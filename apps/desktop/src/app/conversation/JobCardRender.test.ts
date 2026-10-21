@@ -18,6 +18,7 @@ test("the Job card: its line, a bar of one segment per step, the step at work be
     // One step of five passed, three fifths of the next: 32%.
     bar: "32",
     red: false,
+    spinning: true,
     schedule: null,
   });
   // A failed step: its segment red, its name first on the line in red, its words under it.
@@ -28,6 +29,14 @@ test("the Job card: its line, a bar of one segment per step, the step at work be
   assert.deepEqual(seen.failed.shimmer, []);
   assert.equal(seen.failed.label, "Checks failed · fixing");
   assert.equal(seen.failed.red, true);
+  assert.equal(seen.failed.spinning, true, "a fix is at work");
+  // Checks failed and nothing works on them yet: the line is still, its failure in red (#487).
+  assert.equal(seen.stalled.label, "Checks failed");
+  assert.deepEqual(seen.stalled.segments, ["done", "pending", "failed"]);
+  assert.deepEqual(seen.stalled.line, ["failed:Checks"]);
+  assert.deepEqual(seen.stalled.shimmer, []);
+  assert.equal(seen.stalled.spinning, false, "no spinner while no step is at work");
+  assert.equal(seen.stalled.red, true);
   assert.equal(seen.phased.label, "Phase 2 of 4 · Reviewing");
   assert.deepEqual(seen.scheduled.cards, ["context", "schedule"]);
   assert.equal(seen.scheduled.schedule, "Resumes at 4:00 AMin 2h 10mwhen the Claude limit resets");

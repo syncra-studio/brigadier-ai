@@ -332,6 +332,44 @@ impl SessionManager {
         }))
     }
 
+    /// Whether merge `merge_commit` of session `id` is on its base's upstream now (as last
+    /// fetched or pushed): a merge made on this Mac reads pushed once it is. False without an
+    /// upstream, or when it isn't a merge of this session's.
+    pub async fn merge_pushed(&self, id: &ConversationId, merge_commit: &str) -> Result<bool> {
+        let tab = self.core.conversation(id)?;
+        let board = self.core.board(id).await?;
+        let Some(base) = board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                crate::work::OrchestratorStepKind::Merged {
+                    merge_commit: Some(commit),
+                    base,
+                    ..
+                } if commit == merge_commit => Some(base.clone()),
+                _ => None,
+            })
+        else {
+            return Ok(false);
+        };
+        let Some(Setup::Session { repo, .. }) = tab.setup.clone() else {
+            return Ok(false);
+        };
+        let git = self.git.clone();
+        let merge_commit = brigadier_git::Oid(merge_commit.to_owned());
+        super::blocking(move || {
+            let repo = git
+                .open(std::path::Path::new(&repo))
+                .map_err(super::git_error)?;
+            let Some(upstream) = repo.upstream_tip(&base).map_err(super::git_error)? else {
+                return Ok(false);
+            };
+            repo.ancestor(&merge_commit, &upstream)
+                .map_err(super::git_error)
+        })
+        .await
+    }
+
     /// A worktree tab's branch tip, and how many of its commits its base lacks.
     async fn tab_ahead(&self, tab: &Conversation) -> Option<(String, u32)> {
         let Some(Setup::Session {
@@ -726,7 +764,9 @@ impl SessionManager {
         )
     }
 
-    /// `tab`'s branch tip, and how many of its commits `base` lacks.
+    /// `tab`'s branch tip, and how many of its commits `base` lacks. A commit its upstream has
+    /// is not the session's: a new branch starts from the base as its remote has it, which may
+    /// be ahead of the local base (#495).
     async fn tab_tip(&self, tab: &Conversation, base: &str) -> Option<(String, u32)> {
         let Some(Setup::Session {
             repo,
@@ -747,8 +787,12 @@ impl SessionManager {
             ) else {
                 return Ok(None);
             };
+            let upstream = repo.upstream_tip(&base).map_err(super::git_error)?;
             let since = repo
-                .count_commits(&base_tip, &tip)
+                .count_commits_beyond(
+                    &[&base_tip].into_iter().chain(&upstream).collect::<Vec<_>>(),
+                    &tip,
+                )
                 .map_err(super::git_error)?;
             Ok(Some((tip.0, since)))
         })

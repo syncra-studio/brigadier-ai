@@ -8,7 +8,7 @@ import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip
 import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conversation";
 import type { DiffStat, Task } from "@/ipc/generated";
 import { refreshWorkerDiffs } from "@/state/actions";
-import { useBoard } from "@/state/board";
+import { useBoard, workerNote } from "@/state/board";
 
 /**
  * The session's worker summary and background diff refresh.
@@ -72,20 +72,29 @@ export function WorkerDiffs({ conversationId }: { conversationId: string }) {
 /** How many workers at work still get a line each; more read as one row. */
 const WORKER_LINES = 3;
 
-/** A worker at work on one line: its glyph, its name, a soft "working" while it works, and its +N −N. */
+/**
+ * A worker at work: its glyph, its name, a soft "working" while it works, and its +N −N; under
+ * them its progress note when it posted one.
+ */
 const WorkerLineRow: FC<{ task: Task }> = ({ task }) => {
   const name = useWorkerName(task.id);
   const stat = useBoard((s) => workerStat(task, s.board?.diffs));
+  const note = useBoard((s) => workerNote(s.board, task.id));
   const { setPanel } = useContext(AgentsPanelContext);
   return (
     <SummaryRowButton
       data-slot="workers-summary-worker"
       title={name ?? undefined}
       onClick={() => setPanel(task.id)}
-      icon={<WorkerGlyph taskId={task.id} className="size-4" />}
+      // With a note, the glyph stays level with the name.
+      className={note ? "h-auto items-start py-1.25" : undefined}
+      icon={<span className="flex h-lh items-center"><WorkerGlyph taskId={task.id} className="size-4" /></span>}
       meta={stat && stat.insertions + stat.deletions > 0 && <Counts insertions={stat.insertions} deletions={stat.deletions} />}
     >
-      {name}{workerWorking(task) && <span className="text-muted-foreground shimmer"> working</span>}
+      <span className="block truncate">
+        {name}{workerWorking(task) && <span className="text-muted-foreground shimmer"> working</span>}
+      </span>
+      {note && <span data-slot="workers-summary-note" className="text-muted-foreground block truncate text-xs">{note}</span>}
     </SummaryRowButton>
   );
 };

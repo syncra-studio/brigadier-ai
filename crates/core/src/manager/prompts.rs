@@ -2729,7 +2729,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
     let alone = if task.gate_link.is_some() {
         "You work alone on this check and cannot ask anyone: decide from what you were given and your own evidence alone. Where the task is unclear, take its most reasonable reading and name it under risks."
     } else {
-        "You report to the thread, which speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_thread: one question at a time, with the options you see and the one you recommend. It waits for the answer."
+        "You report to the thread, which speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_thread: one question at a time, with the options you see and the one you recommend. It waits for the answer. On work of several steps, say where you are with note_progress as you start each one (\"Step 3 of 5: wiring the exporter\"): the user sees it under your name."
     };
     let code_rules = match (task.kind, &task.mockup) {
         (TaskKind::Implement, Some(MockupPart::Builds)) => {
@@ -3289,8 +3289,9 @@ pub(crate) struct TabLine {
 }
 
 /// Tells the orchestrator of a follow-up the user sent while `request` works: it may sort it
-/// with route_follow_up, or answer or act on it itself. `tabs` are the project's other
-/// sessions, where the message may belong instead.
+/// with route_follow_up, and answers or acts on it once it is sent from the queue as the
+/// user's message (#494). `tabs` are the project's other sessions, where the message may
+/// belong instead.
 pub(crate) fn follow_up(
     id: &str,
     request: &str,
@@ -3326,8 +3327,9 @@ pub(crate) fn follow_up(
          route \"wait\" keeps it queued until this work is done, only for a request of its own \
          that has to come after this work (it builds on its result or changes the same \
          files).{to_tab} Otherwise it joins this work (at once with route \"join\", else shortly \
-         by itself) and reaches you as the user's message; you may also answer or act on it now. \
-         If you have nothing to say now, reply with exactly {QUIET}."
+         by itself) and reaches you as the user's message. Answer it or act on it only once it \
+         reaches you that way: until then it waits in the user's queue, so say nothing about it \
+         yet. If you have nothing to say now, reply with exactly {QUIET}."
     ));
     block
 }
@@ -5630,7 +5632,6 @@ mod environment_tests {
         ] {
             assert!(!alone.contains(gone), "{gone}: {alone}");
         }
-        assert!(alone.contains("you may also answer or act on it now"));
         assert!(alone.ends_with(&format!(
             "If you have nothing to say now, reply with exactly {QUIET}."
         )));
@@ -5651,6 +5652,27 @@ mod environment_tests {
         assert!(
             !block.contains("tab") && !block.contains("workspace"),
             "{block}"
+        );
+    }
+
+    /// #494: the thread wrote about a follow-up while it still waited in the user's queue,
+    /// before it showed in the thread or was sorted. It answers or acts on one only once the
+    /// queue sends it as the user's message, and says nothing about it before.
+    #[test]
+    fn a_follow_up_is_acted_on_only_once_the_queue_sends_it() {
+        let block = follow_up("q-1", "Build the export", "Also add CSV.", &[], &[]);
+        assert!(!block.contains("act on it now"), "{block}");
+        assert!(
+            block.contains(
+                "Answer it or act on it only once it reaches you that way: until then it waits \
+                 in the user's queue, so say nothing about it yet."
+            ),
+            "{block}"
+        );
+        // The way to act on it now is to send it: route "join".
+        assert!(
+            block.find("at once with route \"join\"").unwrap()
+                < block.find("Answer it or act on it only once").unwrap()
         );
     }
 

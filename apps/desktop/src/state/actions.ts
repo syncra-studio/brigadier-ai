@@ -11,6 +11,7 @@ import type {
   ConversationStatus,
   DiffStat,
   ForkPlace,
+  LifecycleOutcome,
   Mention,
   MessageMatches,
   MessageQueue,
@@ -37,12 +38,18 @@ import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
+import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
+import { realActivity, onRealActivity } from "@/state/activity";
+import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
-  boardFromView,
   type Board,
+  boardHeld,
   boardOf,
   collectBoardEvents,
   emptyBoard,
+  keepBoard,
+  placeView,
+  takeKeptBoard,
   ORCHESTRATOR_ENTRIES,
   updateBoard,
   useBoard,
@@ -162,7 +169,7 @@ export async function loadConversation(id: string, { fresh = false }: { fresh?: 
         ? state
         : { conversations: { ...state.conversations, [id]: view.conversation } };
     });
-    updateBoard(id, (board) => boardFromView(view, board, events));
+    placeView(view, events);
   } catch (error) {
     arrived();
     updateThread(id, (thread) => ({ ...thread, loading: false, loadError: error instanceof Error ? error.message : String(error) }));
@@ -233,9 +240,35 @@ let beforeSettings: Selection = { type: "draft", kind: "chat" };
 /**
  * Shows `selection`. By default it is a new entry of the history Back and Forward go through
  * (see state/history.ts); `mode` can put it in place of the current entry, or leave the
- * history alone.
+ * history alone. Resolves once it shows, or once it would have but for a later `select`.
  */
-export function select(selection: Selection, mode: HistoryMode = "push"): void {
+export function select(selection: Selection, mode: HistoryMode = "push"): Promise<void> {
+  const asked = ++selecting;
+  if (selection.type === "conversation" && !conversationHeld(selection.id)) {
+    // Nothing of it is held yet: it shows once its view and the code of its replies are in,
+    // whole and as it really stands (#484, #500), unless something else is asked for meanwhile.
+    // A view that fails to load shows it anyway, with its error and Retry.
+    const loaded = loadConversation(selection.id).catch((error: unknown) => {
+      console.error("loading the conversation failed", error);
+    });
+    const code = import("@/app/conversation/threadCode").then((thread) => thread.preloadThreadCode()).catch(() => {});
+    return Promise.all([loaded, code]).then(() => {
+      if (asked === selecting) show(selection, mode, false);
+    });
+  }
+  show(selection, mode, true);
+  return Promise.resolve();
+}
+
+/** The newest `select`: an earlier one still waiting for its conversation shows nothing. */
+let selecting = 0;
+
+/** Whether a conversation's thread and board are held, so it can show at once as it stands. */
+function conversationHeld(id: string): boolean {
+  return !!useApp.getState().threads[id] && boardHeld(id);
+}
+
+function show(selection: Selection, mode: HistoryMode, refresh: boolean): void {
   const { selection: shown } = useApp.getState();
   // What leaving Settings goes back to, however it was reached (Back and Forward too).
   if (selection.type === "settings" && shown.type !== "settings") beforeSettings = shown;
@@ -243,12 +276,21 @@ export function select(selection: Selection, mode: HistoryMode = "push"): void {
   useApp.setState({ selection });
   const { board } = useBoard.getState();
   if (selection.type !== "conversation") {
-    if (board) useBoard.setState({ board: null });
+    if (board) {
+      // Left for Settings or a new chat, it is kept: coming back shows it as it stands.
+      keepBoard(board);
+      useBoard.setState({ board: null });
+    }
     return;
   }
   if (board?.conversationId !== selection.id) {
-    useBoard.setState({ board: emptyBoard(selection.id) });
+    keepBoard(board);
+    // Its kept board, or the one a side chat shows it with.
+    const beside = boardOf(selection.id);
+    useBoard.setState({ board: takeKeptBoard(selection.id) ?? (beside?.loaded ? beside : emptyBoard(selection.id)) });
   }
+  // What is held is read again, in case something was missed; it shows meanwhile.
+  if (!refresh) return;
   void loadConversation(selection.id).catch((error: unknown) => {
     console.error("loading the conversation failed", error);
   });
@@ -340,17 +382,18 @@ export type OpenAt = { message: string };
  * it, unfolds what folds it, scrolls it to the centre and flashes it once
  * (SESSION-MESSAGING-PLAN.md §6.3).
  */
-export function openConversation(id: string, options: { at?: OpenAt } = {}): void {
+export function openConversation(id: string, options: { at?: OpenAt } = {}): Promise<void> {
   const conversation = useApp.getState().conversations[id];
   if (conversation?.projectId) setProjectExpanded(conversation.projectId, true);
   const shown = useApp.getState().selection;
   // A jump within the open conversation stays where it is: only the thread moves.
-  if (!options.at || shown.type !== "conversation" || shown.id !== id) select({ type: "conversation", id });
+  const showing = !options.at || shown.type !== "conversation" || shown.id !== id ? select({ type: "conversation", id }) : Promise.resolve();
   if (options.at) {
     // The message is in the thread: a session left on a file or its review shows its chat.
     selectTab(id, CHAT_TAB);
     void revealMessage(id, options.at.message).catch((error: unknown) => console.error("showing the message failed", error));
   }
+  return showing;
 }
 
 /**
@@ -610,6 +653,8 @@ export async function send(
     storeConversation(conversation);
     conversationId = conversation.id;
     updateThread(conversationId, () => emptyThread);
+    // A new conversation has nothing to read: it shows at once, its events filling it.
+    keepBoard({ ...emptyBoard(conversationId), loaded: true });
     // Only follow the new conversation if the user is still looking at the draft.
     if (useApp.getState().selection === selection) {
       useApp.setState({ draft: emptyDraft(null) });
@@ -623,19 +668,27 @@ export async function send(
   const prepared = prepareTabChatSend(conversationId);
   if (prepared) await prepared;
   const board = boardOf(conversationId);
+  // A send still under way, or one whose turn the board doesn't show yet: the daemon is busy
+  // with it, so this one waits too.
+  const starting = board !== null && turnStarting(conversationId, board);
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const session = useApp.getState().conversations[conversationId]?.kind === "session";
-  const working = session && board !== null && workingRequest(board) !== null;
+  const working = session && board !== null && (workingRequest(board) !== null || starting);
   const steer = lane === "steer";
   const queue = board?.queue ?? null;
   // Asked to queue with no slot: last.
   const slot = steer ? null : (queueIndex ?? (lane === "queue" ? (queue?.items.length ?? 0) : null));
-  // A message that waits shows in the queue, not the thread; a steered one arrives as an event.
-  const waits = running || working || (slot !== null && !!queue?.paused);
-  const localId = waits ? null : crypto.randomUUID();
+  const paused = slot !== null && !!queue?.paused;
+  // A message that waits shows in the queue at once, not the thread; a steered one arrives
+  // as an event.
+  const waits = running || starting || working || paused;
+  const queued = waits && !steer;
+  const localId = waits && steer ? null : crypto.randomUUID();
+  // Whatever a Stop just showed, what it sends now shows as it really is.
+  dropTurnStops(conversationId);
   if (localId) {
     // The thread places the turn it starts once it shows, under this id (see `shownIdOf`).
-    expectSentTurn(conversationId, localId);
+    if (!queued) expectSentTurn(conversationId, localId);
     useApp.setState((state) => ({
       pending: [
         ...state.pending,
@@ -647,6 +700,8 @@ export async function send(
           mentions: outgoing.mentions,
           createdAtMs: Date.now(),
           queuedIds: queue?.items.map((item) => item.id) ?? [],
+          // The daemon has the thread judge what is sent while a session's answer works.
+          ...(queued ? { queued: { index: slot, deciding: working && !paused } } : {}),
         },
       ],
     }));
@@ -662,7 +717,7 @@ export async function send(
       queueIndex: slot,
     });
     if (outcome.type === "sent") {
-      if (localId) confirmSent(conversationId, outcome.message, localId);
+      if (localId && !queued) confirmSent(conversationId, outcome.message, localId);
       updateThread(conversationId, (thread) => ({
         ...thread,
         items: mergeMessages(thread.items, [outcome.message]),
@@ -670,9 +725,11 @@ export async function send(
     } else {
       // Reconcile before publishing the rail item, including when the response beats its event.
       // Its echo, once its queue event removed it, needs no guard in the others.
+      let unseen = false;
       useApp.setState((state) => {
         const pending = state.pending.filter((entry) => entry.localId !== localId);
         if (localId && pending.length === state.pending.length) return state;
+        unseen = !!localId;
         return {
           pending: pending.map((entry) =>
             entry.conversationId === conversationId && !entry.queuedIds?.includes(outcome.item.id)
@@ -680,12 +737,14 @@ export async function send(
               : entry),
         };
       });
-      // Shown before its queue event arrives. If the queue changed meanwhile, the events are
-      // newer than this answer (the item may already be sent or deleted) and bring it anyway.
+      // Shown before its queue event arrives, in place of its row. Its row still showing means
+      // no event brought it yet, so none sent or deleted it either; without one, a queue that
+      // changed meanwhile has newer events, which bring it anyway.
       updateBoard(conversationId, (current) => {
-        if (current.queue !== queue) return current;
+        if (!unseen && current.queue !== queue) return current;
+        if (current.queue.items.some((entry) => entry.id === outcome.item.id)) return current;
         const items = [...current.queue.items];
-        items.splice(slot ?? items.length, 0, outcome.item);
+        items.splice(Math.min(slot ?? items.length, items.length), 0, outcome.item);
         return { ...current, queue: { ...current.queue, items } };
       });
     }
@@ -696,6 +755,27 @@ export async function send(
       }));
     }
   }
+}
+
+/** How long after the daemon took a message its turn may still be missing from the board. */
+const TURN_SHOWS_MS = 30_000;
+
+/**
+ * Whether a turn is starting that the board doesn't show yet: a send to the conversation is
+ * still under way, or the daemon took a message lately whose request hasn't reached the board.
+ * Its events can come seconds after the send's answer while the connection is busy.
+ */
+function turnStarting(conversationId: string, board: Board): boolean {
+  const { pending, threads } = useApp.getState();
+  if (pending.some((entry) => entry.conversationId === conversationId)) return true;
+  const since = Date.now() - TURN_SHOWS_MS;
+  return (threads[conversationId]?.items ?? []).some(
+    (message) =>
+      message.role === "user" &&
+      message.createdAtMs >= since &&
+      !!message.requestId &&
+      !board.requests[message.requestId],
+  );
 }
 
 /** Changes what can still change after creation: model, effort and permission level. */
@@ -941,18 +1021,82 @@ export async function resumeQueue(conversationId: string): Promise<void> {
   showQueue(conversationId, queue);
 }
 
-/** Stops the running turn; the queue pauses until resumed. */
+/** How long a stop the daemon made may show before its real state does, at most. */
+const STOP_SETTLE_MS = 10_000;
+
+/**
+ * Shows `stop` at once while `run` makes it (#498): the daemon ends a turn or a worker only once
+ * its process has. A failed stop shows the real state again and throws. One made shows until
+ * the real state says it too, `STOP_SETTLE_MS` at most; `stopped`, the workers it stopped.
+ */
+async function showStopped<T>(
+  stop: Omit<Stop, "id" | "atMs">,
+  run: () => Promise<T>,
+  stopped?: (result: T) => readonly string[],
+): Promise<T> {
+  const shown = addStop(stop);
+  let result: T;
+  try {
+    result = await run();
+  } catch (error) {
+    dropStop(shown.id);
+    throw error;
+  }
+  if (stopped) keepStopping(shown.id, stopped(result));
+  const settled = useStopping.getState().stops.find((each) => each.id === shown.id);
+  if (settled) settleStop(settled);
+  return result;
+}
+
+/** Whether `stop` shows in the real state: its workers over, its turn and answers ended. */
+function stopShows(stop: Stop): boolean {
+  const board = boardOf(stop.conversationId);
+  const activity = realActivity(stop.conversationId);
+  const over = stop.tasks.every((id) => {
+    const task = board?.tasks[id];
+    return task ? workerDone(task) : !(id in (activity?.tasks ?? {}));
+  });
+  if (!over || !stop.turn) return over;
+  const run = board?.run ?? activity?.run ?? "idle";
+  const answering = Object.values(board?.requests ?? {}).some(
+    (each) => each.state.type === "working" || each.state.type === "waiting",
+  );
+  return run !== "running" && run !== "starting" && !answering;
+}
+
+function settleStop(stop: Stop): void {
+  if (stopShows(stop)) {
+    dropStop(stop.id);
+    return;
+  }
+  const check = () => {
+    if (stopShows(stop)) done();
+  };
+  const offActivity = onRealActivity(check);
+  const offBoard = useBoard.subscribe(check);
+  const timer = setTimeout(done, STOP_SETTLE_MS);
+  function done() {
+    offActivity();
+    offBoard();
+    clearTimeout(timer);
+    dropStop(stop.id);
+  }
+}
+
+/** Stops the running turn; the queue pauses until resumed. It shows stopped at once. */
 export async function interrupt(conversationId: string): Promise<void> {
   const tasks = useBoard.getState().board;
   const ids = tasks?.conversationId === conversationId
     ? Object.values(tasks.tasks).filter((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)).map((task) => task.id)
     : [];
-  // The turn first: the workers' stop then reaches the thread before its next turn, not
-  // inside the one ending.
-  const [interrupted] = await Promise.allSettled([request({ method: "interrupt", conversationId })]);
-  const results = [interrupted, ...await Promise.allSettled(ids.map(stopTask))];
-  const failed = results.find((result) => result.status === "rejected");
-  if (failed?.status === "rejected") throw failed.reason;
+  await showStopped({ conversationId, turn: true, tasks: ids }, async () => {
+    // The turn first: the workers' stop then reaches the thread before its next turn, not
+    // inside the one ending.
+    const [interrupted] = await Promise.allSettled([request({ method: "interrupt", conversationId })]);
+    const results = [interrupted, ...await Promise.allSettled(ids.map(stopTask))];
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+  });
 }
 
 /** Stops a preview the thread started, or every running one of the conversation. */
@@ -1159,10 +1303,17 @@ export async function stopTask(taskId: string): Promise<void> {
   await request({ method: "stopTask", taskId });
 }
 
-/** Stop all: stops every running or waiting worker of the conversation; the ids stopped. */
+/**
+ * Stop all: stops every running or waiting worker of the conversation; the ids stopped. They
+ * show stopped at once.
+ */
 export async function stopWorkers(conversationId: string): Promise<string[]> {
-  const { taskIds } = await request({ method: "stopWorkers", conversationId });
-  return taskIds;
+  const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
+  return showStopped(
+    { conversationId, turn: false, tasks: ids },
+    async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
+    (stopped) => stopped,
+  );
 }
 
 export async function pauseTask(taskId: string): Promise<void> {
@@ -1441,11 +1592,34 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Brings an archived conversation back; throws if it can't be. */
+/**
+ * Brings an archived conversation back: it is back at once (#499); if it can't be, it is
+ * archived again and this throws.
+ */
 export async function restore(id: string): Promise<void> {
-  const [outcome] = (await request({ method: "restore", ids: [id] })).outcomes;
-  if (outcome?.conversation) storeConversation(outcome.conversation);
-  else throw new Error(outcome?.error ?? "It couldn't be brought back.");
+  const before = useApp.getState().conversations[id];
+  if (before?.lifecycle === "archived") storeConversation({ ...before, lifecycle: "active" });
+  let outcome: LifecycleOutcome | undefined;
+  try {
+    [outcome] = (await request({ method: "restore", ids: [id] })).outcomes;
+  } catch (error) {
+    unrestore(before);
+    throw error;
+  }
+  // Not when it was deleted meanwhile.
+  if (outcome?.conversation) {
+    if (useApp.getState().conversations[id]) storeConversation(outcome.conversation);
+    return;
+  }
+  unrestore(before);
+  throw new Error(outcome?.error ?? "It couldn't be brought back.");
+}
+
+/** An archived conversation whose restore failed is archived again, unless something newer came in. */
+function unrestore(before: Conversation | undefined): void {
+  if (before?.lifecycle === "archived" && useApp.getState().conversations[before.id]?.lifecycle === "active") {
+    storeConversation(before);
+  }
 }
 
 /** Takes conversations out of the app's state (they are being deleted). */

@@ -14,6 +14,8 @@
  *   session reads Merged): git's revert alone reads it Reverted.
  * - `branch`: not merged yet, on its branch two commits ahead: Discard and Merge into main.
  * - `merge-only`: a turn that merged with nothing of its own counted: the merge's card.
+ * - `local`: a merge made on this Mac, its base's upstream without it: "Merged into main on this Mac".
+ * - `pushed`: the same, pushed since (#496): "Merged into main", and Revert pushes its revert.
  * - `waiting`: on its branch, three files waiting for review: Undo All, Keep All, Review Changes;
  *   a waiting row's Undo and Keep sit before its counts.
  * - `reviewed`: on its branch, every file reviewed (kept 2, undid 1): Discard and Merge into main.
@@ -87,6 +89,9 @@ const MERGES = {
   reverted: merged("e1e1e1e1"),
   // Reverted through the thread: not the session's latest merge.
   threadReverted: merged("a2a2a2a2"),
+  // Made on this Mac; git shows the second on its base's upstream since.
+  local: { ...merged("b1b1b1b1"), upstream: { name: "origin/main", behind: 0 } },
+  pushed: { ...merged("b2b2b2b2"), upstream: { name: "origin/main", behind: 0 } },
 };
 
 const review = {
@@ -127,7 +132,7 @@ mockIPC((command, payload) => {
   // The reverted merge's revert, as git shows it; the other merges stand.
   if (req.method === "getMergeUndo") {
     const reverted = [MERGES.reverted.mergeCommit, MERGES.threadReverted.mergeCommit].includes(req.mergeCommit);
-    return { method: req.method, undo: reverted ? { revertedBy: "d0d0d0d0d0", revertedAtMs: REVERTED_AT } : null };
+    return { method: req.method, undo: reverted ? { revertedBy: "d0d0d0d0d0", revertedAtMs: REVERTED_AT } : null, pushed: req.mergeCommit === MERGES.pushed.mergeCommit };
   }
   return { method: req.method };
 });
@@ -150,6 +155,8 @@ const CASES: { id: string; conversation: string; node: ReactNode }[] = [
   { id: "thread-reverted", conversation: CHAT, node: <ChangesCard requestIds={["thread-reverted"]} merge={own(MERGES.threadReverted)} /> },
   { id: "branch", conversation: CHAT, node: <ChangesCard requestIds={["branch"]} /> },
   { id: "merge-only", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.clean)} /> },
+  { id: "local", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.local)} /> },
+  { id: "pushed", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.pushed)} /> },
   { id: "waiting", conversation: CHAT, node: <ChangesCard requestIds={["waiting"]} /> },
   { id: "reviewed", conversation: CHAT, node: <ChangesCard requestIds={["reviewed"]} /> },
 ];
@@ -278,6 +285,11 @@ async function drive() {
   // Redo asks the thread to revert the revert.
   button("reverted", "Redo")?.click();
   await until(() => sent.length >= 3);
+  // A merge pushed since: Revert asks for its revert pushed.
+  button("pushed", "Revert")?.click();
+  await wait(50);
+  at("pushed")?.querySelector<HTMLButtonElement>("[data-slot=merge-revert-go]")?.click();
+  await until(() => sent.length >= 4);
   out.sent = sent;
   // Revert on a folded card opens it to the question.
   button("collapsed", "Revert")?.click();

@@ -5,8 +5,8 @@
  * it opens their output, stops two, ends them, and writes what it saw. With `states=1` it shows a
  * row in each state (building, starting, running, paused, smoke testing, checking) and writes how
  * each one's icon and word look and move. With `ended=1` it shows what stays once processes end
- * (Q94): failed rows with their last line, Restart and ×, finished rows until the next message;
- * it restarts, dismisses, starts one again and sends a message, and writes what it saw.
+ * (Q94): failed rows with their last line, Restart and ×, and no finished or stopped ones; it
+ * restarts, dismisses and starts one again, and writes what it saw.
  * Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -18,7 +18,7 @@ import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, Conversation, EventEnvelope, Preview, Request, Task, UserRequest } from "@/ipc/generated";
+import type { BackgroundRun, Conversation, EventEnvelope, Preview, Request, Task } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -230,8 +230,9 @@ async function driveEnded(): Promise<Record<string, unknown>> {
       red: word?.classList.contains("text-destructive") ?? false, shimmer: word?.classList.contains("shimmer") ?? false,
       muted: button.classList.contains("text-muted-foreground"), lastLine: text(button.querySelector("[data-last-line]")),
       elapsed: text(button.querySelector("span.tabular-nums")), actions,
-      // A failed row's Restart and × show at rest, not only on hover; a finished row has none to show.
+      // A failed row's Restart and × show at rest, not only on hover, clear of its words.
       actionsVisibleAtRest: place ? getComputedStyle(place).display !== "none" : null,
+      clear: place ? place.getBoundingClientRect().left >= (button.querySelector("span.truncate")?.getBoundingClientRect().right ?? 0) : null,
     }];
   }));
   // Restart on the crashed page: its own command again, under its id; the row is the running one.
@@ -248,11 +249,6 @@ async function driveEnded(): Promise<Record<string, unknown>> {
   send({ type: "previewUpdated", preview: { ...api, id: "preview-15", command: "PORT=4100 node server.js", state: { type: "running" }, startedAtMs: Date.now(), endedAtMs: null } });
   await frame();
   seen.startedAgain = ids();
-  // The next message: the finished rows leave.
-  send({ type: "requestUpdated", request: { id: "r9", conversationId: id, preview: "Now the docs", state: { type: "working" }, startedAtMs: Date.now(), endedAtMs: null,
-    steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false } as UserRequest });
-  await frame();
-  seen.afterMessage = ids();
   return seen;
 }
 

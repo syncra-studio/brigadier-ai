@@ -102,7 +102,7 @@ impl SessionManager {
             task_id: task.id.to_string(),
             provider,
             model,
-            category: super::workers::category(task.kind),
+            category: super::workers::task_category(task),
             areas: task.areas.clone(),
             result,
             review_passed_first: checks.review_passed_first,

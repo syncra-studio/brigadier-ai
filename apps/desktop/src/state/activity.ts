@@ -10,6 +10,7 @@ import type {
   TaskKind,
   TaskState,
 } from "@/ipc/generated";
+import { type Stop, stopsOf, useStopping } from "@/state/stopping";
 
 /** A conversation's live state as the sidebar shows it, from the daemon's snapshot and events. */
 type Activity = {
@@ -28,7 +29,11 @@ type Activity = {
   failed: boolean;
   /** Its latest request was stopped by the user, until another turn starts. */
   stopped?: boolean;
+  /** Its requests that work, between turns too (a message waits for a turn, one is owed). */
+  requests?: ReadonlySet<string>;
 };
+
+const NO_REQUESTS: ReadonlySet<string> = new Set();
 
 const IDLE: Activity = {
   run: "idle",
@@ -39,6 +44,7 @@ const IDLE: Activity = {
   phases: {},
   failed: false,
   stopped: false,
+  requests: NO_REQUESTS,
 };
 
 const FINAL: ReadonlySet<TaskState> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
@@ -65,9 +71,84 @@ const TOOL_PHASES: Readonly<Record<string, SessionPhase>> = {
 /** Which phase a row names when several run, first first. */
 const PHASE_ORDER: readonly SessionPhase[] = ["merging", "reviewing", "checking", "watchingCi"];
 
-export const useActivity = create<{ byConversation: Record<string, Activity> }>(() => ({
+type ActivityState = { byConversation: Record<string, Activity> };
+
+/** Every conversation's activity as the daemon says it. */
+const activityStore = create<ActivityState>(() => ({
   byConversation: {},
 }));
+
+/** `activity` as the user's stops under way show it: their workers over, a stopped turn ended. */
+function stoppedActivity(activity: Activity, stops: readonly Stop[]): Activity {
+  let shown = activity;
+  for (const stop of stops) {
+    const over = stop.tasks.filter((id) => id in shown.tasks);
+    if (over.length > 0) {
+      const tasks = { ...shown.tasks };
+      const titles = { ...shown.titles };
+      for (const id of over) {
+        delete tasks[id];
+        delete titles[id];
+      }
+      shown = { ...shown, tasks, titles };
+      for (const id of over) shown = phased(shown, `task:${id}`, undefined);
+    }
+    // The composer's Stop ends what the session is busy with too: its CI watches, a held merge.
+    if (stop.turn) {
+      const running = shown.run === "running" || shown.run === "starting";
+      shown = { ...shown, run: running ? "idle" : shown.run, stopped: true, phases: {}, requests: NO_REQUESTS };
+    }
+  }
+  return shown;
+}
+
+const shownStates = new WeakMap<ActivityState, { stops: readonly Stop[]; state: ActivityState }>();
+
+/** `state` as the stops under way show it; the same state when there are none. */
+function shownState(state: ActivityState, stops: readonly Stop[]): ActivityState {
+  if (stops.length === 0) return state;
+  const cached = shownStates.get(state);
+  if (cached?.stops === stops) return cached.state;
+  const byConversation = { ...state.byConversation };
+  for (const conversationId of new Set(stops.map((stop) => stop.conversationId))) {
+    const activity = byConversation[conversationId];
+    if (activity) byConversation[conversationId] = stoppedActivity(activity, stopsOf(stops, conversationId));
+  }
+  const shown = { byConversation };
+  shownStates.set(state, { stops, state: shown });
+  return shown;
+}
+
+/**
+ * Every conversation's activity as the sidebar shows it: as the daemon says it, but with the
+ * user's stops under way shown at once (#498). `setState` sets the daemon's.
+ */
+export const useActivity = Object.assign(
+  function useActivity<T>(selector: (state: ActivityState) => T): T {
+    const stops = useStopping((s) => s.stops);
+    return activityStore((state) => selector(shownState(state, stops)));
+  },
+  {
+    getState: (): ActivityState => shownState(activityStore.getState(), useStopping.getState().stops),
+    setState: activityStore.setState,
+    subscribe: (listener: () => void): (() => void) => {
+      const own = activityStore.subscribe(listener);
+      const stops = useStopping.subscribe(listener);
+      return () => {
+        own();
+        stops();
+      };
+    },
+  },
+);
+
+/** One conversation's activity as the daemon says it, stops under way or not. */
+export function realActivity(conversationId: string): Activity | undefined {
+  return activityStore.getState().byConversation[conversationId];
+}
+
+/** Calls `listener` on every change of the daemon's activity. */
+export const onRealActivity = (listener: () => void): (() => void) => activityStore.subscribe(listener);
 
 export function fromSnapshot(activity: ConversationActivity): Activity {
   return {
@@ -79,13 +160,14 @@ export function fromSnapshot(activity: ConversationActivity): Activity {
     phases: Object.fromEntries(activity.phases),
     failed: activity.failed ?? false,
     stopped: activity.stopped ?? false,
+    requests: new Set(activity.requests ?? []),
   };
 }
 
 /** Reads every conversation's activity again (after connecting or missing events). */
 export async function loadActivity(): Promise<void> {
   const { activity } = await request({ method: "getActivity" });
-  useActivity.setState({
+  activityStore.setState({
     byConversation: Object.fromEntries(
       activity.map((entry) => [entry.conversationId, fromSnapshot(entry)]),
     ),
@@ -157,7 +239,11 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
       const failed = type === "failed" ? true : type === "working" ? false : current.failed;
       // An update to an earlier request (its review kept, say) leaves the latest one's stop be.
       const stopped = type === "stopped" ? true : type === "working" || type === "failed" ? false : (current.stopped ?? false);
-      return failed === current.failed && stopped === current.stopped ? current : { ...current, failed, stopped };
+      const working = current.requests ?? NO_REQUESTS;
+      const requests = toggled(working, event.request.id, type === "working");
+      return failed === current.failed && stopped === current.stopped && requests === working
+        ? current
+        : { ...current, failed, stopped, requests };
     }
     case "taskUpdated": {
       const { id, state, kind, title } = event.task;
@@ -251,7 +337,7 @@ function conversationOf({ stream, event }: EventEnvelope): string | null {
 /** Folds a batch of events into the conversations' activity. */
 export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
   let changed: Record<string, Activity> | null = null;
-  const { byConversation } = useActivity.getState();
+  const { byConversation } = activityStore.getState();
   for (const envelope of batch) {
     const id = conversationOf(envelope);
     if (!id) continue;
@@ -262,12 +348,13 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
       changed[id] = next;
     }
   }
-  if (changed) useActivity.setState({ byConversation: changed });
+  if (changed) activityStore.setState({ byConversation: changed });
 }
 
 /**
  * What a sidebar row shows: a pill while it waits for the user (a card, a question, or its last
- * turn failed), else a spinner while it runs or is in a phase, with the phase's name, and how
+ * turn failed), else a spinner while it runs (a turn, a worker or a request working between its
+ * turns) or is in a phase, with the phase's name, and how
  * many of its workers run.
  */
 export type RowActivity = {
@@ -283,7 +370,8 @@ export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
   const states = Object.values(activity.tasks);
   const turn = activity.run === "running" || activity.run === "starting";
-  const running = turn || states.some((state) => WORKING.has(state));
+  // A request between turns works too, as its composer says (issue 485).
+  const running = turn || states.some((state) => WORKING.has(state)) || (activity.requests?.size ?? 0) > 0;
   // A failed turn waits for the user even while its workers still run, as the engine says.
   const awaiting =
     activity.approvals.size > 0 || states.some((state) => LANDING.has(state))

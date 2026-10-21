@@ -32,7 +32,7 @@ export async function answerOf(call: AppCall, hands?: PageHands): Promise<AppAns
       return openInApp(call.conversationId, call.op.target, call.op.show);
     case "showSession":
       // As a click on its sidebar row: the selection moves, the window stays where it is.
-      openConversation(call.op.session);
+      await openConversation(call.op.session);
       return { app: "sessionShown", visible: useApp.getState().windowVisible };
     case "endRequest":
       return { app: "closed", tabs: closeRequestTabs(call.conversationId, call.op.request) };

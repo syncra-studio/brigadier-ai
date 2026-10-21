@@ -892,6 +892,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mockup: Option<MockupPart>,
+    /// It makes designs or images (design files, a mockup, generated images): routing files
+    /// it as design work (see `manager::workers::category`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub design: bool,
     /// The plan this one reviews.
     pub plan: Option<CardId>,
     pub attachments: Vec<AttachmentRef>,
@@ -2093,6 +2098,11 @@ pub struct ConversationActivity {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub stopped: bool,
+    /// Its requests that work, by id: between turns too, while a message waits for a turn or
+    /// Brigadier owes one a turn, as its composer shows them working.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub requests: Vec<String>,
 }
 
 /// What a conversation is busy with, as its sidebar row names it ("Watching CI").

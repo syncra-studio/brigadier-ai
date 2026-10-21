@@ -111,6 +111,7 @@ const OTHER: Record<string, [doing: string, done: string]> = {
   // Its name before #66, in older transcripts.
   ask_orchestrator: ["Asking a question", "Asked a question"],
   submit_outline: ["Sending an outline", "Sent an outline"],
+  note_progress: ["Noting its progress", "Noted its progress"],
   list_sessions: ["Looking for sessions", "Looked for sessions"],
   read_session: ["Reading another session", "Read another session"],
   imagegen: ["Creating an image", "Created an image"],
@@ -267,7 +268,8 @@ export function connectorName(name: string): string | null {
 
 /**
  * A tool's own words for `other`: what Brigadier calls it; an integration's tool by the
- * integration ("Used Linear", what it did and was given in its fold); else "Used {name}".
+ * integration ("Used Linear", "Linear: search issues" while it runs, what it did and was given in
+ * its fold); else "Used {name}".
  */
 function otherWords(short: string, detail: string | null = null, connector: string | null = null): StepWords {
   const known = OTHER[short];
@@ -275,7 +277,9 @@ function otherWords(short: string, detail: string | null = null, connector: stri
   const action = actionWords(short);
   if (connector) {
     const given = [action, detail].filter(Boolean).join(" · ");
-    return { kind: "other", doing: `Using ${connector}`, done: `Used ${connector}`, phrase: `Used ${connector}`, unnamed: true, ...(given && { given }) };
+    // While it runs, what it does too ("Pencil: batch design"): the live line may show it for long.
+    const doing = action ? `${connector}: ${action}` : `Using ${connector}`;
+    return { kind: "other", doing, done: `Used ${connector}`, phrase: `Used ${connector}`, unnamed: true, ...(given && { given }) };
   }
   const name = action && action !== "tool" ? action : "a tool";
   return { kind: "other", doing: `Using ${name}`, done: `Used ${name}`, phrase: `Used ${name}`, unnamed: true, ...(detail && { given: detail }) };

@@ -1,6 +1,7 @@
 /**
  * The thread's feedback offers in a production ConversationView: one under the finished first
- * request, one under the second, which runs unless ?done=1 (or the user stopped it, ?stopped=1).
+ * request, one under the second, which runs unless ?done=1 (or the user stopped it, ?stopped=1):
+ * its worker does, and its own turn too with ?turn=1.
  * Its daemon is faked: the writer can't write the first offer up (it shows as its own one
  * report) and makes the second the design's three (a bug, a repeat of #417, an idea); the filer
  * files them as @stephen-golban. ?drive=1 then reads the cards while they're written and after,
@@ -158,6 +159,10 @@ useBoard.setState(({ board }) =>
     ? { board: { ...board, orchestratorSteps: [...board.orchestratorSteps, offer("r1", 7, "first", "Typo fixes take long", "A one-word fix took four minutes."), offer("r2", 30, "second", "Usage, Stop and pinning", SECOND)] } }
     : {},
 );
+// The second request's own turn still runs (?turn=1); else only its worker does.
+if (params.has("turn")) {
+  useBoard.setState(({ board }) => (board ? { board: { ...board, run: "running", runRequest: "r2" } } : {}));
+}
 if (params.has("stopped")) {
   useBoard.setState(({ board }) => {
     const request = board?.requests.r2;

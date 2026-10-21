@@ -1,7 +1,7 @@
 //! The computer-use menu-bar item: which agents are using apps on this Mac, and a way to stop
-//! each. Shown while computer use and its "Show in menu bar" setting are on (the webview says
-//! which, [`set_computer_menu`]); the agents come from the daemon's computer-use status, which
-//! the bridge hands here ([`status_changed`]).
+//! each. Shown only while an agent is using apps, and computer use and its "Show in menu bar"
+//! setting are on (the webview says which, [`set_computer_menu`]); the agents come from the
+//! daemon's computer-use status, which the bridge hands here ([`status_changed`]).
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
@@ -58,6 +58,20 @@ impl MenuState {
         self.generation
     }
 
+    /// The sessions the item lists, or `None` when it's hidden: it shows only while an agent is
+    /// using apps, never just because the settings are on.
+    fn showing(&self) -> Option<Vec<ComputerSession>> {
+        if !self.shown {
+            return None;
+        }
+        let sessions = self
+            .status
+            .as_ref()
+            .map(|status| status.sessions.clone())
+            .unwrap_or_default();
+        (!sessions.is_empty()).then_some(sessions)
+    }
+
     /// The session a menu item names: `<generation>:<index>`.
     fn session(&self, item: &str) -> Option<ComputerSession> {
         let (generation, index) = item.split_once(':')?;
@@ -105,26 +119,18 @@ fn refresh(app: &AppHandle) {
 
 /// Shows, updates or removes the item. Main thread.
 fn apply(app: &AppHandle) -> tauri::Result<()> {
-    let (shown, status) = {
+    let (sessions, status) = {
         let state = state();
-        (state.shown, state.status.clone())
+        (state.showing(), state.status.clone())
     };
-    if !shown {
+    let Some(sessions) = sessions else {
         let _ = app.remove_tray_by_id(TRAY);
         return Ok(());
-    }
-    let sessions = status
-        .as_ref()
-        .map(|s| s.sessions.clone())
-        .unwrap_or_default();
+    };
     let generation = state().built(sessions.clone());
     let menu = menu(app, status.as_ref(), &sessions, generation)?;
-    let icon = icon(!sessions.is_empty())?;
-    let tooltip = if sessions.is_empty() {
-        "Computer use".to_owned()
-    } else {
-        format!("Computer use: {} in use", plural(sessions.len()))
-    };
+    let icon = Image::from_bytes(include_bytes!("../icons/computer-use-tray-active.png"))?;
+    let tooltip = format!("Computer use: {} in use", plural(sessions.len()));
     if let Some(tray) = app.tray_by_id(TRAY) {
         tray.set_menu(Some(menu))?;
         tray.set_icon(Some(icon))?;
@@ -149,14 +155,6 @@ fn plural(apps: usize) -> String {
     } else {
         format!("{apps} apps")
     }
-}
-
-fn icon(active: bool) -> tauri::Result<Image<'static>> {
-    Image::from_bytes(if active {
-        include_bytes!("../icons/computer-use-tray-active.png")
-    } else {
-        include_bytes!("../icons/computer-use-tray.png")
-    })
 }
 
 /// A session's title, "<label> · <app>": a long label is cut, never the app's name.
@@ -189,42 +187,32 @@ fn menu(
     sessions: &[ComputerSession],
     generation: u64,
 ) -> tauri::Result<Menu<tauri::Wry>> {
-    let mut menu = MenuBuilder::new(app);
-    if sessions.is_empty() {
-        let idle = MenuItemBuilder::with_id("cu-idle", "No agent is using apps right now")
-            .enabled(false)
-            .build(app)?;
-        menu = menu.item(&idle);
-    } else {
-        let heading = MenuItemBuilder::with_id("cu-heading", "Agents using apps")
-            .enabled(false)
-            .build(app)?;
-        menu = menu.item(&heading);
-        for (index, session) in sessions.iter().enumerate() {
-            let open = MenuItemBuilder::with_id(
-                format!("{OPEN}{generation}:{index}"),
-                "Open in Brigadier",
-            )
-            .enabled(session.conversation_id.is_some())
-            .build(app)?;
-            let show = MenuItemBuilder::with_id(
-                format!("{SHOW}{generation}:{index}"),
-                format!("Show {}", session.app),
-            )
-            .build(app)?;
-            let stop = MenuItemBuilder::with_id(
-                format!("{STOP}{generation}:{index}"),
-                format!("Stop using {}", session.app),
-            )
-            .build(app)?;
-            let submenu = SubmenuBuilder::new(app, title(&session.label, &session.app))
-                .item(&open)
-                .item(&show)
-                .separator()
-                .item(&stop)
-                .build()?;
-            menu = menu.item(&submenu);
-        }
+    let heading = MenuItemBuilder::with_id("cu-heading", "Agents using apps")
+        .enabled(false)
+        .build(app)?;
+    let mut menu = MenuBuilder::new(app).item(&heading);
+    for (index, session) in sessions.iter().enumerate() {
+        let open =
+            MenuItemBuilder::with_id(format!("{OPEN}{generation}:{index}"), "Open in Brigadier")
+                .enabled(session.conversation_id.is_some())
+                .build(app)?;
+        let show = MenuItemBuilder::with_id(
+            format!("{SHOW}{generation}:{index}"),
+            format!("Show {}", session.app),
+        )
+        .build(app)?;
+        let stop = MenuItemBuilder::with_id(
+            format!("{STOP}{generation}:{index}"),
+            format!("Stop using {}", session.app),
+        )
+        .build(app)?;
+        let submenu = SubmenuBuilder::new(app, title(&session.label, &session.app))
+            .item(&open)
+            .item(&show)
+            .separator()
+            .item(&stop)
+            .build()?;
+        menu = menu.item(&submenu);
     }
     if let Some((line, finish)) = status.and_then(|status| setup_line(&status.setup)) {
         let line = MenuItemBuilder::with_id("cu-setup-line", line)
@@ -302,6 +290,8 @@ fn show_app(session: &ComputerSession) {
 
 #[cfg(test)]
 mod tests {
+    use brigadier_core::PermissionState;
+
     use super::*;
 
     #[test]
@@ -369,5 +359,32 @@ mod tests {
         }
         assert!(state.session(&format!("{first}:0")).is_none());
         assert!(state.session("junk").is_none());
+    }
+
+    #[test]
+    fn the_item_shows_only_while_an_agent_is_using_apps() {
+        let status = |sessions| ComputerUseStatus {
+            available: true,
+            accessibility: PermissionState::Granted,
+            screen_recording: PermissionState::Granted,
+            current: true,
+            setup: ComputerSetup::Ready,
+            sessions,
+        };
+        let mut state = MenuState {
+            shown: true,
+            status: None,
+            generation: 0,
+            menus: VecDeque::new(),
+        };
+        // At launch, before the daemon says anything, and while no agent uses an app.
+        assert_eq!(state.showing(), None);
+        state.status = Some(status(Vec::new()));
+        assert_eq!(state.showing(), None);
+        state.status = Some(status(vec![session("a", "TextEdit")]));
+        assert_eq!(state.showing().map(|sessions| sessions.len()), Some(1));
+        // "Show in menu bar" off hides it even while an agent uses an app.
+        state.shown = false;
+        assert_eq!(state.showing(), None);
     }
 }

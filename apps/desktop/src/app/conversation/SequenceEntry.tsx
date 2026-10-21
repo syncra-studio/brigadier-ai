@@ -1,4 +1,4 @@
-import { type ComponentProps, type ComponentType, type FC, lazy, Suspense, useState } from "react";
+import { type FC, Suspense } from "react";
 
 import { ImagesRow } from "@/app/conversation/activity/ImageRows";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
@@ -7,6 +7,7 @@ import { type BlockCard, isImageStep, type SequenceEntry as Entry } from "@/app/
 import { CompactionRow } from "@/app/conversation/CompactionRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
 import { ReplyText } from "@/app/conversation/ReplyText";
+import { cardBody } from "@/app/conversation/threadCode";
 import { SteerBubble } from "@/app/conversation/SteerBubble";
 import { TimeSeparator } from "@/components/conversation";
 
@@ -14,13 +15,7 @@ import { TimeSeparator } from "@/components/conversation";
  * The card views load on first use, and once loaded render at once: a card in folded work must
  * be whole the frame its work opens, or the row pops in after the fold has measured its height.
  */
-let loadedCardBody: ComponentType<ComponentProps<typeof LazyCardBody>> | null = null;
-export const loadCardBody = () =>
-  import("@/app/conversation/cards/CardBody").then((module) => {
-    loadedCardBody = module.default;
-    return module;
-  });
-const LazyCardBody = lazy(loadCardBody);
+export const loadCardBody = cardBody.preload;
 
 export function entryKey(entry: Entry): string {
   switch (entry.kind) {
@@ -44,12 +39,10 @@ export function entryKey(entry: Entry): string {
 }
 
 function CardEntry({ card }: { card: BlockCard }) {
-  // Chosen once: a card shown through the lazy view keeps it, so it never remounts.
-  const [CardBody] = useState(() => loadedCardBody ?? LazyCardBody);
   return (
     <div data-slot="request-card">
       <Suspense fallback={null}>
-        <CardBody type={card.type} id={card.id} />
+        <cardBody.View type={card.type} id={card.id} />
       </Suspense>
     </div>
   );

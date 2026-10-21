@@ -39,19 +39,14 @@ const label = (activity: Activity) =>
  * the browser (Brigadier's, by Settings › Browser), with what it prints one button away; any
  * other row opens what it prints in a tab. One the user stopped leaves the card; one of the
  * thread's that failed stays red with its last line, Restart and × until dealt with, and one
- * that finished on its own stays muted until the next message (Q94); the thread's fold keeps
- * the history.
+ * that finished on its own leaves too (Q94); the thread's fold keeps the history.
  */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => s.board?.conversationId === conversationId ? Object.values(s.board.previews) : []));
   const runs = useBoard(useShallow((s) => s.board?.conversationId === conversationId ? Object.values(s.board.backgroundRuns) : []));
   const tasks = useBoard((s) => s.board?.conversationId === conversationId ? s.board.tasks : null);
   const cleared = useBoard((s) => s.board?.conversationId === conversationId ? s.board.backgroundCleared : null);
-  // When the user's newest message was sent: a row that finished before it has left.
-  const lastSentMs = useBoard((s) => s.board?.conversationId === conversationId
-    ? Object.values(s.board.requests).reduce<number | null>((last, each) => (each.fromPeer || (last !== null && last >= each.startedAtMs) ? last : each.startedAtMs), null)
-    : null);
-  const activities = backgroundRows(previews, runs, tasks, (task) => (tasks ? workerName(tasks, task) : null), { cleared: cleared ?? [], lastSentMs });
+  const activities = backgroundRows(previews, runs, tasks, (task) => (tasks ? workerName(tasks, task) : null), { cleared: cleared ?? [] });
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
   const since = activities.map((activity) => `${activity.id}@${activity.startedAtMs}`).join();

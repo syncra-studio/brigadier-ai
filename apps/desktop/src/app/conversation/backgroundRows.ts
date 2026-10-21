@@ -9,13 +9,13 @@ import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
  *
  * A row stays while it still needs the user (Q94): one of the thread's that failed stays until
  * its Restart, its dismiss or the thread starts the same process again; one that finished on its
- * own stays until the next message is sent; one that was stopped leaves at once.
+ * own or was stopped leaves at once.
  */
 
 export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "failed" | "finished";
 
-/** What takes an ended row off the card: the user's dismiss or Restart (`cleared`, by id), and the newest message sent. */
-export type BackgroundLeft = { cleared: readonly string[]; lastSentMs: number | null };
+/** What takes a failed row off the card: the user's dismiss or Restart, or a later pass of its command (`cleared`, by id). */
+export type BackgroundLeft = { cleared: readonly string[] };
 
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
@@ -84,7 +84,7 @@ export function backgroundRows(
   runs: readonly BackgroundRun[],
   tasks: Record<string, Task> | null,
   workerName: (task: Task) => string | null,
-  left: BackgroundLeft = { cleared: [], lastSentMs: null },
+  left: BackgroundLeft = { cleared: [] },
 ): BackgroundRow[] {
   const active = previews.filter((preview) => previewActive(preview.state)).toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id));
   const browsers = active.filter((preview) => BROWSER.test(preview.command));
@@ -127,11 +127,11 @@ export function backgroundRows(
   for (const run of runs) {
     if (run.state.type === "running") rows.push({ type: "run", id: run.id, startedAtMs: run.startedAtMs, run, state: runState(run.command) });
   }
-  const stays = (id: string, state: "failed" | "finished" | null, endedAtMs: number): state is "failed" | "finished" =>
-    state !== null && !left.cleared.includes(id) && (state === "failed" || left.lastSentMs === null || left.lastSentMs <= endedAtMs);
+  const stays = (id: string, state: "failed" | "finished" | null): state is "failed" =>
+    state === "failed" && !left.cleared.includes(id);
   for (const preview of previews) {
     const state = endedPreviewState(preview);
-    if (preview.taskId || !stays(preview.id, state, preview.endedAtMs ?? preview.startedAtMs)) continue;
+    if (preview.taskId || !stays(preview.id, state)) continue;
     // The thread started the same process again: the new one is its row.
     const key = `${preview.kind}:${appCommand(preview.command)}`;
     if (previews.some((other) => !other.taskId && later(other, preview) && `${other.kind}:${appCommand(other.command)}` === key)) continue;
@@ -139,7 +139,7 @@ export function backgroundRows(
   }
   for (const run of runs) {
     const state = endedRunState(run);
-    if (!stays(run.id, state, run.endedAtMs ?? run.startedAtMs)) continue;
+    if (!stays(run.id, state)) continue;
     if (runs.some((other) => later(other, run) && appCommand(other.command) === appCommand(run.command))) continue;
     rows.push({ type: "run", id: run.id, startedAtMs: run.startedAtMs, run, state });
   }

@@ -47,6 +47,10 @@ pub(crate) fn row(category: TaskCategory) -> &'static Row {
             order: CLAUDE_FIRST,
             purpose: "operating apps on screen",
         },
+        TaskCategory::Design => &Row {
+            order: CLAUDE_FIRST,
+            purpose: "designs and images",
+        },
         TaskCategory::Chat => &Row {
             order: CLAUDE_FIRST,
             purpose: "chat",

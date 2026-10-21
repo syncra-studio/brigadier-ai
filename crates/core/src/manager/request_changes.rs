@@ -368,6 +368,57 @@ impl Record {
     }
 }
 
+/// The files a session's other requests made, untracked when the last snapshot was taken, each
+/// with the versions those requests left it at.
+struct Scratch(BTreeMap<String, Vec<FileBlob>>);
+
+impl Scratch {
+    fn made(&self, path: &str, blob: &FileBlob) -> bool {
+        self.0.get(path).is_some_and(|left| left.contains(blob))
+    }
+}
+
+/// Reads the other requests' records of the session for [`Scratch`]: a file one of them made
+/// (none before it), at every version one of them left it, unless HEAD had it at `latest`.
+fn scratch_files(
+    repo: &brigadier_git::Repo,
+    id: &ConversationId,
+    request: &str,
+    latest: &Oid,
+) -> Result<Scratch> {
+    let own = format!("{}/record", prefix(id, request));
+    let records = repo
+        .read_only(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            &format!("refs/brigadier/changes/{id}/"),
+        ])
+        .map_err(git_error)?;
+    let mut made = BTreeSet::new();
+    let mut left: BTreeMap<String, Vec<FileBlob>> = BTreeMap::new();
+    for record in records
+        .lines()
+        .filter(|name| name.ends_with("/record") && *name != own)
+    {
+        let after = repo.resolve(record).map_err(git_error)?;
+        let before = repo.resolve(&format!("{record}^")).map_err(git_error)?;
+        let before = repo.file_blobs(&before).map_err(git_error)?;
+        for (path, blob) in repo.file_blobs(&after).map_err(git_error)? {
+            if !before.contains_key(&path) {
+                made.insert(path.clone());
+            }
+            left.entry(path).or_default().push(blob);
+        }
+    }
+    if made.is_empty() {
+        return Ok(Scratch(BTreeMap::new()));
+    }
+    let head = repo.snapshot_head(latest).map_err(git_error)?;
+    let tracked = repo.file_blobs(&head).map_err(git_error)?;
+    left.retain(|path, _| made.contains(path) && !tracked.contains_key(path));
+    Ok(Scratch(left))
+}
+
 impl SessionManager {
     /// Both session environments count, but overnight workspaces and Chats do not.
     pub(super) fn changes_checkout(
@@ -992,6 +1043,8 @@ impl SessionManager {
             // Files gone that nothing here explains: the other end of a move a command's words
             // didn't name (`mv old*.txt new.txt`).
             let mut gone = BTreeSet::new();
+            // Read once a command removed a file nothing here explains.
+            let mut scratch = None;
             if !record.latest.is_empty() {
                 for path in previous
                     .keys()
@@ -1015,6 +1068,26 @@ impl SessionManager {
                         continue;
                     }
                     if !current.contains_key(path) {
+                        // A file an earlier request made that nothing committed, as that
+                        // request left it: a command removing the thread's own scratch or build
+                        // folder changes nothing of the project's (#492).
+                        if command && !record.paths.contains_key(path) {
+                            let scratch = match &scratch {
+                                Some(scratch) => scratch,
+                                None => scratch.insert(scratch_files(
+                                    &repo,
+                                    &id_owned,
+                                    &request_owned,
+                                    &Oid(record.latest.clone()),
+                                )?),
+                            };
+                            if previous
+                                .get(path)
+                                .is_some_and(|blob| scratch.made(path, blob))
+                            {
+                                continue;
+                            }
+                        }
                         gone.insert(path.clone());
                     }
                     if command {

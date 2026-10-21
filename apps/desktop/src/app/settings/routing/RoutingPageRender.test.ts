@@ -23,6 +23,7 @@ test("Routing shows who does what, edits an order, adds a rule with Undo, and ra
     "Resolve conflictsAutomaticNowOpus 5.5",
     "Run checksAutomaticNowOpus 5.5",
     "Use appsYour order · GPT-6, then Opus 5.5NowGPT-6",
+    "Make designs and imagesAutomaticNowOpus 5.5",
     "Take over a chatThe chat's own model, then AutomaticVaries",
     "Coordinate workAutomaticNowOpus 5.5",
     "Write commit messagesAutomaticNowOpus 5.5",
@@ -71,6 +72,11 @@ test("Routing shows who does what, edits an order, adds a rule with Undo, and ra
     seen.clash,
     "“Never give Sonnet 5.5 work” already keeps Sonnet 5.5 away from everything. Never rules win, so this rule won't change anything until you remove that one.",
   );
+  assert.deepEqual(seen.several, {
+    shown: "Review changes, Run checks and Write commit messages",
+    ticked: ["Review changes", "Run checks", "Write commit messages"],
+    note: "Run checks and Write commit messages will go to GPT-6 whenever it can run. Review changes follows your order instead. Everything else stays the same.",
+  });
   assert.equal(
     seen.preview,
     "Write commit messages will go to GPT-6 instead of Opus 5.5 whenever GPT-6 can run. Everything else stays the same.",

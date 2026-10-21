@@ -2,6 +2,8 @@ import type { MergeRecord, ProviderKind } from "@/ipc/generated";
 
 const short = (sha: string) => sha.slice(0, 7);
 const findings = (open: number) => (open === 1 ? "one finding still open" : `${open} findings still open`);
+/** The checks that failed on the merged code: one that failed on earlier code says nothing of it. */
+const failedOnHead = (record: MergeRecord) => record.checks.filter((check) => check.onHead && check.status !== "exit 0");
 
 /**
  * What is really wrong with a merged commit, one line each: a review's findings left open, a
@@ -11,7 +13,7 @@ const findings = (open: number) => (open === 1 ? "one finding still open" : `${o
  */
 export function mergeProblems(record: MergeRecord, vendors: Readonly<Record<ProviderKind, string>>): string[] {
   return [
-    ...record.checks.filter((check) => check.status !== "exit 0").map((check) => `${check.command}: ${check.status}`),
+    ...failedOnHead(record).map((check) => `${check.command}: ${check.status}`),
     ...record.reviews
       .filter((review) => review.open > 0)
       .map((review) => `${vendors[review.reviewer]} review of ${short(review.from)}..${short(review.to)}: ${findings(review.open)}`),
@@ -26,7 +28,7 @@ export function mergeProblems(record: MergeRecord, vendors: Readonly<Record<Prov
  */
 export function mergeWarning(record: MergeRecord): string | null {
   const open = record.reviews.reduce((sum, review) => sum + review.open, 0);
-  const failed = record.checks.filter((check) => check.status !== "exit 0").map((check) => check.command);
+  const failed = failedOnHead(record).map((check) => check.command);
   const parts = [
     ...(open > 0 ? [open === 1 ? "one review finding is still open" : `${open} review findings are still open`] : []),
     ...(failed.length === 1 ? [`${failed[0]} failed`] : failed.length > 1 ? [`${failed.length} checks failed`] : []),

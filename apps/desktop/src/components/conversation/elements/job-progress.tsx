@@ -85,6 +85,7 @@ export function JobProgress({
   detail,
   warning,
   actions,
+  stalled = false,
   className,
   ...props
 }: Omit<
@@ -109,6 +110,8 @@ export function JobProgress({
   warning?: string | undefined;
   /** Its buttons, last. */
   actions?: ReactNode;
+  /** No stage is at work: after a failure the line shows it still, with no spinner. */
+  stalled?: boolean | undefined;
 }) {
   const stage = progressOf(stageIndex, stages.length);
   const progress = clamp(stageProgress, 0, 1);
@@ -176,6 +179,8 @@ export function JobProgress({
           <X aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
         ) : !running ? (
           <Check aria-hidden className="text-success size-icon-sm shrink-0" />
+        ) : stalled && failing ? (
+          <X aria-hidden className="text-destructive size-icon-sm shrink-0" />
         ) : (
           <Spinner
             className={cn(

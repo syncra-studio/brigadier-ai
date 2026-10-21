@@ -33,10 +33,13 @@ export function useTurnMerge(steps: readonly BlockOrchestratorStep[], requestIds
   return useMemo(() => (own ? { merge: own, own: true } : later ? { merge: JSON.parse(later) as Merged, own: false } : null), [own, later]);
 }
 
-/** "Merged into main", "Merged into main on this Mac", "Merged into main (PR #7)". */
-export function mergeWords(merge: Merged): string {
+/**
+ * "Merged into main", "Merged into main on this Mac" (its base has an upstream that doesn't
+ * have it: not `pushed` since), "Merged into main (PR #7)".
+ */
+export function mergeWords(merge: Merged, pushed = false): string {
   if (merge.pr !== undefined) return `Merged into ${merge.base} (PR #${merge.pr})`;
-  return merge.upstream ? `Merged into ${merge.base} on this Mac` : `Merged into ${merge.base}`;
+  return merge.upstream && !pushed ? `Merged into ${merge.base} on this Mac` : `Merged into ${merge.base}`;
 }
 
 /**

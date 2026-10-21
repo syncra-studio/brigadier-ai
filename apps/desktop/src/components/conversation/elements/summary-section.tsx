@@ -114,7 +114,7 @@ type RowContent = {
   muted?: boolean;
   /** The row's one action, in its meta's place while the row is hovered or focused. */
   action?: ReactNode;
-  /** Keeps `action` showing without hover or focus (a failed row's Restart and ×). */
+  /** Keeps `action` showing without hover or focus (a failed row's Restart and ×), after the meta in a place of its own. */
   actionVisible?: boolean | undefined;
 };
 
@@ -134,7 +134,7 @@ function RowParts({ icon, meta, action, actionVisible, children }: RowContent & 
         <span
           className={cn(
             "text-muted-foreground/70 flex shrink-0 items-center gap-1.5 text-xs tabular-nums",
-            action && (actionVisible ? "invisible" : "group-hover/row:invisible group-focus-within/row:invisible"),
+            action && !actionVisible && "group-hover/row:invisible group-focus-within/row:invisible",
           )}
         >
           {meta}
@@ -144,15 +144,16 @@ function RowParts({ icon, meta, action, actionVisible, children }: RowContent & 
   );
 }
 
-/** The action's place: over the meta, at the row's end, shown while the row is hovered or focused
- * (or always, for a row whose action must stay put, like a failed row's Restart and ×). */
+/** The action's place: over the meta, at the row's end, shown while the row is hovered or focused;
+ * or, for a row whose action must stay put (a failed row's Restart and ×), after the meta, taking
+ * its own room so the row's words truncate before it. */
 function RowAction({ children, visible }: { children: ReactNode; visible?: boolean | undefined }) {
   return (
     <span
       data-slot="summary-row-action"
       className={cn(
-        "absolute inset-y-0 end-0 items-center",
-        visible ? "flex" : "hidden group-focus-within/row:flex group-hover/row:flex",
+        "items-center",
+        visible ? "flex shrink-0" : "absolute inset-y-0 end-0 hidden group-focus-within/row:flex group-hover/row:flex",
       )}
     >
       {children}

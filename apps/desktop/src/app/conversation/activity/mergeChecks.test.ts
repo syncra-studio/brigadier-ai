@@ -35,3 +35,21 @@ test("the Merging step lists only what is really wrong with the merged commit", 
     ["pnpm test: exit 1", "Codex review of 0000aaa..9999bbb: one finding still open", "CI failed on a1b2c3d"],
   );
 });
+
+test("checks that failed on earlier code don't read as the merged commit failing", () => {
+  // #497: a run that failed and later passed under a longer command, the full checks before
+  // the last commit, a run at the base commit on purpose; CI passed on the merged commit.
+  const checks = [
+    { command: "pnpm typecheck && pnpm test a.test.ts", status: "exit 1", onHead: false },
+    { command: "pnpm typecheck && pnpm test a.test.ts b.test.ts", status: "exit 0", onHead: false },
+    { command: "cargo test -p brigadier-core --lib -- two tests", status: "exit 101", onHead: false },
+    { command: "tools/full-checks.sh", status: "exit 101", onHead: false },
+    { command: "cd /tmp/base-src && cargo test -p brigadier-core --lib -- two tests", status: "exit 101", onHead: false },
+  ];
+  assert.equal(mergeWarning(record({ checks })), null);
+  assert.deepEqual(mergeProblems(record({ checks }), VENDORS), []);
+  // The same failure on the merged code still reads.
+  const onHead = [...checks, { command: "tools/full-checks.sh", status: "exit 101", onHead: true }];
+  assert.equal(mergeWarning(record({ checks: onHead })), "Tools/full-checks.sh failed.");
+  assert.deepEqual(mergeProblems(record({ checks: onHead }), VENDORS), ["tools/full-checks.sh: exit 101"]);
+});

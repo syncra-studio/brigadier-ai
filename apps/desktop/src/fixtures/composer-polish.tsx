@@ -67,6 +67,8 @@ let dropped: { shift: boolean; entries: { path: string; folder: boolean }[] } | 
 /** Reads a dropped file's bytes, once the `dropSend` case lets it (`null`: none waits). */
 let finishRead: (() => void) | null = null;
 let holdRead = false;
+/** Answers the `stop` case's interrupt, as done or failed (`null`: none waits). */
+let finishInterrupt: ((fail: boolean) => void) | null = null;
 mockWindows("main");
 mockIPC((command, payload) => {
   if (command === "drag_shift") return shiftHeld;
@@ -92,6 +94,12 @@ mockIPC((command, payload) => {
         finishUpload = () => resolve({ method: req.method, attachment });
       });
     }
+    case "interrupt":
+      sent.push(req);
+      if (which !== "stop") return { method: req.method };
+      return new Promise((resolve, reject) => {
+        finishInterrupt = (fail) => (fail ? reject(new Error("The turn would not stop.")) : resolve({ method: req.method }));
+      });
     case "getDictation":
       // Dictation is on offer, its speech model not yet downloaded (starting it downloads first).
       return { method: req.method, dictation: { available: true, installed: false, downloading: false, modelBytes: 1000 } };
@@ -576,6 +584,26 @@ async function restartsCase(seen: Record<string, unknown>) {
   seen.next = sendButton()?.dataset.state;
 }
 
+/**
+ * #498: Stop shows the turn stopped the moment it is pressed, while the daemon still stops it; a
+ * stop that fails shows it working again, and says why.
+ */
+async function stopCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  setState({ type: "working" });
+  setRun("running");
+  await until("Stop", () => sendButton()?.dataset.state === "stop", 3000);
+  await fixtureClick(sendButton()!);
+  await until("the interrupt", () => finishInterrupt !== null, 3000);
+  // A frame or two, well under the hold Stop keeps through the work's own flips.
+  await sleep(100);
+  seen.whileStopping = sendButton()?.dataset.state;
+  finishInterrupt!(true);
+  await until("Stop again", () => sendButton()?.dataset.state === "stop", 3000).catch(() => {});
+  seen.afterFailure = sendButton()?.dataset.state;
+  seen.said = document.body.textContent?.includes("The turn would not stop.") ?? false;
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
@@ -588,6 +616,7 @@ const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = 
   dropSend: dropSendCase,
   flips: flipsCase,
   restarts: restartsCase,
+  stop: stopCase,
 };
 
 async function drive() {

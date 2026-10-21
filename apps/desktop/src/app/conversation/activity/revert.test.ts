@@ -13,6 +13,14 @@ test("Revert asks for a pull request's revert pushed, and a merge made on this M
   assert.equal(revertRequest(unrecorded), null);
 });
 
+test("Revert asks for the revert of a merge made on this Mac and pushed since pushed too", () => {
+  // #496: merged into main on this Mac, then main pushed to origin/main.
+  const local = { ...merge, upstream: { name: "origin/main", behind: 0 } };
+  assert.equal(revertRequest(local), "Revert merge f00dfee on main the way it went in");
+  assert.equal(revertRequest(local, true), "Revert merge f00dfee on main and push it the way it went in");
+  assert.equal(revertRequest({ ...local, pr: 7 }, true), "Revert merge f00dfee (PR #7) on main and push it the way it went in");
+});
+
 test("Redo asks for a reverted merge's revert reverted the way it went in, and only while it stays reverted", () => {
   const undo = { revertedBy: "beefcafe5678", revertedAtMs: 1 };
   assert.equal(redoRequest(merge, undo), "Redo merge f00dfee on main: revert its revert beefcaf the way it went in");

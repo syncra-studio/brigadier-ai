@@ -106,3 +106,10 @@ test("Stop stays Stop while a session's model starts again mid-work; only the wo
   assert.equal(seen.after, "send");
   assert.equal(seen.next, "starting");
 });
+
+test("Stop shows the turn stopped the moment it is pressed; a stop that fails shows it working again and says why (issue 498)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "stop");
+  assert.notEqual(seen.whileStopping, "stop");
+  assert.equal(seen.afterFailure, "stop");
+  assert.equal(seen.said, true);
+});

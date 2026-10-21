@@ -36,7 +36,8 @@ let computerMenu: boolean | null = null;
  * startup holds up the first screen. */
 let computerMenuAllowed = false;
 
-/** Shows the computer-use menu-bar item while computer use and "Show in menu bar" are on. */
+/** Lets the computer-use menu-bar item show while computer use and "Show in menu bar" are on;
+ * the shell shows it only while an agent is using apps. */
 function syncComputerMenu(): void {
   const { settings, info } = useApp.getState();
   const shown =

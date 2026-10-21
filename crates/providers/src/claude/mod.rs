@@ -854,14 +854,40 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     // settings set would win over it, and flag settings win over project settings. Claude
     // takes a blank one as none (2.1.295 then says "Not logged in";
     // docs/evidence/2026-10-09-accounts.md). The process gets none either.
+    let mut env: Map<String, Value> = Map::new();
     if home_login {
-        let blank: Map<String, Value> = crate::accounts::auth_vars(ProviderKind::Claude)
-            .iter()
-            .map(|name| ((*name).to_owned(), json!("")))
-            .collect();
-        settings["env"] = Value::Object(blank);
+        for name in crate::accounts::auth_vars(ProviderKind::Claude) {
+            env.insert((*name).to_owned(), json!(""));
+        }
+    }
+    // A Codex the session runs in its sandbox checks TLS certificates through macOS's trust
+    // service, which Claude's sandbox keeps out (only `enableWeakerNetworkIsolation` lets it in,
+    // for every command, and it is a way out for data): each of its requests fails with "error
+    // sending request". Given a CA bundle, Codex checks them itself with the native roots and
+    // the bundle's (codex-cli 0.163.0, #504). A bundle the user gives it already does that.
+    if cfg!(target_os = "macos")
+        && sandbox_network(&spec.access)
+        && std::env::var_os("CODEX_CA_CERTIFICATE").is_none()
+        && std::env::var_os("SSL_CERT_FILE").is_none()
+    {
+        env.insert("CODEX_CA_CERTIFICATE".to_owned(), json!(MACOS_CA_BUNDLE));
+    }
+    if !env.is_empty() {
+        settings["env"] = Value::Object(env);
     }
     settings
+}
+
+/// macOS's own bundle of the system's root certificates.
+const MACOS_CA_BUNDLE: &str = "/etc/ssl/cert.pem";
+
+/// Whether a session's commands reach the network through Claude's sandbox.
+fn sandbox_network(access: &Access) -> bool {
+    match access {
+        Access::Workspace { .. } => true,
+        Access::Scoped { network, .. } => *network,
+        Access::ReadOnly | Access::Full => false,
+    }
 }
 
 /// A thread's output hook ([`SessionSpec::output_hook`]) as settings `hooks`: the same command
@@ -2466,6 +2492,52 @@ for line in sys.stdin:
         .unwrap();
         let flag = &args[args.iter().position(|arg| arg == "--settings").unwrap() + 1];
         assert!(flag.contains("\"CLAUDE_CODE_OAUTH_TOKEN\":\"\""), "{flag}");
+    }
+
+    #[test]
+    fn codex_in_a_networked_sandbox_checks_certificates_without_macos_trust_service() {
+        let cwd = Temp::new();
+        let scoped = |network: bool| Access::Scoped {
+            write_cwd: true,
+            writable_roots: Vec::new(),
+            network,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        let user_bundle = std::env::var_os("CODEX_CA_CERTIFICATE").is_some()
+            || std::env::var_os("SSL_CERT_FILE").is_some();
+        for (access, networked) in [
+            (
+                Access::Workspace {
+                    extra_roots: Vec::new(),
+                },
+                true,
+            ),
+            (scoped(true), true),
+            (scoped(false), false),
+            (Access::ReadOnly, false),
+            (Access::Full, false),
+        ] {
+            let spec = SessionSpec {
+                access: access.clone(),
+                ..spec(cwd.path(), &[])
+            };
+            let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
+            let bundle = settings["env"]["CODEX_CA_CERTIFICATE"].as_str();
+            if cfg!(target_os = "macos") && networked && !user_bundle {
+                assert_eq!(bundle, Some(MACOS_CA_BUNDLE), "{access:?}");
+                assert!(Path::new(MACOS_CA_BUNDLE).is_file());
+            } else {
+                assert_eq!(bundle, None, "{access:?}");
+            }
+        }
+        // An extra account's blank login variables stay beside it.
+        let spec = SessionSpec {
+            access: scoped(true),
+            ..spec(cwd.path(), &[])
+        };
+        let account = settings(&spec, cwd.path(), &SubAgents::Any, true);
+        assert_eq!(account["env"]["CLAUDE_CODE_OAUTH_TOKEN"], json!(""));
     }
 
     fn spec(cwd: &Path, ids: &[&str]) -> SessionSpec {

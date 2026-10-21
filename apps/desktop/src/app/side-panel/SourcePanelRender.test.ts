@@ -11,6 +11,8 @@ test("the Source panel commits from its menu, merges a branch in, lists its conf
   assert.equal(seen.error, undefined, JSON.stringify(seen));
   assert.deepEqual(seen.groups, ["Staged Changes1", "Changes2"]);
   assert.equal(seen.placeholder, 'Message (⌘⏎ to commit on "brigadier/912a9469/session")');
+  // The empty box is as tall as its placeholder, which wraps in the panel (#490).
+  assert.deepEqual(seen.placeholderFits, { fits: true, lines: 2 });
   assert.equal(seen.commit, "Commit");
   assert.equal(seen.branch, "brigadier/912a9469/session2");
   assert.doesNotMatch(String(seen.panelText), /Leave out AI co-author lines|Review all/);
@@ -47,4 +49,12 @@ test("the Source panel commits from its menu, merges a branch in, lists its conf
   assert.deepEqual([committed.message, committed.amend, committed.push], ["Merge branch 'main' into brigadier/912a9469/session", false, false]);
   assert.equal(seen.afterAbort, "", "an aborted merge's message leaves the box");
   assert.equal(seen.keptMessage, "Unsent message", "closing Source keeps the unsent commit message");
+  // Nothing to commit, the change already committed on the branch: the words say so, and only the branch shows (#490).
+  assert.deepEqual(seen.clean, {
+    box: false,
+    commit: false,
+    branch: "brigadier/912a9469/session1",
+    empty: ["Nothing to commit", "The changes are committed on this branch (1 commit not pushed)."],
+  });
+  assert.deepEqual(seen.changedAgain, { box: true, commit: "Commit" });
 });

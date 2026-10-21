@@ -96,7 +96,38 @@ const groups = () =>
     (group) => text(group.querySelector("header > button")) + text(group.querySelector("header > span:last-child")),
   );
 const box = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')!;
-const commitButton = () => box().closest("div")!.parentElement!.querySelector<HTMLButtonElement>(":scope > div:nth-child(2) > button")!;
+/**
+ * Whether the empty box shows its whole placeholder: its lines, laid out as the box does, fit its
+ * height. Measured as WebKit sizes an empty box, by its rows alone (Chromium sizes it to the
+ * placeholder, WebKit doesn't).
+ */
+function placeholderFits(): { fits: boolean; lines: number } {
+  const webkit = document.createElement("style");
+  webkit.textContent = "textarea { field-sizing: fixed !important; }";
+  document.head.append(webkit);
+  const field = box();
+  const style = getComputedStyle(field);
+  const probe = document.createElement("div");
+  probe.textContent = field.placeholder;
+  Object.assign(probe.style, {
+    position: "absolute",
+    visibility: "hidden",
+    boxSizing: "content-box",
+    width: `${field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)}px`,
+    font: style.font,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+  });
+  document.body.append(probe);
+  const needed = probe.getBoundingClientRect().height;
+  probe.remove();
+  const room = field.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  webkit.remove();
+  return { fits: room + 0.5 >= needed, lines: Math.round(needed / parseFloat(style.lineHeight)) };
+}
+const commitButton = () => box().closest("div")!.parentElement!.parentElement!.querySelector<HTMLButtonElement>(":scope > div:nth-child(2) > button")!;
 /** Opens a menu from the keyboard: a closed menu that stays mounted would swallow a pointer press. */
 const openMenu = (trigger: HTMLElement | undefined) => {
   trigger?.focus();
@@ -121,6 +152,7 @@ function Fixture() {
       await until(() => groups().length === 2);
       seen.groups = groups();
       seen.placeholder = box().placeholder;
+      seen.placeholderFits = placeholderFits();
       seen.commit = text(commitButton());
       seen.branch = text(document.querySelector('[data-slot="source-branch"]'));
       seen.panelText = text(document.querySelector('[data-slot="source-panel"]'));
@@ -180,11 +212,12 @@ function Fixture() {
       seen.committed = calls.find((call) => call.method === "commitChanges");
 
       // A merge aborted elsewhere takes git's message out of the box with it.
-      await until(() => box().value === "");
+      // Committed with nothing left: the box goes until something changes.
+      await until(() => !document.querySelector('[aria-label="Commit message"]'));
       state = { ...state, changes: [file("src/cart/total.ts", "conflicted")], merging: { incoming: "feature", message: "Merge branch 'feature'" } };
       emitWorkspaceChanged({ type: "conversation", conversationId: id });
-      await until(() => box().value === "Merge branch 'feature'");
-      state = { ...state, changes: [], merging: null };
+      await until(() => document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')?.value === "Merge branch 'feature'");
+      state = { ...state, changes: [file("notes.txt", "untracked")], merging: null };
       emitWorkspaceChanged({ type: "conversation", conversationId: id });
       await until(() => text(commitButton()) === "Commit");
       seen.afterAbort = box().value;
@@ -197,6 +230,22 @@ function Fixture() {
       setShown(true);
       await until(() => !!document.querySelector('[aria-label="Commit message"]'));
       seen.keptMessage = box().value;
+
+      // Nothing left to commit, the change committed on the branch: no box, no Commit, the branch stays (#490).
+      state = { ...state, staged: [], changes: [], merging: null, ahead: 1 };
+      emitWorkspaceChanged({ type: "conversation", conversationId: id });
+      await until(() => text(document.querySelector('[data-slot="source-panel"]')).includes("Nothing to commit"));
+      seen.clean = {
+        box: !!document.querySelector('[aria-label="Commit message"]'),
+        commit: !!button("Commit Actions"),
+        branch: text(document.querySelector('[data-slot="source-branch"]')),
+        empty: all('[data-slot="source-panel"] p').map(text).filter((line) => line.startsWith("Nothing") || line.startsWith("The changes")),
+      };
+      // A file changes: the box is back.
+      state = { ...state, changes: [file("README.md", "modified")] };
+      emitWorkspaceChanged({ type: "conversation", conversationId: id });
+      await until(() => !!document.querySelector('[aria-label="Commit message"]'));
+      seen.changedAgain = { box: true, commit: text(commitButton()) };
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen, body: document.body.textContent?.slice(0, 2000) })));
   }, []);

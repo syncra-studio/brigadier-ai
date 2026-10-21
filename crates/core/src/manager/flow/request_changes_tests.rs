@@ -3047,3 +3047,153 @@ async fn a_fast_forward_merges_change_spans_its_commits() {
     assert_eq!(paths, ["two.txt"]);
     flow.stop().await;
 }
+
+/// Writes `count` files under `dir` in the checkout, as a build or a scratch copy does.
+fn scratch_folder(workspace: &Path, dir: &str, count: usize) {
+    let dir = workspace.join(dir);
+    std::fs::create_dir_all(dir.join("deps")).unwrap();
+    for n in 0..count {
+        std::fs::write(dir.join(format!("deps/f{n}.txt")), format!("built {n}\n")).unwrap();
+    }
+}
+
+/// The thread's own scratch and build folders are no change to the project (#492): one it
+/// makes and removes within a turn, a gitignored one and one tagged as a cache never count; an
+/// untagged one it leaves counts in that turn, and the later turn that removes it shows only
+/// its own edit, on the card, in its review and in Last Turn.
+#[tokio::test]
+async fn a_removed_scratch_folder_of_the_threads_is_no_change() {
+    let flow = Flow::start(
+        "20261021-1551-changes-card-492-w01-scratch",
+        Options {
+            thread: ProviderKind::Claude,
+            files: vec![
+                ("a.txt", "base\n"),
+                ("b.txt", "base\n"),
+                (".gitignore", "build/\n"),
+            ],
+            ..Default::default()
+        },
+        script(|turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            if turn.input.contains("Build") {
+                edit(
+                    &turn,
+                    &workspace.join("a.txt"),
+                    "edit-a",
+                    "base\n",
+                    "thread a\n",
+                )
+                .await;
+                observed(&turn, 1).await;
+                scratch_folder(&workspace, "scratch", 40);
+                scratch_folder(&workspace, "target-base", 40);
+                std::fs::write(
+                    workspace.join("target-base/CACHEDIR.TAG"),
+                    "Signature: 8a477f597d28d172789f06886806bc55\n# cargo\n",
+                )
+                .unwrap();
+                scratch_folder(&workspace, "build", 10);
+                scratch_folder(&workspace, "tmp-run", 10);
+                shell_reported(&turn, "build", "cargo build").await;
+                observed(&turn, 1 + 40 + 10).await;
+                std::fs::remove_dir_all(workspace.join("tmp-run")).unwrap();
+                shell_reported(&turn, "clean-tmp", "rm -rf tmp-run").await;
+                observed(&turn, 1 + 40).await;
+                Reply::text("Built it.")
+            } else {
+                for dir in ["scratch", "target-base", "build"] {
+                    std::fs::remove_dir_all(workspace.join(dir)).unwrap();
+                }
+                shell_reported(&turn, "clean", "rm -rf scratch target-base build").await;
+                edit(
+                    &turn,
+                    &workspace.join("b.txt"),
+                    "edit-b",
+                    "base\n",
+                    "thread b\n",
+                )
+                .await;
+                taken(&turn, 1).await;
+                Reply::text("Cleaned up.")
+            }
+        }),
+    )
+    .await;
+    let settled = |after: Option<String>| {
+        move |board: &Board| {
+            board.latest_request().is_some_and(|r| {
+                Some(&r.id) != after.as_ref() && r.changes.as_ref().is_some_and(|c| c.settled)
+            })
+        }
+    };
+    flow.say("Build it.").await;
+    let board = flow.until("the build's changes", settled(None)).await;
+    let built = board.latest_request().unwrap();
+    let paths: Vec<_> = built
+        .changes
+        .as_ref()
+        .unwrap()
+        .stat
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(paths.len(), 41, "{paths:?}");
+    assert!(paths.contains(&"a.txt"));
+    assert!(
+        paths
+            .iter()
+            .all(|path| *path == "a.txt" || path.starts_with("scratch/")),
+        "{paths:?}"
+    );
+    let built = built.id.clone();
+    flow.say("Clean up and edit b.").await;
+    let board = flow
+        .until("the clean-up's changes", settled(Some(built)))
+        .await;
+    let cleaned = board.latest_request().unwrap();
+    let paths: Vec<_> = cleaned
+        .changes
+        .as_ref()
+        .unwrap()
+        .stat
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(paths, ["b.txt"]);
+    assert!(cleaned.changes.as_ref().unwrap().held.is_empty());
+    let cleaned = cleaned.id.clone();
+    let board = flow
+        .until("the clean-up's review", |board| {
+            board
+                .requests
+                .get(&cleaned)
+                .is_some_and(|r| !r.review.is_empty())
+        })
+        .await;
+    let review: Vec<_> = board.requests[&cleaned]
+        .review
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(review, ["b.txt"]);
+    let last = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            ReviewScope::LastTurn {
+                request_id: Some(cleaned),
+            },
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let files: Vec<_> = last.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(files, ["b.txt"]);
+    assert_eq!((last.insertions, last.deletions), (1, 1));
+    flow.stop().await;
+}

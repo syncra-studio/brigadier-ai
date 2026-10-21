@@ -53,8 +53,9 @@ function share(count: string | undefined): number {
 /**
  * The session's job while it works through steps: assistant-ui's job progress element with the
  * job's line ("Reviewing · 3 of 5", "Checks failed · fixing"), a bar of one segment per step, and
- * the step at work (or the one that failed) shimmering before the next. A click opens every step
- * in a tab.
+ * the step at work (or the one that failed) shimmering before the next. A spinner only while a
+ * step is at work: a failure nothing works on yet shows still (#487). A click opens every step in
+ * a tab.
  */
 export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
   const at = job.steps.findIndex((step) => step.state === "active");
@@ -68,6 +69,7 @@ export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
         title={title}
         stageIndex={index}
         stageProgress={current?.state === "active" ? share(current.count) : 0}
+        stalled={at === -1}
         stages={job.steps.map((step, i) => ({
           name: step.name,
           weight: 1,

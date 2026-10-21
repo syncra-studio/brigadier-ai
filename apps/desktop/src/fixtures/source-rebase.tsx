@@ -103,7 +103,7 @@ const groups = () =>
     (group) => text(group.querySelector("header > button")) + text(group.querySelector("header > span:last-child")),
   );
 const box = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')!;
-const commitButton = () => box().closest("div")!.parentElement!.querySelector<HTMLButtonElement>(":scope > div:nth-child(2) > button")!;
+const commitButton = () => box().closest("div")!.parentElement!.parentElement!.querySelector<HTMLButtonElement>(":scope > div:nth-child(2) > button")!;
 const branchItem = () => text(document.querySelector('[data-slot="source-branch"]'));
 const rebaseStep = () => text(document.querySelector('[data-slot="conflict-rebase"]'));
 const openMenu = (trigger: HTMLElement | undefined) => {
@@ -173,8 +173,9 @@ function Fixture() {
       openSub("Commit");
       await until(() => !!menuItem("Abort Rebase"));
       menuItem("Abort Rebase")!.click();
-      await until(() => text(commitButton()) === "Commit");
-      seen.aborted = { branch: branchItem(), message: box().value, boxDisabled: box().disabled };
+      // Nothing is left to commit: the box goes, the branch shows (#490).
+      await until(() => text(document.querySelector('[data-slot="source-panel"]')).includes("Nothing to commit"));
+      seen.aborted = { branch: branchItem(), box: !!document.querySelector('[aria-label="Commit message"]') };
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen, body: document.body.textContent?.slice(0, 2000) })));
   }, []);

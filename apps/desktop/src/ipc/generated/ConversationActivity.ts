@@ -39,4 +39,9 @@ failed?: boolean,
 /**
  * Its latest request was stopped by the user, and no turn has started since.
  */
-stopped?: boolean, };
+stopped?: boolean, 
+/**
+ * Its requests that work, by id: between turns too, while a message waits for a turn or
+ * Brigadier owes one a turn, as its composer shows them working.
+ */
+requests?: Array<string>, };

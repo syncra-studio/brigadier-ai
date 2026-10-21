@@ -59,7 +59,7 @@ export const projects: Record<string, Project> = {
   [PROJECT]: { id: PROJECT, name: "Brigadier Desktop", createdAtMs: 0, repos: [], prefs: {}, trust: [] } as unknown as Project,
 };
 
-const workerKinds: TaskCategory[] = ["scout", "research", "implement", "review", "merge", "verify", "operate"];
+const workerKinds: TaskCategory[] = ["scout", "research", "implement", "review", "merge", "verify", "operate", "design"];
 
 export const rules: OverrideRule[] = [
   // What Routing's old switch wrote for a model kept from tasks.
@@ -166,7 +166,7 @@ function candidate(provider: ProviderKind, id: string, fields: Partial<RouteCand
 
 /** What routing would pick for each kind: review by GPT-6 when Claude wrote the change. */
 export function previewRoutes(areas: Area[], author: ProviderKind | null): RoutePreview[] {
-  return KINDS.map((category) => {
+  return [...KINDS, "design" as const].map((category) => {
     const codexFirst = category === "review" ? author !== "codex" : category === "operate" || category === "scout";
     const first: [ProviderKind, string] = codexFirst ? ["codex", "gpt-6"] : ["claude", "opus"];
     const second: [ProviderKind, string] = codexFirst ? ["claude", "opus"] : ["codex", "gpt-6"];

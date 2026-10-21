@@ -4,4 +4,4 @@
  * What a piece of work is, for routing. Mirrors the core's task kinds plus plain Chats and
  * the orchestrator itself.
  */
-export type TaskCategory = "scout" | "research" | "implement" | "review" | "merge" | "verify" | "operate" | "chat" | "orchestrate" | "gitText";
+export type TaskCategory = "scout" | "research" | "implement" | "review" | "merge" | "verify" | "operate" | "design" | "chat" | "orchestrate" | "gitText";

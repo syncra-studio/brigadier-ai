@@ -13,7 +13,7 @@ const saved: OverrideRule = {
   id: "0b7c",
   effect: "never",
   target,
-  categories: ["scout", "research", "implement", "review", "merge", "verify", "operate"],
+  categories: ["scout", "research", "implement", "review", "merge", "verify", "operate", "design"],
   areas: [],
   projectId: null,
   createdAtMs: 1,
