@@ -2244,8 +2244,12 @@ impl SessionManager {
                     not_it("that message of the user's doesn't say so".into())
                 };
             }
+            // Quoted words skip them only as their message says: "merge without the tests"
+            // out of "don't merge without the tests" doesn't.
             if merge_consent::quotes(named, &message.text) {
-                return if merge_consent::skips_checks(named) {
+                return if merge_consent::skips_checks(named)
+                    && merge_consent::skips_checks(&message.text)
+                {
                     Ok(true)
                 } else {
                     not_it(format!("\"{named}\" doesn't say so"))

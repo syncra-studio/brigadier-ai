@@ -481,7 +481,7 @@ fn merges(board: &crate::board::Board) -> Vec<bool> {
 /// The merge rule (thread-truth grill Q5): a merge into main goes through only once run_checks
 /// passed on its exact commit. Never run, or failed, it is refused with the reason in plain
 /// words, recorded for the user; the user's plain consent named as `anyway` doesn't skip it,
-/// their "merge it anyway" does, and so does their "Merge anyway" click. A pass merges with no
+/// nor their words quoted out of a message that says not to, their "merge it anyway" does, and so does their "Merge anyway" click. A pass merges with no
 /// waiver, and a merge that goes through ends the refusal.
 #[tokio::test]
 async fn a_merge_into_main_needs_run_checks_passed_on_its_commit_or_the_users_merge_anyway() {
@@ -510,6 +510,13 @@ async fn a_merge_into_main_needs_run_checks_passed_on_its_commit_or_the_users_me
                     finish(json!({ "consent": "merge it" })).await;
                     // The user's consent isn't their word to skip the checks.
                     finish(json!({ "consent": "merge it", "anyway": "merge it" })).await;
+                } else if input.contains("Don't merge without the tests") {
+                    // Words lifted out of a message that says not to.
+                    finish(json!({
+                        "consent": "Merge it once they pass",
+                        "anyway": "merge without the tests",
+                    }))
+                    .await;
                 } else if input.contains("Merge it anyway") {
                     finish(json!({ "consent": "Merge it anyway", "anyway": "Merge it anyway" }))
                         .await;
@@ -573,6 +580,17 @@ async fn a_merge_into_main_needs_run_checks_passed_on_its_commit_or_the_users_me
             .starts_with("The checks failed on "),
         "{:?}",
         board.merge_refused
+    );
+    assert!(merges(&board).is_empty());
+
+    // Their words quoted out of a message that says not to skip them don't either.
+    flow.say("Don't merge without the tests. Merge it once they pass")
+        .await;
+    let board = flow.settled().await;
+    let (error, text) = said.lock().unwrap().remove(0);
+    assert!(
+        error && text.contains("`anyway` doesn't skip them"),
+        "{text}"
     );
     assert!(merges(&board).is_empty());
 
