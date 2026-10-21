@@ -3,6 +3,8 @@
 
 export * from "./AgentRow";
 export * from "./BrowserOptions";
+export * from "./CommitActionsMenu";
+export * from "./CommitBox";
 export * from "./EntryView";
 export * from "./FileBrowser";
 export * from "./FileGlyph";
@@ -17,6 +19,9 @@ export * from "./RebaseStep";
 export * from "./ReviewSteps";
 export * from "./SiteInfo";
 export * from "./SiteInfoPopover";
+export * from "./SourceGroup";
+export * from "./SourceHeader";
+export * from "./SourceMoreMenu";
 export * from "./TabPage";
 export * from "./WorkerAnswer";
 export * from "./WorkerBrief";

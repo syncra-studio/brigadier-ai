@@ -222,6 +222,11 @@ table is the current one.
 | Side panel (app.pen) | `#953 SiteInfo popover` | `app/side-panel/SiteInfoPopover.tsx` | `SiteInfoPopover` | |
 | Side panel (app.pen) | `#577 FindBar` | `app/side-panel/FindBar.tsx` | `FindBar` | |
 | Side panel (app.pen) | `#954 BrowserOptions` | `app/side-panel/BrowserOptions.tsx` | `BrowserOptions` | |
+| Side panel (app.pen) | `#462 SOURCE header` | `app/side-panel/SourceHeader.tsx` | `SourceHeader` | |
+| Side panel (app.pen) | `#465 Group (Source)` | `app/side-panel/SourceGroup.tsx` | `SourceGroup` | |
+| Side panel (app.pen) | `#467 CommitBox` | `app/side-panel/CommitBox.tsx` | `CommitBox` | |
+| Side panel (app.pen) | `#977 CommitBox › commit actions menu` | `app/side-panel/CommitActionsMenu.tsx` | `CommitActionsMenu` | |
+| Side panel (app.pen) | `#976 SourcePanel › More Actions menu` | `app/side-panel/SourceMoreMenu.tsx` | `SourceMoreMenu` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
