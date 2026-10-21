@@ -84,7 +84,7 @@ function look() {
     buttons: [...(card?.querySelectorAll("button") ?? [])]
       .filter((button) => !button.closest("[data-slot=turn-diff-file]"))
       .map((button) => button.getAttribute("aria-label") ?? words(button)),
-    rows: rows().map((row) => [row.dataset.review ?? null, [...row.querySelectorAll("button")].slice(1).map(words).join(" ") || words(row.querySelector("[data-slot=turn-diff-reviewed]"))]),
+    rows: rows().map((row) => [row.dataset.review ?? null, [...row.querySelectorAll("[data-slot=turn-diff-review-actions] button")].map(words).join(" ") || words(row.querySelector("[data-slot=turn-diff-reviewed]"))]),
   };
 }
 
