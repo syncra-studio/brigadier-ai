@@ -10,7 +10,8 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, AppStrip, TitlebarNav } from "@/app/shell/AppSidebar";
+import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
+import { TitlebarNav } from "@/components/shared";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";

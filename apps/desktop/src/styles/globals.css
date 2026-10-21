@@ -188,7 +188,7 @@
   );
 }
 
-/* Where Back, Forward and the sidebar toggle end in the titlebar (AppSidebar's TitlebarNav). */
+/* Where Back, Forward and the sidebar toggle end in the titlebar (TitlebarNav). */
 [data-slot="sidebar-wrapper"] {
   --titlebar-nav-end: var(--spacing-titlebar-nav-end);
 }

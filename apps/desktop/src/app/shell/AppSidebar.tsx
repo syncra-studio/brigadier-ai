@@ -7,10 +7,8 @@ import { RemoveProjectDialog } from "@/app/shell/dialogs/RemoveProjectDialog";
 import { NameDialog } from "@/app/shell/NameDialog";
 import { useShortcuts } from "@/app/shortcuts";
 import { openSearch } from "@/app/shell/SearchDialog";
-import { SidebarToggle } from "@/app/shell/SidebarToggle";
 import { besideStrip } from "@/app/shell/sidebar/nav";
 import {
-  ArrowLeft,
   BrigadierGlyph,
   Chats,
   ComposeEditSquare,
@@ -25,7 +23,7 @@ import {
   Sidebar,
   Trash,
 } from "@/components/icons";
-import { TitlebarTips, Banner, ConversationRow, EmptyState, NavFold, NavHeader, NavList, NavSection, RowAction, RowActionsSlot, RowStatus, SidebarError, type RowActions } from "@/components/shared";
+import { Banner, ConversationRow, EmptyState, NavFold, NavHeader, NavList, NavSection, RowAction, RowActionsSlot, RowStatus, SidebarError, type RowActions } from "@/components/shared";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useSidebar } from "@/components/layout";
 import { openFolder } from "@/ipc/client";
@@ -36,58 +34,12 @@ import {
   renameConversation,
   select,
   setProjectExpanded,
-  stepHistory,
 } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
 import { exportProjectConventions } from "@/state/brain";
-import { useCanStep } from "@/state/history";
 import { pickClick, pickedIn, prunePicked } from "@/state/picking";
 import { useTabStates } from "@/state/tabStates";
 import { useApp } from "@/state/store";
-
-// ----- titlebar --------------------------------------------------------------------------
-
-/** The buttons' glyphs dim to this while there is nowhere to go. */
-const NOWHERE = "disabled:opacity-40";
-
-/**
- * Back, Forward and the sidebar toggle, at a fixed spot in the titlebar on the traffic lights'
- * line: Back where the lights end on macOS, at the titlebar's start in full screen (where they
- * are gone) and elsewhere. They stay put while the sidebar collapses and expands.
- */
-export function TitlebarNav() {
-  const { open, toggleSidebar, canToggle } = useSidebar();
-  const shortcuts = useShortcuts();
-  const can = useCanStep();
-  return (
-    <div data-slot="titlebar-nav" className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
-      <TitlebarTips>
-        <TooltipIconButton look="toolbar"
-          tooltip="Back"
-          shortcut={shortcuts.back}
-          disabled={!can.back}
-          className={NOWHERE}
-          onClick={() => stepHistory(-1)}
-        >
-          <ArrowLeft />
-        </TooltipIconButton>
-        <TooltipIconButton look="toolbar"
-          tooltip="Forward"
-          shortcut={shortcuts.forward}
-          disabled={!can.forward}
-          className={NOWHERE}
-          onClick={() => stepHistory(1)}
-        >
-          <ArrowLeft className="-scale-x-100" />
-        </TooltipIconButton>
-        {/* Settings holds the panel open, so it has no toggle; Back and Forward stay put. */}
-        {canToggle && (
-          <SidebarToggle open={open} onToggle={toggleSidebar} />
-        )}
-      </TitlebarTips>
-    </div>
-  );
-}
 
 // ----- the Home panel --------------------------------------------------------------------
 

@@ -12,7 +12,7 @@ test("the sidebar toggle is one plain button, with no tip", async () => {
   globals.getComputedStyle = () => ({ getPropertyValue: () => "" });
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
-    const { SidebarToggle } = await server.ssrLoadModule("/src/app/shell/SidebarToggle.tsx");
+    const { SidebarToggle } = await server.ssrLoadModule("/src/components/shared/sidebar-toggle.tsx");
     const render = (open: boolean) => ReactDOMServer.renderToStaticMarkup(
       React.createElement(SidebarToggle, { open, onToggle: () => {} }),
     );
@@ -38,7 +38,7 @@ const paths = (html: string) => html.match(/ d="[^"]+"/g)?.join("") ?? "";
 test("the right sidebar's icon is the left sidebar toggle's, mirrored, open and closed alike", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
-    const { SidebarGlyph } = await server.ssrLoadModule("/src/app/shell/SidebarToggle.tsx");
+    const { SidebarGlyph } = await server.ssrLoadModule("/src/components/shared/sidebar-toggle.tsx");
     const render = (open: boolean, side: "left" | "right") => ReactDOMServer.renderToStaticMarkup(
       React.createElement(SidebarGlyph, { open, side }),
     );

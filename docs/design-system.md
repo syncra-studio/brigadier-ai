@@ -145,7 +145,7 @@ table is the current one.
 | Primitives · Menus, popovers & dialogs | `ScrollBar/Vertical`, `ScrollBar/Horizontal` | `styles/globals.css` | — | Pen only as a component: scroll bars are the CSS-styled native ones (`scroll-area.tsx` was removed) |
 | Primitives · Menus, popovers & dialogs | `ScrollFade/Top`, `ScrollFade/Bottom` | `components/layout/scroll-fade.tsx` | `ScrollFade` | |
 | Primitives · Menus, popovers & dialogs | — | `components/layout/collapsible.tsx`, `sidebar.tsx`, `sidebar-layout.tsx` | `Collapsible*`, `SidebarPanel`, `SidebarProvider`, `SidebarReveal`, `SidebarResizeHandle` | code only (behaviour, no look of their own) |
-| Glyphs & indicators | `SidebarGlyph/Open`, `SidebarGlyph/Closed (floating)` | `app/shell/SidebarToggle.tsx` | `SidebarGlyph` | in app |
+| Glyphs & indicators | `SidebarGlyph/Open`, `SidebarGlyph/Closed (floating)` | `components/shared/sidebar-toggle.tsx` | `SidebarGlyph` | |
 | Glyphs & indicators | `StepIcon/read` … `StepIcon/stop` | `app/conversation/activity/ActivityGroup.tsx` | `StepIcon` (file-local) | in app |
 | Glyphs & indicators | `FileTypeIcon/Image`, `Document`, `Data`, `Code` | `components/conversation/elements/file-type-icon.tsx` | `FileTypeIcon` | |
 | Glyphs & indicators | `WorkerGlyph` | `app/conversation/WorkerChip.tsx` | `WorkerGlyph` | in app |
@@ -160,10 +160,10 @@ table is the current one.
 | Glyphs & indicators | `Counts` | `app/conversation/Counts.tsx` | `Counts` (`dim`, `quiet`) | in app |
 | Glyphs & indicators | `SourceCountBadge` | `components/controls/source-count-badge.tsx` | `SourceCountBadge` (`count`) | |
 | Glyphs & indicators | `Share` | `app/shell/BarStatus.tsx` | `Share` (file-local) | in app |
-| Shared app parts | `TitlebarNav` | `app/shell/AppSidebar.tsx` | `TitlebarNav` | in app |
+| Shared app parts | `TitlebarNav` | `components/shared/titlebar-nav.tsx` | `TitlebarNav` | |
 | Shared app parts | `RowAction`, `RowActionsSlot` | `components/shared/row-action.tsx` | `RowAction`, `RowActionsSlot` | |
 | Shared app parts | `ConversationRow` | `components/shared/conversation-row.tsx` | `ConversationRow` (on `NavRow`), `RowStatus` | |
-| Shared app parts | `SidebarToggle/Open` | `app/shell/SidebarToggle.tsx` | `SidebarToggle` | in app |
+| Shared app parts | `SidebarToggle/Open` | `components/shared/sidebar-toggle.tsx` | `SidebarToggle` | |
 | Shared app parts | `TerminalButton` | `components/shared/terminal-button.tsx` | `TerminalButton` | |
 | Shared app parts | `NavHeader`, `NavSection` | `components/shared/nav.tsx` | `NavHeader`, `NavSection` (with `NavFold`, `NavList`) | |
 | Shared app parts | `CopyButton` | `components/shared/copy-button.tsx` | `CopyButton` | |

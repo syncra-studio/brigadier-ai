@@ -1,6 +1,7 @@
 import { Suspense, useEffect } from "react";
 
-import { AppSidebar, AppStrip, TitlebarNav } from "@/app/shell/AppSidebar";
+import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
+import { TitlebarNav } from "@/components/shared";
 import { DeleteDialog } from "@/app/shell/dialogs/DeleteDialog";
 import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
 import { AddProjectDialog } from "@/app/shell/dialogs/AddProjectDialog";

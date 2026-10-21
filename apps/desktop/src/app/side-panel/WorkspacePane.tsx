@@ -7,7 +7,7 @@ import { ProjectDraftPane } from "@/app/side-panel/ProjectDraftPane";
 import { SearchPanel } from "@/app/side-panel/SearchPanel";
 import { SourcePanel } from "@/app/side-panel/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
-import { SidebarGlyph } from "@/app/shell/SidebarToggle";
+import { SidebarGlyph } from "@/components/shared";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/layout";
 import { cn } from "@/lib/utils";
 import { browserFocus } from "@/ipc/client";
