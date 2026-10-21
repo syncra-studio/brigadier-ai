@@ -2,8 +2,11 @@
 // Other screens import these from here only.
 
 export * from "./AgentRow";
+export * from "./EntryView";
 export * from "./FileGlyph";
 export * from "./TabPage";
+export * from "./WorkerAnswer";
+export * from "./WorkerBrief";
 export * from "./WorkerFileRow";
 export * from "./WorkerHeader";
 export * from "./WorkerList";

@@ -183,6 +183,9 @@ table is the current one.
 | Side panel (app.pen) | `#149 FileGlyph` | `app/side-panel/FileGlyph.tsx` | `FileGlyph` | |
 | Side panel (app.pen) | `#150 FileRow (worker output)` | `app/side-panel/WorkerFileRow.tsx` | `WorkerFileRow` | |
 | Side panel (app.pen) | `#517 TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | |
+| Side panel (app.pen) | `#481 EntryView` | `app/side-panel/EntryView.tsx` | `EntryView` | |
+| Side panel (app.pen) | `#484 Brief` | `app/side-panel/WorkerBrief.tsx` | `WorkerBrief` | |
+| Side panel (app.pen) | `#486 Answer (worker report)` | `app/side-panel/WorkerAnswer.tsx` | `WorkerAnswer` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
