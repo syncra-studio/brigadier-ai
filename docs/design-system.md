@@ -202,6 +202,13 @@ table is the current one.
 | Inspector (settings.pen) | `#1049 JobRow` | `app/inspector/brain/JobRow.tsx` | `JobRow` | |
 | Inspector (settings.pen) | `#1050 JobsSection` | `app/inspector/brain/JobsSection.tsx` | `JobsSection` | |
 | Inspector (settings.pen) | `#1051 DeveloperActions` | `app/inspector/brain/DeveloperActions.tsx` | `DeveloperActions` | |
+| Inspector (settings.pen) | `#1054 BrainSearch › query bar` | `app/inspector/brain/QueryBar.tsx` | `QueryBar` | |
+| Inspector (settings.pen) | `#1055 BrainSearch › result summary line` | `app/inspector/brain/ResultSummary.tsx` | `ResultSummary` | |
+| Inspector (settings.pen) | `#1052 HitRow` | `app/inspector/brain/HitRow.tsx` | `HitRow` | |
+| Inspector (settings.pen) | `#1056 BrainSearch › “What the orchestrator reads” disclosure` | `app/inspector/brain/OrchestratorReadsDisclosure.tsx` | `OrchestratorReadsDisclosure` | |
+| Inspector (settings.pen) | `#1058 BrainTab › toolbar` | `app/inspector/brain/BrainToolbar.tsx` | `BrainToolbar` | |
+| Inspector (settings.pen) | `#1060 ConversationName` | `app/inspector/brain/ConversationName.tsx` | `ConversationName` | |
+| Inspector (settings.pen) | `#1065 NodeDetail › node link` | `app/inspector/brain/NodeLink.tsx` | `NodeLink` | |
 | Conversation (app.pen) | `#276 ApprovalAction › inline: Reply… button` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | |
 | Conversation (app.pen) | `#279 CardDictate` | `app/conversation/CardDictate.tsx` | `CardDictate` | |
 | Conversation (app.pen) | `#280 ChoiceCard` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |
