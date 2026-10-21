@@ -7,8 +7,9 @@
 //! By default it refuses:
 //!
 //! - the user's Brigadier: `ai.brigadier.app` and every `ai.brigadier.app.*`
-//!   bundle and their windows (development builds under other ids stay
-//!   targetable, so an agent can test the build it is working on);
+//!   bundle and their windows (development builds under other ids, and a
+//!   bare `tauri dev` binary, stay targetable, so an agent can test the build
+//!   it is working on);
 //! - other terminal apps (Terminal, Ghostty, iTerm2, Warp, kitty, ...);
 //! - the helper itself and the embedding host (`BRIGADIER_CU_HOST_BUNDLE_ID`);
 //! - macOS authentication and security surfaces (SecurityAgent, Keychain
@@ -218,7 +219,7 @@ pub fn classify(identity: &TargetIdentity, allowed: &[String]) -> Option<Refusal
     if is_security_surface(&bundle, &name) {
         return Some(RefusalReason::SecuritySurface);
     }
-    if is_brigadier(&bundle, &name) {
+    if is_brigadier(&bundle, &name, identity.pid.is_some()) {
         return Some(RefusalReason::UserBrigadier);
     }
     let host = std::env::var(crate::HOST_BUNDLE_ID_ENV)
@@ -241,12 +242,14 @@ fn is_driver(bundle: &str, name: &str) -> bool {
         || matches!(name, "brigadier-cu" | "brigadier computer use")
 }
 
-fn is_brigadier(bundle: &str, name: &str) -> bool {
+fn is_brigadier(bundle: &str, name: &str, running: bool) -> bool {
     // The name only decides when the bundle is unknown (launch by name), so
-    // a development build named "Brigadier Dev" is not mistaken for it.
+    // a development build named "Brigadier Dev" is not mistaken for it. A
+    // running process without a bundle is a bare binary (`tauri dev`), never
+    // the installed app, which runs from its bundle (#510).
     bundle == "ai.brigadier.app"
         || bundle.starts_with("ai.brigadier.app.")
-        || (bundle.is_empty() && name == "brigadier")
+        || (bundle.is_empty() && !running && name == "brigadier")
 }
 
 fn is_security_surface(bundle: &str, name: &str) -> bool {
@@ -326,8 +329,7 @@ pub fn refusal(tool: &str, identity: &TargetIdentity, reason: RefusalReason) -> 
         RefusalReason::UserBrigadier => {
             "Brigadier Computer Use never acts on the user's Brigadier app or its windows. Use the \
              Brigadier CLI, the Brigadier MCP tools, or the brigadier-browser skill to work with Brigadier; a \
-             session can drive its own tagged Brigadier DEV app only when Brigadier scopes the \
-             session to it."
+             development build (Brigadier Dev, or one started with `tauri dev`) can be driven."
         }
         RefusalReason::Terminal => {
             "Brigadier Computer Use does not act on terminal apps by default. Run the command \
@@ -380,7 +382,9 @@ mod tests {
 
     /// pid 100 = the user's Brigadier, 101 = a tagged Brigadier DEV build,
     /// 102 = TextEdit, 103 = Terminal, 104 = Brigadier NIGHTLY, 105 = Keychain
-    /// Access. Window 9000 belongs to the user's Brigadier, 9001 to TextEdit.
+    /// Access, 106 = System Settings, 107 = a bare `brigadier` binary started
+    /// with `tauri dev`. Window 9000 belongs to the user's Brigadier, 9001 to
+    /// TextEdit.
     fn with_fake_apps<T>(body: impl FnOnce(&TargetResolver<'_>) -> T) -> T {
         let app_for_pid = |pid: i64| match pid {
             100 => Some(app("Brigadier", "ai.brigadier.app", 100)),
@@ -390,6 +394,11 @@ mod tests {
             104 => Some(app("Brigadier NIGHTLY", "ai.brigadier.app.nightly", 104)),
             105 => Some(app("Keychain Access", "com.apple.keychainaccess", 105)),
             106 => Some(app("System Settings", "com.apple.systempreferences", 106)),
+            107 => Some(TargetIdentity {
+                name: "brigadier".to_owned(),
+                bundle_id: None,
+                pid: Some(107),
+            }),
             _ => None,
         };
         let pid_for_window = |window: u64| match window {
@@ -583,6 +592,13 @@ mod tests {
     fn development_builds_are_targetable_and_a_scope_unlocks_only_a_terminal() {
         with_fake_apps(|resolver| {
             assert!(enforce("click", &json!({"pid": 101}), &[], resolver).is_ok());
+            // A `tauri dev` build runs bare, without a bundle (#510).
+            for tool in ["get_window_state", "click", "page"] {
+                assert!(
+                    enforce(tool, &json!({"pid": 107}), &[], resolver).is_ok(),
+                    "{tool}"
+                );
+            }
             // No scope reaches the user's Brigadier.
             let tagged = vec!["ai.brigadier.dev.agt1".to_owned()];
             assert_eq!(
