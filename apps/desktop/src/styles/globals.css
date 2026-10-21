@@ -436,12 +436,6 @@
   --shimmer-base: var(--live-text-quiet);
 }
 
-/* The Job card's step at work: the sweep over bright words, brighter than the steps around it. */
-@utility shimmer-step {
-  --shimmer-base: var(--live-step);
-  --shimmer-glow: var(--foreground);
-}
-
 /* The dots of "still working" in a wave, each a little after the one before. */
 @utility wave-dot {
   @media (prefers-reduced-motion: no-preference) {

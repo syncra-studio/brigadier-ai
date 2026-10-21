@@ -6,11 +6,10 @@ import { cn } from "@/lib/utils";
 
 /**
  * assistant-ui's Long job element (https://www.assistant-ui.com/elements/job-progress, registry
- * item elements-job-progress), ported as is onto Brigadier's tokens and icons: a line with the
- * job, how long is left and a way out, one bar filled by the weighted stages done, and the
- * stages listed under it with the one at work's description. For the Job card each stage also
- * carries its mark: a check once it passed, a dim check while it is still to come, the stage at
- * work shimmering, a cross on one that failed.
+ * item elements-job-progress) on Brigadier's tokens and icons, drawn as the user's JobCard
+ * design: a line with the job, how long is left and a way out; a bar of one segment per stage
+ * (done ones full, the one at work filled as far as it got, a failed one red); under it one line
+ * naming the stage at work, shimmering, and the one after it, then that stage's description.
  */
 
 export type JobStageState = "done" | "active" | "failed" | "pending";
@@ -53,24 +52,13 @@ function formatElapsed(elapsedMs: number) {
   };
 }
 
-const OUTCOME_BAR: Record<JobOutcomeStatus, string> = {
+/** The part of the step where a job ended that it got through. */
+const OUTCOME_PART: Record<JobOutcomeStatus, string> = {
   success: "bg-success",
   partial: "bg-warning",
   failed: "bg-destructive",
-  cancelled: "bg-foreground/20",
+  cancelled: "bg-muted-foreground",
 };
-
-/** A stage's mark in the list. */
-function StageMark({ state }: { state: JobStageState }) {
-  if (state === "failed") return <X aria-hidden className="text-destructive size-icon-xs shrink-0" />;
-  return (
-    <Check
-      aria-hidden
-      data-mark={state}
-      className={cn("size-icon-xs shrink-0", state === "done" ? "text-success" : "text-muted-foreground/60")}
-    />
-  );
-}
 
 export function JobProgress({
   title,
@@ -117,8 +105,25 @@ export function JobProgress({
       : finished
         ? "Job done"
         : "Job running";
-  const outcomeBar = outcome ? OUTCOME_BAR[outcome.status] : undefined;
   const progressPercent = outcome?.status === "success" ? 100 : overall;
+  // The step the line under the bar names: the last one that failed, else the one at work or
+  // where the job stopped; then the step after it. A job done in full names none.
+  const failedAt = stages.findLastIndex((item, index) => stateOf(item, index) === "failed");
+  const shownIndex = failedAt !== -1 ? failedAt : outcome?.status === "success" || finished ? -1 : stage;
+  const shown = stages[shownIndex];
+  const shownState = shown ? stateOf(shown, shownIndex) : "pending";
+  const after = shown ? stages[shownIndex + 1] : undefined;
+  // Each step's share of the bar: done ones full, a failed one red, the one at work filled as far
+  // as it got (grey where the job was stopped), the rest an empty track; all green once done.
+  const segmentFill = (at: JobStageState, index: number): { color: string; width: number } | null => {
+    if (outcome?.status === "success" || (finished && !outcome)) return { color: "bg-success", width: 100 };
+    if (at === "done") return { color: "bg-toggle-on", width: 100 };
+    if (at === "failed") return { color: "bg-destructive", width: 100 };
+    if (index !== stage || progress === 0) return null;
+    if (at === "active") return { color: "bg-toggle-on", width: progress * 100 };
+    if (outcome) return { color: OUTCOME_PART[outcome.status], width: progress * 100 };
+    return null;
+  };
 
   return (
     <div
@@ -163,41 +168,62 @@ export function JobProgress({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(progressPercent * 10) / 10}
-        className="bg-foreground/10 h-1 w-full overflow-hidden rounded-full"
+        className="flex w-full gap-0.75"
       >
-        <span
-          className={cn(
-            "block h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out",
-            outcomeBar ?? (finished ? "bg-success" : failing ? "bg-destructive" : "bg-link"),
-          )}
-          style={{ width: `${progressPercent}%` }}
-        />
+        {stages.map((item, index) => {
+          const at = stateOf(item, index);
+          const fill = segmentFill(at, index);
+          return (
+            <span
+              key={`${item.name}-${index}`}
+              data-segment={at}
+              className="bg-foreground/10 h-1 min-w-0 basis-0 overflow-hidden rounded-full"
+              style={{ flexGrow: item.weight }}
+            >
+              {fill && (
+                <span
+                  className={cn(
+                    "block h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out",
+                    fill.color,
+                  )}
+                  style={{ width: `${fill.width}%` }}
+                />
+              )}
+            </span>
+          );
+        })}
       </span>
 
-      <div className="flex flex-col gap-0.5">
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {stages.map((item, index) => {
-            const at = stateOf(item, index);
-            return (
-              <span
-                key={`${item.name}-${index}`}
-                data-stage={at}
-                className={cn(
-                  mono,
-                  "inline-flex items-center gap-1",
-                  at === "failed" ? "text-destructive" : at === "active" ? "text-foreground" : "text-muted-foreground",
-                )}
-              >
-                <StageMark state={at} />
-                <span className={cn(at === "active" && "shimmer shimmer-step motion-reduce:animate-none")}>{item.name}</span>
-              </span>
-            );
-          })}
+      {shown && (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className={cn(mono, "flex min-w-0 items-baseline gap-1.5")}>
+            <span
+              data-stage={shownState}
+              className={cn(
+                "min-w-0 shrink truncate",
+                shownState === "failed"
+                  ? "text-destructive"
+                  : shownState === "active"
+                    ? "shimmer motion-reduce:animate-none"
+                    : "text-muted-foreground",
+              )}
+            >
+              {shown.name}
+            </span>
+            {after && (
+              <>
+                <span aria-hidden className="text-muted-foreground/40 shrink-0">
+                  →
+                </span>
+                <span data-stage="next" className="text-muted-foreground/60 min-w-0 truncate">
+                  {after.name}
+                </span>
+              </>
+            )}
+          </p>
+          {shown.description ? <p className="text-muted-foreground text-xs break-words">{shown.description}</p> : null}
         </div>
-        {current?.description ? (
-          <p className="text-muted-foreground text-xs break-words">{current.description}</p>
-        ) : null}
-      </div>
+      )}
       {outcome?.summary ? <p className="text-sm break-words">{outcome.summary}</p> : null}
       <span className="sr-only" role="status">
         {announcement}

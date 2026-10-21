@@ -24,8 +24,9 @@ function share(count: string | undefined): number {
 
 /**
  * The session's job while it works through steps: assistant-ui's job progress element with the
- * job's line ("Reviewing · 3 of 5", "Checks failed · fixing"), its bar, and its steps listed, the
- * one at work shimmering, each passed one checked. A click opens every step in a tab.
+ * job's line ("Reviewing · 3 of 5", "Checks failed · fixing"), a bar of one segment per step, and
+ * the step at work (or the one that failed) shimmering before the next. A click opens every step
+ * in a tab.
  */
 export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
   const at = job.steps.findIndex((step) => step.state === "active");
@@ -49,7 +50,7 @@ export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
             name: step.name,
             weight: 1,
             state: step.state,
-            description: i === index && step.state === "active" ? step.summary : undefined,
+            description: (i === index && step.state === "active") || step.state === "failed" ? step.summary : undefined,
           }))}
         />
       </button>
