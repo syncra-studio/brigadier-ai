@@ -114,8 +114,11 @@ pub fn default_data_dir() -> Result<PathBuf> {
     let dir = dirs::data_dir().map(|dir| dir.join("Brigadier"));
     #[cfg(target_os = "linux")]
     let dir = dirs::data_dir().map(|dir| dir.join("brigadier"));
+    // A folder of its own in `%LOCALAPPDATA%\Brigadier`, where the per-user installer puts the
+    // program files: its uninstaller leaves the data, and Uninstall Brigadier… moves the data
+    // without the running programs.
     #[cfg(windows)]
-    let dir = dirs::data_local_dir().map(|dir| dir.join("Brigadier"));
+    let dir = dirs::data_local_dir().map(|dir| dir.join("Brigadier").join("Data"));
     dir.ok_or(Error::NoDataDir)
 }
 
@@ -143,9 +146,15 @@ mod tests {
         let installed = default_data_dir().unwrap();
         let custom_id = "ai.brigadier.issues2-w35";
         assert_eq!(choose_data_dir(crate::APP_ID, None).unwrap(), installed);
+        // On Windows the installed app's data is a level down (`Brigadier\Data`).
+        let base = if cfg!(windows) {
+            installed.parent().and_then(Path::parent)
+        } else {
+            installed.parent()
+        };
         assert_eq!(
             choose_data_dir(custom_id, None).unwrap(),
-            installed.parent().unwrap().join(custom_id)
+            base.unwrap().join(custom_id)
         );
         let override_dir = PathBuf::from("/tmp/20261018-1945-issues-run-2-w35-data");
         for identifier in [crate::APP_ID, custom_id] {
