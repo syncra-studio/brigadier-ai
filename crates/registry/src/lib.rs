@@ -331,8 +331,20 @@ impl Catalog {
         skills::add_project(&mut self.skills, project);
     }
 
-    /// Whether `session`'s agent has `server` by itself.
+    /// Whether `session`'s agent has `server` by itself: it loads it, and no entry of the same
+    /// name that it loads too overrides it (Claude: local over project over user; Codex: a
+    /// project's layer over the user's config).
     pub fn server_native(&self, server: &Server, session: &Session<'_>) -> bool {
+        self.loads(server, session)
+            && !self.servers.iter().any(|other| {
+                other.name == server.name
+                    && precedence(other.source) > precedence(server.source)
+                    && self.loads(other, session)
+            })
+    }
+
+    /// Whether `session`'s agent loads `server`'s entry, overridden or not.
+    fn loads(&self, server: &Server, session: &Session<'_>) -> bool {
         let project = server.project.as_deref();
         match (server.source, session.agent) {
             (Source::ClaudeUser, Agent::Claude) | (Source::CodexUser, Agent::Codex) => true,
@@ -376,13 +388,22 @@ impl Catalog {
     /// The server `entry` names: an id, or a name only one server has (servers that are the
     /// same under several sources, such as one server set up in both Claude apps, count once).
     pub fn find(&self, entry: &str) -> Result<&Server, FindError> {
+        self.find_among(entry, |_| true)
+    }
+
+    /// As [`Self::find`], a name counting only the servers `keep` keeps (an id names any).
+    pub fn find_among(
+        &self,
+        entry: &str,
+        keep: impl Fn(&Server) -> bool,
+    ) -> Result<&Server, FindError> {
         if let Some(server) = self.server(entry) {
             return Ok(server);
         }
         let named: Vec<&Server> = self
             .servers
             .iter()
-            .filter(|server| server.name == entry)
+            .filter(|server| server.name == entry && keep(server))
             .collect();
         let Some(first) = named.first() else {
             return Err(FindError::Unknown);
@@ -397,6 +418,16 @@ impl Catalog {
                 named.iter().map(|server| server.id.clone()).collect(),
             ))
         }
+    }
+}
+
+/// Which of an agent's own entries of one name wins: the higher.
+fn precedence(source: Source) -> u8 {
+    match source {
+        Source::ClaudeLocal => 3,
+        Source::ClaudeProject | Source::CodexProject => 2,
+        Source::ClaudeUser | Source::CodexUser => 1,
+        Source::Desktop | Source::CursorUser | Source::CursorProject => 0,
     }
 }
 
@@ -449,7 +480,11 @@ impl Registry {
             .unwrap_or_else(|p| p.into_inner())
             .as_mut()
         {
-            watcher.rewatch(&self.watched());
+            // A folder made since (a first skill root) may have filled before it was watched.
+            if watcher.rewatch(&self.watched()) {
+                let user = Arc::new(Catalog::user(&self.roots));
+                *self.user.write().unwrap_or_else(|p| p.into_inner()) = user;
+            }
         }
     }
 

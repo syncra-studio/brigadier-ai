@@ -345,7 +345,10 @@ pub(crate) fn resolve(
         .map(|entry| entry.trim())
         .filter(|e| !e.is_empty())
     {
-        let server = match catalog.find(entry) {
+        // A name counts only switched-on servers; an id of a switched-off one is refused below.
+        let server = match catalog.find_among(entry, |server| {
+            !settings.mcp_servers_off.contains(&server.id)
+        }) {
             Ok(server) => server,
             Err(FindError::Unknown) => {
                 let mut known: Vec<&str> = catalog

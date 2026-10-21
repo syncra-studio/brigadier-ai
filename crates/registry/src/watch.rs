@@ -22,6 +22,26 @@ struct Plan {
     folders: BTreeSet<PathBuf>,
     files: BTreeSet<PathBuf>,
     trees: BTreeSet<PathBuf>,
+    /// Configs and roots whose folder doesn't exist yet, under their nearest existing
+    /// ancestor (watched in [`Self::folders`]): making any folder on the way counts.
+    missing: BTreeSet<PathBuf>,
+}
+
+/// `path` under its nearest existing ancestor, symlinks resolved, and that ancestor.
+fn nearest(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(at) {
+            let target = rest
+                .iter()
+                .rev()
+                .fold(real.clone(), |dir, name| dir.join(name));
+            return Some((real, target));
+        }
+        rest.push(at.file_name()?.to_owned());
+        at = at.parent()?;
+    }
 }
 
 impl Plan {
@@ -29,11 +49,14 @@ impl Plan {
     fn new(watched: &Watched) -> Self {
         let mut plan = Self::default();
         for file in &watched.files {
-            if let (Some(parent), Some(name)) = (file.parent(), file.file_name())
-                && let Ok(parent) = std::fs::canonicalize(parent)
-            {
-                plan.files.insert(parent.join(name));
-                plan.folders.insert(parent);
+            if let (Some(parent), Some(name)) = (file.parent(), file.file_name()) {
+                if let Ok(parent) = std::fs::canonicalize(parent) {
+                    plan.files.insert(parent.join(name));
+                    plan.folders.insert(parent);
+                } else if let Some((ancestor, target)) = nearest(file) {
+                    plan.folders.insert(ancestor);
+                    plan.missing.insert(target);
+                }
             }
             // A config linked from elsewhere (a dotfiles folder) changes where it really is.
             if let Ok(target) = std::fs::canonicalize(file)
@@ -43,11 +66,18 @@ impl Plan {
                 plan.files.insert(target);
             }
         }
-        let mut trees: Vec<PathBuf> = watched
-            .trees
-            .iter()
-            .filter_map(|tree| std::fs::canonicalize(tree).ok())
-            .collect();
+        let mut trees = Vec::new();
+        for tree in &watched.trees {
+            match std::fs::canonicalize(tree) {
+                Ok(tree) => trees.push(tree),
+                Err(_) => {
+                    if let Some((ancestor, target)) = nearest(tree) {
+                        plan.folders.insert(ancestor);
+                        plan.missing.insert(target);
+                    }
+                }
+            }
+        }
         trees.sort();
         for tree in trees {
             if !plan.trees.iter().any(|known| tree.starts_with(known)) {
@@ -58,7 +88,9 @@ impl Plan {
     }
 
     fn counts(&self, path: &Path) -> bool {
-        self.files.contains(path) || self.trees.iter().any(|tree| path.starts_with(tree))
+        self.files.contains(path)
+            || self.trees.iter().any(|tree| path.starts_with(tree))
+            || self.missing.iter().any(|target| target.starts_with(path))
     }
 
     fn watches(&self) -> impl Iterator<Item = (&PathBuf, RecursiveMode)> {
@@ -112,12 +144,12 @@ impl Watcher {
         Ok(watcher)
     }
 
-    /// Watches `watched` instead of what it watched.
-    pub fn rewatch(&mut self, watched: &Watched) {
+    /// Watches `watched` instead of what it watched; whether that changed.
+    pub fn rewatch(&mut self, watched: &Watched) -> bool {
         let next = Plan::new(watched);
         let mut plan = self.plan.write().unwrap_or_else(|p| p.into_inner());
         if *plan == next {
-            return;
+            return false;
         }
         for (path, _) in plan.watches() {
             let _ = self.debouncer.unwatch(path);
@@ -128,5 +160,6 @@ impl Watcher {
             }
         }
         *plan = next;
+        true
     }
 }

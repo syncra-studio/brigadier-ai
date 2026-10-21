@@ -609,6 +609,69 @@ fn native_servers_depend_on_the_session() {
 }
 
 #[test]
+fn an_overridden_entry_is_not_native() {
+    let home = fixture("override");
+    let project = home.join("app");
+    let codex_home = home.join("codex-home");
+    write(
+        &home.join(".claude.json"),
+        &format!(
+            r#"{{"mcpServers": {{"db": {{"command": "user-db"}}}},
+                "projects": {{"{}": {{"mcpServers": {{"db": {{"command": "local-db"}}}}}}}}}}"#,
+            project.display()
+        ),
+    );
+    write(
+        &codex_home.join("config.toml"),
+        &format!(
+            "[mcp_servers.db]\ncommand = \"user-db\"\n\n[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+            project.display()
+        ),
+    );
+    write(
+        &project.join(".codex/config.toml"),
+        "[mcp_servers.db]\ncommand = \"project-db\"\n",
+    );
+    let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
+    let catalog = Catalog::read(&roots, Some(&project));
+    let p = project.display();
+    let native = |id: &str, session: Session<'_>| {
+        catalog.server_native(catalog.server(id).unwrap(), &session)
+    };
+    let codex = Session {
+        agent: Agent::Codex,
+        cwd: &project,
+        project: Some(&project),
+        in_checkout: true,
+    };
+    // Codex loads the project's `db`, not the user's.
+    assert!(native(&format!("codex:project:{p}:db"), codex));
+    assert!(!native("codex:user:db", codex));
+    // Elsewhere the user's is Codex's own again.
+    let scratch = Session {
+        cwd: &home,
+        project: None,
+        in_checkout: false,
+        ..codex
+    };
+    assert!(native("codex:user:db", scratch));
+    // Claude's local scope wins over its user scope where it applies.
+    let claude = Session {
+        agent: Agent::Claude,
+        ..codex
+    };
+    assert!(native(&format!("claude:local:{p}:db"), claude));
+    assert!(!native("claude:user:db", claude));
+    assert!(native(
+        "claude:user:db",
+        Session {
+            agent: Agent::Claude,
+            ..scratch
+        }
+    ));
+}
+
+#[test]
 fn find_by_id_name_unknown_and_ambiguous() {
     let home = fixture("find");
     write(
@@ -634,6 +697,15 @@ fn find_by_id_name_unknown_and_ambiguous() {
         ]))
     );
     assert_eq!(catalog.find("desktop:dup").unwrap().name, "dup");
+    // A name counts only the servers kept; an id names any.
+    let on = |server: &Server| server.id != "claude:user:dup";
+    assert_eq!(catalog.find_among("dup", on).unwrap().id, "desktop:dup");
+    let off = |server: &Server| server.name != "pencil";
+    assert_eq!(catalog.find_among("pencil", off), Err(FindError::Unknown));
+    assert_eq!(
+        catalog.find_among("claude:user:pencil", off).unwrap().id,
+        "claude:user:pencil"
+    );
 }
 
 #[cfg(unix)]
@@ -840,4 +912,19 @@ fn watcher_refreshes_on_config_and_skill_edits_through_symlinks() {
         .catalog(None)
         .skill("claude:user:fresh")
         .is_some()));
+
+    // A skill root and a config whose folders didn't exist when watching started.
+    skill(&home.join(".agents/skills/first"), "first", "First.");
+    assert!(
+        eventually(|| registry.catalog(None).skill("agents:user:first").is_some()),
+        "a skill root made later wasn't seen"
+    );
+    write(
+        &home.join(".cursor/mcp.json"),
+        r#"{"mcpServers": {"cur": {"command": "c"}}}"#,
+    );
+    assert!(
+        eventually(|| registry.catalog(None).server("cursor:user:cur").is_some()),
+        "a config in a folder made later wasn't seen"
+    );
 }
