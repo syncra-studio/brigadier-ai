@@ -1321,3 +1321,130 @@ impl SessionManager {
         .unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manager::mcp_auth::{McpAuth, Memory};
+
+    fn home() -> PathBuf {
+        let home =
+            std::env::temp_dir().join(format!("integrations-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&home).unwrap();
+        home
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn roots(home: &Path) -> Roots {
+        Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap()
+    }
+
+    #[test]
+    fn resolve_refuses_a_switched_off_name_and_prefers_a_switched_on_copy() {
+        let home = home();
+        write(
+            &home.join(".claude.json"),
+            r#"{"mcpServers": {"railway": {"command": "npx", "args": ["railway"]},
+                               "lin": {"command": "lin-claude"}}}"#,
+        );
+        write(
+            &home.join(".codex/config.toml"),
+            "[mcp_servers.lin]\ncommand = \"lin-codex\"\n",
+        );
+        let catalog = Catalog::read(&roots(&home), None);
+        let settings = Settings {
+            mcp_servers_off: vec!["claude:user:railway".into(), "claude:user:lin".into()],
+            ..Settings::default()
+        };
+        let resolve = |entry: &str| resolve(&catalog, &[entry.to_owned()], &settings);
+
+        // The only server of the name is switched off.
+        let err = resolve("railway").unwrap_err();
+        assert!(err.contains("is switched off for Brigadier"), "{err}");
+        // Of two different servers of one name, only the switched-on one counts.
+        assert_eq!(resolve("lin").unwrap(), ["codex:user:lin"]);
+        let err = resolve("claude:user:lin").unwrap_err();
+        assert!(err.contains("is switched off for Brigadier"), "{err}");
+        let err = resolve("nowhere").unwrap_err();
+        assert!(err.contains("unknown integration"), "{err}");
+    }
+
+    #[test]
+    fn a_worker_without_a_checkout_is_given_its_projects_servers() {
+        let home = home();
+        let repo = home.join("repo");
+        write(
+            &repo.join(".mcp.json"),
+            r#"{"mcpServers": {"db": {"command": "db-server"}}}"#,
+        );
+        let roots = roots(&home);
+        let catalog = Catalog::read(&roots, Some(&repo));
+        let id = catalog
+            .servers
+            .iter()
+            .find(|server| server.name == "db")
+            .expect("the project's server")
+            .id
+            .clone();
+        assert_eq!(worker_project(Some(&repo), false), None);
+        assert_eq!(worker_project(Some(&repo), true), Some(repo.as_path()));
+        let auth = McpAuth::new(Arc::new(Memory::default()), Arc::new(|_: &str| false));
+        let given = |has_checkout| {
+            let session = Session {
+                agent: Agent::Claude,
+                cwd: &repo,
+                project: worker_project(Some(&repo), has_checkout),
+                in_checkout: has_checkout,
+            };
+            let mut shared = Shared::default();
+            let quiet = auth.prober(&roots, catalog.codex_store, true);
+            let asking = auth.prober(&roots, catalog.codex_store, false);
+            named_servers(
+                &catalog,
+                std::slice::from_ref(&id),
+                &session,
+                &Settings::default(),
+                &mut shared,
+                &quiet,
+                &asking,
+            );
+            shared
+                .servers
+                .into_iter()
+                .map(|server| server.name)
+                .collect::<Vec<_>>()
+        };
+        // Its CLI starts outside the project, so the project's server is given.
+        assert_eq!(given(false), ["db"]);
+        // In a checkout its CLI loads it by itself.
+        assert!(given(true).is_empty());
+    }
+
+    #[test]
+    fn the_copy_key_tells_values_apart_and_holds_none() {
+        let stdio = |value: &str| Transport::Stdio {
+            command: "npx".into(),
+            args: vec!["server".into()],
+            env: vec![("API_KEY".into(), Secret::new(value))],
+            cwd: None,
+            base: None,
+        };
+        let http = |value: &str| Transport::Http {
+            url: "https://mcp.example.com/mcp".into(),
+            headers: vec![("X-Tenant".into(), Secret::new(value))],
+        };
+        assert_eq!(copy_key(&stdio("sk-one")), copy_key(&stdio("sk-one")));
+        assert_ne!(copy_key(&stdio("sk-one")), copy_key(&stdio("sk-two")));
+        assert_eq!(copy_key(&http("acme")), copy_key(&http("acme")));
+        assert_ne!(copy_key(&http("acme")), copy_key(&http("globex")));
+        assert_ne!(copy_key(&stdio("acme")), copy_key(&http("acme")));
+        for value in ["sk-one", "acme"] {
+            assert!(!copy_key(&stdio(value)).contains(value));
+            assert!(!copy_key(&http(value)).contains(value));
+        }
+    }
+}
