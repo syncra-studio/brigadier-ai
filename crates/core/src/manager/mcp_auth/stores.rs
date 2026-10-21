@@ -225,6 +225,9 @@ fn failed(what: &str, err: impl fmt::Display) -> StoreError {
     StoreError::Failed(format!("{what}: {err}"))
 }
 
+/// A store's bytes as read, and where they were found.
+type ReadItem = (Zeroizing<Vec<u8>>, Found);
+
 /// A file's bytes, `None` when it isn't there.
 fn read_file(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, StoreError> {
     match std::fs::read(path) {
@@ -456,7 +459,7 @@ impl Stores {
     }
 
     /// Claude's whole item (or file), as read: `None` when it has neither.
-    fn claude_bytes(&self, quiet: bool) -> Result<Option<(Zeroizing<Vec<u8>>, Found)>, StoreError> {
+    fn claude_bytes(&self, quiet: bool) -> Result<Option<ReadItem>, StoreError> {
         if let Some((service, account)) = &self.homes.claude_item
             && let Some(bytes) = self.keychain.get(service, account, quiet)?
         {
