@@ -153,8 +153,12 @@ pub enum SendOutcome {
     Queued(QueuedMessage),
 }
 
-/// The label of a clean review of the thread's own changes, told only while its answer waits.
+/// The label of a clean review of the thread's own changes, told only when its request_review
+/// call went on before it ended: then it is owed, whatever the thread did meanwhile (#513).
 pub(crate) const CLEAN_REVIEW: &str = "review of your commits · clean";
+/// The start of the label of a pass whose run_checks call went on before it ended: owed to the
+/// thread whatever it did meanwhile, so never dropped as an optional pass is (#513).
+pub(crate) const OWED_PASS: &str = "run_checks passed ";
 
 /// Something for the orchestrator's next turn.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -174,18 +178,13 @@ impl Envelope {
         self.kind == InjectionKind::Decision && self.label.starts_with("checks passed ")
     }
 
-    /// A clean review of the thread's own changes only wakes a request whose answer waits for
-    /// it (BUILD-PLAN B2): an answer given meanwhile makes it moot.
-    fn optional_clean_review(&self) -> bool {
-        self.kind == InjectionKind::Report && self.label == CLEAN_REVIEW
-    }
-
     /// Whether it needs nothing from the thread now, so it may wait a little for others to
     /// wake it once with (BUILD-PLAN C3): a landing done, checks passed, a clean review of its
     /// own changes, or a status due.
     pub(crate) fn quiet(&self) -> bool {
         self.optional_check_pass()
-            || self.optional_clean_review()
+            || (self.kind == InjectionKind::Decision && self.label.starts_with(OWED_PASS))
+            || (self.kind == InjectionKind::Report && self.label == CLEAN_REVIEW)
             || (self.kind == InjectionKind::Decision && self.label.starts_with("landed task-"))
             || (self.kind == InjectionKind::Reminder && self.label == "status")
     }
@@ -1277,10 +1276,13 @@ impl ConvLive {
             .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
     }
 
-    /// Whether the last turn for `request` was stopped or failed, a Stop that had no turn to
-    /// interrupt included.
-    pub(super) async fn request_ended(&self, request: &str) -> bool {
-        self.state.lock().await.outcomes.contains_key(request)
+    /// Whether the last turn for `request` was stopped, a Stop that had no turn to interrupt
+    /// included.
+    pub(super) async fn request_stopped(&self, request: &str) -> bool {
+        matches!(
+            self.state.lock().await.outcomes.get(request),
+            Some(RequestState::Stopped)
+        )
     }
 
     /// Whether no turn runs and nothing waits for one.
@@ -5535,11 +5537,10 @@ impl SessionManager {
                     if status == TurnStatus::Completed {
                         state.answered.insert(request.clone());
                         // A pass arriving during this turn was queued against its previous
-                        // [quiet]. This answer settles it without another turn.
+                        // [quiet]. This answer settles it without another turn. One its
+                        // run_checks call owes the thread still comes (#513).
                         state.inbox.retain(|(envelope, queued)| {
-                            queued.as_ref() != Some(request)
-                                || !(envelope.optional_check_pass()
-                                    || envelope.optional_clean_review())
+                            queued.as_ref() != Some(request) || !envelope.optional_check_pass()
                         });
                     }
                 }

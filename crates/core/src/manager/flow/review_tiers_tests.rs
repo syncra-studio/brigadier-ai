@@ -1,6 +1,7 @@
 //! Reviews the thread asks for (`request_review`): Brigadier starts none by itself. A review
-//! the thread's answer waits for still brings it after a restart, and one of a stopped
-//! request wakes nothing; request_review reuses what reviews cover and re-checks only a fix.
+//! the thread's answer waits for still brings it after a restart, one whose call went on
+//! reaches the thread whatever it did meanwhile (#513), and one of a stopped request wakes
+//! nothing; request_review reuses what reviews cover and re-checks only a fix.
 
 use std::sync::{Arc, Mutex};
 
@@ -353,6 +354,195 @@ async fn a_stopped_request_is_not_woken_by_its_clean_review() {
     assert_eq!(board.requests[&request].state, RequestState::Stopped);
     assert!(answered.lock().unwrap().is_empty());
     assert!(answers(&flow).await.is_empty());
+    flow.stop().await;
+}
+
+/// A thread that asks for a review of its change and answers instead of waiting with [quiet],
+/// once `go` is set; each turn's input is logged.
+fn answering_thread(
+    inputs: Arc<Mutex<Vec<String>>>,
+    go: Arc<std::sync::atomic::AtomicBool>,
+) -> Script {
+    script(move |turn| {
+        let (inputs, go) = (inputs.clone(), go.clone());
+        async move {
+            inputs.lock().unwrap().push(turn.input.clone());
+            if turn.input.starts_with("Build the feature") {
+                commit(&turn, "a.txt", &lines("a", 160), "Build the feature");
+                let asked = turn
+                    .call("request_review", json!({"wait_seconds": 0}))
+                    .await;
+                assert!(asked.text.contains("still reviews"), "{}", asked.text);
+                while !go.load(std::sync::atomic::Ordering::SeqCst) {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                return Reply::text("Built the feature; its review still runs.");
+            }
+            Reply::text("Noted.")
+        }
+    })
+}
+
+/// How many of `inputs` hold `what`.
+fn heard(inputs: &Mutex<Vec<String>>, what: &str) -> usize {
+    inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|input| input.contains(what))
+        .count()
+}
+
+/// A review held until the returned notify, then clean.
+fn held_clean_review() -> (Arc<tokio::sync::Notify>, Script) {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = release.clone();
+    let reviews = script(move |_| {
+        let held = held.clone();
+        async move {
+            held.notified().await;
+            Reply::text("No findings.")
+        }
+    });
+    (release, reviews)
+}
+
+/// #513: request_review's call went on and the thread answered instead of waiting: the
+/// review's clean end, after the answer, reaches the thread as a message once.
+#[tokio::test]
+async fn a_background_clean_review_reaches_a_thread_that_answered_once() {
+    let (release, reviews) = held_clean_review();
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let flow = Flow::start(
+        "review-tiers-answered-clean",
+        Options {
+            reviews: Some(reviews),
+            ..Options::default()
+        },
+        answering_thread(inputs.clone(), Arc::new(true.into())),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    let board = flow
+        .until("the answer, with the review still running", |board| {
+            board.run == crate::work::RunState::Idle
+                && !inputs.lock().unwrap().is_empty()
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    release.notify_one();
+    flow.until("the clean review came as a message", |_| {
+        heard(&inputs, "found nothing") > 0
+    })
+    .await;
+    let board = flow.settled().await;
+    assert_eq!(heard(&inputs, "found nothing"), 1);
+    assert_eq!(board.requests[&request].state, RequestState::Done);
+    flow.stop().await;
+}
+
+/// #513: a background review that ends clean while the turn that asked for it still runs,
+/// when that turn then answers instead of replying [quiet], still comes as a message once.
+#[tokio::test]
+async fn a_background_clean_review_before_the_threads_answer_still_comes_once() {
+    let (release, reviews) = held_clean_review();
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flow = Flow::start(
+        "review-tiers-answered-clean-early",
+        Options {
+            reviews: Some(reviews),
+            ..Options::default()
+        },
+        answering_thread(inputs.clone(), go.clone()),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    flow.until("the review to run", |board| {
+        board
+            .reviews
+            .values()
+            .any(|review| review.state == ReviewState::Running && review.answer_waits)
+    })
+    .await;
+    release.notify_one();
+    flow.until("the review ended clean while the turn ran", |board| {
+        board.run != crate::work::RunState::Idle
+            && board
+                .reviews
+                .values()
+                .all(|review| review.state == ReviewState::Clean)
+    })
+    .await;
+    go.store(true, std::sync::atomic::Ordering::SeqCst);
+    flow.until("the clean review came as a message", |_| {
+        heard(&inputs, "found nothing") > 0
+    })
+    .await;
+    flow.settled().await;
+    assert_eq!(heard(&inputs, "found nothing"), 1);
+    flow.stop().await;
+}
+
+/// #513: a background review's clean end recorded after the thread answered and its request
+/// read done, just before Brigadier stopped and before any turn took it, reaches the thread
+/// after the restart, once: not again after a second restart.
+#[tokio::test]
+async fn a_background_clean_review_no_turn_took_before_a_restart_comes_after_it_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "review-tiers-answered-clean-restart",
+        Options {
+            reviews: Some(script(|_| std::future::pending())),
+            ..Options::default()
+        },
+        answering_thread(inputs.clone(), Arc::new(true.into())),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    let board = flow
+        .until("the answer, with the review still running", |board| {
+            board.run == crate::work::RunState::Idle
+                && !inputs.lock().unwrap().is_empty()
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let mut review = board.reviews.values().next().unwrap().clone();
+    assert!(review.answer_waits);
+    // Its clean end is recorded and the answered request reads done; the daemon dies before
+    // the thread hears it.
+    review.state = ReviewState::Clean;
+    review.ended_at_ms = Some(crate::now_ms());
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![crate::model::DomainEvent::ReviewUpdated { review }],
+        )
+        .await
+        .unwrap();
+    flow.manager.settle_requests(&flow.conversation).await;
+    flow.until("the request read done", |board| {
+        board.requests[&request].state == RequestState::Done
+    })
+    .await;
+    flow.crash().await;
+    flow.until("the clean review came after the restart", |_| {
+        heard(&inputs, "found nothing") > 0
+    })
+    .await;
+    flow.settled().await;
+    flow.crash().await;
+    let board = flow.settled().await;
+    assert_eq!(heard(&inputs, "found nothing"), 1);
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
     flow.stop().await;
 }
 

@@ -479,6 +479,323 @@ async fn a_later_run_checks_at_a_running_commit_joins_it() {
     flow.stop().await;
 }
 
+/// A thread that calls run_checks on "Check it" and answers `answer` at once; "Next" waits for
+/// `go` before it answers (a follow-up quoting either is neither). What each turn heard and
+/// what the call said are logged.
+fn checking_thread(
+    inputs: Arc<Mutex<Vec<String>>>,
+    replies: Arc<Mutex<Vec<String>>>,
+    go: Arc<std::sync::atomic::AtomicBool>,
+    answer: &'static str,
+) -> Script {
+    script(move |turn| {
+        let (seen, log, go) = (inputs.clone(), replies.clone(), go.clone());
+        async move {
+            if turn.is_orchestrator() {
+                seen.lock().unwrap().push(turn.input.clone());
+                if turn.input.starts_with("Check it") {
+                    let reply = turn.call("run_checks", json!({})).await;
+                    log.lock().unwrap().push(reply.text);
+                    return Reply::text(answer);
+                }
+                if turn.input.starts_with("Next") {
+                    while !go.load(std::sync::atomic::Ordering::SeqCst) {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    return Reply::text("Next is done.");
+                }
+            }
+            Reply::text("Done.")
+        }
+    })
+}
+
+/// How often a turn of the thread took a message about check `id`.
+async fn told(flow: &Flow, id: &str) -> usize {
+    flow.core
+        .list_orchestrator_log(&flow.conversation, None, 500)
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(|logged| {
+            matches!(&logged.entry,
+                crate::work::OrchestratorEntry::Injection { injection }
+                    if injection.kind == crate::work::InjectionKind::Decision
+                        && injection.label.ends_with(&format!(" {id}"))
+            )
+        })
+        .count()
+}
+
+/// How many of `inputs` hold `what`.
+fn heard(inputs: &Mutex<Vec<String>>, what: &str) -> usize {
+    inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|input| input.contains(what))
+        .count()
+}
+
+/// Starts a held run_checks whose call goes on in the background, the thread answering
+/// `answer`, and waits until the run has started and the call went on. Returns the hold.
+async fn background_run(flow: &Flow, replies: &Mutex<Vec<String>>) -> std::path::PathBuf {
+    let hold = flow.repo.join(".git/hold-checks");
+    std::fs::write(&hold, "").unwrap();
+    flow.say("Check it").await;
+    flow.until("the call went to the background", |_| {
+        !replies.lock().unwrap().is_empty()
+    })
+    .await;
+    assert!(replies.lock().unwrap()[0].contains("still run"));
+    let repo = flow.repo.clone();
+    flow.until("the checks started", |_| full_runs(&repo) > 0)
+        .await;
+    hold
+}
+
+/// #513: background full checks whose call went on, and whose thread answered instead of
+/// replying [quiet], still tell their pass as a message, once: the thread hears that the
+/// checks it asked for passed without calling run_checks again. The board says so too.
+#[tokio::test]
+async fn a_background_pass_reaches_a_thread_that_answered_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let flow = Flow::start(
+        "run-checks-background-answered",
+        checks_options(),
+        checking_thread(
+            inputs.clone(),
+            replies.clone(),
+            Arc::default(),
+            "They run in the background; I'll say when they pass.",
+        ),
+    )
+    .await;
+    let hold = background_run(&flow, &replies).await;
+    // The thread answered: the request is over and the thread idle while they still run.
+    flow.until("the request was answered", |board| {
+        board.run == crate::work::RunState::Idle
+            && board
+                .requests
+                .values()
+                .all(|request| request.state == crate::work::RequestState::Done)
+    })
+    .await;
+    std::fs::remove_file(&hold).unwrap();
+    flow.until("the pass came as a message", |_| {
+        heard(&inputs, "[checks passed at ") > 0
+    })
+    .await;
+    let board = flow.settled().await;
+    let runs = asked_runs(&board);
+    assert!(matches!(
+        runs[0].state,
+        crate::work::IntegratedCheckState::Passed { .. }
+    ));
+    assert_eq!(heard(&inputs, "[checks passed at "), 1);
+    assert_eq!(told(&flow, &runs[0].id).await, 1);
+    assert_eq!(full_runs(&flow.repo), 1, "the thread didn't run them again");
+    flow.stop().await;
+}
+
+/// #513: a background pass that ends while the turn that called run_checks still runs, when
+/// that turn then answers instead of replying [quiet], still comes as a message once (#512
+/// kept it only for a [quiet]).
+#[tokio::test]
+async fn a_background_pass_before_the_threads_answer_still_comes_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (seen, log, go) = (inputs.clone(), replies.clone(), release.clone());
+    let flow = Flow::start(
+        "run-checks-background-early-answer",
+        checks_options(),
+        script(move |turn| {
+            let (seen, log, go) = (seen.clone(), log.clone(), go.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    seen.lock().unwrap().push(turn.input.clone());
+                    if turn.input.contains("Check it") {
+                        let reply = turn.call("run_checks", json!({})).await;
+                        log.lock().unwrap().push(reply.text);
+                        // The turn ends only once the checks have passed.
+                        while !go.load(std::sync::atomic::Ordering::SeqCst) {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+                        return Reply::text("They run in the background.");
+                    }
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    let hold = background_run(&flow, &replies).await;
+    std::fs::remove_file(&hold).unwrap();
+    flow.until("the checks passed while the turn still ran", |board| {
+        asked_runs(board)
+            .iter()
+            .any(|run| matches!(run.state, crate::work::IntegratedCheckState::Passed { .. }))
+    })
+    .await;
+    release.store(true, std::sync::atomic::Ordering::SeqCst);
+    flow.until("the pass came as a message", |_| {
+        heard(&inputs, "[checks passed at ") > 0
+    })
+    .await;
+    let board = flow.settled().await;
+    assert_eq!(heard(&inputs, "[checks passed at "), 1);
+    assert_eq!(told(&flow, &asked_runs(&board)[0].id).await, 1);
+    flow.stop().await;
+}
+
+/// #513: a background pass that ends while the thread's next request runs reaches the
+/// thread once, from that turn or the one after it.
+#[tokio::test]
+async fn a_background_pass_during_the_next_request_still_comes_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flow = Flow::start(
+        "run-checks-background-next",
+        checks_options(),
+        checking_thread(inputs.clone(), replies.clone(), go.clone(), "They run."),
+    )
+    .await;
+    let hold = background_run(&flow, &replies).await;
+    flow.until("the request was answered", |board| {
+        board.run == crate::work::RunState::Idle
+    })
+    .await;
+    flow.say("Next").await;
+    flow.until("the next message's turn runs", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.starts_with("Next"))
+    })
+    .await;
+    std::fs::remove_file(&hold).unwrap();
+    let board = flow
+        .until("the checks passed during it", |board| {
+            asked_runs(board)
+                .iter()
+                .any(|run| matches!(run.state, crate::work::IntegratedCheckState::Passed { .. }))
+        })
+        .await;
+    let check = asked_runs(&board)[0].id.clone();
+    go.store(true, std::sync::atomic::Ordering::SeqCst);
+    for _ in 0..400 {
+        if told(&flow, &check).await > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    flow.settled().await;
+    assert_eq!(
+        told(&flow, &check).await,
+        1,
+        "{:#?}",
+        inputs.lock().unwrap()
+    );
+    assert!(heard(&inputs, "[checks passed at ") <= 1);
+    assert_eq!(
+        replies.lock().unwrap().len(),
+        1,
+        "run_checks was called once"
+    );
+    flow.stop().await;
+}
+
+/// #513: background full checks a restart cut off tell the thread so once the session is
+/// back, once: not again after a second restart. Their record reads interrupted.
+#[tokio::test]
+async fn background_checks_a_restart_cut_off_tell_the_thread_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "run-checks-background-restart",
+        checks_options(),
+        checking_thread(inputs.clone(), replies.clone(), Arc::default(), "They run."),
+    )
+    .await;
+    let hold = background_run(&flow, &replies).await;
+    flow.until("the request was answered", |board| {
+        board.run == crate::work::RunState::Idle
+    })
+    .await;
+    flow.crash().await;
+    // The cut-off run's script, if it outlived the daemon, ends.
+    std::fs::remove_file(&hold).unwrap();
+    flow.until("the thread heard they were cut off", |_| {
+        heard(&inputs, "[checks couldn't run at ") > 0
+    })
+    .await;
+    let board = flow.settled().await;
+    let run = asked_runs(&board)[0].clone();
+    assert!(
+        matches!(&run.state, crate::work::IntegratedCheckState::Interrupted { reason } if reason.contains("Brigadier quit")),
+        "{run:#?}"
+    );
+    assert_eq!(told(&flow, &run.id).await, 1);
+    flow.crash().await;
+    flow.settled().await;
+    assert_eq!(heard(&inputs, "[checks couldn't run at "), 1);
+    assert_eq!(told(&flow, &run.id).await, 1);
+    flow.stop().await;
+}
+
+/// #513: a background pass recorded just before Brigadier stopped, before any turn of the
+/// thread took it, reaches the thread after the restart, once.
+#[tokio::test]
+async fn a_background_pass_no_turn_took_before_a_restart_comes_after_it_once() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "run-checks-background-restart-pass",
+        checks_options(),
+        checking_thread(inputs.clone(), replies.clone(), Arc::default(), "They run."),
+    )
+    .await;
+    let hold = background_run(&flow, &replies).await;
+    let board = flow
+        .until("the request was answered", |board| {
+            board.run == crate::work::RunState::Idle
+        })
+        .await;
+    // Its pass is recorded; the daemon dies before the thread hears it.
+    let mut run = asked_runs(&board)[0].clone();
+    assert!(run.owed, "the call that went on owes its verdict");
+    run.state = crate::work::IntegratedCheckState::Passed {
+        commands: vec!["tools/full-checks.sh".into()],
+    };
+    run.ended_at_ms = Some(crate::now_ms());
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![crate::model::DomainEvent::IntegratedCheckUpdated { check: run.clone() }],
+        )
+        .await
+        .unwrap();
+    flow.crash().await;
+    // The cut-off run's script, if it outlived the daemon, ends.
+    std::fs::remove_file(&hold).unwrap();
+    flow.until("the pass came after the restart", |_| {
+        heard(&inputs, "[checks passed at ") > 0
+    })
+    .await;
+    flow.settled().await;
+    assert_eq!(told(&flow, &run.id).await, 1);
+    flow.crash().await;
+    flow.settled().await;
+    assert_eq!(heard(&inputs, "[checks passed at "), 1);
+    assert_eq!(told(&flow, &run.id).await, 1);
+    flow.stop().await;
+}
+
 /// A worker's run_checks runs the checks its change calls for in its own checkout and answers
 /// in the call; the run is recorded as the worker's, scope change, at its commit.
 #[tokio::test]
@@ -827,6 +1144,7 @@ async fn an_old_automatic_pass_never_satisfies_the_merge_rule() {
         tasks: Vec::new(),
         rerun: false,
         asked: None,
+        owed: false,
     };
     flow.core
         .record_conversation(

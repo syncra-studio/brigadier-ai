@@ -1640,6 +1640,7 @@ impl SessionManager {
                 task_id: Some(task.clone()),
                 scope: crate::work::ChecksScope::Change,
             }),
+            owed: false,
         };
         drop(board);
         self.store_check(&check).await;

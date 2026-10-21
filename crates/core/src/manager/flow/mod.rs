@@ -2002,6 +2002,7 @@ impl Flow {
                 task_id: None,
                 scope: crate::work::ChecksScope::Full,
             }),
+            owed: false,
         };
         self.core
             .record_conversation(

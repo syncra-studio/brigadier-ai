@@ -1799,6 +1799,12 @@ pub struct IntegratedCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub asked: Option<ChecksAsked>,
+    /// The thread's `run_checks` call went on before the verdict: the verdict is owed to it as
+    /// a message, whatever it did meanwhile, and is told again after a restart until a turn
+    /// took it (#513).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub owed: bool,
 }
 
 /// Who called `run_checks`, and what its run checks.

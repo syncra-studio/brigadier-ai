@@ -1769,14 +1769,14 @@ impl SessionManager {
         .await;
     }
 
-    /// Whether `run_check` told the thread to wait for `review` before it answers, and its
-    /// request still works: then its clean end is news too. One the user stopped meanwhile
-    /// stays stopped, rather than being woken to answer.
+    /// Whether request_review's call went on before `review` ended: then its clean end is
+    /// owed to the thread too, whatever it did meanwhile (#513). One the user stopped
+    /// meanwhile stays stopped, rather than being woken to hear it.
     async fn answer_waits_for(&self, review: &ReviewRun) -> bool {
         let (true, Some(request)) = (review.answer_waits, review.request_id.as_deref()) else {
             return false;
         };
-        let working = self
+        let stopped = self
             .core
             .board(&review.conversation_id)
             .await
@@ -1784,11 +1784,11 @@ impl SessionManager {
                 board
                     .requests
                     .get(request)
-                    .is_some_and(|of| of.state == crate::work::RequestState::Working)
+                    .is_some_and(|of| of.state == crate::work::RequestState::Stopped)
             });
-        working
+        !stopped
             && match self.conv(&review.conversation_id) {
-                Ok(conv) => !conv.request_ended(request).await,
+                Ok(conv) => !conv.request_stopped(request).await,
                 Err(_) => false,
             }
     }
@@ -2138,36 +2138,6 @@ impl SessionManager {
         let Ok(board) = self.core.board(conversation_id).await else {
             return;
         };
-        // A clean review the thread's answer waited for, whose word was still on its way to
-        // the thread when Brigadier stopped: it goes again, so the request gets its answer
-        // instead of ending with none. (A request whose turn the stop cut off reads
-        // interrupted by now, and isn't working.)
-        if let Some(clean) = board.latest_request().and_then(|latest| {
-            let newest = board
-                .reviews
-                .values()
-                .filter(|review| {
-                    review.kind == ReviewKind::Code
-                        && review.task_id.is_none()
-                        && review.request_id.as_deref() == Some(latest.id.as_str())
-                })
-                .max_by_key(|review| (review.started_at_ms, review.number))?;
-            (latest.state == crate::work::RequestState::Working
-                && newest.answer_waits
-                && newest.state == ReviewState::Clean)
-                .then(|| newest.clone())
-        }) && !self
-            .inbox_holds(
-                conversation_id,
-                InjectionKind::Report,
-                super::conversation::CLEAN_REVIEW,
-                None,
-                clean.request_id.as_deref(),
-            )
-            .await
-        {
-            self.tell_review(&clean, None).await;
-        }
         self.recover_unheard_reviews(conversation_id, &board).await;
         let running: Vec<ReviewRun> = board
             .reviews
@@ -2202,8 +2172,10 @@ impl SessionManager {
     /// Findings, or a review that couldn't run, whose word to the thread was still in its
     /// inbox when Brigadier stopped (the inbox lives in memory, #69): each goes again, once,
     /// while its request still works for it and is the one the word is filed under (a task's
-    /// own, else the newest). One a turn took is logged in the orchestrator's stream after
-    /// the review ended, by its label (which names the review) and task.
+    /// own, else the newest). One request_review's call went on before is owed whatever its
+    /// request did since, but a stop, and so is its clean end (#513). One a turn took is
+    /// logged in the orchestrator's stream after the review ended, by its label (which names
+    /// the review) and task.
     async fn recover_unheard_reviews(
         &self,
         conversation_id: &ConversationId,
@@ -2223,10 +2195,16 @@ impl SessionManager {
             .reviews
             .values()
             .filter(|review| {
-                matches!(
-                    review.state,
-                    ReviewState::Findings { .. } | ReviewState::Failed { .. }
-                ) && review.notify == ReviewFor::Orchestrator
+                let owed_clean = review.state == ReviewState::Clean
+                    && review.answer_waits
+                    && review.kind == ReviewKind::Code
+                    && review.task_id.is_none();
+                (owed_clean
+                    || matches!(
+                        review.state,
+                        ReviewState::Findings { .. } | ReviewState::Failed { .. }
+                    ))
+                    && review.notify == ReviewFor::Orchestrator
                     && review.ended_at_ms.is_some()
             })
             .filter(|review| {
@@ -2236,7 +2214,11 @@ impl SessionManager {
                     board
                         .requests
                         .get(&request)
-                        .is_some_and(|of| of.state == crate::work::RequestState::Working)
+                        .is_some_and(|of| match of.state {
+                            crate::work::RequestState::Working => true,
+                            crate::work::RequestState::Stopped => false,
+                            _ => review.answer_waits,
+                        })
                         && !super::requests::ended_run_request(board, &request)
                 })
             })
@@ -2244,7 +2226,9 @@ impl SessionManager {
         let Some(since) = owed.iter().filter_map(|review| review.ended_at_ms).min() else {
             return;
         };
-        let taken = self.reports_taken_since(conversation_id, since).await;
+        let taken = self
+            .injections_taken_since(conversation_id, since, InjectionKind::Report)
+            .await;
         owed.retain(|review| {
             let of = review
                 .task_id
@@ -2295,11 +2279,13 @@ impl SessionManager {
         }
     }
 
-    /// The reports a turn of the thread took since `since_ms`: when, their label and task.
-    async fn reports_taken_since(
+    /// The messages of `kind` a turn of the thread took since `since_ms`: when, their label
+    /// and task.
+    pub(super) async fn injections_taken_since(
         &self,
         id: &ConversationId,
         since_ms: i64,
+        kind: InjectionKind,
     ) -> Vec<(i64, String, Option<TaskId>)> {
         let mut taken = Vec::new();
         let mut before = None;
@@ -2331,7 +2317,7 @@ impl SessionManager {
                         entry: crate::work::OrchestratorEntry::Injection { injection },
                         ..
                     }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
-                    && injection.kind == InjectionKind::Report
+                    && injection.kind == kind
                 {
                     taken.push((stored.at_ms, injection.label, injection.task_id));
                 }

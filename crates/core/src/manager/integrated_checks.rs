@@ -64,6 +64,17 @@ pub(crate) fn integrated_check_number(id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// The label of the message that tells check `id`'s end: `checks passed check-7` for a pass
+/// only a deferred answer waits for, `run_checks passed check-7` for one owed to the thread
+/// (#513), `checks check-7` for the rest.
+fn check_label(id: &str, pass: bool, owed: bool) -> String {
+    match (pass, owed) {
+        (true, true) => format!("{}{id}", super::conversation::OWED_PASS),
+        (true, false) => format!("checks passed {id}"),
+        (false, _) => format!("checks {id}"),
+    }
+}
+
 /// What the sessions' full checks need while the daemon runs.
 #[derive(Default)]
 pub(crate) struct IntegratedChecks {
@@ -220,13 +231,19 @@ pub(crate) fn checking_line(board: &crate::board::Board, request: &str) -> Optio
         })
         .min_by_key(|check| integrated_check_number(&check.id))?;
     Some(format!(
-        "[the session's full checks {} on `{}` at {}, in the background: a failure comes as a message. Answer now, or reply {} to answer with their result.]",
+        "[the session's full checks {} on `{}` at {}, in the background: {} comes as a message. Answer now, or reply {} to answer with their result.]",
         match check.state {
             IntegratedCheckState::Due => "are due",
             _ => "run",
         },
         check.branch,
         short(&check.tip),
+        // A run_checks call that went on is owed the verdict, a pass too (#513).
+        if check.owed {
+            "their result"
+        } else {
+            "a failure"
+        },
         super::prompts::QUIET
     ))
 }
@@ -348,6 +365,9 @@ impl SessionManager {
                     return Ok(self.checks_verdict(now).await);
                 }
                 waiting.remove(&claim);
+                // Under the claims' lock, so its end, told as a message, sees it owed.
+                self.set_owed(id, &check, true).await;
+                drop(waiting);
                 return Ok(format!(
                     "The full checks still run on `{}` at {} ({check}), in the background: their result comes as a message [checks … at {}]. Carry on with what doesn't depend on them, or reply {}; don't call run_checks again for it.",
                     now.branch,
@@ -412,6 +432,7 @@ impl SessionManager {
                 task_id: None,
                 scope: crate::work::ChecksScope::Full,
             }),
+            owed: false,
         };
         self.store_check(&check).await;
         Ok(check.id)
@@ -425,8 +446,8 @@ impl SessionManager {
         }
     }
 
-    /// Records the runner's copy of `check`, with the requests that joined it meanwhile: the
-    /// record holds them, the runner's copy may not.
+    /// Records the runner's copy of `check`, with the requests that joined it meanwhile and
+    /// whether its verdict is owed: the record holds them, the runner's copy may not.
     async fn store_run(&self, check: &mut IntegratedCheck) {
         let _records = self.integrated.records.lock().await;
         if let Ok(board) = self.core.board(&check.conversation_id).await
@@ -437,8 +458,26 @@ impl SessionManager {
                     check.requests.push(request.clone());
                 }
             }
+            check.owed = stored.owed;
         }
         self.store_check(check).await;
+    }
+
+    /// Records whether `check`'s verdict is owed to the thread as a message (#513).
+    async fn set_owed(&self, id: &ConversationId, check: &str, owed: bool) {
+        let _records = self.integrated.records.lock().await;
+        let Some(mut stored) = self
+            .core
+            .board(id)
+            .await
+            .ok()
+            .and_then(|board| board.integrated_checks.get(check).cloned())
+            .filter(|stored| stored.owed != owed)
+        else {
+            return;
+        };
+        stored.owed = owed;
+        self.store_check(&stored).await;
     }
 
     pub(super) async fn store_check(&self, check: &IntegratedCheck) {
@@ -884,13 +923,26 @@ impl SessionManager {
         if matches!(check.state, IntegratedCheckState::Passed { .. }) {
             self.release_checked_holds(id).await;
         }
-        // A `run_checks` call still waiting tells its verdict itself.
+        // A `run_checks` call still waiting tells its verdict itself, owed to an earlier call
+        // that went on or not; else whether one went on is read under the claims' lock, which
+        // that call recorded it under.
         let claim = (id.clone(), check.id.clone());
-        if self.integrated.in_call.lock().await.remove(&claim) {
-            self.check_held_merge(id).await;
-            self.settle_requests(id).await;
-            return;
-        }
+        let owed = {
+            let mut waiting = self.integrated.in_call.lock().await;
+            if waiting.remove(&claim) {
+                drop(waiting);
+                self.set_owed(id, &check.id, false).await;
+                self.check_held_merge(id).await;
+                self.settle_requests(id).await;
+                return;
+            }
+            self.core.board(id).await.ok().is_some_and(|board| {
+                board
+                    .integrated_checks
+                    .get(&check.id)
+                    .is_some_and(|stored| stored.owed)
+            })
+        };
         // Every independent request that deferred to this run gets its own outcome.
         let mut requests: Vec<_> = self
             .waiting_requests(check)
@@ -916,11 +968,7 @@ impl SessionManager {
             };
             let envelope = Envelope {
                 kind: InjectionKind::Decision,
-                label: format!(
-                    "checks {}{}",
-                    if optional_pass { "passed " } else { "" },
-                    check.id
-                ),
+                label: check_label(&check.id, optional_pass, owed),
                 task_id: check.tasks.last().cloned(),
                 text,
             };
@@ -1185,8 +1233,16 @@ impl SessionManager {
 
     /// At startup (`cause`: "Brigadier quit") or an unarchive ("The session was archived"):
     /// nothing runs again by itself. A check cut off while it ran, or one still waiting to
-    /// start, is recorded interrupted, for the agent to call run_checks again.
-    pub(crate) async fn recover_integrated_checks(&self, id: &ConversationId, cause: &str) {
+    /// start, is recorded interrupted, for the agent to call run_checks again. At startup
+    /// (`tell`), each verdict owed to the thread that no turn took goes to it now, once: one
+    /// the stop cut off says so (#513). After an unarchive none is owed any more: the archive
+    /// ended the session's work.
+    pub(crate) async fn recover_integrated_checks(
+        &self,
+        id: &ConversationId,
+        cause: &str,
+        tell: bool,
+    ) {
         let Ok(board) = self.core.board(id).await else {
             return;
         };
@@ -1202,6 +1258,87 @@ impl SessionManager {
             };
             cut.ended_at_ms = Some(now_ms());
             self.store_check(&cut).await;
+        }
+        self.tell_owed_checks(id, tell).await;
+    }
+
+    /// See [`Self::recover_integrated_checks`]. One a turn took since it ended (its message is
+    /// logged in the thread's stream) is owed no more; one in the inbox again already (the
+    /// inbox's own recovery) isn't told twice.
+    async fn tell_owed_checks(&self, id: &ConversationId, tell: bool) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let mut owed: Vec<IntegratedCheck> = board
+            .integrated_checks
+            .values()
+            .filter(|check| check.owed && check.state.is_final())
+            .cloned()
+            .collect();
+        if owed.is_empty() {
+            return;
+        }
+        if !tell {
+            for check in &owed {
+                self.set_owed(id, &check.id, false).await;
+            }
+            return;
+        }
+        owed.sort_by_key(|check| integrated_check_number(&check.id));
+        let since = owed
+            .iter()
+            .map(|check| check.ended_at_ms.unwrap_or(0))
+            .min()
+            .unwrap_or(0);
+        let taken = self
+            .injections_taken_since(id, since, InjectionKind::Decision)
+            .await;
+        for check in owed {
+            let labels = [
+                check_label(&check.id, true, true),
+                check_label(&check.id, true, false),
+                check_label(&check.id, false, false),
+            ];
+            let ended = check.ended_at_ms.unwrap_or(0);
+            if taken
+                .iter()
+                .any(|(at_ms, label, _)| *at_ms >= ended && labels.contains(label))
+            {
+                self.set_owed(id, &check.id, false).await;
+                continue;
+            }
+            let request = check.requests.last().cloned();
+            let task = check.tasks.last().cloned();
+            let mut queued = false;
+            for label in &labels {
+                queued |= self
+                    .inbox_holds(
+                        id,
+                        InjectionKind::Decision,
+                        label,
+                        task.as_ref(),
+                        request.as_deref(),
+                    )
+                    .await;
+            }
+            if queued {
+                continue;
+            }
+            let Some((text, pass)) = self.check_message(&check, false, true).await else {
+                continue;
+            };
+            tracing::info!(conversation = %id, check = %check.id, "a check's verdict the thread was owed goes to it after the restart");
+            self.deliver_for(
+                id,
+                Envelope {
+                    kind: InjectionKind::Decision,
+                    label: check_label(&check.id, pass, true),
+                    task_id: task,
+                    text,
+                },
+                request,
+            )
+            .await;
         }
     }
 
@@ -1464,6 +1601,7 @@ test result: FAILED. 1 passed; 3 failed";
             tasks: Vec::new(),
             rerun: false,
             asked: None,
+            owed: false,
         }
     }
 
@@ -1500,6 +1638,14 @@ test result: FAILED. 1 passed; 3 failed";
             Some(
                 "[the session's full checks are due on `work` at b2, in the background: a failure comes as a message. Answer now, or reply [quiet] to answer with their result.]"
             )
+        );
+        board.integrated_checks.get_mut("check-10").unwrap().owed = true;
+        assert_eq!(
+            checking_line(&board, "r1").as_deref(),
+            Some(
+                "[the session's full checks are due on `work` at b2, in the background: their result comes as a message. Answer now, or reply [quiet] to answer with their result.]"
+            ),
+            "a run_checks call that went on is owed its pass too"
         );
         assert_eq!(
             board

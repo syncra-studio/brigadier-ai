@@ -355,6 +355,7 @@ async fn record_check(flow: &Flow, number: u32, state: IntegratedCheckState, ask
             task_id: None,
             scope: crate::work::ChecksScope::Full,
         }),
+        owed: false,
     };
     flow.core
         .record_conversation(
