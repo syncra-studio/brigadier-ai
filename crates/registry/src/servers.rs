@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::{Problem, Roots, Secret, Server, Source, Transport, server_id};
+use crate::{
+    CodexStore, OAuthClient, Problem, Roots, Secret, Server, Source, Transport, server_id,
+};
 
 /// How a source writes variables in its values.
 #[derive(Clone, Copy)]
@@ -234,6 +236,19 @@ pub(crate) fn codex_trusted(config: &toml::Table) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`, `auto` by default).
+pub(crate) fn codex_store(config: &toml::Table) -> CodexStore {
+    match config
+        .get("mcp_oauth_credentials_store")
+        .and_then(toml::Value::as_str)
+    {
+        None | Some("auto") => CodexStore::Auto,
+        Some("file") => CodexStore::File,
+        Some("keyring") => CodexStore::Keyring,
+        Some(_) => CodexStore::Other,
+    }
+}
+
 /// `mcpServers` of a JSON config (Claude Code, Claude Desktop, Cursor).
 fn json_servers(
     own: &Map<String, Value>,
@@ -316,7 +331,16 @@ fn json_servers(
             problem(name, None, "It has no command or url".into());
             continue;
         };
-        servers.push(server(name, origin.source, origin.project, transport));
+        let mut server = server(name, origin.source, origin.project, transport);
+        server.oauth = config
+            .get("oauth")
+            .and_then(|oauth| oauth.get("clientId"))
+            .and_then(Value::as_str)
+            .map(|id| OAuthClient {
+                client_id: Some(expand(id)),
+                client_secret: None,
+            });
+        servers.push(server);
     }
     servers
 }
@@ -425,12 +449,18 @@ fn toml_servers(
             ));
             continue;
         };
-        servers.push(server(
-            name,
-            source,
-            layer.map(|(project, _)| project),
-            transport,
-        ));
+        let mut server = server(name, source, layer.map(|(project, _)| project), transport);
+        server.oauth = config
+            .get("oauth")
+            .and_then(toml::Value::as_table)
+            .map(|oauth| {
+                let text = |key: &str| oauth.get(key).and_then(toml::Value::as_str);
+                OAuthClient {
+                    client_id: text("client_id").map(str::to_owned),
+                    client_secret: text("client_secret").map(Secret::new),
+                }
+            });
+        servers.push(server);
     }
     servers
 }
@@ -445,6 +475,7 @@ fn server(name: &str, source: Source, project: Option<&Path>, transport: Transpo
         project: project.map(Path::to_owned),
         transport,
         signs_in,
+        oauth: None,
     }
 }
 

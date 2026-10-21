@@ -18,11 +18,16 @@
 //! [`Catalog::skill_native`]. Values of a server's environment and headers are [`Secret`]s: only
 //! their names leave Brigadier's process, never their values.
 //!
+//! A remote server with no credentials in its config signs in with OAuth, which each CLI keeps in
+//! a store of its own: [`Catalog::sign_in`] says which stored sign-in can serve a session, from
+//! what a [`SignInStores`] reads ([`sign_ins`]).
+//!
 //! [`Registry`] keeps the user's part current with a file watcher; a project's part is read when
 //! asked for. Variables (`${VAR}` in Claude's configs, `${env:VAR}` in Cursor's) expand from
 //! [`Roots::vars`], the environment the CLIs themselves run with.
 
 mod servers;
+mod sign_ins;
 mod skills;
 mod watch;
 
@@ -31,6 +36,10 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+pub use sign_ins::{
+    Owner, Probe, SignInStores, Unread, claude_key, claude_lock_name, codex_keys, identity,
+    owner_agent, sha256_hex,
+};
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
@@ -225,6 +234,29 @@ pub struct Server {
     /// which each agent does by itself (Codex: `codex mcp login`), so another agent's sign-in
     /// doesn't serve it as such (docs/research/phase7-probes.md (f)): [`Catalog::sign_in`].
     pub signs_in: bool,
+    /// The OAuth client its config names (Codex's `[mcp_servers.<name>.oauth]`, Claude's
+    /// `oauth.clientId`), which renewing its sign-in needs: no CLI stores a configured secret
+    /// with the token.
+    pub oauth: Option<OAuthClient>,
+}
+
+/// A pre-registered OAuth client of a server's config.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OAuthClient {
+    pub client_id: Option<String>,
+    pub client_secret: Option<Secret>,
+}
+
+/// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CodexStore {
+    /// The Keychain, else `$CODEX_HOME/.credentials.json` (its default).
+    #[default]
+    Auto,
+    File,
+    Keyring,
+    /// A value Brigadier doesn't know: its sign-ins aren't read.
+    Other,
 }
 
 /// A server, or a whole config file, that couldn't be read: no session gets it.
@@ -253,9 +285,11 @@ pub enum SignIn {
     Native,
     /// The sign-in another agent stored can serve it (read, and written back when renewed).
     ReusableFrom(Agent),
-    /// No agent's stored sign-in can: one sign-in in Brigadier serves it to every agent.
+    /// Brigadier's own sign-in serves it, to every agent.
     InBrigadier,
-    /// Not known: nothing reads the agents' stored sign-ins yet.
+    /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
+    Needed,
+    /// Not known: a store couldn't be read without asking the user, or they said no.
     Unknown,
 }
 
@@ -293,6 +327,8 @@ pub struct Catalog {
     pub codex_skill_config: Vec<serde_json::Value>,
     /// The projects the user trusts in Codex, whose `.codex` layers Codex loads.
     pub codex_trusted: Vec<PathBuf>,
+    /// Where Codex keeps its MCP sign-ins.
+    pub codex_store: CodexStore,
 }
 
 impl Catalog {
@@ -320,6 +356,7 @@ impl Catalog {
                 .as_ref()
                 .map(servers::codex_trusted)
                 .unwrap_or_default(),
+            codex_store: codex.as_ref().map(servers::codex_store).unwrap_or_default(),
         };
         skills::add_user(&mut catalog.skills, roots);
         catalog
@@ -366,14 +403,54 @@ impl Catalog {
         skill.roots.iter().any(|root| root.native(session))
     }
 
-    /// How `session`'s agent is signed in to `server`; `None` for one that doesn't sign in.
-    pub fn sign_in(&self, server: &Server, session: &Session<'_>) -> Option<SignIn> {
-        server.signs_in.then(|| {
-            if self.server_native(server, session) {
-                SignIn::Native
-            } else {
-                SignIn::Unknown
+    /// How `session`'s agent is signed in to `server`, from what `stores` read; `None` for one
+    /// that doesn't sign in.
+    pub fn sign_in(
+        &self,
+        server: &Server,
+        session: &Session<'_>,
+        stores: &dyn SignInStores,
+    ) -> Option<SignIn> {
+        self.sign_in_from(server, session, stores)
+            .map(|(sign_in, _)| sign_in)
+    }
+
+    /// As [`Self::sign_in`], with the entry whose agent's stored sign-in serves it for
+    /// [`SignIn::ReusableFrom`]: the agent's own sign-in when it has the server and isn't known
+    /// to lack one, else the first usable one of an entry with its [`identity`] (Claude's and
+    /// Codex's keys are an entry's), else Brigadier's own.
+    pub fn sign_in_from<'a>(
+        &'a self,
+        server: &'a Server,
+        session: &Session<'_>,
+        stores: &dyn SignInStores,
+    ) -> Option<(SignIn, Option<&'a Server>)> {
+        if !server.signs_in {
+            return None;
+        }
+        let native = self.server_native(server, session);
+        if native && stores.probe(session.agent.into(), server) != Probe::Absent {
+            return Some((SignIn::Native, None));
+        }
+        let mut unknown = false;
+        for entry in sign_ins::same_server(&self.servers, server) {
+            let Some(agent) = owner_agent(entry.source) else {
+                continue;
+            };
+            if native && entry.id == server.id && agent == session.agent {
+                continue;
             }
+            match stores.probe(agent.into(), entry) {
+                Probe::Usable => return Some((SignIn::ReusableFrom(agent), Some(entry))),
+                Probe::Unknown => unknown = true,
+                Probe::Absent => {}
+            }
+        }
+        Some(match stores.probe(Owner::Brigadier, server) {
+            Probe::Usable => (SignIn::InBrigadier, None),
+            Probe::Unknown => (SignIn::Unknown, None),
+            Probe::Absent if unknown => (SignIn::Unknown, None),
+            Probe::Absent => (SignIn::Needed, None),
         })
     }
 

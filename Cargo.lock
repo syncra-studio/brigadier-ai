@@ -693,6 +693,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "serde_json",
+ "sha2 0.11.0",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "yaml-rust2",

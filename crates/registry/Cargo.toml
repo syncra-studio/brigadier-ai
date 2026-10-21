@@ -11,6 +11,8 @@ publish.workspace = true
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 serde_json.workspace = true
+# The CLIs' keys for their stored MCP sign-ins.
+sha2 = "0.11.0"
 toml = "1.1.6"
 tracing.workspace = true
 yaml-rust2 = "0.13.0"
