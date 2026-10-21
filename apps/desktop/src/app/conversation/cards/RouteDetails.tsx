@@ -1,6 +1,6 @@
 import { Section } from "@/components/shared";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { RankingView } from "@/app/settings/RankingView";
+import { RankingView } from "@/app/conversation/cards/RankingView";
 import type { ModelGroup } from "@/components/shared";
 import { Badge } from "@/components/controls";
 import { useNow } from "@/hooks/use-now";

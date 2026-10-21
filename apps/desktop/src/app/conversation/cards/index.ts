@@ -9,4 +9,5 @@ export * from "./PlanClip";
 export * from "./PlanFrame";
 export * from "./PlanRating";
 export * from "./PlanText";
+export * from "./RankingView";
 export * from "./RulesAndSources";

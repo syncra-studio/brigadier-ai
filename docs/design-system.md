@@ -401,7 +401,7 @@ table is the current one.
 | Settings (settings.pen) | `#756 AgentModels` | `app/settings/providers/AgentModels.tsx` | `AgentModels` | |
 | Settings (settings.pen) | `#758 AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
 | Settings (settings.pen) | `#763 AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
-| Settings (settings.pen) | `#738 RankingView` | `app/settings/RankingView.tsx` | `RankingView` | |
+| Settings (settings.pen) | `#738 RankingView` | `app/conversation/cards/RankingView.tsx` | `RankingView` | |
 | Settings (settings.pen) | `#773 More › kind of work row` | `app/settings/routing/KindOfWorkRow.tsx` | `KindOfWorkRow` | |
 | Settings (settings.pen) | `#774 More › loading line` | `app/settings/routing/LoadingLine.tsx` | `LoadingLine` | |
 | Settings (settings.pen) | `#775 More › strength row` | `app/settings/routing/StrengthRow.tsx` | `StrengthRow` | |
