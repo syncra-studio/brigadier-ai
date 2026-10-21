@@ -266,6 +266,17 @@ table is the current one.
 | Conversation (app.pen) | `#299 DictationBar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
 | Conversation (app.pen) | `#300 DictationBar › inline: waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
 | Conversation (app.pen) | `#301 ComposerHint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
+| Settings (settings.pen) | `#645 AppearanceSection` | `app/settings/AppearanceSection.tsx` | `AppearanceSection` | |
+| Settings (settings.pen) | `#646 NameRow` | `app/settings/NameRow.tsx` | `NameRow` | |
+| Settings (settings.pen) | `#647 ComposerSection (general)` | `app/settings/ComposerSection.tsx` | `ComposerSection` | |
+| Settings (settings.pen) | `#648 NotificationsSection` | `app/settings/NotificationsSection.tsx` | `NotificationsSection` | |
+| Settings (settings.pen) | `#649 NotificationsSection › inline: dimmed row (notifications off)` | `app/settings/DimmedRow.tsx` | `DimmedRow` | |
+| Settings (settings.pen) | `#650 PowerSection` | `app/settings/PowerSection.tsx` | `PowerSection` | |
+| Settings (settings.pen) | `#651 OpenAtLoginRow` | `app/settings/OpenAtLoginRow.tsx` | `OpenAtLoginRow` | |
+| Settings (settings.pen) | `#652 AboutSection` | `app/settings/AboutSection.tsx` | `AboutSection` | |
+| Settings (settings.pen) | `#653 AboutSection › inline: version value` | `app/settings/VersionValue.tsx` | `VersionValue` | |
+| Settings (settings.pen) | `#654 HibernateRow` | `app/settings/HibernateRow.tsx` | `HibernateRow` | |
+| Settings (settings.pen) | `#675 Picture (sidebar closed preview)` | `app/settings/SidebarClosedPicture.tsx` | `SidebarClosedPicture` | |
 
 ## Icons
 

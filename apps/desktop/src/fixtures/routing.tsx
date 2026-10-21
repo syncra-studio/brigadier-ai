@@ -6,7 +6,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { GENERAL_ROWS } from "@/app/settings/GeneralPage";
+import { GENERAL_ROWS } from "@/app/settings/generalRows";
 import { ROUTING_PAGE_ROWS } from "@/app/settings/routing/RoutingPage";
 import { revealSetting } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
