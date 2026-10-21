@@ -406,7 +406,9 @@ fn the_link_helper_rejects_non_web_or_extra_arguments() {
 /// has them). It downloads the agent, and its installer may add its folder to the user's PATH
 /// in the registry: back that up first. No account is used: the sign-in is cancelled once its
 /// link reaches Brigadier, or a minute after it starts (an agent that ignores `BROWSER` opens
-/// the page itself).
+/// the page itself). Codex finds its home through Windows' profile folder, not `USERPROFILE`
+/// (codex-cli 0.163.0 read and wrote the user's own `.codex` here), so `CODEX_HOME` keeps it in
+/// the scratch home.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "downloads a real agent and may change the user's PATH; run by hand"]
 async fn live_install_up_to_the_sign_in_link() {
@@ -443,6 +445,7 @@ async fn live_install_up_to_the_sign_in_link() {
         ),
         ("TEMP".into(), home.join("Temp").into_os_string()),
         ("TMP".into(), home.join("Temp").into_os_string()),
+        ("CODEX_HOME".into(), home.join(".codex").into_os_string()),
         ("PATH".into(), path),
         ("SystemRoot".into(), system.into_os_string()),
     ]);
@@ -457,7 +460,7 @@ async fn live_install_up_to_the_sign_in_link() {
             vars.insert(key.into(), value);
         }
     }
-    for dir in ["AppData/Roaming", "AppData/Local", "Temp"] {
+    for dir in ["AppData/Roaming", "AppData/Local", "Temp", ".codex"] {
         std::fs::create_dir_all(home.join(dir)).unwrap();
     }
     let _ = tracing_subscriber::fmt()
@@ -474,6 +477,7 @@ async fn live_install_up_to_the_sign_in_link() {
         ProviderKind::Codex => Arc::new(Codex::new(platform.clone(), env.clone())),
     };
     let link = home.join("brigadier-opened-link");
+    let _ = std::fs::remove_file(&link);
     let opened = link.clone();
     let marks = env.clone();
     let ops = Ops {
