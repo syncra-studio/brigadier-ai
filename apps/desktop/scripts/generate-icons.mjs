@@ -46,11 +46,11 @@ const SMALL_SIZES = [16, 20, 24, 32];
 /** The plate at `size` px with the small cut on it: the mark takes three quarters of it (the
  *  large icon's takes 64%), so its stripes get the pixels. */
 function smallIcon(size) {
-  const mark = Math.round((size * 0.75) / 2) * 2;
-  const { stripes, core } = smallMark(mark);
+  const markSize = Math.round((size * 0.75) / 2) * 2;
+  const { stripes, core } = smallMark(markSize);
   const shapes = stripes.map(([x, y, w, h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}"/>`);
   shapes.push(`<circle cx="${core.cx}" cy="${core.cy}" r="${core.r}"/>`);
-  const at = (size - mark) / 2;
+  const at = (size - markSize) / 2;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" rx="${(size * 218) / 1024}" fill="#181818"/><g transform="translate(${at} ${at})" fill="#f2f5ff">${shapes.join("")}</g></svg>`;
 }
 
@@ -92,9 +92,9 @@ try {
   // Tauri gives the window the first entry (Windows scales it to the title bar): 32 px first,
   // as `tauri icon` orders them.
   const small = SMALL_SIZES.map((size) => {
-    const source = join(output, `small-${size}.svg`);
-    writeFileSync(source, smallIcon(size));
-    execFileSync(tauri, [...tauriArgs, "icon", source, "--output", join(output, `small-${size}`), "--png", String(size)], {
+    const svgPath = join(output, `small-${size}.svg`);
+    writeFileSync(svgPath, smallIcon(size));
+    execFileSync(tauri, [...tauriArgs, "icon", svgPath, "--output", join(output, `small-${size}`), "--png", String(size)], {
       stdio: "ignore",
     });
     return { size, png: readFileSync(join(output, `small-${size}`, `${size}x${size}.png`)) };
