@@ -1,6 +1,5 @@
-import { useAui, FileTypeIcon, useCheckoutRoot } from "@/components/conversation";
+import { useAui, FileTypeIcon } from "@/components/conversation";
 import {
-  createContext,
   type FC,
   type ReactNode,
   useCallback,
@@ -14,12 +13,6 @@ import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { Counts } from "@/app/conversation/Counts";
 import { TooltipIconButton } from "@/components/controls";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/overlays";
-import {
   Check,
   ChevronDown,
   ChevronDownUp,
@@ -27,23 +20,20 @@ import {
   ChevronUpDown,
   Compare,
   Copy,
-  ExternalLink,
-  FolderOpen,
-  Folders,
   Reload,
   Text,
 } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { openFolder, request, revealPath } from "@/ipc/client";
+import { request } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
 import { type DiffLine, fileSides, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
 import { type DiffSource, DiffView } from "@/app/side-panel/diffView";
+import { OpenInMenu } from "@/app/side-panel/OpenInMenu";
+import { ReviewContext } from "@/app/side-panel/reviewContext";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { useApp } from "@/state/store";
 import { type ReviewOptions, setReviewOption, useReview } from "@/state/review";
-import { CHAT_TAB, openFileTab, type ReviewTarget, reviewScope, selectTab } from "@/state/sessionTabs";
-import { toast } from "@/state/toasts";
+import { CHAT_TAB, type ReviewTarget, reviewScope, selectTab } from "@/state/sessionTabs";
 
 /**
  * A session's Review tab, opened from the Source panel: a group's diffs ("Open Changes"), each
@@ -313,51 +303,6 @@ const FileSection: FC<{
       </header>
       {!collapsed && <FileBody file={file} patch={patch} options={options} />}
     </section>
-  );
-};
-
-/** Whose checkout a file's diff is of. */
-const ReviewContext = createContext("");
-
-function failed(cause: unknown) {
-  toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
-}
-
-/** A changed file's "Open in" menu: a file tab, its default app, or the file manager. */
-const OpenInMenu: FC<{ file: ReviewFile }> = ({ file }) => {
-  const conversationId = useContext(ReviewContext);
-  const root = useCheckoutRoot();
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const gone = file.status === "deleted";
-  const absolute = root ? `${root.replace(/\/$/, "")}/${file.path}` : null;
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip="Open in" size="icon-xs" disabled={gone}>
-          <ExternalLink />
-        </TooltipIconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => openFileTab(conversationId, file.path)}>
-          <Folders />
-          File tab
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={!absolute}
-          onSelect={() => absolute && openFolder(absolute).catch(failed)}
-        >
-          <ExternalLink />
-          Default app
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={!absolute}
-          onSelect={() => absolute && revealPath(absolute).catch(failed)}
-        >
-          <FolderOpen />
-          {mac ? "Finder" : "File manager"}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 };
 

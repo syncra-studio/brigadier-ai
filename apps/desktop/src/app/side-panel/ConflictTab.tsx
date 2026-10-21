@@ -16,6 +16,7 @@ import {
   UNTOUCHED,
 } from "@/app/side-panel/conflicts";
 import { DiffView } from "@/app/side-panel/diffView";
+import { RebaseStep } from "@/app/side-panel/RebaseStep";
 import { StepCounter } from "@/app/conversation/StepCounter";
 import { Button } from "@/components/controls";
 import { ConfirmDialog } from "@/components/overlays";
@@ -92,21 +93,6 @@ async function resolve(target: WorkspaceTarget, path: string, expected: string |
   emitWorkspaceChanged(target);
   return state;
 }
-
-/** During a rebase, the commit it replays: "Rebasing 2 of 5: <subject>". */
-const RebaseStep: FC<{ file: ConflictFile }> = ({ file }) => {
-  const rebase = file.rebasing;
-  if (!rebase) return null;
-  const subject = rebase.message.split("\n")[0] ?? "";
-  return (
-    <div data-slot="conflict-rebase" className="border-border text-muted-foreground flex h-control-sm shrink-0 items-center border-b px-3.5 text-xs">
-      <span className="truncate">
-        Rebasing {rebase.step} of {rebase.total}
-        {subject && <span className="text-foreground">: {subject}</span>}
-      </span>
-    </div>
-  );
-};
 
 /* ---------- the code ---------- */
 

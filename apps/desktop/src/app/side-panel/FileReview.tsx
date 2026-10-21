@@ -2,6 +2,7 @@ import { type FC, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, u
 
 import { DiffView, type DiffNote } from "@/app/side-panel/diffView";
 import { StepCounter } from "@/app/conversation/StepCounter";
+import { ReviewSteps } from "@/app/side-panel/ReviewSteps";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { Button, Kbd } from "@/components/controls";
 import { ChevronRight } from "@/components/icons";
@@ -181,16 +182,7 @@ export const FileReviewBar: FC<{ review: FileReviewState }> = ({ review }) => {
   const count = file.hunks.length;
   return (
     <span data-slot="review-bar" className="flex shrink-0 items-center gap-2">
-      {count > 0 && <StepCounter data-slot="review-changes" noun="change" vertical at={current} count={count} onStep={(by) => review.step(by)} />}
-      <span className="bg-border h-3 w-px" />
-      <StepCounter
-        data-slot="review-files"
-        noun="file"
-        at={paths.indexOf(path)}
-        count={paths.length}
-        unit={paths.length === 1 ? "File" : "Files"}
-        onStep={review.move}
-      />
+      <ReviewSteps current={current} count={count} paths={paths} path={path} onStep={(by) => review.step(by)} onMove={review.move} />
       <Button
         size="xs"
         variant="outline"

@@ -190,6 +190,9 @@ table is the current one.
 | Side panel (app.pen) | `#484 Brief` | `app/side-panel/WorkerBrief.tsx` | `WorkerBrief` | |
 | Side panel (app.pen) | `#486 Answer (worker report)` | `app/side-panel/WorkerAnswer.tsx` | `WorkerAnswer` | |
 | Side panel (app.pen) | `#490 WorkspacePane › view icon tab row` | `app/side-panel/PaneViewTabs.tsx` | `PaneViewTabs` | |
+| Side panel (app.pen) | `#500 RebaseStep` | `app/side-panel/RebaseStep.tsx` | `RebaseStep` | |
+| Side panel (app.pen) | `#509 Steps` | `app/side-panel/ReviewSteps.tsx` | `ReviewSteps` | |
+| Side panel (app.pen) | `#974 OpenInMenu` | `app/side-panel/OpenInMenu.tsx` | `OpenInMenu` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
