@@ -1,32 +1,29 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { TooltipIconButton, Button, Kbd, NavRow } from "@/components/controls";
-import { errorText } from "@/app/shell/dialogs/fields";
+import { TooltipIconButton, NavRow } from "@/components/controls";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/shell/dialogs/RemoveProjectDialog";
 import { NameDialog } from "@/app/shell/NameDialog";
 import { useShortcuts } from "@/app/shortcuts";
 import { openSearch } from "@/app/shell/SearchDialog";
-import { besideStrip } from "@/app/shell/sidebar/nav";
+import { Flyout } from "@/app/shell/Flyout";
+import { NewChatRow } from "@/app/shell/NewChatRow";
+import { ProjectRow } from "@/app/shell/ProjectRow";
+import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
+import { SidebarHeader } from "@/app/shell/SidebarHeader";
 import {
   BrigadierGlyph,
   Chats,
   ComposeEditSquare,
-  DotsHorizontal,
-  Download,
   Folder,
-  FolderOpen,
   Folders,
   MagnifyingGlassSearch,
   Plus,
-  SettingsCog,
   Sidebar,
-  Trash,
 } from "@/components/icons";
-import { Banner, ConversationRow, EmptyState, NavFold, NavHeader, NavList, NavSection, RowAction, RowActionsSlot, RowStatus, SidebarError, type RowActions } from "@/components/shared";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { Banner, ConversationRow, EmptyState, NavList, NavSection, RowAction, RowStatus, SidebarError, type RowActions } from "@/components/shared";
+import { DropdownMenuLabel, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useSidebar } from "@/components/layout";
-import { openFolder } from "@/ipc/client";
 import type { Conversation, Project } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
@@ -36,7 +33,6 @@ import {
   setProjectExpanded,
 } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
-import { exportProjectConventions } from "@/state/brain";
 import { pickClick, pickedIn, prunePicked } from "@/state/picking";
 import { useTabStates } from "@/state/tabStates";
 import { useApp } from "@/state/store";
@@ -204,43 +200,9 @@ export function AppSidebar() {
 
   return (
     <>
-      <NavHeader
-        title={
-          <span className="-ms-0.5 flex items-center gap-2">
-            <BrigadierGlyph className="size-5 shrink-0" />
-            Brigadier
-          </span>
-        }
-        actions={
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-md"
-                aria-label="Search"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => openSearch()}
-              >
-                <MagnifyingGlassSearch />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Search
-              <Kbd>{shortcuts.search}</Kbd>
-            </TooltipContent>
-          </Tooltip>
-        }
-      />
+      <SidebarHeader searchShortcut={shortcuts.search} />
       <NavList className="mb-2 px-2">
-        <li>
-          <NavRow
-            data-active={isChatDraft}
-            onClick={() => select({ type: "draft", kind: "chat" })}
-          >
-            <ComposeEditSquare />
-            <span className="truncate">New chat</span>
-          </NavRow>
-        </li>
+        <NewChatRow active={isChatDraft} />
       </NavList>
 
       <div className="scroll-edge-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pt-1 pb-2">
@@ -296,16 +258,7 @@ export function AppSidebar() {
               />
             ))}
             {catalogLoaded && projects.length === 0 && (
-              <li className="text-muted-foreground px-2 py-1 text-sm">
-                Projects group sessions on a repository.{" "}
-                <button
-                  type="button"
-                  className="text-foreground/85 underline-offset-4 hover:underline"
-                  onClick={() => openAddProject()}
-                >
-                  Add a project
-                </button>
-              </li>
+              <ProjectsEmptyPrompt />
             )}
           </NavList>
         </NavSection>
@@ -438,47 +391,6 @@ export function AppStrip() {
   );
 }
 
-/**
- * A strip icon that opens a list beside the strip, to pick from without expanding the sidebar.
- * It closes on a pick (`pick` runs the choice and closes it), on Esc and on a click outside.
- */
-function Flyout({
-  label,
-  icon,
-  children,
-}: {
-  label: string;
-  icon: ReactNode;
-  children: (pick: (choose: () => void) => void) => ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const pick = (choose: () => void) => {
-    setOpen(false);
-    choose();
-  };
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <TooltipIconButton look="strip" side="right" tooltip={label} className="w-full">{icon}</TooltipIconButton>
-      </PopoverTrigger>
-      <PopoverContent
-        side="right"
-        align="start"
-        sideOffset={besideStrip()}
-        aria-label={label}
-        // Focus the list itself, not its first row, so Tab goes on into the rows.
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
-        }}
-        className="flex max-h-(--radix-popover-content-available-height) w-72 flex-col overflow-y-auto p-1.5"
-      >
-        {children(pick)}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 /** A chat or session in a flyout: its title and state; picking it opens it. */
 function FlyoutConversation({
   conversation,
@@ -608,116 +520,3 @@ function ChatsFlyout({ pick }: { pick: (choose: () => void) => void }) {
     </div>
   );
 }
-
-const ProjectRow = memo(function ProjectRow({
-  project,
-  sessions,
-  activeId,
-  drafting,
-  actions,
-  onSettings,
-  onRemove,
-}: {
-  project: Project;
-  sessions: Conversation[];
-  activeId: string | null;
-  drafting: boolean;
-  actions: RowActions;
-  onSettings: (project: Project) => void;
-  onRemove: (project: Project) => void;
-}) {
-  const expanded = useApp((s) => s.expandedProjects[project.id] ?? true);
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const repo = project.repos[0]?.path;
-  const newSession = () => {
-    setProjectExpanded(project.id, true);
-    select({ type: "draft", kind: "session", projectId: project.id });
-  };
-  return (
-    <li className="flex flex-col">
-      <div className="group/row relative">
-        <NavRow
-          aria-expanded={expanded}
-          data-active={drafting}
-          className="pe-16"
-          onClick={() => setProjectExpanded(project.id, !expanded)}
-        >
-          {expanded ? <FolderOpen /> : <Folder />}
-          <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
-            {project.name}
-          </span>
-        </NavRow>
-        <RowActionsSlot>
-          <DropdownMenu modal={false}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <RowAction aria-label={`Actions for ${project.name}`}>
-                    <DotsHorizontal />
-                  </RowAction>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Project actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent side="bottom" align="start">
-              <DropdownMenuItem onSelect={newSession}>
-                <ComposeEditSquare />
-                New session
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onSettings(project)}>
-                <SettingsCog />
-                Project settings…
-              </DropdownMenuItem>
-              {repo && (
-                <DropdownMenuItem
-                  onSelect={() =>
-                    void openFolder(repo).catch((error: unknown) => actions.onError(errorText(error)))
-                  }
-                >
-                  <FolderOpen />
-                  {mac ? "Reveal in Finder" : "Open in File Manager"}
-                </DropdownMenuItem>
-              )}
-              {repo && (
-                <DropdownMenuItem onSelect={() => void exportProjectConventions(project.id, repo)}>
-                  <Download />
-                  Export conventions to AGENTS.md…
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={() => onRemove(project)}>
-                <Trash />
-                Remove project…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <RowAction
-                aria-label={`New session in ${project.name}`}
-                onClick={newSession}
-              >
-                <ComposeEditSquare />
-              </RowAction>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">New session</TooltipContent>
-          </Tooltip>
-        </RowActionsSlot>
-      </div>
-      <NavFold open={expanded}>
-        <NavList className="pt-px pb-2">
-          {sessions.map((conversation) => (
-            <ConversationRow
-              key={conversation.id}
-              conversation={conversation}
-              active={activeId === conversation.id}
-              actions={actions}
-              nested
-            />
-          ))}
-          {sessions.length === 0 && <EmptyState as="li" className="ps-8" title="No sessions yet" />}
-        </NavList>
-      </NavFold>
-    </li>
-  );
-});

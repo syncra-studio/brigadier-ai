@@ -180,6 +180,11 @@ table is the current one.
 | App shell (app.pen) | `#60 PageCorners` | `app/shell/PageCorners.tsx` | `PageCorners` | |
 | App shell (app.pen) | `#62 App › page surface` | `app/shell/PageSurface.tsx` | `PageSurface` | |
 | App shell (app.pen) | `#63 App › Settings titlebar strip` | `components/shared/settings-titlebar-strip.tsx` | `SettingsTitlebarStrip` | |
+| App shell (app.pen) | `#66 AppSidebar › header title and Search` | `app/shell/SidebarHeader.tsx` | `SidebarHeader` | |
+| App shell (app.pen) | `#67 AppSidebar › New chat row` | `app/shell/NewChatRow.tsx` | `NewChatRow` | |
+| App shell (app.pen) | `#69 AppSidebar › projects empty prompt` | `app/shell/ProjectsEmptyPrompt.tsx` | `ProjectsEmptyPrompt` | |
+| App shell (app.pen) | `#74 ProjectRow` | `app/shell/ProjectRow.tsx` | `ProjectRow` | |
+| App shell (app.pen) | `#943 Flyout` | `app/shell/Flyout.tsx` | `Flyout` | its lists (`ProjectsFlyout`, `ChatsFlyout`, `FlyoutConversation`) stay in `app/shell/AppSidebar.tsx` |
 | Side panel (app.pen) | `#412 AgentRow` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
 | Side panel (app.pen) | `#414 WorkerList` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
 | Side panel (app.pen) | `#416 WorkerDetail › worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |
