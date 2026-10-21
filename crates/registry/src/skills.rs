@@ -113,6 +113,25 @@ pub(crate) fn add_project(skills: &mut Vec<Skill>, project: &Path) {
     );
 }
 
+/// Adds `skill` to `skills`, or merges its roots and folders into the one it is: the same folder,
+/// or a copy of it file for file.
+pub(crate) fn merge(skills: &mut Vec<Skill>, skill: Skill) {
+    let known = skills.iter_mut().find(|known| {
+        known.dir == skill.dir
+            || (known.name == skill.name && same_contents(&known.dir, &skill.dir))
+    });
+    let Some(known) = known else {
+        skills.push(skill);
+        return;
+    };
+    for root in skill.roots {
+        if !known.roots.contains(&root) {
+            known.roots.push(root);
+        }
+    }
+    known.entries.extend(skill.entries);
+}
+
 /// Every skill folder directly in `folder` (hidden ones, such as Codex's `.system`, left out).
 fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
     let Ok(entries) = std::fs::read_dir(folder) else {

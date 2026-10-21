@@ -565,6 +565,31 @@ impl Registry {
         catalog
     }
 
+    /// Adds to `catalog` the servers and skills of `project`'s own config whose ids
+    /// `keep_server` and `keep_skill` take, as found there: items of another project the user
+    /// uses in every project. Its unreadable entries are left out.
+    pub fn adopt(
+        &self,
+        catalog: &mut Catalog,
+        project: &Path,
+        keep_server: impl Fn(&str) -> bool,
+        keep_skill: impl Fn(&str) -> bool,
+    ) {
+        let servers = servers::project(&self.roots, project, &mut Vec::new());
+        for server in servers {
+            if keep_server(&server.id) && catalog.server(&server.id).is_none() {
+                catalog.servers.push(server);
+            }
+        }
+        let mut skills = Vec::new();
+        skills::add_project(&mut skills, project);
+        for skill in skills {
+            if keep_skill(&skill.id) && !catalog.skills.iter().any(|known| known.id == skill.id) {
+                skills::merge(&mut catalog.skills, skill);
+            }
+        }
+    }
+
     /// Reads the user's configs again.
     pub fn refresh(&self) {
         let user = Arc::new(Catalog::user(&self.roots));

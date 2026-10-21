@@ -437,6 +437,24 @@ pub(crate) fn view(
     }
 }
 
+/// What is switched off for sessions in one project: the user's switches with that project's
+/// exceptions ([`Settings::server_off`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Switches<'a> {
+    pub settings: &'a Settings,
+    pub project: Option<&'a ProjectId>,
+}
+
+impl Switches<'_> {
+    fn server_off(&self, id: &str) -> bool {
+        self.settings.server_off(id, self.project)
+    }
+
+    fn skill_off(&self, id: &str) -> bool {
+        self.settings.skill_off(id, self.project)
+    }
+}
+
 fn switched_off_error(entry: &str) -> String {
     format!(
         "integration `{entry}` is switched off for Brigadier (the user's setting): no worker gets it"
@@ -447,7 +465,7 @@ fn switched_off_error(entry: &str) -> String {
 pub(crate) fn resolve(
     catalog: &Catalog,
     entries: &[String],
-    settings: &Settings,
+    switches: &Switches<'_>,
 ) -> std::result::Result<Vec<String>, String> {
     let mut ids = Vec::new();
     for entry in entries
@@ -456,9 +474,7 @@ pub(crate) fn resolve(
         .filter(|e| !e.is_empty())
     {
         // A name counts only switched-on servers; an id of a switched-off one is refused below.
-        let server = match catalog.find_among(entry, |server| {
-            !settings.mcp_servers_off.contains(&server.id)
-        }) {
+        let server = match catalog.find_among(entry, |server| !switches.server_off(&server.id)) {
             Ok(server) => server,
             // Only switched-off servers have the name.
             Err(FindError::Unknown)
@@ -470,7 +486,7 @@ pub(crate) fn resolve(
                 let mut known: Vec<&str> = catalog
                     .servers
                     .iter()
-                    .filter(|server| !settings.mcp_servers_off.contains(&server.id))
+                    .filter(|server| !switches.server_off(&server.id))
                     .map(|server| server.name.as_str())
                     .collect();
                 known.sort_unstable();
@@ -497,7 +513,7 @@ pub(crate) fn resolve(
                 server.name
             ));
         }
-        if settings.mcp_servers_off.contains(&server.id) {
+        if switches.server_off(&server.id) {
             return Err(switched_off_error(entry));
         }
         if !ids.contains(&server.id) {
@@ -540,13 +556,13 @@ pub(crate) struct Proxied {
 pub(crate) fn switched_off(
     catalog: &Catalog,
     session: &Session<'_>,
-    settings: &Settings,
+    switches: &Switches<'_>,
 ) -> SwitchedOff {
     let mut off = SwitchedOff::default();
     for server in &catalog.servers {
         // A user's server under Brigadier's own name isn't one Brigadier gives: switching it
         // off must not take Brigadier's own away.
-        if settings.mcp_servers_off.contains(&server.id)
+        if switches.server_off(&server.id)
             && !RESERVED.contains(&server.name.as_str())
             && catalog.server_native(server, session)
             && !off.servers.contains(&server.name)
@@ -555,7 +571,7 @@ pub(crate) fn switched_off(
         }
     }
     for skill in &catalog.skills {
-        if !settings.skills_off.contains(&skill.id) || !catalog.skill_native(skill, session) {
+        if !switches.skill_off(&skill.id) || !catalog.skill_native(skill, session) {
             continue;
         }
         match session.agent {
@@ -703,7 +719,7 @@ fn named_servers(
     catalog: &Catalog,
     ids: &[String],
     session: &Session<'_>,
-    settings: &Settings,
+    switches: &Switches<'_>,
     shared: &mut Shared,
     quiet: &Prober<'_>,
     asking: &Prober<'_>,
@@ -716,13 +732,13 @@ fn named_servers(
     let mut taken: HashSet<String> = RESERVED.iter().map(|name| (*name).to_owned()).collect();
     taken.extend(native.iter().map(|server| server.name.clone()));
     // A switched-off copy of its own is no copy it has: its name stays taken all the same.
-    native.retain(|server| !settings.mcp_servers_off.contains(&server.id));
+    native.retain(|server| !switches.server_off(&server.id));
     for id in ids {
         let Some(server) = catalog.server(id) else {
             tracing::warn!(id, "a task's integration is no longer configured; left out");
             continue;
         };
-        if settings.mcp_servers_off.contains(id) {
+        if switches.server_off(id) {
             tracing::info!(id, "a task's integration was switched off since; left out");
             continue;
         }
@@ -779,13 +795,13 @@ fn named_servers(
 fn shared_skills(
     catalog: &Catalog,
     session: &Session<'_>,
-    settings: &Settings,
+    switches: &Switches<'_>,
     data_dir: &Path,
 ) -> std::io::Result<Option<PathBuf>> {
     let mut chosen = Vec::new();
     let mut names = HashSet::new();
     for skill in &catalog.skills {
-        if settings.skills_off.contains(&skill.id) || catalog.skill_native(skill, session) {
+        if switches.skill_off(&skill.id) || catalog.skill_native(skill, session) {
             continue;
         }
         let base = folder_name(&skill.name);
@@ -924,13 +940,12 @@ fn link(target: &Path, at: &Path) -> std::io::Result<()> {
 pub(crate) fn thread_section(
     catalog: &Catalog,
     project: Option<&Path>,
-    settings: &Settings,
+    switches: &Switches<'_>,
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
     for server in &catalog.servers {
-        if settings.mcp_servers_off.contains(&server.id) || RESERVED.contains(&server.name.as_str())
-        {
+        if switches.server_off(&server.id) || RESERVED.contains(&server.name.as_str()) {
             continue;
         }
         let native = server_native_to(catalog, server, project);
@@ -942,9 +957,7 @@ pub(crate) fn thread_section(
         let same: Vec<&Server> = catalog
             .servers
             .iter()
-            .filter(|other| {
-                other.name == server.name && !settings.mcp_servers_off.contains(&other.id)
-            })
+            .filter(|other| other.name == server.name && !switches.server_off(&other.id))
             .collect();
         let differs = same.iter().any(|other| other.transport != server.transport);
         let mut agents: Vec<&str> = Vec::new();
@@ -985,6 +998,26 @@ pub(crate) fn thread_section(
     )
 }
 
+/// `registry`'s catalog for sessions in `repo`, with the items of the projects at `others` that
+/// the user uses in every project.
+fn catalog_for(
+    registry: &Registry,
+    repo: Option<&Path>,
+    others: &[PathBuf],
+    settings: &Settings,
+) -> Catalog {
+    let mut catalog = registry.catalog(repo);
+    for other in others {
+        registry.adopt(
+            &mut catalog,
+            other,
+            |id| settings.servers_everywhere.iter().any(|kept| kept == id),
+            |id| settings.skills_everywhere.iter().any(|kept| kept == id),
+        );
+    }
+    catalog
+}
+
 impl SessionManager {
     /// The catalog of servers and skills, kept current by its watcher.
     pub(crate) fn registry(&self) -> Arc<Registry> {
@@ -1010,6 +1043,35 @@ impl SessionManager {
             Some(crate::model::Setup::Session { repo, .. }) => Some(PathBuf::from(repo)),
             _ => None,
         }
+    }
+
+    /// The project session `id` is in.
+    fn session_project(&self, id: &ConversationId) -> Option<ProjectId> {
+        self.core.conversation(id).ok()?.project_id
+    }
+
+    /// The folders of the user's other projects, while trusted, that hold an item the user
+    /// uses in every project ([`Settings::servers_everywhere`], [`Settings::skills_everywhere`]);
+    /// `repo` is the session's.
+    fn everywhere_repos(&self, settings: &Settings, repo: Option<&Path>) -> Vec<PathBuf> {
+        if settings.servers_everywhere.is_empty() && settings.skills_everywhere.is_empty() {
+            return Vec::new();
+        }
+        self.core
+            .catalog()
+            .projects
+            .into_iter()
+            .filter_map(|project| {
+                let path = project.repos.first()?.path.clone();
+                // An item's id holds its project's folder: `claude:project:<folder>:<name>`.
+                let holds = |id: &String| id.contains(&format!(":{path}:"));
+                (project.counts_trusted(&path)
+                    && repo != Some(Path::new(&path))
+                    && (settings.servers_everywhere.iter().any(holds)
+                        || settings.skills_everywhere.iter().any(holds)))
+                .then(|| PathBuf::from(path))
+            })
+            .collect()
     }
 
     /// Settings' catalog: the user's servers and skills, and `project`'s (its first repository)
@@ -1202,10 +1264,18 @@ impl SessionManager {
         }
         let (registry, settings, repo) =
             (self.registry(), self.core.settings(), self.trusted_repo(id));
+        let (project, others) = (
+            self.session_project(id),
+            self.everywhere_repos(&settings, repo.as_deref()),
+        );
         let entries = entries.to_vec();
         super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            resolve(&catalog, &entries, &settings).map_err(Error::Invalid)
+            let catalog = catalog_for(&registry, repo.as_deref(), &others, &settings);
+            let switches = Switches {
+                settings: &settings,
+                project: project.as_ref(),
+            };
+            resolve(&catalog, &entries, &switches).map_err(Error::Invalid)
         })
         .await
     }
@@ -1228,13 +1298,21 @@ impl SessionManager {
             self.trusted_repo(conversation),
             self.mcp_auth.clone(),
         );
+        let (project, others) = (
+            self.session_project(conversation),
+            self.everywhere_repos(&settings, repo.as_deref()),
+        );
         let (ids, cwd, data_dir) = (ids.to_vec(), cwd.to_owned(), self.data_dir.clone());
         let in_checkout = checkout == Some(cwd.as_path());
         let has_checkout = checkout.is_some();
         let made = super::blocking(move || {
             // A task can name a server of the project, but a worker without a checkout starts
             // without the project's setup.
-            let catalog = registry.catalog(repo.as_deref());
+            let catalog = catalog_for(&registry, repo.as_deref(), &others, &settings);
+            let switches = Switches {
+                settings: &settings,
+                project: project.as_ref(),
+            };
             let session = Session {
                 agent: agent(provider),
                 cwd: &cwd,
@@ -1242,7 +1320,7 @@ impl SessionManager {
                 in_checkout,
             };
             let mut shared = Shared {
-                switched_off: switched_off(&catalog, &session, &settings),
+                switched_off: switched_off(&catalog, &session, &switches),
                 ..Shared::default()
             };
             let quiet = auth.prober(registry.roots(), catalog.codex_store, true);
@@ -1251,13 +1329,13 @@ impl SessionManager {
                 &catalog,
                 &ids,
                 &session,
-                &settings,
+                &switches,
                 &mut shared,
                 &quiet,
                 &asking,
             );
             shared.skills =
-                shared_skills(&catalog, &session, &settings, &data_dir).unwrap_or_else(|err| {
+                shared_skills(&catalog, &session, &switches, &data_dir).unwrap_or_else(|err| {
                     tracing::warn!(error = %err, "the shared skills' folder couldn't be made");
                     None
                 });
@@ -1302,6 +1380,7 @@ impl SessionManager {
             self.core.settings(),
             self.trusted_repo(conversation),
         );
+        let project = self.session_project(conversation);
         let cwd = cwd.to_owned();
         super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
@@ -1311,7 +1390,11 @@ impl SessionManager {
                 project: repo.as_deref(),
                 in_checkout: false,
             };
-            Ok(switched_off(&catalog, &session, &settings))
+            let switches = Switches {
+                settings: &settings,
+                project: project.as_ref(),
+            };
+            Ok(switched_off(&catalog, &session, &switches))
         })
         .await
         .unwrap_or_default()
@@ -1324,9 +1407,17 @@ impl SessionManager {
             self.core.settings(),
             self.trusted_repo(conversation),
         );
+        let (project, others) = (
+            self.session_project(conversation),
+            self.everywhere_repos(&settings, repo.as_deref()),
+        );
         super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            Ok(thread_section(&catalog, repo.as_deref(), &settings))
+            let catalog = catalog_for(&registry, repo.as_deref(), &others, &settings);
+            let switches = Switches {
+                settings: &settings,
+                project: project.as_ref(),
+            };
+            Ok(thread_section(&catalog, repo.as_deref(), &switches))
         })
         .await
         .unwrap_or_default()
@@ -1371,7 +1462,11 @@ mod tests {
             mcp_servers_off: vec!["claude:user:railway".into(), "claude:user:lin".into()],
             ..Settings::default()
         };
-        let resolve = |entry: &str| resolve(&catalog, &[entry.to_owned()], &settings);
+        let switches = Switches {
+            settings: &settings,
+            project: None,
+        };
+        let resolve = |entry: &str| resolve(&catalog, &[entry.to_owned()], &switches);
 
         // The only server of the name is switched off.
         let err = resolve("railway").unwrap_err();
@@ -1382,6 +1477,138 @@ mod tests {
         assert!(err.contains("is switched off for Brigadier"), "{err}");
         let err = resolve("nowhere").unwrap_err();
         assert!(err.contains("unknown integration"), "{err}");
+    }
+
+    #[test]
+    fn a_project_turns_a_default_off_or_on_for_itself_only() {
+        let home = home();
+        write(
+            &home.join(".claude.json"),
+            r#"{"mcpServers": {"railway": {"command": "railway"}, "pencil": {"command": "pencil"}}}"#,
+        );
+        let catalog = Catalog::read(&roots(&home), None);
+        let (here, there) = (ProjectId("here".into()), ProjectId("there".into()));
+        let settings = Settings {
+            mcp_servers_off: vec!["claude:user:railway".into()],
+            project_switches: vec![crate::model::ProjectSwitches {
+                project_id: here.clone(),
+                servers_on: vec!["claude:user:railway".into()],
+                servers_off: vec!["claude:user:pencil".into()],
+                skills_on: Vec::new(),
+                skills_off: Vec::new(),
+            }],
+            ..Settings::default()
+        };
+        let resolve = |project: &ProjectId, entry: &str| {
+            let switches = Switches {
+                settings: &settings,
+                project: Some(project),
+            };
+            resolve(&catalog, &[entry.to_owned()], &switches)
+        };
+        assert_eq!(resolve(&here, "railway").unwrap(), ["claude:user:railway"]);
+        let err = resolve(&here, "pencil").unwrap_err();
+        assert!(err.contains("is switched off for Brigadier"), "{err}");
+        // Another project goes by the defaults.
+        let err = resolve(&there, "railway").unwrap_err();
+        assert!(err.contains("is switched off for Brigadier"), "{err}");
+        assert_eq!(resolve(&there, "pencil").unwrap(), ["claude:user:pencil"]);
+        assert!(settings.server_off("claude:user:railway", None));
+        assert!(!settings.server_off("claude:user:pencil", None));
+    }
+
+    #[test]
+    fn another_projects_item_used_everywhere_reaches_workers_of_this_one() {
+        let home = home();
+        let (repo, other) = (home.join("repo"), home.join("steady"));
+        write(
+            &other.join(".mcp.json"),
+            // A server and a skill of one name share an id: the skill used everywhere doesn't
+            // take the server along.
+            r#"{"mcpServers": {"steady-api": {"command": "steady"}, "steady-db": {"command": "db"},
+                               "deploy": {"command": "deploy"}}}"#,
+        );
+        write(
+            &other.join(".claude/skills/deploy/SKILL.md"),
+            "---\nname: deploy\ndescription: Deploys.\n---\n",
+        );
+        write(
+            &other.join(".claude/skills/seed/SKILL.md"),
+            "---\nname: seed\ndescription: Seeds.\n---\n",
+        );
+        std::fs::create_dir_all(&repo).unwrap();
+        let registry = Registry::new(roots(&home));
+        let theirs = Catalog::read(&roots(&home), Some(&other));
+        let id = |name: &str| {
+            theirs
+                .servers
+                .iter()
+                .map(|server| (&server.name, &server.id))
+                .chain(theirs.skills.iter().map(|skill| (&skill.name, &skill.id)))
+                .find(|(found, _)| *found == name)
+                .unwrap()
+                .1
+                .clone()
+        };
+        let settings = Settings {
+            servers_everywhere: vec![id("steady-api")],
+            skills_everywhere: vec![id("deploy")],
+            ..Settings::default()
+        };
+        let catalog = catalog_for(
+            &registry,
+            Some(&repo),
+            std::slice::from_ref(&other),
+            &settings,
+        );
+        let names = |found: Vec<&String>| found.into_iter().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            names(catalog.servers.iter().map(|server| &server.name).collect()),
+            ["steady-api"]
+        );
+        assert_eq!(
+            names(catalog.skills.iter().map(|skill| &skill.name).collect()),
+            ["deploy"]
+        );
+        // Not its own project's, so a worker here gets the server only when named, and the
+        // skill from Brigadier.
+        let session = Session {
+            agent: Agent::Claude,
+            cwd: &repo,
+            project: Some(&repo),
+            in_checkout: true,
+        };
+        let server = catalog.server(&id("steady-api")).unwrap();
+        assert!(!catalog.server_native(server, &session));
+        assert!(!catalog.skill_native(&catalog.skills[0], &session));
+        let switches = Switches {
+            settings: &settings,
+            project: None,
+        };
+        assert_eq!(
+            resolve(&catalog, &["steady-api".into()], &switches).unwrap(),
+            [id("steady-api")]
+        );
+        let data = home.join("data");
+        let plugin = shared_skills(&catalog, &session, &switches, &data)
+            .unwrap()
+            .expect("the shared skills");
+        assert!(plugin.join("skills/deploy/SKILL.md").is_file());
+        assert!(!plugin.join("skills/seed").exists());
+
+        // This project has the same skill, file for file: one skill, which its workers find.
+        write(
+            &repo.join(".claude/skills/deploy/SKILL.md"),
+            "---\nname: deploy\ndescription: Deploys.\n---\n",
+        );
+        let catalog = catalog_for(
+            &registry,
+            Some(&repo),
+            std::slice::from_ref(&other),
+            &settings,
+        );
+        assert_eq!(catalog.skills.len(), 1);
+        assert!(catalog.skill_native(&catalog.skills[0], &session));
     }
 
     #[test]
@@ -1418,7 +1645,10 @@ mod tests {
                 &catalog,
                 std::slice::from_ref(&id),
                 &session,
-                &Settings::default(),
+                &Switches {
+                    settings: &Settings::default(),
+                    project: None,
+                },
                 &mut shared,
                 &quiet,
                 &asking,

@@ -317,6 +317,7 @@ export type { ProjectPatch } from "./ProjectPatch";
 export type { ProjectPrefs } from "./ProjectPrefs";
 export type { ProjectRemoval } from "./ProjectRemoval";
 export type { ProjectRepo } from "./ProjectRepo";
+export type { ProjectSwitches } from "./ProjectSwitches";
 export type { ProjectUsage } from "./ProjectUsage";
 export type { ProofKind } from "./ProofKind";
 export type { ProposedPhase } from "./ProposedPhase";
