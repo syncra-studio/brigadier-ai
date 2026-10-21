@@ -813,3 +813,17 @@ async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
     assert_eq!(board.tasks.len(), 1, "{:#?}", board.tasks);
     flow.stop().await;
 }
+
+/// Workers ask for their own review only when it is worth one: a resumed worker hears it once,
+/// the thread nothing new.
+#[test]
+fn a_resumed_worker_hears_once_when_to_ask_for_its_review() {
+    use crate::manager::prompts::{WORKER_REVIEW_REVISION, revision_note};
+    let note = revision_note(WORKER_REVIEW_REVISION - 1, true).unwrap();
+    assert!(
+        note.contains("request_review only when your task asks"),
+        "{note}"
+    );
+    assert!(revision_note(WORKER_REVIEW_REVISION, true).is_none());
+    assert_eq!(revision_note(WORKER_REVIEW_REVISION - 1, false), None);
+}

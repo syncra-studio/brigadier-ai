@@ -1348,6 +1348,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, Brigadier no longer reviews or checks anything by itself: no review after a landing or of your own commits, no full checks after a landing. Call request_review for a large or risky change before merging, and run_checks before every merge into main.",
         worker: "",
     },
+    Revision {
+        number: WORKER_REVIEW_REVISION,
+        thread: "",
+        worker: "From now on, call request_review only when your task asks for a review or your change is large or risky; otherwise report once your checks pass and your evidence is in.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1631,7 +1636,7 @@ pub(crate) fn browser_note(on: bool) -> String {
 /// Tells a running worker that builds the user switched reviews: its brief keeps what it said.
 pub(crate) fn worker_reviews_note(on: bool) -> &'static str {
     if on {
-        "[settings] The user turned reviews on. Once your work is committed, call request_review once if you haven't, and fix the findings you agree with before your report; this replaces what your task says about reviews."
+        "[settings] The user turned reviews on. If your change is large or risky, or your task asks for a review, call request_review once your work is committed if you haven't, and fix the findings you agree with before your report; this replaces what your task says about reviews."
     } else {
         "[settings] The user turned reviews off. From now on, don't call request_review and don't wait for a review: nothing waits on one. A review already running may still send its findings; fix those you agree with if they arrive before your report, but don't wait for them. Once your checks pass and your evidence is in, call submit_report. This replaces what your task says about reviews."
     }
@@ -1940,6 +1945,9 @@ pub(crate) const MERGE_RULE_REVISION: u32 = 127;
 /// Brigadier starts no review, full check or fix by itself: no review after a landing or of the
 /// thread's own commits, no full checks after a landing (thread-truth grill, 10-21).
 pub(crate) const NO_AUTO_PIPELINE_REVISION: u32 = 128;
+/// A worker asks for its own review only when its task asks or its change is large or risky
+/// (thread-truth grill Q2).
+pub(crate) const WORKER_REVIEW_REVISION: u32 = 129;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2586,7 +2594,7 @@ const WORKER_VOICE: &str = "
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call request_review once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the thread.\n- After your work lands, the findings of its review that the thread keeps open may come back to you in this same session, as a new task.";
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. If your change is large or risky, or your task asks for a review, call request_review once as soon as your work is committed: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the thread.\n- After your work lands, the findings of its review that the thread keeps open may come back to you in this same session, as a new task.";
 
 /// What a worker that builds a mockup does instead of the change (SESSION-FIXES-PLAN.md Q10):
 /// a static preview from the real components with fake data, shown as screenshots.
@@ -3739,7 +3747,7 @@ mod tests {
             "call submit_report at once: no more verifying, re-reading or screenshots after that"
         ));
         // Its review runs while it gathers its evidence and runs its checks: no idle wait.
-        assert!(brief.contains("As soon as your work is committed, call request_review once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it"));
+        assert!(brief.contains("If your change is large or risky, or your task asks for a review, call request_review once as soon as your work is committed: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it"));
         assert!(brief.contains("Findings that arrive after your report go to the thread."));
         assert!(brief.contains("Do exactly what the task asks"));
         // #66: the user reads a worker's words, which name the thread as they know it.
