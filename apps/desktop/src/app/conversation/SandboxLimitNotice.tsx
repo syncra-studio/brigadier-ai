@@ -32,7 +32,7 @@ export function SandboxLimitNotice({ reason }: { reason: string }) {
       aria-label="This needs more access"
       data-slot="orchestrator-step"
       data-kind="fullAccessSuggested"
-      className="bg-rail border-foreground/10 rounded-surface my-1 flex flex-col gap-2 border px-4 py-3 text-sm"
+      className="bg-rail border-foreground/10 rounded-question my-1 flex flex-col gap-2 border px-4 py-3 text-sm"
     >
       <div className="flex min-w-0 items-start gap-3">
         <ShieldExclamation className="size-icon-md mt-0.5 shrink-0" />

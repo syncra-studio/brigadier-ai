@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect } from "@/app/settings/parts";
+import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
-import { ProgressLine, SettingsCard } from "@/components/shared";
+import { ProgressLine, SettingsCard, SettingsRow } from "@/components/shared";
 import { Plus, Trash } from "@/components/icons";
-import { Button } from "@/components/controls";
+import { Button, SettingsSelect } from "@/components/controls";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,

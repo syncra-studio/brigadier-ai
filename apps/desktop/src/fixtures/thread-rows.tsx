@@ -37,7 +37,7 @@ import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { ArtifactDialog } from "@/app/side-panel/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
-import { CompactionRow } from "@/app/conversation/RequestBlock";
+import { CompactionRow } from "@/app/conversation/CompactionRow";
 import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { TurnBoundary, ImagePreview, MessageAttachments, MarkdownBlock, AttachmentReaderContext } from "@/components/conversation";

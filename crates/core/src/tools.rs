@@ -1219,8 +1219,9 @@ pub enum SuggestedSetting {
     MergeOnOwn,
 }
 
-/// `offer_feedback`: the user seems annoyed with Brigadier itself; the thread offers them a
-/// report to its developers, drafted from the conversation, as a card they send or dismiss.
+/// `offer_feedback`: the user seems annoyed with Brigadier itself, or asked to report something
+/// to its developers; the thread offers them a report, drafted from the conversation, as a card
+/// they send or dismiss.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OfferFeedback {
@@ -1230,6 +1231,10 @@ pub struct OfferFeedback {
     pub title: String,
     /// What happened and what they expected, steps if known; in the user's view, a few lines.
     pub body: String,
+    /// The user asked for it ("report this"): an earlier offer, unanswered or dismissed,
+    /// doesn't refuse it.
+    #[serde(default)]
+    pub asked: bool,
 }
 
 /// `offer_session`: work the thread found along the way that is outside the request; the user

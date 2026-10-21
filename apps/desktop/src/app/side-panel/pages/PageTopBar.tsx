@@ -1,16 +1,16 @@
-import { type LexicalEditor, BLOCKS, applyBlock, BlockRow } from "@/components/views/page-editor";
+import type { LexicalEditor } from "@/components/views/page-editor";
 import { useEffect, useRef, useState } from "react";
 
-import { shortcutLabel } from "@/app/side-panel/SidePanel";
-import { TooltipIconButton, Input } from "@/components/controls";
-import { ConfirmDialog, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/overlays";
-import { ChevronDown, Copy, Document, Download, EditPencil, SquarePlus, Trash } from "@/components/icons";
-import { pageDelete, pageList, saveCopy } from "@/ipc/client";
-import type { PageContent, PageSummary } from "@/ipc/generated";
+import { PageFileMenu } from "@/app/side-panel/pages/PageFileMenu";
+import { PageInsertMenu } from "@/app/side-panel/pages/PageInsertMenu";
+import { ShowPages } from "@/app/side-panel/pages/ShowPages";
+import { TooltipIconButton } from "@/components/controls";
+import { ConfirmDialog, DropdownMenu, DropdownMenuTrigger } from "@/components/overlays";
+import { ChevronDown, Document, SquarePlus } from "@/components/icons";
+import { pageDelete, saveCopy } from "@/ipc/client";
+import type { PageContent } from "@/ipc/generated";
 import { pageEditing } from "@/state/pageEditing";
 import { dropPageTabs, openPageTab } from "@/state/sessionTabs";
-
-import { when } from "../NewTabTools";
 
 /** A page as one Markdown document: its title as the top heading, then its body. */
 export function pageAsMarkdown(content: PageContent): string {
@@ -69,38 +69,28 @@ export function PageTopBar({ conversationId, pageId, content, editor, mac, activ
             <Document aria-hidden className="size-icon-sm" /><ChevronDown aria-hidden className="size-icon-sm" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="page-menu page-file-menu" onCloseAutoFocus={(event) => {
-          if (!renaming.current) return;
-          event.preventDefault();
-          renaming.current = false;
-          // The closing menu releases its focus trap after this callback returns.
-          requestAnimationFrame(onRename);
-        }}>
-          <DropdownMenuItem className="page-menu-item" onSelect={() => setListing(true)}>
-            <Document aria-hidden /><span className="flex-1">Show pages</span><DropdownMenuShortcut>{shortcutLabel("⌥⌘E", mac)}</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="page-menu-item" onSelect={() => { renaming.current = true; }}><EditPencil aria-hidden />Rename</DropdownMenuItem>
-          <DropdownMenuItem className="page-menu-item" onSelect={copy}><Copy aria-hidden />Copy as Markdown</DropdownMenuItem>
-          <DropdownMenuItem className="page-menu-item" onSelect={download}><Download aria-hidden />Download</DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="page-menu-item" variant="destructive" onSelect={() => setDeleting(true)}><Trash aria-hidden />Delete</DropdownMenuItem>
-        </DropdownMenuContent>
+        <PageFileMenu
+          mac={mac}
+          onCloseAutoFocus={(event) => {
+            if (!renaming.current) return;
+            event.preventDefault();
+            renaming.current = false;
+            // The closing menu releases its focus trap after this callback returns.
+            requestAnimationFrame(onRename);
+          }}
+          onRename={() => { renaming.current = true; }}
+          onShowPages={() => setListing(true)}
+          onCopy={copy}
+          onDownload={download}
+          onDelete={() => setDeleting(true)}
+        />
       </DropdownMenu>
       <div className="page-capsule">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <TooltipIconButton tooltip="Insert" size="icon-md" className="rounded-full"><SquarePlus /></TooltipIconButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="page-menu page-insert-list" aria-label="Insert options"
-            onCloseAutoFocus={(event) => { const current = editor(); if (current) { event.preventDefault(); current.focus(); } }}>
-            <div className="page-menu-label">Basic</div>
-            {BLOCKS.filter((block) => block.kind !== "paragraph").map((block) => (
-              <DropdownMenuItem key={block.kind} className="page-menu-item" onSelect={() => { const current = editor(); if (current) applyBlock(current, block.kind); }}>
-                <BlockRow block={block} />
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
+          <PageInsertMenu editor={editor} />
         </DropdownMenu>
       </div>
       {notice && <span role="status" className="page-notice">{notice}</span>}
@@ -121,50 +111,5 @@ export function PageTopBar({ conversationId, pageId, content, editor, mac, activ
         }}
       />
     </div>
-  );
-}
-
-/** Every page, the most recent first, narrowed by what is typed. */
-function ShowPages({ open, onOpenChange, onPick }: { open: boolean; onOpenChange: (open: boolean) => void; onPick: (page: PageSummary) => void }) {
-  const [pages, setPages] = useState<PageSummary[] | null>(null);
-  const [query, setQuery] = useState("");
-  const [at, setAt] = useState(0);
-  useEffect(() => {
-    if (!open) return;
-    let live = true;
-    pageList().then((list) => { if (live) setPages(list); }, () => { if (live) setPages([]); });
-    return () => { live = false; setQuery(""); setAt(0); setPages(null); };
-  }, [open]);
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = (pages ?? []).filter((page) => words.every((word) => (page.title || "Untitled page").toLowerCase().includes(word)));
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="page-list-dialog" aria-describedby={undefined}>
-        <DialogHeader><DialogTitle>Pages</DialogTitle></DialogHeader>
-        <Input
-          aria-label="Search pages"
-          placeholder="Search pages"
-          value={query}
-          onChange={(event) => { setQuery(event.target.value); setAt(0); }}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown") { event.preventDefault(); setAt((index) => Math.min(index + 1, shown.length - 1)); }
-            if (event.key === "ArrowUp") { event.preventDefault(); setAt((index) => Math.max(index - 1, 0)); }
-            if (event.key === "Enter" && shown[at]) { event.preventDefault(); onPick(shown[at]); }
-          }}
-        />
-        <ul aria-label="Pages" className="page-list">
-          {pages && !shown.length && <li className="page-list-empty">{pages.length ? "No pages match." : "No pages yet."}</li>}
-          {shown.map((page, index) => (
-            <li key={page.id}>
-              <button type="button" tabIndex={-1} aria-current={index === at || undefined} className="page-list-row" onMouseEnter={() => setAt(index)} onClick={() => onPick(page)}>
-                {page.emoji ? <span aria-hidden className="page-list-emoji">{page.emoji}</span> : <Document aria-hidden className="size-icon-sm" />}
-                <span className="min-w-0 flex-1 truncate">{page.title || "Untitled page"}</span>
-                <span className="text-muted-foreground">{when(page.updatedMs)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </DialogContent>
-    </Dialog>
   );
 }

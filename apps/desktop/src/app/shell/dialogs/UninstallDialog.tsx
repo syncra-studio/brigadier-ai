@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
-import { CheckboxRow, ErrorLine, errorText } from "@/app/shell/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
 import { Spinner } from "@/components/icons";
-import { Badge, Button } from "@/components/controls";
+import { Badge, Button, CheckboxRow, ErrorLine } from "@/components/controls";
 import {
   Dialog,
   DialogContent,

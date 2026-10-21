@@ -4,9 +4,12 @@ import { mergeProblems } from "@/app/conversation/activity/mergeChecks";
 import { type BoardJob, useSessionJobs } from "@/app/conversation/boardJob";
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { type Job, type JobStep, phaseWords } from "@/app/conversation/job";
+import { overnightActions, useOvernightCards } from "@/app/conversation/overnightAdapter";
 import type { FindingLabel, FindingRow } from "@/app/conversation/reviewStatus";
 import { Timeline, type TimelineEvent } from "@/components/conversation";
 import { Badge } from "@/components/controls";
+import { RunPart } from "@/app/side-panel/RunPart";
+import { TabPage } from "@/app/side-panel/TabPage";
 import { formatTime } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";
 
@@ -15,14 +18,6 @@ function stepDetail(step: JobStep, next: boolean): string | undefined {
   if (step.summary) return step.summary;
   if (step.state === "active") return step.count;
   return next ? "Next" : undefined;
-}
-
-function TabPage({ children }: { children: ReactNode }) {
-  return (
-    <div data-slot="job-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="max-w-thread mx-auto flex w-full flex-col gap-8 px-5 pt-6 pb-10">{children}</div>
-    </div>
-  );
 }
 
 /**
@@ -83,16 +78,21 @@ function jobDetails(job: BoardJob): Record<string, ReactNode> {
 }
 
 /**
- * The session's job tab, opened from the Job card or a merge's warning line: the job at work,
- * step by step, then each earlier merge's, newest first, with every review's findings at full
- * width and what is wrong with each merged commit, if anything.
+ * The session's job tab, opened from the Job card or a merge's warning line: its overnight runs,
+ * newest first (each with its plan, its phases and its report), then the job at work, step by
+ * step, then each earlier merge's, newest first, with every review's findings at full width and
+ * what is wrong with each merged commit, if anything.
  */
 export function SessionJobTab({ conversationId }: { conversationId: string }) {
   const jobs = useSessionJobs(conversationId);
+  const runs = useOvernightCards(conversationId);
   const past = jobs?.past ?? [];
   return (
     <TabPage>
-      {!jobs?.current && past.length === 0 && <p className="text-muted-foreground text-sm">Nothing has run yet.</p>}
+      {!jobs?.current && past.length === 0 && runs.length === 0 && <p className="text-muted-foreground text-sm">Nothing has run yet.</p>}
+      {runs.toReversed().map((model) => (
+        <RunPart key={model.run.id} model={model} actions={overnightActions} />
+      ))}
       {jobs?.current && <JobTimeline job={jobs.current} title="Now" details={jobDetails(jobs.current)} />}
       {past.map((job) => (
         <JobTimeline

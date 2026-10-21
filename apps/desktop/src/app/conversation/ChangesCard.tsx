@@ -7,26 +7,26 @@ import { mergeViewTarget, mergeWords, type TurnMerge } from "@/app/conversation/
 import { type Merged, redoRequest, revertRequest } from "@/app/conversation/activity/revert";
 import { isFinal } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
-import { mergeStats } from "@/app/conversation/ComposerCapsule";
-import { Counts } from "@/app/conversation/Counts";
+import { ChangesFileRow } from "@/app/conversation/ChangesFileRow";
+import { PRIMARY, QUIET } from "@/app/conversation/changesPills";
+import { mergeStats } from "@/app/conversation/mergeStats";
+import { MergeWarningRow } from "@/app/conversation/MergeWarningRow";
+import { RevertConfirmRow } from "@/app/conversation/RevertConfirmRow";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { RoundBadge } from "@/app/settings/storage/parts";
 import {
   ArrowRotateCcw,
   ArrowRotateCw,
   Branch,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
-  FileCode,
   PullRequestMerged,
   Spinner,
   Trash,
   TriangleExclamationErrorWarning,
 } from "@/components/icons";
-import { Button } from "@/components/controls";
-import { RowText, SettingsCard } from "@/components/shared";
+import { Button, RoundBadge } from "@/components/controls";
+import { Counts, RowText, SettingsCard } from "@/components/shared";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";
@@ -49,11 +49,6 @@ import { toast } from "@/state/toasts";
  * code (an open review finding, a failed check) is the card's footer row, or, folded, a line in
  * its header: it never folds away.
  */
-
-/** The design's borderless pill: secondary words, 13 like the card's other pills. */
-const QUIET = "text-foreground/65 hover:text-foreground text-label";
-/** Its white pill, 13 too. */
-const PRIMARY = "text-label";
 
 /** The files listed before "Show {n} more files". */
 const FIRST_FILES = 3;
@@ -97,52 +92,6 @@ function useTurnReview(conversationId: string, requests: string, wanted: boolean
   return state?.change === key ? state : null;
 }
 
-/** Where the review left a file, as its row says it; a merge says so once, in the card's header. */
-const REVIEWED: Record<Exclude<FileReview, "pending">, string | null> = { later: "Changed later", kept: "Kept", undone: "Undone", merged: null };
-
-/**
- * One changed file: its icon, the folder dim and the name in full, its counts in two columns and
- * a chevron. A click opens its diff in a tab (a file that waits for review, its review). While it
- * waits, Undo and Keep show on hover; once reviewed, where the review left it.
- */
-const FileRow: FC<{
-  file: FileStat;
-  review: FileReview | undefined;
-  busy: boolean;
-  onOpen: () => void;
-  onAct: (what: "keep" | "undo") => void;
-}> = ({ file, review, busy, onOpen, onAct }) => {
-  const cut = file.path.lastIndexOf("/") + 1;
-  return (
-    <li data-slot="turn-diff-file" data-review={review} className="group/file border-divider flex h-10 items-center gap-3 border-t">
-      <button type="button" onClick={onOpen} title={file.path} className="flex h-full min-w-0 flex-1 items-center gap-3 text-start">
-        <FileCode aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
-        <span className={cn("min-w-0 flex-1 truncate text-label", review !== undefined && review !== "pending" && "opacity-60")}>
-          <span data-slot="turn-diff-dir" className="text-muted-foreground">{file.path.slice(0, cut)}</span>
-          <span data-slot="turn-diff-name" className="text-foreground font-medium">{file.path.slice(cut)}</span>
-        </span>
-        {review && review !== "pending" && REVIEWED[review] && (
-          <span data-slot="turn-diff-reviewed" className="text-muted-foreground shrink-0 text-xs">{REVIEWED[review]}</span>
-        )}
-        {file.binary ? (
-          <span className="text-muted-foreground w-17 shrink-0 text-xs">binary</span>
-        ) : (
-          <span data-slot="turn-diff-file-counts" className="flex shrink-0 gap-2 font-mono text-xs tabular-nums">
-            <span className={cn("w-7.5", file.insertions === 0 ? "text-muted-foreground" : "text-success")}>+{file.insertions}</span>{" "}
-            <span className={cn("w-7.5", file.deletions === 0 ? "text-muted-foreground" : "text-destructive")}>−{file.deletions}</span>
-          </span>
-        )}
-        <ChevronRight aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
-      </button>
-      {review === "pending" && (
-        <span className="hidden shrink-0 items-center gap-1 group-focus-within/file:flex group-hover/file:flex">
-          <Button size="xs" variant="ghost" className="font-normal" disabled={busy} onClick={() => onAct("undo")}>Undo</Button>
-          <Button size="xs" variant="ghost" className="font-normal" disabled={busy} onClick={() => onAct("keep")}>Keep</Button>
-        </span>
-      )}
-    </li>
-  );
-};
 
 /**
  * Whether a request's review holds files: one it put back as it was after a merge took it waits
@@ -423,7 +372,9 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   } else {
     actions = (
       <>
-        {undoable && !reviewing && (
+        {/* A reviewed turn keeps Discard (the design's reviewed tally), its files all decided; once
+            a merge took its files, the merge's own record takes them back. */}
+        {undoable && !Object.values(review).includes("merged") && (
           <Button variant="ghost" size="sm" className={QUIET}
             data-slot="turn-diff-undo"
             data-held={held.length || undefined}
@@ -501,7 +452,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
         {files.length > 0 && (
           <ul data-slot="turn-diff-files" className="flex flex-col ps-13">
             {shown.map((file) => (
-              <FileRow
+              <ChangesFileRow
                 key={file.path}
                 file={file}
                 review={review[file.path]}
@@ -521,52 +472,26 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           </ul>
         )}
         {problem && (
-          <div data-slot="merge-warning" className="border-divider flex items-center gap-3 border-t pt-3 pb-3.5 ps-13">
-            <TriangleExclamationErrorWarning aria-hidden className="text-warning size-3.5 shrink-0" />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span data-slot="merge-warning-title" className="text-warning text-label font-medium">{problem.replace(/\.$/, "")}</span>
-              {finding && (
-                <span data-slot="merge-warning-finding" className="text-muted-foreground truncate text-xs">
-                  {finding.id} · {finding.title}
-                </span>
-              )}
-            </div>
-            <Button variant="ghost" size="sm" className={QUIET} data-slot="merge-warning-open" onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}>
-              {openFindings > 0 ? "Open finding" : "Open Progress"}
-            </Button>
-          </div>
+          <MergeWarningRow
+            problem={problem}
+            finding={finding}
+            openFindings={openFindings}
+            onOpen={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}
+          />
         )}
         {merged && (confirming || reverting) && (
-          <div data-slot="merge-revert-confirm" className="border-divider flex items-center gap-3 border-t pt-3.5 pb-4 ps-13">
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-foreground text-label font-medium">
-                {files.length > 0 ? `Revert ${files.length === 1 ? "this file" : `these ${files.length} files`} on ${merged.base}?` : `Revert this merge on ${merged.base}?`}
-              </span>
-              <span className="text-muted-foreground text-xs">
-                {`Adds one commit that undoes ${files.length > 0 ? `+${counts.insertions} −${counts.deletions}` : "it"}${merged.pr === undefined ? "" : " and pushes it"}. Work merged after this stays.`}
-              </span>
-            </div>
-            {reverting ? (
-              <span role="status" className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-label">
-                <Spinner className="size-icon-sm animate-spin" />
-                Reverting…
-              </span>
-            ) : (
-              <>
-                <Button variant="ghost" size="sm" className={QUIET} onClick={() => setConfirming(false)}>Cancel</Button>
-                <Button size="sm" className={PRIMARY}
-                  data-slot="merge-revert-go"
-                  onClick={() => {
-                    revert.ask();
-                    setSent("sent");
-                    setConfirming(false);
-                  }}
-                >
-                  {files.length === 0 ? "Revert" : files.length === 1 ? "Revert 1 file" : `Revert ${files.length} files`}
-                </Button>
-              </>
-            )}
-          </div>
+          <RevertConfirmRow
+            merged={merged}
+            fileCount={files.length}
+            counts={counts}
+            reverting={reverting}
+            onCancel={() => setConfirming(false)}
+            onRevert={() => {
+              revert.ask();
+              setSent("sent");
+              setConfirming(false);
+            }}
+          />
         )}
       </FoldBody>
     </SettingsCard>

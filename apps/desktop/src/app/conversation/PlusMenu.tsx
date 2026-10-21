@@ -1,8 +1,7 @@
-import { ComposerPrimitive, useAui, composerPill, floatingMenu } from "@/components/conversation";
+import { composerPill, ComposerPrimitive, floatingMenu, useAui, WorkerGlyph } from "@/components/conversation";
 import { type FC, useCallback, useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { WorkerGlyph } from "@/app/conversation/WorkerChip";
 import {
   COMPOSER_EDITABLE,
   type ComposerTarget,

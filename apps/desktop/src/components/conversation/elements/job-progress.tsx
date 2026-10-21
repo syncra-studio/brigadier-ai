@@ -1,19 +1,21 @@
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 import { ghostButton, mono } from "@/components/conversation/elements/surfaces";
-import { Check, ExclamationMarkCircle, Spinner, X } from "@/components/icons";
+import { Check, ExclamationMarkCircle, Moon, Spinner, Stop, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**
  * assistant-ui's Long job element (https://www.assistant-ui.com/elements/job-progress, registry
- * item elements-job-progress), ported as is onto Brigadier's tokens and icons: a line with the
- * job, how long is left and a way out, one bar filled by the weighted stages done, and the
- * stages listed under it with the one at work's description. For the Job card each stage also
- * carries its mark: a check once it passed, a dim check while it is still to come, the stage at
- * work shimmering, a cross on one that failed.
+ * item elements-job-progress) on Brigadier's tokens and icons, drawn as the user's JobCard
+ * design: a line with the job, how long is left and a way out; a bar of one segment per stage
+ * (done ones full, the one at work filled as far as it got, a failed one red); under it one line
+ * naming the stage at work, shimmering, and the one after it, then that stage's description and
+ * the job's own line. A proposed job (not started) lists its stages one per line instead, with
+ * what it asks of the user; a job's actions sit last, as buttons of their own.
  */
 
-export type JobStageState = "done" | "active" | "failed" | "pending";
+/** `partial`: it ended with part of its work done. */
+export type JobStageState = "done" | "active" | "failed" | "partial" | "pending";
 
 export interface JobStage {
   name: string;
@@ -47,30 +49,27 @@ function formatElapsed(elapsedMs: number) {
   const seconds = Math.max(0, Math.round(Number.isFinite(elapsedMs) ? elapsedMs / 1_000 : 0));
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
+  const hours = Math.floor(minutes / 60);
   return {
     dateTime: `PT${seconds}S`,
-    label: minutes === 0 ? `${seconds}s` : remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`,
+    label:
+      hours > 0
+        ? `${hours}h ${String(minutes % 60).padStart(2, "0")}m`
+        : minutes === 0
+          ? `${seconds}s`
+          : remainder === 0
+            ? `${minutes}m`
+            : `${minutes}m ${remainder}s`,
   };
 }
 
-const OUTCOME_BAR: Record<JobOutcomeStatus, string> = {
+/** The part of the step where a job ended that it got through. */
+const OUTCOME_PART: Record<JobOutcomeStatus, string> = {
   success: "bg-success",
   partial: "bg-warning",
   failed: "bg-destructive",
-  cancelled: "bg-foreground/20",
+  cancelled: "bg-muted-foreground",
 };
-
-/** A stage's mark in the list. */
-function StageMark({ state }: { state: JobStageState }) {
-  if (state === "failed") return <X aria-hidden className="text-destructive size-icon-xs shrink-0" />;
-  return (
-    <Check
-      aria-hidden
-      data-mark={state}
-      className={cn("size-icon-xs shrink-0", state === "done" ? "text-success" : "text-muted-foreground/60")}
-    />
-  );
-}
 
 export function JobProgress({
   title,
@@ -81,6 +80,11 @@ export function JobProgress({
   onCancel,
   outcome,
   elapsedMs,
+  proposed = false,
+  meta,
+  detail,
+  warning,
+  actions,
   className,
   ...props
 }: Omit<
@@ -95,30 +99,64 @@ export function JobProgress({
   onCancel?: (() => void) | undefined;
   outcome?: { status: JobOutcomeStatus; summary?: string | undefined } | undefined;
   elapsedMs?: number | undefined;
+  /** Not started yet: its stages listed, nothing at work. */
+  proposed?: boolean | undefined;
+  /** Mono words on the right of the line, e.g. "3 phases". */
+  meta?: string | undefined;
+  /** The job's own line under its steps or its outcome: "Wraps up at 7:30". */
+  detail?: string | undefined;
+  /** What the user should know before a proposed job starts, in one muted line. */
+  warning?: string | undefined;
+  /** Its buttons, last. */
+  actions?: ReactNode;
 }) {
   const stage = progressOf(stageIndex, stages.length);
   const progress = clamp(stageProgress, 0, 1);
   const totalWeight = stages.reduce((sum, item) => sum + item.weight, 0) || 1;
   const completed = stages.slice(0, stage).reduce((sum, item) => sum + item.weight, 0);
   const current = stages[stage];
-  const overall = pct(completed + (current ? current.weight * progress : 0), totalWeight);
-  const finished = stage >= stages.length;
+  const overall = proposed ? 0 : pct(completed + (current ? current.weight * progress : 0), totalWeight);
+  const finished = !proposed && stage >= stages.length;
   const running = !finished && outcome === undefined;
-  const state = outcome?.status ?? (finished ? "done" : "running");
+  const state = proposed ? "proposed" : (outcome?.status ?? (finished ? "done" : "running"));
   const elapsed = !running && elapsedMs !== undefined ? formatElapsed(elapsedMs) : undefined;
   const statusWord = outcome?.status === "success" ? "done" : (outcome?.status ?? "done");
   const stateOf = (item: JobStage, index: number): JobStageState =>
-    item.state ?? (index < stage || finished ? "done" : index === stage && running ? "active" : "pending");
+    item.state ??
+    (proposed ? "pending" : index < stage || finished ? "done" : index === stage && running ? "active" : "pending");
   const failing = running && stages.some((item, index) => stateOf(item, index) === "failed");
-  const announcement = outcome
-    ? `Job ${outcome.status === "success" ? "done" : outcome.status === "partial" ? "partly done" : outcome.status}`
-    : current
-      ? `Current stage: ${current.name}`
-      : finished
-        ? "Job done"
-        : "Job running";
-  const outcomeBar = outcome ? OUTCOME_BAR[outcome.status] : undefined;
+  const announcement = proposed
+    ? "Job not started"
+    : outcome
+      ? `Job ${outcome.status === "success" ? "done" : outcome.status === "partial" ? "partly done" : outcome.status}`
+      : current
+        ? `Current stage: ${current.name}`
+        : finished
+          ? "Job done"
+          : "Job running";
   const progressPercent = outcome?.status === "success" ? 100 : overall;
+  // The step the line under the bar names: the last one that failed, else the one at work or
+  // where the job stopped; then the step after it. A job done in full names none.
+  const failedAt = stages.findLastIndex((item, index) => stateOf(item, index) === "failed");
+  const shownIndex = proposed ? -1 : failedAt !== -1 ? failedAt : outcome?.status === "success" || finished ? -1 : stage;
+  const shown = stages[shownIndex];
+  const shownState = shown ? stateOf(shown, shownIndex) : "pending";
+  const after = shown ? stages[shownIndex + 1] : undefined;
+  // Each step's share of the bar: done ones full, a failed one red, the one at work filled as far
+  // as it got (grey where the job was stopped), the rest an empty track; all green once done.
+  const segmentFill = (at: JobStageState, index: number): { color: string; width: number } | null => {
+    if (proposed) return null;
+    if (outcome?.status === "success" || (finished && !outcome)) return { color: "bg-success", width: 100 };
+    if (at === "done") return { color: "bg-toggle-on", width: 100 };
+    if (at === "failed") return { color: "bg-destructive", width: 100 };
+    if (at === "partial") return { color: "bg-warning", width: 100 };
+    if (index !== stage || progress === 0) return null;
+    if (at === "active") return { color: "bg-toggle-on", width: progress * 100 };
+    if (outcome) return { color: OUTCOME_PART[outcome.status], width: progress * 100 };
+    return null;
+  };
+  const right = elapsed ? <time dateTime={elapsed.dateTime}>{elapsed.label}</time> : !running ? statusWord : (meta ?? eta);
+  const lines = [shown?.description, outcome?.summary ? undefined : detail].filter(Boolean);
 
   return (
     <div
@@ -128,7 +166,9 @@ export function JobProgress({
       {...props}
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        {outcome?.status === "partial" ? (
+        {proposed ? (
+          <Moon aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
+        ) : outcome?.status === "partial" ? (
           <ExclamationMarkCircle aria-hidden className="text-warning size-icon-sm shrink-0" />
         ) : outcome?.status === "failed" ? (
           <X aria-hidden className="text-destructive size-icon-sm shrink-0" />
@@ -144,15 +184,24 @@ export function JobProgress({
             )}
           />
         )}
-        <span className={cn("min-w-0 flex-1 truncate font-medium", failing && "text-destructive")}>{title}</span>
-        {(elapsed || !running || eta) && (
-          <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
-            {elapsed ? <time dateTime={elapsed.dateTime}>{elapsed.label}</time> : !running ? statusWord : eta}
-          </span>
-        )}
-        {running && onCancel ? (
-          <button type="button" aria-label="Cancel the job" onClick={onCancel} className={cn(ghostButton, "size-control-xs")}>
-            <X className="size-icon-sm" />
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate font-medium",
+            (failing || outcome?.status === "failed") && "text-destructive",
+          )}
+        >
+          {title}
+        </span>
+        {right && <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>{right}</span>}
+        {running && !proposed && onCancel ? (
+          <button
+            type="button"
+            aria-label="Stop"
+            title="Stop"
+            onClick={onCancel}
+            className={cn(ghostButton, "rounded-toolbar-button size-icon-button-xs pointer-events-auto")}
+          >
+            <Stop className="size-icon-xs" />
           </button>
         ) : null}
       </div>
@@ -163,42 +212,108 @@ export function JobProgress({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(progressPercent * 10) / 10}
-        className="bg-foreground/10 h-1 w-full overflow-hidden rounded-full"
+        className="flex w-full gap-0.75"
       >
-        <span
-          className={cn(
-            "block h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out",
-            outcomeBar ?? (finished ? "bg-success" : failing ? "bg-destructive" : "bg-link"),
-          )}
-          style={{ width: `${progressPercent}%` }}
-        />
+        {stages.map((item, index) => {
+          const at = stateOf(item, index);
+          const fill = segmentFill(at, index);
+          return (
+            <span
+              key={`${item.name}-${index}`}
+              data-segment={at}
+              className="bg-foreground/10 h-1 min-w-0 basis-0 overflow-hidden rounded-full"
+              style={{ flexGrow: item.weight }}
+            >
+              {fill && (
+                <span
+                  className={cn(
+                    "block h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out",
+                    fill.color,
+                  )}
+                  style={{ width: `${fill.width}%` }}
+                />
+              )}
+            </span>
+          );
+        })}
       </span>
 
-      <div className="flex flex-col gap-0.5">
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {stages.map((item, index) => {
-            const at = stateOf(item, index);
-            return (
-              <span
-                key={`${item.name}-${index}`}
-                data-stage={at}
-                className={cn(
-                  mono,
-                  "inline-flex items-center gap-1",
-                  at === "failed" ? "text-destructive" : at === "active" ? "text-foreground" : "text-muted-foreground",
+      {(proposed || shown || outcome?.summary || lines.length > 0 || actions) && (
+        <div className="flex min-w-0 flex-col gap-2.5">
+          {proposed ? (
+            <ul className="flex min-w-0 flex-col gap-1">
+              {stages.map((item, index) => (
+                <li key={`${item.name}-${index}`} data-stage="pending" className={cn(mono, "text-muted-foreground flex min-w-0 items-center gap-1.5")}>
+                  <Check aria-hidden className="text-muted-foreground/60 size-icon-xs shrink-0" />
+                  <span className="min-w-0 truncate">{item.name}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            (shown || lines.length > 0) && (
+              <div className="flex min-w-0 flex-col gap-0.5">
+                {shown && (
+                  <p className={cn(mono, "flex min-w-0 items-baseline gap-1.5")}>
+                    <span
+                      data-stage={shownState}
+                      className={cn(
+                        "min-w-0 shrink truncate",
+                        shownState === "failed"
+                          ? "text-destructive"
+                          : shownState === "partial"
+                            ? "text-warning"
+                            : shownState === "active"
+                              ? "shimmer motion-reduce:animate-none"
+                              : "text-muted-foreground",
+                      )}
+                    >
+                      {shown.name}
+                    </span>
+                    {after && (
+                      <>
+                        <span aria-hidden className="text-muted-foreground/40 shrink-0">
+                          →
+                        </span>
+                        <span data-stage="next" className="text-muted-foreground/60 min-w-0 truncate">
+                          {after.name}
+                        </span>
+                      </>
+                    )}
+                  </p>
                 )}
-              >
-                <StageMark state={at} />
-                <span className={cn(at === "active" && "shimmer shimmer-step motion-reduce:animate-none")}>{item.name}</span>
-              </span>
-            );
-          })}
+                {lines.map((line) => (
+                  <p key={line} data-slot="job-detail" className="text-muted-foreground text-xs break-words">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            )
+          )}
+          {outcome?.summary ? (
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <p data-slot="job-outcome" className="text-label break-words">
+                {outcome.summary}
+              </p>
+              {detail && (
+                <p data-slot="job-detail" className="text-muted-foreground text-xs break-words">
+                  {detail}
+                </p>
+              )}
+            </div>
+          ) : null}
+          {proposed && (detail || warning) && (
+            <div className="flex min-w-0 flex-col gap-0.5 text-xs">
+              {detail && <p data-slot="job-detail">{detail}</p>}
+              {warning && (
+                <p data-slot="job-warning" className="text-muted-foreground">
+                  {warning}
+                </p>
+              )}
+            </div>
+          )}
+          {actions ? <div className="pointer-events-auto flex flex-wrap items-center gap-2 self-start">{actions}</div> : null}
         </div>
-        {current?.description ? (
-          <p className="text-muted-foreground text-xs break-words">{current.description}</p>
-        ) : null}
-      </div>
-      {outcome?.summary ? <p className="text-sm break-words">{outcome.summary}</p> : null}
+      )}
       <span className="sr-only" role="status">
         {announcement}
       </span>

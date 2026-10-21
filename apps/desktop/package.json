@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.test.json",
-    "lint": "oxlint --deny-warnings && node scripts/check-styles.mjs",
+    "lint": "oxlint --deny-warnings && node scripts/check-styles.mjs && node scripts/gen-tokens.mjs --check",
     "test": "node scripts/run-tests.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",

@@ -10,16 +10,13 @@ import {
 } from "react";
 
 import { FileReviewBar, FileReviewBody, useFileReview } from "@/app/side-panel/FileReview";
+import { FindLineBox, MAX_MATCHES } from "@/app/side-panel/FindLineBox";
 import { FileTypeIcon, useCheckoutRoot } from "@/components/conversation";
 import { TooltipIconButton } from "@/components/controls";
 import {
-  ArrowDown,
-  ArrowUp,
   Check,
   Copy,
   FolderOpen,
-  Search,
-  X,
 } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { request, RequestError, revealPath } from "@/ipc/client";
@@ -40,9 +37,6 @@ import { onWorkspaceChanged } from "@/state/workspaceCache";
  * comes to the front. While agents' changes to it wait for review, it shows them inline to
  * keep or undo (`FileReview`).
  */
-
-/** Matches marked at most; past that, finding says so. */
-const MAX_MATCHES = 10_000;
 
 function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
@@ -353,96 +347,32 @@ const CodeLines: FC<{
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {(finding || going) && (
-        <div
-          data-slot="file-find"
-          className="bg-popover text-popover-foreground border-border rounded-surface shadow-menu absolute end-4 top-2 z-10 flex h-control-lg items-center gap-1 border ps-2 pe-1"
-        >
-          {finding ? (
-            <>
-              <Search className="text-muted-foreground size-icon-sm shrink-0" />
-              <input
-                ref={findInput}
-                // ⌘F opens it to type in at once.
-                // oxlint-disable-next-line jsx-a11y/no-autofocus
-                autoFocus
-                value={query}
-                placeholder="Find"
-                aria-label="Find in file"
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setCurrent(0);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    step(event.shiftKey ? -1 : 1);
-                  } else if (event.key === "Escape") {
-                    event.preventDefault();
-                    setFinding(false);
-                    scrollRef.current?.focus();
-                  }
-                }}
-                className="placeholder:text-muted-foreground w-48 min-w-0 bg-transparent text-sm outline-none"
-              />
-              <span className="text-muted-foreground shrink-0 px-1 text-xs tabular-nums">
-                {!query
-                  ? ""
-                  : matches.length === 0
-                    ? "No results"
-                    : `${current + 1} of ${matches.length >= MAX_MATCHES ? `${MAX_MATCHES}+` : matches.length}`}
-              </span>
-              <TooltipIconButton
-                tooltip="Previous match"
-                shortcut="⇧↵"
-                size="icon-xs"
-                disabled={!matches.length}
-                onClick={() => step(-1)}
-              >
-                <ArrowUp />
-              </TooltipIconButton>
-              <TooltipIconButton
-                tooltip="Next match"
-                shortcut="↵"
-                size="icon-xs"
-                disabled={!matches.length}
-                onClick={() => step(1)}
-              >
-                <ArrowDown />
-              </TooltipIconButton>
-            </>
-          ) : (
-            <input
-              // ⌃G opens it to type in at once.
-              // oxlint-disable-next-line jsx-a11y/no-autofocus
-              autoFocus
-              inputMode="numeric"
-              placeholder={`Go to line (1–${lines.length})`}
-              aria-label="Go to line"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  goTo(event.currentTarget.value);
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  setGoing(false);
-                  scrollRef.current?.focus();
-                }
-              }}
-              className="placeholder:text-muted-foreground w-48 min-w-0 bg-transparent text-sm outline-none"
-            />
-          )}
-          <TooltipIconButton
-            tooltip="Close"
-            shortcut="Esc"
-            size="icon-xs"
-            onClick={() => {
-              setFinding(false);
-              setGoing(false);
-            }}
-          >
-            <X />
-          </TooltipIconButton>
-        </div>
+        <FindLineBox
+          finding={finding}
+          query={query}
+          count={matches.length}
+          current={current}
+          lines={lines.length}
+          inputRef={findInput}
+          onQueryChange={(value) => {
+            setQuery(value);
+            setCurrent(0);
+          }}
+          onStep={step}
+          onGoTo={goTo}
+          onFindEscape={() => {
+            setFinding(false);
+            scrollRef.current?.focus();
+          }}
+          onGoEscape={() => {
+            setGoing(false);
+            scrollRef.current?.focus();
+          }}
+          onClose={() => {
+            setFinding(false);
+            setGoing(false);
+          }}
+        />
       )}
       <div
         ref={scrollRef}

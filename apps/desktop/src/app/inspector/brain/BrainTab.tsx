@@ -3,14 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { BrainGraphPanel, preloadGraphCanvas } from "@/app/inspector/brain/BrainGraphPanel";
 import { BrainOverviewView } from "@/app/inspector/brain/BrainOverview";
 import { BrainSearch } from "@/app/inspector/brain/BrainSearch";
-import { Picker } from "@/app/inspector/providers/Picker";
-import { ToggleGroup, ToggleGroupItem } from "@/components/controls";
+import { type BrainView, BrainToolbar } from "@/app/inspector/brain/BrainToolbar";
 import type { BrainOverview } from "@/ipc/generated";
 import { loadBrain, PERSONAL, selectBrain, useBrain } from "@/state/brain";
 import { inspectedConversation } from "@/state/actions";
 import { useApp } from "@/state/store";
-
-type View = "overview" | "search" | "graph";
 
 /** How long after the tab opens the graph's libraries start loading. */
 const GRAPH_PRELOAD_MS = 500;
@@ -51,7 +48,7 @@ export function BrainTab() {
   const key = useBrainKey();
   const projects = useApp((s) => s.projects);
   const overview = useBrain((s) => s.overviews[key]);
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<BrainView>("overview");
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const moving = busy(overview);
 
@@ -104,30 +101,13 @@ export function BrainTab() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2 text-xs">
-        <Picker label="Brain" value={key} options={options} onChange={selectBrain} />
-        <span className="flex-1" />
-        <ToggleGroup
-          type="single"
-          size="sm"
-          variant="outline"
-          value={view}
-          onValueChange={(value) => {
-            if (value === "overview" || value === "search" || value === "graph") setView(value);
-          }}
-          aria-label="Brain view"
-        >
-          <ToggleGroupItem value="overview" className="text-xs">
-            Overview
-          </ToggleGroupItem>
-          <ToggleGroupItem value="search" className="text-xs">
-            Search
-          </ToggleGroupItem>
-          <ToggleGroupItem value="graph" className="text-xs">
-            Graph
-          </ToggleGroupItem>
-        </ToggleGroup>
-      </div>
+      <BrainToolbar
+        brainKey={key}
+        options={options}
+        onBrainChange={selectBrain}
+        view={view}
+        onViewChange={setView}
+      />
       {error && (
         <p role="alert" className="text-destructive shrink-0 border-b px-3 py-2 text-xs">
           {error}

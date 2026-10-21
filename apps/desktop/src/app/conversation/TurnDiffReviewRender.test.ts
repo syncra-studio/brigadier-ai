@@ -18,7 +18,8 @@ test("an answer's card reviews its files: Undo All, Keep All, Review Changes, pe
   assert.deepEqual(seen.keptOne.rows.map(([state]) => state), ["kept", "kept", "pending"]);
   assert.deepEqual(seen.asked, ["keepChanges src/a.ts", "undoPendingChanges src/c.ts"]);
   // Done: the card stays as the turn's record, its rows each opening their diff.
-  assert.deepEqual([seen.done.title, seen.done.review, seen.done.buttons], ["Edited 3 files", "kept 2, undid 1", ["Fold the files"]]);
+  // Every file decided, the turn keeps Discard, as the design's reviewed tally (app.pen kUqk1 › wYSCe) has it.
+  assert.deepEqual([seen.done.title, seen.done.review, seen.done.buttons], ["Edited 3 files", "kept 2, undid 1", ["Discard", "Fold the files"]]);
   assert.deepEqual(seen.done.rows, [["kept", "Kept"], ["kept", "Kept"], ["undone", "Undone"]]);
   // A merge took the files that waited (#288): no Undo or Keep; the merge's own record says it
   // merged, once, so no row says Merged.

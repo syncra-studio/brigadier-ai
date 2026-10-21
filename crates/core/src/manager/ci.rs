@@ -61,14 +61,14 @@ pub(crate) struct GhOutput {
 }
 
 impl GhOutput {
-    fn success(&self) -> bool {
+    pub(crate) fn success(&self) -> bool {
         self.code == Some(0)
     }
 }
 
 /// Why `gh` gave no output at all.
 #[derive(Debug)]
-enum RunError {
+pub(crate) enum RunError {
     /// It could not be started: missing, or not runnable.
     Spawn(std::io::Error),
     /// It did not finish within [`CALL_TIMEOUT`].
@@ -78,7 +78,7 @@ enum RunError {
 impl Gh {
     /// Runs `gh` with `args`. An error means `gh` could not be started (or never finished);
     /// a non-zero exit is an `Ok` with its code.
-    async fn output(&self, args: &[&str]) -> std::result::Result<GhOutput, RunError> {
+    pub(crate) async fn output(&self, args: &[&str]) -> std::result::Result<GhOutput, RunError> {
         self.output_in(None, args).await
     }
 
@@ -88,8 +88,28 @@ impl Gh {
         dir: Option<&Path>,
         args: &[&str],
     ) -> std::result::Result<GhOutput, RunError> {
+        self.run(dir, args, None).await
+    }
+
+    /// [`Self::output`] with `input` on its standard input (an issue's body for `--body-file -`).
+    pub(crate) async fn output_with_input(
+        &self,
+        args: &[&str],
+        input: &str,
+    ) -> std::result::Result<GhOutput, RunError> {
+        self.run(None, args, Some(input)).await
+    }
+
+    /// Runs `gh` with `args` in `dir`, `input` on its standard input (else none). An error means
+    /// `gh` could not be started (or never finished); a non-zero exit is an `Ok` with its code.
+    async fn run(
+        &self,
+        dir: Option<&Path>,
+        args: &[&str],
+        input: Option<&str>,
+    ) -> std::result::Result<GhOutput, RunError> {
         let mut tries = 0;
-        let child = loop {
+        let mut child = loop {
             let mut command = tokio::process::Command::new(&self.program);
             if let Some(dir) = dir {
                 command.current_dir(dir);
@@ -98,7 +118,11 @@ impl Gh {
                 .args(args)
                 .env_clear()
                 .envs(self.vars.iter().map(|(key, value)| (key, value)))
-                .stdin(Stdio::null())
+                .stdin(if input.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
@@ -113,6 +137,19 @@ impl Gh {
                 Err(err) => return Err(RunError::Spawn(err)),
             }
         };
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            use tokio::io::AsyncWriteExt;
+            let written = async {
+                stdin.write_all(input.as_bytes()).await?;
+                stdin.shutdown().await
+            };
+            // Dropping `stdin` closes it, so `gh` reads to the end.
+            match tokio::time::timeout(CALL_TIMEOUT, written).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => return Err(RunError::Spawn(err)),
+                Err(_) => return Err(RunError::Timeout),
+            }
+        }
         let output = tokio::time::timeout(CALL_TIMEOUT, child.wait_with_output())
             .await
             .map_err(|_| RunError::Timeout)?

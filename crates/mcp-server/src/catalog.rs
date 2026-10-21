@@ -427,12 +427,15 @@ outward step only the user takes). Refused when the session already has Full acc
 once; the user's switch, if they make it, arrives as a change of this session's setting.";
 
 const OFFER_FEEDBACK: &str = "When the user seems annoyed with Brigadier itself (a bug in \
-the app or in how you or its workers behave; never their own project's code), offer them a \
-report to Brigadier's developers, drafted from this conversation: a card under your answer that \
-they send to GitHub, edit first or dismiss. Nothing is sent without their click. title: one line \
-naming the problem. body: what happened and what they expected, steps if known, a few plain \
-lines; no secrets, paths or project code. One offer per incident: refused while an earlier one \
-is unanswered or after they dismissed one.";
+the app or in how you or its workers behave; never their own project's code), or asks you to \
+report something to Brigadier's developers (\"report this\", \"file that as a bug\"), offer \
+them a report drafted from this conversation: a card under your answer. Its Send files it on \
+GitHub as the user, one issue per bug or idea, a repeat added to the issue it repeats; they may \
+edit it first or dismiss it. Nothing is sent without their click. title: one line naming the \
+problem. body: what happened and what they expected, steps if known, a few plain lines in their \
+words; never invent steps; no secrets, paths or project code. asked: true when the user asked \
+for it. One offer per incident: unless asked, refused while an earlier one is unanswered or \
+after they dismissed one.";
 
 const OFFER_SESSION: &str = "Work you found along the way that is outside this request (a \
 separate bug, a follow-up the user didn't ask for): offer it as a session of its own instead of \
@@ -1079,7 +1082,7 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     ),
     (
         "offer_feedback",
-        "user annoyed, frustrated, complaint, bug report, feedback",
+        "user annoyed, frustrated, complaint, bug report, feedback, report this, file an issue",
     ),
     (
         "offer_session",

@@ -13,6 +13,7 @@ import {
   refusedDescribed,
   UNKNOWN_SESSION,
 } from "@/app/conversation/activity/peerWords";
+import { PeerLink } from "@/app/conversation/activity/PeerLink";
 import { type BlockOrchestratorStep, heldForWait, type PeerSentStep } from "@/app/conversation/blocks";
 import { usePeerName } from "@/app/conversation/peerParts";
 import { useViewConversation } from "@/app/conversation/viewContext";
@@ -20,7 +21,6 @@ import { ThreadActivity } from "@/components/conversation";
 import { Chat, Clock } from "@/components/icons";
 import type { Conversation, OrchestratorStepKind, PeerMessage, Project } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { openConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
@@ -135,22 +135,6 @@ export function describePeerStep(step: BlockOrchestratorStep, peers: PeerLookup,
   }
   return null;
 }
-
-/** A session a row names: a button that opens it (at the message, once it has it). */
-const PeerLink: FC<{ peer: PeerRef }> = ({ peer }) => (
-  <button
-    type="button"
-    data-slot="peer-link"
-    title={`Open ${peer.title}`}
-    onClick={(event) => {
-      event.stopPropagation();
-      openConversation(peer.session, peer.message ? { at: { message: peer.message } } : {});
-    }}
-    className="text-row-object hover:text-foreground focus-visible:text-foreground rounded-control align-bottom"
-  >
-    {peer.title}
-  </button>
-);
 
 /** Why the row's messages didn't go, for its tooltip. */
 function failures(records: readonly PeerMessage[]): string | undefined {

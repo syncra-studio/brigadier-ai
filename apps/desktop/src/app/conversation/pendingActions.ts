@@ -3,13 +3,13 @@ import type { Board } from "@/state/board";
 
 export type PendingAction = {
   /** `outline`: a lead's outline approval, asked as "Implement this plan?" like a plan. */
-  type: "approval" | "question" | "plan" | "outline" | "overnight";
+  type: "approval" | "question" | "plan" | "outline";
   id: string;
 };
 
-type PendingBoard = Pick<Board, "conversationId" | "approvals" | "questions" | "plans" | "overnight">;
+type PendingBoard = Pick<Board, "conversationId" | "approvals" | "questions" | "plans">;
 
-/** Oldest pending decisions first, with overnight proposals after the other cards. */
+/** Oldest pending decisions first. */
 export function pendingActionKeys(
   conversation: Pick<Conversation, "id" | "setup"> | null,
   board: PendingBoard | null,
@@ -34,11 +34,6 @@ export function pendingActionKeys(
   for (const plan of Object.values(board.plans)) {
     if (plan.state.type === "proposed" && (decidesPlans || plan.body)) {
       waiting.push({ key: `plan:${plan.id}`, position: plan.position });
-    }
-  }
-  for (const run of Object.values(board.overnight)) {
-    if (run.state === "proposed") {
-      waiting.push({ key: `overnight:${run.id}`, position: Number.MAX_SAFE_INTEGER });
     }
   }
   return waiting.toSorted((a, b) => a.position - b.position).map((entry) => entry.key);

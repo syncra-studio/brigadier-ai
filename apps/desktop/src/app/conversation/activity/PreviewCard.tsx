@@ -3,25 +3,19 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
+import { OpenPill } from "@/app/conversation/activity/OpenPill";
+import { failed, kindOf, LAST_LINES, printed, type Proof } from "@/app/conversation/activity/previewProofs";
+import { Proofs } from "@/app/conversation/activity/Proofs";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { RoundBadge } from "@/app/settings/storage/parts";
-import { ImagePreview } from "@/components/conversation";
-import { Button, buttonVariants } from "@/components/controls";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays";
-import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@/components/icons";
+import { Button, RoundBadge } from "@/components/controls";
+import { ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Reload, Terminal } from "@/components/icons";
 import { RowText, SettingsCard } from "@/components/shared";
-import type { OrchestratorStepKind, Preview, PreviewKind, ProofKind } from "@/ipc/generated";
-import { openPdf, openSimulator, openUrl } from "@/ipc/client";
-import { formatTime } from "@/lib/format";
+import type { Preview, PreviewKind } from "@/ipc/generated";
+import { openPdf, openSimulator } from "@/ipc/client";
 import { cn } from "@/lib/utils";
 import { previewLogTail, restartPreview, resumePreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { openLink } from "@/state/links";
-import { openBrowserTab } from "@/state/sessionTabs";
-import { useApp } from "@/state/store";
-import { useThreadImages } from "@/state/threadImages";
-import { toast } from "@/state/toasts";
 
 /**
  * The Preview card, under a finished turn's answer and above its Changes card (the user's design,
@@ -31,21 +25,6 @@ import { toast } from "@/state/toasts";
  * where. Paused: Start again. The chevron folds the proofs away; folded, the header counts them.
  * Proofs with no page left running are the card's alone ("Screenshots").
  */
-
-type Proof = Extract<OrchestratorStepKind, { type: "proof" }>;
-
-function failed(cause: unknown): void {
-  toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
-}
-
-/** What a proof is: as it was recorded, else (a proof from before that) by its file's type. */
-function kindOf(proof: Proof): ProofKind {
-  if (proof.kind) return proof.kind;
-  return proof.mime.startsWith("video/") ? "recording" : proof.mime.startsWith("image/") ? "screenshot" : "log";
-}
-
-/** Log and test output: read as text, not looked at. */
-const printed = (proof: Proof) => ["log", "test"].includes(kindOf(proof));
 
 /** Each kind of proof, by how it is counted: test output counts as a log. */
 const NOUNS = [
@@ -76,15 +55,6 @@ function takenWhere(proofs: readonly Proof[]): string | null {
   return proofs.every((proof) => proof.takenOn !== undefined && /^https?:\/\//.test(proof.takenOn)) ? "Checked in the browser" : null;
 }
 
-/** The lines of log or test output shown: its last ones. */
-const LAST_LINES = 5;
-
-/** A text file read as a data URL, as words. */
-function textOf(url: string): string {
-  const data = url.slice(url.indexOf(",") + 1);
-  return new TextDecoder().decode(Uint8Array.from(atob(data), (char) => char.charCodeAt(0)));
-}
-
 /** A preview record for the page: a local server on the same port, the latest one started. */
 function samePage(record: Preview, url: string): boolean {
   if (!record.url) return false;
@@ -110,89 +80,6 @@ function standing(record: Preview): { words: string; live: boolean } {
       return { words: "Stopped", live: false };
   }
 }
-
-/** The design's split pill: Open opens the page where Settings › Browser sends it; ▾ picks where. */
-const OpenPill: FC<{ url: string; conversationId: string | null }> = ({ url, conversationId }) => {
-  const browser = useApp((s) => s.settings.browserEnabled && s.info?.platform !== "linux");
-  const inApp = browser && conversationId !== null;
-  // A Browser tab already on the page comes to the front (#425).
-  const open = () => void openLink(url, conversationId ? { agent: true, conversationId } : { agent: true }).catch(failed);
-  const half = "hover:bg-foreground/10 flex h-full items-center";
-  return (
-    <span
-      data-slot="preview-open"
-      className={cn(buttonVariants({ variant: "outline", size: "sm" }), "rounded-nav bg-foreground/5 text-label gap-0 overflow-hidden px-0 font-normal")}
-    >
-      <button type="button" onClick={open} title={url} className={cn(half, "gap-1.5 ps-3 pe-2")}>
-        <ArrowUpRight aria-hidden className="size-icon-sm" />
-        Open
-      </button>
-      <span aria-hidden className="bg-divider h-3.5 w-px" />
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <button type="button" aria-label="Open in" className={cn(half, "text-foreground/65 ps-1.5 pe-2")}>
-            <ChevronDown aria-hidden className="size-icon-sm" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {inApp && <DropdownMenuItem onSelect={() => conversationId && openBrowserTab(conversationId, url, true)}>Brigadier browser</DropdownMenuItem>}
-          <DropdownMenuItem onSelect={() => void openUrl(url).catch(failed)}>Default browser</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </span>
-  );
-};
-
-/** The proofs, two to a row: each cropped to the top of what it shows, "1. What it shows" and when under it. */
-const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefined }[]; conversationId: string | null }> = ({ proofs, conversationId }) => {
-  const media = useThreadImages(conversationId, proofs.map(({ proof }) => proof.id));
-  const images = proofs.flatMap(({ proof }, index) => (kindOf(proof) === "screenshot" ? [{ name: proof.caption ?? proof.name, url: media[index]?.url ?? null }] : []));
-  const frame = "border-border block h-44.5 w-full overflow-hidden rounded-lg border";
-  return (
-    <div data-slot="turn-proofs" className="grid grid-cols-2 gap-3">
-      {proofs.map(({ proof, atMs }, index) => {
-        const { url, error } = media[index] ?? { url: null, error: null };
-        // What it shows in the thread's words; a proof taken without them goes by its file's name.
-        const label = proof.caption ?? proof.name;
-        const kind = kindOf(proof);
-        let shown: ReactNode;
-        if (url && printed(proof)) {
-          // Its last lines, under the command or file it came from.
-          const lines = textOf(url).trimEnd().split("\n");
-          shown = <ShellBox command={proof.takenOn ?? proof.name} output={lines.slice(-LAST_LINES).join("\n")} status="inProgress" exit={null} />;
-        } else if (!url) {
-          shown = (
-            <div title={error ?? label} className={cn(frame, "bg-foreground/5 text-muted-foreground flex items-center justify-center p-1 text-center text-xs")}>
-              {error ? "Not available" : <span className="shimmer">Loading</span>}
-            </div>
-          );
-        } else if (kind === "recording") {
-          shown = <video src={url} controls muted playsInline preload="metadata" aria-label={label} title={label} className={cn(frame, "object-cover object-top")} />;
-        } else {
-          const at = images.findIndex((image) => image.url === url);
-          shown = (
-            <ImagePreview url={url} name={label} gallery={{ images, index: Math.max(at, 0) }}>
-              <button type="button" aria-label={`Open ${label}`} title={label} className={cn(frame, "focus-visible:ring-ring group/proof relative focus-visible:ring-2 focus-visible:outline-none")}>
-                <img src={url} alt={label} className="size-full object-cover object-top" />
-                <span aria-hidden className="group-hover/proof:bg-background/20 pointer-events-none absolute inset-0 transition-colors" />
-              </button>
-            </ImagePreview>
-          );
-        }
-        return (
-          <figure key={proof.id} data-slot="proof" data-kind={kind} data-caption={proof.caption} className={cn("flex min-w-0 flex-col gap-2", printed(proof) && "col-span-2")}>
-            {shown}
-            <figcaption className="flex min-w-0 items-center gap-1.5 text-xs">
-              <span className="text-muted-foreground shrink-0">{index + 1}.</span>
-              <span className="text-foreground min-w-0 truncate">{label}</span>
-              {atMs !== undefined && <span className="text-muted-foreground shrink-0">{formatTime(atMs)}</span>}
-            </figcaption>
-          </figure>
-        );
-      })}
-    </div>
-  );
-};
 
 /** A preview that isn't a web page, by its kind: its title, its badge and the word for it being up. */
 const KINDS: Record<Exclude<PreviewKind, "web" | "app">, { title: string; Icon: FC<{ className?: string }>; up: string }> = {
@@ -281,7 +168,8 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
   const where = takenWhere(proofs.map(({ proof }) => proof));
   const logsOnly = proofs.length > 0 && proofs.every(({ proof }) => printed(proof));
   const lastLines = output?.trimEnd().split("\n").slice(-LAST_LINES).join("\n") ?? "";
-  const body = proofs.length > 0 || (ownLog && lastLines !== "");
+  const shownLog = ownLog && lastLines !== "";
+  const body = proofs.length > 0 || shownLog;
 
   let action: ReactNode = null;
   if (record && record.state.type === "paused" && viewed) {
@@ -296,7 +184,7 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
     const again = record.kind === "test";
     action = (
       <Button variant="soft" size="sm" data-slot="preview-start" onClick={() => void restartPreview(viewed, record.id).catch(failed)}>
-        {again ? <ArrowRotateCw aria-hidden className="size-icon-sm" /> : <Play aria-hidden className="size-icon-sm" />}
+        {again ? <Reload aria-hidden className="size-icon-sm" /> : <Play aria-hidden className="size-icon-sm" />}
         {again ? "Run again" : "Start again"}
       </Button>
     );
@@ -347,11 +235,13 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
       </span>,
     );
   }
-  // Folded, a card of proofs alone or another kind of preview, the header counts them.
-  if (counted && (!open || !url || preview)) {
+  // Folded, a card of proofs alone or another kind of preview, the header counts them; a test
+  // run's own output it shows counts as its log.
+  const headerCount = shownLog && !counted ? "1 log" : counted;
+  if (headerCount && (!open || !url || preview)) {
     line.push(
       <span key="count" data-slot="preview-count" className="text-muted-foreground shrink-0">
-        {counted}
+        {headerCount}
       </span>,
     );
   }
@@ -401,7 +291,7 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
                 <span data-slot="preview-proofs-count" className="text-muted-foreground">{counted}</span>
               </div>
             )}
-            {ownLog && lastLines && preview && (
+            {shownLog && preview && (
               <div data-slot="preview-run-output" className="flex flex-col gap-2">
                 <div className="flex items-center gap-2 text-xs">
                   <span className="text-foreground/65 font-medium">Test output</span>

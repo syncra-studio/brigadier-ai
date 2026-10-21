@@ -1,5 +1,5 @@
 import { PinnedSummaryToggle } from "@/app/conversation/PinnedSummary";
-import { TerminalButton } from "@/app/side-panel/SidePanel";
+import { TerminalButton } from "@/components/shared";
 import { WorkspacePaneToggle } from "@/app/side-panel/WorkspacePane";
 import { toolbarToggles } from "@/state/workspacePane";
 

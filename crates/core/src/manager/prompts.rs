@@ -329,7 +329,7 @@ How to work:
 - Write to another session's thread only with message_session.
 - {APP_RULE}
 - {OFFER_SESSION_RULE}
-- When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
+- When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once; when they ask you to report something to its developers, call it with asked true.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
@@ -1271,6 +1271,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         ),
         worker: "",
     },
+    Revision {
+        number: FEEDBACK_ASKED_REVISION,
+        thread: "From now on, when the user asks you to report something to Brigadier's developers (\"report this\", \"file that as a bug\"), call offer_feedback with asked true, drafted from this conversation in their words: its card's Send files it on GitHub as them.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1845,6 +1850,9 @@ pub(crate) const QUEUE_DECIDES_REVISION: u32 = 121;
 /// A follow-up that is separate work (a different goal, files the running request leaves alone)
 /// is offered as a session of its own with route "new_session", not held as "wait" (#444).
 pub(crate) const SEPARATE_FOLLOW_UP_REVISION: u32 = 122;
+/// The user may ask the thread to report something to Brigadier's developers ("report this"):
+/// it offers the feedback card with `asked`, which an earlier offer doesn't refuse (#471).
+pub(crate) const FEEDBACK_ASKED_REVISION: u32 = 123;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

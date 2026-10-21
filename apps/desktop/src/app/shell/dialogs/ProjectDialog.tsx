@@ -1,8 +1,9 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type FormEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
-import { Button, Input, Switch } from "@/components/controls";
+import { Field } from "@/app/shell/dialogs/Field";
+import { errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
+import { Button, Input, Switch, ErrorLine } from "@/components/controls";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/overlays";
 import { Plus, Trash, X } from "@/components/icons";
 import { pickFolder } from "@/ipc/client";
@@ -30,21 +31,6 @@ export function ProjectDialog(props: ProjectDialogProps) {
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** A labelled field: its label (and a note on the right), then the control. */
-function Field({ label, aside, htmlFor, children }: { label: string; aside?: string; htmlFor?: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-4">
-        <label htmlFor={htmlFor} className="text-foreground text-label leading-4 font-medium">
-          {label}
-        </label>
-        {aside && <span className="text-muted-foreground text-xs leading-3.75">{aside}</span>}
-      </div>
-      {children}
-    </div>
   );
 }
 

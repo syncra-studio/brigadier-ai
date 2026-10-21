@@ -2974,6 +2974,14 @@ impl SessionManager {
     ) -> Result<bool> {
         // Only one card at a time: later tasks wait for the same answer.
         let asking = self.uncommitted_asks.lock().await;
+        // A card answered since this task looked: its answer holds for this task too (#461).
+        if let Some(Setup::Session {
+            workers_see_uncommitted: Some(see),
+            ..
+        }) = self.core.conversation(conversation_id)?.setup
+        {
+            return Ok(see);
+        }
         let board = self.core.board(conversation_id).await?;
         let open = board.questions.values().find(|q| {
             q.answer.is_none() && matches!(q.kind, QuestionKind::UncommittedChanges { .. })

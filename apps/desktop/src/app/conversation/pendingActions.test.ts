@@ -36,14 +36,14 @@ const board = {
   plans: { plan }, overnight: { night: run },
 };
 
-test("overnight proposals stay reachable after older questions and approvals under Full access", () => {
-  assert.deepEqual(pendingActionKeys(conversation, board), ["question:question", "approval:approval", "overnight:night"]);
+test("Full access asks questions and approvals; a proposed overnight run stays in its Job card", () => {
+  assert.deepEqual(pendingActionKeys(conversation, board), ["question:question", "approval:approval"]);
 });
 
 test("approval and plan modes include proposed plans in their original order", () => {
   for (const change of [{ permission: "askForApproval" as const }, { planMode: true }]) {
     assert.deepEqual(pendingActionKeys({ ...conversation, setup: { ...setup, ...change } }, board),
-      ["question:question", "plan:plan", "approval:approval", "overnight:night"]);
+      ["question:question", "plan:plan", "approval:approval"]);
   }
 });
 
@@ -54,18 +54,17 @@ test("a plan written as a document, and a lead's outline, ask the user under any
   };
   assert.deepEqual(pendingActionKeys(conversation, {
     ...board, plans: { plan: { ...plan, body: "# Add a flag\n\nOne line." } }, approvals: { approval, outline },
-  }), ["question:question", "plan:plan", "approval:approval", "outline:outline", "overnight:night"]);
+  }), ["question:question", "plan:plan", "approval:approval", "outline:outline"]);
 });
 
-test("settled decisions and runs leave the rail", () => {
+test("settled decisions leave the rail", () => {
   assert.deepEqual(pendingActionKeys(conversation, {
     ...board,
     approvals: { approval: { ...approval, state: { type: "allowed", by: "user", similar: false } } },
     questions: { question: { ...question, answer: "main", answeredAtMs: 1 } },
-    overnight: { night: { ...run, state: "running" } },
   }), []);
   assert.deepEqual(pendingActionKeys(conversation, {
-    ...board, approvals: {}, overnight: {},
+    ...board, approvals: {},
     questions: { question: { ...question, answeredAtMs: 1 } },
   }), []);
 });

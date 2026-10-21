@@ -2,14 +2,10 @@ import { type FC, useContext, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WORKERS_LABEL } from "@/app/side-panel/Agents";
-import { Counts } from "@/app/conversation/Counts";
+import { Counts } from "@/components/shared";
 import { outcomeWords, workerDone, workerWorking } from "@/app/conversation/workerPresentation";
-import {
-  AgentsPanelContext,
-  useWorkerName,
-  WorkerGlyph,
-} from "@/app/conversation/WorkerChip";
-import { SummaryRowButton, SummarySection } from "@/components/conversation";
+import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
+import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conversation";
 import type { DiffStat, Task } from "@/ipc/generated";
 import { refreshWorkerDiffs } from "@/state/actions";
 import { useBoard } from "@/state/board";

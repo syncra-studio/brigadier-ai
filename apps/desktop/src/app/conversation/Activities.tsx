@@ -5,8 +5,8 @@ import { type BackgroundRow, type BackgroundState, backgroundRows, rowEnded } fr
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { latestLine, previewWord } from "@/app/conversation/previewStatus";
 import { workerName } from "@/app/conversation/rowWords";
-import { SummaryRowButton, SummarySection } from "@/components/conversation";
-import { Check, Pause, Spinner, Terminal, X } from "@/components/icons";
+import { StateIcon, SummaryRowButton, SummarySection } from "@/components/conversation";
+import { Terminal, X } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
 import { request } from "@/ipc/client";
 import type { Preview } from "@/ipc/generated";
@@ -22,25 +22,6 @@ type Activity = BackgroundRow;
 
 /** A process at work: its word shimmers. Paused or ended, it rests. */
 const live = (state: BackgroundState) => state !== "paused" && !rowEnded(state);
-
-/**
- * A row's icon for its state: a spinner while the process is on its way somewhere (building,
- * starting, a smoke test or a check of it), a steady green dot once it is up, a pause sign while
- * it is held. With less motion, nothing spins or pulses.
- */
-function StateIcon({ state }: { state: BackgroundState }) {
-  if (state === "running") {
-    return (
-      <span data-icon="live" aria-hidden className="flex size-icon-md items-center justify-center">
-        <span className="size-2 rounded-full bg-success motion-safe:animate-pulse" />
-      </span>
-    );
-  }
-  if (state === "paused") return <Pause data-icon="paused" />;
-  if (state === "failed") return <X data-icon="failed" className="text-destructive" />;
-  if (state === "finished") return <Check data-icon="finished" />;
-  return <Spinner data-icon="spinner" className="motion-safe:animate-spin" />;
-}
 
 /** What a row is for, first letter up: "Dev app", "Core tests". A command stands as it is. */
 const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);

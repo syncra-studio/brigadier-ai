@@ -1,14 +1,16 @@
-import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import { type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
+import { GroupStepList } from "@/app/conversation/activity/GroupStepList";
+import { InFold, InGroup } from "@/app/conversation/activity/groupContext";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
-import { foldRepeats, labelParts, stepLabel, type StepWords, summarize, summaryLead, timesWord } from "@/app/conversation/activity/words";
-import { CHEVRON, LIST_ICON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS, GROUP_LIST, RowOpens, ThreadActivity } from "@/components/conversation";
+import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
+import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, RowOpens, StepIcon, ThreadActivity } from "@/components/conversation";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
-import { ChevronRightAlt, Clock, Globe, Stop, Tasks } from "@/components/icons";
+import { ChevronRightAlt, Tasks } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import type { ItemStatus } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
@@ -26,27 +28,6 @@ export type Described = {
 
 /** After a step ends, the live group still says it this long, so a quick read is seen, not "Thinking". */
 export const STEP_LINGERS_MS = 1000;
-
-/** A row inside an opened group: a running command there reads "Running command for 12s". */
-const InGroup = createContext(false);
-
-/** A row inside a fold of one tool's repeats: it says what the call was given ("Used search issues checkout tax"). */
-const InFold = createContext(false);
-
-/** Which icon a step's row has, by name (the name is also on the row, for tests). */
-export function stepIconName(words: StepWords, stopped = false): string {
-  return stopped ? "stop" : words.web ? "web" : words.waiting ? "waiting" : words.list ? "list" : words.kind;
-}
-
-function StepIcon({ words, stopped = false }: { words: StepWords; stopped?: boolean }) {
-  const name = stepIconName(words, stopped);
-  const Icon = name === "stop" ? Stop : name === "web" ? Globe : name === "waiting" ? Clock : name === "list" ? LIST_ICON : WORK_ICONS[words.kind];
-  return (
-    <span data-icon={name} className="contents">
-      <Icon aria-hidden className="size-4 shrink-0" />
-    </span>
-  );
-}
 
 /** A step's words in two tones: the verb in the row's, what it acts on a step fainter; white together on hover. */
 function Words({ words, label, objectNode }: { words: StepWords; label: string; objectNode?: ReactNode }) {
@@ -139,33 +120,6 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
 }
 
 /**
- * Back-to-back calls of one tool Brigadier has no words for, as one row of an opened group:
- * "Used search issues 6 times in 12s". It opens to each call, indented, saying what it was given (#101).
- */
-function RepeatsRow({ described, children }: { described: readonly Described[]; children: ReactNode }) {
-  const [first] = described;
-  if (!first) return null;
-  const running = described.some((step) => step.status === "inProgress");
-  const took = described.map((step) => (step.startedAtMs !== undefined && step.endedAtMs !== undefined ? step.endedAtMs - step.startedAtMs : undefined));
-  const ms = took.every((each) => each !== undefined) ? took.reduce((sum, each) => sum + each, 0) : 0;
-  return (
-    <ThreadActivity
-      data-slot="repeats"
-      detail={<InFold.Provider value>{children}</InFold.Provider>}
-      detailClassName={cn(ROW_DETAIL, "gap-activity-row-gap max-h-none overflow-visible")}
-    >
-      <StepIcon words={first.words} />
-      <span className={cn("min-w-0 truncate", running && "shimmer")}>{`${running ? first.words.doing : first.words.done} ${timesWord(described.length)}`}</span>
-      {!running && ms >= 1000 && <span className="shrink-0 tabular-nums">{`in ${formatDuration(ms)}`}</span>}
-    </ThreadActivity>
-  );
-}
-
-/** Reads, searches and listings that still run show once done inside an opened group: its row names them. */
-const exploring = (described: Described) =>
-  described.status === "inProgress" && (described.words.kind === "read" || described.words.kind === "code");
-
-/**
  * Whether the newest step still names the live group: while it runs, and for `STEP_LINGERS_MS`
  * after it ended; it re-renders when that time is up.
  */
@@ -243,27 +197,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   if (items.length === 1 && (!line || rowOpen) && !summary) {
     return <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>;
   }
-  // Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more.
-  // Its rows keep their height: an opened Shell box scrolls with them, never squeezed.
-  const list = (
-    <div data-slot={GROUP_LIST} className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)] [--diff-header-top:var(--spacing-group-fade)]">
-      <InGroup.Provider value>
-        {foldRepeats(described.map((step) => step.words)).map((run) => {
-          const [index = 0] = run;
-          const item = items[index];
-          if (!item) return null;
-          if (run.length > 1) {
-            return (
-              <RepeatsRow key={`repeats:${item.key}`} described={run.flatMap((at) => described[at] ?? [])}>
-                {run.map((at) => items[at] && renderStep(items[at].step, items[at].key))}
-              </RepeatsRow>
-            );
-          }
-          return described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key);
-        })}
-      </InGroup.Provider>
-    </div>
-  );
+  const list = <GroupStepList items={items} described={described} renderStep={renderStep} />;
   return (
     <Collapsible data-slot="work-group" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>

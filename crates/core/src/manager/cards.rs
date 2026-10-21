@@ -499,6 +499,12 @@ impl SessionManager {
             self.answering(&conversation_id, &card_id, question.request_id.clone())
                 .await;
         }
+        // The uncommitted-changes card is closed and its answer kept under the lock its asking
+        // holds: a task that asks meanwhile sees either the open card or the answer (#461).
+        let asking = match &question.kind {
+            QuestionKind::UncommittedChanges { .. } => Some(self.uncommitted_asks.lock().await),
+            _ => None,
+        };
         let recorded = self
             .core
             .record_conversation(
@@ -624,6 +630,7 @@ impl SessionManager {
             self.answer_delivered(&conversation_id, &card_id).await;
         }
         self.waiters.answer(&card_id, CardAnswer::Answered);
+        drop(asking);
         self.settle_requests(&conversation_id).await;
         Ok(())
     }

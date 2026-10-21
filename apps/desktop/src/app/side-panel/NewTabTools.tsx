@@ -4,8 +4,9 @@ import { WorkspacePaneContext } from "@/app/side-panel/WorkspacePane";
 import { shortcutLabel } from "@/app/side-panel/SidePanel";
 import { useCheckoutRoot } from "@/components/conversation";
 import { TooltipIconButton, Kbd } from "@/components/controls";
+import { SiteIcon } from "@/components/shared";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays";
-import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@/components/icons";
+import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Grid, Search, X } from "@/components/icons";
 import { pageList } from "@/ipc/client";
 import type { BrowserVisit, PageSummary } from "@/ipc/generated";
 import { browserHistory } from "@/state/browserData";
@@ -16,7 +17,7 @@ import { openPageTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs"
 import { useApp } from "@/state/store";
 import { setTerminalOpen } from "@/state/terminalPlaces";
 
-import { suggestedSites, type SuggestedSite } from "./newTabSites";
+import { suggestedSites } from "./newTabSites";
 import "./NewTabTools.css";
 
 /**
@@ -172,14 +173,4 @@ export function when(ms: number, now = Date.now()): string {
   if (minutes < 60) return `${minutes} min ago`;
   if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ago`;
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-/** Use an already-known site icon without making extra requests to sites on the launch page. */
-function SiteIcon({ site }: { site: SuggestedSite }) {
-  const favicon = useBrowsers((s) => Object.values(s.pages).find((page) => {
-    try { return new URL(page.url).origin === site.origin && page.favicon; } catch { return false; }
-  })?.favicon);
-  const [failed, setFailed] = useState<string | null>(null);
-  return <span className="new-tab-site-icon">{favicon && favicon !== failed
-    ? <img src={favicon} alt="" onError={() => setFailed(favicon)} /> : <Globe aria-hidden />}</span>;
 }

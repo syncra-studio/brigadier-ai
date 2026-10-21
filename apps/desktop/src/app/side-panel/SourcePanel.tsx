@@ -1,35 +1,31 @@
-import { type FC, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FC, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BranchNameBox, BranchPicker } from "@/app/side-panel/BranchPicker";
+import { CommitBox } from "@/app/side-panel/CommitBox";
+import { SourceGroup } from "@/app/side-panel/SourceGroup";
+import { SourceHeader } from "@/app/side-panel/SourceHeader";
+import { SourceMoreMenu } from "@/app/side-panel/SourceMoreMenu";
+import { type CommitHow, CONFLICTS_LEFT, type Picking, reason, sessionOf, sourceCalls, type SourceTarget } from "@/app/side-panel/sourceTarget";
 import { conflictCount, parseConflicts } from "@/app/side-panel/conflicts";
 import { LETTERS } from "@/app/side-panel/sourceStatus";
 import {
-  ArrowUp,
   Branch,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  DotsHorizontal,
   FileDocument,
   FileIcon,
   Minus,
   Plus,
-  Reload,
-  Sparkles,
-  Spinner,
   Undo,
 } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
-import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/overlays";
+import { ConfirmDialog, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/overlays";
 import { request } from "@/ipc/client";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
-import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";
+import type { SourceAction, SourceBranch, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
 import { noteSourceState } from "@/state/review";
 import { openConflictTab, openFileTab, openReviewTab } from "@/state/sessionTabs";
-import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 /**
@@ -47,64 +43,6 @@ import { toast } from "@/state/toasts";
  * that folder can stage and commit there already (there is no Review tab yet); one that will
  * make its own copy only reads it.
  */
-
-/** Whose changes the panel shows: a session's checkout, or the project folder of one not started. */
-export type SourceTarget =
-  | { type: "conversation"; conversationId: string }
-  | { type: "project"; projectId: string; readOnly: boolean };
-
-/** The panel's changes, sent for its target. */
-function sourceCalls(target: SourceTarget) {
-  return target.type === "conversation"
-    ? sessionCalls(target.conversationId)
-    : projectCalls(target.projectId);
-}
-
-function sessionCalls(conversationId: string) {
-  return {
-    change: (change: SourceChange): Promise<{ state: SourceState }> =>
-      change.type === "stage"
-        ? request({ method: "stageFiles", conversationId, paths: change.paths })
-        : change.type === "unstage"
-          ? request({ method: "unstageFiles", conversationId, paths: change.paths })
-          : request({ method: "discardFiles", conversationId, scope: change.scope, paths: change.paths }),
-    commit: (message: string | null, push: boolean, amend: boolean): Promise<{ outcome: CommitOutcome }> =>
-      request({ method: "commitChanges", conversationId, message, includeUnstaged: false, push, amend }),
-  };
-}
-
-function projectCalls(projectId: string) {
-  return {
-    change: (change: SourceChange): Promise<{ state: SourceState }> =>
-      request({ method: "changeProjectSource", projectId, change }),
-    commit: (message: string | null, push: boolean, amend: boolean): Promise<{ outcome: CommitOutcome }> =>
-      request({ method: "commitProjectChanges", projectId, message, includeUnstaged: false, push, amend }),
-  };
-}
-
-/** The session a target belongs to, if it has started. */
-function sessionOf(target: SourceTarget): string | null {
-  return target.type === "conversation" ? target.conversationId : null;
-}
-
-/** The checkout a target reads and changes. */
-function workspaceTargetOf(target: SourceTarget): WorkspaceTarget {
-  return target.type === "conversation"
-    ? { type: "conversation", conversationId: target.conversationId }
-    : { type: "project", projectId: target.projectId };
-}
-
-/** Each target's unsent commit message, kept while the app runs: closing or switching the pane keeps it. */
-const unsent = new Map<string, string>();
-
-/** The key a target's unsent message is kept under. */
-function targetKey(target: SourceTarget): string {
-  return target.type === "conversation" ? target.conversationId : `project:${target.projectId}`;
-}
-
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
@@ -172,10 +110,7 @@ type Discarding = { scope: SourceScope; files: SourceFile[] };
 /** A conflicted file (or all of them) the user asked to stage while it still has conflict markers. */
 type StagingConflicts = { paths: string[]; marked: number };
 
-const CONFLICTS_LEFT = "There are merge conflicts. Resolve them before committing your changes.";
-
-/** What a branch pick is for, and what its picker asks. */
-type Picking = "merge" | "checkout" | "rebase" | "from" | "delete";
+/** What its picker asks for each branch pick. */
 const PICK_PLACEHOLDER: Record<Picking, string> = {
   merge: "Select a branch to merge from",
   checkout: "Select a branch to checkout",
@@ -380,132 +315,41 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
 
   return (
     <div data-slot="source-panel" className="relative flex min-h-0 flex-1 flex-col">
-      <header className="group/source-title text-muted-foreground flex h-control-md shrink-0 items-center gap-0.5 ps-1 pe-2">
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-          className="flex min-w-0 flex-1 items-center gap-1 text-start text-xs font-semibold tracking-wide"
-        >
-          {open ? <ChevronDown className="size-icon-sm shrink-0" /> : <ChevronRight className="size-icon-sm shrink-0" />}
-          SOURCE
-        </button>
-        <span className="flex items-center opacity-0 transition-opacity group-hover/source-title:opacity-100 group-focus-within/source-title:opacity-100">
-          {!readOnly && (
-            <TooltipIconButton tooltip="Commit" size="icon-xs" disabled={locked} onClick={() => commitRef.current?.("commit")}>
-              <Check />
-            </TooltipIconButton>
-          )}
-          <TooltipIconButton tooltip="Refresh" size="icon-xs" onClick={load}>
-            <Reload />
-          </TooltipIconButton>
-        </span>
-        {!readOnly && (
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <TooltipIconButton tooltip="More Actions" size="icon-xs" disabled={locked}>
-                <DotsHorizontal />
-              </TooltipIconButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={pull}>Pull</DropdownMenuItem>
-              <DropdownMenuItem onSelect={push}>Push</DropdownMenuItem>
-              {canCheckout && <DropdownMenuItem onSelect={() => pick("checkout")}>Checkout to…</DropdownMenuItem>}
-              <DropdownMenuItem onSelect={fetch}>Fetch</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>Commit</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem onSelect={() => commitRef.current?.("commit")}>Commit</DropdownMenuItem>
-                  <DropdownMenuItem disabled={resolving} onSelect={() => commitRef.current?.("amend")}>
-                    Commit (Amend)
-                  </DropdownMenuItem>
-                  {merging && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={abortMerge}>Abort Merge</DropdownMenuItem>
-                    </>
-                  )}
-                  {state?.rebasing && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={abortRebase}>Abort Rebase</DropdownMenuItem>
-                    </>
-                  )}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>Changes</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem disabled={changes.length === 0} onSelect={() => stage(changes.map((file) => file.path))}>
-                    Stage All Changes
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={staged.length === 0} onSelect={() => unstage(null)}>
-                    Unstage All Changes
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={changes.length === 0} onSelect={() => setDiscarding({ scope: "unstaged", files: changes })}>
-                    Discard All Changes
-                  </DropdownMenuItem>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>Pull, Push</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem onSelect={pull}>Pull</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={push}>Push</DropdownMenuItem>
-                  <DropdownMenuItem onSelect={fetch}>Fetch</DropdownMenuItem>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>Branch</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem disabled={resolving} onSelect={() => pick("merge")}>Merge…</DropdownMenuItem>
-                  <DropdownMenuItem disabled={resolving || !state?.branch} onSelect={() => pick("rebase")}>
-                    Rebase Branch…
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  {/* A session works on its own branch: it makes and renames none. */}
-                  {canCheckout && (
-                    <>
-                      <DropdownMenuItem onSelect={() => setNaming({ kind: "create", from: null })}>Create Branch…</DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => pick("from")}>Create Branch From…</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem disabled={!state?.branch} onSelect={() => setNaming({ kind: "rename" })}>
-                        Rename Branch…
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                  <DropdownMenuItem onSelect={() => pick("delete")}>Delete Branch…</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem disabled={!state?.branch || !!state.upstream} onSelect={publish}>
-                    Publish Branch
-                  </DropdownMenuItem>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>Stash</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem disabled={resolving} onSelect={() => stash(false)}>Stash</DropdownMenuItem>
-                  <DropdownMenuItem disabled={resolving} onSelect={() => stash(true)}>
-                    Stash (Include Untracked)
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem disabled={resolving} onSelect={() => applyStash(false)}>
-                    Apply Latest Stash
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={resolving} onSelect={() => applyStash(true)}>
-                    Pop Latest Stash
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => setDroppingStash(true)}>Drop Stash…</DropdownMenuItem>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={showGitOutput}>Show Git Output</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </header>
+      <SourceHeader
+        open={open}
+        onToggle={() => setOpen(!open)}
+        readOnly={readOnly}
+        locked={locked}
+        onCommit={() => commitRef.current?.("commit")}
+        onRefresh={load}
+        moreMenu={
+          <SourceMoreMenu
+            state={state}
+            merging={merging !== null}
+            resolving={resolving}
+            canCheckout={canCheckout}
+            hasChanges={changes.length > 0}
+            hasStaged={staged.length > 0}
+            onPull={pull}
+            onPush={push}
+            onFetch={fetch}
+            onPick={pick}
+            onCommit={(how) => commitRef.current?.(how)}
+            onAbortMerge={abortMerge}
+            onAbortRebase={abortRebase}
+            onStageAll={() => stage(changes.map((file) => file.path))}
+            onUnstageAll={() => unstage(null)}
+            onDiscardAll={() => setDiscarding({ scope: "unstaged", files: changes })}
+            onCreateBranch={() => setNaming({ kind: "create", from: null })}
+            onRenameBranch={() => setNaming({ kind: "rename" })}
+            onPublish={publish}
+            onStash={stash}
+            onApplyStash={applyStash}
+            onDropStash={() => setDroppingStash(true)}
+            onShowGitOutput={showGitOutput}
+          />
+        }
+      />
       {picker && (
         <BranchPicker
           placeholder={PICK_PLACEHOLDER[picker]}
@@ -557,7 +401,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
               <p className="text-muted-foreground p-2 text-sm">No changes</p>
             )}
             {conflicted.length > 0 && (
-              <Group
+              <SourceGroup
                 title="Merge Changes"
                 count={conflicted.length}
                 actions={
@@ -594,10 +438,10 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
                     )}
                   </FileRow>
                 ))}
-              </Group>
+              </SourceGroup>
             )}
             {staged.length > 0 && (
-              <Group
+              <SourceGroup
                 title="Staged Changes"
                 count={staged.length}
                 actions={
@@ -630,10 +474,10 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
                     )}
                   </FileRow>
                 ))}
-              </Group>
+              </SourceGroup>
             )}
             {state && (changes.length > 0 || staged.length > 0 || resolving) && (
-              <Group
+              <SourceGroup
                 title="Changes"
                 count={changes.length}
                 actions={
@@ -693,7 +537,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
                     )}
                   </FileRow>
                 ))}
-              </Group>
+              </SourceGroup>
             )}
           </div>
       </div>
@@ -798,40 +642,6 @@ const OpenFileButton: FC<{ onClick: () => void }> = ({ onClick }) => (
   </TooltipIconButton>
 );
 
-/** A group of files under its title and count, folding away; its actions show on hover. */
-const Group: FC<{ title: string; count: number; actions: ReactNode; children: ReactNode }> = ({
-  title,
-  count,
-  actions,
-  children,
-}) => {
-  const [open, setOpen] = useState(true);
-  return (
-    <section aria-label={title} className="mt-2">
-      <header className="group/source-group flex h-control-sm items-center gap-1 pe-1 text-sm">
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-          className="flex min-w-0 flex-1 items-center gap-1 text-start"
-        >
-          {open ? (
-            <ChevronDown className="text-muted-foreground size-icon-sm shrink-0" />
-          ) : (
-            <ChevronRight className="text-muted-foreground size-icon-sm shrink-0" />
-          )}
-          <span className="truncate">{title}</span>
-        </button>
-        <span className="hidden shrink-0 items-center group-focus-within/source-group:flex group-hover/source-group:flex">
-          {actions}
-        </span>
-        <span className="bg-muted text-muted-foreground rounded-full px-1.5 text-xs tabular-nums">{count}</span>
-      </header>
-      {open && <ul>{children}</ul>}
-    </section>
-  );
-};
-
 /** A changed file: click to open its diff (once there is a Review tab); its actions show on hover. */
 const FileRow: FC<{ file: SourceFile; onOpen: (() => void) | null; children: ReactNode }> = ({
   file,
@@ -929,217 +739,6 @@ const DiscardDialog: FC<{
       destructive
       onConfirm={onConfirm}
     />
-  );
-};
-
-/** How the Commit button's menu commits: plain, amending the last commit, then pushing, or then pulling and pushing. */
-type CommitHow = "commit" | "amend" | "push" | "sync";
-
-/**
- * The message box (blank: written for you; ✨ writes one now; during a merge, git's merge
- * message; during a rebase, the message of the commit it stopped on, kept as it is), the Commit
- * button with its menu (Continue during a merge or rebase), and the branch.
- */
-const CommitBox: FC<{
-  target: SourceTarget;
-  state: SourceState | null;
-  /** A stage, unstage, discard or git action is under way. */
-  staging: boolean;
-  /** The header's ✓ and the More Actions menu commit through it. */
-  commitRef: RefObject<((how: CommitHow) => void) | null>;
-  onCommitting: (committing: boolean) => void;
-  onCommitted: () => void;
-  /** Commit & Sync's pull and push, after the commit. */
-  onSync: () => void;
-  /** Continue during a rebase. */
-  onContinueRebase: () => void;
-  /** Opens Checkout to…; null where the branch can't change. */
-  onBranch: (() => void) | null;
-  /** Something is under way: the branch can't change meanwhile. */
-  locked: boolean;
-}> = ({ target, state, staging, commitRef, onCommitting, onCommitted, onSync, onContinueRebase, onBranch, locked }) => {
-  const key = targetKey(target);
-  const [message, setMessageState] = useState(() => unsent.get(key) ?? "");
-  const setMessage = (next: string) => {
-    if (next) unsent.set(key, next);
-    else unsent.delete(key);
-    setMessageState(next);
-  };
-  const [busy, setBusyState] = useState<CommitHow | "write" | null>(null);
-  const setBusy = (next: CommitHow | "write" | null) => {
-    setBusyState(next);
-    onCommitting(next !== null);
-  };
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const merging = state?.merging ?? null;
-  const rebasing = state?.rebasing ?? null;
-  // A merge starts with git's message in the box, unless the user had written one.
-  const [prefilled, setPrefilled] = useState<string | null>(null);
-  if (merging && merging.message !== prefilled) {
-    setPrefilled(merging.message);
-    if (!message) setMessage(merging.message);
-  } else if (state && !merging && prefilled !== null) {
-    // The merge ended (committed or aborted): its message goes unless the user rewrote it.
-    setPrefilled(null);
-    if (message === prefilled) setMessage("");
-  }
-  const conflicted = state?.changes.some((file) => file.status === "conflicted") ?? false;
-  const nothing = !state || (merging || rebasing ? conflicted : state.staged.length === 0);
-  const blocked = (how: CommitHow) =>
-    (how === "amend" ? !state || merging !== null : nothing) ||
-    ((how === "push" || how === "sync") && !state?.remote) ||
-    (rebasing !== null && how !== "commit");
-  const commit = (how: CommitHow) => {
-    if (blocked(how) || busy || staging) {
-      if ((merging || rebasing) && conflicted) toast(CONFLICTS_LEFT, { tone: "error" });
-      return;
-    }
-    if (rebasing) {
-      onContinueRebase();
-      return;
-    }
-    setBusy(how);
-    sourceCalls(target)
-      .commit(message.trim() || null, how === "push", how === "amend")
-      .then(({ outcome }) => {
-        const done = outcome.pushed
-          ? `Committed and pushed to ${outcome.branch}`
-          : `Committed to ${outcome.branch}`;
-        // Why the chosen writer model didn't write the message, when it didn't.
-        toast(outcome.note ? `${done}. ${outcome.note}` : done);
-        setMessage("");
-        if (how === "sync") onSync();
-      })
-      .catch((failure: unknown) => toast(`Failed to commit: ${reason(failure)}`, { tone: "error" }))
-      .finally(() => {
-        setBusy(null);
-        onCommitted();
-      });
-  };
-  useEffect(() => {
-    commitRef.current = commit;
-  });
-  const write = () => {
-    setBusy("write");
-    request({ method: "writeCommitMessage", target: workspaceTargetOf(target) })
-      .then(({ message: written }) => setMessage(written))
-      .catch((failure: unknown) => toast(`Failed to write a message: ${reason(failure)}`, { tone: "error" }))
-      .finally(() => setBusy(null));
-  };
-  const writing = busy !== null && busy !== "write" && !message.trim() && !merging;
-  const label = merging || rebasing ? "Continue" : "Commit";
-  return (
-    <div className="flex shrink-0 flex-col gap-2 px-2 pb-1">
-      <div className="border-border rounded-control focus-within:border-ring flex items-start border">
-        <textarea
-          rows={1}
-          value={rebasing ? rebasing.message : message}
-          disabled={busy !== null || rebasing !== null}
-          aria-label="Commit message"
-          placeholder={`Message (${mac ? "⌘⏎" : "Ctrl+⏎"} to commit on "${state?.branch ?? "…"}")`}
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && (mac ? event.metaKey : event.ctrlKey)) {
-              event.preventDefault();
-              commit("commit");
-            }
-          }}
-          className="placeholder:text-muted-foreground field-sizing-content max-h-40 min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none"
-        />
-        <TooltipIconButton
-          tooltip="Generate Commit Message"
-          size="icon-xs"
-          className="m-1"
-          disabled={busy !== null || merging !== null || rebasing !== null || !state || state.staged.length === 0}
-          onClick={write}
-        >
-          {busy === "write" ? <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" /> : <Sparkles />}
-        </TooltipIconButton>
-      </div>
-      <div className="flex">
-        <Button
-          size="sm"
-          className="flex-1 rounded-e-none"
-          disabled={nothing || busy !== null || staging}
-          title={(merging || rebasing) && conflicted ? "Resolve the merge conflicts first" : nothing ? "Stage changes to commit them" : undefined}
-          onClick={() => commit("commit")}
-        >
-          {busy === "commit" ? <Spinner className="size-icon-sm animate-spin motion-reduce:animate-none" /> : <Check />}
-          {writing ? "Writing message…" : label}
-        </Button>
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="sm"
-              aria-label="Commit Actions"
-              className="border-background/40 rounded-s-none border-s px-1.5"
-              disabled={busy !== null || staging}
-            >
-              <ChevronDown />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem disabled={blocked("commit")} onSelect={() => commit("commit")}>
-              Commit
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={blocked("amend")} onSelect={() => commit("amend")}>
-              Commit (Amend)
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={blocked("push")} onSelect={() => commit("push")}>
-              Commit & Push
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={blocked("sync")} onSelect={() => commit("sync")}>
-              Commit & Sync
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      <BranchItem state={state} onClick={onBranch} disabled={locked} />
-    </div>
-  );
-};
-
-/**
- * The checked-out branch, "(merging)" during a merge, the branch being rebased with "(rebasing)"
- * during a rebase, and its commits not pushed yet; a click opens Checkout to….
- */
-const BranchItem: FC<{ state: SourceState | null; onClick: (() => void) | null; disabled: boolean }> = ({
-  state,
-  onClick,
-  disabled,
-}) => {
-  const content = (
-    <>
-      <Branch className="size-icon-sm shrink-0" />
-      <span className="text-foreground min-w-0 truncate">
-        {state?.branch ?? state?.rebasing?.branch ?? "…"}
-        {state?.merging && " (merging)"}
-        {state?.rebasing && " (rebasing)"}
-      </span>
-      {state && state.ahead > 0 && (
-        <span title={`${state.ahead} not pushed`} className="flex shrink-0 items-center text-xs tabular-nums">
-          <ArrowUp className="size-icon-xs" />
-          {state.ahead}
-        </span>
-      )}
-    </>
-  );
-  const look = "text-muted-foreground rounded-control flex h-control-sm min-w-0 items-center gap-1.5 px-1 text-sm";
-  return onClick ? (
-    <button
-      type="button"
-      title="Checkout to…"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(look, "hover:bg-muted text-start disabled:opacity-50")}
-    >
-      {content}
-    </button>
-  ) : (
-    <div data-slot="source-branch" className={look}>
-      {content}
-    </div>
   );
 };
 

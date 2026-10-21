@@ -3,35 +3,19 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 
 import { errorText } from "@/app/shell/dialogs/fields";
-
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
-
 import { FreeUpCard, type FreeUp } from "@/app/settings/storage/FreeUpCard";
-
-import { checkedWords, count, size, startTicked, usageParts } from "@/app/settings/storage/model";
-
-import { UsageBar } from "@/app/settings/storage/parts";
-
-import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/ProjectsCard";
-
-import { FolderOpen, Reload } from "@/components/icons";
-
+import { checkedWords, count, size, startTicked } from "@/app/settings/storage/model";
+import { ProjectsCard } from "@/app/settings/storage/ProjectsCard";
+import { UsageCard } from "@/app/settings/storage/UsageCard";
+import type { UnusedFreeUp } from "@/app/settings/storage/UnusedRow";
+import { Reload } from "@/components/icons";
 import { Button } from "@/components/controls";
-
-import { RowText, SettingsCard, StateDot } from "@/components/shared";
-
-import { revealPath } from "@/ipc/client";
-
+import { RowText, SettingsCard } from "@/components/shared";
 import type { StorageReport } from "@/ipc/generated";
-
-import { shortPath } from "@/lib/format";
-
 import { cn } from "@/lib/utils";
-
 import { openSettings } from "@/state/actions";
-
 import { cleanStorage, freeUpProjects, onCleanProgress, openUninstall, scanStorage } from "@/state/storage";
-
 import { useApp } from "@/state/store";
 
 /** The Storage page's rows, for the page and for Settings search. */
@@ -253,56 +237,6 @@ export function StoragePage() {
         </SettingsCard>
       </SettingsSection>
     </SettingsPage>
-  );
-}
-
-/** What Brigadier uses in all, where, and what it is made of. */
-function UsageCard({ report, error }: { report: StorageReport | null; error: string | null }) {
-  const parts = report ? usageParts(report) : [];
-  return (
-    <SettingsCard padded data-usage>
-      <div className="flex items-end gap-4">
-        <div className="flex min-w-0 flex-1 items-end gap-2.5">
-          <span className="text-page-title font-medium">
-            {report ? size(report.totalBytes) : "…"}
-          </span>
-          <span className="text-foreground/65 text-label leading-none">
-            {report ? "used by Brigadier" : "Looking…"}
-          </span>
-        </div>
-        {report?.dataDir && (
-          <button
-            type="button"
-            title={report.dataDir}
-            onClick={() => void revealPath(report.dataDir).catch(() => {})}
-            className="text-muted-foreground hover:text-foreground/65 flex min-w-0 items-center gap-2 font-mono text-xs"
-          >
-            <span className="truncate">{shortPath(report.dataDir)}</span>
-            <FolderOpen aria-hidden className="text-foreground/65 size-3.5 shrink-0" />
-          </button>
-        )}
-      </div>
-      {error && <span className="text-destructive text-xs">{error}</span>}
-      <UsageBar parts={parts} pending={!report} />
-      <div className="flex justify-between gap-4">
-        {parts.map((part) => (
-          <div key={part.key} data-legend={part.key} className="flex flex-col gap-1.25">
-            <span className="text-foreground/65 flex items-center gap-1.75 text-xs">
-              <StateDot color={part.color} />
-              {part.label}
-            </span>
-            <span
-              className={cn(
-                "text-xs font-medium",
-                part.bytes > 0 ? "text-foreground" : "text-muted-foreground",
-              )}
-            >
-              {size(part.bytes)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </SettingsCard>
   );
 }
 

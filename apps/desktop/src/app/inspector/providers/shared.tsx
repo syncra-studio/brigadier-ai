@@ -1,3 +1,5 @@
+import { type ReactNode, useState } from "react";
+
 import type { ProviderKind, QuotaSnapshot, RawState } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { usageTone } from "@/lib/quota";
@@ -51,5 +53,47 @@ export function QuotaWindows({ quota }: { quota: QuotaSnapshot }) {
         );
       })}
     </div>
+  );
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Runs an action, keeping its error for display. */
+export function useAction() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, error, run };
+}
+
+export function Section({
+  title,
+  actions,
+  children,
+}: {
+  title: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-2 border-b px-3 py-3">
+      <div className="flex items-center gap-2">
+        <h3 className="flex-1 text-xs font-medium">{title}</h3>
+        {actions}
+      </div>
+      {children}
+    </section>
   );
 }

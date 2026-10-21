@@ -1,23 +1,21 @@
 import { useState } from "react";
 
-import { useAction } from "@/app/conversation/useAction";
 import { BrowserDownloads } from "@/app/settings/BrowserDownloads";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
+import { BrowserOffNote } from "@/app/settings/BrowserOffNote";
 import { BrowserSiteSettings } from "@/app/settings/BrowserSiteSettings";
+import { BrowserSwitch } from "@/app/settings/BrowserSwitch";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
-import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch, SwitchSetting } from "@/app/settings/parts";
-import { Globe } from "@/components/icons";
+import { LinkRow } from "@/app/settings/LinkRow";
+import { LocationRow } from "@/app/settings/LocationRow";
+import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { Button } from "@/components/controls";
-import { SettingsCard } from "@/components/shared";
-import { pickFolder } from "@/ipc/client";
-import type { LinkTarget } from "@/ipc/generated";
-import { shortPath } from "@/lib/format";
+import { SettingsCard, SettingsRow } from "@/components/shared";
 import {
   setClearingBrowsingData as setClearing,
   showBrowserSettingsView as setView,
   useBrowserSettingsView,
 } from "@/state/browserSettings";
-import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
 /** The Browser page's rows, for the page and for Settings search. */
@@ -67,11 +65,6 @@ export const BROWSER_ROWS = {
 const PAGE_DESCRIPTION = "The built-in browser, where links open, and what it keeps.";
 const OFF_NOTE = "The built-in browser is off: links open in your default browser, and agents are told it isn't there.";
 
-const TARGETS = [
-  { value: "brigadier", label: "Brigadier's browser" },
-  { value: "system", label: "Your default browser" },
-] as const satisfies readonly { value: LinkTarget; label: string }[];
-
 /** Settings › Browser. Off, only the switch shows: the browser doesn't exist anywhere else. */
 export function BrowserPage() {
   const on = useApp((s) => s.settings.browserEnabled);
@@ -107,9 +100,9 @@ export function BrowserPage() {
     <SettingsPage title="Browser" description={PAGE_DESCRIPTION}>
       <SettingsSection>
         <SettingsCard>
-          <BrowserSwitch on={on} />
+          <BrowserSwitch on={on} row={BROWSER_ROWS.browser} />
         </SettingsCard>
-        {!on && <p className="text-foreground/65 px-1 text-xs">{OFF_NOTE}</p>}
+        {!on && <BrowserOffNote>{OFF_NOTE}</BrowserOffNote>}
       </SettingsSection>
       {on && embedded && (
         <SettingsSection title="General">
@@ -129,7 +122,7 @@ export function BrowserPage() {
       {on && embedded && (
         <SettingsSection title="Downloads">
           <SettingsCard>
-            <LocationRow />
+            <LocationRow row={BROWSER_ROWS.location} />
             {mac && <SwitchSetting setting="browserAskDownloads" row={BROWSER_ROWS.askDownloads} />}
             <SettingsRow label={BROWSER_ROWS.downloads.label} description={BROWSER_ROWS.downloads.description}>
               <Button variant="soft" size="sm" onClick={() => setView("downloads")}>Manage</Button>
@@ -148,76 +141,5 @@ export function BrowserPage() {
       )}
       {clearDialog}
     </SettingsPage>
-  );
-}
-
-/** Downloads' folder: the system's Downloads folder until another is chosen. */
-function LocationRow() {
-  const dir = useApp((s) => s.settings.browserDownloadsDir);
-  const save = useAction();
-  const change = () =>
-    save.run(async () => {
-      const picked = await pickFolder(dir || undefined);
-      if (picked) await setSetting("browserDownloadsDir", picked);
-    });
-  return (
-    <SettingsRow
-      label={BROWSER_ROWS.location.label}
-      description={dir ? <span title={dir}>{shortPath(dir)}</span> : "Your Downloads folder"}
-      error={save.error}
-    >
-      <div className="flex items-center gap-2">
-        {dir && (
-          <Button variant="soft" size="sm" onClick={() => save.run(() => setSetting("browserDownloadsDir", ""))}>
-            Use Downloads
-          </Button>
-        )}
-        <Button variant="soft" size="sm" onClick={change}>Change…</Button>
-      </div>
-    </SettingsRow>
-  );
-}
-
-function BrowserSwitch({ on }: { on: boolean }) {
-  const save = useAction();
-  return (
-    <SettingsRow
-      label={
-        <span className="flex items-center gap-3">
-          <Globe aria-hidden className="size-icon-lg text-foreground/80 shrink-0" />
-          {BROWSER_ROWS.browser.label}
-        </span>
-      }
-      description={<span className="block ps-[calc(var(--spacing-icon-lg)+var(--spacing)*3)]">{BROWSER_ROWS.browser.description}</span>}
-      error={save.error}
-      className="py-4"
-    >
-      <SettingsSwitch
-        label={BROWSER_ROWS.browser.label}
-        checked={on}
-        onCheckedChange={(next) => save.run(() => setSetting("browserEnabled", next))}
-      />
-    </SettingsRow>
-  );
-}
-
-function LinkRow({
-  setting,
-  row,
-}: {
-  setting: "webLinksIn" | "localLinksIn";
-  row: { label: string; description: string };
-}) {
-  const value = useApp((s) => s.settings[setting]);
-  const save = useAction();
-  return (
-    <SettingsRow label={row.label} description={row.description} error={save.error}>
-      <SettingsSelect<LinkTarget>
-        label={row.label}
-        value={value}
-        options={TARGETS}
-        onChange={(next) => save.run(() => setSetting(setting, next))}
-      />
-    </SettingsRow>
   );
 }

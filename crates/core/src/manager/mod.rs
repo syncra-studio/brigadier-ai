@@ -50,6 +50,7 @@ mod export;
 mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
+mod feedback;
 mod files;
 mod find_repos;
 #[cfg(test)]
@@ -234,9 +235,14 @@ pub struct SessionManager {
     /// When each ready session's pull request was last looked up at a connect
     /// (`refresh_pull_request_soon`).
     pr_looked_up: Mutex<HashMap<ConversationId, std::time::Instant>>,
+    /// Send feedback's GitHub sign-in at work, if any.
+    feedback_sign_in: Mutex<Option<feedback::GhSignIn>>,
     /// A stand-in `gh` for tests.
     #[cfg(test)]
     pub(crate) gh_override: Mutex<Option<ci::Gh>>,
+    /// A stand-in `curl` for tests (Send feedback's reads of GitHub's public API).
+    #[cfg(test)]
+    pub(crate) curl_override: Mutex<Option<PathBuf>>,
     /// Held while a task is read, changed and recorded (`update_task`), so two writers can't
     /// each write back a copy that lacks the other's change.
     task_writes: tokio::sync::Mutex<()>,
@@ -422,6 +428,9 @@ impl SessionManager {
             pr_looked_up: Mutex::default(),
             #[cfg(test)]
             gh_override: Mutex::default(),
+            #[cfg(test)]
+            curl_override: Mutex::default(),
+            feedback_sign_in: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),

@@ -1,110 +1,41 @@
-import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { TooltipIconButton, Button, Kbd } from "@/components/controls";
-import { errorText } from "@/app/shell/dialogs/fields";
+import { TooltipIconButton, NavRow } from "@/components/controls";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/shell/dialogs/RemoveProjectDialog";
 import { NameDialog } from "@/app/shell/NameDialog";
 import { useShortcuts } from "@/app/shortcuts";
 import { openSearch } from "@/app/shell/SearchDialog";
-import { SidebarToggle } from "@/app/shell/SidebarToggle";
+import { Flyout } from "@/app/shell/Flyout";
+import { NewChatRow } from "@/app/shell/NewChatRow";
+import { ProjectRow } from "@/app/shell/ProjectRow";
+import { ProjectsEmptyPrompt } from "@/app/shell/ProjectsEmptyPrompt";
+import { SidebarHeader } from "@/app/shell/SidebarHeader";
 import {
-  navRow,
-  NavFold,
-  NavHeader,
-  NavList,
-  NavSection,
-  rowAction,
-  besideStrip,
-} from "@/app/shell/sidebar/nav";
-import {
-  Archive,
-  ArrowLeft,
   BrigadierGlyph,
   Chats,
   ComposeEditSquare,
-  DotsHorizontal,
-  Download,
   Folder,
-  FolderOpen,
   Folders,
   MagnifyingGlassSearch,
-  Pencil,
-  Pin,
   Plus,
-  SettingsCog,
   Sidebar,
-  Trash,
-  Unpin,
 } from "@/components/icons";
-import { TitlebarTips, Banner, EmptyState } from "@/components/shared";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { Banner, ConversationRow, EmptyState, NavList, NavSection, RowAction, RowStatus, SidebarError, type RowActions } from "@/components/shared";
+import { DropdownMenuLabel, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useSidebar } from "@/components/layout";
-import { openFolder } from "@/ipc/client";
 import type { Conversation, Project } from "@/ipc/generated";
-import { SessionStatusLabel, SidebarActivityMark, SidebarError } from "@/app/shell/SessionStatus";
 import { cn } from "@/lib/utils";
 import {
-  archive,
-  archiveAll,
   openConversation,
   renameConversation,
   select,
-  setPinned,
   setProjectExpanded,
-  stepHistory,
 } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
-import { exportProjectConventions } from "@/state/brain";
-import { useCanStep } from "@/state/history";
-import { lastFinished, unread, useLastOpened } from "@/state/lastOpened";
-import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
+import { pickClick, pickedIn, prunePicked } from "@/state/picking";
 import { useTabStates } from "@/state/tabStates";
 import { useApp } from "@/state/store";
-
-// ----- titlebar --------------------------------------------------------------------------
-
-/** The buttons' glyphs dim to this while there is nowhere to go. */
-const NOWHERE = "disabled:opacity-40";
-
-/**
- * Back, Forward and the sidebar toggle, at a fixed spot in the titlebar on the traffic lights'
- * line: Back where the lights end on macOS, at the titlebar's start in full screen (where they
- * are gone) and elsewhere. They stay put while the sidebar collapses and expands.
- */
-export function TitlebarNav() {
-  const { open, toggleSidebar, canToggle } = useSidebar();
-  const shortcuts = useShortcuts();
-  const can = useCanStep();
-  return (
-    <div data-slot="titlebar-nav" className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
-      <TitlebarTips>
-        <TooltipIconButton look="toolbar"
-          tooltip="Back"
-          shortcut={shortcuts.back}
-          disabled={!can.back}
-          className={NOWHERE}
-          onClick={() => stepHistory(-1)}
-        >
-          <ArrowLeft />
-        </TooltipIconButton>
-        <TooltipIconButton look="toolbar"
-          tooltip="Forward"
-          shortcut={shortcuts.forward}
-          disabled={!can.forward}
-          className={NOWHERE}
-          onClick={() => stepHistory(1)}
-        >
-          <ArrowLeft className="-scale-x-100" />
-        </TooltipIconButton>
-        {/* Settings holds the panel open, so it has no toggle; Back and Forward stay put. */}
-        {canToggle && (
-          <SidebarToggle open={open} onToggle={toggleSidebar} />
-        )}
-      </TitlebarTips>
-    </div>
-  );
-}
 
 // ----- the Home panel --------------------------------------------------------------------
 
@@ -118,16 +49,6 @@ type Sections = {
   chats: Conversation[];
   projects: Project[];
   sessions: Record<string, Conversation[]>;
-};
-
-/** What the rows can ask the sidebar to do. */
-type RowActions = {
-  onRename: (conversation: Conversation) => void;
-  onError: (error: string) => void;
-  /** A click with ⌘ (Ctrl off macOS) or Shift picks rows; false for a plain click. */
-  onPick: (id: string, event: MouseEvent) => boolean;
-  /** The picked rows, in the order the sidebar shows them. */
-  picked: () => string[];
 };
 
 function useSections(): Sections {
@@ -279,45 +200,9 @@ export function AppSidebar() {
 
   return (
     <>
-      <NavHeader
-        title={
-          <span className="-ms-0.5 flex items-center gap-2">
-            <BrigadierGlyph smallCut={20} className="size-5 shrink-0" />
-            Brigadier
-          </span>
-        }
-        actions={
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-md"
-                aria-label="Search"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => openSearch()}
-              >
-                <MagnifyingGlassSearch />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Search
-              <Kbd>{shortcuts.search}</Kbd>
-            </TooltipContent>
-          </Tooltip>
-        }
-      />
+      <SidebarHeader searchShortcut={shortcuts.search} />
       <NavList className="mb-2 px-2">
-        <li>
-          <button
-            type="button"
-            data-active={isChatDraft}
-            className={navRow}
-            onClick={() => select({ type: "draft", kind: "chat" })}
-          >
-            <ComposeEditSquare />
-            <span className="truncate">New chat</span>
-          </button>
-        </li>
+        <NewChatRow active={isChatDraft} />
       </NavList>
 
       <div className="scroll-edge-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pt-1 pb-2">
@@ -347,14 +232,13 @@ export function AppSidebar() {
           actions={
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
+                <RowAction
                   aria-label="Add project"
-                  className={cn(rowAction, "size-icon-button-sm")}
+                  className="size-icon-button-sm"
                   onClick={() => openAddProject()}
                 >
                   <Plus />
-                </button>
+                </RowAction>
               </TooltipTrigger>
               <TooltipContent side="bottom">Add project</TooltipContent>
             </Tooltip>
@@ -374,16 +258,7 @@ export function AppSidebar() {
               />
             ))}
             {catalogLoaded && projects.length === 0 && (
-              <li className="text-muted-foreground px-2 py-1 text-sm">
-                Projects group sessions on a repository.{" "}
-                <button
-                  type="button"
-                  className="text-foreground/85 underline-offset-4 hover:underline"
-                  onClick={() => openAddProject()}
-                >
-                  Add a project
-                </button>
-              </li>
+              <ProjectsEmptyPrompt />
             )}
           </NavList>
         </NavSection>
@@ -395,14 +270,13 @@ export function AppSidebar() {
           actions={
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
+                <RowAction
                   aria-label="New chat"
-                  className={cn(rowAction, "size-icon-button-sm")}
+                  className="size-icon-button-sm"
                   onClick={() => select({ type: "draft", kind: "chat" })}
                 >
                   <Plus />
-                </button>
+                </RowAction>
               </TooltipTrigger>
               <TooltipContent side="bottom">New chat</TooltipContent>
             </Tooltip>
@@ -517,47 +391,6 @@ export function AppStrip() {
   );
 }
 
-/**
- * A strip icon that opens a list beside the strip, to pick from without expanding the sidebar.
- * It closes on a pick (`pick` runs the choice and closes it), on Esc and on a click outside.
- */
-function Flyout({
-  label,
-  icon,
-  children,
-}: {
-  label: string;
-  icon: ReactNode;
-  children: (pick: (choose: () => void) => void) => ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const pick = (choose: () => void) => {
-    setOpen(false);
-    choose();
-  };
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <TooltipIconButton look="strip" side="right" tooltip={label} className="w-full">{icon}</TooltipIconButton>
-      </PopoverTrigger>
-      <PopoverContent
-        side="right"
-        align="start"
-        sideOffset={besideStrip()}
-        aria-label={label}
-        // Focus the list itself, not its first row, so Tab goes on into the rows.
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
-        }}
-        className="flex max-h-(--radix-popover-content-available-height) w-72 flex-col overflow-y-auto p-1.5"
-      >
-        {children(pick)}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 /** A chat or session in a flyout: its title and state; picking it opens it. */
 function FlyoutConversation({
   conversation,
@@ -572,11 +405,10 @@ function FlyoutConversation({
 }) {
   return (
     <li>
-      <button
-        type="button"
+      <NavRow
         data-active={active}
         aria-current={active ? "page" : undefined}
-        className={cn(navRow, "pe-1.5", nested && "ps-8")}
+        className={cn("pe-1.5", nested && "ps-8")}
         onClick={() => pick(() => openConversation(conversation.id))}
       >
         <SidebarError conversationId={conversation.id} />
@@ -584,7 +416,7 @@ function FlyoutConversation({
           {conversation.title}
         </span>
         <RowStatus conversationId={conversation.id} />
-      </button>
+      </NavRow>
     </li>
   );
 }
@@ -614,11 +446,9 @@ function ProjectsFlyout({ pick }: { pick: (choose: () => void) => void }) {
     <NavList>
       {projects.map((project) => (
         <li key={project.id} className="flex flex-col">
-          <button
-            type="button"
+          <NavRow
             title={`New session in ${project.name}`}
             data-active={draftProjectId === project.id}
-            className={navRow}
             onClick={() =>
               pick(() => {
                 setProjectExpanded(project.id, true);
@@ -630,7 +460,7 @@ function ProjectsFlyout({ pick }: { pick: (choose: () => void) => void }) {
             <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
               {project.name}
             </span>
-          </button>
+          </NavRow>
           <NavList className="pt-px pb-1">
             {(sessions[project.id] ?? NO_SESSIONS).map((conversation) => (
               <FlyoutConversation
@@ -690,288 +520,3 @@ function ChatsFlyout({ pick }: { pick: (choose: () => void) => void }) {
     </div>
   );
 }
-
-/** A row's hover actions, over its end; the row's status gives way to them. */
-function RowActionsSlot({ children }: { children: ReactNode }) {
-  return (
-    <div className="pointer-events-none absolute inset-y-0 end-1.5 flex items-center gap-2 opacity-0 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 group-hover/row:pointer-events-auto group-hover/row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100">
-      {children}
-    </div>
-  );
-}
-
-/** Keeps a row's title clear of its actions while they show. */
-const roomForActions =
-  "group-hover/row:pe-14 group-focus-within/row:pe-14 group-has-data-[state=open]/row:pe-14";
-
-/** Hides a row's trailing status while its actions show. */
-const hideOnRowHover =
-  "group-hover/row:invisible group-focus-within/row:invisible group-has-data-[state=open]/row:invisible";
-
-const ProjectRow = memo(function ProjectRow({
-  project,
-  sessions,
-  activeId,
-  drafting,
-  actions,
-  onSettings,
-  onRemove,
-}: {
-  project: Project;
-  sessions: Conversation[];
-  activeId: string | null;
-  drafting: boolean;
-  actions: RowActions;
-  onSettings: (project: Project) => void;
-  onRemove: (project: Project) => void;
-}) {
-  const expanded = useApp((s) => s.expandedProjects[project.id] ?? true);
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const repo = project.repos[0]?.path;
-  const newSession = () => {
-    setProjectExpanded(project.id, true);
-    select({ type: "draft", kind: "session", projectId: project.id });
-  };
-  return (
-    <li className="flex flex-col">
-      <div className="group/row relative">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          data-active={drafting}
-          className={cn(navRow, "pe-16")}
-          onClick={() => setProjectExpanded(project.id, !expanded)}
-        >
-          {expanded ? <FolderOpen /> : <Folder />}
-          <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
-            {project.name}
-          </span>
-        </button>
-        <RowActionsSlot>
-          <DropdownMenu modal={false}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <button type="button" aria-label={`Actions for ${project.name}`} className={rowAction}>
-                    <DotsHorizontal />
-                  </button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Project actions</TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent side="bottom" align="start">
-              <DropdownMenuItem onSelect={newSession}>
-                <ComposeEditSquare />
-                New session
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onSettings(project)}>
-                <SettingsCog />
-                Project settings…
-              </DropdownMenuItem>
-              {repo && (
-                <DropdownMenuItem
-                  onSelect={() =>
-                    void openFolder(repo).catch((error: unknown) => actions.onError(errorText(error)))
-                  }
-                >
-                  <FolderOpen />
-                  {mac ? "Reveal in Finder" : "Open in File Manager"}
-                </DropdownMenuItem>
-              )}
-              {repo && (
-                <DropdownMenuItem onSelect={() => void exportProjectConventions(project.id, repo)}>
-                  <Download />
-                  Export conventions to AGENTS.md…
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={() => onRemove(project)}>
-                <Trash />
-                Remove project…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label={`New session in ${project.name}`}
-                className={rowAction}
-                onClick={newSession}
-              >
-                <ComposeEditSquare />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">New session</TooltipContent>
-          </Tooltip>
-        </RowActionsSlot>
-      </div>
-      <NavFold open={expanded}>
-        <NavList className="pt-px pb-2">
-          {sessions.map((conversation) => (
-            <ConversationRow
-              key={conversation.id}
-              conversation={conversation}
-              active={activeId === conversation.id}
-              actions={actions}
-              nested
-            />
-          ))}
-          {sessions.length === 0 && <EmptyState as="li" className="ps-8" title="No sessions yet" />}
-        </NavList>
-      </NavFold>
-    </li>
-  );
-});
-
-/** A row's state word and mark, with its reason on hover; otherwise its unread dot. */
-function RowStatus({ conversationId }: { conversationId: string }) {
-  const seen = useLastOpened((s) => s.at[conversationId]);
-  const finishedAtMs = useApp((s) => lastFinished(s.conversations[conversationId]));
-  const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
-  const isUnread = unread(finishedAtMs, seen, open);
-  const mark = <SidebarActivityMark conversationId={conversationId} unread={isUnread} />;
-  return <SessionStatusLabel conversationId={conversationId} className={hideOnRowHover}
-    rowIndicator={mark} fallback={isUnread ? <span data-slot="row-status" data-status="unread" className={hideOnRowHover}>{mark}</span> : null} />;
-}
-
-/**
- * A chat or session: its title, its state at the end, and on hover Pin and Archive. A
- * right-click opens its menu (Pin, Rename…, Archive, Delete…), or on one of several picked
- * rows the menu for all of them (Archive (N), Delete (N)…). ⌘-click (Ctrl-click off macOS)
- * picks it, Shift-click picks a range.
- */
-const ConversationRow = memo(function ConversationRow({
-  conversation,
-  active,
-  actions,
-  nested = false,
-}: {
-  conversation: Conversation;
-  active: boolean;
-  actions: RowActions;
-  nested?: boolean;
-}) {
-  const title = conversation.title;
-  const pinned = conversation.pinnedAtMs !== null;
-  const noun = conversation.kind === "chat" ? "chat" : "session";
-  const togglePin = () =>
-    void setPinned(conversation.id, !pinned).catch((error: unknown) =>
-      actions.onError(errorText(error)),
-    );
-  const archiveIt = () =>
-    void archive(conversation.id).catch((error: unknown) =>
-      actions.onError(errorText(error)),
-    );
-  const picked = usePicked((s) => s.list === "sidebar" && s.ids.includes(conversation.id));
-  // What a right-click acts on: every picked row when this is one of several.
-  const [targets, setTargets] = useState<string[]>([]);
-
-  return (
-    <li className="group/row relative">
-      <ContextMenu
-        modal={false}
-        onOpenChange={(open) => {
-          if (!open) return;
-          const all = actions.picked();
-          if (all.includes(conversation.id)) setTargets(all);
-          else {
-            // A right-click on a row not picked is about that row alone.
-            clearPicked();
-            setTargets([conversation.id]);
-          }
-        }}
-      >
-        <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            data-active={active}
-            data-selected={picked}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              navRow,
-              "data-[selected=true]:bg-link/20 data-[selected=true]:text-foreground pe-1.5",
-              roomForActions,
-              nested && "ps-8",
-            )}
-            onClick={(event) => {
-              if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
-            }}
-          >
-            <SidebarError conversationId={conversation.id} />
-            <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
-              {title}
-            </span>
-            <RowStatus conversationId={conversation.id} />
-          </button>
-        </ContextMenuTrigger>
-        {targets.length > 1 ? (
-          <ContextMenuContent>
-            <ContextMenuItem
-              onSelect={() => {
-                clearPicked();
-                void archiveAll(targets);
-              }}
-            >
-              <Archive />
-              Archive ({targets.length})
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onSelect={() => askDelete(targets)}>
-              <Trash />
-              Delete ({targets.length})…
-            </ContextMenuItem>
-          </ContextMenuContent>
-        ) : (
-          <ContextMenuContent>
-            <ContextMenuItem onSelect={togglePin}>
-              {pinned ? <Unpin /> : <Pin />}
-              {pinned ? `Unpin ${noun}` : `Pin ${noun}`}
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => actions.onRename(conversation)}>
-              <Pencil />
-              Rename {noun}…
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={archiveIt}>
-              <Archive />
-              Archive {noun}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onSelect={() => askDelete([conversation.id])}>
-              <Trash />
-              Delete {noun}…
-            </ContextMenuItem>
-          </ContextMenuContent>
-        )}
-      </ContextMenu>
-      <RowActionsSlot>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`}
-              className={rowAction}
-              onClick={togglePin}
-            >
-              {pinned ? <Unpin /> : <Pin />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{pinned ? `Unpin ${noun}` : `Pin ${noun}`}</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={`Archive ${title}`}
-              className={rowAction}
-              onClick={archiveIt}
-            >
-              <Archive />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Archive {noun}</TooltipContent>
-        </Tooltip>
-      </RowActionsSlot>
-    </li>
-  );
-});

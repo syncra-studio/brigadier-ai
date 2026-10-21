@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { jumpInThread } from "@/components/conversation/thread-scroll";
 import { openNotificationSettings, request } from "@/ipc/client";
-import type { DiffStat, OvernightRun, TaskId } from "@/ipc/generated";
+import type { DiffStat, OvernightRun, TaskId, TaskState } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";
 import { currentStep, type RunStep, runSteps } from "@/app/conversation/phaseView";
 import { type Board, updateBoard, useBoard } from "@/state/board";
@@ -13,7 +13,7 @@ import { emptyThread, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 /** Run facts translated for the shared card. */
-export type OvernightDetails = {
+type OvernightDetails = {
   /**
    * What waits on the user and was decided for them: the same counts as the lists in the
    * context card right above, so the two never disagree.
@@ -29,11 +29,15 @@ export type OvernightDetails = {
       {
         quota?: { provider?: string; resetsAtMs: number };
         workerTaskIds?: readonly TaskId[];
+        /** How many of its workers are past their work. */
+        workersDone?: number;
       }
     >
   >;
   /** Needed when a relative deadline has been resolved at Start. */
   reportReadyAtMs?: number;
+  /** The report in full, once its message is loaded. */
+  report?: string;
   /** Exactly the report's three outcome lines, from recorded report facts. */
   outcome?: readonly [string, string, string];
   reportMessageId?: string;
@@ -74,14 +78,17 @@ export type OvernightActions = {
 };
 
 /** A continuation replaces only its own lineage, including bare goals without plan IDs. */
-export function currentRuns(runs: Readonly<Record<string, OvernightRun>>): OvernightRun[] {
+function currentRuns(runs: Readonly<Record<string, OvernightRun>>): OvernightRun[] {
   const continued = new Set(Object.values(runs).flatMap((run) => run.predecessor ? [run.predecessor] : []));
   return Object.values(runs)
     .filter((run) => run.state !== "superseded" && !continued.has(run.id))
     .toSorted((a, b) => a.createdAtMs - b.createdAtMs);
 }
 
-export function projectOvernight(run: OvernightRun, board: Board, report?: string): OvernightCardModel {
+/** A worker still at its work, or yet to start. */
+const AT_WORK = new Set<TaskState>(["queued", "starting", "running", "blocked", "paused"]);
+
+function projectOvernight(run: OvernightRun, board: Board, report?: string): OvernightCardModel {
   const waiting = Object.keys(board.waiting).length;
   const decided = board.decisions.length;
   const steps = runSteps(run, board.plans);
@@ -99,6 +106,7 @@ export function projectOvernight(run: OvernightRun, board: Board, report?: strin
         resetsAtMs: quotaTask.quotaWait!.resetsAtMs!,
       } } : {}),
       workerTaskIds: tasks.map((task) => task.id),
+      workersDone: tasks.filter((task) => !AT_WORK.has(task.state)).length,
     }];
   }));
   // The report renderer owns these three paragraphs; never infer success in the frontend.
@@ -106,6 +114,7 @@ export function projectOvernight(run: OvernightRun, board: Board, report?: strin
     ?.map((line) => line.replace(/[*`]/g, "").trim());
   return { run, details: {
     waiting, decided, steps, phaseProgress,
+    ...(report ? { report } : {}),
     ...(lines?.length === 3 ? { outcome: lines as [string, string, string] } : {}),
     ...(run.reportMessageId ? { reportMessageId: run.reportMessageId } : {}),
     ...(run.verifiedCommit && run.verifiedCommit !== run.workspace?.baseCommit ? { verifiedSha: run.verifiedCommit } : {}),

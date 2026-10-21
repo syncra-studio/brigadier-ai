@@ -18,7 +18,14 @@ type Look = {
 };
 type Seen = {
   error?: string;
-  cases: Record<"merged-finding" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "thread-reverted" | "branch" | "merge-only", Look>;
+  cases: Record<"merged-finding" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "thread-reverted" | "branch" | "merge-only" | "waiting" | "reviewed", Look>;
+  measured: {
+    confirmGap: number | null;
+    revertingInset: number | null;
+    counts: string[];
+    reviewBeforeCounts: boolean;
+    focused: { shown: string | null; washed: boolean };
+  };
   row: unknown;
   viewChanges: unknown;
   finding: string | null;
@@ -68,6 +75,15 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
   assert.deepEqual([cases.branch.state, cases.branch.status, cases.branch.buttons], ["branch", "On three-small-improvements · 2 commits ahead", ["Discard", "Merge into main", "Fold the files"]]);
   // A merge with nothing of its own counted: the merge's card.
   assert.deepEqual([cases["merge-only"].title, cases["merge-only"].status, cases["merge-only"].buttons], ["Merged into main", "2 commits from brigadier/due-dates", ["Revert", "View changes"]]);
+  // Waiting for review: Undo All, Keep All, Review Changes. Reviewed: Discard and Merge again.
+  assert.deepEqual([cases.waiting.title, cases.waiting.status, cases.waiting.buttons], ["6 Files", "3 to review", ["Undo All", "Keep All", "Review Changes", "Fold the files"]]);
+  assert.deepEqual(
+    [cases.reviewed.status, cases.reviewed.buttons],
+    ["kept 2, undid 1 · On three-small-improvements · 2 commits ahead", ["Discard", "Merge into main", "Fold the files"]],
+  );
+  // The design's measures: Cancel and Revert 4 apart, "Reverting…" 12 in, counts right-aligned, a
+  // waiting row's Undo and Keep before its counts, shown on the washed row while it has focus.
+  assert.deepEqual(seen.measured, { confirmGap: 4, revertingInset: 12, counts: ["end"], reviewBeforeCounts: true, focused: { shown: "flex", washed: true } });
   // A row opens that file's part of the merge in a tab; View changes all of it; Open finding the Progress tab.
   assert.deepEqual(seen.row, { id: "review:f1f1f1f1", target: { type: "commit", commit: "f1f1f1f1", staged: false, path: "public/index.html" } });
   assert.deepEqual(seen.viewChanges, { id: "review:f1f1f1f1", target: { type: "commit", commit: "f1f1f1f1", staged: false } });

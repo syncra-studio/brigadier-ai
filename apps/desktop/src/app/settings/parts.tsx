@@ -1,54 +1,14 @@
-import { useId, type ComponentProps, type ReactNode } from "react";
-
-
+import { useId, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-
-
-
-import { ErrorLine } from "@/app/shell/dialogs/fields";
-
-
-
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/overlays";
-
-
-
-import { Check, ChevronDown, ChevronLeft } from "@/components/icons";
-
+import { BackLink } from "@/app/settings/BackLink";
 import { ScrollFade } from "@/components/layout";
-
-
-
-import { type Choice, Switch } from "@/components/controls";
-
-
-
-
-
-
+import { Switch } from "@/components/controls";
+import { SettingsRow } from "@/components/shared";
 import type { Settings } from "@/ipc/generated";
-
-
-
 import { cn } from "@/lib/utils";
-
-
-
 import { setSetting } from "@/state/settings";
-
-
-
 import { useApp } from "@/state/store";
-
-
-
 
 /*
  * The parts every Settings page is built from: a page (title, optional description and actions,
@@ -101,16 +61,7 @@ export function SettingsPage({
             scrollable ? "pb-12" : "min-h-0 flex-1",
           )}
         >
-          {back && (
-            <button
-              type="button"
-              onClick={back.onBack}
-              className="text-foreground/65 hover:text-foreground text-label -ms-1 flex w-fit items-center gap-0.5"
-            >
-              <ChevronLeft aria-hidden className="size-icon-sm" />
-              {back.label}
-            </button>
-          )}
+          {back && <BackLink label={back.label} onBack={back.onBack} />}
           <header className="flex shrink-0 items-start gap-4 py-3">
             <div className="flex min-w-0 flex-1 items-center gap-3.5">
               {mark}
@@ -188,58 +139,6 @@ export function SettingsSection({
   );
 }
 
-/**
- * One setting: its label and description on the start, its control on the end. `htmlFor` ties
- * the label to a control with that id; without it, give the control its own label. `error` is
- * what the last change of it failed with. `setting` is the name search and links find it by,
- * for a label that isn't plain text or changes as it is used.
- */
-export function SettingsRow({
-  label,
-  setting,
-  description,
-  htmlFor,
-  error,
-  children,
-  className,
-}: {
-  label: ReactNode;
-  setting?: string;
-  description?: ReactNode;
-  htmlFor?: string;
-  error?: string | null;
-  children?: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      data-slot="settings-row"
-      // Settings search scrolls to the row it found by this.
-      data-setting={setting ?? (typeof label === "string" ? label : undefined)}
-      className={cn("@container flex items-center justify-between gap-6 px-4 py-3", className)}
-    >
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {htmlFor ? (
-          <label htmlFor={htmlFor} className="text-label font-medium break-words">
-            {label}
-          </label>
-        ) : (
-          <div className="text-label font-medium break-words">{label}</div>
-        )}
-        {description && (
-          <div className="text-foreground/65 text-xs break-words">{description}</div>
-        )}
-        <ErrorLine error={error ?? null} />
-      </div>
-      {children && (
-        <div className="flex max-w-full min-w-settings-control shrink-0 items-center justify-end gap-2">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** A setting that is on or off. */
 export function SettingsSwitch({
   label,
@@ -288,101 +187,5 @@ export function SwitchSetting({
         onCheckedChange={(on) => save.run(() => setSetting(setting, on))}
       />
     </SettingsRow>
-  );
-}
-
-/** The look of a pill that opens a menu of choices (a select, the model pickers). */
-export const selectTrigger =
-  "border-divider bg-foreground/3 hover:bg-foreground/6 data-[state=open]:bg-foreground/6 rounded-capsule text-label h-7 max-w-full min-w-0 items-center border px-3 transition-colors disabled:opacity-50";
-
-/**
- * A select's pill on its own, for a menu of other contents (put it in `DropdownMenuTrigger
- * asChild`): an optional icon, its value (grey while it is a `placeholder`), a chevron.
- */
-export function SettingsSelectTrigger({
-  label,
-  icon,
-  placeholder = false,
-  className,
-  children,
-  ...props
-}: {
-  /** The accessible name, usually the row's label. */
-  label: string;
-  icon?: ReactNode;
-  placeholder?: boolean;
-  children: ReactNode;
-} & Omit<ComponentProps<"button">, "children">) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      {...props}
-      className={cn(selectTrigger, "inline-flex shrink-0", icon ? "gap-2" : "gap-1", className)}
-    >
-      {icon}
-      <span className={cn("min-w-0 flex-1 truncate text-start", placeholder && "text-muted-foreground")}>
-        {children}
-      </span>
-      <ChevronDown aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
-    </button>
-  );
-}
-/**
- * One of several choices in a menu, shown as a pill with the chosen one's label (or its
- * `shown` words). `className` sizes the pill; the menu is at least as wide.
- */
-export function SettingsSelect<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-  id,
-  icon,
-  align = "end",
-  className,
-}: {
-  label: string;
-  value: T;
-  options: readonly (Choice<T> & { shown?: ReactNode })[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-  id?: string;
-  icon?: ReactNode;
-  align?: "start" | "end";
-  className?: string;
-}) {
-  const chosen = options.find((option) => option.value === value);
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild disabled={disabled}>
-        <SettingsSelectTrigger id={id} label={label} icon={icon} className={className}>
-          {chosen?.shown ?? chosen?.label}
-        </SettingsSelectTrigger>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align={align}
-        className="max-h-96 max-w-sm min-w-(--radix-dropdown-menu-trigger-width) overflow-y-auto"
-      >
-        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as T)}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              indicator={<Check className="size-icon-md" />}
-              className={option.hint ? "h-auto py-1.5" : undefined}
-            >
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate">{option.label}</span>
-                {option.hint && (
-                  <span className="text-muted-foreground text-xs whitespace-normal">{option.hint}</span>
-                )}
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

@@ -1,15 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 
-import { TooltipIconButton, Button, Segmented, Switch } from "@/components/controls";
+import { TooltipIconButton, Segmented, Switch } from "@/components/controls";
 import { errorText } from "@/app/shell/dialogs/fields";
-
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 
 import { agentState } from "@/app/setup/onboarding/SetupTerminal";
 
 import { footMenuPlacement } from "@/app/shell/sidebar/nav";
+import { ProviderUsage } from "@/app/shell/ProviderUsage";
 
-import { BarChart, ChevronRight, Lightbulb, ProviderGlyph } from "@/components/icons";
+import { BarChart, ChevronRight, Lightbulb } from "@/components/icons";
 
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
@@ -17,16 +16,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 
 import { useSidebar } from "@/components/layout";
 
-import { StateDot, UsageBar } from "@/components/shared";
-
 
 import type { AccountView, ProviderKind, ProviderOverview, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
 
 import { maskEmailsIn } from "@/lib/email";
 
-import { formatCountdown } from "@/lib/format";
-
-import { levelTone, ordered, USAGE_DANGER_FROM, type UsageLevel, usageLevel, used, windowTitle } from "@/lib/quota";
+import { ordered, usageLevel, used } from "@/lib/quota";
 
 import { cn } from "@/lib/utils";
 
@@ -124,22 +119,13 @@ function useUsageRefresh(): void {
   }, [connected]);
 }
 
-/** Used % past which a provider's usage turns amber in the list (the user's design). */
-const USAGE_AMBER_PAST = 75;
-
 /** The window nearest its limit. */
 function tightest(windows: readonly QuotaWindow[]): QuotaWindow | null {
   return windows.reduce<QuotaWindow | null>((top, window) => (top && used(top) >= used(window) ? top : window), null);
 }
 
-/** A share's colour in the list: amber past 75% used, red at a reached limit or from 90%. */
-function shareTone(percent: number, limitReached = false): UsageLevel {
-  if (limitReached || percent >= USAGE_DANGER_FROM) return "danger";
-  return percent > USAGE_AMBER_PAST ? "warning" : "normal";
-}
-
 /** A provider in the list: one that reports usage (its account in use's), or one that needs signing in. */
-type UsageEntry =
+export type UsageEntry =
   | { provider: ProviderKind; needs: "signIn" }
   | { provider: ProviderKind; needs: null; top: QuotaWindow; limitReached: boolean };
 
@@ -273,86 +259,6 @@ function offsetInRow(button: HTMLElement | null): number {
   if (!button || !row) return 0;
   const start = row.getBoundingClientRect().left + Number.parseFloat(getComputedStyle(row).paddingLeft);
   return Math.max(0, button.getBoundingClientRect().left - start);
-}
-
-/** A limit's thin bar and its share, amber past 75% used, in usage's shared colours. */
-function Share({ percent, limitReached = false }: { percent: number; limitReached?: boolean }) {
-  const level = shareTone(percent, limitReached);
-  const look = levelTone(level, percent === 0 ? { text: "text-muted-foreground" } : {});
-  return (
-    <>
-      <UsageBar value={percent} fill={look.fill} className="w-11" />
-      <span
-        data-slot="usage-value"
-        data-level={level}
-        className={cn("w-8.5 shrink-0 text-end text-xs font-medium tabular-nums", look.text)}
-      >
-        {percent}%
-      </span>
-    </>
-  );
-}
-
-/**
- * One provider: its mark and name, then its account in use's tightest limit ("Weekly · 1d 8h",
- * a bar and the share), saying so when its limit is reached; clicking it opens the provider's
- * page. Needing a sign-in, that and Sign in.
- */
-function ProviderUsage({
-  entry,
-  now,
-  account,
-  onOpen,
-  onSignIn,
-}: {
-  entry: UsageEntry;
-  now: number;
-  /** Who its account in use is, masked, when it has several. */
-  account: string | null;
-  onOpen: () => void;
-  onSignIn: () => void;
-}) {
-  const name = PROVIDER_LABELS[entry.provider];
-  const mark = (
-    <ProviderGlyph
-      provider={entry.provider}
-      className="size-icon-md shrink-0"
-    />
-  );
-  const row = "h-control-sm rounded-capsule flex w-full items-center gap-2 px-2 text-sm";
-  if (entry.needs) {
-    return (
-      <div data-slot="usage-row" className={row}>
-        {mark}
-        <span className="truncate">{name}</span>
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <StateDot tone="needs" />
-          <span className="text-warning truncate text-xs">Not signed in</span>
-        </span>
-        <Button type="button" variant="outline" size="xs" onClick={onSignIn} className="shrink-0">
-          Sign in
-        </Button>
-      </div>
-    );
-  }
-  const { top, limitReached } = entry;
-  const resets = top.resetsAtMs === null ? null : formatCountdown(top.resetsAtMs, now);
-  return (
-    <button
-      type="button"
-      data-slot="usage-row"
-      title={account ? `In use: ${account}` : undefined}
-      onClick={onOpen}
-      className={cn(row, "hover:bg-foreground/8 text-start")}
-    >
-      {mark}
-      <span className="truncate">{name}</span>
-      <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-        {[limitReached ? "At limit" : windowTitle(top), resets].filter(Boolean).join(" · ")}
-      </span>
-      <Share percent={used(top)} limitReached={limitReached} />
-    </button>
-  );
 }
 
 // ----- keep awake ----------------------------------------------------------------------

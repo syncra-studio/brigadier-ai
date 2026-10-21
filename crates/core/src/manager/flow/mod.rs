@@ -2128,6 +2128,8 @@ mod terminal_run_tests;
 #[cfg(unix)]
 mod fault_tests;
 #[cfg(unix)]
+mod feedback_tests;
+#[cfg(unix)]
 mod findings_tests;
 #[cfg(unix)]
 mod fresh_base_tests;

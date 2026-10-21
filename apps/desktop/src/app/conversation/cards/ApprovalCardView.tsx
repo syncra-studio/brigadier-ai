@@ -93,7 +93,7 @@ function describe(
               <ToolBox>{request.input}</ToolBox>
             )}
             {request.cwd && (
-              <p className="text-muted-foreground px-1 font-mono text-xs">in {request.cwd}</p>
+              <p className="text-muted-foreground font-mono text-xs">in {request.cwd}</p>
             )}
           </>
         ),
@@ -107,7 +107,7 @@ function describe(
         body: (
           <>
             <ToolBox>{subject.argv.map(quote).join(" ")}</ToolBox>
-            <p className="text-muted-foreground px-1 font-mono text-xs">in {subject.cwd}</p>
+            <p className="text-muted-foreground font-mono text-xs">in {subject.cwd}</p>
           </>
         ),
       };
@@ -128,30 +128,42 @@ function describe(
         icon: <Sparkle />,
         title: subject.action,
         subtitle: by,
-        body: <ToolBox prose>{subject.details}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.details}</p>,
       };
     case "outline":
       return {
         icon: <Sparkle />,
         title: "Start this plan?",
         subtitle: byline(by, subject.title),
-        body: <ToolBox prose>{subject.outline}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.outline}</p>,
       };
     case "peerMessage":
       return {
         icon: <Sparkle />,
         title: `Send a message to ${subject.title} in ${subject.project}?`,
         subtitle: by,
-        body: <ToolBox prose>{subject.text}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.text}</p>,
       };
     case "browser":
       return {
         icon: <Globe />,
         title: subject.question,
         subtitle: by,
-        body: <ToolBox prose>{subject.details}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.details}</p>,
       };
   }
+}
+
+/**
+ * What a decided card asked, whatever its kind: every kind's body goes in here, so each keeps the
+ * design's 16 in from the card's edges and 8 between its parts (app.pen #352 ApprovalCard).
+ */
+function ApprovalCardBody({ children }: { children: ReactNode }) {
+  return (
+    <div data-slot="approval-card-body" className="flex flex-col gap-2 px-4">
+      {children}
+    </div>
+  );
 }
 
 /** In the thread: a waiting row while the card is in the composer, then who decided. */
@@ -174,12 +186,13 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
   // The rail's approval card as it was answered: what it asked, then who decided.
   return (
     <ActionCard data-card="approval" aria-label="Approval" className={cn(paper, "rounded-thread")}>
-      <div className="flex min-w-0 items-start gap-2 px-4 pt-3.5 pb-2.5">
+      <div data-slot="approval-card-header" className="flex min-w-0 items-start gap-2 px-4 pt-3.5 pb-2.5">
         <span className="text-foreground/65 flex h-5 shrink-0 items-center [&_svg]:size-4.5">{shown.icon}</span>
         <ActionCardTitle detail={shown.subtitle}>{shown.title}</ActionCardTitle>
       </div>
-      <div className="flex flex-col gap-2 px-3">{shown.body}</div>
-      <div className="fade-in animate-in text-muted-foreground flex items-center justify-end gap-2 px-4 pt-2 pb-4 text-xs duration-300">
+      <ApprovalCardBody>{shown.body}</ApprovalCardBody>
+      {/* As tall as its words: 10 over them, 14 under. */}
+      <div data-slot="approval-card-footer" className="fade-in animate-in text-muted-foreground flex items-center justify-end gap-2 px-4 pt-2.5 pb-3.5 text-xs duration-300">
         <Resolution state={approval.state} />
       </div>
     </ActionCard>

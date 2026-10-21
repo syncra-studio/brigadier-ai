@@ -247,6 +247,8 @@ function look(id: string) {
     shell: card?.querySelector("[data-slot=shell-card]") ? [words(card.querySelector("[data-slot=shell-command]")), card.querySelector("[data-slot=shell-output] pre")?.textContent ?? null] : null,
     captions: [...(card?.querySelectorAll("[data-slot=proof] figcaption") ?? [])].map((each) => [...each.children].map((part) => words(part)).join(" ")),
     thumb: thumb ? Math.round(thumb.height) : null,
+    // The split Open pill's edge, as the design's (1 px of --border).
+    edge: card?.querySelector("span[data-slot=preview-open]") ? Number.parseFloat(getComputedStyle(card.querySelector("span[data-slot=preview-open]")!).borderTopWidth) : null,
     // Cropped to the top of the page: the image fills its frame, its top at the frame's.
     fit: card?.querySelector("[data-slot=proof] img") ? getComputedStyle(card.querySelector("[data-slot=proof] img")!).objectPosition : null,
   };

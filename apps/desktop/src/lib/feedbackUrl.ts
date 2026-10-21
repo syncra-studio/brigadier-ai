@@ -1,7 +1,10 @@
 /**
- * The link Send feedback opens: a new issue in Brigadier's repository, filled in from the
- * repository's own issue forms (state/feedback.ts opens it).
+ * What Send feedback files or opens in Brigadier's repository, in the shape of its own issue
+ * forms (state/feedback.ts sends it): each report's issue body, a repeat's comment, and the
+ * one prefilled form used when no writer could run.
  */
+
+import type { FeedbackReport } from "@/ipc/generated";
 
 export type FeedbackKind = "bug" | "idea";
 
@@ -66,4 +69,89 @@ function withBody(kind: FeedbackKind, body: string, details: FeedbackDetails): s
     params.set("problem", body);
   }
   return `${FEEDBACK_REPO}/issues/new?${params.toString()}`;
+}
+
+/** The blank new-issue page, where the user picks a form themselves. */
+export const NEW_ISSUE_CHOOSER = `${FEEDBACK_REPO}/issues/new/choose`;
+
+/** What a report's issue says about itself, first: where it came from, and the duplicate search. */
+export function filedFrom(searched: boolean): string {
+  return searched
+    ? "_Filed from Brigadier’s Send feedback, written up from the reporter’s note. Brigadier searched open and closed issues for a duplicate first._"
+    : "_Filed from Brigadier’s Send feedback, written up from the reporter’s note. Brigadier couldn’t search the issues for a duplicate._";
+}
+
+/** The form's AI assistance answer: Brigadier wrote it up. */
+const AI_NOTE = "Written up by Brigadier from the reporter’s own words.";
+
+/** A report's issue title, with its form's prefix. */
+export function reportTitle(report: FeedbackReport): string {
+  return `${report.kind === "bug" ? "[Bug]" : "[Proposal]"}: ${report.title}`;
+}
+
+/** The environment field: the system and the agent CLIs found. */
+function environmentOf(details: FeedbackDetails): string {
+  return [details.system, ...details.agents].filter(Boolean).join(", ");
+}
+
+/** A report's fields as its form names them (the form's ids, and the headings GitHub shows). */
+function reportFields(report: FeedbackReport, details: FeedbackDetails): { id: string; label: string; value: string }[] {
+  if (report.kind === "bug") {
+    return [
+      { id: "version", label: "Version or commit", value: details.version ?? "" },
+      { id: "environment", label: "Environment", value: environmentOf(details) },
+      { id: "area", label: "Area", value: report.area },
+      { id: "steps", label: "Steps to reproduce", value: report.steps },
+      { id: "expected", label: "Expected", value: report.expected },
+      { id: "actual", label: "What happened", value: report.actual },
+      { id: "ai", label: "AI assistance", value: AI_NOTE },
+    ];
+  }
+  return [
+    { id: "problem", label: "The problem", value: report.problem },
+    { id: "today", label: "What you do today", value: report.today },
+    { id: "wanted", label: "What should happen instead", value: report.wanted },
+  ];
+}
+
+/**
+ * A report's issue body, as its form would render it: the note on where it came from (and the
+ * issues it's close to but doesn't repeat), then each field under its heading ("_No response_"
+ * when empty, as GitHub writes it). The forms' "Before you file" boxes are left out: the
+ * reporter didn't tick them.
+ */
+export function reportBody(report: FeedbackReport, details: FeedbackDetails, searched: boolean): string {
+  const sections = reportFields(report, details).map(
+    ({ label, value }) => `### ${label}\n\n${value.trim() || "_No response_"}`,
+  );
+  const related = report.related.length ? [`Maybe related: ${report.related.map((number) => `#${number}`).join(", ")}`] : [];
+  return [filedFrom(searched), ...related, ...sections].join("\n\n");
+}
+
+/** The comment a repeat adds to the issue it repeats, with the versions it was seen on. */
+export function repeatComment(report: FeedbackReport, details: FeedbackDetails): string {
+  const note = report.duplicate?.comment.trim() || "Seen again.";
+  const seenOn = detailsLine(details);
+  return [
+    "_Reported again from Brigadier’s Send feedback._",
+    note,
+    ...(seenOn ? [`Seen on: ${seenOn}`] : []),
+  ].join("\n\n");
+}
+
+/** A report as the thread's card shows it opened: its fields in a line each, as they'll be posted. */
+export function reportLines(report: FeedbackReport): string[] {
+  const fields =
+    report.kind === "bug"
+      ? [
+          ["What happened", report.actual],
+          ["Expected", report.expected],
+          ["Steps", report.steps],
+        ]
+      : [
+          ["The problem", report.problem],
+          ["Today", report.today],
+          ["Wanted", report.wanted],
+        ];
+  return fields.flatMap(([label, value]) => (value?.trim() ? [`${label}: ${value.trim()}`] : []));
 }

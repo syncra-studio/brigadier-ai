@@ -10,6 +10,7 @@ import { trackPageHidden } from "@/lib/pageHidden";
 import { showStartupError, watchStartup } from "@/lib/splash";
 import { markStartup } from "@/lib/startup";
 import { startBridge } from "@/state/bridge";
+import { lookUpSystem } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 markStartup("script");
@@ -36,7 +37,8 @@ async function start(): Promise<void> {
 async function startApp(): Promise<void> {
   trackFocusInput();
   trackPageHidden();
-  const info = await appInfo();
+  // The system for Send feedback, alongside: it never changes, and the dialog shows it at once.
+  const [info] = await Promise.all([appInfo(), lookUpSystem()]);
   document.documentElement.dataset.platform = info.platform;
   if (info.platform === "macos") {
     void trackFullscreen().catch((error: unknown) => {

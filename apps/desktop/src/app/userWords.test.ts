@@ -22,6 +22,7 @@ const FILES = [
   "app/conversation/ActionCards.tsx",
   "app/conversation/SessionOffer.tsx",
   "app/inspector/providers/ProvidersTab.tsx",
+  "app/inspector/providers/StartSessionForm.tsx",
 ];
 
 /** The JSX text and the sentence-like strings of `source`, its comments left out. */

@@ -7,15 +7,6 @@ import { cn } from "@/lib/utils";
 /** A commit id as shown on cards. */
 export const short = (commit: string) => commit.slice(0, 8);
 
-export function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-1">
-      <h3 className="text-muted-foreground text-xs font-medium">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
 export function DiffStatView({ stat }: { stat: DiffStat }) {
   return (
     <div className="flex flex-col gap-0.5">

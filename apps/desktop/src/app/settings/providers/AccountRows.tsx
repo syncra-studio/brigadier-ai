@@ -1,12 +1,10 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ErrorLine } from "@/app/shell/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/setup/onboarding/SetupTerminal";
 import { ROW_LINE, UsageMeter } from "@/app/settings/providers/parts";
-import { SettingsRow } from "@/app/settings/parts";
-import { Badge, Button, Input } from "@/components/controls";
+import { Badge, Button, Input, ErrorLine } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
-import { SettingsCard, UsageBar } from "@/components/shared";
+import { SettingsCard, UsageBar, SettingsRow } from "@/components/shared";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";

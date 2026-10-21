@@ -1,16 +1,23 @@
 /**
  * The thread's feedback offers in a production ConversationView: one under the finished first
  * request, one under the second, which runs unless ?done=1 (or the user stopped it, ?stopped=1).
- * ?drive=1 then reads the cards,
- * opens Edit first, sends one, dismisses the other and writes what it saw to
- * #feedback-offer-result (FeedbackOfferRender.test.ts reads it).
+ * Its daemon is faked: the writer can't write the first offer up (it shows as its own one
+ * report) and makes the second the design's three (a bug, a repeat of #417, an idea); the filer
+ * files them as @stephen-golban. ?drive=1 then reads the cards while they're written and after,
+ * opens a report, opens Edit, sends the second (failing once, then Try again), dismisses the
+ * first and writes what it saw to #feedback-offer-result (FeedbackOfferRender.test.ts reads
+ * it). With ?partial=1 too it sends the second with its last report failing, then files
+ * that one on Try again. With ?signedout=1 instead it sends the second signed out: the card
+ * signs in to GitHub under its reports (a one-time code, Open GitHub, waiting), then files.
+ * ?state=drafted|open|working|signin|signin-waiting|signin-nogh|done|failed shows the second
+ * card in the design's state, for screenshots.
  */
 import { createRoot } from "react-dom/client";
 
 import { FeedbackDialog } from "@/app/shell/feedback/FeedbackDialog";
-import type { OrchestratorStep } from "@/ipc/generated";
+import type { FeedbackFiling, FeedbackReport, OrchestratorStep } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
-import { closeFeedback, useFeedbackUi } from "@/state/feedback";
+import { closeFeedback, COULDNT_REACH, lookUpSystem, useFeedbackOffers, useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
@@ -19,42 +26,136 @@ await import("@/fixtures/flow");
 
 // The flow fixture's daemon answers requests; the app's own commands are answered here.
 const opened: string[] = [];
+const wrote: string[] = [];
+/** Every request's method, in order. */
+const askedMethods: string[] = [];
+/** How many reports each filing sent. */
+const filed: number[] = [];
+const REPO = "https://github.com/syncra-studio/brigadier-ai/issues";
+const report = (kind: "bug" | "idea", title: string, fields: Partial<FeedbackReport>): FeedbackReport => ({
+  kind,
+  title,
+  area: "",
+  steps: "",
+  expected: "",
+  actual: "",
+  problem: "",
+  today: "",
+  wanted: "",
+  duplicate: null,
+  related: [],
+  ...fields,
+});
+const reports = [
+  report("bug", "Usage popover doesn't refresh when a session ends", {
+    area: "Settings, accounts, usage or updates",
+    actual: "the usage popover keeps showing the old numbers after a session ends.",
+    expected: "the 5-hour bar moves as soon as the session finishes.",
+    steps: "run a session to the end, then open the usage popover from the sidebar.",
+  }),
+  report("bug", "Stop doesn't stop a running worker", {
+    duplicate: {
+      number: 417,
+      title: "Stop leaves a worker running",
+      url: `${REPO}/417`,
+      open: true,
+      comment: "Same here: pressing Stop on a worker doesn't stop it. It keeps writing files until it finishes on its own.",
+    },
+  }),
+  report("idea", "Pin a chat to the top of the sidebar", {
+    problem: "keep the chat I use every day at hand.",
+    today: "it moves down the list as other chats get newer.",
+  }),
+];
+/**
+ * The faked daemon: writes held until released, every filing failing (or only the last), `gh`
+ * signed in, and the GitHub sign-in's answer once given.
+ */
+const daemon = {
+  hold: null as Promise<void> | null,
+  failing: false,
+  failingLast: false,
+  signedIn: !params.has("signedout"),
+  approve: null as ((yes: boolean) => void) | null,
+};
+let release = () => {};
+const state = params.get("state");
+const DEVICE = "https://github.com/login/device";
+if (params.has("drive") || state === "working") daemon.hold = new Promise((resolve) => (release = resolve));
 const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown, options?: unknown) => Promise<unknown> } })["__TAURI_INTERNALS__"];
 const invoke = internals.invoke.bind(internals);
-internals.invoke = (command, args, options) => {
-  if (command === "system_name") return Promise.resolve("macOS 27.0 Tahoe (aarch64)");
+internals.invoke = async (command, args, options) => {
+  if (command === "system_name") return "macOS 27.0 Tahoe (aarch64)";
   if (command === "open_url") {
     opened.push((args as { url: string }).url);
-    return Promise.resolve(null);
+    return null;
+  }
+  const request = (args as { request?: { method: string; text?: string; items?: FeedbackFiling[] } }).request;
+  if (command === "ipc_request" && request) askedMethods.push(request.method);
+  if (command === "ipc_request" && request?.method === "feedbackAccount") {
+    return { method: request.method, signedIn: daemon.signedIn, login: daemon.signedIn ? "stephen-golban" : null };
+  }
+  if (command === "ipc_request" && request?.method === "startGitHubSignIn") {
+    return { method: request.method, signIn: daemon.signedIn ? { state: "signedIn" } : { state: "code", code: "WDJB-MJHT", url: DEVICE } };
+  }
+  if (command === "ipc_request" && request?.method === "waitGitHubSignIn") {
+    const yes = await new Promise<boolean>((resolve) => (daemon.approve = resolve));
+    if (!yes) throw { code: "invalid", message: "Signing in to GitHub didn’t finish. Try again." };
+    daemon.signedIn = true;
+    return { method: request.method };
+  }
+  if (command === "ipc_request" && request?.method === "writeUpFeedback") {
+    wrote.push(request.text ?? "");
+    await daemon.hold;
+    if (request.text?.startsWith("Typo")) throw { code: "invalid", message: "no model can write the report now" };
+    return { method: request.method, writeUp: { reports, searched: true } };
+  }
+  if (command === "ipc_request" && request?.method === "fileFeedback") {
+    filed.push((request.items ?? []).length);
+    return {
+      method: request.method,
+      signedIn: daemon.signedIn,
+      results: !daemon.signedIn ? [] : (request.items ?? []).map((item, index) =>
+        daemon.failing || (daemon.failingLast && index === (request.items ?? []).length - 1)
+          ? { outcome: "failed", reason: "HTTP 502: Bad gateway" }
+          : item.commentOn === null
+            ? { outcome: "filed", number: 482 + index, url: `${REPO}/${482 + index}` }
+            : { outcome: "commented", number: item.commentOn, url: `${REPO}/${item.commentOn}#issuecomment-1` },
+      ),
+    };
   }
   return invoke(command, args, options);
 };
+// As the app does at startup.
+await lookUpSystem();
 // Send feedback, which the app mounts beside every view.
 const dialogRoot = document.createElement("div");
 document.body.append(dialogRoot);
 createRoot(dialogRoot).render(<FeedbackDialog />);
 const calls = (window as unknown as { flow: { calls: { method: string }[] } }).flow.calls;
 
-useApp.setState((state) => ({
-  info: { ...state.info, version: "0.1.0" } as typeof state.info,
+useApp.setState((app) => ({
+  info: { ...app.info, version: "0.1.0" } as typeof app.info,
   providers: {
-    ...state.providers,
+    ...app.providers,
     view: {
       providers: [{ provider: "claude", status: { provider: "claude", path: null, version: "2.1.4", loggedIn: true, authMethod: null, plan: null }, models: null, quota: null, usage: null, error: null, checkedAtMs: null }],
       sessions: [],
       fixtures: [],
-    } as unknown as NonNullable<typeof state.providers.view>,
+    } as unknown as NonNullable<typeof app.providers.view>,
   },
 }));
-const offer = (requestId: string, position: number, id: string, title: string): OrchestratorStep => ({
+const offer = (requestId: string, position: number, id: string, title: string, body: string): OrchestratorStep => ({
   requestId,
   atMs: Date.now(),
   position,
-  kind: { type: "feedbackOffered", id, kind: "bug", title, body: "After I press Stop mid-reply, the tab keeps its spinner." },
+  kind: { type: "feedbackOffered", id, kind: "bug", title, body },
 });
+const SECOND =
+  "The usage popover keeps the old numbers after a session ends. Stop on a worker doesn't stop it. They'd like to pin a chat to the top.";
 useBoard.setState(({ board }) =>
   board
-    ? { board: { ...board, orchestratorSteps: [...board.orchestratorSteps, offer("r1", 7, "first", "Typo fixes take long"), offer("r2", 30, "second", "Stop leaves the tab spinning")] } }
+    ? { board: { ...board, orchestratorSteps: [...board.orchestratorSteps, offer("r1", 7, "first", "Typo fixes take long", "A one-word fix took four minutes."), offer("r2", 30, "second", "Usage, Stop and pinning", SECOND)] } }
     : {},
 );
 if (params.has("stopped")) {
@@ -66,43 +167,114 @@ if (params.has("stopped")) {
 
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
 const cards = () => [...document.querySelectorAll<HTMLElement>('[data-kind="feedbackOffered"]')];
-const card = (title: string) => cards().find((each) => text(each).includes(title));
 const button = (root: ParentNode | undefined, name: string) =>
   [...(root?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((each) => text(each) === name);
+const rows = (root: ParentNode | undefined, list: string) => [...(root?.querySelectorAll(`[aria-label="${list}"] li`) ?? [])].map(text);
+const head = (root: HTMLElement | undefined) => [...(root?.querySelectorAll("p") ?? [])].slice(0, 2).map(text);
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A state of the design's, on the second card, once both are written.
+if (state && state !== "working") {
+  void (async () => {
+    for (let tries = 0; tries < 100 && !useFeedbackOffers.getState()["second"]?.written; tries++) await wait(50);
+    if (state === "open") {
+      await wait(200);
+      cards()[1]?.querySelector<HTMLElement>('[aria-label="Reports"] li button')?.click();
+    }
+    const written = useFeedbackOffers.getState()["second"]?.written ?? null;
+    const results = [
+      { kind: "bug" as const, title: reports[0]!.title, outcome: "filed" as const, number: 482, url: `${REPO}/482` },
+      { kind: "bug" as const, title: reports[1]!.title, outcome: "added" as const, number: 417, url: `${REPO}/417` },
+      { kind: "idea" as const, title: reports[2]!.title, outcome: "filed" as const, number: 483, url: `${REPO}/483` },
+    ];
+    const code = { step: "code" as const, code: "WDJB-MJHT", url: DEVICE };
+    if (state === "signin") useFeedbackOffers.setState({ second: { written, sending: { phase: "signIn", signIn: { ...code, opened: false }, results: null } } });
+    if (state === "signin-waiting") useFeedbackOffers.setState({ second: { written, sending: { phase: "signIn", signIn: { ...code, opened: true }, results: null } } });
+    if (state === "signin-nogh") useFeedbackOffers.setState({ second: { written, sending: { phase: "signIn", signIn: { step: "noGh" }, results: null } } });
+    if (state === "done") useFeedbackOffers.setState({ second: { written, sending: { phase: "done", results } } });
+    if (state === "failed") useFeedbackOffers.setState({ second: { written, sending: { phase: "failed", error: COULDNT_REACH, results: null } } });
+  })();
+}
 
 async function drive() {
   const seen: Record<string, unknown> = {};
   for (let tries = 0; tries < 100 && cards().length === 0; tries++) await wait(50);
   await wait(300);
-  // Each card's draft title, in the thread's order.
-  seen.cards = cards().map((each) => text(each.querySelector("[class*=rounded-settings] p")));
+  // While they're written: the card says so, with no buttons.
+  seen.writing = cards().map((each) => [...head(each), text(each.querySelector('[data-slot="progress-line"]')), each.querySelectorAll("button").length]);
+  release();
+  daemon.hold = null;
+  await wait(300);
+  // Each card's reports, in the thread's order.
+  seen.cards = cards().map((each) => rows(each, "Reports"));
+  const second = () => cards()[1];
+  const actions = () => [...(second()?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("li")).map(text);
+  if (params.has("partial")) {
+    daemon.failingLast = true;
+    button(second(), "Send")?.click();
+    await wait(400);
+    seen.partial = [...head(second()), rows(second(), "Sent"), actions()];
+    daemon.failingLast = false;
+    button(second(), "Try again")?.click();
+    await wait(400);
+    seen.sent = [...head(second()), rows(second(), "Sent"), actions()];
+    seen.filed = filed;
+    seen.answers = calls.filter((call) => call.method === "answerFeedbackOffer").length;
+    return seen;
+  }
+  if (params.has("signedout")) {
+    const signInStep = () => {
+      const step = second()?.querySelector('[aria-label="Sign in to GitHub"]');
+      return step ? [...step.children].map(text) : null;
+    };
+    seen.head = head(second());
+    button(second(), "Send")?.click();
+    await wait(300);
+    const cardActions = actions().filter((name) => !["Copy code", "Open GitHub"].includes(name));
+    seen.signIn = [signInStep(), cardActions, button(second(), "Send")?.disabled, rows(second(), "Reports").length];
+    button(second(), "Open GitHub")?.click();
+    await wait(100);
+    seen.waiting = [signInStep(), [...opened]];
+    daemon.approve?.(true);
+    await wait(400);
+    seen.sent = [...head(second()), rows(second(), "Sent")];
+    seen.asked = askedMethods.filter((method) => /GitHubSignIn|fileFeedback/.test(method));
+    return seen;
+  }
   if (!params.has("done")) return seen;
-  const sending = card("Stop leaves the tab spinning");
-  seen.details = text([...(sending?.querySelectorAll("p") ?? [])].find((p) => text(p).startsWith("Adds")));
-  seen.buttons = [...(sending?.querySelectorAll("button") ?? [])].map((each) => text(each));
-  button(sending, "Edit first")?.click();
+  seen.head = head(second());
+  seen.buttons = [...(second()?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("li")).map(text);
+  second()?.querySelector<HTMLElement>('[aria-label="Reports"] li button')?.click();
+  await wait(300);
+  seen.report = [...(second()?.querySelectorAll('[aria-label="Reports"] li:first-child p') ?? [])].map(text);
+  second()?.querySelectorAll<HTMLElement>('[aria-label="Reports"] li button')[1]?.click();
+  await wait(300);
+  seen.repeat = [...(second()?.querySelectorAll('[aria-label="Reports"] li:nth-child(2) p') ?? [])].map(text);
+  button(second(), "Edit")?.click();
   await wait(300);
   const dialog = document.querySelector('[data-slot="feedback"]');
-  seen.edit = {
-    text: dialog?.querySelector("textarea")?.value,
-    kind: text(dialog?.querySelector('[role="radio"][aria-checked="true"]')),
-  };
+  seen.edit = dialog?.querySelector("textarea")?.value;
   closeFeedback();
   await wait(300);
-  button(card("Stop leaves the tab spinning"), "Open on GitHub")?.click();
-  await wait(300);
-  seen.opened = opened.map((url) => Object.fromEntries(new URL(url).searchParams));
-  // Sent, the second card is its one line.
-  seen.sent = text(cards()[1]?.querySelector('[role="status"]'));
-  button(card("Typo fixes take long"), "Dismiss")?.click();
+  daemon.failing = true;
+  button(second(), "Send")?.click();
+  await wait(400);
+  seen.failed = [text(second()?.querySelector('[role="alert"]')), [...(second()?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("li")).map(text)];
+  daemon.failing = false;
+  button(second(), "Try again")?.click();
+  await wait(400);
+  seen.wrote = wrote;
+  seen.opened = opened;
+  // Sent, the second card says so and lists what was filed.
+  seen.sent = head(second());
+  seen.rows = rows(second(), "Sent");
+  button(cards()[0], "Dismiss")?.click();
   await wait(300);
   seen.left = cards().length;
   seen.answers = calls.filter((call) => call.method === "answerFeedbackOffer");
   seen.dialogOpen = useFeedbackUi.getState().open;
   return seen;
 }
-
 if (params.has("drive")) {
   void drive().then((seen) => {
     const result = document.createElement("pre");

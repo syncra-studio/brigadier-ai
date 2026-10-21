@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import {
-  phaseMark,
   phaseOutcome,
   phaseViewOf,
   phaseWord,
@@ -21,10 +20,9 @@ const plans = night.plans as unknown as Record<string, Plan>;
 const plan = plans[run.planId ?? ""] as Plan;
 const RUN_REQUEST = "run-09cc7d53-g1";
 
-/** A step's state as the report heads it: "✓ done", "not reached". */
+/** A step's state as the report heads it: "done", "not reached". */
 function said(step: RunStep, over: boolean): string {
-  const mark = phaseMark(step.mark, over);
-  return mark ? `${mark} ${phaseWord(step.mark, over)}` : phaseWord(step.mark, over);
+  return phaseWord(step.mark, over);
 }
 
 /** `step` as it was before the thread settled it. */
@@ -51,7 +49,7 @@ test("the night's phases read as its report heads them: done, partial, not reach
   const steps = runSteps(run, plans);
   assert.deepEqual(
     steps.map((step) => `Phase ${step.number} · ${step.name}: ${said(step, true)}`),
-    ["Phase 1 · Measure: ✓ done", "Phase 2 · Fix: ◐ partial", "Phase 3 · Re-measure: not reached"],
+    ["Phase 1 · Measure: done", "Phase 2 · Fix: partial", "Phase 3 · Re-measure: not reached"],
   );
   // Done reads its settlement's first sentence; partial what is left of it, said to the user.
   assert.deepEqual(
@@ -85,21 +83,21 @@ test("a blocked phase says what only the user can do", () => {
       : step,
   );
   const step = runSteps(blocked.runs[run.id]!, blocked.plans)[2]!;
-  assert.equal(said(step, true), "✕ blocked");
+  assert.equal(said(step, true), "blocked");
   assert.equal(phaseOutcome(run, step, true), "The re-run needs you to sign in to Codex.");
 });
 
 test("a phase the run's restrictions left out is skipped, before and after the run", () => {
   const skipped = withSteps("running", (step, index) => (index === 2 ? { ...step, stage: "skipped" } : step));
   const step = runSteps(skipped.runs[run.id]!, skipped.plans)[2]!;
-  assert.equal(said(step, false), "– skipped");
-  assert.equal(said(step, true), "– skipped");
+  assert.equal(said(step, false), "skipped");
+  assert.equal(said(step, true), "skipped");
   assert.equal(phaseOutcome(run, step, true), "Skipped, as the run's restrictions said.");
   // Before the run has a plan, its restrictions say which phases it skips.
   const proposed: OvernightRun = { ...run, planId: null, state: "proposed", directives: { ...run.directives, skip: [2] } };
   assert.deepEqual(
     runSteps(proposed, {}).map((one) => said(one, false)),
-    ["not started", "– skipped", "not started"],
+    ["not started", "skipped", "not started"],
   );
 });
 
@@ -108,7 +106,7 @@ test("a phase not begun is not reached once the run is over; one begun and not s
     index === 1 ? unsettled(step) : step,
   );
   const steps = runSteps(cut.runs[run.id]!, cut.plans);
-  assert.equal(said(steps[1]!, true), "◐ unfinished");
+  assert.equal(said(steps[1]!, true), "unfinished");
   assert.equal(phaseOutcome(run, steps[1]!, true), "The run ended during this phase (stopped by you).");
   assert.equal(said(steps[2]!, true), "not reached");
   // While the run works they are at work and not started, with no outcome yet.

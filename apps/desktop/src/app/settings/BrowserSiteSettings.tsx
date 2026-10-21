@@ -1,17 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
-import { SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
-import { Camera, Mic } from "@/components/icons";
+import { ErrorLine } from "@/components/controls";
+import { errorText } from "@/app/shell/dialogs/fields";
+import { SettingsPage, SettingsSection } from "@/app/settings/parts";
+import { SiteRow } from "@/app/settings/SiteRow";
 import { EmptyState, SettingsCard } from "@/components/shared";
 import type { BrowserSite, SitePermission } from "@/ipc/generated";
 import { browserSites, setSite } from "@/state/browserData";
-
-const CHOICES = [
-  { value: "ask", label: "Ask" },
-  { value: "allow", label: "Allow" },
-  { value: "block", label: "Block" },
-] as const satisfies readonly { value: SitePermission; label: string }[];
 
 /**
  * Settings › Browser › Site settings: every site that asked the built-in browser for the camera
@@ -53,29 +48,7 @@ export function BrowserSiteSettings({ onBack }: { onBack: () => void }) {
           <SettingsCard>
             <ul className="divide-divider divide-y">
               {(sites ?? []).map((site) => (
-                <li key={site.origin} className="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-2 py-2">
-                  <span className="text-label min-w-0 flex-1 truncate" title={site.origin}>
-                    {site.origin.replace(/^https:\/\//, "")}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <Camera aria-hidden className="text-foreground/65 size-icon-sm" />
-                    <SettingsSelect
-                      label={`Camera for ${site.origin}`}
-                      value={site.camera}
-                      options={CHOICES}
-                      onChange={(choice) => choose(site.origin, "camera", choice)}
-                    />
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <Mic aria-hidden className="text-foreground/65 size-icon-sm" />
-                    <SettingsSelect
-                      label={`Microphone for ${site.origin}`}
-                      value={site.microphone}
-                      options={CHOICES}
-                      onChange={(choice) => choose(site.origin, "microphone", choice)}
-                    />
-                  </span>
-                </li>
+                <SiteRow key={site.origin} site={site} onChoose={(device, choice) => choose(site.origin, device, choice)} />
               ))}
             </ul>
           </SettingsCard>

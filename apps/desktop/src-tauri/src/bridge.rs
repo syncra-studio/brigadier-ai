@@ -41,6 +41,13 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Freeing up projects deletes each one's conversations in turn and waits for its Brain's scan
 /// under way (two minutes at most per project).
 const FREE_UP_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Send feedback's write-up (two writer turns and GitHub reads), its filing (one `gh` call or
+/// two per report) and its GitHub sign-in (up to 15 minutes) take minutes at worst; a timeout
+/// would only lose the answer, as the daemon carries on.
+const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Starting a GitHub sign-in asks `gh` whether it is signed in already (two minutes at most),
+/// then waits for its one-time code (half a minute at most).
+const SIGN_IN_START_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 /// How long to wait for a freshly launched daemon to accept connections.
 const LAUNCH_WAIT: Duration = Duration::from_secs(10);
 const CONNECT_POLL: Duration = Duration::from_millis(20);
@@ -152,14 +159,7 @@ impl Bridge {
         if let Request::SetMetricsStreaming { enabled } = &request {
             self.inner.metrics_wanted.store(*enabled, Ordering::Release);
         }
-        let timeout = match &request {
-            Request::CloneProject { .. } => CLONE_TIMEOUT,
-            Request::FreeUpProjects { .. } => FREE_UP_TIMEOUT,
-            Request::Archive { .. } | Request::Restore { .. } | Request::Delete { .. } => {
-                LIFECYCLE_TIMEOUT
-            }
-            _ => REQUEST_TIMEOUT,
-        };
+        let timeout = timeout_for(&request);
         let (reply, response) = oneshot::channel();
         let outgoing = Outgoing {
             request,
@@ -854,6 +854,22 @@ fn unavailable(message: &str) -> IpcError {
     }
 }
 
+/// How long the app waits for the daemon to answer `request`.
+fn timeout_for(request: &Request) -> Duration {
+    match request {
+        Request::CloneProject { .. } => CLONE_TIMEOUT,
+        Request::FreeUpProjects { .. } => FREE_UP_TIMEOUT,
+        Request::Archive { .. } | Request::Restore { .. } | Request::Delete { .. } => {
+            LIFECYCLE_TIMEOUT
+        }
+        Request::WriteUpFeedback { .. }
+        | Request::FileFeedback { .. }
+        | Request::WaitGitHubSignIn => FEEDBACK_TIMEOUT,
+        Request::StartGitHubSignIn => SIGN_IN_START_TIMEOUT,
+        _ => REQUEST_TIMEOUT,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use brigadier_core::{CardId, TaskId};
@@ -882,6 +898,13 @@ mod tests {
                 created_at_ms: 0,
             },
         }
+    }
+
+    #[test]
+    fn starting_a_github_sign_in_waits_as_long_as_the_daemon_may_take() {
+        // The daemon's `gh auth status` (two minutes at most), then its one-time code (30 s).
+        let daemon = Duration::from_secs(120 + 30);
+        assert!(timeout_for(&Request::StartGitHubSignIn) > daemon);
     }
 
     #[test]

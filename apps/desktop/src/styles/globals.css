@@ -190,7 +190,7 @@
   );
 }
 
-/* Where Back, Forward and the sidebar toggle end in the titlebar (AppSidebar's TitlebarNav). */
+/* Where Back, Forward and the sidebar toggle end in the titlebar (TitlebarNav). */
 [data-slot="sidebar-wrapper"] {
   --titlebar-nav-end: var(--spacing-titlebar-nav-end);
 }
@@ -436,12 +436,6 @@
 /* A wait on the user's approval: the same sweep over fainter words. */
 @utility shimmer-quiet {
   --shimmer-base: var(--live-text-quiet);
-}
-
-/* The Job card's step at work: the sweep over bright words, brighter than the steps around it. */
-@utility shimmer-step {
-  --shimmer-base: var(--live-step);
-  --shimmer-glow: var(--foreground);
 }
 
 /* The dots of "still working" in a wave, each a little after the one before. */

@@ -1,4 +1,4 @@
-import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useAuiState, useExternalStoreRuntime, MessageAttachments, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type RailEntry, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext } from "@/components/conversation";
+import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useExternalStoreRuntime, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type RailEntry, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext } from "@/components/conversation";
 import {
   type FC,
   useCallback,
@@ -22,11 +22,11 @@ import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { PastedTextPane } from "@/app/side-panel/PastedTextPane";
 import { WorkerDiffs } from "@/app/side-panel/WorkerSummary";
 import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
-import { interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
+import { interruptedByQuit } from "@/app/conversation/turnError";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { foldedEntries } from "@/app/conversation/railHistory";
 import { useSidePanel } from "@/app/side-panel/SidePanel";
-import { BrigadierGlyph, Info, Spinner, Unarchive, Warning, X } from "@/components/icons";
+import { BrigadierGlyph } from "@/components/icons";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { sendLane } from "@/app/conversation/composerKeys";
@@ -52,8 +52,10 @@ import { workerName } from "@/app/conversation/rowWords";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { ThreadFind } from "@/app/conversation/ThreadFind";
+import { AboveComposer } from "@/app/conversation/AboveComposer";
 import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
-import { useAction } from "@/app/conversation/useAction";
+import { LoadEarlier } from "@/app/conversation/LoadEarlier";
+import { UserAttachments } from "@/app/conversation/UserAttachments";
 import { ViewContext } from "@/app/conversation/viewContext";
 import {
   MentionMemory,
@@ -64,13 +66,11 @@ import {
 } from "@/app/conversation/Mentions";
 import { TopBar } from "@/app/shell/TopBar";
 import { Banner } from "@/components/shared";
-import { Button } from "@/components/controls";
 import { useNow } from "@/hooks/use-now";
 import type {
   AttachmentRef,
   Mention,
   ModelChoice,
-  Notice,
   Rating,
 } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -80,14 +80,12 @@ import {
   editQueued,
   interrupt,
   loadEarlier,
-  loadConversation,
   loadFullText,
   rateMessage,
   readAttachment,
   searchEarlier,
   moveQueued,
   regenerate,
-  restore,
   restoreQueued,
   resume,
   send,
@@ -118,7 +116,7 @@ type Item = { id: string; parentId: string | null } & (
 );
 
 /** Extra message data the footers read back from assistant-ui's message state. */
-type Custom = {
+export type Custom = {
   attachments?: AttachmentRef[];
   block?: BlockMeta;
   /** The message can be edited now (see `canRework`). */
@@ -1003,195 +1001,6 @@ export const Welcome: FC = () => {
           "What should we build?"
         )}
       </h1>
-    </div>
-  );
-};
-
-/**
- * Above the messages: "N earlier messages" while older turns are folded away; then, while older
- * pages wait in the database, they load as the user scrolls to the top (a spinner while one
- * does, Try again when it failed), or with "Load earlier messages" when nothing scrolls yet.
- */
-const LoadEarlier: FC = () => {
-  const { selection } = useContext(ViewContext);
-  const conversationId = selection.type === "conversation" ? selection.id : "";
-  const hasMore = useApp((s) => s.threads[conversationId]?.hasMore ?? false);
-  const loading = useApp((s) => s.threads[conversationId]?.loading ?? false);
-  const earlier = useContext(ThreadHistoryContext);
-  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
-  const loadOlder = earlier?.loadOlder;
-  const auto = hasMore && !loading && !earlier?.failed && (earlier?.hidden ?? 0) === 0;
-  // Scrolled to the top, the next page loads: the thread keeps what shows where it is.
-  useEffect(() => {
-    const viewport = sentinel?.closest("[data-slot=aui_thread-viewport]");
-    if (!auto || !sentinel || !viewport || !loadOlder) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting) && viewport.scrollHeight > viewport.clientHeight) {
-          loadOlder().catch(() => {});
-        }
-      },
-      { root: viewport },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [auto, sentinel, loadOlder]);
-  if (earlier && earlier.hidden > 0) {
-    return (
-      <div className="mb-4 flex justify-center">
-        <Button variant="ghost" size="sm" data-slot="earlier-turns" onClick={earlier.unfold}>
-          {earlier.hidden} earlier {earlier.hidden === 1 ? "message" : "messages"}
-        </Button>
-      </div>
-    );
-  }
-  if (!hasMore || !loadOlder) return null;
-  if (loading) {
-    return (
-      <div data-slot="earlier-loading" role="status" className="flex justify-center py-4">
-        <Spinner className="text-muted-foreground size-icon-sm animate-spin" />
-        <span className="sr-only">Loading older messages…</span>
-      </div>
-    );
-  }
-  if (earlier.failed) {
-    return (
-      <div data-slot="earlier-failed" className="mb-4 flex items-center justify-center gap-2">
-        <span role="alert" className="text-muted-foreground text-sm">
-          Couldn't load older messages
-        </span>
-        <Button variant="secondary" size="sm" onClick={() => loadOlder().catch(() => {})}>
-          Try again
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <div ref={setSentinel} data-slot="earlier-load" className="mb-4 flex justify-center">
-      <Button variant="ghost" size="sm" onClick={() => loadOlder().catch(() => {})}>
-        Load earlier messages
-      </Button>
-    </div>
-  );
-};
-
-/** Above a user message's text: its attachments. */
-const UserAttachments: FC = () => {
-  const role = useAuiState((s) => s.message.role);
-  const custom = useAuiState((s) => s.message.metadata.custom) as Custom;
-  if (role !== "user" || !custom.attachments || custom.attachments.length === 0) return null;
-  return <MessageAttachments attachments={custom.attachments} className="justify-end" />;
-};
-
-/** One calm line above the composer: a small muted icon, the words, and × where it can go. */
-const ABOVE_LINE = "bg-muted text-foreground rounded-control flex items-start gap-2 px-3 py-1.5 text-xs";
-
-/** Notices (environment problems, fallbacks), newest last; each can be dismissed. */
-function Notices({ notices }: { notices: readonly Notice[] }) {
-  const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set());
-  const shown = notices.filter((notice) => !dismissed.has(notice.atMs)).slice(-3);
-  if (shown.length === 0) return null;
-  return (
-    <ul aria-label="Notices" className="flex flex-col gap-1">
-      {shown.map((notice) => (
-        <li key={`${notice.atMs}:${notice.text}`} data-level={notice.level} className={ABOVE_LINE}>
-          {notice.level === "warning" ? (
-            <Warning aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
-          ) : (
-            <Info aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
-          )}
-          <span className="min-w-0 flex-1 whitespace-pre-wrap">{notice.text}</span>
-          <button
-            type="button"
-            aria-label="Dismiss notice"
-            className="text-muted-foreground hover:text-foreground shrink-0"
-            onClick={() => setDismissed((current) => new Set(current).add(notice.atMs))}
-          >
-            <X className="size-icon-xs" />
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-const NO_NOTICES: Notice[] = [];
-
-/** Between the thread and the composer: notices, a failed run, the archived state. */
-const AboveComposer: FC = () => {
-  const { conversation } = useContext(ViewContext);
-  const conversationId = conversation?.id ?? null;
-  const notices = useBoard((s) =>
-    s.board?.conversationId === conversationId ? s.board.notices : NO_NOTICES,
-  );
-  // A run that failed a request is said by that request in the thread, once.
-  const runError = useBoard((s) =>
-    s.board?.conversationId === conversationId && s.board.run === "failed" && !s.board.runRequest
-      ? (s.board.runError ?? "The model stopped with an error.")
-      : null,
-  );
-  // What the newest failed turn already says in the thread is never said again here.
-  const turnError = useBoard((s) =>
-    s.board?.conversationId === conversationId ? newestFailedError(s.board.requests) : null,
-  );
-  const shown = useMemo(() => withoutTurnError(notices, turnError), [notices, turnError]);
-  const failure = runError !== null && runError.trim() !== turnError?.trim() ? runError : null;
-  const [failureDismissed, setFailureDismissed] = useState<string | null>(null);
-  const action = useAction();
-  // Its messages could not be loaded: said once, with Retry.
-  const loadError = useApp((s) => (conversationId ? (s.threads[conversationId]?.loadError ?? null) : null));
-  const reload = useAction();
-  const archived = conversation?.lifecycle === "archived";
-  const failed = failure !== null && failure !== failureDismissed;
-  // Nothing at all when there is nothing to say, so the footer adds no gap for it.
-  if (!conversation || (shown.length === 0 && !failed && !archived && loadError === null)) return null;
-  return (
-    <div className="flex flex-col gap-1.5">
-      {loadError !== null && (
-        <p data-slot="load-error" role="alert" title={loadError} className={ABOVE_LINE}>
-          <Warning aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
-          <span className="min-w-0 flex-1">Couldn’t load messages</span>
-          <button
-            type="button"
-            disabled={reload.busy}
-            className="text-link hover:text-link/80 shrink-0"
-            onClick={() => reload.run(() => loadConversation(conversation.id))}
-          >
-            Retry
-          </button>
-        </p>
-      )}
-      <Notices notices={shown} />
-      {failed && (
-        <p role="status" className={ABOVE_LINE}>
-          <Warning aria-hidden className="text-muted-foreground size-icon-xs mt-px shrink-0" />
-          <span className="min-w-0 flex-1 whitespace-pre-wrap">{failure}</span>
-          <button
-            type="button"
-            aria-label="Dismiss"
-            className="text-muted-foreground hover:text-foreground shrink-0"
-            onClick={() => setFailureDismissed(failure)}
-          >
-            <X className="size-icon-xs" />
-          </button>
-        </p>
-      )}
-      {archived ? (
-        <div className="bg-muted rounded-control flex items-center gap-2 px-3 py-2 text-sm">
-          <span className="min-w-0 flex-1">
-            Archived. Restore it to continue.
-          </span>
-          {action.error && (
-            <span role="alert" className="text-destructive text-xs">
-              {action.error}
-            </span>
-          )}
-          <Button size="sm" disabled={action.busy} onClick={() => action.run(() => restore(conversation.id))}>
-            <Unarchive />
-            Restore
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 };

@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, selectTrigger, SwitchSetting } from "@/app/settings/parts";
-import { findModel, ModelSelector, SettingsCard } from "@/components/shared";
+import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
+import { findModel, ModelSelector, SettingsCard, SettingsRow } from "@/components/shared";
 import { Check } from "@/components/icons";
-import { Button, Input, type Choice } from "@/components/controls";
+import { Button, Input, type Choice, SettingsSelect, selectTrigger } from "@/components/controls";
 import type { GitStyle, ModelChoice } from "@/ipc/generated";
 import {
   AUTOSAVE_MS,

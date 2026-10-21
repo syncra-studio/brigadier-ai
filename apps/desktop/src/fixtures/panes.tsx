@@ -10,14 +10,14 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { TitlebarNav } from "@/app/shell/AppSidebar";
+import { TitlebarNav } from "@/components/shared";
 import { revealApp } from "@/lib/splash";
 import { WorkspacePane, WorkspacePaneContext, WorkspacePaneToggle } from "@/app/side-panel/WorkspacePane";
 import { RightSidebar, RightSidebarContext } from "@/app/side-panel/RightSidebar";
 import {
-  TerminalButton,
   useSidePanel,
 } from "@/app/side-panel/SidePanel";
+import { TerminalButton } from "@/components/shared";
 import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { newSessionTab, useSessionTabs, useSessionTabsOf, selectTab, closeTab } from "@/state/sessionTabs";
 import { TerminalPane } from "@/app/side-panel/TerminalTab";

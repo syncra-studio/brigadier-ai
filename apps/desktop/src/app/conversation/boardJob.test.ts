@@ -98,9 +98,9 @@ test("a plan of phases shows its phase at work, and stays while phases are left"
   assert.equal(jobLabel(job), "Phase 2 of 3 · Building");
 });
 
-test("an overnight run at work has its own card: no job beside it", () => {
+test("an overnight run at work no longer hides the session's job: the Job card's slot picks between them (runInSlot)", () => {
   const run = { id: "o1", state: "running", planId: null } as unknown as OvernightRun;
-  assert.equal(sessionJobs(input({ tasks: byId([task("t1", "running", 10)]), overnight: { o1: run } })).current, null);
+  assert.equal(jobLabel(sessionJobs(input({ tasks: byId([task("t1", "running", 10)]), overnight: { o1: run } })).current!), "Building");
 });
 
 // Issue 414: the thread fixed a finding itself and the checks run before it records it: the

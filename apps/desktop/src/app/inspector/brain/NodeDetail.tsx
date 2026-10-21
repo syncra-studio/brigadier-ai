@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 
+import { ConversationName } from "@/app/inspector/brain/ConversationName";
 import { KINDS, ORIGIN_LABELS, stateLabel } from "@/app/inspector/brain/kinds";
+import { NodeLink } from "@/app/inspector/brain/NodeLink";
 import { Badge, Button } from "@/components/controls";
 import { X } from "@/components/icons";
 import type { Edge, EdgeKind, Node, Provenance } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
-import { useApp } from "@/state/store";
 
 const EDGE_LABELS: Record<EdgeKind, string> = {
   contains: "contains",
@@ -17,12 +18,6 @@ const EDGE_LABELS: Record<EdgeKind, string> = {
   consumes: "consumes",
   relates: "relates to",
 };
-
-/** A conversation's title while it exists, else its id. */
-function ConversationName({ id }: { id: string }) {
-  const title = useApp((s) => s.conversations[id]?.title);
-  return <span title={id}>{title ?? id}</span>;
-}
 
 function shortHash(hash: string): string {
   return hash.slice(0, 12);
@@ -87,14 +82,6 @@ export function NodeDetail({
   const { provenance } = node;
   const outgoing = edges.filter((edge) => edge.from === node.id);
   const incoming = edges.filter((edge) => edge.to === node.id);
-  const link = (id: string) =>
-    titles.has(id) ? (
-      <button type="button" className="text-link hover:text-link/80 text-start" onClick={() => onSelect(id)}>
-        {titles.get(id)}
-      </button>
-    ) : (
-      <span className="font-mono">{id}</span>
-    );
   return (
     <div data-selectable className="flex flex-col gap-3 p-3 text-xs">
       <div className="flex items-start gap-2">
@@ -113,7 +100,7 @@ export function NodeDetail({
       )}
       {node.state.type === "superseded" && (
         <p className="text-muted-foreground">
-          Superseded by {link(node.state.by)}
+          Superseded by <NodeLink id={node.state.by} titles={titles} onSelect={onSelect} />
           {node.state.reason && `: ${node.state.reason}`}
         </p>
       )}
@@ -178,12 +165,12 @@ export function NodeDetail({
             {outgoing.map((edge) => (
               <li key={`out:${edge.kind}:${edge.to}`}>
                 <span className="text-muted-foreground">{EDGE_LABELS[edge.kind]} </span>
-                {link(edge.to)}
+                <NodeLink id={edge.to} titles={titles} onSelect={onSelect} />
               </li>
             ))}
             {incoming.map((edge) => (
               <li key={`in:${edge.kind}:${edge.from}`}>
-                {link(edge.from)}
+                <NodeLink id={edge.from} titles={titles} onSelect={onSelect} />
                 <span className="text-muted-foreground"> {EDGE_LABELS[edge.kind]} this</span>
               </li>
             ))}

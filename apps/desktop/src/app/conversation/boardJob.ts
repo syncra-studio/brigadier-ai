@@ -26,7 +26,12 @@ export type JobFacts = {
   merge: { commit: string | null; base: string; pr: boolean; record: MergeRecord | null } | null;
 };
 
-export type BoardJob = Job & { atMs: number; facts: JobFacts };
+export type BoardJob = Job & {
+  atMs: number;
+  /** The newest work start, even when several workers share one step's earliest start. */
+  latestStartedAtMs: number;
+  facts: JobFacts;
+};
 
 /** What a job is read from: the board's parts and the two settings that add steps to come. */
 export type JobInput = Pick<Board, "tasks" | "reviews" | "integratedChecks" | "orchestratorSteps" | "plans" | "requests" | "overnight"> & {
@@ -255,6 +260,13 @@ function windowJob(
   return {
     steps: result,
     atMs: Number.isFinite(atMs) ? atMs : since,
+    latestStartedAtMs: Math.max(
+      Number.isFinite(atMs) ? atMs : since,
+      ...tasks.map((task) => task.createdAtMs),
+      ...reviews.map((item) => item.startedAtMs),
+      ...checks.map((item) => item.startedAtMs ?? item.dueAtMs),
+      ...result.flatMap((step) => (step.startedAtMs == null ? [] : [step.startedAtMs])),
+    ),
     facts: {
       findings,
       merge: merged ? { commit: merged.kind.mergeCommit ?? null, base: merged.kind.base, pr: merged.kind.pr !== undefined, record: merged.kind.record ?? null } : null,
@@ -301,9 +313,6 @@ function currentPhase(input: JobInput): { plan: Plan; index: number; since: numb
   return { plan, index, since, until: Number.POSITIVE_INFINITY, state, tasks: task ? [task, ...others] : others };
 }
 
-/** An overnight run at work has its own card for its phases: no job beside it. */
-const RUN_AT_WORK = new Set(["preparing", "running", "waitingQuota", "windingDown", "reporting"]);
-
 /**
  * The session's job at work (`current`, null when there is none or it is all done) and the jobs
  * each earlier merge closed, newest first.
@@ -316,7 +325,6 @@ export function sessionJobs(input: JobInput): { current: BoardJob | null; past: 
     .map((merge, index) => windowJob(input, (merges[index - 1]?.atMs ?? -1) + 1, merge.atMs + 1, merge, null))
     .filter((job): job is BoardJob => job !== null)
     .toReversed();
-  if (Object.values(input.overnight).some((run) => RUN_AT_WORK.has(run.state))) return { current: null, past };
   const lastMerge = (merges.at(-1)?.atMs ?? -1) + 1;
   const phase = currentPhase(input);
   const current = phase

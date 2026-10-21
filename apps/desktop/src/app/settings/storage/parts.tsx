@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 import type { Part } from "@/app/settings/storage/model";
 import { cn } from "@/lib/utils";
 
@@ -9,21 +7,6 @@ import { cn } from "@/lib/utils";
  * over its card), a card, buttons, a blue link, a round badge, a tick box, the usage bar and a
  * project's share bar.
  */
-
-/** The round badge at a summary's start. */
-export function RoundBadge({ tone = "plain", children }: { tone?: "plain" | "done"; children: ReactNode }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-full [&_svg]:size-icon-md",
-        tone === "done" ? "bg-success/15 text-success" : "bg-foreground/8 text-foreground",
-      )}
-    >
-      {children}
-    </span>
-  );
-}
 
 /** The usage bar: each part's share of the total, 2 apart; a part too small to see still shows. */
 export function UsageBar({ parts, pending = false }: { parts: readonly Part[]; pending?: boolean }) {

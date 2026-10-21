@@ -6,9 +6,8 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Counts } from "@/app/conversation/Counts";
 import { StepCounter } from "@/app/conversation/StepCounter";
-import { CopyButton } from "@/components/shared";
+import { CopyButton, Counts } from "@/components/shared";
 import { Button, Kbd } from "@/components/controls";
 import { TooltipProvider } from "@/components/overlays";
 import { colourOf } from "@/fixtures/look";

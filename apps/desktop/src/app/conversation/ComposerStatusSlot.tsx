@@ -1,150 +1,25 @@
-import { type FC, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FC, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
   CI_LINGER_MS,
-  ciPill,
-  ciRunWords,
-  type CiState,
-  type CiWatchView,
   ciWatches,
+  type CiWatchView,
   ciWords,
   heldMerge,
   mergeWords,
-  shortSha,
   type SlotRow,
   slotRows,
 } from "@/app/conversation/activity/slotView";
 import { stripWords } from "@/app/conversation/activity/stripView";
 import { useWorkersStrip, WorkersStrip } from "@/app/conversation/activity/WorkersStrip";
-import { useAction } from "@/app/conversation/useAction";
+import { CiPill } from "@/app/conversation/CiPill";
+import { FoldedCountBadge } from "@/app/conversation/FoldedCountBadge";
+import { MergePill } from "@/app/conversation/MergePill";
+import { StatusSlotToggle } from "@/app/conversation/StatusSlotToggle";
 import { ComposerRailItem } from "@/components/conversation";
-import { Branch, Check, ChevronRight, Spinner, X } from "@/components/icons";
-import { Button } from "@/components/controls";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
-import { openUrl } from "@/ipc/client";
 import { cn } from "@/lib/utils";
-import { cancelMerge } from "@/state/actions";
 import { useBoard } from "@/state/board";
-
-/** A row's words and toggle, as the Workers strip draws its own: grey, its chevron after. */
-const Toggle: FC<{ open: boolean; onToggle: () => void; icon: ReactNode; children: ReactNode }> = ({ open, onToggle, icon, children }) => (
-  <button
-    type="button"
-    aria-expanded={open}
-    onClick={onToggle}
-    data-state={open ? "open" : "closed"}
-    className="group/toggle hover:text-foreground text-foreground/60 rounded-control flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-start text-sm"
-  >
-    <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
-    <span className="flex min-w-0 items-center">
-      <span className="min-w-0 truncate tabular-nums">{children}</span>
-      <span aria-hidden className="size-icon-button-sm flex shrink-0 items-center justify-center">
-        <ChevronRight className="text-row-chevron size-chevron group-hover/toggle:text-foreground group-focus-visible/toggle:text-foreground transition-[rotate,color] duration-300 ease-standard group-data-[state=open]/toggle:rotate-90 motion-reduce:transition-none" />
-      </span>
-    </span>
-  </button>
-);
-
-/** The CI pill's icon: a spinner while it checks, then how it ended. */
-const CiGlyph: FC<{ state: CiState }> = ({ state }) => {
-  switch (state) {
-    case "checking":
-      return <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />;
-    case "passed":
-      return <Check className="text-success size-icon-xs" />;
-    case "failed":
-      return <X className="text-destructive size-icon-xs" />;
-    case "ended":
-      return <span className="border-foreground/35 size-icon-xs rounded-full border" />;
-  }
-};
-
-/**
- * "Checking CI · 2 of 5 jobs done", then "CI passed" or "CI failed · test": every push being
- * watched, each run's jobs or how it ended, and its link, inside.
- */
-const CiPill: FC<{ watches: readonly CiWatchView[] }> = ({ watches }) => {
-  const [open, setOpen] = useState(false);
-  const pill = ciPill(watches);
-  return (
-    <div data-slot="ci-pill" data-ci={pill.state} className="flex flex-col px-1 py-1">
-      <div className="flex min-h-row items-center gap-1">
-        <Toggle open={open} onToggle={() => setOpen(!open)} icon={<CiGlyph state={pill.state} />}>
-          {pill.words}
-        </Toggle>
-      </div>
-      {open && (
-        <ul className="max-h-queue-max flex flex-col gap-1 overflow-y-auto px-2 pb-1">
-          {watches.map((watch) => (
-            <li key={`${watch.repo} ${watch.branch} ${watch.sha}`} className="flex flex-col">
-              <span className="text-foreground/80 min-h-row-sm flex min-w-0 items-center gap-1.5 ps-6 text-sm">
-                <span className="truncate">{watch.repo}</span>
-                <span aria-hidden className="text-foreground/40">·</span>
-                <span className="truncate">{watch.branch}</span>
-                <span aria-hidden className="text-foreground/40">·</span>
-                <span className="text-foreground/50 font-mono text-xs">{shortSha(watch.sha)}</span>
-              </span>
-              {watch.runs.length === 0 ? (
-                <span className="text-foreground/50 ps-6 text-sm">{watch.result === null ? "Waiting for CI to start…" : watch.result === "stopped" ? "Stopped watching CI" : "No CI runs"}</span>
-              ) : (
-                watch.runs.map((run) => (
-                  <button
-                    key={run.url}
-                    type="button"
-                    onClick={() => void openUrl(run.url).catch(() => {})}
-                    className="hover:bg-foreground/5 rounded-control min-h-row-sm text-foreground/60 hover:text-foreground flex min-w-0 items-center gap-1.5 ps-6 pe-2 text-start text-sm"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{run.workflow}</span>
-                    <span className="shrink-0 tabular-nums">{ciRunWords(run)}</span>
-                  </button>
-                ))
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-};
-
-/**
- * "Merging after 2 workers finish", with Cancel: the user's yes, held while workers write. While
- * a merge card waits for their answer, the card is where they say it: no Cancel.
- */
-const MergePill: FC<{ conversationId: string; words: string; branch: string; base: string; asking: boolean }> = ({ conversationId, words, branch, base, asking }) => {
-  const cancel = useAction();
-  return (
-    <div data-slot="merge-pill" className="flex flex-col px-1 py-1">
-      <div className="flex min-h-row items-center gap-1">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-foreground/60 flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-sm">
-              <Branch aria-hidden className="size-4 shrink-0" />
-              <span className="min-w-0 truncate">{words}</span>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            {asking ? `Merges ${branch} into ${base} once you say yes on its card` : `Merges ${branch} into ${base} once they’re done, as you asked`}
-          </TooltipContent>
-        </Tooltip>
-        {!asking && (
-          <Button
-            size="xs"
-            variant="ghost"
-            data-slot="merge-cancel"
-            disabled={cancel.busy}
-            onClick={() => cancel.run(() => cancelMerge(conversationId))}
-            className="text-foreground/60 hover:text-foreground"
-          >
-            Cancel
-          </Button>
-        )}
-      </div>
-      {cancel.error && <p role="alert" className="text-destructive px-2 text-xs">{cancel.error}</p>}
-    </div>
-  );
-};
 
 /**
  * The one slot above the composer for live work (SESSION-FIXES-PLAN.md Q8): the Workers strip,
@@ -198,9 +73,9 @@ export const ComposerStatusSlot: FC<{ conversationId: string }> = ({ conversatio
         {/* A narrow composer: one line, the newest row's words and how many more. */}
         {folds && (
           <div className="hidden px-1 py-1 @max-md/slot:flex">
-            <Toggle open={false} onToggle={() => setExpanded(true)} icon={<span className="bg-foreground/10 text-foreground/70 rounded-full px-1.5 text-xs tabular-nums">{rows.length}</span>}>
+            <StatusSlotToggle open={false} onToggle={() => setExpanded(true)} icon={<FoldedCountBadge count={rows.length} />}>
               {words[rows.at(-1)!]} · {rows.length - 1} more
-            </Toggle>
+            </StatusSlotToggle>
           </div>
         )}
         <div className={cn("flex flex-col divide-foreground/10 divide-y", folds && "@max-md/slot:hidden")}>

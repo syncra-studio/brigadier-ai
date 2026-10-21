@@ -5,7 +5,8 @@ import { BROWSER_IMPORT_ROWS, BrowserImportPage } from "@/app/settings/BrowserIm
 import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage, computerUseAvailable } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
-import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
+import { GeneralPage } from "@/app/settings/GeneralPage";
+import { GENERAL_ROWS } from "@/app/settings/generalRows";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
 import { MEMORY_ROWS, MemoryPage } from "@/app/settings/MemoryPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/storage/StoragePage";

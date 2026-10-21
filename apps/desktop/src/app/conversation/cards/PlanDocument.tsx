@@ -1,14 +1,12 @@
-import { type ComponentProps, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { CopyButton } from "@/components/shared";
-import { RateItem, RateMenu, MarkdownBlock } from "@/components/conversation";
 import { TooltipIconButton } from "@/components/controls";
-import { ExpandSm, Lightbulb } from "@/components/icons";
-import { useAction } from "@/app/conversation/useAction";
-import type { Rating } from "@/ipc/generated";
-import { cn } from "@/lib/utils";
-import { rateMessage } from "@/state/actions";
+import { ExpandSm } from "@/components/icons";
+import { PlanClip } from "@/app/conversation/cards/PlanClip";
+import { PlanFrame } from "@/app/conversation/cards/PlanFrame";
+import { PlanRating } from "@/app/conversation/cards/PlanRating";
+import { PlanText } from "@/app/conversation/cards/PlanText";
 import { useBoard } from "@/state/board";
 import { type PlanDoc, type PlanDocRef, planDoc, usePlanOpens } from "@/state/planDoc";
 import { openPlanTab } from "@/state/sessionTabs";
@@ -18,6 +16,9 @@ import { openPlanTab } from "@/state/sessionTabs";
  * in its header, Copy and Open on the right, and the start of the plan under it, clipped with a
  * fade. A click opens the whole plan in its own tab.
  */
+
+// The side panel's plan tab takes the plan's text from here.
+export { PlanText };
 
 /** The plan a reference points to, kept stable while its words don't change. */
 export function usePlanDoc(ref: PlanDocRef | null): PlanDoc | null {
@@ -30,95 +31,9 @@ export function usePlanDoc(ref: PlanDocRef | null): PlanDoc | null {
   return title === null || markdown === null ? null : { title, markdown };
 }
 
-/** A plan's text in the plan's own type: a large title, section headings, compact lists. */
-export function PlanText({ markdown }: { markdown: string }) {
-  return (
-    <div
-      data-slot="plan-text"
-      className={cn(
-        "text-plan text-foreground [&_.aui-md-li]:leading-(--text-plan--line-height) [&_.aui-md-p]:leading-(--text-plan--line-height)",
-        "[&_.aui-md-h1]:text-plan-title [&_.aui-md-h1]:mb-2",
-        "[&_.aui-md-h2]:text-plan-heading [&_.aui-md-h2]:mt-4 [&_.aui-md-h2]:mb-1",
-        "[&_.aui-md-h3]:text-plan [&_.aui-md-h3]:mt-3 [&_.aui-md-h3]:mb-1",
-        "[&_.aui-md-p]:my-2 [&_.aui-md-ol]:my-1 [&_.aui-md-ul]:my-1 [&_.aui-md-ol>li]:mt-0 [&_.aui-md-ul>li]:mt-0",
-      )}
-    >
-      <MarkdownBlock text={markdown} />
-    </div>
-
-  );
-}
-
-/** "Rate this plan": Good plan / Bad plan, and Clear rating once rated; kept on this machine like an answer's (#127). */
-function PlanRating({ conversationId, planId }: { conversationId: string; planId: string }) {
-  const subject = `plan:${planId}`;
-  const rated = useBoard((s) => s.board?.ratings[subject] ?? null);
-  const action = useAction();
-  const rate = (rating: Rating | null) => action.run(() => rateMessage(conversationId, subject, rating));
-  return (
-    <RateMenu rated={rated} onClear={() => rate(null)} tooltip="Rate this plan" below className="text-foreground/50 hover:text-foreground size-6 shrink-0">
-      <RateItem rating="good" of="plan" onSelect={() => rate("good")} />
-      <RateItem rating="bad" of="plan" onSelect={() => rate("bad")} />
-    </RateMenu>
-  );
-}
-
-/** The card's frame: its header ("Plan" or "Writing plan", with a bulb) and what it holds. */
-function PlanFrame({
-  label,
-  live = false,
-  actions,
-  children,
-  ...props
-}: {
-  label: string;
-  live?: boolean;
-  actions?: ReactNode;
-  children?: ReactNode;
-} & Omit<ComponentProps<"section">, "children">) {
-  return (
-    <section
-      data-slot="plan-card"
-      className="border-work-rule bg-foreground/3 rounded-plan flex min-w-0 flex-col border"
-      {...props}
-    >
-      <header className="h-plan-header flex shrink-0 items-center gap-2 ps-3.5 pe-2">
-        <Lightbulb aria-hidden className="text-foreground/50 size-icon-md shrink-0" />
-        <span className={cn("min-w-0 flex-1 truncate text-sm", live ? "shimmer" : "text-foreground/50")}>
-          {label}
-        </span>
-        {actions && <span className="flex shrink-0 items-center gap-0.5">{actions}</span>}
-      </header>
-      {children}
-    </section>
-  );
-}
-
 /** "Writing plan", shimmering, while the thread writes its plan, until the whole plan arrives. */
 export function WritingPlanCard() {
   return <PlanFrame label="Writing plan" live aria-label="Writing plan" />;
-}
-
-/** The start of a plan, clipped; the fade shows only over a plan that goes on past the clip. */
-function PlanClip({ markdown }: { markdown: string }) {
-  const clip = useRef<HTMLDivElement>(null);
-  const [clipped, setClipped] = useState(false);
-  useLayoutEffect(() => {
-    const element = clip.current;
-    const text = element?.firstElementChild;
-    if (!element || !text) return undefined;
-    const measure = () => setClipped(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(text);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return (
-    <div ref={clip} data-clipped={clipped || undefined} className="plan-clip data-clipped:plan-clip-fade">
-      <PlanText markdown={markdown} />
-    </div>
-  );
 }
 
 /** The plan's card in the thread. */

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::shell_changes::{ShellCaptures, ShellEvidence, ShellKey};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
-use crate::work::{HeldPath, RequestChanges, RequestState};
+use crate::work::{BackgroundRunState, HeldPath, RequestChanges, RequestState};
 use crate::{Error, Result};
 
 #[derive(Default)]
@@ -741,6 +741,19 @@ impl SessionManager {
             }
             _ => {}
         }
+        // A command of this request still running in the background may have made what
+        // nothing here explains: the pass at its end would find that already seen.
+        let command = command
+            || self
+                .core
+                .board(id)
+                .await?
+                .background_runs
+                .values()
+                .any(|run| {
+                    run.state == BackgroundRunState::Running
+                        && run.request_id.as_deref() == Some(request)
+                });
         let settled = settling
             || (recovering
                 && self

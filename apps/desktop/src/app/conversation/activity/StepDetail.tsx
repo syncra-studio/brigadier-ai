@@ -1,18 +1,18 @@
-import { type ReactNode, useContext, useEffect, useState } from "react";
+import { type ReactNode, useContext, useState } from "react";
 
-import type { LeadStep } from "@/app/conversation/activity/group";
-import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { Diffs } from "@/app/conversation/activity/Diffs";
+import { Output } from "@/app/conversation/activity/Output";
 import { cliRunOutput, OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
+import { RawToolCallDialog } from "@/app/conversation/activity/RawToolCallDialog";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
-import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { EDITS, SHELLS } from "@/app/conversation/activity/toolSets";
+import { type ActionItem, editHunks, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { CopyButton } from "@/components/shared";
 import { ToolBox, ErrorState, MarkdownBlock, searchResults, WebSearch, type TranscriptItem } from "@/components/conversation";
-import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/overlays";
 import { Check } from "@/components/icons";
-import type { ItemStatus, ThreadItem } from "@/ipc/generated";
+import type { ItemStatus } from "@/ipc/generated";
 import { ansiRuns, stripAnsi } from "@/lib/ansi";
 import { cn } from "@/lib/utils";
-import { getThreadItem } from "@/state/actions";
 import { useCallItems } from "@/state/threadItems";
 
 /**
@@ -25,29 +25,6 @@ import { useCallItems } from "@/state/threadItems";
 // Its parts keep their heights: WebKit squeezed a clamped two-line command under the output.
 const SHELL = "border-foreground/16 bg-foreground/8 rounded-shell mt-1 flex flex-col overflow-hidden border *:shrink-0";
 const SHELL_TEXT = "text-code font-mono whitespace-pre-wrap wrap-anywhere";
-
-/** Output this long shows its head and tail, with the lines between folded. */
-const LONG_LINES = 40;
-const SHOWN_LINES = 15;
-
-/** A long output as its first and last lines, "… N lines …" between them, until opened in full. */
-function Output({ text }: { text: string }) {
-  const [all, setAll] = useState(false);
-  const lines = text.split("\n");
-  if (all || lines.length <= LONG_LINES) return <>{text}</>;
-  const hidden = lines.length - 2 * SHOWN_LINES;
-  return (
-    <>
-      {lines.slice(0, SHOWN_LINES).join("\n")}
-      {"\n"}
-      <button type="button" className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline" onClick={() => setAll(true)}>
-        … {hidden} lines …
-      </button>
-      {"\n"}
-      {lines.slice(-SHOWN_LINES).join("\n")}
-    </>
-  );
-}
 
 /** How a command ended, in the Shell box's last line; nothing while it runs. */
 function ending(status: ItemStatus, exit: number | null, stopped: boolean): { text: string; ok?: boolean } | null {
@@ -210,38 +187,7 @@ export function ToolResult({ name, status, input, output }: { name: string; stat
           {text}
         </pre>
       )}
-      {(input || text) && (
-        <Dialog>
-          <DialogTrigger asChild>
-            <button type="button" data-slot="tool-raw" className="text-muted-foreground hover:text-foreground self-start text-xs transition-colors">
-              Show raw tool call output
-            </button>
-          </DialogTrigger>
-          <DialogContent aria-describedby={undefined} className="max-w-thread flex max-h-full flex-col gap-3">
-            <DialogTitle>{name}</DialogTitle>
-            <div className="flex min-h-0 flex-col gap-3 overflow-auto">
-              {input && <ToolBox title="Input" className="mt-1"><Output text={input} /></ToolBox>}
-              {text && <ToolBox title="Output" className="mt-1"><Output text={output ?? ""} /></ToolBox>}
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-    </div>
-  );
-}
-
-/**
- * Several files' changes, each its own card; an edit's several places in one file are one card,
- * "⋯" between them.
- */
-function Diffs({ files }: { files: readonly { path: string; diff: string }[] }) {
-  const byPath = new Map<string, string[]>();
-  for (const file of files) byPath.set(file.path, [...(byPath.get(file.path) ?? []), file.diff]);
-  return (
-    <div className="flex flex-col gap-1">
-      {[...byPath].map(([path, diffs]) => (
-        <InlineDiff key={path} path={path} diff={diffs.join("\n@@\n")} />
-      ))}
+      {(input || text) && <RawToolCallDialog name={name} input={input} output={output} />}
     </div>
   );
 }
@@ -251,10 +197,6 @@ function searchQuery(input: string | null): string | null {
   const query = parsedInput(input)?.["query"];
   return typeof query === "string" ? query : null;
 }
-
-const SHELLS = new Set(["Bash", "run", "run_unsandboxed", "shell", "exec_command", "run_check"]);
-
-const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]);
 
 /** A call's detail from what it was given and what it gave back. */
 export function callDetail(name: string, status: ItemStatus, call: { input: string | null; output: string | null; exit: number | null; command?: string | null; stopped?: boolean | undefined }): ReactNode {
@@ -309,39 +251,6 @@ export function actionDetail(item: ActionItem): ReactNode {
 }
 
 /**
- * What a lead's tool step opens to, fetched from the thread's log when it opens: the daemon
- * keeps the call's whole input and output there, the board only its one-line detail.
- */
-function LeadToolDetail({ conversationId, kind }: { conversationId: string; kind: ToolStep }) {
-  const [item, setItem] = useState<ThreadItem | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let current = true;
-    getThreadItem(conversationId, kind.itemId).then(
-      (found) => current && setItem(found),
-      (cause: unknown) => current && setError(cause instanceof Error ? cause.message : String(cause)),
-    );
-    return () => {
-      current = false;
-    };
-  }, [conversationId, kind.itemId]);
-  if (error) return <p className="text-destructive text-xs">{error}</p>;
-  if (!item) return <span className="shimmer text-xs">Loading</span>;
-  const short = toolName(kind.name);
-  // An edit the CLI reported as file changes (no call input): the daemon gives their diffs, each
-  // after its path.
-  if (EDITS.has(short) && !item.input && item.output) return <Diffs files={fileDiffs(item.output)} />;
-  // A CLI's own command gives its command line as plain text, not a call's JSON.
-  const command = SHELLS.has(short) && parsedInput(item.input) === null ? item.input || kind.detail : null;
-  const detail = callDetail(kind.name, kind.status, { input: item.input, output: item.output, exit: item.exit ?? kind.exit ?? null, command, stopped: kind.stopped });
-  if (detail) return <>{detail}</>;
-  // A search with no results kept: nothing more to show than its row.
-  if (short === "WebSearch" || short === "web_search") return null;
-  if (EDITS.has(short) && kind.detail) return <ToolBox title="Files" className="mt-1"><Output text={kind.detail} /></ToolBox>;
-  return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
-}
-
-/**
  * A lead's call as one action, from its items: a command's, a file change's, an image's, or a
  * tool's; a shell tool still running with output printed so far (Brigadier's own `run`) is a
  * command whose output grows.
@@ -376,44 +285,3 @@ export function useLeadItems(conversationId: string, requestId: string | null, k
   return useCallItems(conversationId, requestId, kind.turn ?? null, kind.itemId, callStood(kind));
 }
 
-/**
- * What a lead's call opens to, the same as a worker's action (`actionDetail`): read with the
- * request's calls, while it runs too, its Shell box following the output as it comes.
- */
-function LeadItemDetail({ conversationId, requestId, kind }: { conversationId: string; requestId: string | null; kind: ToolStep }) {
-  const { items, error } = useLeadItems(conversationId, requestId, kind);
-  if (error && !items) return <p className="text-destructive text-xs">{error}</p>;
-  if (!items) return <span className="shimmer text-xs">Loading</span>;
-  const item = leadAction(items, kind);
-  // Not among the request's calls (a row from before they were kept): read on its own.
-  if (!item) return kind.status === "inProgress" ? null : <LeadToolDetail conversationId={conversationId} kind={kind} />;
-  if (item.kind === "tool") {
-    const short = toolName(item.name);
-    // A CLI's own command gives its command line as plain text, not a call's JSON.
-    const command = SHELLS.has(short) && parsedInput(item.input) === null ? item.input || kind.detail : null;
-    const detail = callDetail(item.name, kind.status, { input: item.input, output: item.output, exit: kind.exit ?? null, command, stopped: kind.stopped });
-    if (detail) return <>{detail}</>;
-    if (short === "WebSearch" || short === "web_search") return null;
-    return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
-  }
-  if (item.kind === "command") return <ShellBox command={item.command || (kind.detail ?? "")} output={item.output || null} status={kind.status} exit={item.exitCode ?? kind.exit ?? null} stopped={kind.stopped} />;
-  return <>{actionDetail(item)}</>;
-}
-
-/** The kinds of work whose row opens while it runs: a command, to its Shell box as the output comes. */
-const OPEN_WHILE_RUNNING = new Set(["run", "checks"]);
-
-/** Whether a lead's step has a detail to open to; `kind` is its words' kind. */
-export function leadStepOpens(step: LeadStep, kind?: string): boolean {
-  if (step.kind.type !== "tool") return false;
-  if (step.kind.status !== "inProgress") return true;
-  return step.kind.logSeq !== undefined && kind !== undefined && OPEN_WHILE_RUNNING.has(kind);
-}
-
-/** What a lead's step opens to, in its conversation; `kind` is its words' kind. */
-export function leadStepDetail(conversationId: string | null, step: LeadStep, kind?: string): ReactNode {
-  if (!conversationId || step.kind.type !== "tool" || !leadStepOpens(step, kind)) return undefined;
-  // A call kept with the request's calls (BUILD-PLAN B1b) opens as a worker's does; an older one as it was kept.
-  if (step.kind.logSeq !== undefined) return <LeadItemDetail conversationId={conversationId} requestId={step.requestId ?? null} kind={step.kind} />;
-  return <LeadToolDetail conversationId={conversationId} kind={step.kind} />;
-}

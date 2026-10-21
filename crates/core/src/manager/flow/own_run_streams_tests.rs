@@ -406,6 +406,121 @@ async fn own_run_streams_keep_one_buffer_through_background_handoff() {
     }
 }
 
+/// A background run writes a file, then a snapshot that no command explains (the turn's end,
+/// drained late) sees it before the run ends: the file is still that run's request's change.
+#[tokio::test]
+async fn a_background_runs_file_seen_before_its_end_stays_its_change() {
+    let script: Script = Arc::new(|turn: Turn| {
+        Box::pin(async move {
+            if turn.earlier > 0 {
+                return Reply::text("The background command finished.");
+            }
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            for gate in ["gate-0", "gate-1"] {
+                assert!(
+                    std::process::Command::new("mkfifo")
+                        .arg(turn.cwd.join(gate))
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            let words = format!(
+                "IFS= read -r gate < {}; printf 'written\\n' > {}; IFS= read -r gate < {}",
+                quote(&turn.cwd.join("gate-0")),
+                quote(&workspace.join("background-written.txt")),
+                quote(&turn.cwd.join("gate-1"))
+            );
+            let name = match turn.provider {
+                ProviderKind::Claude => "mcp__brigadier__run",
+                _ => "brigadier/run",
+            };
+            let call = |status, output: Option<String>| ProviderEvent::ToolCall {
+                kept: None,
+                item_id: "own-run".into(),
+                name: name.into(),
+                input: Some(json!({"command": words}).to_string()),
+                status,
+                output,
+            };
+            turn.emit(call(ItemStatus::InProgress, None)).await;
+            tokio::time::timeout(*super::PATIENCE, async {
+                while row(&turn.host.core.board(&id).await.unwrap(), "own-run").is_none() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let reply = turn
+                .call("run", json!({"command": words, "timeout_secs": 120}))
+                .await;
+            assert!(reply.text.contains("[run-1 still runs"), "{}", reply.text);
+            turn.emit(call(ItemStatus::Completed, Some(reply.text)))
+                .await;
+            Reply::text("[quiet]")
+        })
+    });
+    let flow = Flow::start(
+        "20261021-0738-feedback-flicker-w13-background-file",
+        Options::default(),
+        script,
+    )
+    .await;
+    flow.background_commands();
+    flow.say("Run in the background.").await;
+    // The turn is over, so all it reported is queued; applying it now leaves nothing to come.
+    let board = flow
+        .until("the turn over with its run in the background", |b| {
+            b.run == crate::work::RunState::Idle
+                && b.background_runs
+                    .get("run-1")
+                    .is_some_and(|run| run.state == BackgroundRunState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let turn_end = ProviderEvent::TurnCompleted {
+        turn_id: None,
+        status: brigadier_providers::TurnStatus::Completed,
+        duration_ms: None,
+        usage: None,
+    };
+    let refresh = || {
+        flow.manager.refresh_changes(
+            &flow.conversation,
+            Some(&request),
+            crate::manager::request_changes::Refresh::Event(&turn_end),
+        )
+    };
+    refresh().await;
+    let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    release(scratch.join("gate-0")).await;
+    tokio::time::timeout(*super::PATIENCE, async {
+        while !workspace.join("background-written.txt").exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    refresh().await;
+    release(scratch.join("gate-1")).await;
+    let board = flow
+        .until("the finished run and its change", |b| {
+            b.background_runs
+                .get("run-1")
+                .is_some_and(|run| matches!(run.state, BackgroundRunState::Finished { .. }))
+                && b.latest_request()
+                    .and_then(|request| request.changes.as_ref())
+                    .is_some_and(|changes| !changes.stat.files.is_empty())
+        })
+        .await;
+    let changes = board.latest_request().unwrap().changes.as_ref().unwrap();
+    assert_eq!(changes.stat.files.len(), 1);
+    assert_eq!(changes.stat.files[0].path, "background-written.txt");
+    flow.stop().await;
+}
+
 /// What a background run printed before the user's Stop stays readable from its row.
 #[tokio::test]
 async fn own_run_streams_keep_a_stopped_background_runs_output() {

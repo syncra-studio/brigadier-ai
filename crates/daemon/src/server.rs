@@ -1399,6 +1399,11 @@ fn answered_beside(request: &Request) -> bool {
             | Request::GetSettledTabs
             | Request::GetMergeUndo { .. }
             | Request::RestartPreview { .. }
+            | Request::WriteUpFeedback { .. }
+            | Request::FileFeedback { .. }
+            | Request::FeedbackAccount
+            | Request::StartGitHubSignIn
+            | Request::WaitGitHubSignIn
     )
 }
 
@@ -2150,6 +2155,34 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.put_off_plan(conversation_id, card_id)).await?;
             Response::PutOffPlan
         }
+        Request::WriteUpFeedback { text } => Response::WriteUpFeedback {
+            write_up: heap(|| sessions.write_up_feedback(&text)).await?,
+        },
+        Request::FileFeedback { items } => {
+            let filed = heap(|| sessions.file_feedback(&items)).await;
+            Response::FileFeedback {
+                signed_in: filed.is_some(),
+                results: filed.unwrap_or_default(),
+            }
+        }
+        Request::FeedbackAccount => {
+            let account = heap(|| sessions.feedback_account()).await;
+            Response::FeedbackAccount {
+                signed_in: account.is_some(),
+                login: account.flatten(),
+            }
+        }
+        Request::StartGitHubSignIn => Response::StartGitHubSignIn {
+            sign_in: heap(|| sessions.start_github_sign_in()).await?,
+        },
+        Request::WaitGitHubSignIn => {
+            heap(|| sessions.wait_github_sign_in()).await?;
+            Response::WaitGitHubSignIn
+        }
+        Request::CancelGitHubSignIn => {
+            sessions.cancel_github_sign_in();
+            Response::CancelGitHubSignIn
+        }
         Request::AnswerFeedbackOffer {
             conversation_id,
             offer_id,
@@ -2885,6 +2918,23 @@ mod tests {
         let settings = Box::new(brigadier_core::model::Settings::default());
         assert!(!answered_beside(&Request::UpdateSettings { settings }));
         assert!(!answered_beside(&Request::GetCatalog));
+    }
+
+    /// Send feedback's writer turns and GitHub calls take a minute or more: the connection's
+    /// other requests and its events don't wait for them.
+    #[test]
+    fn send_feedback_holds_up_no_other_request() {
+        for request in [
+            Request::WriteUpFeedback {
+                text: "Stop leaves a worker running".into(),
+            },
+            Request::FileFeedback { items: Vec::new() },
+            Request::FeedbackAccount,
+            Request::StartGitHubSignIn,
+            Request::WaitGitHubSignIn,
+        ] {
+            assert!(answered_beside(&request), "{request:?} is answered beside");
+        }
     }
 
     /// Every await of `handle_request` goes through [`heap`]: an unoptimized build keeps all

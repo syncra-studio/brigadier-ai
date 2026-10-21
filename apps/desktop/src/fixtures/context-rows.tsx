@@ -111,7 +111,7 @@ async function drive(): Promise<string> {
   seen.workers = [...card()!.querySelectorAll('[aria-label="Session workers"] [data-slot^="workers-summary"]')].map((row) => row.textContent);
   const height = card()!.getBoundingClientRect().height;
   seen.planInCard = card()!.querySelectorAll('[data-card="plan"]').length;
-  const job = document.querySelector<HTMLButtonElement>('[aria-label="Context"] [data-slot="job-card"]');
+  const job = document.querySelector<HTMLElement>('[aria-label="Context"] [data-slot="job-card"]');
   seen.job = job?.querySelector('[data-slot="job-progress"] span.truncate')?.textContent ?? null;
   // The job's card comes right after the context card.
   seen.jobAfterCard = card()?.nextElementSibling?.querySelector('[data-slot="job-card"]') === job;
@@ -119,7 +119,8 @@ async function drive(): Promise<string> {
   seen.project = [...project.querySelectorAll('[data-slot="summary-row"]')].map((row) => row.textContent?.replace(/\s+/g, " ").trim());
   seen.branchTip = project.querySelector('[data-row="branch"]')?.getAttribute("title");
   seen.findingsInCard = card()!.querySelectorAll('[data-slot*="finding"]').length;
-  job?.click();
+  // The whole card is one open button laid over its content (the action buttons are siblings).
+  job?.parentElement?.querySelector<HTMLButtonElement>(':scope > [data-slot="job-card-open"]')?.click();
   await frame();
   seen.jobOpens = sessionTabs(id).active;
   seen.branchIsButton = project.querySelector('[data-row="branch"]')?.tagName === "BUTTON";

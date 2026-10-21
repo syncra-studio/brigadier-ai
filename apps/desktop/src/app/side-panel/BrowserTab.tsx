@@ -1,46 +1,33 @@
-import { type ReactNode, type RefObject, useEffect, useEffectEvent, useRef, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { AddressSuggestions, useAddressSuggestions } from "./AddressSuggestions";
 import { type Suggestion, stepSuggestion } from "./browserSuggestions";
-import { browserAddress, shownAddress, siteSecurity, webAddress } from "./browserAddress";
+import { browserAddress, shownAddress, webAddress } from "./browserAddress";
 import { showPage } from "../conversation/browserLayer";
-import { type BrowserKey, browserKey, stepZoom, ZOOM_LEAST, ZOOM_MOST, zoomLabel } from "../conversation/browserKeys";
+import { type BrowserKey, browserKey, stepZoom } from "../conversation/browserKeys";
 import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
+import { BrowserOptions } from "./BrowserOptions";
+import { FindBar } from "./FindBar";
+import { NavigationCapsule } from "./NavigationCapsule";
+import { SiteInfo } from "./SiteInfo";
 
 import {
-  ArrowLeft,
-  ArrowRight,
   ArrowUpRight,
   CameraPhoto,
-  ChevronDown,
-  ChevronUp,
-  DotsHorizontal,
   Globe,
-  Info,
-  Lock,
-  Minus,
-  Plus,
-  Reload,
-  Search,
-  Spinner,
-  Warning,
-  X,
 } from "@/components/icons";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { Banner } from "@/components/shared";
-import { TooltipIconButton } from "@/components/controls";
+import { Button, TooltipIconButton } from "@/components/controls";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
-import { closeFind, findInPage, findLabel, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";
+import { closeFind, findInPage, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";
 import {
   dismissBlocked,
   openPage,
   useBrowsers,
   zoomPage,
 } from "@/state/browsers";
-import { openSettings } from "@/state/actions";
 import { handBack, pageShows, useAgentPause, userUsed } from "@/state/agentPause";
-import { openBrowserSettings } from "@/state/browserSettings";
 import { useBrowserOn } from "@/state/links";
 import { selectTab, sessionWith, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -103,255 +90,6 @@ function failed(cause: unknown) {
 
 function openOutside(url: string) {
   openUrl(url).catch(failed);
-}
-
-/** Back, Forward and Reload: round, and faint while they can't act. */
-const NAV_BUTTON = "rounded-full disabled:opacity-40 disabled:text-muted-foreground";
-
-/** What the site information popover says of each kind of page. */
-const SECURITY = {
-  secure: {
-    label: "View site information",
-    Icon: Lock,
-    title: "Connection is secure",
-    detail: "Passwords, card numbers and anything else you send this site stay private on the way there.",
-  },
-  insecure: {
-    label: "Not secure, view site information",
-    Icon: Warning,
-    title: "Connection is not secure",
-    detail: "Don't enter passwords, card numbers or other private information here: others on the network could read them.",
-  },
-  local: {
-    label: "View site information",
-    Icon: Info,
-    title: "Connection is not secure",
-    detail: "This page comes from your own computer, so what you send it doesn't travel over the network.",
-  },
-} as const;
-
-/**
- * The address field's start: a lock for https (shown while the pointer is over the field), "Not
- * secure" for http, nothing on the New tab page. It opens what is known of the connection.
- */
-function SiteInfo({ url }: { url: string }) {
-  const security = siteSecurity(url);
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const [open, setOpen] = useState(false);
-  if (!security) return null;
-  const { label, Icon, title, detail } = SECURITY[security];
-  let host = url;
-  try {
-    host = new URL(url).host;
-  } catch {
-    // siteSecurity read it already.
-  }
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <TooltipIconButton
-          tooltip={label}
-          size="icon-md"
-          data-slot="browser-site-info"
-          data-security={security}
-          className={cn(
-            "shrink-0 rounded-full",
-            security === "insecure"
-              ? "text-destructive w-auto gap-1 px-2 text-xs"
-              : "opacity-0 group-hover/address:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100",
-          )}
-        >
-          <Icon />
-          {security === "insecure" && <span aria-hidden>Not secure</span>}
-        </TooltipIconButton>
-      </PopoverTrigger>
-      <PopoverContent align="start" aria-label="Site information" className="w-browser-site-info p-3">
-        <p className="text-browser truncate font-medium">{host}</p>
-        <div className="mt-3 flex items-start gap-2">
-          <Icon aria-hidden className={cn("size-icon-md mt-0.5 shrink-0", security === "insecure" && "text-destructive")} />
-          <div className="min-w-0">
-            <p className="text-browser">{title}</p>
-            <p className="text-muted-foreground mt-0.5 text-xs">{detail}</p>
-          </div>
-        </div>
-        {mac && (
-          <>
-            <div className="bg-border -mx-3 my-3 h-px" />
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                openBrowserSettings("sites");
-              }}
-              className="hover:bg-foreground/8 text-browser h-browser-menu-item -mx-1 flex w-full items-center rounded-capsule px-1"
-            >
-              Site settings
-            </button>
-          </>
-        )}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** The ⋯ menu's rows the page does natively (macOS), faint while there is no page to act on. */
-const NATIVE_ITEM = "data-[disabled]:opacity-40";
-
-/**
- * The ⋯ menu: the page's own actions (Find in page, Print and Zoom, which the page does natively
- * on macOS and only once there is one), then where the browser's data lives in Settings.
- */
-function BrowserOptions({
-  native,
-  zoom,
-  onFind,
-  onPrint,
-  onZoom,
-}: {
-  /** A page is open and does them natively. */
-  native: boolean;
-  zoom: number;
-  onFind: () => void;
-  onPrint: () => void;
-  onZoom: (zoom: number) => void;
-}) {
-  const mac = useApp((s) => s.info?.platform === "macos");
-  // Find in page puts the keyboard in its field: the menu doesn't take it back to its button.
-  const keepFocus = useRef(false);
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip="Browser options" size="icon-lg" className="shrink-0 rounded-full">
-          <DotsHorizontal />
-        </TooltipIconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        data-slot="browser-options"
-        className="w-browser-menu rounded-browser-menu [&_[role=menuitem]]:h-browser-menu-item [&_[role=menuitem]]:text-browser"
-        onCloseAutoFocus={(event) => {
-          if (!keepFocus.current) return;
-          keepFocus.current = false;
-          event.preventDefault();
-        }}
-      >
-        <DropdownMenuItem
-          disabled={!native}
-          className={NATIVE_ITEM}
-          onSelect={() => {
-            keepFocus.current = true;
-            onFind();
-          }}
-        >
-          Find in page
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled={!native} className={NATIVE_ITEM} onSelect={onPrint}>Print</DropdownMenuItem>
-        <DropdownMenuSeparator className="mx-2" />
-        <div role="group" aria-label="Zoom" className="text-browser flex h-browser-menu-item items-center gap-1 ps-2 pe-1">
-          <span className="flex-1">Zoom</span>
-          <div className="border-border bg-foreground/5 flex h-browser-zoom items-center rounded-lg border text-xs">
-            <button
-              type="button"
-              disabled={!native || zoom <= ZOOM_LEAST}
-              aria-label="Zoom out"
-              onClick={() => onZoom(stepZoom(zoom, -1))}
-              className="hover:bg-foreground/8 flex size-6 items-center justify-center rounded-s-lg disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <Minus className="size-icon-sm" />
-            </button>
-            <span data-slot="browser-zoom" aria-live="polite" className="border-border w-browser-zoom-value border-x text-center tabular-nums">
-              {zoomLabel(zoom)}
-            </span>
-            <button
-              type="button"
-              disabled={!native || zoom >= ZOOM_MOST}
-              aria-label="Zoom in"
-              onClick={() => onZoom(stepZoom(zoom, 1))}
-              className="hover:bg-foreground/8 flex size-6 items-center justify-center rounded-e-lg disabled:opacity-40 disabled:hover:bg-transparent"
-            >
-              <Plus className="size-icon-sm" />
-            </button>
-          </div>
-          <button
-            type="button"
-            disabled={!native || zoom === 1}
-            aria-label="Reset zoom"
-            onClick={() => onZoom(1)}
-            className="hover:bg-foreground/8 flex size-6 items-center justify-center rounded-full disabled:opacity-40 disabled:hover:bg-transparent"
-          >
-            <Reload className="size-icon-sm" />
-          </button>
-        </div>
-        <DropdownMenuSeparator className="mx-2" />
-        {mac && <DropdownMenuItem onSelect={() => openSettings("browserImport")}>Import Browser Data…</DropdownMenuItem>}
-        <DropdownMenuItem onSelect={() => openBrowserSettings("downloads")}>Downloads</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openBrowserSettings("history")}>History</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openBrowserSettings("clear")}>Clear browsing data</DropdownMenuItem>
-        <DropdownMenuSeparator className="mx-2" />
-        <DropdownMenuItem onSelect={() => openBrowserSettings()}>Browser settings</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/**
- * The page's find bar, under the toolbar at its end (the page, drawn over the window, would hide
- * it anywhere over the page): the text, which match of how many, the previous and next match,
- * and close. Enter goes to the next match, Shift+Enter the previous, Esc closes.
- */
-function FindBar({ id, input, onClose }: { id: string; input: RefObject<HTMLInputElement | null>; onClose: () => void }) {
-  const find = useBrowserFind((s) => s.tabs[id]) ?? NO_FIND;
-  const label = findLabel(find);
-  const step = (backwards: boolean) => {
-    if (find.query) void findInPage(id, find.query, backwards ? "previous" : "next");
-  };
-  return (
-    <div data-slot="browser-find-row" className="border-border flex shrink-0 justify-end border-b px-2 py-1">
-      <div
-        role="search"
-        aria-label="Find in page"
-        data-slot="browser-find"
-        className="bg-popover text-popover-foreground shadow-browser-find rounded-menu flex h-browser-find-row w-browser-find max-w-full min-w-0 items-center gap-2 ps-4 pe-2"
-      >
-        <Search aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
-        <input
-          ref={input}
-          value={find.query}
-          placeholder="Find in page…"
-          aria-label="Find in page"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          onChange={(event) => void findInPage(id, event.target.value, "type")}
-          onFocus={(event) => event.target.select()}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              step(event.shiftKey);
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              onClose();
-            }
-          }}
-          className="text-browser placeholder:text-muted-foreground h-6 min-w-0 flex-1 bg-transparent outline-none"
-        />
-        <span data-slot="browser-find-count" aria-live="polite" className="text-muted-foreground shrink-0 text-xs whitespace-nowrap tabular-nums select-none">
-          {label}
-        </span>
-        <TooltipIconButton tooltip="Previous match" shortcut="⇧↵" size="icon-xs" disabled={!find.found} onClick={() => step(true)}>
-          <ChevronUp />
-        </TooltipIconButton>
-        <TooltipIconButton tooltip="Next match" shortcut="↵" size="icon-xs" disabled={!find.found} onClick={() => step(false)}>
-          <ChevronDown />
-        </TooltipIconButton>
-        <span aria-hidden className="bg-border h-4 w-px shrink-0" />
-        <TooltipIconButton tooltip="Close find" size="icon-xs" onClick={onClose}>
-          <X />
-        </TooltipIconButton>
-      </div>
-    </div>
-  );
 }
 
 const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -627,26 +365,7 @@ export function BrowserTab({
   return (
     <div data-pane="browser" data-active={active || undefined} className="@container/new-tab flex min-h-0 flex-1 flex-col">
       <div data-slot="browser-toolbar" className="@container/browser-toolbar border-border flex h-12 shrink-0 items-center gap-1.5 border-b p-2">
-        <div role="group" aria-label="Navigation" data-slot="browser-navigation" className="bg-muted/60 flex h-control-md shrink-0 items-center rounded-full p-0.5">
-          <TooltipIconButton tooltip="Back" size="icon-md" className={NAV_BUTTON} disabled={!embedded || !made} onClick={() => act("back")}>
-            <ArrowLeft />
-          </TooltipIconButton>
-          <TooltipIconButton tooltip="Forward" size="icon-md" className={NAV_BUTTON} disabled={!embedded || !made} onClick={() => act("forward")}>
-            <ArrowRight />
-          </TooltipIconButton>
-          <span aria-hidden className="bg-border mx-1 h-4 w-px shrink-0" />
-          {/* While the page loads the spinner stands in for Reload, and stops the load. */}
-          <TooltipIconButton
-            tooltip={loading ? "Stop loading" : "Reload"}
-            size="icon-md"
-            className={NAV_BUTTON}
-            aria-busy={loading}
-            disabled={!embedded || !made}
-            onClick={() => act(loading ? "stop" : "reload")}
-          >
-            {loading ? <Spinner className="animate-spin" /> : <Reload />}
-          </TooltipIconButton>
-        </div>
+        <NavigationCapsule disabled={!embedded || !made} loading={loading} onAct={act} />
         <form
           className="flex min-w-0 flex-1 justify-center px-1 @max-sm/browser-toolbar:px-0"
           onSubmit={(event) => {
@@ -777,13 +496,9 @@ export function BrowserTab({
           data-slot="browser-paused"
           text={<>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
         >
-          <button
-            type="button"
-            onClick={() => handBack(conversationId)}
-            className="bg-foreground text-background hover:bg-foreground/90 rounded-control h-control-sm shrink-0 px-3 font-medium transition-colors"
-          >
+          <Button size="sm" onClick={() => handBack(conversationId)}>
             Continue
-          </button>
+          </Button>
         </Banner>
       )}
       {page?.blocked && (
@@ -792,13 +507,9 @@ export function BrowserTab({
           onDismiss={() => dismissBlocked(conversationId)}
         >
           {webAddress(page.blocked) && (
-            <button
-              type="button"
-              onClick={() => page.blocked && openOutside(page.blocked)}
-              className="hover:bg-foreground/5 rounded-control h-control-sm shrink-0 px-2 transition-colors"
-            >
+            <Button size="sm" variant="ghost" onClick={() => page.blocked && openOutside(page.blocked)}>
               Open in browser
-            </button>
+            </Button>
           )}
         </Banner>
       )}
