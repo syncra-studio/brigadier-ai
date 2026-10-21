@@ -289,8 +289,13 @@ pub enum SignIn {
     InBrigadier,
     /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
     Needed,
-    /// Not known: a store couldn't be read without asking the user, or they said no.
+    /// Not known: a store couldn't be read without asking the user, or it failed.
     Unknown,
+    /// The agent's stored sign-in can't be reused: the system wasn't allowed to let Brigadier
+    /// read it.
+    NotAllowed(Agent),
+    /// Sign-ins to it can't be checked or kept on this system.
+    Unsupported,
 }
 
 /// A session, as far as what it finds by itself goes.
@@ -432,7 +437,12 @@ impl Catalog {
         if native && stores.probe(session.agent.into(), server) != Probe::Absent {
             return Some((SignIn::Native, None));
         }
-        let mut unknown = false;
+        let (mut refused, mut unknown, mut unsupported) = (None, false, false);
+        let mut note = |probe| match probe {
+            Probe::Unknown => unknown = true,
+            Probe::Unsupported => unsupported = true,
+            Probe::Usable | Probe::Absent | Probe::Refused => {}
+        };
         for entry in sign_ins::same_server(&self.servers, server) {
             let Some(agent) = owner_agent(entry.source) else {
                 continue;
@@ -442,16 +452,24 @@ impl Catalog {
             }
             match stores.probe(agent.into(), entry) {
                 Probe::Usable => return Some((SignIn::ReusableFrom(agent), Some(entry))),
-                Probe::Unknown => unknown = true,
-                Probe::Absent => {}
+                Probe::Refused => refused = refused.or(Some(agent)),
+                probe => note(probe),
             }
         }
-        Some(match stores.probe(Owner::Brigadier, server) {
-            Probe::Usable => (SignIn::InBrigadier, None),
-            Probe::Unknown => (SignIn::Unknown, None),
-            Probe::Absent if unknown => (SignIn::Unknown, None),
-            Probe::Absent => (SignIn::Needed, None),
-        })
+        match stores.probe(Owner::Brigadier, server) {
+            Probe::Usable => return Some((SignIn::InBrigadier, None)),
+            probe => note(probe),
+        }
+        // What stands in the way of a reuse, the one the user can act on first.
+        Some((
+            match (refused, unknown, unsupported) {
+                (Some(agent), _, _) => SignIn::NotAllowed(agent),
+                (None, true, _) => SignIn::Unknown,
+                (None, false, true) => SignIn::Unsupported,
+                (None, false, false) => SignIn::Needed,
+            },
+            None,
+        ))
     }
 
     pub fn server(&self, id: &str) -> Option<&Server> {

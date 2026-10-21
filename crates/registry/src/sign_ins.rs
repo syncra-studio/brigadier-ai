@@ -32,9 +32,12 @@ pub enum Probe {
     Usable,
     /// None, or one that can't serve any more.
     Absent,
-    /// Not known: the store couldn't be read without asking the user, they said no, or it is
-    /// one Brigadier doesn't read.
+    /// Not known: the store couldn't be read without asking the user, or it failed.
     Unknown,
+    /// The system wasn't allowed to let Brigadier read it (the user said no to its prompt).
+    Refused,
+    /// A store Brigadier can't read or keep on this system.
+    Unsupported,
 }
 
 /// The stored sign-ins, as far as the caller can read them.
