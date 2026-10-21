@@ -277,6 +277,39 @@ table is the current one.
 | Inspector (settings.pen) | `#1082 TranscriptList` | `app/inspector/providers/TranscriptList.tsx` | `TranscriptList` | |
 | Inspector (settings.pen) | `#1083 ApprovalCard (RawSessionView)` | `app/inspector/providers/RawApprovalCard.tsx` | `RawApprovalCard` | |
 | Inspector (settings.pen) | `#1084 Composer (raw session)` | `app/inspector/providers/RawSessionComposer.tsx` | `RawSessionComposer` | |
+| Conversation (app.pen) | `#147 LoadEarlier` | `app/conversation/LoadEarlier.tsx` | `LoadEarlier` | |
+| Conversation (app.pen) | `#148 UserAttachments` | `app/conversation/UserAttachments.tsx` | `UserAttachments` | |
+| Conversation (app.pen) | `#160 UpdateText and 4 parts` | `app/conversation/UpdateText.tsx` | `UpdateText` | parts: `ReplyText`, `ReportText` (+ `AnswerDetails`), `DetailsFold`, `PhaseOutcome`, each in its own file |
+| Conversation (app.pen) | `#164 SteerBubble` | `app/conversation/SteerBubble.tsx` | `SteerBubble` | |
+| Conversation (app.pen) | `#165 BlockError` | `app/conversation/BlockError.tsx` | `BlockError` | |
+| Conversation (app.pen) | `#166 usage-limit divider` | `app/conversation/UsageLimitDivider.tsx` | `UsageLimitDivider` | |
+| Conversation (app.pen) | `#168 joined answer` | `app/conversation/JoinedAnswer.tsx` | `JoinedAnswer` | |
+| Conversation (app.pen) | `#170 ModelChanged` | `app/conversation/ModelChanged.tsx` | `ModelChanged` | |
+| Conversation (app.pen) | `#171 AnswerActions and 2 parts` | `app/conversation/AnswerActions.tsx` | `AnswerActions` | parts: `JoinedAnswerActions`, `ReadAloud`, each in its own file |
+| Conversation (app.pen) | `#174 ContinuedFrom` | `app/conversation/ContinuedFrom.tsx` | `ContinuedFrom` | |
+| Conversation (app.pen) | `#187 WorkHeader (RequestBlock)` | `app/conversation/WorkHeader.tsx` | `WorkHeader` | |
+| Conversation (app.pen) | `#189 CompactionBlock` | `app/conversation/CompactionBlock.tsx` | `CompactionBlock` | |
+| Conversation (app.pen) | `#190 ActivityItems` | `app/conversation/ActivityItems.tsx` | `ActivityItems` | |
+| Conversation (app.pen) | `#198 RepeatsRow` | `app/conversation/activity/RepeatsRow.tsx` | `RepeatsRow` | |
+| Conversation (app.pen) | `#200 group step list (ActivityGroup)` | `app/conversation/activity/GroupStepList.tsx` | `GroupStepList` | |
+| Conversation (app.pen) | `#201 RunOutput` | `app/conversation/activity/RunOutput.tsx` | `RunOutput` | |
+| Conversation (app.pen) | `#203 FileLink` | `app/conversation/activity/FileLink.tsx` | `FileLink` | |
+| Conversation (app.pen) | `#204 FileCounts` | `app/conversation/activity/FileCounts.tsx` | `FileCounts` | |
+| Conversation (app.pen) | `#213 MachineRow` | `app/conversation/activity/MachineRow.tsx` | `MachineRow` | |
+| Conversation (app.pen) | `#214 DecidedRow` | `app/conversation/activity/DecidedRow.tsx` | `DecidedRow` | |
+| Conversation (app.pen) | `#215 QuotaResumed` | `app/conversation/activity/QuotaResumed.tsx` | `QuotaResumed` | |
+| Conversation (app.pen) | `#217 ThreadStep › merged row` | `app/conversation/activity/MergedRow.tsx` | `MergedRow` | |
+| Conversation (app.pen) | `#218 PeerLink` | `app/conversation/activity/PeerLink.tsx` | `PeerLink` | |
+| Conversation (app.pen) | `#226 ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | |
+| Conversation (app.pen) | `#227 Diffs` | `app/conversation/activity/Diffs.tsx` | `Diffs` | |
+| Conversation (app.pen) | `#228 LeadToolDetail` | `app/conversation/activity/LeadToolDetail.tsx` | `LeadToolDetail` | |
+| Conversation (app.pen) | `#229 LeadItemDetail` | `app/conversation/activity/LeadItemDetail.tsx` | `LeadItemDetail` | |
+| Conversation (app.pen) | `#233 TeamSentence › Glyphs` | `app/conversation/activity/Glyphs.tsx` | `Glyphs` | |
+| Conversation (app.pen) | `#234 TeamSentence › Briefs` | `app/conversation/activity/Briefs.tsx` | `Briefs` | |
+| Conversation (app.pen) | `#236 TeamStep › Quiet` | `app/conversation/activity/QuietBrief.tsx` | `QuietBrief` | |
+| Conversation (app.pen) | `#270 Notices` | `app/conversation/Notices.tsx` | `Notices` | |
+| Conversation (app.pen) | `#271 AboveComposer` | `app/conversation/AboveComposer.tsx` | `AboveComposer` | |
+| Conversation (app.pen) | `#272 AboveComposer › inline: archived bar` | `app/conversation/ArchivedBar.tsx` | `ArchivedBar` | |
 | Conversation (app.pen) | `#276 ApprovalAction › inline: Reply… button` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | |
 | Conversation (app.pen) | `#279 CardDictate` | `app/conversation/CardDictate.tsx` | `CardDictate` | |
 | Conversation (app.pen) | `#280 ChoiceCard` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |
@@ -285,9 +318,52 @@ table is the current one.
 | Conversation (app.pen) | `#284 PlanAction` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
 | Conversation (app.pen) | `#285 PhasePlanAction` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
 | Conversation (app.pen) | `#286 OvernightAction` | `app/conversation/OvernightAction.tsx` | `OvernightAction` | |
+| Conversation (app.pen) | `#289 ConversationComposer › inline: composer card` | `app/conversation/ComposerCard.tsx` | `ComposerCard` | |
+| Conversation (app.pen) | `#290 ComposerInput` | `app/conversation/ComposerInput.tsx` | `ComposerInput` | |
+| Conversation (app.pen) | `#292 ComposerContextRing` | `app/conversation/ComposerContextRing.tsx` | `ComposerContextRing` | |
+| Conversation (app.pen) | `#293 FullAccessNotice` | `app/conversation/FullAccessNotice.tsx` | `FullAccessNotice` | |
+| Conversation (app.pen) | `#294 UtilityBar` | `app/conversation/UtilityBar.tsx` | `UtilityBar` | |
+| Conversation (app.pen) | `#295 SendControls` | `app/conversation/SendControls.tsx` | `SendControls` | the button itself is `SendButton` (Primitives · Controls) |
+| Conversation (app.pen) | `#296 DictationNote` | `app/conversation/DictationNote.tsx` | `DictationNote` | |
+| Conversation (app.pen) | `#297 DictateButton` | `app/conversation/DictateButton.tsx` | `DictateButton` | |
+| Conversation (app.pen) | `#298 ComposerFooter` | `app/conversation/ComposerFooter.tsx` | `ComposerFooter` | |
+| Conversation (app.pen) | `#299 DictationBar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
+| Conversation (app.pen) | `#300 DictationBar › inline: waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
+| Conversation (app.pen) | `#301 ComposerHint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
+| Conversation (app.pen) | `#302 Pill (ComposerCapsule)` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
+| Conversation (app.pen) | `#303 StepList` | `app/conversation/StepList.tsx` | `StepList` | |
+| Conversation (app.pen) | `#305 RunCapsule` | `app/conversation/RunCapsule.tsx` | `RunCapsule` | |
+| Conversation (app.pen) | `#306 Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
+| Conversation (app.pen) | `#307 RequestCapsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
+| Conversation (app.pen) | `#308 DiffPill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
+| Conversation (app.pen) | `#310 Toggle (ComposerStatusSlot)` | `app/conversation/StatusSlotToggle.tsx` | `StatusSlotToggle` | |
+| Conversation (app.pen) | `#311 CiPill` | `app/conversation/CiPill.tsx` | `CiPill` | |
+| Conversation (app.pen) | `#312 MergePill` | `app/conversation/MergePill.tsx` | `MergePill` | |
+| Conversation (app.pen) | `#314 ComposerStatusSlot › inline: folded count badge` | `app/conversation/FoldedCountBadge.tsx` | `FoldedCountBadge` | |
+| Conversation (app.pen) | `#320 QueueCard › inline: moved message notice` | `app/conversation/MovedMessageNotice.tsx` | `MovedMessageNotice` | |
+| Conversation (app.pen) | `#321 RailPill` | `app/conversation/RailPill.tsx` | `RailPill` | |
+| Conversation (app.pen) | `#326 StandInPill` | `app/shell/StandInPill.tsx` | `StandInPill` | |
+| Conversation (app.pen) | `#327 WaitingPill` | `app/shell/WaitingPill.tsx` | `WaitingPill` | |
+| Conversation (app.pen) | `#330 StatusCard › Row` | `app/conversation/StatusCardRow.tsx` | `StatusCardRow` | |
+| Conversation (app.pen) | `#331 StatusCard › LimitBar` | `app/conversation/LimitBar.tsx` | `LimitBar` | |
+| Conversation (app.pen) | `#334 WorkersStrip › StripRow` | `app/conversation/activity/StripRow.tsx` | `StripRow` | |
 | Conversation (app.pen) | `#364 ChangesCard › FileRow` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
 | Conversation (app.pen) | `#366 ChangesCard › inline: merge warning row` | `app/conversation/MergeWarningRow.tsx` | `MergeWarningRow` | |
 | Conversation (app.pen) | `#367 ChangesCard › inline: revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
+| Conversation (app.pen) | `#370 TurnEnd` | `app/conversation/TurnEnd.tsx` | `TurnEnd` | |
+| Conversation (app.pen) | `#375 PreviewCard › OpenPill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
+| Conversation (app.pen) | `#376 PreviewCard › Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
+| Conversation (app.pen) | `#382 PlanCard` | `app/conversation/cards/PlanCard.tsx` | `PlanCard` | |
+| Conversation (app.pen) | `#384 OvernightPlanCard › PhaseWork` | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | |
+| Conversation (app.pen) | `#386 OvernightPlanCard › Rules and sources disclosure` | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | |
+| Conversation (app.pen) | `#388 PhaseMore` | `app/conversation/cards/PhaseMore.tsx` | `PhaseMore` | |
+| Conversation (app.pen) | `#389 DoneWhen` | `app/conversation/cards/DoneWhen.tsx` | `DoneWhen` | |
+| Conversation (app.pen) | `#392 PlanRating` | `app/conversation/cards/PlanRating.tsx` | `PlanRating` | |
+| Conversation (app.pen) | `#393 PlanFrame` | `app/conversation/cards/PlanFrame.tsx` | `PlanFrame` | |
+| Conversation (app.pen) | `#395 PlanClip` | `app/conversation/cards/PlanClip.tsx` | `PlanClip` | |
+| Conversation (app.pen) | `#970 ProjectCombobox › picker row` | `app/conversation/PickerRow.tsx` | `PickerRow` | |
+| Conversation (app.pen) | `#971 UsageRemaining` | `app/conversation/UsageRemaining.tsx` | `UsageRemaining` | |
+| Conversation (app.pen) | `PlanText` | `app/conversation/cards/PlanText.tsx` | `PlanText` | moved out of PlanDocument.tsx with PlanClip; PlanDocument re-exports it |
 | Settings (settings.pen) | `#684 SettingsPage › back link` | `app/settings/BackLink.tsx` | `BackLink` | |
 | Settings (settings.pen) | `#607 BrowserDownloads › inline: download row` | `app/settings/DownloadRow.tsx` | `DownloadRow` | |
 | Settings (settings.pen) | `#610 BrowserHistory › inline: day group (collapsible card)` | `app/settings/DayGroup.tsx` | `DayGroup` | |
@@ -310,18 +386,6 @@ table is the current one.
 | Settings (settings.pen) | `#632 BrowserSiteSettings › inline: site row` | `app/settings/SiteRow.tsx` | `SiteRow` | |
 | Settings (settings.pen) | `#634 ClearForm` | `app/settings/ClearForm.tsx` | `ClearForm` | |
 | Settings (settings.pen) | `#635 ClearForm › inline: tick row` | `app/settings/TickRow.tsx` | `TickRow` | |
-| Conversation (app.pen) | `#289 ConversationComposer › inline: composer card` | `app/conversation/ComposerCard.tsx` | `ComposerCard` | |
-| Conversation (app.pen) | `#290 ComposerInput` | `app/conversation/ComposerInput.tsx` | `ComposerInput` | |
-| Conversation (app.pen) | `#292 ComposerContextRing` | `app/conversation/ComposerContextRing.tsx` | `ComposerContextRing` | |
-| Conversation (app.pen) | `#293 FullAccessNotice` | `app/conversation/FullAccessNotice.tsx` | `FullAccessNotice` | |
-| Conversation (app.pen) | `#294 UtilityBar` | `app/conversation/UtilityBar.tsx` | `UtilityBar` | |
-| Conversation (app.pen) | `#295 SendControls` | `app/conversation/SendControls.tsx` | `SendControls` | the button itself is `SendButton` (Primitives · Controls) |
-| Conversation (app.pen) | `#296 DictationNote` | `app/conversation/DictationNote.tsx` | `DictationNote` | |
-| Conversation (app.pen) | `#297 DictateButton` | `app/conversation/DictateButton.tsx` | `DictateButton` | |
-| Conversation (app.pen) | `#298 ComposerFooter` | `app/conversation/ComposerFooter.tsx` | `ComposerFooter` | |
-| Conversation (app.pen) | `#299 DictationBar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
-| Conversation (app.pen) | `#300 DictationBar › inline: waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
-| Conversation (app.pen) | `#301 ComposerHint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
 | Settings (settings.pen) | `#645 AppearanceSection` | `app/settings/AppearanceSection.tsx` | `AppearanceSection` | |
 | Settings (settings.pen) | `#646 NameRow` | `app/settings/NameRow.tsx` | `NameRow` | |
 | Settings (settings.pen) | `#647 ComposerSection (general)` | `app/settings/ComposerSection.tsx` | `ComposerSection` | |
@@ -333,25 +397,10 @@ table is the current one.
 | Settings (settings.pen) | `#653 AboutSection › inline: version value` | `app/settings/VersionValue.tsx` | `VersionValue` | |
 | Settings (settings.pen) | `#654 HibernateRow` | `app/settings/HibernateRow.tsx` | `HibernateRow` | |
 | Settings (settings.pen) | `#675 Picture (sidebar closed preview)` | `app/settings/SidebarClosedPicture.tsx` | `SidebarClosedPicture` | |
-| Conversation (app.pen) | `#302 Pill (ComposerCapsule)` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
-| Conversation (app.pen) | `#303 StepList` | `app/conversation/StepList.tsx` | `StepList` | |
-| Conversation (app.pen) | `#305 RunCapsule` | `app/conversation/RunCapsule.tsx` | `RunCapsule` | |
-| Conversation (app.pen) | `#306 Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
-| Conversation (app.pen) | `#307 RequestCapsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
-| Conversation (app.pen) | `#308 DiffPill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
-| Conversation (app.pen) | `#310 Toggle (ComposerStatusSlot)` | `app/conversation/StatusSlotToggle.tsx` | `StatusSlotToggle` | |
-| Conversation (app.pen) | `#311 CiPill` | `app/conversation/CiPill.tsx` | `CiPill` | |
-| Conversation (app.pen) | `#312 MergePill` | `app/conversation/MergePill.tsx` | `MergePill` | |
-| Conversation (app.pen) | `#314 ComposerStatusSlot › inline: folded count badge` | `app/conversation/FoldedCountBadge.tsx` | `FoldedCountBadge` | |
 | Settings (settings.pen) | `#755 Installation` | `app/settings/providers/Installation.tsx` | `Installation` | |
 | Settings (settings.pen) | `#756 AgentModels` | `app/settings/providers/AgentModels.tsx` | `AgentModels` | |
 | Settings (settings.pen) | `#758 AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
 | Settings (settings.pen) | `#763 AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
-| Conversation (app.pen) | `#147 LoadEarlier` | `app/conversation/LoadEarlier.tsx` | `LoadEarlier` | |
-| Conversation (app.pen) | `#148 UserAttachments` | `app/conversation/UserAttachments.tsx` | `UserAttachments` | |
-| Conversation (app.pen) | `#270 Notices` | `app/conversation/Notices.tsx` | `Notices` | |
-| Conversation (app.pen) | `#271 AboveComposer` | `app/conversation/AboveComposer.tsx` | `AboveComposer` | |
-| Conversation (app.pen) | `#272 AboveComposer › inline: archived bar` | `app/conversation/ArchivedBar.tsx` | `ArchivedBar` | |
 | Settings (settings.pen) | `#738 RankingView` | `app/settings/RankingView.tsx` | `RankingView` | |
 | Settings (settings.pen) | `#773 More › kind of work row` | `app/settings/routing/KindOfWorkRow.tsx` | `KindOfWorkRow` | |
 | Settings (settings.pen) | `#774 More › loading line` | `app/settings/routing/LoadingLine.tsx` | `LoadingLine` | |
@@ -384,55 +433,6 @@ table is the current one.
 | Settings (settings.pen) | `#713 Size` | `app/settings/storage/StorageSize.tsx` | `StorageSize` | |
 | Settings (settings.pen) | `#714 UnusedRow` | `app/settings/storage/UnusedRow.tsx` | `UnusedRow` | |
 | Settings (settings.pen) | `#719 UsageCard` | `app/settings/storage/UsageCard.tsx` | `UsageCard` | |
-| Conversation (app.pen) | `#320 QueueCard › inline: moved message notice` | `app/conversation/MovedMessageNotice.tsx` | `MovedMessageNotice` | |
-| Conversation (app.pen) | `#321 RailPill` | `app/conversation/RailPill.tsx` | `RailPill` | |
-| Conversation (app.pen) | `#970 ProjectCombobox › picker row` | `app/conversation/PickerRow.tsx` | `PickerRow` | |
-| Conversation (app.pen) | `#971 UsageRemaining` | `app/conversation/UsageRemaining.tsx` | `UsageRemaining` | |
-| Conversation (app.pen) | `#330 StatusCard › Row` | `app/conversation/StatusCardRow.tsx` | `StatusCardRow` | |
-| Conversation (app.pen) | `#331 StatusCard › LimitBar` | `app/conversation/LimitBar.tsx` | `LimitBar` | |
-| Conversation (app.pen) | `#160 UpdateText and 4 parts` | `app/conversation/UpdateText.tsx` | `UpdateText` | parts: `ReplyText`, `ReportText` (+ `AnswerDetails`), `DetailsFold`, `PhaseOutcome`, each in its own file |
-| Conversation (app.pen) | `#168 joined answer` | `app/conversation/JoinedAnswer.tsx` | `JoinedAnswer` | |
-| Conversation (app.pen) | `#164 SteerBubble` | `app/conversation/SteerBubble.tsx` | `SteerBubble` | |
-| Conversation (app.pen) | `#165 BlockError` | `app/conversation/BlockError.tsx` | `BlockError` | |
-| Conversation (app.pen) | `#166 usage-limit divider` | `app/conversation/UsageLimitDivider.tsx` | `UsageLimitDivider` | |
-| Conversation (app.pen) | `#170 ModelChanged` | `app/conversation/ModelChanged.tsx` | `ModelChanged` | |
-| Conversation (app.pen) | `#174 ContinuedFrom` | `app/conversation/ContinuedFrom.tsx` | `ContinuedFrom` | |
-| Conversation (app.pen) | `#171 AnswerActions and 2 parts` | `app/conversation/AnswerActions.tsx` | `AnswerActions` | parts: `JoinedAnswerActions`, `ReadAloud`, each in its own file |
-| Conversation (app.pen) | `#187 WorkHeader (RequestBlock)` | `app/conversation/WorkHeader.tsx` | `WorkHeader` | |
-| Conversation (app.pen) | `#189 CompactionBlock` | `app/conversation/CompactionBlock.tsx` | `CompactionBlock` | |
-| Conversation (app.pen) | `#190 ActivityItems` | `app/conversation/ActivityItems.tsx` | `ActivityItems` | |
-| Conversation (app.pen) | `#370 TurnEnd` | `app/conversation/TurnEnd.tsx` | `TurnEnd` | |
-| Conversation (app.pen) | `#198 RepeatsRow` | `app/conversation/activity/RepeatsRow.tsx` | `RepeatsRow` | |
-| Conversation (app.pen) | `#200 group step list (ActivityGroup)` | `app/conversation/activity/GroupStepList.tsx` | `GroupStepList` | |
-| Conversation (app.pen) | `#201 RunOutput` | `app/conversation/activity/RunOutput.tsx` | `RunOutput` | |
-| Conversation (app.pen) | `#203 FileLink` | `app/conversation/activity/FileLink.tsx` | `FileLink` | |
-| Conversation (app.pen) | `#204 FileCounts` | `app/conversation/activity/FileCounts.tsx` | `FileCounts` | |
-| Conversation (app.pen) | `#213 MachineRow` | `app/conversation/activity/MachineRow.tsx` | `MachineRow` | |
-| Conversation (app.pen) | `#214 DecidedRow` | `app/conversation/activity/DecidedRow.tsx` | `DecidedRow` | |
-| Conversation (app.pen) | `#215 QuotaResumed` | `app/conversation/activity/QuotaResumed.tsx` | `QuotaResumed` | |
-| Conversation (app.pen) | `#217 ThreadStep › merged row` | `app/conversation/activity/MergedRow.tsx` | `MergedRow` | |
-| Conversation (app.pen) | `#218 PeerLink` | `app/conversation/activity/PeerLink.tsx` | `PeerLink` | |
-| Conversation (app.pen) | `#375 PreviewCard › OpenPill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
-| Conversation (app.pen) | `#376 PreviewCard › Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
-| Conversation (app.pen) | `#226 ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | |
-| Conversation (app.pen) | `#227 Diffs` | `app/conversation/activity/Diffs.tsx` | `Diffs` | |
-| Conversation (app.pen) | `#228 LeadToolDetail` | `app/conversation/activity/LeadToolDetail.tsx` | `LeadToolDetail` | |
-| Conversation (app.pen) | `#229 LeadItemDetail` | `app/conversation/activity/LeadItemDetail.tsx` | `LeadItemDetail` | |
-| Conversation (app.pen) | `#233 TeamSentence › Glyphs` | `app/conversation/activity/Glyphs.tsx` | `Glyphs` | |
-| Conversation (app.pen) | `#234 TeamSentence › Briefs` | `app/conversation/activity/Briefs.tsx` | `Briefs` | |
-| Conversation (app.pen) | `#236 TeamStep › Quiet` | `app/conversation/activity/QuietBrief.tsx` | `QuietBrief` | |
-| Conversation (app.pen) | `#334 WorkersStrip › StripRow` | `app/conversation/activity/StripRow.tsx` | `StripRow` | |
-| Conversation (app.pen) | `#382 PlanCard` | `app/conversation/cards/PlanCard.tsx` | `PlanCard` | |
-| Conversation (app.pen) | `#384 OvernightPlanCard › PhaseWork` | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | |
-| Conversation (app.pen) | `#386 OvernightPlanCard › Rules and sources disclosure` | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | |
-| Conversation (app.pen) | `#388 PhaseMore` | `app/conversation/cards/PhaseMore.tsx` | `PhaseMore` | |
-| Conversation (app.pen) | `#389 DoneWhen` | `app/conversation/cards/DoneWhen.tsx` | `DoneWhen` | |
-| Conversation (app.pen) | `#392 PlanRating` | `app/conversation/cards/PlanRating.tsx` | `PlanRating` | |
-| Conversation (app.pen) | `#393 PlanFrame` | `app/conversation/cards/PlanFrame.tsx` | `PlanFrame` | |
-| Conversation (app.pen) | `#395 PlanClip` | `app/conversation/cards/PlanClip.tsx` | `PlanClip` | |
-| Conversation (app.pen) | `PlanText` | `app/conversation/cards/PlanText.tsx` | `PlanText` | moved out of PlanDocument.tsx with PlanClip; PlanDocument re-exports it |
-| Conversation (app.pen) | `#326 StandInPill` | `app/shell/StandInPill.tsx` | `StandInPill` | |
-| Conversation (app.pen) | `#327 WaitingPill` | `app/shell/WaitingPill.tsx` | `WaitingPill` | |
 
 ## Icons
 
