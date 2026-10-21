@@ -1114,6 +1114,146 @@ async fn a_sign_out_or_a_refusal_stops_a_route_and_any_spelling_finds_brigadier_
     assert!(auth.token(&route, None).await.unwrap().expose() == "claude-access");
 }
 
+/// Brigadier's own sign-in to `catalog`'s server `id`, kept as `credential` says.
+fn save_own(stores: &Stores, catalog: &Catalog, id: &str, credential: &Credential) -> Place {
+    let place = Place::of(Owner::Brigadier, server(catalog, id), CodexStore::Auto).unwrap();
+    let Place::Brigadier { identity, url } = &place else {
+        panic!("Brigadier's place");
+    };
+    stores.save_own(identity, url, credential).unwrap();
+    place
+}
+
+fn own_credential(refresh: Option<&str>, expires_at: u64) -> Credential {
+    Credential {
+        access_token: Secret::new("own-access"),
+        refresh_token: refresh.map(Secret::new),
+        expires_at: Some(expires_at),
+        client_id: Some("registered".into()),
+        client_secret: None,
+        token_endpoint: None,
+        since: Some(1_000),
+        found: Found::Own,
+    }
+}
+
+fn route_to(place: &Place, url: &str, roots: &Roots) -> Route {
+    Route {
+        grant: "worker".into(),
+        place: place.clone(),
+        url: url.into(),
+        headers: Vec::new(),
+        client: None,
+        homes: Homes::new(roots),
+    }
+}
+
+#[tokio::test]
+async fn every_spelling_of_an_address_shares_brigadier_s_cached_sign_in_and_its_sign_out() {
+    let home = home();
+    write(
+        &home.join(".claude.json"),
+        &json!({"mcpServers": {
+            "one": {"type": "http", "url": "https://mcp.example.com/mcp"},
+            "two": {"type": "http", "url": "https://mcp.example.com/mcp/"}}})
+        .to_string(),
+    );
+    let roots = roots(&home);
+    let catalog = Catalog::read(&roots, None);
+    let auth = auth(Arc::new(Memory::default()), "worker");
+    let stores = auth.stores(Homes::new(&roots));
+    let one = save_own(
+        &stores,
+        &catalog,
+        "claude:user:one",
+        &own_credential(Some("own-refresh"), now_ms() + 3_600_000),
+    );
+    let two = Place::of(
+        Owner::Brigadier,
+        server(&catalog, "claude:user:two"),
+        CodexStore::Auto,
+    )
+    .unwrap();
+    let (by_one, by_two) = (
+        route_to(&one, "https://mcp.example.com/mcp", &roots),
+        route_to(&two, "https://mcp.example.com/mcp/", &roots),
+    );
+    assert!(auth.token(&by_one, None).await.unwrap().expose() == "own-access");
+    assert!(auth.token(&by_two, None).await.unwrap().expose() == "own-access");
+    // One cache slot, so one renewal at a time for the one refresh token.
+    assert!(Arc::ptr_eq(&auth.slot(&one), &auth.slot(&two)));
+    // Signed out through one spelling, the other's route sends no cached token.
+    auth.sign_out(&one, Homes::new(&roots)).await.unwrap();
+    assert!(auth.token(&by_two, None).await.is_err());
+}
+
+#[tokio::test]
+async fn a_sign_out_in_the_cli_is_read_once_the_known_read_is_old() {
+    let home = home();
+    write(
+        &home.join(".claude.json"),
+        &json!({"mcpServers": {"linear": {"type": "http", "url": "https://mcp.example.com/mcp"}}})
+            .to_string(),
+    );
+    let roots = roots(&home);
+    let catalog = Catalog::read(&roots, None);
+    let linear = server(&catalog, "claude:user:linear");
+    let memory = Arc::new(Memory::default());
+    let auth = auth(memory.clone(), "worker");
+    let entry = json!({"serverName": "linear", "serverUrl": "https://mcp.example.com/mcp",
+                       "accessToken": "claude-access", "refreshToken": "claude-refresh",
+                       "expiresAt": now_ms() + 3_600_000});
+    put_claude(
+        &memory,
+        &roots,
+        &json!({"mcpOAuth": {claude_key(linear).unwrap(): entry}}),
+    );
+    let own = save_own(
+        &auth.stores(Homes::new(&roots)),
+        &catalog,
+        "claude:user:linear",
+        &own_credential(Some("own-refresh"), now_ms() + 3_600_000),
+    );
+    let asking = auth.prober(&roots, CodexStore::Auto, false);
+    let claude = reused(&catalog, linear, Agent::Codex, &asking).expect("Claude's sign-in");
+    assert!(matches!(claude, Place::Claude { .. }));
+    let route = route_to(&claude, "https://mcp.example.com/mcp", &roots);
+    assert!(auth.token(&route, None).await.unwrap().expose() == "claude-access");
+
+    // The user signs out in Claude Code: once the read is old, the store is read again.
+    put_claude(&memory, &roots, &json!({"mcpOAuth": {}}));
+    assert_eq!(
+        reused(&catalog, linear, Agent::Codex, &asking),
+        Some(claude.clone())
+    );
+    auth.age();
+    assert_eq!(reused(&catalog, linear, Agent::Codex, &asking), Some(own));
+    assert!(auth.token(&route, None).await.is_err());
+}
+
+#[tokio::test]
+async fn a_token_without_a_refresh_token_serves_until_it_expires() {
+    let home = home();
+    write(
+        &home.join(".claude.json"),
+        &json!({"mcpServers": {"one": {"type": "http", "url": "https://mcp.example.com/mcp"}}})
+            .to_string(),
+    );
+    let roots = roots(&home);
+    let catalog = Catalog::read(&roots, None);
+    let auth = auth(Arc::new(Memory::default()), "worker");
+    // Within the renewal window: there is nothing to renew it with, and it is still valid.
+    let place = save_own(
+        &auth.stores(Homes::new(&roots)),
+        &catalog,
+        "claude:user:one",
+        &own_credential(None, now_ms() + 30_000),
+    );
+    let route = route_to(&place, "https://mcp.example.com/mcp", &roots);
+    assert!(auth.token(&route, None).await.unwrap().expose() == "own-access");
+    assert!(auth.token(&route, None).await.unwrap().expose() == "own-access");
+}
+
 mod in_brigadier {
     //! The sign-in in Brigadier, through the manager the IPC methods call, serving workers of
     //! both agents whose own configs have the server unsigned.

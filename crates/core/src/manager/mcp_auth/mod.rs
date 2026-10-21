@@ -275,8 +275,15 @@ impl McpAuth {
         Ok(())
     }
 
-    /// What `place` holds: refused until the user asks again, known within [`KNOWN_FOR`], a
-    /// sign-in in use, else read now.
+    /// Tests: what was read of every store is past [`KNOWN_FOR`].
+    #[cfg(test)]
+    pub(crate) fn age(&self) {
+        lock(&self.known).clear();
+    }
+
+    /// What `place` holds: refused until the user asks again, known within [`KNOWN_FOR`], else
+    /// read now. A read that changed what the proxy holds replaces it, and one that finds no
+    /// usable sign-in drops it. A quiet read that would ask leaves a sign-in in use as usable.
     fn probe(&self, stores: &Stores, place: &Place, quiet: bool) -> Probe {
         if lock(&self.refused).contains(&Refusal::of(place)) {
             return Probe::Refused;
@@ -286,32 +293,39 @@ impl McpAuth {
         {
             return *probe;
         }
-        let slot = lock(&self.live).get(place).cloned();
-        if let Some(slot) = slot
-            && let Ok(held) = slot.try_lock()
-            && held.as_ref().is_some_and(Credential::usable)
-        {
-            return Probe::Usable;
-        }
         match stores.read(place, quiet) {
             Ok(Some(credential)) if credential.usable() && !self.is_dead(place, &credential) => {
                 self.know(place, Probe::Usable);
                 self.note_since(place, Some(&credential));
-                // Kept for the proxy, which then needs no second read.
+                // Kept for the proxy, which then needs no second read. A renewal under way
+                // holds the slot and writes the store itself.
                 if let Ok(mut held) = self.slot(place).try_lock()
-                    && held.is_none()
+                    && !held
+                        .as_ref()
+                        .is_some_and(|held| held.same_tokens(&credential))
                 {
                     *held = Some(credential);
                 }
                 Probe::Usable
             }
             Ok(_) => {
+                self.forget(place);
                 self.know(place, Probe::Absent);
                 self.note_since(place, None);
                 Probe::Absent
             }
+            Err(StoreError::Busy) if quiet && self.in_use(place) => Probe::Usable,
             Err(err) => self.read_failed(place, &err),
         }
+    }
+
+    /// The proxy holds a usable sign-in for `place`.
+    fn in_use(&self, place: &Place) -> bool {
+        let slot = lock(&self.live).get(place).cloned();
+        slot.is_some_and(|slot| {
+            slot.try_lock()
+                .is_ok_and(|held| held.as_ref().is_some_and(Credential::usable))
+        })
     }
 
     /// A route for `route`'s worker to its server through the proxy: its address.
@@ -370,7 +384,7 @@ impl McpAuth {
         let current = held.as_ref().map(|credential| {
             (
                 refused.is_some_and(|token| *token == credential.access_token)
-                    || credential.expires_within(RENEW_WITHIN),
+                    || credential.due(RENEW_WITHIN),
                 credential.access_token.clone(),
             )
         });
@@ -414,7 +428,7 @@ impl McpAuth {
         let renewed_by_owner = ours
             .as_ref()
             .is_some_and(|ours| ours.access_token != now.access_token);
-        if renewed_by_owner && !now.expires_within(RENEW_WITHIN) {
+        if renewed_by_owner && !now.due(RENEW_WITHIN) {
             return Ok(now);
         }
         let now = now.with_client(route.client.as_ref());

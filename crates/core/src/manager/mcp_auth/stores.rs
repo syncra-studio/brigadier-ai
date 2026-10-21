@@ -9,6 +9,7 @@
 //! entry's three token fields.
 
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -41,8 +42,10 @@ pub(crate) fn now_ms() -> u64 {
         })
 }
 
-/// Where one stored sign-in for a server is kept.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Where one stored sign-in for a server is kept. Brigadier's own places are equal by
+/// identity alone: every spelling of a server's address shares its one Keychain item, so it
+/// shares what is cached of it, its renewals and its sign-out.
+#[derive(Debug, Clone)]
 pub(crate) enum Place {
     /// Claude Code's entry under its key.
     Claude { key: String, url: String },
@@ -55,6 +58,50 @@ pub(crate) enum Place {
     },
     /// Brigadier's own, by the server's identity.
     Brigadier { identity: String, url: String },
+}
+
+impl PartialEq for Place {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Claude { key, url }, Self::Claude { key: k, url: u }) => key == k && url == u,
+            (
+                Self::Codex {
+                    name,
+                    url,
+                    keys,
+                    store,
+                },
+                Self::Codex {
+                    name: n,
+                    url: u,
+                    keys: k,
+                    store: s,
+                },
+            ) => name == n && url == u && keys == k && store == s,
+            (Self::Brigadier { identity, .. }, Self::Brigadier { identity: i, .. }) => {
+                identity == i
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Place {}
+
+impl Hash for Place {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Claude { key, url } => (key, url).hash(state),
+            Self::Codex {
+                name,
+                url,
+                keys,
+                store,
+            } => (name, url, keys, store).hash(state),
+            Self::Brigadier { identity, .. } => identity.hash(state),
+        }
+    }
 }
 
 impl Place {
@@ -137,10 +184,25 @@ impl fmt::Debug for Credential {
 impl Credential {
     /// It can serve: an access token not yet expired, or a refresh token.
     pub(crate) fn usable(&self) -> bool {
+        self.renewable()
+            || (!self.access_token.expose().is_empty() && !self.expires_within(Duration::ZERO))
+    }
+
+    /// Its access token is due for renewal: expired, or expiring within `margin` when a refresh
+    /// token can renew it early. One without a refresh token serves until it expires.
+    pub(crate) fn due(&self, margin: Duration) -> bool {
+        self.expires_within(Duration::ZERO) || (self.renewable() && self.expires_within(margin))
+    }
+
+    fn renewable(&self) -> bool {
         self.refresh_token
             .as_ref()
             .is_some_and(|token| !token.expose().trim().is_empty())
-            || (!self.access_token.expose().is_empty() && !self.expires_within(Duration::ZERO))
+    }
+
+    /// It holds the same tokens as `other`.
+    pub(crate) fn same_tokens(&self, other: &Self) -> bool {
+        self.access_token == other.access_token && self.refresh_token == other.refresh_token
     }
 
     /// Its access token expires within `margin` (or has).
