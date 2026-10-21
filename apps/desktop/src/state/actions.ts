@@ -42,11 +42,14 @@ import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping 
 import { realActivity, onRealActivity } from "@/state/activity";
 import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
-  boardFromView,
   type Board,
+  boardHeld,
   boardOf,
   collectBoardEvents,
   emptyBoard,
+  keepBoard,
+  placeView,
+  takeKeptBoard,
   ORCHESTRATOR_ENTRIES,
   updateBoard,
   useBoard,
@@ -166,7 +169,7 @@ export async function loadConversation(id: string, { fresh = false }: { fresh?: 
         ? state
         : { conversations: { ...state.conversations, [id]: view.conversation } };
     });
-    updateBoard(id, (board) => boardFromView(view, board, events));
+    placeView(view, events);
   } catch (error) {
     arrived();
     updateThread(id, (thread) => ({ ...thread, loading: false, loadError: error instanceof Error ? error.message : String(error) }));
@@ -237,9 +240,35 @@ let beforeSettings: Selection = { type: "draft", kind: "chat" };
 /**
  * Shows `selection`. By default it is a new entry of the history Back and Forward go through
  * (see state/history.ts); `mode` can put it in place of the current entry, or leave the
- * history alone.
+ * history alone. Resolves once it shows, or once it would have but for a later `select`.
  */
-export function select(selection: Selection, mode: HistoryMode = "push"): void {
+export function select(selection: Selection, mode: HistoryMode = "push"): Promise<void> {
+  const asked = ++selecting;
+  if (selection.type === "conversation" && !conversationHeld(selection.id)) {
+    // Nothing of it is held yet: it shows once its view and the code of its replies are in,
+    // whole and as it really stands (#484, #500), unless something else is asked for meanwhile.
+    // A view that fails to load shows it anyway, with its error and Retry.
+    const loaded = loadConversation(selection.id).catch((error: unknown) => {
+      console.error("loading the conversation failed", error);
+    });
+    const code = import("@/app/conversation/threadCode").then((thread) => thread.preloadThreadCode()).catch(() => {});
+    return Promise.all([loaded, code]).then(() => {
+      if (asked === selecting) show(selection, mode, false);
+    });
+  }
+  show(selection, mode, true);
+  return Promise.resolve();
+}
+
+/** The newest `select`: an earlier one still waiting for its conversation shows nothing. */
+let selecting = 0;
+
+/** Whether a conversation's thread and board are held, so it can show at once as it stands. */
+function conversationHeld(id: string): boolean {
+  return !!useApp.getState().threads[id] && boardHeld(id);
+}
+
+function show(selection: Selection, mode: HistoryMode, refresh: boolean): void {
   const { selection: shown } = useApp.getState();
   // What leaving Settings goes back to, however it was reached (Back and Forward too).
   if (selection.type === "settings" && shown.type !== "settings") beforeSettings = shown;
@@ -247,12 +276,21 @@ export function select(selection: Selection, mode: HistoryMode = "push"): void {
   useApp.setState({ selection });
   const { board } = useBoard.getState();
   if (selection.type !== "conversation") {
-    if (board) useBoard.setState({ board: null });
+    if (board) {
+      // Left for Settings or a new chat, it is kept: coming back shows it as it stands.
+      keepBoard(board);
+      useBoard.setState({ board: null });
+    }
     return;
   }
   if (board?.conversationId !== selection.id) {
-    useBoard.setState({ board: emptyBoard(selection.id) });
+    keepBoard(board);
+    // Its kept board, or the one a side chat shows it with.
+    const beside = boardOf(selection.id);
+    useBoard.setState({ board: takeKeptBoard(selection.id) ?? (beside?.loaded ? beside : emptyBoard(selection.id)) });
   }
+  // What is held is read again, in case something was missed; it shows meanwhile.
+  if (!refresh) return;
   void loadConversation(selection.id).catch((error: unknown) => {
     console.error("loading the conversation failed", error);
   });
@@ -344,17 +382,18 @@ export type OpenAt = { message: string };
  * it, unfolds what folds it, scrolls it to the centre and flashes it once
  * (SESSION-MESSAGING-PLAN.md §6.3).
  */
-export function openConversation(id: string, options: { at?: OpenAt } = {}): void {
+export function openConversation(id: string, options: { at?: OpenAt } = {}): Promise<void> {
   const conversation = useApp.getState().conversations[id];
   if (conversation?.projectId) setProjectExpanded(conversation.projectId, true);
   const shown = useApp.getState().selection;
   // A jump within the open conversation stays where it is: only the thread moves.
-  if (!options.at || shown.type !== "conversation" || shown.id !== id) select({ type: "conversation", id });
+  const showing = !options.at || shown.type !== "conversation" || shown.id !== id ? select({ type: "conversation", id }) : Promise.resolve();
   if (options.at) {
     // The message is in the thread: a session left on a file or its review shows its chat.
     selectTab(id, CHAT_TAB);
     void revealMessage(id, options.at.message).catch((error: unknown) => console.error("showing the message failed", error));
   }
+  return showing;
 }
 
 /**
@@ -614,6 +653,8 @@ export async function send(
     storeConversation(conversation);
     conversationId = conversation.id;
     updateThread(conversationId, () => emptyThread);
+    // A new conversation has nothing to read: it shows at once, its events filling it.
+    keepBoard({ ...emptyBoard(conversationId), loaded: true });
     // Only follow the new conversation if the user is still looking at the draft.
     if (useApp.getState().selection === selection) {
       useApp.setState({ draft: emptyDraft(null) });

@@ -201,6 +201,17 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.ok(seen.working.rows >= 2);
 });
 
+// #500: a conversation opened before the replies' Markdown code is in, from a busy dev server.
+test("a conversation opened for the first time shows its replies whole, never placeholder lines", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1&only=coldOpen", "thread-scroll-result", 60000, {
+    slow: { url: "/conversation/markdown-text.tsx", ms: 2500 },
+  })) as { error?: string; coldOpen: { shown: boolean; empty: number; placeholders: number; rows: number } };
+  assert.equal(seen.error, undefined);
+  const { shown, empty, placeholders, rows } = seen.coldOpen;
+  assert.deepEqual({ shown, empty, placeholders }, { shown: true, empty: 0, placeholders: 0 });
+  assert.ok(rows > 0);
+});
+
 // #337: a card's view loads on first use, late from a busy dev server; until it shows, the plan's
 // thread doesn't yet fill the view.
 test("the capsule's gaps are read once the plan's card shows, however late its view loads", { timeout: 90000 }, async (t) => {

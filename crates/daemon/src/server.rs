@@ -1404,11 +1404,13 @@ fn internal(err: brigadier_store::Error) -> IpcError {
 /// rather than before them. A site's icon waits on the site itself, which may take its whole
 /// timeout; the tabs' settled states read git in every tab; the requests that read the user's
 /// folders (the first run's project scan, Add project's) run git there and may wait on a
-/// macOS privacy prompt nobody has answered yet.
+/// macOS privacy prompt nobody has answered yet. A conversation's view waits for nothing slow
+/// before it: the app shows a conversation once its view is in (#484).
 fn answered_beside(request: &Request) -> bool {
     matches!(
         request,
         Request::SiteIcon { .. }
+            | Request::GetConversation { .. }
             | Request::FindProjects
             | Request::FindRepos
             | Request::GetRepoInfo { .. }
@@ -3023,6 +3025,17 @@ mod tests {
             assert!(!read_beside(&request), "{request:?} stays in turn");
             assert!(!answered_beside(&request), "{request:?} stays in turn");
         }
+    }
+
+    /// Switching to a session showed it finished for as long as its view waited behind the
+    /// connection's slower requests, minutes on a slow network (#484): the view waits for none.
+    #[test]
+    fn a_conversation_view_waits_for_no_slower_request() {
+        let id = ConversationId("a".into());
+        assert!(answered_beside(&Request::GetConversation {
+            id,
+            limit: 200
+        }));
     }
 
     /// Send feedback's writer turns and GitHub calls take a minute or more: the connection's

@@ -13,7 +13,6 @@ import {
 } from "@assistant-ui/react";
 import {
   createContext,
-  lazy,
   Suspense,
   useContext,
   useLayoutEffect,
@@ -44,6 +43,7 @@ import {
 } from "@/components/icons";
 import { ScrollFade } from "@/components/layout/scroll-fade";
 import { Skeleton } from "@/components/layout/skeleton";
+import { markdownText } from "@/components/conversation/markdown-lazy";
 import { useNow } from "@/hooks/use-now";
 import { formatDaySeparator, formatSentAt, separatesTurn } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -473,12 +473,8 @@ const ThreadScrollToBottom: FC = () => {
 const noSubscribe = () => () => {};
 const notShown = () => false;
 
-// The markdown stack (remark, micromark, mdast) loads with the first reply, not at startup.
-const MarkdownText = lazy(() =>
-  import("@/components/conversation/markdown-text").then((module) => ({
-    default: module.MarkdownText,
-  })),
-);
+// The markdown stack (remark, micromark, mdast) loads off the cold start (`markdownText`).
+const MarkdownText = markdownText.View;
 
 /** Keep Markdown source out of the first reply while its renderer loads. */
 const ReplyLoading: FC = () => (

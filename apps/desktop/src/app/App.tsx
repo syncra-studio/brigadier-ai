@@ -23,6 +23,7 @@ import { PageSurface } from "@/app/shell/PageSurface";
 import { SettingsTitlebarStrip, TerminalButton } from "@/components/shared";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster } from "@/components/overlays";
+import { preloadThreadCode } from "@/app/conversation/threadCode";
 import { appReady, nowEpochMs } from "@/ipc/client";
 import { waitForAgents } from "@/lib/agentsReady";
 import { nextPaint, setFrameSampling } from "@/lib/perf";
@@ -87,6 +88,8 @@ export function App() {
         // check opens it straight away, and measures the app as it is.)
         if (!useApp.getState().info?.smoke) {
           whenIdle(warmSettings);
+          // The replies' and cards' code, so the first conversation opened has nothing to wait for.
+          whenIdle(() => void preloadThreadCode().catch((error: unknown) => console.error("loading the thread's code failed", error)));
           whenIdle(() => void warmCode().catch((error: unknown) => console.error("warming the code views failed", error)), 2000);
         }
         whenIdle(allowComputerMenu);
