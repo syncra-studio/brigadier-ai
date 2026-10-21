@@ -29,7 +29,11 @@ type Activity = {
   failed: boolean;
   /** Its latest request was stopped by the user, until another turn starts. */
   stopped?: boolean;
+  /** Its requests that work, between turns too (a message waits for a turn, one is owed). */
+  requests?: ReadonlySet<string>;
 };
+
+const NO_REQUESTS: ReadonlySet<string> = new Set();
 
 const IDLE: Activity = {
   run: "idle",
@@ -40,6 +44,7 @@ const IDLE: Activity = {
   phases: {},
   failed: false,
   stopped: false,
+  requests: NO_REQUESTS,
 };
 
 const FINAL: ReadonlySet<TaskState> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
@@ -91,7 +96,7 @@ function stoppedActivity(activity: Activity, stops: readonly Stop[]): Activity {
     // The composer's Stop ends what the session is busy with too: its CI watches, a held merge.
     if (stop.turn) {
       const running = shown.run === "running" || shown.run === "starting";
-      shown = { ...shown, run: running ? "idle" : shown.run, stopped: true, phases: {} };
+      shown = { ...shown, run: running ? "idle" : shown.run, stopped: true, phases: {}, requests: NO_REQUESTS };
     }
   }
   return shown;
@@ -155,6 +160,7 @@ export function fromSnapshot(activity: ConversationActivity): Activity {
     phases: Object.fromEntries(activity.phases),
     failed: activity.failed ?? false,
     stopped: activity.stopped ?? false,
+    requests: new Set(activity.requests ?? []),
   };
 }
 
@@ -233,7 +239,11 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
       const failed = type === "failed" ? true : type === "working" ? false : current.failed;
       // An update to an earlier request (its review kept, say) leaves the latest one's stop be.
       const stopped = type === "stopped" ? true : type === "working" || type === "failed" ? false : (current.stopped ?? false);
-      return failed === current.failed && stopped === current.stopped ? current : { ...current, failed, stopped };
+      const working = current.requests ?? NO_REQUESTS;
+      const requests = toggled(working, event.request.id, type === "working");
+      return failed === current.failed && stopped === current.stopped && requests === working
+        ? current
+        : { ...current, failed, stopped, requests };
     }
     case "taskUpdated": {
       const { id, state, kind, title } = event.task;
@@ -343,7 +353,8 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
 
 /**
  * What a sidebar row shows: a pill while it waits for the user (a card, a question, or its last
- * turn failed), else a spinner while it runs or is in a phase, with the phase's name, and how
+ * turn failed), else a spinner while it runs (a turn, a worker or a request working between its
+ * turns) or is in a phase, with the phase's name, and how
  * many of its workers run.
  */
 export type RowActivity = {
@@ -359,7 +370,8 @@ export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
   const states = Object.values(activity.tasks);
   const turn = activity.run === "running" || activity.run === "starting";
-  const running = turn || states.some((state) => WORKING.has(state));
+  // A request between turns works too, as its composer says (issue 485).
+  const running = turn || states.some((state) => WORKING.has(state)) || (activity.requests?.size ?? 0) > 0;
   // A failed turn waits for the user even while its workers still run, as the engine says.
   const awaiting =
     activity.approvals.size > 0 || states.some((state) => LANDING.has(state))

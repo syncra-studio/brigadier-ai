@@ -109,3 +109,15 @@ test("a thread that fails while its worker runs reads Needs you · failed, not W
   assert.equal(row.awaiting, "failed");
   assert.deepEqual(sessionStatus(row, null, undefined), { state: "failed", reason: null });
 });
+
+test("a request working between turns reads Working, not Ready, as its composer does (issue 485)", () => {
+  const snapshot = fromSnapshot({ conversationId: "between", run: "idle", tasks: [], approvals: [], questions: [], phases: [], requests: ["r1"] });
+  useActivity.setState({ byConversation: { between: snapshot } });
+  const working = rowActivity(useActivity.getState().byConversation.between);
+  assert.equal(working.running, true);
+  assert.deepEqual(sessionStatus(working, null, { state: "ready" }), { state: "working", reason: null });
+  applyActivityEvents([on("between", { type: "requestUpdated", request: { id: "r1", conversationId: "between", state: { type: "done" } } })]);
+  assert.deepEqual(sessionStatus(rowActivity(useActivity.getState().byConversation.between), null, { state: "ready" }), { state: "ready", reason: null });
+  applyActivityEvents([on("between", { type: "requestUpdated", request: { id: "r2", conversationId: "between", state: { type: "working" } } })]);
+  assert.equal(rowActivity(useActivity.getState().byConversation.between).running, true);
+});

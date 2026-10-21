@@ -68,6 +68,23 @@
     "expect": "working"
   },
   {
+    "name": "a request between turns works over ready",
+    "activity": {
+      "conversationId": "s",
+      "run": "idle",
+      "tasks": [],
+      "approvals": [],
+      "questions": [],
+      "phases": [],
+      "requests": [
+        "r1"
+      ]
+    },
+    "quotaWait": false,
+    "settled": "ready",
+    "expect": "working"
+  },
+  {
     "name": "a CI watch works",
     "activity": {
       "conversationId": "s",

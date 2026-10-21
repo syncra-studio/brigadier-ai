@@ -2098,6 +2098,11 @@ pub struct ConversationActivity {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub stopped: bool,
+    /// Its requests that work, by id: between turns too, while a message waits for a turn or
+    /// Brigadier owes one a turn, as its composer shows them working.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub requests: Vec<String>,
 }
 
 /// What a conversation is busy with, as its sidebar row names it ("Watching CI").
