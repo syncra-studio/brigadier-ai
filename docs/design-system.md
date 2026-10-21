@@ -180,6 +180,9 @@ table is the current one.
 | Side panel (app.pen) | `#412 AgentRow` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
 | Side panel (app.pen) | `#414 WorkerList` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
 | Side panel (app.pen) | `#416 WorkerDetail › worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |
+| Side panel (app.pen) | `#149 FileGlyph` | `app/side-panel/FileGlyph.tsx` | `FileGlyph` | |
+| Side panel (app.pen) | `#150 FileRow (worker output)` | `app/side-panel/WorkerFileRow.tsx` | `WorkerFileRow` | |
+| Side panel (app.pen) | `#517 TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |

@@ -7,6 +7,7 @@ import { type Job, type JobStep, phaseWords } from "@/app/conversation/job";
 import type { FindingLabel, FindingRow } from "@/app/conversation/reviewStatus";
 import { Timeline, type TimelineEvent } from "@/components/conversation";
 import { Badge } from "@/components/controls";
+import { TabPage } from "@/app/side-panel/TabPage";
 import { formatTime } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";
 
@@ -15,14 +16,6 @@ function stepDetail(step: JobStep, next: boolean): string | undefined {
   if (step.summary) return step.summary;
   if (step.state === "active") return step.count;
   return next ? "Next" : undefined;
-}
-
-function TabPage({ children }: { children: ReactNode }) {
-  return (
-    <div data-slot="job-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="max-w-thread mx-auto flex w-full flex-col gap-8 px-5 pt-6 pb-10">{children}</div>
-    </div>
-  );
 }
 
 /**
