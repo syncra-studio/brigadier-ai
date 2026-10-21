@@ -1186,6 +1186,10 @@ const DELEGATE_TASK_FIELDS: &[(&str, &str)] = &[
         "Optional \"high\" when it needs the best models (hard or risky work).",
     ),
     ("image_generation", "True when it must generate images."),
+    (
+        "design",
+        "True when it makes designs or images: design files (Pencil's .pen), mockups, generated images.",
+    ),
     ("phase", "The plan phase it works on (plan_phases), from 1."),
     (
         "role",

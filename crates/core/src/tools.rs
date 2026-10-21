@@ -207,6 +207,11 @@ pub struct DelegateTask {
     /// it on one that can, hand-offs included.
     #[serde(default)]
     pub image_generation: bool,
+    /// True when the task makes designs or images: edits design files (Pencil's `.pen`),
+    /// draws mockups or generates images. Routing files it under design work, which the user's
+    /// routing rules can name. A mockup or image generation counts as design by itself.
+    #[serde(default)]
+    pub design: bool,
     /// For a task that works on a phase of the request's plan (`plan_phases`): that phase's
     /// number (1 is the first). The user follows the plan's progress by it.
     #[serde(default, alias = "step")]

@@ -169,7 +169,9 @@ pub fn default_floor(category: TaskCategory) -> QualityTier {
         TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => {
             QualityTier::Frontier
         }
-        TaskCategory::Orchestrate | TaskCategory::Operate => QualityTier::Strong,
+        TaskCategory::Orchestrate | TaskCategory::Operate | TaskCategory::Design => {
+            QualityTier::Strong
+        }
         TaskCategory::Research => QualityTier::Standard,
         TaskCategory::Scout | TaskCategory::Verify | TaskCategory::Chat | TaskCategory::GitText => {
             QualityTier::Light
@@ -225,7 +227,7 @@ pub fn allows_trials(category: TaskCategory) -> bool {
 /// and code is written and reviewed at high effort. A scout is a chore and runs at low.
 fn at_least(category: TaskCategory, effort: &'static str) -> &'static str {
     let floor = match category {
-        TaskCategory::Verify | TaskCategory::Operate => "medium",
+        TaskCategory::Verify | TaskCategory::Operate | TaskCategory::Design => "medium",
         TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => "high",
         TaskCategory::Scout => return "low",
         _ => return effort,
@@ -244,6 +246,7 @@ fn category_effort(category: TaskCategory) -> Option<&'static str> {
         TaskCategory::Research
         | TaskCategory::Verify
         | TaskCategory::Operate
+        | TaskCategory::Design
         | TaskCategory::Orchestrate => Some("medium"),
         TaskCategory::Implement | TaskCategory::Review | TaskCategory::Merge => Some("high"),
         TaskCategory::Chat => None,

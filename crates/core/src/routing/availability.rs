@@ -21,7 +21,7 @@ use crate::model::{ModelChoice, ModelRef, SETTINGS_VERSION, Settings};
 
 /// The kinds of work the orchestrator hands to workers: what a "Don't give work" rule is
 /// about. Not `chat` (a Chat's stand-in) or `orchestrate`.
-pub const WORKER_CATEGORIES: [TaskCategory; 7] = [
+pub const WORKER_CATEGORIES: [TaskCategory; 8] = [
     TaskCategory::Scout,
     TaskCategory::Research,
     TaskCategory::Implement,
@@ -29,7 +29,20 @@ pub const WORKER_CATEGORIES: [TaskCategory; 7] = [
     TaskCategory::Merge,
     TaskCategory::Verify,
     TaskCategory::Operate,
+    TaskCategory::Design,
 ];
+
+/// Whether a rule keeps its model from exactly `kinds` of work, everywhere: a worker switch
+/// or "Don't give work" rule saved when the worker kinds were those.
+fn never_for_exactly(rule: &OverrideRule, kinds: &[TaskCategory]) -> bool {
+    rule.effect == OverrideEffect::Never
+        && rule.categories.len() == kinds.len()
+        && kinds
+            .iter()
+            .all(|category| rule.categories.contains(category))
+        && rule.areas.is_empty()
+        && rule.project_id.is_none()
+}
 
 /// The agent isn't switched off.
 pub fn provider_on(settings: &Settings, provider: ProviderKind) -> bool {
@@ -115,14 +128,8 @@ pub fn worker_rule(provider: ProviderKind, id: &str, now_ms: i64) -> OverrideRul
 
 /// Whether `rule` is [`worker_rule`] for this model.
 pub fn is_worker_rule(rule: &OverrideRule, provider: ProviderKind, id: &str) -> bool {
-    rule.effect == OverrideEffect::Never
-        && matches!(&rule.target, OverrideTarget::Model { provider: p, id: m } if *p == provider && m == id)
-        && rule.categories.len() == WORKER_CATEGORIES.len()
-        && WORKER_CATEGORIES
-            .iter()
-            .all(|category| rule.categories.contains(category))
-        && rule.areas.is_empty()
-        && rule.project_id.is_none()
+    matches!(&rule.target, OverrideTarget::Model { provider: p, id: m } if *p == provider && m == id)
+        && never_for_exactly(rule, &WORKER_CATEGORIES)
 }
 
 /// The settings with the models of `provider`'s list recorded as known, or `None` when all
@@ -275,6 +282,9 @@ pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
 ///
 /// Version 4: account switching is set per agent, and the one switch saved before covers
 /// every agent: off, every agent's work stays on its default account.
+///
+/// Version 5: a rule keeping a model from every worker kind of work, saved before design
+/// work existed, covers it too.
 pub fn migrate(settings: &Settings) -> Option<Settings> {
     if settings.settings_version >= SETTINGS_VERSION {
         return None;
@@ -295,18 +305,14 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
             !off
         });
     }
+    // The worker kinds as they were before operate (version 2) and design (version 5) work.
+    let before_operate = &WORKER_CATEGORIES[..6];
+    let before_design = &WORKER_CATEGORIES[..7];
     if settings.settings_version < 2 {
-        let before = &WORKER_CATEGORIES[..WORKER_CATEGORIES.len() - 1];
         for rule in &mut next.routing_overrides {
-            let switch = rule.effect == OverrideEffect::Never
-                && matches!(rule.target, OverrideTarget::Model { .. })
-                && rule.categories.len() == before.len()
-                && before
-                    .iter()
-                    .all(|category| rule.categories.contains(category))
-                && rule.areas.is_empty()
-                && rule.project_id.is_none();
-            if switch {
+            if matches!(rule.target, OverrideTarget::Model { .. })
+                && never_for_exactly(rule, before_operate)
+            {
                 rule.categories.push(TaskCategory::Operate);
             }
         }
@@ -318,6 +324,13 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
         for provider in ProviderKind::ALL {
             if !next.manual_accounts.contains(&provider) {
                 next.manual_accounts.push(provider);
+            }
+        }
+    }
+    if settings.settings_version < 5 {
+        for rule in &mut next.routing_overrides {
+            if never_for_exactly(rule, before_design) {
+                rule.categories.push(TaskCategory::Design);
             }
         }
     }
@@ -556,6 +569,46 @@ mod tests {
             ProviderKind::Claude,
             "haiku"
         ));
+        assert!(migrate(&next).is_none());
+    }
+
+    /// #503: a model kept from every worker kind before design work existed stays kept from
+    /// design work; a rule naming some kinds stays as it is.
+    #[test]
+    fn an_old_worker_switch_covers_design_work() {
+        let switch = OverrideRule {
+            categories: WORKER_CATEGORIES[..7].to_vec(),
+            ..worker_rule(ProviderKind::Codex, "gpt-6-astra", 0)
+        };
+        let vendor = OverrideRule {
+            id: "no-work".into(),
+            target: OverrideTarget::Vendor {
+                provider: ProviderKind::Claude,
+            },
+            ..switch.clone()
+        };
+        let some = OverrideRule {
+            id: "some".into(),
+            categories: vec![TaskCategory::Verify, TaskCategory::GitText],
+            ..switch.clone()
+        };
+        let settings = Settings {
+            routing_overrides: vec![switch, vendor, some.clone()],
+            settings_version: 4,
+            ..Settings::default()
+        };
+        let next = migrate(&settings).expect("version 4 converts");
+        assert!(is_worker_rule(
+            &next.routing_overrides[0],
+            ProviderKind::Codex,
+            "gpt-6-astra"
+        ));
+        assert!(
+            next.routing_overrides[1]
+                .categories
+                .contains(&TaskCategory::Design)
+        );
+        assert_eq!(next.routing_overrides[2], some);
         assert!(migrate(&next).is_none());
     }
 

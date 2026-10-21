@@ -9,6 +9,7 @@ export const WORKER_CATEGORIES: readonly TaskCategory[] = [
   "merge",
   "verify",
   "operate",
+  "design",
 ];
 
 /**

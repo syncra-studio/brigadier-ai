@@ -338,6 +338,7 @@ impl SessionManager {
                             target,
                             end_state,
                             mockup,
+                            design: args.design,
                             live_look: args.live_look,
                             request,
                             ..Default::default()

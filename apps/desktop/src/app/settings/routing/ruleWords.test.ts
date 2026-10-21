@@ -44,7 +44,7 @@ const rule = (fields: Partial<OverrideRule>): OverrideRule => ({
 });
 
 /** Every kind picking Opus 5.5 now, GPT-6 next. */
-const routes = (["scout", "research", "implement", "review", "merge", "verify", "operate", "chat", "orchestrate", "gitText"] as TaskCategory[]).map(
+const routes = (["scout", "research", "implement", "review", "merge", "verify", "operate", "design", "chat", "orchestrate", "gitText"] as TaskCategory[]).map(
   (category): RoutePreview => ({
     category,
     areas: [],
@@ -114,7 +114,7 @@ test("A draft says what it would change, or warns when another rule or an order 
   });
   assert.equal(
     ask("never", opus, "")?.text,
-    "Explore the code, Research, Write code, Review changes, Resolve conflicts, Run checks and Use apps will move to the next model. You can still pick Opus 5.5 yourself in a chat or session.",
+    "Explore the code, Research, Write code, Review changes, Resolve conflicts, Run checks, Use apps and Make designs and images will move to the next model. You can still pick Opus 5.5 yourself in a chat or session.",
   );
   const ordered: Ranking = { id: "o", category: "implement", areas: [], projectId: null, manual: true, entries: [{ target: opus, effort: null }], only: false, updatedAtMs: 0 };
   assert.deepEqual(ask("prefer", gpt6, "implement", [ordered]), {
@@ -135,7 +135,7 @@ test("A draft for any work weighs each kind a rule covers, and a rule kept to an
   // A rule naming no kind keeps it from all of them.
   assert.equal(ask([rule({})], "prefer", sonnet)?.tone, "warning");
   // Every kind counts, coordinating and commit messages too.
-  assert.equal(ask([], "prefer", gpt6)?.text, "10 kinds of work will go to GPT-6 whenever it can run. Everything else stays the same.");
+  assert.equal(ask([], "prefer", gpt6)?.text, "11 kinds of work will go to GPT-6 whenever it can run. Everything else stays the same.");
   // A rule kept to an area isn't the same rule, and doesn't block one for everywhere.
   const frontend = rule({ categories: ["review"], areas: ["frontend"] });
   assert.equal(ask([frontend], "never", sonnet, "review")?.tone, "info");

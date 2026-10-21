@@ -2109,6 +2109,8 @@ mod decision_index_tests;
 #[cfg(unix)]
 mod deliverable_tests;
 #[cfg(unix)]
+mod design_work_tests;
+#[cfg(unix)]
 mod ending_tests;
 #[cfg(unix)]
 mod engine_tests;

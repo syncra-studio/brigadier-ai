@@ -130,6 +130,7 @@
 //! | Merge          | Claude, Codex |
 //! | Verify         | Codex, Claude |
 //! | Operate        | Claude, Codex |
+//! | Design         | Claude, Codex |
 //! | Chat           | Claude, Codex |
 //! | Orchestrate    | Claude, Codex |
 
@@ -203,6 +204,8 @@ pub enum TaskCategory {
     Verify,
     /// Operates apps on the user's Mac; writes nothing that lands.
     Operate,
+    /// Makes designs and images: design files (Pencil's `.pen`), mockups, generated images.
+    Design,
     /// A plain conversation with the model (no orchestrator, no workers).
     Chat,
     /// A session's orchestrator: plans, delegates and reviews, never does the work itself.
@@ -212,7 +215,7 @@ pub enum TaskCategory {
 }
 
 impl TaskCategory {
-    pub const ALL: [TaskCategory; 10] = [
+    pub const ALL: [TaskCategory; 11] = [
         TaskCategory::Scout,
         TaskCategory::Research,
         TaskCategory::Implement,
@@ -220,6 +223,7 @@ impl TaskCategory {
         TaskCategory::Merge,
         TaskCategory::Verify,
         TaskCategory::Operate,
+        TaskCategory::Design,
         TaskCategory::Chat,
         TaskCategory::Orchestrate,
         TaskCategory::GitText,

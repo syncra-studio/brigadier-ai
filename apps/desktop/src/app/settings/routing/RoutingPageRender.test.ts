@@ -23,6 +23,7 @@ test("Routing shows who does what, edits an order, adds a rule with Undo, and ra
     "Resolve conflictsAutomaticNowOpus 5.5",
     "Run checksAutomaticNowOpus 5.5",
     "Use appsYour order · GPT-6, then Opus 5.5NowGPT-6",
+    "Make designs and imagesAutomaticNowOpus 5.5",
     "Take over a chatThe chat's own model, then AutomaticVaries",
     "Coordinate workAutomaticNowOpus 5.5",
     "Write commit messagesAutomaticNowOpus 5.5",
