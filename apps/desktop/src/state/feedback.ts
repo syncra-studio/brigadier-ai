@@ -83,7 +83,10 @@ export function openFeedback(draft: FeedbackDraft | null = null): void {
   void loadAccount();
 }
 
-/** The dialog's send now; one closed on (or before) is left to end on its own, unseen. */
+/**
+ * The dialog's send now; one closed on (or before) is left to end on its own, unseen, and one
+ * closed before it filed anything (asking who it posts as, signing in) stops there.
+ */
 let dialogSend = 0;
 
 /** Closes it; a send at work carries on, and shows when it opens again. A sign-in stops. */
@@ -106,14 +109,20 @@ export function setFeedbackText(text: string): void {
   );
 }
 
+/** The ask for who it posts as under way, which a send waits for when it doesn't know yet. */
+let accountAsked: Promise<void> | null = null;
+
 /** Asks the daemon who it posts as (each time it opens: a sign-in may have changed). */
-async function loadAccount(): Promise<void> {
-  try {
-    const { signedIn, login } = await request({ method: "feedbackAccount" });
-    useFeedbackUi.setState({ account: { signedIn, login: login ?? null } });
-  } catch (cause) {
-    console.warn("feedback: who it posts as is unknown", cause);
-  }
+function loadAccount(): Promise<void> {
+  accountAsked ??= request({ method: "feedbackAccount" })
+    .then(
+      ({ signedIn, login }) => useFeedbackUi.setState({ account: { signedIn, login: login ?? null } }),
+      (cause: unknown) => console.warn("feedback: who it posts as is unknown", cause),
+    )
+    .finally(() => {
+      accountAsked = null;
+    });
+  return accountAsked;
 }
 
 /** The account, asked for once when nothing asked yet (the thread's card). */
@@ -170,9 +179,23 @@ export function openDialogSignIn(): void {
   openSignIn(useFeedbackUi.getState().sending, (next) => useFeedbackUi.setState({ sending: next }));
 }
 
-/** Whether a send has to sign in first: known to be signed out, or still at a sign-in step. */
-function signInFirst(sending: FeedbackSending): boolean {
-  return useFeedbackUi.getState().account?.signedIn === false || sending.phase === "signIn";
+/**
+ * Whether a send has to sign in first: known to be signed out, or still at a sign-in step;
+ * `null` when who it posts as isn't known yet (see `signInOnceKnown`).
+ */
+function signInFirst(sending: FeedbackSending): boolean | null {
+  if (sending.phase === "signIn") return true;
+  const account = useFeedbackUi.getState().account;
+  return account ? !account.signedIn : null;
+}
+
+/**
+ * Whether a send has to sign in first, once the daemon said who it posts as; when it couldn't
+ * tell, the sign-in finds out (signed in already, it goes straight on).
+ */
+async function signInOnceKnown(sending: FeedbackSending): Promise<boolean> {
+  await loadAccount();
+  return signInFirst(sending) ?? true;
 }
 
 /** A send's results, the account marked signed out when filing found it so (Try again signs in). */
@@ -192,7 +215,10 @@ export function sendFromDialog(): void {
     if (mine === dialogSend) useFeedbackUi.setState({ sending: next });
   };
   const run = async (): Promise<FeedbackResult[] | null> => {
-    if (signInFirst(sending) && !(await signIn((step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
+    const first = signInFirst(sending) ?? (await signInOnceKnown(sending));
+    if (first && !(await signIn((step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
+    // Closed (or sent again) while it asked or signed in: this send stops there.
+    if (mine !== dialogSend) return null;
     set({ phase: "working", step: failed ? { step: "filing", count: failed.length } : { step: "writing" } });
     return filed(await (failed ? retryFeedback(failed) : sendFeedback(text, draft?.kind, (step) => set({ phase: "working", step }))));
   };
@@ -219,6 +245,9 @@ export const useFeedbackOffers = create<
   Record<string, { written?: FeedbackWriteUp | null; sending: FeedbackSending } | undefined>
 >(() => ({}));
 
+/** Each card's send now, by offer id; a sign-in dismissed with its card is left to end, unseen. */
+const offerSends: Record<string, number | undefined> = {};
+
 function setOffer(id: string, next: { written?: FeedbackWriteUp | null; sending: FeedbackSending }): void {
   useFeedbackOffers.setState({ [id]: { ...useFeedbackOffers.getState()[id], ...next } });
 }
@@ -240,9 +269,16 @@ export function sendOffer(id: string, text: string, kind: FeedbackKind, onSent: 
   const written = offer?.written ?? null;
   const filedBefore = sending.phase === "done";
   const failed = sending.phase === "done" || sending.phase === "failed" || sending.phase === "signIn" ? sending.results : null;
-  const set = (next: FeedbackSending) => setOffer(id, { sending: next });
+  const mine = (offerSends[id] ?? 0) + 1;
+  offerSends[id] = mine;
+  const set = (next: FeedbackSending) => {
+    if (offerSends[id] === mine) setOffer(id, { sending: next });
+  };
   const run = async (): Promise<FeedbackResult[] | null> => {
-    if (signInFirst(sending) && !(await signIn((step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
+    const first = signInFirst(sending) ?? (await signInOnceKnown(sending));
+    if (first && !(await signIn((step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
+    // Dismissed (or sent again) while it asked or signed in: this send stops there.
+    if (offerSends[id] !== mine) return null;
     set({ phase: "working", step: { step: "filing", count: failed?.length || written?.reports.length || 1 } });
     return filed(await (failed ? retryFeedback(failed) : fileFeedback(text, kind, written)));
   };
@@ -266,9 +302,12 @@ export function openOfferSignIn(id: string): void {
   if (offer) openSignIn(offer.sending, (next) => setOffer(id, { sending: next }));
 }
 
-/** The offer `id` was dismissed: a sign-in it started stops. */
+/** The offer `id` was dismissed: a send not filing yet stops, a sign-in it started too. */
 export function dismissOffer(id: string): void {
-  if (useFeedbackOffers.getState()[id]?.sending.phase === "signIn") cancelSignIn();
+  const phase = useFeedbackOffers.getState()[id]?.sending.phase;
+  if (phase === "working") return;
+  if (phase === "signIn") cancelSignIn();
+  offerSends[id] = (offerSends[id] ?? 0) + 1;
 }
 
 /** The offer `id` was sent from the dialog (its Edit): the card shows what was filed. */

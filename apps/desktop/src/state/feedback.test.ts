@@ -11,6 +11,7 @@ import type * as FeedbackModule from "@/state/feedback";
 type Feedback = typeof FeedbackModule;
 let server: ViteDevServer;
 let closeFeedback: Feedback["closeFeedback"];
+let dismissOffer: Feedback["dismissOffer"];
 let openFeedback: Feedback["openFeedback"];
 let sendFromDialog: Feedback["sendFromDialog"];
 let sendOffer: Feedback["sendOffer"];
@@ -20,7 +21,7 @@ let useFeedbackUi: Feedback["useFeedbackUi"];
 
 before(async () => {
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ closeFeedback, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
+  ({ closeFeedback, dismissOffer, openFeedback, sendFromDialog, sendOffer, setFeedbackText, useFeedbackOffers, useFeedbackUi } =
     (await server.ssrLoadModule("/src/state/feedback.ts")) as Feedback);
 });
 
@@ -48,6 +49,11 @@ const report = (title: string): FeedbackReport => ({
 let wrote: string[];
 let filings: ((items: RequestOf<"fileFeedback">["items"]) => FeedbackFiled[])[];
 let asked: RequestOf<"fileFeedback">["items"][];
+/** Who the faked daemon says it posts as, and when; the sign-in requests it got, in turn. */
+let account: () => Promise<boolean> | boolean;
+let signIns: string[];
+/** When the faked sign-in's wait answers (GitHub said yes). */
+let signedIn: Promise<void>;
 
 const filed = (number: number): FeedbackFiled => ({ outcome: "filed", number, url: `https://github.com/syncra-studio/brigadier-ai/issues/${number}` });
 const refused: FeedbackFiled = { outcome: "failed", reason: "HTTP 502: Bad gateway" };
@@ -57,13 +63,42 @@ beforeEach(() => {
   wrote = [];
   filings = [];
   asked = [];
-  useFeedbackUi.setState({ open: false, draft: null, text: "", sending: { phase: "write" }, account: null });
+  account = () => true;
+  signIns = [];
+  signedIn = Promise.resolve();
+  useFeedbackUi.setState({ open: false, draft: null, text: "", sending: { phase: "write" }, account: { signedIn: true, login: "someone" } });
   useFeedbackOffers.setState({}, true);
-  mockIPC((command, payload) => {
+  mockIPC(async (command, payload) => {
     if (command === "system_name") return "macOS 27.0 (aarch64)";
     if (command === "open_url") return null;
-    const request = (payload as { request: RequestOf<"writeUpFeedback"> | RequestOf<"fileFeedback"> | RequestOf<"feedbackAccount"> }).request;
-    if (request.method === "feedbackAccount") return { method: "feedbackAccount", signedIn: true, login: "someone" };
+    const request = (
+      payload as {
+        request:
+          | RequestOf<"writeUpFeedback">
+          | RequestOf<"fileFeedback">
+          | RequestOf<"feedbackAccount">
+          | RequestOf<"startGitHubSignIn">
+          | RequestOf<"waitGitHubSignIn">
+          | RequestOf<"cancelGitHubSignIn">;
+      }
+    ).request;
+    if (request.method === "feedbackAccount") {
+      const yes = await account();
+      return { method: "feedbackAccount", signedIn: yes, login: yes ? "someone" : null };
+    }
+    if (request.method === "startGitHubSignIn") {
+      signIns.push(request.method);
+      return { method: "startGitHubSignIn", signIn: { state: "code", code: "ABCD-1234", url: "https://github.com/login/device" } };
+    }
+    if (request.method === "waitGitHubSignIn") {
+      signIns.push(request.method);
+      await signedIn;
+      return { method: "waitGitHubSignIn" };
+    }
+    if (request.method === "cancelGitHubSignIn") {
+      signIns.push(request.method);
+      return { method: "cancelGitHubSignIn" };
+    }
     if (request.method === "writeUpFeedback") {
       wrote.push(request.text);
       return { method: "writeUpFeedback", writeUp: { reports: request.text.split(". ").map(report), searched: true } };
@@ -152,4 +187,75 @@ test("a card that sent only some files the rest on Try again, and is answered on
   const sending = useFeedbackOffers.getState().offer?.sending;
   assert.deepEqual(sending?.phase === "done" && sending.results.map((result) => result.outcome), ["filed", "filed"]);
   assert.equal(answered, 1);
+});
+
+/** Waits until `ready` holds (the faked daemon answers on later turns). */
+async function until(ready: () => boolean): Promise<void> {
+  for (let tries = 0; tries < 200 && !ready(); tries++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(ready());
+}
+
+/** A sign-in GitHub says yes to only when the returned function is called. */
+function signInPending(): () => void {
+  let yes: (() => void) | undefined;
+  signedIn = new Promise((resolve) => {
+    yes = resolve;
+  });
+  return () => yes?.();
+}
+
+test("closing the dialog while its sign-in finishes sends nothing", async () => {
+  useFeedbackUi.setState({ account: null });
+  account = () => false;
+  const yes = signInPending();
+  openFeedback({ kind: "bug", text: "Stop leaves it spinning" });
+  await until(() => useFeedbackUi.getState().account !== null);
+  sendFromDialog();
+  await until(() => signIns.includes("waitGitHubSignIn"));
+  closeFeedback();
+  // GitHub's yes was already on its way when the dialog closed.
+  yes();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(wrote, []);
+  assert.deepEqual(asked, []);
+  assert.equal(useFeedbackUi.getState().sending.phase, "write");
+});
+
+test("dismissing a card while its sign-in finishes files nothing", async () => {
+  useFeedbackUi.setState({ account: null });
+  account = () => false;
+  const yes = signInPending();
+  useFeedbackOffers.setState({ offer: { written: { reports: [report("Spins")], searched: true }, sending: { phase: "write" } } });
+  openFeedback();
+  await until(() => useFeedbackUi.getState().account !== null);
+  closeFeedback();
+  let answered = 0;
+  sendOffer("offer", "Spins", "bug", () => answered++);
+  await until(() => signIns.includes("waitGitHubSignIn"));
+  dismissOffer("offer");
+  yes();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(asked, []);
+  assert.equal(answered, 0);
+});
+
+test("a Send before it knows who it posts as waits, and signs in when signed out", async () => {
+  useFeedbackUi.setState({ account: null });
+  let answer: ((yes: boolean) => void) | undefined;
+  account = () =>
+    new Promise<boolean>((resolve) => {
+      answer = resolve;
+    });
+  openFeedback({ kind: "bug", text: "Stop leaves it spinning" });
+  sendFromDialog();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(wrote, []);
+  answer?.(false);
+  await until(() => useFeedbackUi.getState().sending.phase === "done");
+  assert.deepEqual(signIns, ["startGitHubSignIn", "waitGitHubSignIn"]);
+  assert.deepEqual(wrote, ["Stop leaves it spinning"]);
+  // The ask again once signed in.
+  answer?.(true);
 });
