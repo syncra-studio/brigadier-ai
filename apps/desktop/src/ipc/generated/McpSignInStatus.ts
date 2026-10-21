@@ -3,4 +3,4 @@
 /**
  * How a sign-in in Brigadier went. It never carries a token.
  */
-export type McpSignInStatus = { "type": "pending" } | { "type": "signedIn" } | { "type": "failed", reason: string, };
+export type McpSignInStatus = { "type": "pending" } | { "type": "signedIn" } | { "type": "cancelled" } | { "type": "failed", reason: string, };

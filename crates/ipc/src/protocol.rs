@@ -1242,6 +1242,28 @@ pub enum Request {
     GetMcpSignIn {
         id: String,
     },
+    /// Stops sign-in `id` while it waits for the browser: its callback listener closes,
+    /// nothing is saved, and [`Request::GetMcpSignIn`] reports it cancelled.
+    CancelMcpSignIn {
+        id: String,
+    },
+    /// Opens sign-in `id`'s page in the user's browser again, while it waits.
+    ReopenMcpSignIn {
+        id: String,
+    },
+    /// Deletes Brigadier's own sign-in to the server `serverId` (of `projectId`'s catalog when
+    /// given), if it has one. Claude Code's and Codex's own stores are never touched.
+    SignOutMcpServer {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
+    /// Forgets that macOS refused to let Brigadier read another agent's sign-in for the
+    /// server `serverId` and reads it once more, so macOS asks again. The new state arrives
+    /// with the next [`Request::GetIntegrations`].
+    AskMcpSignInAgain {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
     /// Adds an extra account of `provider` (a CLI home of its own) and opens the terminal
     /// that signs it in: the CLI's own sign-in, run with that home. Its output streams like
     /// [`Request::OpenTerminal`]'s; the account is checked again when it ends.
@@ -1957,6 +1979,10 @@ pub enum Response {
     GetMcpSignIn {
         status: brigadier_core::manager::McpSignInStatus,
     },
+    CancelMcpSignIn,
+    ReopenMcpSignIn,
+    SignOutMcpServer,
+    AskMcpSignInAgain,
     AddAccount {
         account: AccountEntry,
         terminal: TerminalInfo,

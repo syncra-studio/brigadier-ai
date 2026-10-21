@@ -5,13 +5,13 @@ import { mergeViews, snapshotOf } from "@/app/settings/integrations/live";
 import type { IntegrationsView, McpServerView, Project, SignInState, SkillView } from "@/ipc/generated";
 
 const railway = (source: string, id: string, off: boolean, nativeTo: McpServerView["nativeTo"]): McpServerView => ({
-  id, name: "railway", source, project: null, off, nativeTo, signIn: null,
+  id, name: "railway", source, project: null, off, nativeTo, signIn: null, pendingSignIn: null, copyKey: "railway-key",
   transport: { type: "stdio", command: "npx", args: ["-y", "@railway/mcp-server"], env: [], cwd: null },
 });
 const linear: McpServerView = {
   id: "claude:user:linear", name: "linear", source: "Claude Code (user)", project: null, off: false, nativeTo: ["claude"],
   transport: { type: "http", url: "https://mcp.linear.app/mcp", headers: [] },
-  signIn: { claude: { type: "native" }, codex: { type: "unknown" } },
+  signIn: { claude: { type: "native" }, codex: { type: "unknown" } }, pendingSignIn: null, copyKey: "linear-key",
 };
 const shared: SkillView = {
   id: "agents:user:grill-me", name: "grill-me", description: "Interview you.", path: "/Users/me/.agents/skills/grill-me",
@@ -46,8 +46,13 @@ test("live catalog: one row per server found in several configs, its switch cove
   assert.deepEqual(lin!.signIn, { claude: { kind: "native" }, codex: { kind: "required" } });
   const signIns = (claude: SignInState, codex: SignInState) =>
     snapshotOf(mergeViews({ ...user, servers: [{ ...linear, signIn: { claude, codex } }], problems: [] }, []), [], [], 1).snapshot.catalog.servers[0]!.signIn;
-  assert.deepEqual(signIns({ type: "inBrigadier" }, { type: "reusableFrom", agent: "claude" }), { claude: { kind: "native" }, codex: { kind: "reusable", from: "claude" } });
+  assert.deepEqual(signIns({ type: "inBrigadier", sinceMs: 1 }, { type: "reusableFrom", agent: "claude" }), { claude: { kind: "native" }, codex: { kind: "reusable", from: "claude" } });
   assert.deepEqual(signIns({ type: "needed" }, { type: "unknown" }), { claude: { kind: "required" }, codex: { kind: "required" } });
+  assert.deepEqual(signIns({ type: "notAllowed", agent: "claude" }, { type: "unsupported" }), { claude: { kind: "required" }, codex: { kind: "required" } });
+  // Two copies with one name and command but other environment values are two servers.
+  const otherKey = { ...railway("Codex (user)", "codex:user:railway", false, ["codex"]), copyKey: "other-railway-key" };
+  const split = snapshotOf(mergeViews({ ...user, servers: [user.servers[0]!, otherKey], problems: [] }, []), [], [], 1).snapshot.catalog.servers;
+  assert.equal(split.length, 2);
   assert.equal(dbRow!.project, "brigadier-ai");
   assert.deepEqual(dbRow!.sourceFiles, [{ source: "ClaudeProjectFile", path: "~/Development/brigadier-ai/.mcp.json" }]);
   assert.equal(figma!.error, "Unsupported address “ws://”: only http and https");

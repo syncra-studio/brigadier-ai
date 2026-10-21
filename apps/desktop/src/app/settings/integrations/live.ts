@@ -60,12 +60,15 @@ function signIn(state: SignInState): IntegrationSignIn {
     case "inBrigadier": return { kind: "native" };
     case "reusableFrom": return { kind: "reusable", from: agentOf(state.agent) };
     case "needed":
-    case "unknown": return { kind: "required" };
+    case "unknown":
+    case "notAllowed":
+    case "unsupported": return { kind: "required" };
   }
 }
 
+/** Copies of one server: the same name and project, and a transport with the same values (`copyKey` hashes them). */
 function sameServer(a: McpServerView, b: McpServerView): boolean {
-  return a.name === b.name && a.project === b.project && JSON.stringify({ ...a.transport, env: [], headers: [] }) === JSON.stringify({ ...b.transport, env: [], headers: [] });
+  return a.name === b.name && a.project === b.project && a.copyKey === b.copyKey;
 }
 
 /** Each group of copies of one server, keyed by its first copy's id. */

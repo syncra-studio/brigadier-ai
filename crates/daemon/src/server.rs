@@ -2584,6 +2584,34 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetMcpSignIn { id } => Response::GetMcpSignIn {
             status: daemon.sessions.mcp_sign_in(&id)?,
         },
+        Request::CancelMcpSignIn { id } => {
+            daemon.sessions.cancel_mcp_sign_in(&id)?;
+            Response::CancelMcpSignIn
+        }
+        Request::ReopenMcpSignIn { id } => {
+            daemon.sessions.reopen_mcp_sign_in(&id)?;
+            Response::ReopenMcpSignIn
+        }
+        Request::SignOutMcpServer {
+            server_id,
+            project_id,
+        } => {
+            daemon
+                .sessions
+                .sign_out_mcp_server(&server_id, project_id)
+                .await?;
+            Response::SignOutMcpServer
+        }
+        Request::AskMcpSignInAgain {
+            server_id,
+            project_id,
+        } => {
+            daemon
+                .sessions
+                .ask_mcp_sign_in_again(&server_id, project_id)
+                .await?;
+            Response::AskMcpSignInAgain
+        }
         Request::RemoveAccount { id } => Response::RemoveAccount {
             settings: Box::new(heap(|| daemon.sessions.remove_account(&id)).await?),
         },
