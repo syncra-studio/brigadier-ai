@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
+# The order a JSON config writes keys in (`Written`).
+serde.workspace = true
 serde_json.workspace = true
 # The CLIs' keys for their stored MCP sign-ins.
 sha2 = "0.11.0"
