@@ -449,7 +449,13 @@ fn read_toml(path: &Path) -> Option<toml::Table> {
     match text.parse::<toml::Table>() {
         Ok(table) => Some(table),
         Err(error) => {
-            tracing::warn!(path = %path.display(), %error, "unreadable Codex config");
+            // The error's own text quotes the line, which may hold a secret.
+            tracing::warn!(
+                path = %path.display(),
+                error = error.message(),
+                at = ?error.span(),
+                "unreadable Codex config"
+            );
             None
         }
     }

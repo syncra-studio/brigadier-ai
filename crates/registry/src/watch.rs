@@ -8,7 +8,7 @@ use std::time::Duration;
 use notify::RecursiveMode;
 use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache};
 
-/// What to watch: config files, and folders whose whole tree counts.
+/// What to watch: config files (and what they link to), and folders whose whole tree counts.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Watched {
     pub files: Vec<PathBuf>,
@@ -34,6 +34,13 @@ impl Plan {
             {
                 plan.files.insert(parent.join(name));
                 plan.folders.insert(parent);
+            }
+            // A config linked from elsewhere (a dotfiles folder) changes where it really is.
+            if let Ok(target) = std::fs::canonicalize(file)
+                && let Some(folder) = target.parent()
+            {
+                plan.folders.insert(folder.to_owned());
+                plan.files.insert(target);
             }
         }
         let mut trees: Vec<PathBuf> = watched
