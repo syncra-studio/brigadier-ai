@@ -1224,6 +1224,12 @@ pub enum Request {
     /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
     /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
     GetAccounts,
+    /// Settings → MCP servers and Skills: every server and skill the agents' configs on this
+    /// machine name, with a project's own when `projectId` is given. Switching one off goes
+    /// through [`Request::UpdateSettings`] (`mcpServersOff`, `skillsOff`).
+    GetIntegrations {
+        project_id: Option<ProjectId>,
+    },
     /// Adds an extra account of `provider` (a CLI home of its own) and opens the terminal
     /// that signs it in: the CLI's own sign-in, run with that home. Its output streams like
     /// [`Request::OpenTerminal`]'s; the account is checked again when it ends.
@@ -1929,6 +1935,9 @@ pub enum Response {
     SendConnectCode,
     GetAccounts {
         accounts: AccountsView,
+    },
+    GetIntegrations {
+        integrations: brigadier_core::manager::integrations::IntegrationsView,
     },
     AddAccount {
         account: AccountEntry,

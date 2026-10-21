@@ -112,8 +112,11 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         append_system_prompt: None,
         mcp_servers: vec![McpServer {
             name: "probe".into(),
-            command: PathBuf::from("python3"),
-            args: vec![root.join("server.py").display().to_string()],
+            transport: brigadier_providers::McpTransport::Stdio {
+                command: PathBuf::from("python3"),
+                args: vec![root.join("server.py").display().to_string()],
+                cwd: None,
+            },
             env: Vec::new(),
             tool_timeout_secs: Some(120),
             trusted: true,
@@ -124,6 +127,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         add_dirs: Vec::new(),
         project: None,
         skill_plugins: Vec::new(),
+        switched_off: Default::default(),
         env: Vec::new(),
         unset_env: Vec::new(),
         low_priority: false,

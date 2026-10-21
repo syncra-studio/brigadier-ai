@@ -65,7 +65,7 @@ impl SessionManager {
         call: OrchestratorCall,
     ) -> Result<String> {
         match call {
-            OrchestratorCall::DelegateTask(args) => {
+            OrchestratorCall::DelegateTask(mut args) => {
                 // In plan mode a lead may outline the work (it stops at its outline); nothing
                 // merges.
                 if args.kind.writes() {
@@ -238,6 +238,10 @@ impl SessionManager {
                 } else {
                     Vec::new()
                 };
+                // Resolved in place: one more list held across this branch's awaits would
+                // outgrow the dispatch future's bound.
+                args.integrations =
+                    crate::heap(|| self.resolve_integrations(id, &args.integrations)).await?;
                 let mut attachments =
                     crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
                 for image in mockup_images {
@@ -264,6 +268,7 @@ impl SessionManager {
                                 areas: areas.clone(),
                                 floor,
                                 needs: needs.clone(),
+                                integrations: args.integrations.clone(),
                             },
                         )
                     })
@@ -340,6 +345,7 @@ impl SessionManager {
                             mockup,
                             live_look: args.live_look,
                             request,
+                            integrations: args.integrations,
                             ..Default::default()
                         },
                     )
@@ -389,7 +395,7 @@ impl SessionManager {
                 if !args.attachments.is_empty() {
                     let given =
                         crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
-                    args.text = self.with_files(&task, given, args.text).await?;
+                    args.text = crate::heap(|| self.with_files(&task, given, args.text)).await?;
                 }
                 // A later request's turn hands the worker its question: the report that
                 // answers it, and the reply after it, belong to the request that asked.

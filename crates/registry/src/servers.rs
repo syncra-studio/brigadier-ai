@@ -1,0 +1,462 @@
+//! Reading MCP servers from each agent's config.
+
+use std::path::{Path, PathBuf};
+
+use serde_json::{Map, Value};
+
+use crate::{Roots, Secret, Server, Source, Transport, server_id};
+
+/// How a source writes variables in its values.
+#[derive(Clone, Copy)]
+enum Variables {
+    /// None (Codex's TOML, Claude Desktop).
+    None,
+    /// Claude Code: `${VAR}` and `${VAR:-default}`.
+    Claude,
+    /// Cursor: `${env:VAR}`, `${userHome}`, `${workspaceFolder}`, `${workspaceFolderBasename}`,
+    /// `${pathSeparator}` and `${/}`.
+    Cursor,
+}
+
+/// What a config file's servers share.
+struct Origin<'a> {
+    source: Source,
+    project: Option<&'a Path>,
+    /// Where relative paths resolve from.
+    base: Option<&'a Path>,
+    variables: Variables,
+}
+
+/// The user's servers: Claude Code's user and local scopes, Codex's, Claude Desktop's and
+/// Cursor's.
+pub(crate) fn user(roots: &Roots, codex: Option<&toml::Table>) -> Vec<Server> {
+    let mut servers = Vec::new();
+    if let Some(claude) = read_json(&roots.claude_json) {
+        if let Some(own) = claude.get("mcpServers").and_then(Value::as_object) {
+            servers.extend(json_servers(
+                own,
+                &Origin {
+                    source: Source::ClaudeUser,
+                    project: None,
+                    base: None,
+                    variables: Variables::Claude,
+                },
+                roots,
+            ));
+        }
+        for (path, project) in claude
+            .get("projects")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            let Some(own) = project.get("mcpServers").and_then(Value::as_object) else {
+                continue;
+            };
+            let path = Path::new(path);
+            servers.extend(json_servers(
+                own,
+                &Origin {
+                    source: Source::ClaudeLocal,
+                    project: Some(path),
+                    base: Some(path),
+                    variables: Variables::Claude,
+                },
+                roots,
+            ));
+        }
+    }
+    if let Some(codex) = codex {
+        servers.extend(toml_servers(codex, Source::CodexUser, None, roots));
+    }
+    if let Some(desktop) = roots.desktop_config.as_deref().and_then(read_json)
+        && let Some(own) = desktop.get("mcpServers").and_then(Value::as_object)
+    {
+        servers.extend(json_servers(
+            own,
+            &Origin {
+                source: Source::Desktop,
+                project: None,
+                base: None,
+                variables: Variables::None,
+            },
+            roots,
+        ));
+    }
+    if let Some(cursor) = read_json(&roots.cursor_dir.join("mcp.json"))
+        && let Some(own) = cursor.get("mcpServers").and_then(Value::as_object)
+    {
+        servers.extend(json_servers(
+            own,
+            &Origin {
+                source: Source::CursorUser,
+                project: None,
+                base: None,
+                variables: Variables::Cursor,
+            },
+            roots,
+        ));
+    }
+    servers
+}
+
+/// A project's servers: its `.mcp.json`, its Codex layers and its Cursor config.
+pub(crate) fn project(roots: &Roots, project: &Path) -> Vec<Server> {
+    let mut servers = Vec::new();
+    if let Some(config) = read_json(&project.join(".mcp.json"))
+        && let Some(own) = config.get("mcpServers").and_then(Value::as_object)
+    {
+        servers.extend(json_servers(
+            own,
+            &Origin {
+                source: Source::ClaudeProject,
+                project: Some(project),
+                base: Some(project),
+                variables: Variables::Claude,
+            },
+            roots,
+        ));
+    }
+    servers.extend(codex_layers(roots, project, project));
+    if let Some(config) = read_json(&project.join(".cursor").join("mcp.json"))
+        && let Some(own) = config.get("mcpServers").and_then(Value::as_object)
+    {
+        servers.extend(json_servers(
+            own,
+            &Origin {
+                source: Source::CursorProject,
+                project: Some(project),
+                base: Some(project),
+                variables: Variables::Cursor,
+            },
+            roots,
+        ));
+    }
+    servers
+}
+
+/// The servers of the project's `.codex/config.toml` layers that a session working in `dir`
+/// loads: every folder from `dir` up to the project's root, the nearest winning for a name, as
+/// Codex merges them. Each starts in its layer's folder unless it names its own.
+pub(crate) fn codex_layers(roots: &Roots, project: &Path, dir: &Path) -> Vec<Server> {
+    let mut servers: Vec<Server> = Vec::new();
+    for folder in dir.ancestors() {
+        if let Some(layer) = read_toml(&folder.join(".codex").join("config.toml")) {
+            for server in toml_servers(&layer, Source::CodexProject, Some((project, folder)), roots)
+            {
+                if !servers.iter().any(|known| known.name == server.name) {
+                    servers.push(server);
+                }
+            }
+        }
+        if folder == project {
+            break;
+        }
+    }
+    servers
+}
+
+/// `$CODEX_HOME/config.toml`, read once for its servers, skills and trust.
+pub(crate) fn codex_config(roots: &Roots) -> Option<toml::Table> {
+    read_toml(&roots.codex_home.join("config.toml"))
+}
+
+/// The user's own `skills.config` entries.
+pub(crate) fn codex_skill_config(config: &toml::Table) -> Vec<Value> {
+    config
+        .get("skills")
+        .and_then(|skills| skills.get("config"))
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| serde_json::to_value(entry).ok())
+        .collect()
+}
+
+/// The projects the user trusts in Codex (`[projects."<path>"] trust_level = "trusted"`).
+pub(crate) fn codex_trusted(config: &toml::Table) -> Vec<PathBuf> {
+    config
+        .get("projects")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+        .filter(|(_, project)| {
+            project.get("trust_level").and_then(toml::Value::as_str) == Some("trusted")
+        })
+        .map(|(path, _)| PathBuf::from(path))
+        .collect()
+}
+
+/// `mcpServers` of a JSON config (Claude Code, Claude Desktop, Cursor).
+fn json_servers(own: &Map<String, Value>, origin: &Origin<'_>, roots: &Roots) -> Vec<Server> {
+    let expand = |text: &str| expand(text, origin.variables, roots, origin.project);
+    let mut servers = Vec::new();
+    for (name, config) in own {
+        let Some(config) = config.as_object() else {
+            continue;
+        };
+        // A server switched off where it is configured is off for every session.
+        if config.get("disabled").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let kind = config.get("type").and_then(Value::as_str);
+        let transport = if let Some(url) = config.get("url").and_then(Value::as_str) {
+            // Legacy SSE servers aren't shared: Codex has no SSE transport.
+            if kind == Some("sse") {
+                continue;
+            }
+            Transport::Http {
+                url: expand(url),
+                headers: string_map(config.get("headers"))
+                    .map(|(header, value)| (header, Secret::new(expand(&value))))
+                    .collect(),
+            }
+        } else if let Some(command) = config.get("command").and_then(Value::as_str) {
+            if kind.is_some_and(|kind| kind != "stdio") {
+                continue;
+            }
+            let base = origin.base;
+            Transport::Stdio {
+                command: command_path(&expand(command), base),
+                args: config
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(expand)
+                    .collect(),
+                env: string_map(config.get("env"))
+                    .map(|(key, value)| (key, Secret::new(expand(&value))))
+                    .collect(),
+                cwd: config
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(|cwd| absolute(&expand(cwd), base)),
+                base: base.map(Path::to_owned),
+            }
+        } else {
+            continue;
+        };
+        servers.push(server(name, origin.source, origin.project, transport));
+    }
+    servers
+}
+
+/// `mcp_servers` of a Codex config. `layer`: a project's, with the folder of the layer, which
+/// its servers start in by default.
+fn toml_servers(
+    config: &toml::Table,
+    source: Source,
+    layer: Option<(&Path, &Path)>,
+    roots: &Roots,
+) -> Vec<Server> {
+    let Some(own) = config.get("mcp_servers").and_then(toml::Value::as_table) else {
+        return Vec::new();
+    };
+    let base = layer.map(|(_, folder)| folder);
+    let env_var = |name: &str| roots.vars.get(name).cloned().unwrap_or_default();
+    let mut servers = Vec::new();
+    for (name, config) in own {
+        let Some(config) = config.as_table() else {
+            continue;
+        };
+        if config.get("enabled").and_then(toml::Value::as_bool) == Some(false) {
+            continue;
+        }
+        let strings = |key: &str| -> Vec<(String, String)> {
+            config
+                .get(key)
+                .and_then(toml::Value::as_table)
+                .into_iter()
+                .flatten()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+                .collect()
+        };
+        let transport = if let Some(url) = config.get("url").and_then(toml::Value::as_str) {
+            let mut headers: Vec<(String, Secret)> = strings("http_headers")
+                .into_iter()
+                .map(|(header, value)| (header, Secret::new(value)))
+                .collect();
+            headers.extend(
+                strings("env_http_headers")
+                    .into_iter()
+                    .map(|(header, var)| (header, Secret::new(env_var(&var)))),
+            );
+            if let Some(var) = config
+                .get("bearer_token_env_var")
+                .and_then(toml::Value::as_str)
+            {
+                headers.push((
+                    "Authorization".into(),
+                    Secret::new(format!("Bearer {}", env_var(var))),
+                ));
+            }
+            Transport::Http {
+                url: url.to_owned(),
+                headers,
+            }
+        } else if let Some(command) = config.get("command").and_then(toml::Value::as_str) {
+            let mut env: Vec<(String, Secret)> = strings("env")
+                .into_iter()
+                .map(|(key, value)| (key, Secret::new(value)))
+                .collect();
+            // Variables Codex passes on from its own environment, by name (or `{ name }`).
+            for entry in config
+                .get("env_vars")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let name = entry
+                    .as_str()
+                    .or_else(|| entry.get("name").and_then(toml::Value::as_str));
+                if let Some(name) = name
+                    && let Some(value) = roots.vars.get(name)
+                {
+                    env.push((name.to_owned(), Secret::new(value.clone())));
+                }
+            }
+            Transport::Stdio {
+                command: command_path(command, base),
+                args: config
+                    .get("args")
+                    .and_then(toml::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+                env,
+                cwd: config
+                    .get("cwd")
+                    .and_then(toml::Value::as_str)
+                    .map(|cwd| absolute(cwd, base)),
+                base: base.map(Path::to_owned),
+            }
+        } else {
+            continue;
+        };
+        servers.push(server(
+            name,
+            source,
+            layer.map(|(project, _)| project),
+            transport,
+        ));
+    }
+    servers
+}
+
+fn server(name: &str, source: Source, project: Option<&Path>, transport: Transport) -> Server {
+    let signs_in = matches!(&transport, Transport::Http { headers, .. }
+        if !headers.iter().any(|(header, _)| header.eq_ignore_ascii_case("authorization")));
+    Server {
+        id: server_id(source, project, name),
+        name: name.to_owned(),
+        source,
+        project: project.map(Path::to_owned),
+        transport,
+        signs_in,
+    }
+}
+
+/// A JSON object's string values.
+fn string_map(value: Option<&Value>) -> impl Iterator<Item = (String, String)> + '_ {
+    value
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+}
+
+/// A command as its source means it: one written as a relative path (`./bin/server`,
+/// `scripts/mcp`) is in `base`; a bare name is looked up on PATH.
+fn command_path(command: &str, base: Option<&Path>) -> String {
+    let relative = Path::new(command).is_relative()
+        && (command.contains('/') || (cfg!(windows) && command.contains('\\')));
+    match base {
+        Some(base) if relative => base.join(command).display().to_string(),
+        _ => command.to_owned(),
+    }
+}
+
+fn absolute(path: &str, base: Option<&Path>) -> PathBuf {
+    match base {
+        Some(base) if Path::new(path).is_relative() => base.join(path),
+        _ => PathBuf::from(path),
+    }
+}
+
+/// `text` with the source's variables expanded from the CLIs' environment. An unset variable
+/// without a default expands to nothing.
+fn expand(text: &str, variables: Variables, roots: &Roots, project: Option<&Path>) -> String {
+    if matches!(variables, Variables::None) || !text.contains("${") {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let inner = &after[..end];
+        let var = |name: &str| roots.vars.get(name).cloned();
+        let value = match variables {
+            Variables::Claude => match inner.split_once(":-") {
+                Some((name, default)) => var(name)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| default.to_owned()),
+                None => var(inner).unwrap_or_default(),
+            },
+            Variables::Cursor => match inner {
+                "userHome" => roots.home.display().to_string(),
+                "workspaceFolder" => project.map(|p| p.display().to_string()).unwrap_or_default(),
+                "workspaceFolderBasename" => project
+                    .and_then(Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                "pathSeparator" | "/" => std::path::MAIN_SEPARATOR.to_string(),
+                _ => match inner.strip_prefix("env:") {
+                    Some(name) => var(name).unwrap_or_default(),
+                    None => format!("${{{inner}}}"),
+                },
+            },
+            Variables::None => unreachable!(),
+        };
+        out.push_str(&value);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str(&text) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "unreadable MCP config");
+            None
+        }
+    }
+}
+
+fn read_toml(path: &Path) -> Option<toml::Table> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match text.parse::<toml::Table>() {
+        Ok(table) => Some(table),
+        Err(error) => {
+            // The error's own text quotes the line, which may hold a secret.
+            tracing::warn!(
+                path = %path.display(),
+                error = error.message(),
+                at = ?error.span(),
+                "unreadable Codex config"
+            );
+            None
+        }
+    }
+}

@@ -412,9 +412,16 @@ impl Claude {
 /// refers to by name, what the output hook reads, its MCP time limits and auto-compaction.
 fn session_env(spec: &SessionSpec) -> Vec<(String, String)> {
     let mut env = spec.env.clone();
-    // What the MCP config refers to by name, and what the output hook reads.
-    for server in &spec.mcp_servers {
-        env.extend(server.env.iter().cloned());
+    // What the MCP config refers to by name, each under its server's own alias, and what the
+    // output hook reads.
+    for (index, server) in spec.mcp_servers.iter().enumerate() {
+        env.extend(
+            server
+                .env
+                .iter()
+                .enumerate()
+                .map(|(key, (_, value))| (mcp_alias(index, key), value.clone())),
+        );
     }
     if let Some(hook) = spec
         .output_hook
@@ -444,35 +451,69 @@ fn session_env(spec: &SessionSpec) -> Vec<(String, String)> {
     env
 }
 
+/// The variable that holds value `key` of the session's server `server` in Claude's
+/// environment: each server's own, so two servers can give one name different values.
+fn mcp_alias(server: usize, key: usize) -> String {
+    format!("BRIGADIER_MCP_{server}_{key}")
+}
+
 /// Claude's `--mcp-config` for the session's servers.
 ///
 /// The config is on Claude's command line, which any process of the user can read, so a
-/// server's environment values (such as a grant) are not in it: they are in Claude's own
-/// environment, and the config names them (`${NAME}`, expanded by Claude).
+/// server's values (a grant, a token, a header) are not in it: they are in Claude's own
+/// environment under aliases ([`mcp_alias`]), and the config names them (`${ALIAS}`, expanded
+/// by Claude in `env` and `headers`). Claude ignores a stdio server's `cwd` (2.1.306,
+/// docs/research/phase7-probes.md (g)), so on Unix a server with a folder of its own starts
+/// through a shell that changes to it first.
 fn mcp_config(servers: &[McpServer]) -> Value {
     let servers: Map<String, Value> = servers
         .iter()
-        .map(|server| {
-            let env: Map<String, Value> = server
+        .enumerate()
+        .map(|(index, server)| {
+            let values: Map<String, Value> = server
                 .env
                 .iter()
-                .map(|(name, _)| (name.clone(), Value::String(format!("${{{name}}}"))))
+                .enumerate()
+                .map(|(key, (name, _))| {
+                    let alias = mcp_alias(index, key);
+                    (name.clone(), Value::String(format!("${{{alias}}}")))
+                })
                 .collect();
-            (server.name.clone(), {
-                let mut config = json!({
-                    "type": "stdio",
-                    "command": server.command.display().to_string(),
-                    "args": server.args,
-                    "env": env,
-                });
-                if let Some(secs) = server.tool_timeout_secs {
-                    config["timeout"] = json!(secs * 1000);
+            let mut config = match &server.transport {
+                McpTransport::Stdio { command, args, cwd } => {
+                    let command = command.display().to_string();
+                    let (command, args) = match cwd {
+                        Some(cwd) if cfg!(unix) => (
+                            "/bin/sh".to_owned(),
+                            ["-c", r#"cd "$0" && exec "$@""#]
+                                .into_iter()
+                                .map(str::to_owned)
+                                .chain([cwd.display().to_string(), command])
+                                .chain(args.iter().cloned())
+                                .collect(),
+                        ),
+                        _ => (command, args.clone()),
+                    };
+                    json!({
+                        "type": "stdio",
+                        "command": command,
+                        "args": args,
+                        "env": values,
+                    })
                 }
-                if server.always_load {
-                    config["alwaysLoad"] = json!(true);
-                }
-                config
-            })
+                McpTransport::Http { url } => json!({
+                    "type": "http",
+                    "url": url,
+                    "headers": values,
+                }),
+            };
+            if let Some(secs) = server.tool_timeout_secs {
+                config["timeout"] = json!(secs * 1000);
+            }
+            if server.always_load {
+                config["alwaysLoad"] = json!(true);
+            }
+            (server.name.clone(), config)
         })
         .collect();
     json!({ "mcpServers": servers })
@@ -632,7 +673,14 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
             ask.push(format!("mcp__{}__{tool}", server.name));
         }
     }
-    let mut deny: Vec<String> = Vec::new();
+    // The user's own servers they switched off for Brigadier: a deny rule keeps their tools
+    // from the model (docs/research/phase7-probes.md (a)).
+    let mut deny: Vec<String> = spec
+        .switched_off
+        .servers
+        .iter()
+        .map(|name| format!("mcp__{name}"))
+        .collect();
     let sandbox = match &spec.access {
         Access::Workspace { extra_roots } => json!({
             "enabled": true,
@@ -815,6 +863,17 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     if spec.omit_ai_coauthors {
         settings["includeCoAuthoredBy"] = json!(false);
         settings["attribution"] = json!({ "commit": "", "pr": "" });
+    }
+    // The user's own skills they switched off for Brigadier. Claude keys them by name, so
+    // every skill of that name goes (docs/research/phase7-probes.md (b)).
+    if !spec.switched_off.skill_names.is_empty() {
+        let off: Map<String, Value> = spec
+            .switched_off
+            .skill_names
+            .iter()
+            .map(|name| (name.clone(), json!("off")))
+            .collect();
+        settings["skillOverrides"] = Value::Object(off);
     }
     if let Some(hooks) = output_hooks(spec) {
         settings["hooks"] = hooks;
@@ -2133,8 +2192,11 @@ for line in sys.stdin:
             model: Some("claude-sonnet-5-5".into()),
             mcp_servers: vec![McpServer {
                 name: "probe".into(),
-                command: PathBuf::from("python3"),
-                args: vec![server.display().to_string()],
+                transport: McpTransport::Stdio {
+                    command: PathBuf::from("python3"),
+                    args: vec![server.display().to_string()],
+                    cwd: None,
+                },
                 env: Vec::new(),
                 tool_timeout_secs: Some(60),
                 trusted: true,
@@ -2481,6 +2543,7 @@ for line in sys.stdin:
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
             env: Vec::new(),
@@ -2616,8 +2679,11 @@ for line in sys.stdin:
         // allowed (an ask rule wins over an allow rule).
         let server = McpServer {
             name: "brigadier".into(),
-            command: PathBuf::from("/bin/true"),
-            args: Vec::new(),
+            transport: McpTransport::Stdio {
+                command: PathBuf::from("/bin/true"),
+                args: Vec::new(),
+                cwd: None,
+            },
             env: Vec::new(),
             tool_timeout_secs: None,
             trusted: true,
@@ -2705,6 +2771,7 @@ for line in sys.stdin:
             auto_review,
             tools: ToolSet::Thread,
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             add_dirs: vec![ws.clone()],
             allowed_models: None,
             ..spec(cwd.path(), &[])
@@ -3111,6 +3178,7 @@ for line in sys.stdin:
                 unix_sockets: Vec::new(),
             },
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             add_dirs: vec![checkout.clone()],
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };
@@ -3243,6 +3311,7 @@ for line in sys.stdin:
                 unix_sockets: Vec::new(),
             },
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             add_dirs: vec![checkout.clone()],
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };
@@ -3699,5 +3768,127 @@ for line in sys.stdin:
         for text in [NOT_INSTALLED, SIGNED_OUT] {
             assert!(!text.contains('`') && !text.contains("terminal"), "{text}");
         }
+    }
+
+    /// Two servers may give one variable different values: each value is in Claude's
+    /// environment under its server's own alias, the config names the alias, and no value is
+    /// on the command line. An HTTP server's headers come the same way, and a server with a
+    /// folder of its own starts in it (Claude ignores `cwd`, phase7-probes.md (g)).
+    #[test]
+    fn each_servers_values_have_their_own_aliases() {
+        let dir = std::env::temp_dir();
+        let server = |name: &str, transport: McpTransport, env: &[(&str, &str)]| McpServer {
+            name: name.into(),
+            transport,
+            env: env
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+            prompt_tools: Vec::new(),
+        };
+        let spec = SessionSpec {
+            mcp_servers: vec![
+                server(
+                    "one",
+                    McpTransport::Stdio {
+                        command: PathBuf::from("/bin/one"),
+                        args: vec!["--x".into()],
+                        cwd: None,
+                    },
+                    &[("TOKEN", "first-secret")],
+                ),
+                server(
+                    "two",
+                    McpTransport::Stdio {
+                        command: PathBuf::from("/bin/two"),
+                        args: vec!["serve".into()],
+                        cwd: Some(PathBuf::from("/srv/two")),
+                    },
+                    &[("TOKEN", "second-secret"), ("MODE", "dev")],
+                ),
+                server(
+                    "web",
+                    McpTransport::Http {
+                        url: "https://mcp.example.com/mcp".into(),
+                    },
+                    &[("Authorization", "Bearer third-secret")],
+                ),
+            ],
+            tools: ToolSet::Lean,
+            ..spec(&dir, &[])
+        };
+        let env = session_env(&spec);
+        let value = |name: &str| {
+            env.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("BRIGADIER_MCP_0_0"), Some("first-secret"));
+        assert_eq!(value("BRIGADIER_MCP_1_0"), Some("second-secret"));
+        assert_eq!(value("BRIGADIER_MCP_1_1"), Some("dev"));
+        assert_eq!(value("BRIGADIER_MCP_2_0"), Some("Bearer third-secret"));
+        assert_eq!(value("TOKEN"), None);
+
+        let args = Claude::session_flags(&spec, &dir, false, None);
+        for secret in ["first-secret", "second-secret", "third-secret"] {
+            assert!(!args.iter().any(|arg| arg.contains(secret)), "{args:?}");
+        }
+        let at = args.iter().position(|arg| arg == "--mcp-config").unwrap();
+        let config: Value = serde_json::from_str(&args[at + 1]).unwrap();
+        let servers = &config["mcpServers"];
+        assert_eq!(
+            servers["one"],
+            json!({"type": "stdio", "command": "/bin/one", "args": ["--x"],
+                   "env": {"TOKEN": "${BRIGADIER_MCP_0_0}"}})
+        );
+        if cfg!(unix) {
+            assert_eq!(
+                servers["two"],
+                json!({"type": "stdio", "command": "/bin/sh",
+                       "args": ["-c", r#"cd "$0" && exec "$@""#, "/srv/two", "/bin/two", "serve"],
+                       "env": {"TOKEN": "${BRIGADIER_MCP_1_0}", "MODE": "${BRIGADIER_MCP_1_1}"}})
+            );
+        }
+        assert_eq!(
+            servers["web"],
+            json!({"type": "http", "url": "https://mcp.example.com/mcp",
+                   "headers": {"Authorization": "${BRIGADIER_MCP_2_0}"}})
+        );
+    }
+
+    /// What the user switched off for Brigadier: a server's tools are denied by name, and a
+    /// skill is turned off by name (phase7-probes.md (a), (b)).
+    #[test]
+    fn switched_off_servers_are_denied_and_skills_turned_off() {
+        let dir = std::env::temp_dir();
+        let off = SessionSpec {
+            tools: ToolSet::Lean,
+            switched_off: SwitchedOff {
+                servers: vec!["railway".into()],
+                skill_names: vec!["review".into()],
+                skill_files: vec![PathBuf::from("/ignored/by/claude/SKILL.md")],
+                codex_skill_config: Vec::new(),
+            },
+            ..spec(&dir, &[])
+        };
+        let settings = settings_of(&off, &dir);
+        let deny = settings["permissions"]["deny"].as_array().expect("deny");
+        assert!(deny.contains(&json!("mcp__railway")), "{deny:?}");
+        assert_eq!(settings["skillOverrides"], json!({"review": "off"}));
+        // Nothing switched off, nothing added.
+        let plain = settings_of(&spec(&dir, &[]), &dir);
+        assert!(plain.get("skillOverrides").is_none());
+        assert!(plain["permissions"]["deny"].as_array().is_none_or(|deny| {
+            !deny
+                .iter()
+                .any(|rule| rule.as_str().is_some_and(|r| r.starts_with("mcp__")))
+        }));
+    }
+
+    fn settings_of(spec: &SessionSpec, dir: &Path) -> Value {
+        settings(spec, dir, &SubAgents::Any, false)
     }
 }

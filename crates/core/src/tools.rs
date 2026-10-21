@@ -231,6 +231,11 @@ pub struct DelegateTask {
     /// change it is told of; it changes nothing. Other workers never build the app.
     #[serde(default)]
     pub live_look: bool,
+    /// MCP servers the worker needs besides its own agent's, by name (or id) from the list
+    /// your instructions give: a server only another agent, Claude Desktop or Cursor has.
+    /// Only what the task needs: each one's tools fill the worker's context.
+    #[serde(default)]
+    pub integrations: Vec<String>,
 }
 
 /// `message_worker`: answer a worker's blocking question, or steer a running worker.
