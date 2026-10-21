@@ -381,7 +381,9 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
-        "review_candidate" => ToolCall::Orchestrator(O::ReviewCandidate(arg(name, args))),
+        "request_review" if orchestrator => {
+            ToolCall::Orchestrator(O::RequestReview(arg(name, args)))
+        }
         "attach_proof" => ToolCall::Orchestrator(O::AttachProof(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
@@ -402,7 +404,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
-        "review_code" => ToolCall::Worker(W::ReviewCode),
+        "request_review" => ToolCall::Worker(W::RequestReview),
         "note_progress" => ToolCall::Worker(W::NoteProgress(arg(name, args))),
         "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),

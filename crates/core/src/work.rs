@@ -1543,7 +1543,7 @@ pub struct Plan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewKind {
-    /// The commits `base..tip`: a landing's, or a worker's own (`review_code`).
+    /// The commits `base..tip`: a landing's, or a worker's own (`request_review`).
     Code,
     /// A lead's outline, with the code it starts from (`tip`) checked out.
     Plan,
@@ -1579,7 +1579,7 @@ pub enum ReviewState {
 pub enum ReviewFor {
     /// The orchestrator: a landing's review, an outline's.
     Orchestrator,
-    /// The worker that asked for it (`review_code`); the orchestrator once it has reported or
+    /// The worker that asked for it (`request_review`); the orchestrator once it has reported or
     /// ended.
     Worker { task_id: TaskId },
 }

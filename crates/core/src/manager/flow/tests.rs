@@ -649,7 +649,7 @@ type Heard = Arc<std::sync::Mutex<Vec<String>>>;
 /// Asks for a review of the worker's own work and waits for the findings, which steer into
 /// its running turn. What the review found, or why there is none.
 async fn own_review(turn: &Turn) -> String {
-    let started = turn.call("review_code", json!({})).await;
+    let started = turn.call("request_review", json!({})).await;
     assert!(!started.is_error, "{}", started.text);
     if !started.text.starts_with("Started a review") {
         return started.text;
@@ -975,7 +975,7 @@ fn reports_in(input: &str) -> Vec<u32> {
 
 /// Done when (1): a small request goes straight to a lead, with no outline. The lead (Codex,
 /// which can't commit from its sandbox, so Brigadier commits for it) asks for its own review
-/// (review_code), which returns at once; the review comes from the other vendor, reads its
+/// (request_review), which returns at once; the review comes from the other vendor, reads its
 /// work in a checkout of its own, and its findings reach the lead as a message. Then the
 /// orchestrator lands it: the lead's own review is the change's one review, so the landing,
 /// with the lead's fix after it, gets none of its own (SESSION-FIXES-PLAN.md Q6.1). No
@@ -1336,7 +1336,7 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
 }
 
 /// A verifier only when the orchestrator wants one: it starts it on the lead's report; the
-/// verifier asks for the review (review_code), which returns at once, gets the findings as a
+/// verifier asks for the review (request_review), which returns at once, gets the findings as a
 /// message, fixes the one it agrees with and reports; the orchestrator lands the verifier.
 #[tokio::test]
 async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
@@ -1462,7 +1462,7 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
 }
 
 /// A lead asks for its review and reports before it ends; the orchestrator starts a verifier on
-/// the lead's last commit, the same range. The verifier's review_code finds that review still
+/// the lead's last commit, the same range. The verifier's request_review finds that review still
 /// running and takes it over: the findings reach the verifier, which fixes and reports.
 #[tokio::test]
 async fn a_verifier_takes_over_its_leads_review_still_running() {
@@ -1526,7 +1526,7 @@ async fn a_verifier_takes_over_its_leads_review_still_running() {
                     return Reply::text("[quiet]");
                 }
                 if turn.prompt.contains("You verify this phase") {
-                    let asked = turn.call("review_code", json!({})).await;
+                    let asked = turn.call("request_review", json!({})).await;
                     assert!(
                         asked.text.contains("being reviewed already; the findings arrive"),
                         "{}",
@@ -1553,7 +1553,7 @@ async fn a_verifier_takes_over_its_leads_review_still_running() {
                 turn.write("hello.txt", "hello");
                 turn.git(&["add", "hello.txt"]);
                 turn.git(&["commit", "-q", "-m", "Add hello.txt"]);
-                let asked = turn.call("review_code", json!({})).await;
+                let asked = turn.call("request_review", json!({})).await;
                 assert!(asked.text.starts_with("Started a review"), "{}", asked.text);
                 let reply = turn
                     .call(
@@ -1702,7 +1702,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                         turn.prompt.contains("Name the file p1.txt."),
                         "it checks against the outline's corrections"
                     );
-                    assert!(turn.prompt.contains("review_code"));
+                    assert!(turn.prompt.contains("request_review"));
                     let review = own_review(&turn).await;
                     assert!(
                         review.contains("reviewed already"),
@@ -2633,7 +2633,7 @@ async fn in_plan_mode_a_lead_outlines_and_builds_nothing() {
             }
             assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
             for (tool, args) in [
-                ("review_code", json!({})),
+                ("request_review", json!({})),
                 ("submit_report", json!({"summary": "Added one.txt."})),
             ] {
                 let refused = turn.call(tool, args).await;
@@ -2857,7 +2857,7 @@ async fn in_plan_mode_a_phase_lead_outlines_and_builds_nothing() {
             }
             assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
             for (tool, args) in [
-                ("review_code", json!({})),
+                ("request_review", json!({})),
                 ("submit_report", json!({"summary": "Built phase one."})),
             ] {
                 let refused = turn.call(tool, args).await;

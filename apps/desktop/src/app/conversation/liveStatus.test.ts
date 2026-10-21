@@ -209,7 +209,7 @@ test("an integration's live line names its action, and a worker's progress note 
 
 test("the thread's own tool steps show as their rows, never as Thinking or a worker", () => {
   for (const name of ["Bash", "Read", "Edit", "mcp__brigadier__run", "mcp__brigadier__run_check", "mcp__brigadier__start_preview",
-    "mcp__brigadier__preview_log", "mcp__brigadier__review_code", "shell", "apply_patch"]) {
+    "mcp__brigadier__preview_log", "mcp__brigadier__request_review", "shell", "apply_patch"]) {
     assert.deepEqual(threadStatus(input({ ...leading, orchestratorSteps: [call(name)] })), { head: null }, name);
   }
   // Once the step is done the thread thinks again.

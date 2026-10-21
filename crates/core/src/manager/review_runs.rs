@@ -1,5 +1,5 @@
 //! One-shot reviews (THREAD-PLAN.md §2 Q12): every landing gets one read-only review by the
-//! vendor other than its author's; a worker may ask for one of its own work (`review_code`);
+//! vendor other than its author's; a worker may ask for one of its own work (`request_review`);
 //! a lead's outline gets one in the background (a plan review). Nothing waits for one: the
 //! findings reach whoever asked as a message, also after the session was merged.
 //!
@@ -70,7 +70,7 @@ const REVIEW_TIME: Duration = Duration::from_secs(30 * 60);
 const MESSAGE_MAX: usize = 12_000;
 /// What a worker waiting for its own review's findings is blocked on.
 pub(crate) const WAITING_FOR_REVIEW: &str = "Waiting for its code review";
-/// `review_code`'s answer while the user has reviews off.
+/// `request_review`'s answer while the user has reviews off.
 const REVIEWS_OFF_CODE: &str = "Reviews are off (the user's setting): no review runs, and nothing waits for one. Check your work yourself; once your checks pass and your evidence is in, call submit_report.";
 /// `review_plan`'s answer while the user has reviews off.
 const REVIEWS_OFF_PLAN: &str = "Reviews are off (the user's setting): no plan review runs. Judge the plan yourself and carry on.";
@@ -426,7 +426,7 @@ impl ReplyClaims {
     }
 }
 
-/// A review_candidate call's claim on a review's outcome ([`SessionManager::review_replies`]):
+/// A request_review call's claim on a review's outcome ([`SessionManager::review_replies`]):
 /// dropped while still armed (the call ends without saying it, or is cancelled), the review's
 /// message is delivered as usual again; one whose end already stood aside for the call is
 /// told now, by the last such call, unless another said it (#332).
@@ -764,7 +764,7 @@ impl SessionManager {
         }
     }
 
-    /// How much of `task`'s landing, `from..tip`, its worker's own review (review_code)
+    /// How much of `task`'s landing, `from..tip`, its worker's own review (request_review)
     /// covers: the newest that ended with a verdict, from the same start. Its range landed as
     /// it was reviewed, or with commits after it: after findings those are the worker's fixes,
     /// which get no review of their own; after a clean review they are work nobody read yet,
@@ -1029,15 +1029,15 @@ impl SessionManager {
         }
     }
 
-    /// `review_candidate`: the other vendor's review of the thread's candidate commit, small
+    /// `request_review`: the other vendor's review of the thread's candidate commit, small
     /// changes too. What reviews already cover is reused: the range starts where a chain of
     /// earlier reviews from the merge base ends, and after findings it re-checks their fix
     /// alone (#138). It waits up to `wait_seconds` for the findings and returns them in its
     /// reply instead of a message (#137). No reviewer, or reviews off, is a fact it states.
-    pub(crate) async fn review_candidate(
+    pub(crate) async fn request_review(
         &self,
         id: &ConversationId,
-        args: crate::tools::ReviewCandidate,
+        args: crate::tools::RequestReview,
     ) -> Result<String> {
         // What the thread committed joins its unreviewed range first, so the range this review
         // covers isn't reviewed again by itself.
@@ -1246,7 +1246,7 @@ impl SessionManager {
         Some(self.orchestrator_word(&ended, text.as_deref()).await)
     }
 
-    /// Review `review`'s end stood aside for a review_candidate call that was cancelled before
+    /// Review `review`'s end stood aside for a request_review call that was cancelled before
     /// it said it: the thread hears it as a message after all (#332).
     async fn tell_unsaid_review(&self, id: &ConversationId, review: &str) {
         let Some(ended) = self
@@ -1263,7 +1263,7 @@ impl SessionManager {
         self.tell_review_now(&ended, text.as_deref(), None).await;
     }
 
-    /// An ended review of the thread's candidate, as review_candidate's reply.
+    /// An ended review of the thread's candidate, as request_review's reply.
     async fn review_reply(&self, review: &ReviewRun) -> String {
         let reviewer = review.reviewer.label();
         let range = format!("{}..{}", short(&review.base), short(&review.tip));
@@ -1410,10 +1410,10 @@ impl SessionManager {
         }
     }
 
-    /// `review_code`: one review of the caller's committed work, from where it started, by
+    /// `request_review`: one review of the caller's committed work, from where it started, by
     /// the vendor other than its phase's author. Returns at once; the findings arrive as a
     /// message.
-    pub(crate) async fn review_code(
+    pub(crate) async fn worker_request_review(
         &self,
         conversation_id: &ConversationId,
         task_id: &TaskId,
@@ -2255,7 +2255,7 @@ impl SessionManager {
     }
 
     async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>, filed: Option<String>) {
-        // A review_candidate or run_check call that waited on it said its outcome in its reply.
+        // A request_review or run_check call that waited on it said its outcome in its reply.
         if review.notify == ReviewFor::Orchestrator
             && self.reply_claims().stand_aside(&(
                 review.conversation_id.clone(),

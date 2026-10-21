@@ -42,7 +42,7 @@ const worker = (item: ActionItem) => {
 };
 
 test("a tool keeps its words across provider namespaces and never shows them", () => {
-  for (const action of ["query_brain", "code_search", "Read", "Edit", "exec_command", "apply_patch", "run", "run_check", "WebSearch", "start_preview", "review_code"]) {
+  for (const action of ["query_brain", "code_search", "Read", "Edit", "exec_command", "apply_patch", "run", "run_check", "WebSearch", "start_preview", "review_code", "request_review"]) {
     for (const name of [action, `mcp__brigadier__${action}`, `functions.${action}`, `brigadier/${action}`]) {
       assert.equal(toolName(name), action);
       for (const status of ["completed", "inProgress", "failed", "declined"] as const) {
@@ -59,7 +59,7 @@ test("Brigadier's plumbing is never a row", () => {
   for (const name of ["read_report", "read_artifact", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "ask_user", "mcp__brigadier__propose_merge", "mcp__brigadier__submit_report", "ToolSearch"]) {
     assert.ok(isPlumbing(name), name);
   }
-  for (const name of ["Read", "run", "query_brain", "review_code"]) assert.ok(!isPlumbing(name), name);
+  for (const name of ["Read", "run", "query_brain", "review_code", "request_review"]) assert.ok(!isPlumbing(name), name);
 });
 
 test("a step names what it acts on, by the file's name", () => {
@@ -116,7 +116,7 @@ test("a run sums up its kinds comma-joined, edits, reading, commands and the web
   // Searching and listing are reading too.
   assert.equal(summarize([words("Read", "a.ts"), words("Bash", "ls src"), words("Grep", "add"), words("Bash", "sleep 4")]), "Read files, ran a command");
   assert.equal(summarize([words("Bash", "node math.js"), words("apply_patch", "math.js")]), "Edited a file, ran a command");
-  assert.equal(summarize([words("review_code"), words("Read", "a.ts")]), "Read files, asked for a review");
+  assert.equal(summarize([words("request_review"), words("Read", "a.ts")]), "Read files, asked for a review");
   assert.equal(summarize([words("run_check", "pnpm test"), words("start_preview", "web")]), "Ran checks, started a preview");
 });
 
@@ -164,7 +164,7 @@ test("a command reads as the call it was however it ended; another tool that fai
   assert.equal(stepLabel(ran, "completed", 2), "Ran pnpm test");
   // A declined call shows as the call it was: the header counts the declined ones.
   assert.equal(stepLabel(ran, "declined", 130), "Ran pnpm test");
-  assert.equal(stepLabel(toolStepWords(call("review_code", "failed")), "failed"), "Asked for a review — failed");
+  assert.equal(stepLabel(toolStepWords(call("request_review", "failed")), "failed"), "Asked for a review — failed");
   // A worker's question to the thread, by its name since #66 and its older one.
   for (const name of ["mcp__brigadier__ask_thread", "mcp__brigadier__ask_orchestrator"]) {
     assert.equal(stepLabel(toolStepWords(call(name, "completed")), "completed"), "Asked a question");

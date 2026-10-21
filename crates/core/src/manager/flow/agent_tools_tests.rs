@@ -444,3 +444,19 @@ async fn an_open_thread_hears_once_that_run_checks_replaces_rerun_checks() {
             .contains(crate::manager::prompts::WORKER_RUN_CHECKS_RULE)
     );
 }
+
+/// request_review replaces review_candidate and review_code: an open thread hears of it once,
+/// and so do its workers (BUILD-PLAN rule R).
+#[tokio::test]
+async fn an_open_thread_hears_once_that_request_review_replaces_the_old_review_tools() {
+    let (added, _) = an_open_thread_hears_once(
+        "request-review-revision",
+        crate::manager::prompts::REQUEST_REVIEW_REVISION,
+    )
+    .await;
+    assert!(added.thread.contains("review_candidate is gone"));
+    assert!(added.worker.contains("review_code is gone"));
+    for text in [added.thread, added.worker] {
+        assert!(text.contains("request_review"), "{text}");
+    }
+}

@@ -10,7 +10,7 @@ use brigadier_core::tools::{
     LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, NoteProgress,
     OfferFeedback, OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog,
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
-    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
+    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RequestReview, RerunTask,
     ReviewPlan, Role, RouteFollowUp, RunCheck, RunChecks, RunCommand, RunTools, RunUnsandboxed,
     SaveMemory, SaveReport, SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession,
     StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline,
@@ -187,7 +187,7 @@ the lead's. Small work needs none: land the lead. With fresh: true it gets only 
 request, the user's constraints, done_when and the candidate commit (a task's, or commit for your \
 own work) and tries to break it. Returns at once.";
 
-const REVIEW_CANDIDATE: &str = "Ask the other vendor to review your candidate commit (your \
+const REQUEST_REVIEW: &str = "Ask the other vendor to review your candidate commit (your \
 checkout's HEAD by default), small changes too. What earlier reviews already cover isn't \
 reviewed again: only what came after, and after findings their fix is re-checked. It waits \
 for the findings (wait_seconds) and returns them in its reply; one still running then \
@@ -218,7 +218,7 @@ money, handling credentials yourself (a token, a password, the keychain directly
 something outside this session's own work. Not for pushes, pull requests or deploys (just do \
 those, on the git and gh sign-in the user set up) nor for work inside the session. Returns at once; the decision arrives later as a message.";
 
-const REVIEW_CODE: &str = "Start one review of your committed work by a model from the other \
+const WORKER_REQUEST_REVIEW: &str = "Start one review of your committed work by a model from the other \
 vendor, from where your work started to your last commit (uncommitted changes are committed for \
 you first). Returns at once: keep working, and the findings arrive later as a message from \
 Brigadier. Don't wait for them unless your task says so: report once your checks pass and your \
@@ -796,7 +796,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                 .filter(|tool| {
                     !matches!(
                         tool.name.as_ref(),
-                        "ask_thread" | "submit_outline" | "review_code"
+                        "ask_thread" | "submit_outline" | "request_review"
                     )
                 })
                 .collect()
@@ -877,9 +877,9 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<StartVerifier>(),
         ),
         tool(
-            "review_candidate",
-            REVIEW_CANDIDATE,
-            input_schema::<ReviewCandidate>(),
+            "request_review",
+            REQUEST_REVIEW,
+            input_schema::<RequestReview>(),
         ),
         tool("attach_proof", ATTACH_PROOF, input_schema::<AttachProof>()),
         tool(
@@ -990,7 +990,7 @@ fn worker_tools() -> Vec<Tool> {
             SUBMIT_OUTLINE,
             input_schema::<SubmitOutline>(),
         ),
-        tool("review_code", REVIEW_CODE, no_arguments()),
+        tool("request_review", WORKER_REQUEST_REVIEW, no_arguments()),
         tool(
             "note_progress",
             NOTE_PROGRESS,
@@ -1258,10 +1258,20 @@ pub enum ParseError {
 
 /// Tools that are gone, and what a session that still calls one is told to do instead
 /// (BUILD-PLAN rule R).
-const RETIRED: &[(&str, &str)] = &[(
-    "rerun_checks",
-    "call run_checks with rerun true. Brigadier no longer runs the checks by itself: run_checks runs them, and a merge into main needs them passed on its commit.",
-)];
+const RETIRED: &[(&str, &str)] = &[
+    (
+        "rerun_checks",
+        "call run_checks with rerun true. Brigadier no longer runs the checks by itself: run_checks runs them, and a merge into main needs them passed on its commit.",
+    ),
+    (
+        "review_candidate",
+        "call request_review, with the same commit and wait_seconds.",
+    ),
+    (
+        "review_code",
+        "call request_review: it starts the same review of your committed work, and its findings arrive as a message.",
+    ),
+];
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1324,7 +1334,7 @@ pub fn parse_call(
                 "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
-                "review_candidate" => OrchestratorCall::ReviewCandidate(args(name, arguments)?),
+                "request_review" => OrchestratorCall::RequestReview(args(name, arguments)?),
                 "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
@@ -1380,7 +1390,7 @@ pub fn parse_call(
                 "submit_outline" if !checks => {
                     WorkerCall::SubmitOutline(args::<SubmitOutline>(name, arguments)?)
                 }
-                "review_code" if !checks => WorkerCall::ReviewCode,
+                "request_review" if !checks => WorkerCall::RequestReview,
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
                 "query_brain" => WorkerCall::QueryBrain(args::<QueryBrain>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
@@ -2549,6 +2559,48 @@ mod tests {
         );
     }
 
+    /// review_candidate and review_code are gone: request_review takes both places, and a
+    /// session that started before is told what to call instead (BUILD-PLAN rule R).
+    #[test]
+    fn request_review_replaces_review_candidate_and_review_code() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        for role in [thread.clone(), worker(false)] {
+            let names: Vec<_> = tools_for(&role)
+                .iter()
+                .map(|tool| tool.name.to_string())
+                .collect();
+            assert!(names.contains(&"request_review".to_owned()), "{role:?}");
+            for old in ["review_candidate", "review_code"] {
+                assert!(!names.contains(&old.to_owned()), "{role:?}");
+            }
+        }
+        let wait = serde_json::json!({ "commit": "abc", "wait_seconds": 0 });
+        assert!(matches!(
+            parse_call(&thread, "request_review", wait.as_object().cloned()),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::RequestReview(args)))
+                if args.commit.as_deref() == Some("abc") && args.wait_seconds == Some(0)
+        ));
+        assert!(matches!(
+            parse_call(&worker(false), "request_review", None),
+            Ok(ToolCall::Worker(WorkerCall::RequestReview))
+        ));
+        let late = parse_call(&thread, "review_candidate", None).unwrap_err();
+        assert!(
+            late.to_string()
+                .starts_with("review_candidate is gone: call request_review"),
+            "{late}"
+        );
+        let late = parse_call(&worker(false), "review_code", None).unwrap_err();
+        assert!(
+            late.to_string()
+                .starts_with("review_code is gone: call request_review"),
+            "{late}"
+        );
+    }
+
     #[test]
     fn a_gate_member_cannot_ask_the_orchestrator() {
         let names = |role: &Role| -> Vec<String> {
@@ -2559,10 +2611,10 @@ mod tests {
         };
         assert!(names(&worker(false)).contains(&"ask_thread".to_owned()));
         assert!(!names(&worker(false)).contains(&"ask_orchestrator".to_owned()));
-        assert!(names(&worker(false)).contains(&"review_code".to_owned()));
+        assert!(names(&worker(false)).contains(&"request_review".to_owned()));
         let checker = names(&worker(true));
         assert!(!checker.contains(&"ask_thread".to_owned()));
-        assert!(!checker.contains(&"review_code".to_owned()));
+        assert!(!checker.contains(&"request_review".to_owned()));
         assert!(checker.contains(&"submit_report".to_owned()));
         let question = || {
             let mut arguments = JsonObject::new();

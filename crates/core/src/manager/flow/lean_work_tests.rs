@@ -50,7 +50,7 @@ struct Seen {
     reviews: Vec<String>,
     /// The fix's first input, when it ran.
     fix: Option<String>,
-    /// What review_code answered the worker.
+    /// What request_review answered the worker.
     asked: Option<String>,
 }
 
@@ -163,7 +163,7 @@ async fn landed_in_parts(name: &str, answer: Answer) -> (Flow, Arc<Mutex<Seen>>,
                 turn.write("NOTES.md", "notes \n");
                 turn.git(&["add", "NOTES.md"]);
                 turn.git(&["commit", "-qm", "Write the notes"]);
-                let asked = turn.call("review_code", json!({})).await;
+                let asked = turn.call("request_review", json!({})).await;
                 assert!(!asked.is_error, "{}", asked.text);
                 log.lock().unwrap().asked = Some(asked.text);
                 turn.write("README.md", "See NOTES.md.\n");

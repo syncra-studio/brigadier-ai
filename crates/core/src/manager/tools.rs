@@ -580,8 +580,8 @@ impl SessionManager {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 crate::heap(|| self.verify_task(id, args)).await
             }
-            OrchestratorCall::ReviewCandidate(args) => {
-                crate::heap(|| self.review_candidate(id, args)).await
+            OrchestratorCall::RequestReview(args) => {
+                crate::heap(|| self.request_review(id, args)).await
             }
             OrchestratorCall::AttachProof(args) => {
                 crate::heap(|| self.attach_proof(id, args)).await
@@ -963,7 +963,9 @@ impl SessionManager {
                 self.submit_outline(&conversation_id, &task_id, args.outline)
                     .await
             }
-            WorkerCall::ReviewCode => self.review_code(&conversation_id, &task_id).await,
+            WorkerCall::RequestReview => {
+                self.worker_request_review(&conversation_id, &task_id).await
+            }
             // The app shows the note from the call itself, in the worker's live events.
             WorkerCall::NoteProgress(args) => {
                 if args.note.trim().is_empty() {
