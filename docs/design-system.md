@@ -173,10 +173,13 @@ table is the current one.
 | Shared app parts | `SettingsButton` | `components/controls/button.tsx` | `Button variant="soft" size="sm"` | |
 | Shared app parts | `SettingsSearch` | `components/shared/settings-search.tsx` | `SettingsSearch` | |
 | Shared app parts | `Settings Card`, `Settings Row` | `components/shared/settings-card.tsx`, `settings-row.tsx` | `SettingsCard`, `RowText`, `settingsRows`; `SettingsRow` | |
-| Shared app parts | `SettingsTitlebarStrip` | `app/App.tsx` | — (inline strip holding `TerminalButton`) | in app |
+| Shared app parts | `SettingsTitlebarStrip` | `components/shared/settings-titlebar-strip.tsx` | `SettingsTitlebarStrip` (holds `TerminalButton`) | |
 | Shared app parts | `LabeledDivider` | `components/shared/labeled-divider.tsx` | `LabeledDivider` | |
 | Shared app parts | `MD/Paragraph`, `MD/Bullet item` | `components/conversation/markdown-text.tsx` | `MarkdownText` | |
 | Shared app parts | — | `components/shared/banner.tsx`, `empty-state.tsx`, `usage-bar.tsx`, `titlebar-button.tsx` | `Banner`, `EmptyState`, `UsageBar`, `TITLEBAR_BUTTON`, `TitlebarTips` | code only |
+| App shell (app.pen) | `#60 PageCorners` | `app/shell/PageCorners.tsx` | `PageCorners` | |
+| App shell (app.pen) | `#62 App › page surface` | `app/shell/PageSurface.tsx` | `PageSurface` | |
+| App shell (app.pen) | `#63 App › Settings titlebar strip` | `components/shared/settings-titlebar-strip.tsx` | `SettingsTitlebarStrip` | |
 | Side panel (app.pen) | `#412 AgentRow` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
 | Side panel (app.pen) | `#414 WorkerList` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
 | Side panel (app.pen) | `#416 WorkerDetail › worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |

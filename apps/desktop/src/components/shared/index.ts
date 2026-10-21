@@ -10,6 +10,7 @@ export * from "./progress-line";
 export * from "./settings-card";
 export * from "./settings-row";
 export * from "./settings-search";
+export * from "./settings-titlebar-strip";
 export * from "./state-dot";
 export * from "./titlebar-button";
 export * from "./usage-bar";

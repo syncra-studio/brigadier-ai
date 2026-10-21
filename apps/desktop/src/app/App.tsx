@@ -18,7 +18,9 @@ import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { runSmoke } from "@/app/smoke";
 import { SettingsNav, SettingsView, warmSettings } from "@/app/settings/lazy";
 import { SidebarFoot } from "@/app/shell/SidebarFoot";
-import { TitlebarTips } from "@/components/shared";
+import { PageCorners } from "@/app/shell/PageCorners";
+import { PageSurface } from "@/app/shell/PageSurface";
+import { SettingsTitlebarStrip } from "@/components/shared";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { Toaster } from "@/components/overlays";
 import { appReady, nowEpochMs } from "@/ipc/client";
@@ -48,21 +50,6 @@ function viewKey(selection: Selection): string {
     case "none":
       return "none";
   }
-}
-
-/** Keeps the page surface's corners round over the columns that fill it (see page-corner). */
-function PageCorners() {
-  return (
-    <div
-      aria-hidden
-      className="top-titlebar start-surface-inset end-surface-inset bottom-surface-inset pointer-events-none absolute z-20"
-    >
-      <span className="page-corner page-corner-top-start" />
-      <span className="page-corner page-corner-top-end" />
-      <span className="page-corner page-corner-bottom-start" />
-      <span className="page-corner page-corner-bottom-end" />
-    </div>
-  );
 }
 
 export function App() {
@@ -154,13 +141,7 @@ export function App() {
         navigationKey={JSON.stringify(selection)}
         className="relative min-h-0 flex-1 flex-col"
       >
-        {/* The page surface the sidebar panel and the content sit on; their headers stay
-            above it, in the titlebar strip. */}
-        <div
-          aria-hidden
-          data-slot="page-surface"
-          className="bg-background rounded-page shadow-page top-titlebar start-surface-inset end-surface-inset bottom-surface-inset pointer-events-none absolute"
-        />
+        <PageSurface />
         <PageCorners />
         <div className="relative flex min-h-0 min-w-0 flex-1 ps-surface-inset pe-surface-inset pb-surface-inset">
           {/* Settings keeps the panel open: it has no strip, and no foot. */}
@@ -180,13 +161,9 @@ export function App() {
             <div className="relative flex h-full min-w-0 flex-1 flex-col">
               {selection.type === "settings" ? (
                 <>
-                  {/* The page's strip of the titlebar: only Terminal. The page scrolls below it,
-                      clipped at its bottom edge. */}
-                  <div data-tauri-drag-region className="h-titlebar flex shrink-0 items-center justify-end pe-1">
-                    <TitlebarTips>
-                      <TerminalButton />
-                    </TitlebarTips>
-                  </div>
+                  <SettingsTitlebarStrip>
+                    <TerminalButton />
+                  </SettingsTitlebarStrip>
                   <div className="min-h-0 flex-1 overflow-clip">
                     <Suspense fallback={null}>
                       <SettingsView page={selection.page} />
