@@ -999,20 +999,24 @@ pub(crate) fn thread_section(
 }
 
 /// `registry`'s catalog for sessions in `repo`, with the items of the projects at `others` that
-/// the user uses in every project.
+/// the user uses in every project. A skill switched off by `switches` isn't taken, so it can't
+/// stand in for a switched-on copy of it from another project.
 fn catalog_for(
     registry: &Registry,
     repo: Option<&Path>,
     others: &[PathBuf],
-    settings: &Settings,
+    switches: &Switches<'_>,
 ) -> Catalog {
+    let settings = switches.settings;
     let mut catalog = registry.catalog(repo);
     for other in others {
         registry.adopt(
             &mut catalog,
             other,
             |id| settings.servers_everywhere.iter().any(|kept| kept == id),
-            |id| settings.skills_everywhere.iter().any(|kept| kept == id),
+            |id| {
+                settings.skills_everywhere.iter().any(|kept| kept == id) && !switches.skill_off(id)
+            },
         );
     }
     catalog
@@ -1270,11 +1274,11 @@ impl SessionManager {
         );
         let entries = entries.to_vec();
         super::blocking(move || {
-            let catalog = catalog_for(&registry, repo.as_deref(), &others, &settings);
             let switches = Switches {
                 settings: &settings,
                 project: project.as_ref(),
             };
+            let catalog = catalog_for(&registry, repo.as_deref(), &others, &switches);
             resolve(&catalog, &entries, &switches).map_err(Error::Invalid)
         })
         .await
@@ -1308,11 +1312,11 @@ impl SessionManager {
         let made = super::blocking(move || {
             // A task can name a server of the project, but a worker without a checkout starts
             // without the project's setup.
-            let catalog = catalog_for(&registry, repo.as_deref(), &others, &settings);
             let switches = Switches {
                 settings: &settings,
                 project: project.as_ref(),
             };
+            let catalog = catalog_for(&registry, repo.as_deref(), &others, &switches);
             let session = Session {
                 agent: agent(provider),
                 cwd: &cwd,
@@ -1412,11 +1416,11 @@ impl SessionManager {
             self.everywhere_repos(&settings, repo.as_deref()),
         );
         super::blocking(move || {
-            let catalog = catalog_for(&registry, repo.as_deref(), &others, &settings);
             let switches = Switches {
                 settings: &settings,
                 project: project.as_ref(),
             };
+            let catalog = catalog_for(&registry, repo.as_deref(), &others, &switches);
             Ok(thread_section(&catalog, repo.as_deref(), &switches))
         })
         .await
@@ -1555,11 +1559,15 @@ mod tests {
             skills_everywhere: vec![id("deploy")],
             ..Settings::default()
         };
+        let switches = Switches {
+            settings: &settings,
+            project: None,
+        };
         let catalog = catalog_for(
             &registry,
             Some(&repo),
             std::slice::from_ref(&other),
-            &settings,
+            &switches,
         );
         let names = |found: Vec<&String>| found.into_iter().cloned().collect::<Vec<_>>();
         assert_eq!(
@@ -1581,10 +1589,6 @@ mod tests {
         let server = catalog.server(&id("steady-api")).unwrap();
         assert!(!catalog.server_native(server, &session));
         assert!(!catalog.skill_native(&catalog.skills[0], &session));
-        let switches = Switches {
-            settings: &settings,
-            project: None,
-        };
         assert_eq!(
             resolve(&catalog, &["steady-api".into()], &switches).unwrap(),
             [id("steady-api")]
@@ -1605,10 +1609,39 @@ mod tests {
             &registry,
             Some(&repo),
             std::slice::from_ref(&other),
-            &settings,
+            &switches,
         );
         assert_eq!(catalog.skills.len(), 1);
         assert!(catalog.skill_native(&catalog.skills[0], &session));
+
+        // Two other projects use the same skill everywhere, the first switched off: the
+        // second's copy is given.
+        let third = home.join("third");
+        write(
+            &third.join(".claude/skills/deploy/SKILL.md"),
+            "---\nname: deploy\ndescription: Deploys.\n---\n",
+        );
+        let thirds = Catalog::read(&roots(&home), Some(&third));
+        let theirs_id = thirds.skills[0].id.clone();
+        let settings = Settings {
+            skills_everywhere: vec![id("deploy"), theirs_id.clone()],
+            skills_off: vec![id("deploy")],
+            ..Settings::default()
+        };
+        let switches = Switches {
+            settings: &settings,
+            project: None,
+        };
+        let elsewhere = home.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let catalog = catalog_for(
+            &registry,
+            Some(&elsewhere),
+            &[other.clone(), third.clone()],
+            &switches,
+        );
+        let ids: Vec<&String> = catalog.skills.iter().map(|skill| &skill.id).collect();
+        assert_eq!(ids, [&theirs_id]);
     }
 
     #[test]
