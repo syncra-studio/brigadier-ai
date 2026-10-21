@@ -30,6 +30,26 @@ It downloads the same DMG, checks its checksum, checks that the app is signed by
 developer and notarized by Apple, and copies it to Applications. It asks before it replaces
 an existing Brigadier. To read it first, download it and run `sh install.sh`.
 
+## Windows
+
+Brigadier also runs on 64-bit Windows 10 and 11. Windows releases aren't published yet: until
+they are, the installer comes from a build ([docs/DEVELOPMENT.md](../DEVELOPMENT.md#build-and-install-windows)).
+Once a release carries it, this installs it from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/syncra-studio/brigadier-ai/v0.1.0-alpha/scripts/install.ps1 | iex
+```
+
+It downloads `Brigadier-0.1.0-alpha-x64-setup.exe` from the release, checks its checksum and
+that it is signed by Brigadier's developer, and installs it for you alone, with no
+administrator permission, in `%LOCALAPPDATA%\Brigadier`. It asks before it replaces an
+existing Brigadier. To read it first, download it and run `powershell -File install.ps1`.
+
+Run the installer itself (`…-x64-setup.exe`) to choose another folder. Either way Brigadier
+appears in the Start menu, with a desktop shortcut, and keeps its data in
+`%LOCALAPPDATA%\Brigadier\Data`. If the WebView2 runtime is missing (Windows 11 and an updated
+Windows 10 already have it), the installer adds it.
+
 ## Updates
 
 Brigadier checks for new versions by itself, but it asks before it updates. When a newer
@@ -49,3 +69,7 @@ Use **Brigadier › Uninstall Brigadier…** in the menu bar, or **Settings › 
 every session, keeps unfinished work as commits on their branches, and removes the worktrees,
 scratch folders and session files Brigadier made. Then move the app to the Trash (or run
 `brew uninstall --cask brigadier`).
+
+On Windows use **Settings › Storage › Uninstall Brigadier**, then remove the app in
+**Settings › Apps › Installed apps** (Brigadier › Uninstall). Removing the app alone keeps
+`%LOCALAPPDATA%\Brigadier\Data`, as deleting the app on a Mac keeps its data.

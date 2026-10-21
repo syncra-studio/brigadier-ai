@@ -24,7 +24,7 @@ crates/        Rust workspace
 apps/desktop/  Tauri 2 shell (src-tauri/) and the React UI (src/)
 helpers/computer-use/  the computer-use helper app, its own Cargo workspace (macOS; see its README)
 registry/      the curated model registry, published from this repository
-scripts/       install.sh (the one-command installer), uninstall.sh
+scripts/       install.sh and install.ps1 (the one-command installers), uninstall.sh and uninstall.ps1
 tools/         full-checks.sh, the live smoke, dev-app helpers, the A/B harness
 docs/          design plans and evidence (see docs/README.md)
 ```
@@ -57,7 +57,7 @@ The app launches `brigadierd` detached; closing the window keeps both running in
 too.
 
 Release identity `ai.brigadier.app` keeps its data in `~/Library/Application Support/Brigadier`
-(`%LOCALAPPDATA%\Brigadier`, `~/.local/share/brigadier`). Other release builds default to a
+(`%LOCALAPPDATA%\Brigadier\Data`, `~/.local/share/brigadier`). Other release builds default to a
 folder named after their bundle identifier in the same parent directory. Set
 `BRIGADIER_DATA_DIR` to use a throwaway directory; each data directory gets its own daemon.
 
@@ -343,6 +343,51 @@ moved: a fix ships as the next version. Then bump the cask in
 [syncra-studio/homebrew-tap](https://github.com/syncra-studio/homebrew-tap) (`version` and the
 DMG's `sha256`) and the version in `scripts/install.sh`.
 
+## Build and install (Windows)
+
+```sh
+CARGO_BUILD_JOBS=4 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+  pnpm tauri build --bundles nsis -- -p brigadier-desktop -p brigadier-daemon
+```
+
+These are the nightly Windows job's release settings (no cross-crate LTO); on a 32 GB machine 4
+jobs keep the build under 80% of memory. Tauri downloads NSIS and the WebView2 bootstrapper into
+`%LOCALAPPDATA%\tauri` on the first bundle. The installer is
+`target/release/bundle/nsis/Brigadier_<version>_x64-setup.exe`. It holds `brigadier.exe` and
+`brigadierd.exe` (the daemon, which is also the agents' `BROWSER` on Windows) with the icons of
+`icons/icon.ico`, and embeds the WebView2 bootstrapper, which installs the runtime only where it
+is missing. The macOS-only computer-use helper isn't in it.
+
+It installs for the current user, without an administrator's prompt, in
+`%LOCALAPPDATA%\Brigadier` (or another folder on its directory page; `/S` installs silently and
+`/D=<folder>`, last and unquoted, names the folder). It adds Start menu and desktop shortcuts,
+the user's uninstall entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Brigadier`)
+and `HKCU\Software\SYNCRA SRL\Brigadier` with the folder; it doesn't change `Path`, and `/S`
+doesn't start the app. Its uninstaller (Settings › Apps › Installed apps, or `uninstall.exe` in
+that folder) removes the shortcuts, the uninstall entry and the program files only. The data in
+`%LOCALAPPDATA%\Brigadier\Data` stays, as do `HKCU\Software\SYNCRA SRL\Brigadier` and the
+webview's folders `%APPDATA%\ai.brigadier.app` and `%LOCALAPPDATA%\ai.brigadier.app` unless its
+*Delete the application data* box is ticked (a silent `/S` run never ticks it). Updates run the
+same installer (`/UPDATE`) over the installed one; a reinstall keeps the data too.
+
+The installer isn't Authenticode-signed yet: Windows SmartScreen warns before it runs, and
+`scripts/install.ps1` refuses it. Signing needs a code-signing certificate for SYNCRA SRL, named
+in `tauri.windows.conf.json` (`bundle.windows.certificateThumbprint` for one in the build
+machine's certificate store, or `bundle.windows.signCommand` for a signing service). The
+nightly's Windows job uploads the installer and its `SHA256SUMS` as the `installer-Windows`
+artifact on every run. With the updater key secrets (`TAURI_SIGNING_PRIVATE_KEY`,
+`UPDATER_PUBKEY`) it builds it with the nightly's or the tag's version and feed, and adds the
+updater's `.sig` and a `windows-x86_64` feed entry (`latest-windows.json`). The publish and
+release jobs don't take them, so no Windows file is published.
+
+`scripts/install.ps1` is install.sh's counterpart: `irm <raw URL>/install.ps1 | iex`, or
+`powershell -File scripts\install.ps1`. It downloads `SHA256SUMS` and
+`Brigadier-<version>-x64-setup.exe` from the release (`BRIGADIER_RELEASE_URL` reads them from
+elsewhere), checks the checksum and that a valid Authenticode signature names SYNCRA SRL, asks
+before it replaces an installed Brigadier, refuses while Brigadier runs from there, and runs the
+installer silently into `BRIGADIER_INSTALL_DIR`, the installed folder or
+`%LOCALAPPDATA%\Brigadier`. A release bumps its version with install.sh's.
+
 ## The uninstall script
 
 `scripts/uninstall.sh` removes an instance whose app is already gone (the app's own **Uninstall
@@ -360,3 +405,21 @@ per-app folders to the Trash. Dirty worktrees and unmerged branches stay; the su
 command for each one to resolve manually. It removes only ledger-recorded Claude session files
 and Codex rollouts, and reports Codex state database rows and trust entries it cannot confirm.
 A remaining worktree keeps the data directory in place and makes the script exit nonzero.
+
+On Windows `scripts/uninstall.ps1` does the same in Windows PowerShell 5.1, with `-KeepData`,
+`-DataDir PATH`, `-AppId ID`, `-App FOLDER`, `-Dev`, `-DryRun` and `-Help`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -AppId ai.brigadier.app -DryRun
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -AppId ai.brigadier.app
+```
+
+Its default data directory is `$env:BRIGADIER_DATA_DIR` or `%LOCALAPPDATA%\Brigadier\Data`, and
+its default app is the installed folder (from its uninstall entry, else
+`%LOCALAPPDATA%\Brigadier`). It reads the event store with Windows' own `winsqlite3.dll`, counts
+junctions and other reparse points as symlinks, and moves to the Recycle Bin what uninstall.sh
+moves to the Trash: the data, `%APPDATA%\<id>` and `%LOCALAPPDATA%\<id>`, and the recorded
+session files. The app goes by its own uninstaller (`uninstall.exe /S`), which leaves a kept
+data folder in place; then the script removes the installer's `HKCU\Software\SYNCRA SRL\Brigadier`
+key, as uninstall.sh trashes the app's Preferences plist. Windows has no keep-awake rule or microphone permission to reset, and
+Brigadier makes no session temp folders there.

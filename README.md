@@ -43,7 +43,9 @@ Brigadier to Applications. It updates itself. More ways, and how to uninstall:
 You also need at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex](https://github.com/openai/codex); Brigadier's setup can install them. Both is
 better: each reviews the other's work. To build from source (or for Windows and Linux), see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Windows builds a per-user installer
+(`…-x64-setup.exe`) there; Windows releases aren't published yet
+([docs/user/install.md](docs/user/install.md#windows)).
 
 ## Quick start
 
@@ -320,6 +322,10 @@ processes. If the app is already deleted, run the script from this repository (i
 scripts/uninstall.sh --dry-run --app-id ai.brigadier.app
 scripts/uninstall.sh --app-id ai.brigadier.app
 ```
+
+On Windows, Uninstall Brigadier… is in Settings › Storage; then remove the app in Settings ›
+Apps › Installed apps. The script there is `scripts\uninstall.ps1 -DryRun -AppId ai.brigadier.app`
+(and without `-DryRun`), which also runs the app's own uninstaller.
 
 Neither removes the computer-use helper's Accessibility and Screen Recording entries: remove
 "Brigadier Computer Use" from System Settings › Privacy & Security yourself.
