@@ -202,6 +202,9 @@ table is the current one.
 | Side panel (app.pen) | `#422 FileBrowser` | `app/side-panel/FileBrowser.tsx` | `FileBrowser` | |
 | Side panel (app.pen) | `#962 FilePill › images menu` | `app/side-panel/ImagesMenu.tsx` | `ImagesMenu` | |
 | Side panel (app.pen) | `#963 NotesList` | `app/side-panel/NotesList.tsx` | `NotesList` | |
+| Side panel (app.pen) | `#881 ShowPages` | `app/side-panel/pages/ShowPages.tsx` | `ShowPages` | |
+| Side panel (app.pen) | `#983 PageTopBar › File menu` | `app/side-panel/pages/PageFileMenu.tsx` | `PageFileMenu` | |
+| Side panel (app.pen) | `#984 PageTopBar › Insert menu` | `app/side-panel/pages/PageInsertMenu.tsx` | `PageInsertMenu` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
