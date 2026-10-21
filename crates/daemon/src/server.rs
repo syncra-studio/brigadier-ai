@@ -209,6 +209,18 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
     tracing::info!(connection = id, client = %client.name, pid = client.pid, "client connected");
     daemon.metrics.connection_opened(id, client.clone());
     let (late_tx, late) = mpsc::channel(LATE_ANSWERS);
+    let (reads, mut read_queue) = mpsc::unbounded_channel::<(u32, Request)>();
+    let reader = daemon.supervisor.spawn({
+        let (daemon, late) = (daemon.clone(), late_tx.clone());
+        async move {
+            while let Some((id, request)) = read_queue.recv().await {
+                let outcome = handle_request(&daemon, request).await;
+                if late.send((id, outcome)).await.is_err() {
+                    return;
+                }
+            }
+        }
+    });
     let mut session = Session {
         daemon: daemon.clone(),
         client,
@@ -231,10 +243,12 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         searches: 0,
         late_tx,
         late,
+        reads,
     };
     if let Err(err) = session.run(connection.reader).await {
         tracing::debug!(connection = id, error = %err, "connection ended with an error");
     }
+    reader.abort();
     if session.metrics.is_some() {
         daemon.metrics.set_streaming(false);
     }
@@ -287,6 +301,8 @@ struct Session {
     /// Answers to slow requests (clones), which run beside the others, by request id.
     late_tx: mpsc::Sender<(u32, Result<Response, IpcError>)>,
     late: mpsc::Receiver<(u32, Result<Response, IpcError>)>,
+    /// Reads of checkouts and diffs ([`read_beside`]), answered in turn on a task of their own.
+    reads: mpsc::UnboundedSender<(u32, Request)>,
 }
 
 enum Flow {
@@ -644,6 +660,14 @@ impl Session {
                         .map_err(IpcError::from);
                     let _ = late.send((id, outcome)).await;
                 });
+                return Ok(Flow::Continue);
+            }
+            // A checkout's or a diff's read: answered in turn with the others of its kind, beside
+            // everything else.
+            request if read_beside(&request) => {
+                if self.reads.send((id, request)).is_err() {
+                    anyhow::bail!("the connection's reads stopped");
+                }
                 return Ok(Flow::Continue);
             }
             // Long: answered beside the connection's other requests.
@@ -1407,6 +1431,31 @@ fn answered_beside(request: &Request) -> bool {
             | Request::FeedbackAccount
             | Request::StartGitHubSignIn
             | Request::WaitGitHubSignIn
+    )
+}
+
+/// Reads of a checkout or a diff: git and the disk, a few hundred milliseconds each on a big
+/// repository, and the side panels and the Changes card ask for several on every change while
+/// a session works. In the connection's turn they held up a message sent meanwhile, a Stop and
+/// every event for seconds (#491). They are answered in turn with each other, so an older
+/// read's answer never comes after a newer one's, beside the connection's other requests;
+/// their git takes no locks, so a write beside them still goes.
+fn read_beside(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::GetSourceState { .. }
+            | Request::GetProjectSourceState { .. }
+            | Request::GetSessionDiff { .. }
+            | Request::GetWorkerDiffs { .. }
+            | Request::GetPendingChanges { .. }
+            | Request::GetRunDiff { .. }
+            | Request::GetReviewDiff { .. }
+            | Request::GetWorkspaceTree { .. }
+            | Request::ListWorkspaceFolder { .. }
+            | Request::ListFiles { .. }
+            | Request::ListProjectFiles { .. }
+            | Request::ListSourceBranches { .. }
+            | Request::GetThreadMetrics { .. }
     )
 }
 
@@ -2921,6 +2970,59 @@ mod tests {
         let settings = Box::new(brigadier_core::model::Settings::default());
         assert!(!answered_beside(&Request::UpdateSettings { settings }));
         assert!(!answered_beside(&Request::GetCatalog));
+    }
+
+    /// #491: a message sent while a session works showed nowhere for seconds. Its send waited
+    /// in the connection's turn behind the side panels' and the Changes card's reads of the
+    /// checkout (12 of them held a request 2.1 s on an idle Mac). Those reads go beside; the
+    /// send, a Stop and the queue's changes stay in turn.
+    #[test]
+    fn a_checkouts_reads_hold_up_no_send() {
+        let id = || ConversationId("c1".into());
+        let target = || WorkspaceTarget::Conversation {
+            conversation_id: id(),
+        };
+        for request in [
+            Request::GetSourceState {
+                conversation_id: id(),
+            },
+            Request::GetSessionDiff { id: id() },
+            Request::GetWorkerDiffs {
+                conversation_id: id(),
+            },
+            Request::GetPendingChanges {
+                conversation_id: id(),
+                path: None,
+            },
+            Request::GetWorkspaceTree { target: target() },
+            Request::ListSourceBranches { target: target() },
+        ] {
+            assert!(read_beside(&request), "{request:?} is read beside");
+        }
+        for request in [
+            Request::SendMessage {
+                conversation_id: id(),
+                text: "Also add CSV.".into(),
+                attachments: Vec::new(),
+                mentions: Vec::new(),
+                steer: false,
+                queue_index: None,
+            },
+            Request::Interrupt {
+                conversation_id: id(),
+            },
+            Request::DeleteQueued {
+                conversation_id: id(),
+                item_id: "q1".into(),
+            },
+            Request::StageFiles {
+                conversation_id: id(),
+                paths: None,
+            },
+        ] {
+            assert!(!read_beside(&request), "{request:?} stays in turn");
+            assert!(!answered_beside(&request), "{request:?} stays in turn");
+        }
     }
 
     /// Send feedback's writer turns and GitHub calls take a minute or more: the connection's
