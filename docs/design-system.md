@@ -229,10 +229,31 @@ table is the current one.
 | Conversation (app.pen) | `#284 PlanAction` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
 | Conversation (app.pen) | `#285 PhasePlanAction` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
 | Conversation (app.pen) | `#286 OvernightAction` | `app/conversation/OvernightAction.tsx` | `OvernightAction` | |
-| Settings (settings.pen) | `#684 SettingsPage › back link` | `app/settings/BackLink.tsx` | `BackLink` | |
 | Conversation (app.pen) | `#364 ChangesCard › FileRow` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
 | Conversation (app.pen) | `#366 ChangesCard › inline: merge warning row` | `app/conversation/MergeWarningRow.tsx` | `MergeWarningRow` | |
 | Conversation (app.pen) | `#367 ChangesCard › inline: revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
+| Settings (settings.pen) | `#684 SettingsPage › back link` | `app/settings/BackLink.tsx` | `BackLink` | |
+| Settings (settings.pen) | `#607 BrowserDownloads › inline: download row` | `app/settings/DownloadRow.tsx` | `DownloadRow` | |
+| Settings (settings.pen) | `#610 BrowserHistory › inline: day group (collapsible card)` | `app/settings/DayGroup.tsx` | `DayGroup` | |
+| Settings (settings.pen) | `#611 VisitRow` | `app/settings/VisitRow.tsx` | `VisitRow` | |
+| Settings (settings.pen) | `#612 FilterMenu (history)` | `app/settings/FilterMenu.tsx` | `FilterMenu` | |
+| Settings (settings.pen) | `#614 BrowserImportPage › inline: status line (error / none found)` | `app/settings/ImportStatusLine.tsx` | `ImportStatusLine` | |
+| Settings (settings.pen) | `#615 BrowserImportPage › inline: browser-off note` | `app/settings/BrowserOffNote.tsx` | `BrowserOffNote` | |
+| Settings (settings.pen) | `#616 ListingRows` | `app/settings/ListingRows.tsx` | `ListingRows` | |
+| Settings (settings.pen) | `#617 BrowserIcon` | `app/settings/BrowserIcon.tsx` | `BrowserIcon` | |
+| Settings (settings.pen) | `#618 BrowserRow` | `app/settings/BrowserRow.tsx` | `BrowserRow` | |
+| Settings (settings.pen) | `#619 BrowserRow › inline: status dot + text` | `app/settings/BrowserStatus.tsx` | `BrowserStatus` | |
+| Settings (settings.pen) | `#620 FlowHeader` | `app/settings/FlowHeader.tsx` | `FlowHeader` | |
+| Settings (settings.pen) | `#622 ImportBar` | `app/settings/ImportBar.tsx` | `ImportBar` | |
+| Settings (settings.pen) | `#623 ChooseStep` | `app/settings/ChooseStep.tsx` | `ChooseStep` | |
+| Settings (settings.pen) | `#624 ProfilePick` | `app/settings/ProfilePick.tsx` | `ProfilePick` | |
+| Settings (settings.pen) | `#626 BrowserPage › inline: off note` | `app/settings/BrowserOffNote.tsx` | `BrowserOffNote` | |
+| Settings (settings.pen) | `#627 LocationRow` | `app/settings/LocationRow.tsx` | `LocationRow` | |
+| Settings (settings.pen) | `#628 BrowserSwitch` | `app/settings/BrowserSwitch.tsx` | `BrowserSwitch` | |
+| Settings (settings.pen) | `#629 LinkRow` | `app/settings/LinkRow.tsx` | `LinkRow` | |
+| Settings (settings.pen) | `#632 BrowserSiteSettings › inline: site row` | `app/settings/SiteRow.tsx` | `SiteRow` | |
+| Settings (settings.pen) | `#634 ClearForm` | `app/settings/ClearForm.tsx` | `ClearForm` | |
+| Settings (settings.pen) | `#635 ClearForm › inline: tick row` | `app/settings/TickRow.tsx` | `TickRow` | |
 
 ## Icons
 

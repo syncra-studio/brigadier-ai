@@ -1,20 +1,23 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { CheckboxRow, errorText } from "@/app/shell/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
+import { BrowserOffNote } from "@/app/settings/BrowserOffNote";
+import { BrowserRow } from "@/app/settings/BrowserRow";
+import { ChooseStep } from "@/app/settings/ChooseStep";
+import { FlowHeader } from "@/app/settings/FlowHeader";
+import { ImportBar } from "@/app/settings/ImportBar";
+import { ImportStatusLine } from "@/app/settings/ImportStatusLine";
+import { ListingRows } from "@/app/settings/ListingRows";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
-import { Badge, Button, Checkbox } from "@/components/controls";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/overlays";
-import { Globe } from "@/components/icons";
-import { SettingsCard, UsageBar } from "@/components/shared";
+import { Button } from "@/components/controls";
+import { Dialog, DialogContent, DialogFooter } from "@/components/overlays";
+import { SettingsCard } from "@/components/shared";
 import type { ImportFailure, ImportProgress, ImportSource } from "@/ipc/generated";
-import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import {
-  counted,
   doneToast,
   doneTone,
   importBrowser,
-  importedBadge,
   importSources,
   lastImportSources,
   openFullDiskAccess,
@@ -23,7 +26,6 @@ import {
   progressText,
   reasonText,
   retryable,
-  type RowTone,
   rowView,
 } from "@/state/browserImport";
 import { useApp } from "@/state/store";
@@ -176,9 +178,9 @@ export function BrowserImportPage() {
           {list.status === "loading" ? (
             <ListingRows />
           ) : list.status === "error" ? (
-            <p className="text-destructive px-1 text-sm">{list.message}</p>
+            <ImportStatusLine error>{list.message}</ImportStatusLine>
           ) : list.sources.length === 0 ? (
-            <p className="text-foreground/65 px-1 text-sm">No supported browsers were found on this machine.</p>
+            <ImportStatusLine>No supported browsers were found on this machine.</ImportStatusLine>
           ) : (
             <SettingsCard>
               {list.sources.map((source) => (
@@ -194,13 +196,13 @@ export function BrowserImportPage() {
           )}
         </div>
         {!on && (
-          <p data-slot="browser-off" className="text-foreground/65 px-1 text-xs">
+          <BrowserOffNote data-slot="browser-off">
             The built-in browser is off, so there is nothing to import into. Turn it on in{" "}
             <button type="button" className="text-link hover:underline" onClick={() => openSettings("browser")}>
               Settings › Browser
             </button>
             .
-          </p>
+          </BrowserOffNote>
         )}
       </SettingsSection>
       <ImportDialog
@@ -210,108 +212,6 @@ export function BrowserImportPage() {
         onRecheck={recheck}
       />
     </SettingsPage>
-  );
-}
-
-/**
- * While the browsers are first listed: rows the size of a browser's, empty, so the list fills
- * in where they stand rather than pushing the page down.
- */
-function ListingRows() {
-  return (
-    <SettingsCard>
-      <div role="status" aria-label="Looking for browsers" data-slot="import-listing">
-        {[0, 1, 2].map((row) => (
-          <div key={row} aria-hidden className="flex items-center gap-3 px-4 py-3">
-            <span className="bg-foreground/5 size-8 shrink-0 rounded-lg" />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              {/* Lines of a row's sizes, their words hidden. */}
-              <span className="text-label w-fit rounded-sm bg-foreground/5 text-transparent select-none">
-                A browser&apos;s name
-              </span>
-              <span className="w-fit rounded-sm bg-foreground/5 text-xs text-transparent select-none">
-                Where it stands, and its profiles
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </SettingsCard>
-  );
-}
-
-/** A browser's app icon, or a globe in a tile when it has none. */
-function BrowserIcon({ source, className }: { source: ImportSource; className?: string }) {
-  return source.icon ? (
-    <img src={source.icon} alt="" aria-hidden className={cn("size-8 shrink-0", className)} />
-  ) : (
-    <span aria-hidden className={cn("bg-foreground/5 text-foreground/65 flex size-8 shrink-0 items-center justify-center rounded-lg", className)}>
-      <Globe className="size-icon-md" />
-    </span>
-  );
-}
-
-const DOT: Record<RowTone, string> = {
-  ready: "bg-success",
-  attention: "bg-warning",
-  idle: "border-foreground/45 border",
-};
-
-function BrowserRow({
-  source,
-  nowMs,
-  disabled,
-  onAction,
-}: {
-  source: ImportSource;
-  nowMs: number;
-  disabled: boolean;
-  onAction: () => void;
-}) {
-  const view = rowView(source);
-  return (
-    <div data-slot="import-row" data-browser={source.key} className="flex items-center gap-3 px-4 py-3">
-      <BrowserIcon source={source} />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-label truncate font-medium">{source.name}</span>
-          {source.record && (
-            <Badge data-slot="import-badge" variant="secondary" className="font-normal">
-              {importedBadge(source.record, nowMs)}
-            </Badge>
-          )}
-        </div>
-        <div className="text-foreground/65 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-          <span data-slot="import-status" className={cn("inline-flex shrink-0 items-center gap-1.5", view.tone === "attention" && "text-warning")}>
-            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", DOT[view.tone])} />
-            {view.status}
-          </span>
-          {view.details.map((detail) => (
-            <span key={detail} data-slot="import-detail" className="min-w-0">
-              {detail}
-            </span>
-          ))}
-        </div>
-      </div>
-      {view.label && (
-        <Button variant="soft" size="sm" disabled={disabled || view.action === "none"} onClick={onAction}>
-          {view.label}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-/** The heading every step of the dialog shares: the browser's icon and what is going on. */
-function FlowHeader({ source, title, description }: { source: ImportSource; title: string; description: string }) {
-  return (
-    <DialogHeader>
-      <DialogTitle className="flex items-center gap-2.5">
-        <BrowserIcon source={source} className="size-6" />
-        {title}
-      </DialogTitle>
-      <DialogDescription>{description}</DialogDescription>
-    </DialogHeader>
   );
 }
 
@@ -396,121 +296,5 @@ function ImportDialog({
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** How far the cookies have come; indeterminate until they are counted. */
-function ImportBar({ progress }: { progress: ImportProgress | null }) {
-  const share = progress?.type === "cookies" && progress.total > 0 ? progress.done / progress.total : progress?.type === "history" ? 1 : null;
-  return (
-    <UsageBar
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={share === null ? undefined : Math.round(share * 100)}
-      value={share === null ? null : share * 100}
-      indeterminate={share === null}
-      fill="bg-foreground/60"
-      size="md"
-    />
-  );
-}
-
-/** Which profiles to copy, and whether history comes too. */
-function ChooseStep({
-  source,
-  onCancel,
-  onImport,
-}: {
-  source: ImportSource;
-  onCancel: () => void;
-  onImport: (source: ImportSource, ids: string[], history: boolean) => void;
-}) {
-  const [ticked, setTicked] = useState<Set<string>>(() => new Set(source.profiles[0] ? [source.profiles[0].id] : []));
-  const [history, setHistory] = useState(true);
-  const chosen = source.profiles.filter((profile) => ticked.has(profile.id));
-  const cookies = chosen.reduce((sum, profile) => sum + (profile.cookies ?? 0), 0);
-  const tick = (id: string, on: boolean) =>
-    setTicked((current) => {
-      const next = new Set(current);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  const note =
-    source.family === "chromium"
-      ? `${source.name} must stay closed during the import. macOS may ask for Keychain access to its encryption key; choose Allow (Always Allow avoids asking again).`
-      : source.family === "gecko"
-        ? `${source.name} must stay closed during the import.`
-        : null;
-  return (
-    <>
-      <FlowHeader
-        source={source}
-        title={`Import from ${source.name}`}
-        description="Which profiles should be copied into Brigadier's browser?"
-      />
-      <div data-slot="import-profiles" className="border-divider bg-card rounded-settings flex flex-col overflow-hidden border">
-        {source.profiles.map((profile) => (
-          <ProfilePick
-            key={profile.id}
-            name={profile.name}
-            cookies={profile.cookies}
-            checked={ticked.has(profile.id)}
-            onCheckedChange={(on) => tick(profile.id, on)}
-          />
-        ))}
-      </div>
-      <CheckboxRow
-        label="Also bring browsing history"
-        note="The pages you visited, to search and revisit."
-        checked={history}
-        onCheckedChange={setHistory}
-      />
-      {note && <p className="text-foreground/65 text-xs">{note}</p>}
-      <DialogFooter>
-        <Button type="button" variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          disabled={chosen.length === 0}
-          onClick={() => onImport(source, chosen.map((profile) => profile.id), history)}
-        >
-          Import {counted(cookies, "cookie", "cookies")}
-        </Button>
-      </DialogFooter>
-    </>
-  );
-}
-
-function ProfilePick({
-  name,
-  cookies,
-  checked,
-  onCheckedChange,
-}: {
-  name: string;
-  cookies: number | null;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  const id = useId();
-  return (
-    <div
-      data-slot="import-profile"
-      className="not-last:border-divider flex items-start gap-3 px-4 py-3 not-last:border-b"
-    >
-      <Checkbox
-        id={id}
-        checked={checked}
-        onCheckedChange={(state) => onCheckedChange(state === true)}
-        className="mt-0.5"
-      />
-      <label htmlFor={id} className="grid min-w-0 flex-1 gap-0.5">
-        <span className="text-label break-words">{name}</span>
-        {cookies !== null && <span className="text-foreground/65 text-xs">{counted(cookies, "cookie", "cookies")}</span>}
-      </label>
-    </div>
   );
 }

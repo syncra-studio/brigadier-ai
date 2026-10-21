@@ -1,27 +1,15 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
+import { DayGroup } from "@/app/settings/DayGroup";
+import { FilterMenu } from "@/app/settings/FilterMenu";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
-import { Button, SettingsSelect } from "@/components/controls";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/layout";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays";
-import { ChevronDown, DotsHorizontal, ExternalLink, Filter, Globe, Trash } from "@/components/icons";
-import { EmptyState, SettingsCard, SettingsSearch } from "@/components/shared";
+import { VisitRow } from "@/app/settings/VisitRow";
+import { Button } from "@/components/controls";
+import { EmptyState, SettingsSearch } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
-import { formatTime } from "@/lib/format";
-import { browserHistory, byDay, HISTORY_PAGE, removeHistory, siteOf } from "@/state/browserData";
-import { openLink } from "@/state/links";
-
-const FILTERS = [
-  { value: "all", label: "All" },
-  { value: "agent", label: "Agent" },
-  { value: "other", label: "Other" },
-] as const satisfies readonly { value: HistoryFilter; label: string }[];
+import { browserHistory, byDay, HISTORY_PAGE, removeHistory } from "@/state/browserData";
 
 const HEADINGS: Record<HistoryFilter, string> = {
   all: "All-time history",
@@ -109,24 +97,11 @@ export function BrowserHistory({
           <EmptyState title={query ? "No pages match." : EMPTY[filter]} />
         )}
         {days.map((day) => (
-          <SettingsCard key={day.key}>
-            <Collapsible defaultOpen>
-              <CollapsibleTrigger className="group flex min-h-11 w-full items-center justify-between text-start text-sm font-medium">
-                {day.label}
-                <ChevronDown
-                  aria-hidden
-                  className="text-foreground/65 size-icon-sm transition-transform group-data-[state=open]:rotate-180"
-                />
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <ul className="divide-divider border-divider divide-y border-t">
-                  {day.items.map((visit) => (
-                    <VisitRow key={visit.id} visit={visit} onRemove={() => remove(visit.id)} />
-                  ))}
-                </ul>
-              </CollapsibleContent>
-            </Collapsible>
-          </SettingsCard>
+          <DayGroup key={day.key} label={day.label}>
+            {day.items.map((visit) => (
+              <VisitRow key={visit.id} visit={visit} onRemove={() => remove(visit.id)} />
+            ))}
+          </DayGroup>
         ))}
         {more && (
           <Button variant="soft" size="sm" className="self-center" onClick={loadMore}>
@@ -135,60 +110,5 @@ export function BrowserHistory({
         )}
       </SettingsSection>
     </SettingsPage>
-  );
-}
-
-function VisitRow({ visit, onRemove }: { visit: BrowserVisit; onRemove: () => void }) {
-  const site = siteOf(visit.url);
-  return (
-    <li className="flex min-h-11 items-center gap-3 py-1.5">
-      <Globe aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
-      <button
-        type="button"
-        title={visit.url}
-        onClick={() => void openLink(visit.url)}
-        className="text-label flex min-w-0 flex-1 items-baseline gap-2 text-start"
-      >
-        <span className="truncate">{visit.title || site}</span>
-        {visit.title && <span className="text-foreground/65 shrink-0 text-xs">{site}</span>}
-      </button>
-      <span className="text-foreground/65 shrink-0 text-xs tabular-nums">{formatTime(visit.atMs)}</span>
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`More for ${visit.title || site}`}
-            className="text-foreground/65 shrink-0"
-          >
-            <DotsHorizontal />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => void openLink(visit.url)}>
-            <ExternalLink />
-            Open
-          </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onSelect={onRemove}>
-            <Trash />
-            Remove from history
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </li>
-  );
-}
-
-function FilterMenu({ value, onChange }: { value: HistoryFilter; onChange: (value: HistoryFilter) => void }) {
-  return (
-    <SettingsSelect
-      label="Filter browsing history"
-      value={value}
-      options={FILTERS}
-      onChange={onChange}
-      icon={<Filter aria-hidden className="size-icon-sm shrink-0" />}
-      className="w-32"
-    />
   );
 }
