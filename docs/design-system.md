@@ -323,6 +323,14 @@ table is the current one.
 | Setup (app.pen) | `#825 PermissionStep` | `app/setup/computerSetup/PermissionStep.tsx` | `PermissionStep` | |
 | Setup (app.pen) | `#826 HelperCard` | `app/setup/computerSetup/HelperCard.tsx` | `HelperCard` | |
 | Setup (app.pen) | `#827 CaptureStep` | `app/setup/computerSetup/CaptureStep.tsx` | `CaptureStep` | |
+| Setup (app.pen) | `#829 AgentCard` | `app/setup/onboarding/AgentCard.tsx` | `AgentCard` | |
+| Setup (app.pen) | `#832 Onboarding` | `app/setup/onboarding/Onboarding.tsx` | `Onboarding` | |
+| Setup (app.pen) | `#833 TopBar (onboarding)` | `app/setup/onboarding/OnboardingTopBar.tsx` | `OnboardingTopBar` | |
+| Setup (app.pen) | `#835 ProjectsStep › found counter` | `app/setup/onboarding/FoundCounter.tsx` | `FoundCounter` | |
+| Setup (app.pen) | `#836 ProjectsStep › Select all / none` | `app/setup/onboarding/SelectAllToggle.tsx` | `SelectAllToggle` | |
+| Setup (app.pen) | `#837 ProjectCard` | `app/setup/onboarding/ProjectCard.tsx` | `ProjectCard` | |
+| Setup (app.pen) | `#840 ContinueButton` | `app/setup/onboarding/ContinueButton.tsx` | `ContinueButton` | |
+| Setup (app.pen) | `#841 NameForm (onboarding)` | `app/setup/onboarding/NameForm.tsx` | `NameForm` | |
 
 ## Icons
 

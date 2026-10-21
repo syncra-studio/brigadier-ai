@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader } from "@/app/setup/onboarding/parts";
-import { FolderOpen, ProviderGlyph, Spinner } from "@/components/icons";
-import { Button, CheckboxMark } from "@/components/controls";
+import { FoundCounter } from "@/app/setup/onboarding/FoundCounter";
+import { RAISED_BUTTON, StepFooter, StepHeader } from "@/app/setup/onboarding/parts";
+import { ProjectCard } from "@/app/setup/onboarding/ProjectCard";
+import { SelectAllToggle } from "@/app/setup/onboarding/SelectAllToggle";
+import { FolderOpen, Spinner } from "@/components/icons";
+import { Button } from "@/components/controls";
 import { pickFolder, warmFolderPicker } from "@/ipc/client";
 import type { ProjectCandidate } from "@/ipc/generated";
-import { formatAgo, shortPath } from "@/lib/format";
+import { shortPath } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { createProject, select } from "@/state/actions";
 import { checkFolder } from "@/state/addProject";
@@ -137,31 +139,17 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
       <div className="mt-12 flex min-h-0 flex-1 flex-col gap-3">
         <div className="shrink-0 px-6">
         <div className="max-w-onboarding mx-auto flex w-full flex-wrap items-center gap-x-1 gap-y-2">
-          <div className="text-muted-foreground/70 text-label flex items-center gap-2 px-1">
-            {found > 0 && <span aria-hidden className="bg-success size-1.5 shrink-0 rounded-full" />}
-            <span>Found in your history</span>
-            {candidates !== null && <span className="tabular-nums">{found}</span>}
-          </div>
+          <FoundCounter found={found} loaded={candidates !== null} />
           <div className="ms-auto flex items-center gap-1">
             {addable.length > 0 && (
               // Words alone, as designed: hovered they brighten, with no pill behind them.
-              <button
-                type="button"
+              <SelectAllToggle
+                allChosen={allChosen}
                 disabled={busy}
-                onClick={() =>
+                onToggle={() =>
                   setSelected(allChosen ? new Set() : new Set(addable.map((candidate) => candidate.path)))
                 }
-                className={cn(
-                  PILL_BUTTON,
-                  "text-muted-foreground enabled:hover:text-foreground grid items-center px-2.5 font-medium transition-colors disabled:opacity-50",
-                )}
-              >
-                {/* Both labels hold the room, so the button never moves as it switches. */}
-                <span className="col-start-1 row-start-1">{allChosen ? "Select none" : "Select all"}</span>
-                <span aria-hidden className="invisible col-start-1 row-start-1">
-                  Select none
-                </span>
-              </button>
+              />
             )}
             <Button
               size="sm"
@@ -223,58 +211,5 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
         }}
       />
     </div>
-  );
-}
-
-function ProjectCard({
-  candidate,
-  nowMs,
-  selected,
-  disabled,
-  onToggle,
-}: {
-  candidate: ProjectCandidate;
-  nowMs: number;
-  selected: boolean;
-  disabled: boolean;
-  onToggle: () => void;
-}) {
-  const added = candidate.projectId !== null;
-  const on = added || selected;
-  const activity =
-    candidate.sessions > 0
-      ? `${candidate.sessions} ${candidate.sessions === 1 ? "session" : "sessions"} · ${formatAgo(candidate.lastActiveMs, nowMs)}`
-      : null;
-  return (
-    <li className="min-w-0">
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={on}
-        aria-label={candidate.name}
-        disabled={disabled || added}
-        onClick={onToggle}
-        className={cn(
-          "bg-card rounded-settings flex h-full w-full min-w-0 flex-col gap-1 border p-4 text-start transition-colors",
-          "enabled:hover:bg-muted/60 disabled:cursor-default",
-          added && "opacity-60",
-        )}
-      >
-        <span className="flex w-full min-w-0 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{candidate.name}</span>
-          <CheckboxMark checked={on} />
-        </span>
-        <span className="text-muted-foreground/70 w-full truncate font-mono text-xs">{shortPath(candidate.path)}</span>
-        <span className="text-muted-foreground/70 flex min-w-0 items-center gap-1.5 pt-2.5 text-xs">
-          {candidate.providers.map((provider) => (
-            <span key={provider} title={PROVIDER_LABELS[provider]} className="flex shrink-0">
-              <ProviderGlyph provider={provider} className="size-icon-sm" />
-              <span className="sr-only">{PROVIDER_LABELS[provider]}</span>
-            </span>
-          ))}
-          <span className="truncate">{added ? "Already added" : activity}</span>
-        </span>
-      </button>
-    </li>
   );
 }

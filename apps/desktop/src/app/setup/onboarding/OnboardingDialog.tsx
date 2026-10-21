@@ -1,25 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 
-import { AgentsStep } from "@/app/setup/onboarding/AgentsStep";
-import { ProjectsStep } from "@/app/setup/onboarding/ProjectsStep";
-import { Welcome } from "@/app/setup/onboarding/Welcome";
+import { Onboarding } from "@/app/setup/onboarding/Onboarding";
+import { closeSetup } from "@/app/setup/onboarding/steps";
 import { preloadWelcomeSound } from "@/app/setup/onboarding/welcomeSound";
-import { Button } from "@/components/controls";
-import { Dialog, DialogContent, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays";
-import { X } from "@/components/icons";
+import { Dialog, DialogContent } from "@/components/overlays";
 import { introRelease } from "@/ipc/client";
 import { useRevealed } from "@/lib/splash";
-import { cn } from "@/lib/utils";
-import { finishOnboarding, useOnboarding } from "@/state/onboarding";
-import { setSetting } from "@/state/settings";
+import { useOnboarding } from "@/state/onboarding";
 import { useApp } from "@/state/store";
-
-type Step = "intro" | "name" | "agents" | "projects";
-
-/** Closes a run of the setup opened from Settings. */
-function close(): void {
-  void finishOnboarding().catch((error: unknown) => console.error(error));
-}
 
 /**
  * The first launch: a welcome intro with its sound, the name to call the user by, the coding
@@ -70,150 +58,12 @@ export function OnboardingDialog() {
           }}
           onEscapeKeyDown={(event) => {
             event.preventDefault();
-            if (reopened) close();
+            if (reopened) closeSetup();
           }}
         >
           {open && <Onboarding />}
         </DialogContent>
       </Dialog>
     </>
-  );
-}
-
-/** Where the setup starts: a run from Settings at the agents, otherwise where the last one left off. */
-function firstStep(reopened: boolean, introSeen: boolean, userName: string): Step {
-  if (reopened) return "agents";
-  if (!introSeen) return "intro";
-  return userName ? "agents" : "name";
-}
-
-function Onboarding() {
-  const userName = useApp((s) => s.settings.userName);
-  // A run from Settings: they've met already.
-  const reopened = useOnboarding((s) => s.reopened);
-  const [step, setStep] = useState<Step>(() => {
-    const { settings } = useApp.getState();
-    return firstStep(useOnboarding.getState().reopened, settings.introSeen, settings.userName);
-  });
-  const [reached, setReached] = useState(() => Math.max(STEPS.indexOf(step), 0));
-  const stopSound = useRef<(() => void) | null>(null);
-
-  // Closing the setup before the sound has ended fades it out. So does closing the window,
-  // which only hides it (the setup stays, behind it).
-  useEffect(() => () => stopSound.current?.(), []);
-  const windowVisible = useApp((s) => s.windowVisible);
-  useEffect(() => {
-    if (!windowVisible) stopSound.current?.();
-  }, [windowVisible]);
-
-  const go = (next: Step) => {
-    setStep(next);
-    setReached((current) => Math.max(current, STEPS.indexOf(next)));
-  };
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-col">
-      {step !== "intro" && (
-        // As designed, the projects' strip has no Close: Back and the step's action lead on.
-        <TopBar step={step} reached={reached} onStep={go} closable={reopened && step !== "projects"} />
-      )}
-      {step === "intro" || step === "name" ? (
-        <Welcome
-          step={step}
-          name={userName}
-          onSound={(stop) => {
-            stopSound.current = stop;
-            if (!useApp.getState().windowVisible) stop();
-          }}
-          onContinue={() => {
-            go("name");
-            setSetting("introSeen", true).catch((error: unknown) => console.error(error));
-          }}
-          onName={async (name) => {
-            await setSetting("userName", name);
-            go("agents");
-          }}
-        />
-      ) : step === "agents" ? (
-        <AgentsStep
-          onBack={() => go("name")}
-          onContinue={() => go("projects")}
-        />
-      ) : (
-        <ProjectsStep onBack={() => go("agents")} />
-      )}
-    </div>
-  );
-}
-
-/** The steps after the intro, in the dots at the top. */
-const STEPS: readonly Step[] = ["name", "agents", "projects"];
-const STEP_LABELS: Record<Step, string> = {
-  intro: "Welcome",
-  name: "Name",
-  agents: "Agents",
-  projects: "Projects",
-};
-
-/**
- * The strip along the top: the window drags by it, a segment per step (the current one longer
- * and bright; steps already reached can be revisited) and, on a run from Settings, Close at the
- * end.
- */
-function TopBar({
-  step,
-  reached,
-  onStep,
-  closable,
-}: {
-  step: Step;
-  reached: number;
-  onStep: (step: Step) => void;
-  closable: boolean;
-}) {
-  const current = STEPS.indexOf(step);
-  return (
-    <div
-      data-tauri-drag-region
-      className="h-titlebar relative z-10 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center px-2"
-    >
-      <TooltipProvider>
-        <nav aria-label="Setup steps" className="col-start-2 flex items-center gap-1">
-          {STEPS.map((entry, index) => {
-            const active = index === current;
-            return (
-              <Tooltip key={entry}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={`Step ${index + 1}: ${STEP_LABELS[entry]}`}
-                    aria-current={active ? "step" : undefined}
-                    disabled={index > reached}
-                    onClick={() => onStep(entry)}
-                    className={cn(
-                      "rounded-capsule relative h-0.75 transition-all before:absolute before:-inset-x-0.5 before:-inset-y-2",
-                      active ? "bg-foreground w-7.5" : "bg-muted enabled:hover:bg-muted-foreground/45 w-3.75",
-                    )}
-                  />
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{STEP_LABELS[entry]}</TooltipContent>
-              </Tooltip>
-            );
-          })}
-        </nav>
-      </TooltipProvider>
-      {closable && (
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="Close setup"
-          onClick={close}
-          // As designed: round, 28 across, 20 in from the window's edge.
-          className="text-muted-foreground hover:text-foreground me-3 size-7 justify-self-end rounded-full"
-        >
-          <X className="size-3.75" />
-        </Button>
-      )}
-    </div>
   );
 }

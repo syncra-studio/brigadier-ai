@@ -1,12 +1,11 @@
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { errorText } from "@/app/shell/dialogs/fields";
+import { ContinueButton } from "@/app/setup/onboarding/ContinueButton";
 import { IntroCanvas, WINDOW_SHAPED } from "@/app/setup/onboarding/IntroCanvas";
-import { PRIMARY_BUTTON, PRIMARY_KEY, useFocusOnMount } from "@/app/setup/onboarding/parts";
+import { NameForm } from "@/app/setup/onboarding/NameForm";
 import { StaggerText } from "@/app/setup/onboarding/StaggerText";
 import { playWelcomeSound, preloadWelcomeSound } from "@/app/setup/onboarding/welcomeSound";
-import { BrigadierGlyph, Spinner } from "@/components/icons";
-import { Button, Input, Kbd } from "@/components/controls";
+import { BrigadierGlyph } from "@/components/icons";
 import { DialogTitle } from "@/components/overlays";
 import { introBegin, introFinish, introRelease, introShaped, onIntroEnded } from "@/ipc/client";
 
@@ -289,110 +288,7 @@ export function Welcome({
   );
 }
 
-/** The intro's Continue: the steps' own at the app's large size, its key's chip grown with it. */
-const INTRO_BUTTON = "gap-3 rounded-full ps-5 pe-2.5";
-const INTRO_KEY = "h-5.5 px-2 in-data-[slot=button]:text-xs";
-
 /** How many letters (spaces aside) the title's lines before `line` hold. */
 function lettersBefore(line: number): number {
   return TITLE.slice(0, line).reduce((sum, text) => sum + text.replaceAll(" ", "").length, 0);
-}
-
-function ContinueButton({
-  ready,
-  busy = false,
-  intro = false,
-  onClick,
-  form,
-}: {
-  ready: boolean;
-  busy?: boolean;
-  /** The intro's: out of reach (inert) until it has come in, never greyed. */
-  intro?: boolean;
-  onClick?: () => void;
-  form?: string;
-}) {
-  const button = useRef<HTMLButtonElement>(null);
-  // Once usable it takes the focus, so Enter continues.
-  useEffect(() => {
-    if (ready && !form) button.current?.focus();
-  }, [ready, form]);
-  return (
-    <Button
-      ref={button}
-      type={form ? "submit" : "button"}
-      form={form}
-      disabled={intro ? busy : !ready || busy}
-      onClick={onClick}
-      size={intro ? "lg" : "default"}
-      className={intro ? INTRO_BUTTON : PRIMARY_BUTTON}
-    >
-      {busy && <Spinner className="animate-spin" />}
-      Continue
-      <Kbd className={intro ? INTRO_KEY : PRIMARY_KEY}>↩</Kbd>
-    </Button>
-  );
-}
-
-/**
- * "What should we call you?" under the mark: one borderless field, focused as the step opens;
- * Continue (or Return) saves it once it holds more than spaces.
- */
-function NameForm({ name, onName }: { name: string; onName: (name: string) => Promise<void> }) {
-  const id = useId();
-  const [value, setValue] = useState(name);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const trimmed = value.trim();
-  const input = useFocusOnMount<HTMLInputElement>();
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!trimmed || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onName(trimmed);
-    } catch (cause) {
-      setError(errorText(cause));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="welcome-name">
-      <form id={id} className="welcome-name-body" onSubmit={(event) => void submit(event)}>
-        <div className="welcome-mark" aria-hidden>
-          <BrigadierGlyph />
-        </div>
-        <DialogTitle asChild>
-          <h1 className="welcome-heading text-balance">What should we call you?</h1>
-        </DialogTitle>
-        <label htmlFor={`${id}-name`} className="sr-only">
-          Your name
-        </label>
-        <Input
-          ref={input}
-          id={`${id}-name`}
-          autoComplete="given-name"
-          placeholder="Your name"
-          maxLength={80}
-          value={value}
-          disabled={busy}
-          aria-invalid={error !== null || undefined}
-          onChange={(event) => setValue(event.target.value)}
-          // Borderless: the words alone, centred under the question.
-          className="placeholder:text-muted-foreground/70 focus-visible:bg-transparent disabled:bg-transparent h-auto max-w-xs rounded-none bg-transparent p-0 text-center text-lg outline-none"
-        />
-        {error && (
-          <p role="alert" className="text-destructive mt-3 text-sm">
-            {error}
-          </p>
-        )}
-      </form>
-      <div className="welcome-continue">
-        <ContinueButton ready={trimmed !== ""} busy={busy} form={id} />
-      </div>
-    </div>
-  );
 }
