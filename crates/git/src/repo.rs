@@ -23,6 +23,9 @@ pub struct Repo {
     pub(crate) common_dir: PathBuf,
 }
 
+/// The message of a [`Repo::snapshot_files`] snapshot.
+const SNAPSHOT: &str = "Brigadier snapshot of the checkout's files";
+
 /// A lock per repository (common git dir), each made on first use and dropped when unused.
 type RepoLocks = OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>>;
 
@@ -442,22 +445,94 @@ impl Repo {
     /// as a commit no ref names: HEAD itself when nothing differs from it. The same files on
     /// the same HEAD give the same commit, so a snapshot can be compared with an earlier one.
     /// The real index, working tree, stash and refs remain untouched.
+    /// Build output and caches stay out (#492): an untracked folder a tool tagged with a
+    /// `CACHEDIR.TAG`, as cargo tags every target folder, is no file of the project's.
     pub fn snapshot_files(&self) -> Result<Oid> {
         let head = self.resolve("HEAD")?;
-        let tree = match self.capture() {
+        let tree = match self.capture_files(true) {
             Ok((_, tree)) => tree,
             // Unresolved entries or a dirty submodule: the files as they stand all the same.
-            Err(_) => self.files_tree()?,
+            Err(_) => {
+                let caches = self
+                    .status(false)
+                    .and_then(|status| self.cache_dirs(&status))
+                    .unwrap_or_default();
+                self.files_tree_without(&caches)?
+            }
         };
         if tree == self.tree_of(&head.0)? {
             return Ok(head);
         }
-        self.commit_tree_with(
-            &tree,
-            &[&head],
-            "Brigadier snapshot of the checkout's files",
-            &fixed_identity(),
-        )
+        self.commit_tree_with(&tree, &[&head], SNAPSHOT, &fixed_identity())
+    }
+
+    /// The HEAD a [`Repo::snapshot_files`] snapshot was taken on: its parent, or the snapshot
+    /// itself when the files were HEAD's.
+    pub fn snapshot_head(&self, snapshot: &Oid) -> Result<Oid> {
+        valid_oid(snapshot)?;
+        let subject = self.read_only(&["log", "-1", "--format=%s", &snapshot.0])?;
+        if subject.trim_end() == SNAPSHOT {
+            self.resolve(&format!("{}^", snapshot.0))
+        } else {
+            Ok(snapshot.clone())
+        }
+    }
+
+    /// The untracked folders tagged as caches by the Cache Directory Tagging Specification
+    /// (a `CACHEDIR.TAG` starting with its signature), outermost only, without tracked files.
+    fn cache_dirs(&self, status: &parse::Status) -> Result<Vec<String>> {
+        const SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+        let mut dirs: Vec<String> = status
+            .untracked()
+            .into_iter()
+            .filter_map(|path| Some(path.strip_suffix("/CACHEDIR.TAG")?.to_owned()))
+            .filter(|dir| {
+                let mut head = [0; SIGNATURE.len()];
+                fs::File::open(self.root.join(dir).join("CACHEDIR.TAG"))
+                    .and_then(|mut tag| std::io::Read::read_exact(&mut tag, &mut head))
+                    .is_ok_and(|()| head == SIGNATURE)
+            })
+            .collect();
+        let outer = dirs.clone();
+        dirs.retain(|dir| {
+            !outer
+                .iter()
+                .any(|other| dir.starts_with(&format!("{other}/")))
+        });
+        if dirs.is_empty() {
+            return Ok(dirs);
+        }
+        let mut args = vec!["ls-files", "-z", "--"];
+        args.extend(dirs.iter().map(String::as_str));
+        let tracked = self.cmd(&args, true)?;
+        let tracked: Vec<&[u8]> = tracked
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .collect();
+        dirs.retain(|dir| {
+            let inside = format!("{dir}/");
+            !tracked
+                .iter()
+                .any(|path| path.starts_with(inside.as_bytes()))
+        });
+        Ok(dirs)
+    }
+
+    /// `add -A` of the whole checkout into a private index, leaving out `skip` (folders).
+    fn add_all_but(&self, temp: &TempIndex, skip: &[String]) -> Result<()> {
+        let mut args: Vec<OsString> = ["-c", "core.splitIndex=false", "add", "-A", "--", "."]
+            .map(OsString::from)
+            .to_vec();
+        args.extend(
+            skip.iter()
+                .map(|dir| OsString::from(format!(":(exclude,literal){dir}"))),
+        );
+        // Exclude magic needs pathspecs read as pathspecs; each path in it stays literal.
+        let mut env = temp.env();
+        env.push(("GIT_LITERAL_PATHSPECS".into(), "0".into()));
+        self.git
+            .checked(Some(&self.root), &args, false, &env, None)?;
+        Ok(())
     }
 
     /// A commit holding `tip`'s files whose parent is `base`, so `base...it` (a diff from the
@@ -486,6 +561,11 @@ impl Repo {
     }
 
     pub(crate) fn capture(&self) -> Result<(TempIndex, Oid)> {
+        self.capture_files(false)
+    }
+
+    /// [`Repo::capture`], leaving out untracked cache folders with `skip_caches`.
+    fn capture_files(&self, skip_caches: bool) -> Result<(TempIndex, Oid)> {
         let status = self.status(false)?;
         if status.dirty_submodule {
             return Err(Error::Invalid("commit or discard changes inside submodules before capturing the parent repository".into()));
@@ -513,10 +593,12 @@ impl Repo {
                 "--no-split-index",
             ],
         )?;
-        self.index_cmd(
-            &temp,
-            &["-c", "core.splitIndex=false", "add", "-A", "--", "."],
-        )?;
+        let caches = if skip_caches {
+            self.cache_dirs(&status)?
+        } else {
+            Vec::new()
+        };
+        self.add_all_but(&temp, &caches)?;
         let tree = parse::oid(&self.index_cmd(&temp, &["write-tree"])?)?;
         Ok((temp, tree))
     }
@@ -524,9 +606,13 @@ impl Repo {
     /// The tree of the checkout's files as they stand (HEAD plus every non-ignored change),
     /// read past an index with unresolved entries, which `capture` refuses.
     pub fn files_tree(&self) -> Result<Oid> {
+        self.files_tree_without(&[])
+    }
+
+    fn files_tree_without(&self, skip: &[String]) -> Result<Oid> {
         let temp = TempIndex::new()?;
         self.index_cmd(&temp, &["read-tree", "HEAD"])?;
-        self.index_cmd(&temp, &["add", "-A", "--", "."])?;
+        self.add_all_but(&temp, skip)?;
         parse::oid(&self.index_cmd(&temp, &["write-tree"])?)
     }
 
@@ -2694,6 +2780,60 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&shown), "mode = b\n");
     }
+
+    /// Build output tagged as a cache (cargo's target folder, wherever it is) is no file of
+    /// the checkout's snapshot; an untagged folder, a tag without the signature and a tagged
+    /// folder with tracked files still are (#492).
+    #[test]
+    fn a_snapshot_leaves_out_untracked_cache_folders() {
+        let (dir, git) = test_git("cachedir");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        fs::create_dir_all(root.join("kept")).unwrap();
+        fs::write(root.join("kept/CACHEDIR.TAG"), CACHE_TAG).unwrap();
+        fs::write(root.join("kept/tracked.txt"), "t\n").unwrap();
+        let head = repo.commit_changes("Base", true).unwrap();
+        let tag = |dir: &str| {
+            fs::create_dir_all(root.join(dir).join("debug/deps")).unwrap();
+            fs::write(root.join(dir).join("CACHEDIR.TAG"), CACHE_TAG).unwrap();
+            fs::write(root.join(dir).join("debug/deps/lib.rlib"), "built").unwrap();
+        };
+        tag("target-base");
+        tag("nested/out");
+        tag("target-base/inner");
+        fs::create_dir_all(root.join("fake")).unwrap();
+        fs::write(root.join("fake/CACHEDIR.TAG"), "not a tag").unwrap();
+        fs::create_dir_all(root.join("scratch")).unwrap();
+        fs::write(root.join("scratch/x.txt"), "x\n").unwrap();
+        fs::write(root.join("kept/new.txt"), "n\n").unwrap();
+        fs::write(root.join("a.txt"), "a2\n").unwrap();
+        let snapshot = repo.snapshot_files().unwrap();
+        let files: Vec<_> = repo.file_blobs(&snapshot).unwrap().into_keys().collect();
+        assert_eq!(
+            files,
+            [
+                "a.txt",
+                "fake/CACHEDIR.TAG",
+                "kept/CACHEDIR.TAG",
+                "kept/new.txt",
+                "kept/tracked.txt",
+                "scratch/x.txt"
+            ]
+        );
+        assert_eq!(repo.snapshot_head(&snapshot).unwrap(), head);
+        // Only the tagged folders changed since HEAD: the snapshot is HEAD itself.
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        for path in ["fake", "scratch"] {
+            fs::remove_dir_all(root.join(path)).unwrap();
+        }
+        fs::remove_file(root.join("kept/new.txt")).unwrap();
+        assert_eq!(repo.snapshot_files().unwrap(), head);
+        assert_eq!(repo.snapshot_head(&head).unwrap(), head);
+    }
+
+    const CACHE_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache\n";
 
     #[test]
     fn work_without_its_litter_keeps_it_out_of_every_commit() {
