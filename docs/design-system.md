@@ -177,6 +177,15 @@ table is the current one.
 | Shared app parts | `LabeledDivider` | `components/shared/labeled-divider.tsx` | `LabeledDivider` | |
 | Shared app parts | `MD/Paragraph`, `MD/Bullet item` | `components/conversation/markdown-text.tsx` | `MarkdownText` | |
 | Shared app parts | — | `components/shared/banner.tsx`, `empty-state.tsx`, `usage-bar.tsx`, `titlebar-button.tsx` | `Banner`, `EmptyState`, `UsageBar`, `TITLEBAR_BUTTON`, `TitlebarTips` | code only |
+| Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
+| Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
+| Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
+| Inspector (settings.pen) | `#1008 OrchestratorLogView › list switch bar` | `app/inspector/ListSwitchBar.tsx` | `ListSwitchBar` | |
+| Inspector (settings.pen) | `#1009 Breaches` | `app/inspector/Breaches.tsx` | `Breaches` | |
+| Inspector (settings.pen) | `#1010 ContextMeter` | `app/inspector/ContextMeter.tsx` | `ContextMeter` | |
+| Inspector (settings.pen) | `#1011 InjectionRowView` | `app/inspector/InjectionRowView.tsx` | `InjectionRowView` | |
+| Inspector (settings.pen) | `#1012 GenerationHeader` | `app/inspector/GenerationHeader.tsx` | `GenerationHeader` | |
+| Inspector (settings.pen) | `#1013 InjectionList` | `app/inspector/InjectionList.tsx` | `InjectionList` | |
 
 ## Icons
 
