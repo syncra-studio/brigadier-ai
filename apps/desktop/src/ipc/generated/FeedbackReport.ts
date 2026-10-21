@@ -32,6 +32,11 @@ today: string,
  */
 wanted: string, 
 /**
- * The existing issue it repeats, when the check was sure: a note goes there instead.
+ * The open issue of its kind it repeats, when the check was sure: a note goes there instead.
  */
-duplicate: FeedbackDuplicate | null, };
+duplicate: FeedbackDuplicate | null, 
+/**
+ * Issues close to it that it doesn't repeat (closed, another kind, or not the same
+ * thing): a new issue names them as maybe related.
+ */
+related: Array<number>, };

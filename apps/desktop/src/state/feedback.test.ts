@@ -41,6 +41,7 @@ const report = (title: string): FeedbackReport => ({
   today: "",
   wanted: "",
   duplicate: null,
+  related: [],
 });
 
 /** What the faked daemon was asked to write up, and how it files: once per call, in turn. */

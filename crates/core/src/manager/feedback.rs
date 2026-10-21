@@ -145,6 +145,12 @@ impl SessionManager {
                 title: String,
                 state: String,
                 url: String,
+                #[serde(default)]
+                labels: Vec<Label>,
+            }
+            #[derive(serde::Deserialize)]
+            struct Label {
+                name: String,
             }
             let limit = ISSUE_LIMIT.to_string();
             let args = [
@@ -157,7 +163,7 @@ impl SessionManager {
                 "--limit",
                 &limit,
                 "--json",
-                "number,title,state,url",
+                "number,title,state,url,labels",
             ];
             let out = tokio::time::timeout(READ_TIMEOUT, gh.output(&args))
                 .await
@@ -172,6 +178,10 @@ impl SessionManager {
                 listed
                     .into_iter()
                     .map(|issue| KnownIssue {
+                        kind: KnownIssue::kind_of(
+                            &issue.title,
+                            issue.labels.iter().map(|label| label.name.as_str()),
+                        ),
                         number: issue.number,
                         title: issue.title,
                         open: issue.state.eq_ignore_ascii_case("open"),
@@ -271,9 +281,18 @@ impl SessionManager {
 
 /// An issue as the public API lists it.
 fn api_issue(item: &serde_json::Value) -> Option<KnownIssue> {
+    let title = item.get("title")?.as_str()?;
+    let labels = item.get("labels").and_then(|labels| labels.as_array());
     Some(KnownIssue {
+        kind: KnownIssue::kind_of(
+            title,
+            labels
+                .into_iter()
+                .flatten()
+                .filter_map(|label| label.get("name")?.as_str()),
+        ),
         number: item.get("number")?.as_u64()?,
-        title: item.get("title")?.as_str()?.to_owned(),
+        title: title.to_owned(),
         open: item.get("state")?.as_str()? == "open",
         url: item.get("html_url")?.as_str()?.to_owned(),
     })

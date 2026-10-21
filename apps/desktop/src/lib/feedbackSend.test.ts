@@ -23,6 +23,7 @@ const bug: FeedbackReport = {
   today: "",
   wanted: "",
   duplicate: null,
+  related: [],
 };
 const idea: FeedbackReport = { ...bug, kind: "idea", title: "Pin a chat", area: "", steps: "", expected: "", actual: "", problem: "Lost chats", wanted: "A pin" };
 const repeat: FeedbackReport = {

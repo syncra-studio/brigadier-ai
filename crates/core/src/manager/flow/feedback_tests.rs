@@ -131,11 +131,12 @@ const TWO_REPORTS: &str = r#"{"reports":[
   "wanted":"A pin on a chat.","candidates":[]}]}"#;
 
 const ISSUES: &str = r#"[
- {"number":12,"title":"Stop doesn't stop the spinner","state":"OPEN","url":"https://github.com/syncra-studio/brigadier-ai/issues/12"},
+ {"number":12,"title":"Stop doesn't stop the spinner","state":"OPEN","url":"https://github.com/syncra-studio/brigadier-ai/issues/12","labels":[{"name":"bug"}]},
  {"number":7,"title":"Dark mode","state":"CLOSED","url":"https://github.com/syncra-studio/brigadier-ai/issues/7"}]"#;
 
 /// Signed in: the issues come through `gh` (open and closed, on Brigadier's repository), the
-/// likely ones are read in full, and the check marks the bug as #12's.
+/// likely ones are read in full, and the check marks the bug as #12's (open, a bug); closed #7
+/// it called the same too is only linked.
 #[tokio::test]
 async fn a_note_becomes_reports_and_a_repeat_points_at_its_issue() {
     let seen = Seen::default();
@@ -145,7 +146,8 @@ async fn a_note_becomes_reports_and_a_repeat_points_at_its_issue() {
         writer(
             &seen,
             TWO_REPORTS,
-            r#"{"duplicates":[{"report":0,"issue":12,"comment":"Seen again after Stop."}]}"#,
+            r#"{"matches":[{"report":0,"issue":12,"same":true},
+                           {"report":0,"issue":7,"issueKind":"bug","same":true}]}"#,
         ),
     )
     .await;
@@ -166,8 +168,13 @@ async fn a_note_becomes_reports_and_a_repeat_points_at_its_issue() {
     let duplicate = bug.duplicate.as_ref().expect("a repeat of #12");
     assert_eq!(
         (duplicate.number, duplicate.open, duplicate.comment.as_str()),
-        (12, true, "Seen again after Stop.")
+        (
+            12,
+            true,
+            "Seen again.\n\nWhat happened: The tab keeps spinning after Stop.\nExpected: It stops."
+        )
     );
+    assert_eq!(bug.related, [7]);
     assert_eq!(write_up.reports[1].kind, FeedbackKind::Idea);
     assert_eq!(write_up.reports[1].duplicate, None);
 
@@ -176,11 +183,16 @@ async fn a_note_becomes_reports_and_a_repeat_points_at_its_issue() {
     assert!(seen[0].contains("The tab spins after Stop."), "{}", seen[0]);
     assert!(seen[0].contains("#12 open: Stop doesn't stop the spinner"));
     assert!(seen[0].contains("#7 closed: Dark mode"));
-    assert!(seen[1].contains("issue #12 (open)") && seen[1].contains("The spinner keeps going."));
+    assert!(
+        seen[1].contains("issue #12 (open, bug)") && seen[1].contains("The spinner keeps going."),
+        "{}",
+        seen[1]
+    );
+    assert!(seen[1].contains("issue #7 (closed, kind not marked)"));
     let calls = stubs.lines("calls");
     assert!(
         calls.iter().any(|call| call
-            == &format!("issue list --repo {FEEDBACK_REPO} --state all --limit 1000 --json number,title,state,url")),
+            == &format!("issue list --repo {FEEDBACK_REPO} --state all --limit 1000 --json number,title,state,url,labels")),
         "{calls:?}"
     );
     assert!(
@@ -200,7 +212,7 @@ async fn signed_out_the_public_list_is_searched() {
     let flow = Flow::start(
         "feedback-public",
         Options::default(),
-        writer(&seen, TWO_REPORTS, r#"{"duplicates":[]}"#),
+        writer(&seen, TWO_REPORTS, r#"{"matches":[]}"#),
     )
     .await;
     let stubs = Stubs::new(&flow);

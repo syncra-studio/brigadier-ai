@@ -61,6 +61,7 @@ test("send feedback files what the user wrote and lists it with its links", { ti
   assert.equal(seen.stillOpen, false);
   assert.equal(seen.signedOutAccount, "You’re not signed in to GitHub, so each report opens in your browser, filled in.");
   assert.deepEqual(seen.signedOut, [
+    "Ready to post",
     "3 reports opened in your browser. Post each one there.",
     [
       "Stop leaves the tab spinningOpened in your browser",

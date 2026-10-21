@@ -41,6 +41,7 @@ const report = (kind: "bug" | "idea", title: string, fields: Partial<FeedbackRep
   today: "",
   wanted: "",
   duplicate: null,
+  related: [],
   ...fields,
 });
 const REPO = "https://github.com/syncra-studio/brigadier-ai/issues";
@@ -280,7 +281,7 @@ function Fixture() {
       await write("The tab keeps spinning after Stop, and the usage bar lags. Also, let me pin a chat.");
       button("Send", dialog() ?? document)?.click();
       await wait(400);
-      seen.signedOut = [text(dialog()?.querySelector("p")), sent(), opened.map((url) => new URL(url).searchParams.get("template"))];
+      seen.signedOut = [text(dialog()?.querySelector("h2")), text(dialog()?.querySelector("p")), sent(), opened.map((url) => new URL(url).searchParams.get("template"))];
       closeFeedback();
       daemon.signedIn = true;
 

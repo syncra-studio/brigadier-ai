@@ -39,6 +39,7 @@ const report = (kind: "bug" | "idea", title: string, fields: Partial<FeedbackRep
   today: "",
   wanted: "",
   duplicate: null,
+  related: [],
   ...fields,
 });
 const reports = [

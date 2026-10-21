@@ -1,5 +1,5 @@
 import { ErrorLine } from "@/app/shell/dialogs/fields";
-import { FeedbackResults, sentLine, stepProgress, unsentLine, useSystemWord } from "@/app/shell/feedback/FeedbackResults";
+import { FeedbackResults, sentLine, sentTitle, stepProgress, unsentLine, useSystemWord } from "@/app/shell/feedback/FeedbackResults";
 import { Button } from "@/components/controls";
 import { ArrowUpRight, X } from "@/components/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
@@ -47,7 +47,7 @@ function Feedback() {
     <DialogContent data-slot="feedback" showCloseButton={false} className="max-w-feedback block gap-0 p-0">
       <div className="flex gap-3.5 pt-6 pe-5 pb-4.5 ps-6">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <DialogTitle>{!done ? "Send feedback" : unsent ? "Not all of it was sent" : "Thanks, it’s sent"}</DialogTitle>
+          <DialogTitle>{!done ? "Send feedback" : unsent ? "Not all of it was sent" : sentTitle(done, "Thanks, it’s sent")}</DialogTitle>
           <DialogDescription>
             {!done
               ? "Say what’s wrong or what you’d like. Brigadier writes it up for its developers."

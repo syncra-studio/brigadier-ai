@@ -67,6 +67,7 @@ const bug: FeedbackReport = {
   today: "",
   wanted: "",
   duplicate: null,
+  related: [],
 };
 const idea: FeedbackReport = {
   ...bug,
@@ -98,6 +99,12 @@ test("a bug's issue body follows the bug form, says where it came from and ticks
   );
   assert.ok(!reportBody(bug, details, true).includes("[x]"));
   assert.ok(reportBody(bug, details, false).includes("couldn’t search the issues"));
+});
+
+test("a new issue names the issues it's close to but doesn't repeat, under where it came from", () => {
+  const body = reportBody({ ...bug, related: [10457, 57] }, details, true);
+  assert.ok(body.includes("duplicate first._\n\nMaybe related: #10457, #57\n\n### Version or commit"), body);
+  assert.ok(!reportBody(bug, details, true).includes("Maybe related"));
 });
 
 test("an idea's issue body follows the proposal form; an empty field reads as GitHub writes it", () => {

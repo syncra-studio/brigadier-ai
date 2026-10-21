@@ -5,6 +5,6 @@
  */
 export type FeedbackDuplicate = { number: number, title: string, url: string, open: boolean, 
 /**
- * What this report adds to it, a few plain lines.
+ * The note for it: the report's own fields, so only what the user wrote.
  */
 comment: string, };

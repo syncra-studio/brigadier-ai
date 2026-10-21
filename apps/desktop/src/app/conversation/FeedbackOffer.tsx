@@ -6,6 +6,7 @@ import {
   FeedbackResults,
   KindIcon,
   sentLine,
+  sentTitle,
   sentToBrowser,
   stepProgress,
   unsentLine,
@@ -91,7 +92,7 @@ export function FeedbackCard({
         label="Sent to Brigadier’s developers"
         kind="feedbackOffered"
         icon={<Check className="text-success" />}
-        title="Sent. Thank you"
+        title={results ? sentTitle(results, "Sent. Thank you") : "Sent. Thank you"}
         line={results && sentToBrowser(results) ? sentLine(results) : "You can follow them on GitHub."}
       >
         {results && <FeedbackResults results={results} />}
@@ -211,6 +212,7 @@ function asReport(kind: FeedbackKind, title: string, body: string): FeedbackRepo
     today: "",
     wanted: "",
     duplicate: null,
+    related: [],
   };
 }
 

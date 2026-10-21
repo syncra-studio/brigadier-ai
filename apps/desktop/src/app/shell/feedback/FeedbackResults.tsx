@@ -65,6 +65,11 @@ export function sentToBrowser(results: readonly FeedbackResult[]): boolean {
   return results.every((result) => result.outcome === "opened" || result.outcome === "known");
 }
 
+/** A done send's title: thanks once posted; ready to post when it only went to the browser. */
+export function sentTitle(results: readonly FeedbackResult[], posted: string): string {
+  return sentToBrowser(results) ? "Ready to post" : posted;
+}
+
 /** What a done send says under its title: how many, and where they went. */
 export function sentLine(results: readonly FeedbackResult[]): string {
   const one = results.length === 1;

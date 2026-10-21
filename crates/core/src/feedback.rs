@@ -28,6 +28,43 @@ pub const BUG_AREAS: [&str; 11] = [
     "Other",
 ];
 
+/// What each of [`BUG_AREAS`] covers, for the writer: an area is picked only when the bug
+/// plainly sits in it, else "Other".
+const AREA_HINTS: [(&str, &str); 11] = [
+    (
+        "Sessions, workers, landing or review",
+        "a session's conversation, its workers or jobs, landing or reviewing their changes",
+    ),
+    (
+        "Chats",
+        "the Chats (one-off conversations outside a project)",
+    ),
+    ("Overnight runs", "overnight runs"),
+    (
+        "Accounts, usage or routing",
+        "Claude or Codex accounts, usage and limits, which account or model a task goes to",
+    ),
+    ("Computer use", "the agent driving apps on the computer"),
+    ("Built-in browser", "the built-in browser panel"),
+    (
+        "Terminal, files or source",
+        "the terminal, the file tree and editor, git and diffs",
+    ),
+    (
+        "Dictation or read aloud",
+        "dictating into the composer, reading replies aloud",
+    ),
+    (
+        "Settings, onboarding or uninstall",
+        "Settings, the first-launch screens, removing the app",
+    ),
+    ("Build from source", "building Brigadier from its source"),
+    (
+        "Other",
+        "everything else, the app's frame too: the sidebar, tabs, windows, menus, switching projects, the look",
+    ),
+];
+
 /// The most reports one note becomes.
 const MAX_REPORTS: usize = 10;
 /// The most issues one report is checked against, by their text.
@@ -61,8 +98,11 @@ pub struct FeedbackReport {
     pub today: String,
     /// What should happen instead.
     pub wanted: String,
-    /// The existing issue it repeats, when the check was sure: a note goes there instead.
+    /// The open issue of its kind it repeats, when the check was sure: a note goes there instead.
     pub duplicate: Option<FeedbackDuplicate>,
+    /// Issues close to it that it doesn't repeat (closed, another kind, or not the same
+    /// thing): a new issue names them as maybe related.
+    pub related: Vec<u64>,
 }
 
 /// An existing issue a report repeats, and the note for it.
@@ -73,7 +113,7 @@ pub struct FeedbackDuplicate {
     pub title: String,
     pub url: String,
     pub open: bool,
-    /// What this report adds to it, a few plain lines.
+    /// The note for it: the report's own fields, so only what the user wrote.
     pub comment: String,
 }
 
@@ -116,15 +156,48 @@ pub(crate) struct KnownIssue {
     pub title: String,
     pub open: bool,
     pub url: String,
+    /// Its form's kind, by its label or title prefix; `None` when it has neither.
+    pub kind: Option<FeedbackKind>,
+}
+
+impl KnownIssue {
+    /// An issue's kind by its labels (`bug`, `proposal`), else its form's title prefix.
+    pub(crate) fn kind_of<'a>(
+        title: &str,
+        labels: impl IntoIterator<Item = &'a str>,
+    ) -> Option<FeedbackKind> {
+        for label in labels {
+            match label.trim().to_ascii_lowercase().as_str() {
+                "bug" => return Some(FeedbackKind::Bug),
+                "proposal" => return Some(FeedbackKind::Idea),
+                _ => {}
+            }
+        }
+        let title = title.trim_start().to_ascii_lowercase();
+        if title.starts_with("[bug]") {
+            Some(FeedbackKind::Bug)
+        } else if title.starts_with("[proposal]") {
+            Some(FeedbackKind::Idea)
+        } else {
+            None
+        }
+    }
+}
+
+fn kind_word(kind: FeedbackKind) -> &'static str {
+    match kind {
+        FeedbackKind::Bug => "bug",
+        FeedbackKind::Idea => "idea",
+    }
 }
 
 /// The writer's instructions: the note becomes reports, with candidates for the duplicate check.
 pub(crate) fn write_prompt() -> String {
-    let areas = BUG_AREAS
+    let areas = AREA_HINTS
         .iter()
-        .map(|area| format!("\"{area}\""))
+        .map(|(area, covers)| format!("  \"{area}\": {covers}"))
         .collect::<Vec<_>>()
-        .join(", ");
+        .join("\n");
     format!(
         "You turn a note a user wrote about Brigadier (a desktop app that runs Claude Code and \
 Codex sessions) into issue reports for its developers. Reply with JSON only, no code fences: \
@@ -136,15 +209,17 @@ in one report, never split one problem in two.\n\
 - kind: \"bug\" for something Brigadier does wrong, \"idea\" for something missing or a change \
 in how it behaves.\n\
 - title: one plain line naming it, at most 70 characters, no prefix.\n\
-- A bug fills area (exactly one of {areas}), steps (to reproduce), expected and actual (what \
-happened). An idea fills problem (what they're trying to do and what gets in the way), today \
+- A bug fills area, steps (to reproduce), expected and actual (what happened). area is exactly \
+one of the bug form's options below, read literally: the one the bug plainly sits in, by where \
+it shows, not what it might touch. When none fits plainly, \"Other\".\n{areas}\n\
+- An idea fills problem (what they're trying to do and what gets in the way), today \
 (what they do now) and wanted (what should happen instead). Leave the other kind's fields \"\".\n\
 - Use only what the note says, in plain words close to the user's own. Never invent steps, \
-versions, errors or details. What the note doesn't say reads \"Not given.\"; steps it doesn't \
+versions, errors or details, and never take any from the issue list. What the note doesn't say reads \"Not given.\"; steps it doesn't \
 give read \"Not given; see What happened.\"\n\
 - Leave out secrets, emails, tokens and file paths.\n\
-- candidates: the numbers of up to 3 existing issues listed below that may be about the same \
-thing, closest first; [] when none come close."
+- candidates: the numbers of up to 3 existing issues listed below (open or closed) that may be \
+about the same thing, closest first; [] when none come close."
     )
 }
 
@@ -166,17 +241,22 @@ pub(crate) fn write_turn(note: &str, issues: Option<&[KnownIssue]>) -> String {
     text
 }
 
-/// The duplicate check's instructions.
+/// The duplicate check's instructions. It only judges; which match becomes a comment is
+/// [`mark_duplicates`]'s rule (an open issue of the report's own kind).
 pub(crate) const JUDGE_PROMPT: &str = "You decide whether new reports about Brigadier repeat \
 an existing GitHub issue. Reply with JSON only, no code fences: \
-{\"duplicates\":[{\"report\":0,\"issue\":123,\"comment\":\"\"}]}\n\
+{\"matches\":[{\"report\":0,\"issue\":123,\"issueKind\":\"bug\",\"same\":false}]}\n\
 Rules:\n\
-- A report repeats an issue only when the issue is clearly about the same problem or wish, not \
-merely the same part of the app. When unsure, leave the report out: it is filed as a new issue.\n\
-- A closed issue counts too.\n\
-- comment: a short note for that issue in plain words: that it was seen again, and anything \
-the report adds (what happened, when). Leave out secrets, emails, tokens and file paths.\n\
-- Reports that repeat nothing are left out.";
+- List a report with an issue only when the issue is close to it: the same problem or wish, \
+or one very like it. Same part of the app alone is not close. Reports with no close issue are \
+left out.\n\
+- same: true only when the issue describes the very same specific thing: the same behaviour \
+going wrong in the same way, or the same wish. A broader, narrower or neighbouring problem \
+is not the same (a stop that fails during setup is not every stop failing). When unsure, \
+false: the report is filed as a new issue that links this one.\n\
+- A bug is never the same as an idea, nor an idea as a bug.\n\
+- issueKind: \"bug\" when the issue reports something Brigadier does wrong, \"idea\" when it \
+asks for something new or a change.";
 
 /// The duplicate check's turn: each report with the issues it may repeat, their text read.
 pub(crate) fn judge_turn(
@@ -189,8 +269,9 @@ pub(crate) fn judge_turn(
             continue;
         }
         text.push_str(&format!(
-            "Report {index} ({:?}): {}\n",
-            report.kind, report.title
+            "Report {index} ({}): {}\n",
+            kind_word(report.kind),
+            report.title
         ));
         for (label, field) in [
             ("Steps", &report.steps),
@@ -208,8 +289,9 @@ pub(crate) fn judge_turn(
             if let Some((issue, body)) = bodies.iter().find(|(issue, _)| issue.number == *number) {
                 let state = if issue.open { "open" } else { "closed" };
                 let body: String = body.chars().take(ISSUE_BODY_CHARS).collect();
+                let kind = issue.kind.map_or("kind not marked", kind_word);
                 text.push_str(&format!(
-                    "--- issue #{} ({state}): {}\n{body}\n---\n",
+                    "--- issue #{} ({state}, {kind}): {}\n{body}\n---\n",
                     issue.number, issue.title
                 ));
             }
@@ -315,6 +397,7 @@ pub(crate) fn reports_of(
                 today: field(&raw.today, FeedbackKind::Idea),
                 wanted: field(&raw.wanted, FeedbackKind::Idea),
                 duplicate: None,
+                related: Vec::new(),
             };
             (report, candidates)
         })
@@ -325,9 +408,14 @@ pub(crate) fn reports_of(
     Ok(reports)
 }
 
-/// Marks the reports the duplicate check's `reply` says repeat an issue: only an issue that
-/// report was checked against, once per report. An unreadable reply marks none, so every
-/// report is filed new.
+/// Most issues a new one names as maybe related.
+const MAX_RELATED: usize = 3;
+
+/// Marks what the duplicate check's `reply` matched, among the issues each report was checked
+/// against. A report repeats (and becomes a comment on) an issue only when the check says it
+/// is the same thing, the issue is open, and it is of the report's kind: by its label or title
+/// prefix, else as the check read it. Any other match is named as maybe related. An unreadable
+/// reply marks none, so every report is filed new.
 pub(crate) fn mark_duplicates(
     reports: &mut [(FeedbackReport, Vec<u64>)],
     reply: &str,
@@ -336,43 +424,88 @@ pub(crate) fn mark_duplicates(
     #[derive(Deserialize)]
     struct Reply {
         #[serde(default)]
-        duplicates: Vec<Raw>,
+        matches: Vec<Raw>,
     }
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct Raw {
         report: usize,
         issue: u64,
         #[serde(default)]
-        comment: String,
+        issue_kind: String,
+        #[serde(default)]
+        same: bool,
     }
     let Some(reply) = json_in(reply).and_then(|value| serde_json::from_value::<Reply>(value).ok())
     else {
         tracing::warn!("the duplicate check's reply couldn't be read; filing every report new");
         return;
     };
-    for raw in reply.duplicates {
+    for raw in reply.matches {
         let Some((report, candidates)) = reports.get_mut(raw.report) else {
             continue;
         };
-        if report.duplicate.is_some() || !candidates.contains(&raw.issue) {
+        if !candidates.contains(&raw.issue) {
             continue;
         }
         let Some((issue, _)) = bodies.iter().find(|(issue, _)| issue.number == raw.issue) else {
             continue;
         };
-        let comment = cut(&raw.comment, MAX_FIELD);
-        report.duplicate = Some(FeedbackDuplicate {
-            number: issue.number,
-            title: issue.title.clone(),
-            url: issue.url.clone(),
-            open: issue.open,
-            comment: if comment.is_empty() {
-                "Seen again.".to_owned()
-            } else {
-                comment
-            },
-        });
+        let read_kind = match raw.issue_kind.trim().to_ascii_lowercase().as_str() {
+            "bug" => Some(FeedbackKind::Bug),
+            "idea" | "proposal" => Some(FeedbackKind::Idea),
+            _ => None,
+        };
+        let same_kind = issue.kind.or(read_kind) == Some(report.kind);
+        if raw.same && issue.open && same_kind && report.duplicate.is_none() {
+            report.related.retain(|number| *number != issue.number);
+            report.duplicate = Some(FeedbackDuplicate {
+                number: issue.number,
+                title: issue.title.clone(),
+                url: issue.url.clone(),
+                open: issue.open,
+                comment: repeat_note(report),
+            });
+        } else if report.duplicate.as_ref().map(|d| d.number) != Some(issue.number)
+            && !report.related.contains(&issue.number)
+            && report.related.len() < MAX_RELATED
+        {
+            report.related.push(issue.number);
+        }
     }
+}
+
+/// What a repeat says on its issue: that it was seen again, then the report's own fields
+/// (what the user wrote, nothing of the issue's), leaving out what the note didn't give.
+pub(crate) fn repeat_note(report: &FeedbackReport) -> String {
+    let (head, fields) = match report.kind {
+        FeedbackKind::Bug => (
+            "Seen again.",
+            [
+                ("What happened", &report.actual),
+                ("Expected", &report.expected),
+                ("Steps to reproduce", &report.steps),
+            ],
+        ),
+        FeedbackKind::Idea => (
+            "Asked for again.",
+            [
+                ("The problem", &report.problem),
+                ("What they do today", &report.today),
+                ("What should happen instead", &report.wanted),
+            ],
+        ),
+    };
+    let lines: Vec<String> = fields
+        .iter()
+        .map(|(label, value)| (label, value.trim()))
+        .filter(|(_, value)| !value.is_empty() && !value.starts_with("Not given"))
+        .map(|(label, value)| format!("{label}: {value}"))
+        .collect();
+    if lines.is_empty() {
+        return head.to_owned();
+    }
+    format!("{head}\n\n{}", lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -385,6 +518,7 @@ mod tests {
             title: title.into(),
             open: number.is_multiple_of(2),
             url: format!("https://github.com/{FEEDBACK_REPO}/issues/{number}"),
+            kind: None,
         }
     }
 
@@ -402,9 +536,16 @@ mod tests {
             .filter_map(|line| line.trim().strip_prefix("- "))
             .collect();
         assert_eq!(listed, BUG_AREAS);
+        let hinted: Vec<&str> = AREA_HINTS.iter().map(|(area, _)| *area).collect();
+        assert_eq!(
+            hinted, BUG_AREAS,
+            "every option has its hint, in the form's order"
+        );
         for area in BUG_AREAS {
             assert!(write_prompt().contains(&format!("\"{area}\"")), "{area}");
         }
+        // The app's frame, which no option names, is the form's catch-all.
+        assert!(AREA_HINTS[10].1.contains("sidebar"));
     }
 
     #[test]
@@ -453,33 +594,144 @@ mod tests {
         assert!(reports_of(r#"{"reports":[{"kind":"bug","title":"  "}]}"#, &[]).is_err());
     }
 
-    #[test]
-    fn only_a_checked_candidate_becomes_a_duplicate() {
+    type Checked = Vec<(FeedbackReport, Vec<u64>)>;
+
+    /// A bug (report 0) and an idea (report 1), each checked against #12 (open), #13 (closed)
+    /// and #14 (open, an idea by its label).
+    fn checked() -> (Checked, Vec<(KnownIssue, String)>) {
         let reply = r#"{"reports":[
-          {"kind":"bug","title":"A","actual":"x","candidates":[12]},
-          {"kind":"idea","title":"B","problem":"y","candidates":[13]}]}"#;
-        let issues = [issue(12, "Spinning tab"), issue(13, "Pins")];
-        let mut reports = reports_of(reply, &issues).unwrap();
-        let bodies: Vec<_> = issues
+          {"kind":"bug","title":"A","actual":"Stop does nothing.","expected":"Not given.",
+           "steps":"Not given; see What happened.","candidates":[12,13,14]},
+          {"kind":"idea","title":"B","problem":"Diffs are bright.","today":"Not given.",
+           "wanted":"A dark diff.","candidates":[12,13,14]}]}"#;
+        let mut idea = issue(14, "[Proposal]: Dark diffs");
+        idea.kind = KnownIssue::kind_of(&idea.title, ["area: diff"]);
+        let issues = [issue(12, "Spinning tab"), issue(13, "Stop in setup"), idea];
+        let reports = reports_of(reply, &issues).unwrap();
+        let bodies = issues
             .iter()
             .map(|issue| (issue.clone(), "text".to_owned()))
             .collect();
+        (reports, bodies)
+    }
+
+    #[test]
+    fn an_open_issue_of_its_kind_the_check_calls_the_same_takes_a_comment() {
+        let (mut reports, bodies) = checked();
         mark_duplicates(
             &mut reports,
-            r#"{"duplicates":[{"report":0,"issue":13,"comment":"not its candidate"},
-                              {"report":0,"issue":12,"comment":"Seen on 0.2 too."},
-                              {"report":5,"issue":12}]}"#,
+            r#"{"matches":[{"report":0,"issue":12,"issueKind":"bug","same":true},
+                           {"report":0,"issue":99,"issueKind":"bug","same":true},
+                           {"report":5,"issue":12,"same":true}]}"#,
             &bodies,
         );
         let duplicate = reports[0].0.duplicate.as_ref().unwrap();
-        assert_eq!(duplicate.number, 12);
-        assert_eq!(duplicate.comment, "Seen on 0.2 too.");
-        assert!(duplicate.open);
+        assert_eq!((duplicate.number, duplicate.open), (12, true));
+        assert!(reports[0].0.related.is_empty(), "not a candidate: no link");
         assert_eq!(reports[1].0.duplicate, None);
         // An unreadable check marks nothing.
-        let mut fresh = reports_of(reply, &issues).unwrap();
+        let (mut fresh, bodies) = checked();
         mark_duplicates(&mut fresh, "no", &bodies);
         assert!(fresh.iter().all(|(report, _)| report.duplicate.is_none()));
+    }
+
+    #[test]
+    fn a_closed_issue_is_never_commented_on_only_linked() {
+        let (mut reports, bodies) = checked();
+        mark_duplicates(
+            &mut reports,
+            r#"{"matches":[{"report":0,"issue":13,"issueKind":"bug","same":true}]}"#,
+            &bodies,
+        );
+        assert_eq!(reports[0].0.duplicate, None, "a new issue");
+        assert_eq!(reports[0].0.related, [13]);
+    }
+
+    #[test]
+    fn a_bug_never_folds_into_an_idea_nor_an_idea_into_a_bug() {
+        let (mut reports, bodies) = checked();
+        mark_duplicates(
+            &mut reports,
+            // #14 is an idea by its title's prefix, whatever the check read; #12 is unmarked,
+            // so the check's reading of it counts.
+            r#"{"matches":[{"report":0,"issue":14,"issueKind":"bug","same":true},
+                           {"report":1,"issue":12,"issueKind":"bug","same":true},
+                           {"report":1,"issue":12,"issueKind":"bug","same":true}]}"#,
+            &bodies,
+        );
+        assert_eq!(reports[0].0.duplicate, None);
+        assert_eq!(reports[0].0.related, [14]);
+        assert_eq!(reports[1].0.duplicate, None);
+        assert_eq!(reports[1].0.related, [12], "named once");
+        // An unmarked issue the check didn't read a kind for takes no comment either.
+        let (mut reports, bodies) = checked();
+        mark_duplicates(
+            &mut reports,
+            r#"{"matches":[{"report":0,"issue":12,"same":true},
+                           {"report":1,"issue":14,"issueKind":"bug","same":true}]}"#,
+            &bodies,
+        );
+        assert_eq!(reports[0].0.duplicate, None);
+        assert_eq!(reports[0].0.related, [12]);
+        assert_eq!(reports[1].0.duplicate.as_ref().map(|d| d.number), Some(14));
+    }
+
+    #[test]
+    fn a_close_match_that_isnt_the_same_thing_is_linked() {
+        let (mut reports, bodies) = checked();
+        mark_duplicates(
+            &mut reports,
+            r#"{"matches":[{"report":0,"issue":12,"issueKind":"bug","same":false},
+                           {"report":0,"issue":13,"issueKind":"bug"}]}"#,
+            &bodies,
+        );
+        assert_eq!(reports[0].0.duplicate, None);
+        assert_eq!(reports[0].0.related, [12, 13]);
+    }
+
+    #[test]
+    fn the_repeat_note_is_the_reports_own_words_and_nothing_of_the_issue() {
+        let (mut reports, bodies) = checked();
+        mark_duplicates(
+            &mut reports,
+            r#"{"matches":[{"report":0,"issue":12,"issueKind":"bug","same":true,
+                            "comment":"while setup is still running"},
+                           {"report":1,"issue":14,"same":true}]}"#,
+            &bodies,
+        );
+        assert_eq!(
+            reports[0].0.duplicate.as_ref().unwrap().comment,
+            "Seen again.\n\nWhat happened: Stop does nothing.",
+            "what the note didn't give is left out; the check's words never get in"
+        );
+        assert_eq!(
+            reports[1].0.duplicate.as_ref().unwrap().comment,
+            "Asked for again.\n\nThe problem: Diffs are bright.\nWhat should happen instead: A dark diff."
+        );
+    }
+
+    #[test]
+    fn an_issues_kind_is_its_label_else_its_forms_prefix() {
+        assert_eq!(
+            KnownIssue::kind_of("Stop", ["bug", "area: x"]),
+            Some(FeedbackKind::Bug)
+        );
+        assert_eq!(
+            KnownIssue::kind_of("[Bug]: x", ["proposal"]),
+            Some(FeedbackKind::Idea)
+        );
+        assert_eq!(
+            KnownIssue::kind_of("[Proposal]: x", []),
+            Some(FeedbackKind::Idea)
+        );
+        assert_eq!(
+            KnownIssue::kind_of("[bug] x", ["nightly"]),
+            Some(FeedbackKind::Bug)
+        );
+        assert_eq!(
+            KnownIssue::kind_of("The diff has no colour", ["area: x"]),
+            None
+        );
     }
 
     #[test]

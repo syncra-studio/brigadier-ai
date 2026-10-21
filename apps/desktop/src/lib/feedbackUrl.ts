@@ -115,15 +115,17 @@ function reportFields(report: FeedbackReport, details: FeedbackDetails): { id: s
 }
 
 /**
- * A report's issue body, as its form would render it: the note on where it came from, then
- * each field under its heading ("_No response_" when empty, as GitHub writes it). The forms'
- * "Before you file" boxes are left out: the reporter didn't tick them.
+ * A report's issue body, as its form would render it: the note on where it came from (and the
+ * issues it's close to but doesn't repeat), then each field under its heading ("_No response_"
+ * when empty, as GitHub writes it). The forms' "Before you file" boxes are left out: the
+ * reporter didn't tick them.
  */
 export function reportBody(report: FeedbackReport, details: FeedbackDetails, searched: boolean): string {
   const sections = reportFields(report, details).map(
     ({ label, value }) => `### ${label}\n\n${value.trim() || "_No response_"}`,
   );
-  return [filedFrom(searched), ...sections].join("\n\n");
+  const related = report.related.length ? [`Maybe related: ${report.related.map((number) => `#${number}`).join(", ")}`] : [];
+  return [filedFrom(searched), ...related, ...sections].join("\n\n");
 }
 
 /** The comment a repeat adds to the issue it repeats, with the versions it was seen on. */
