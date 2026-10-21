@@ -28,6 +28,7 @@ export * from "./NotificationsSection";
 export * from "./OpenAtLoginRow";
 export * from "./PowerSection";
 export * from "./ProfilePick";
+export * from "./RankingView";
 export * from "./SidebarClosedPicture";
 export * from "./SiteRow";
 export * from "./TickRow";

@@ -305,6 +305,19 @@ table is the current one.
 | Conversation (app.pen) | `#270 Notices` | `app/conversation/Notices.tsx` | `Notices` | |
 | Conversation (app.pen) | `#271 AboveComposer` | `app/conversation/AboveComposer.tsx` | `AboveComposer` | |
 | Conversation (app.pen) | `#272 AboveComposer › inline: archived bar` | `app/conversation/ArchivedBar.tsx` | `ArchivedBar` | |
+| Settings (settings.pen) | `#738 RankingView` | `app/settings/RankingView.tsx` | `RankingView` | |
+| Settings (settings.pen) | `#773 More › kind of work row` | `app/settings/routing/KindOfWorkRow.tsx` | `KindOfWorkRow` | |
+| Settings (settings.pen) | `#774 More › loading line` | `app/settings/routing/LoadingLine.tsx` | `LoadingLine` | |
+| Settings (settings.pen) | `#775 More › strength row` | `app/settings/routing/StrengthRow.tsx` | `StrengthRow` | |
+| Settings (settings.pen) | `#776 More › ratings footer` | `app/settings/routing/RatingsFooter.tsx` | `RatingsFooter` | |
+| Settings (settings.pen) | `#777 More › steps list` | `app/settings/routing/StepsList.tsx` | `StepsList` | |
+| Settings (settings.pen) | `#778 MoreRowHead` | `app/settings/routing/MoreRowHead.tsx` | `MoreRowHead` | |
+| Settings (settings.pen) | `#785 KindRow` | `app/settings/routing/KindRow.tsx` | `KindRow` | |
+| Settings (settings.pen) | `#786 NowPick` | `app/settings/routing/NowPick.tsx` | `NowPick` | |
+| Settings (settings.pen) | `#787 WhoPicks` | `app/settings/routing/WhoPicks.tsx` | `WhoPicks` | |
+| Settings (settings.pen) | `#788 AutoPicks` | `app/settings/routing/AutoPicks.tsx` | `AutoPicks` | |
+| Settings (settings.pen) | `#790 OrderList` | `app/settings/routing/OrderList.tsx` | `OrderList` | |
+| Settings (settings.pen) | `#791 OrderPlace` | `app/settings/routing/OrderPlace.tsx` | `OrderPlace` | |
 
 ## Icons
 
