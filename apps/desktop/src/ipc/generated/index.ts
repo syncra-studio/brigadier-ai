@@ -227,6 +227,7 @@ export type { MachineStepKind } from "./MachineStepKind";
 export type { MachineStepReason } from "./MachineStepReason";
 export type { McpServerState } from "./McpServerState";
 export type { McpServerView } from "./McpServerView";
+export type { McpSignInStatus } from "./McpSignInStatus";
 export type { McpStatus } from "./McpStatus";
 export type { MemoryChange } from "./MemoryChange";
 export type { Mention } from "./Mention";

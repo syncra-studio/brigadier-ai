@@ -2568,6 +2568,22 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetIntegrations { project_id } => Response::GetIntegrations {
             integrations: daemon.sessions.integrations_view(project_id).await?,
         },
+        Request::SignInMcpServer {
+            server_id,
+            project_id,
+        } => Response::SignInMcpServer {
+            id: daemon
+                .sessions
+                .sign_in_mcp_server(
+                    &server_id,
+                    project_id,
+                    std::sync::Arc::new(crate::connect::open_in_browser),
+                )
+                .await?,
+        },
+        Request::GetMcpSignIn { id } => Response::GetMcpSignIn {
+            status: daemon.sessions.mcp_sign_in(&id)?,
+        },
         Request::RemoveAccount { id } => Response::RemoveAccount {
             settings: Box::new(heap(|| daemon.sessions.remove_account(&id)).await?),
         },

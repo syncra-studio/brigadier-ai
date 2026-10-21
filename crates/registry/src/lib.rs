@@ -248,7 +248,7 @@ pub struct OAuthClient {
 }
 
 /// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum CodexStore {
     /// The Keychain, else `$CODEX_HOME/.credentials.json` (its default).
     #[default]

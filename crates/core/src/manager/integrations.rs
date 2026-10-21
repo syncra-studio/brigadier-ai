@@ -13,6 +13,10 @@
 //!
 //! Values of a server's environment and headers go only into the CLI's environment (or a Codex
 //! thread's config, which stays off disk) and the redactor: the view shows their names.
+//!
+//! A remote server that signs in with OAuth reaches a worker whose agent's own sign-in doesn't
+//! serve it through Brigadier's sign-in proxy ([`super::mcp_auth`]), with another agent's
+//! stored sign-in or Brigadier's own, whether the task named it or its agent has it.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -20,12 +24,14 @@ use std::sync::Arc;
 
 use brigadier_providers::{McpServer, McpTransport, ProviderKind, SwitchedOff};
 use brigadier_registry::{
-    Agent, Catalog, FindError, Registry, Roots, Server, Session, SignIn, Transport,
+    Agent, Catalog, FindError, OAuthClient, Owner, Probe, Registry, Roots, Secret, Server, Session,
+    SignIn, SignInStores, Transport, identity, owner_agent,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::SessionManager;
+use super::mcp_auth::{Homes, McpSignInStatus, Place, Prober, Route};
 use crate::model::{ConversationId, ProjectId, Settings};
 use crate::{Error, Result};
 
@@ -130,9 +136,11 @@ pub enum SignInState {
     Native,
     /// The sign-in another agent stored can serve it.
     ReusableFrom { agent: ProviderKind },
-    /// It needs one sign-in in Brigadier, which then serves every agent.
+    /// Brigadier's own sign-in serves it, to every agent.
     InBrigadier,
-    /// Not known yet.
+    /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
+    Needed,
+    /// Not known: a store couldn't be read without asking the user, or they said no.
     Unknown,
 }
 
@@ -147,6 +155,7 @@ impl From<SignIn> for SignInState {
                 },
             },
             SignIn::InBrigadier => Self::InBrigadier,
+            SignIn::Needed => Self::Needed,
             SignIn::Unknown => Self::Unknown,
         }
     }
@@ -231,11 +240,12 @@ fn server_native_to(
         .collect()
 }
 
-/// Settings' view of `catalog`, read for `project`.
+/// Settings' view of `catalog`, read for `project`, with the sign-ins `stores` read.
 pub(crate) fn view(
     catalog: &Catalog,
     project: Option<&Path>,
     settings: &Settings,
+    stores: &dyn SignInStores,
 ) -> IntegrationsView {
     let names = |pairs: &[(String, brigadier_registry::Secret)]| {
         pairs.iter().map(|(name, _)| name.clone()).collect()
@@ -268,7 +278,7 @@ pub(crate) fn view(
             sign_in: {
                 let state = |provider| {
                     catalog
-                        .sign_in(server, &worker_session(provider, project))
+                        .sign_in(server, &worker_session(provider, project), stores)
                         .map(SignInState::from)
                 };
                 state(ProviderKind::Claude)
@@ -403,6 +413,23 @@ pub(crate) struct Shared {
     /// The plugin folder of skills its agent doesn't find by itself.
     pub skills: Option<PathBuf>,
     pub switched_off: SwitchedOff,
+    /// Servers of [`Self::servers`] served through Brigadier's sign-in proxy, once their
+    /// routes are made.
+    pub proxied: Vec<Proxied>,
+}
+
+/// A server a worker reaches through the sign-in proxy.
+#[derive(Debug)]
+pub(crate) struct Proxied {
+    /// Its place in [`Shared::servers`].
+    pub index: usize,
+    /// Where the sign-in that serves it is kept.
+    pub place: Place,
+    pub url: String,
+    /// Its configured headers but `Authorization`.
+    pub headers: Vec<(String, Secret)>,
+    pub client: Option<OAuthClient>,
+    pub homes: Homes,
 }
 
 /// What of its agent's own setup `session` goes without: what the user switched off.
@@ -457,15 +484,114 @@ pub(crate) fn switched_off(
     off
 }
 
+/// Where the sign-in that serves `server` to `session`'s agent is kept when it isn't the
+/// agent's own: another agent's stored sign-in, or Brigadier's.
+fn reused_sign_in(
+    catalog: &Catalog,
+    server: &Server,
+    session: &Session<'_>,
+    stores: &Prober<'_>,
+) -> Option<Place> {
+    match catalog.sign_in_from(server, session, stores)? {
+        (SignIn::ReusableFrom(agent), Some(entry)) => stores.place(agent.into(), entry),
+        (SignIn::InBrigadier, _) => stores.place(Owner::Brigadier, server),
+        _ => None,
+    }
+}
+
+/// Whether another sign-in than its agent's own could serve `server`, as far as is known
+/// without asking the user: Brigadier holds one, or another agent's entry is the same server.
+fn may_reuse(catalog: &Catalog, server: &Server, quiet: &Prober<'_>) -> bool {
+    let id = identity(&server.transport);
+    quiet.probe(Owner::Brigadier, server) == Probe::Usable
+        || catalog.servers.iter().any(|other| {
+            other.id != server.id
+                && other.signs_in
+                && owner_agent(other.source).is_some()
+                && identity(&other.transport) == id
+        })
+}
+
+/// `server` as a worker gets it under `name`; through the sign-in proxy with the sign-in at
+/// `place`, once its route is made.
+fn give(shared: &mut Shared, name: String, server: &Server, place: Option<(Place, &Homes)>) {
+    let (transport, env) = match &server.transport {
+        Transport::Stdio {
+            command, args, env, ..
+        } => (
+            McpTransport::Stdio {
+                command: PathBuf::from(command),
+                args: args.clone(),
+                cwd: server.transport.working_dir().map(Path::to_owned),
+            },
+            env,
+        ),
+        Transport::Http { url, headers } => {
+            if let Some((place, homes)) = place {
+                shared.proxied.push(Proxied {
+                    index: shared.servers.len(),
+                    place,
+                    url: url.clone(),
+                    headers: headers
+                        .iter()
+                        .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
+                        .cloned()
+                        .collect(),
+                    client: server.oauth.clone(),
+                    homes: homes.clone(),
+                });
+            }
+            (McpTransport::Http { url: url.clone() }, headers)
+        }
+    };
+    let env: Vec<(String, String)> = env
+        .iter()
+        .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+        .collect();
+    shared.secrets.extend(
+        env.iter()
+            .map(|(_, value)| value.clone())
+            .filter(|v| !v.is_empty()),
+    );
+    shared.servers.push(McpServer {
+        name,
+        transport,
+        env,
+        tool_timeout_secs: None,
+        trusted: false,
+        always_load: false,
+        prompt_tools: Vec::new(),
+    });
+}
+
+/// `name`, or the first `name-<n>` not in `taken`, then taken.
+fn free_name(taken: &mut HashSet<String>, name: &str) -> String {
+    let mut free = name.to_owned();
+    let mut n = 2;
+    while taken.contains(&free) {
+        free = format!("{name}-{n}");
+        n += 1;
+    }
+    taken.insert(free.clone());
+    free
+}
+
 /// The servers `ids` name that `session`'s agent doesn't have by itself, as it gets them: a
 /// name that is taken (by Brigadier's own, one of the agent's, or another named one) gets a
-/// number. Values go in [`Shared::secrets`] too.
+/// number. Values go in [`Shared::secrets`] too. A server that signs in goes through the
+/// sign-in proxy when another stored sign-in serves it, and so does one of the agent's own
+/// that its own sign-in doesn't serve: Codex gets it under its own name (the entry the thread's
+/// config gives wins over the user's), and Claude, which keeps its own entry over a given one
+/// of the same name, goes without its own and gets it under a new name. `quiet` reads never
+/// ask the user; `asking` ones may.
 fn named_servers(
     catalog: &Catalog,
     ids: &[String],
     session: &Session<'_>,
     settings: &Settings,
     shared: &mut Shared,
+    quiet: &Prober<'_>,
+    asking: &Prober<'_>,
 ) {
     let mut native: Vec<&Server> = catalog
         .servers
@@ -493,46 +619,40 @@ fn named_servers(
         {
             continue;
         }
-        let mut name = server.name.clone();
-        let mut n = 2;
-        while taken.contains(&name) {
-            name = format!("{}-{n}", server.name);
-            n += 1;
-        }
-        taken.insert(name.clone());
-        let (transport, env) = match &server.transport {
-            Transport::Stdio {
-                command, args, env, ..
-            } => (
-                McpTransport::Stdio {
-                    command: PathBuf::from(command),
-                    args: args.clone(),
-                    cwd: server.transport.working_dir().map(Path::to_owned),
-                },
-                env,
-            ),
-            // A bearer token from a stored sign-in would be one more header here, its value
-            // in the CLI's environment under an alias like every other.
-            Transport::Http { url, headers } => (McpTransport::Http { url: url.clone() }, headers),
-        };
-        let env: Vec<(String, String)> = env
-            .iter()
-            .map(|(name, value)| (name.clone(), value.expose().to_owned()))
-            .collect();
-        shared.secrets.extend(
-            env.iter()
-                .map(|(_, value)| value.clone())
-                .filter(|v| !v.is_empty()),
-        );
-        shared.servers.push(McpServer {
+        let name = free_name(&mut taken, &server.name);
+        let place = server
+            .signs_in
+            .then(|| reused_sign_in(catalog, server, session, asking))
+            .flatten();
+        give(
+            shared,
             name,
-            transport,
-            env,
-            tool_timeout_secs: None,
-            trusted: false,
-            always_load: false,
-            prompt_tools: Vec::new(),
-        });
+            server,
+            place.map(|place| (place, asking.homes())),
+        );
+    }
+    let mut seen = HashSet::new();
+    for server in native {
+        if !server.signs_in
+            || RESERVED.contains(&server.name.as_str())
+            || !seen.insert(server.name.as_str())
+            || !may_reuse(catalog, server, quiet)
+        {
+            continue;
+        }
+        let Some(place) = reused_sign_in(catalog, server, session, asking) else {
+            continue;
+        };
+        let name = match session.agent {
+            Agent::Codex => server.name.clone(),
+            Agent::Claude => {
+                if !shared.switched_off.servers.contains(&server.name) {
+                    shared.switched_off.servers.push(server.name.clone());
+                }
+                free_name(&mut taken, &server.name)
+            }
+        };
+        give(shared, name, server, Some((place, asking.homes())));
     }
 }
 
@@ -792,12 +912,74 @@ impl SessionManager {
             }
             None => None,
         };
-        let (registry, settings) = (self.registry(), self.core.settings());
+        let (registry, settings, auth) =
+            (self.registry(), self.core.settings(), self.mcp_auth.clone());
         super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
-            Ok(view(&catalog, repo.as_deref(), &settings))
+            // Settings polls: its reads never ask the user.
+            let stores = auth.prober(registry.roots(), catalog.codex_store, true);
+            Ok(view(&catalog, repo.as_deref(), &settings, &stores))
         })
         .await
+    }
+
+    /// Starts a sign-in in Brigadier to the server `server_id` (of `project`'s catalog, when
+    /// given and trusted), in the user's browser (`open`): its id at once, for
+    /// [`Self::mcp_sign_in`]. The sign-in then serves every agent's workers.
+    pub async fn sign_in_mcp_server(
+        &self,
+        server_id: &str,
+        project: Option<ProjectId>,
+        open: Arc<dyn Fn(&str) + Send + Sync>,
+    ) -> Result<String> {
+        let repo = match project {
+            Some(id) => {
+                let project = self.core.project(&id)?;
+                let repo = project
+                    .repos
+                    .first()
+                    .map(|repo| repo.path.clone())
+                    .ok_or_else(|| Error::Invalid("the project has no repository".into()))?;
+                if !project.counts_trusted(&repo) {
+                    return Err(Error::Invalid(
+                        "the project's folder isn't trusted: its servers aren't read".into(),
+                    ));
+                }
+                Some(PathBuf::from(repo))
+            }
+            None => None,
+        };
+        let registry = self.registry();
+        let server_id = server_id.to_owned();
+        let (server, homes) = super::blocking(move || {
+            let catalog = registry.catalog(repo.as_deref());
+            let server = catalog
+                .server(&server_id)
+                .cloned()
+                .ok_or_else(|| Error::Invalid(format!("no MCP server `{server_id}` here")))?;
+            if !server.signs_in {
+                return Err(Error::Invalid(format!(
+                    "`{}` doesn't sign in with OAuth",
+                    server.name
+                )));
+            }
+            Ok((server, Homes::new(registry.roots())))
+        })
+        .await?;
+        let auth = self.mcp_auth.clone();
+        let id = auth.begin_sign_in();
+        let running = id.clone();
+        self.spawn(async move {
+            auth.sign_in(&running, &server, homes, &*open).await;
+        });
+        Ok(id)
+    }
+
+    /// How sign-in `id` ([`Self::sign_in_mcp_server`]) went.
+    pub fn mcp_sign_in(&self, id: &str) -> Result<McpSignInStatus> {
+        self.mcp_auth
+            .sign_in_status(id)
+            .ok_or_else(|| Error::Invalid(format!("no sign-in `{id}`")))
     }
 
     /// The ids of the servers a task's `integrations` name, in the session's trusted project.
@@ -820,7 +1002,8 @@ impl SessionManager {
     }
 
     /// What a worker of `provider` starting in `cwd` gets of the catalog: its task's named
-    /// servers, the shared skills, and the switches. `checkout`: its worktree.
+    /// servers, the shared skills, and the switches. `checkout`: its worktree. `grant`: its
+    /// key, the only one its routes through the sign-in proxy take.
     pub(crate) async fn worker_shared(
         &self,
         conversation: &ConversationId,
@@ -828,11 +1011,13 @@ impl SessionManager {
         provider: ProviderKind,
         cwd: &Path,
         checkout: Option<&Path>,
+        grant: &str,
     ) -> Shared {
-        let (registry, settings, repo) = (
+        let (registry, settings, repo, auth) = (
             self.registry(),
             self.core.settings(),
             self.trusted_repo(conversation),
+            self.mcp_auth.clone(),
         );
         let (ids, cwd, data_dir) = (ids.to_vec(), cwd.to_owned(), self.data_dir.clone());
         let in_checkout = checkout == Some(cwd.as_path());
@@ -848,7 +1033,17 @@ impl SessionManager {
                 switched_off: switched_off(&catalog, &session, &settings),
                 ..Shared::default()
             };
-            named_servers(&catalog, &ids, &session, &settings, &mut shared);
+            let quiet = auth.prober(registry.roots(), catalog.codex_store, true);
+            let asking = auth.prober(registry.roots(), catalog.codex_store, false);
+            named_servers(
+                &catalog,
+                &ids,
+                &session,
+                &settings,
+                &mut shared,
+                &quiet,
+                &asking,
+            );
             shared.skills =
                 shared_skills(&catalog, &session, &settings, &data_dir).unwrap_or_else(|err| {
                     tracing::warn!(error = %err, "the shared skills' folder couldn't be made");
@@ -857,7 +1052,30 @@ impl SessionManager {
             Ok(shared)
         })
         .await;
-        made.unwrap_or_default()
+        let mut shared = made.unwrap_or_default();
+        for proxied in std::mem::take(&mut shared.proxied) {
+            let route = Route {
+                grant: grant.to_owned(),
+                place: proxied.place,
+                url: proxied.url,
+                headers: proxied.headers,
+                client: proxied.client,
+                homes: proxied.homes,
+            };
+            match self.mcp_auth.route(route).await {
+                Ok(url) => {
+                    let server = &mut shared.servers[proxied.index];
+                    server.transport = McpTransport::Http { url };
+                    server.env = vec![("Authorization".into(), format!("Bearer {grant}"))];
+                }
+                Err(reason) => tracing::warn!(
+                    server = %shared.servers[proxied.index].name,
+                    %reason,
+                    "a reused MCP sign-in can't be served: the server goes as configured"
+                ),
+            }
+        }
+        shared
     }
 
     /// What a thread of `provider` starting in `cwd` goes without of its agent's own setup.

@@ -1230,6 +1230,18 @@ pub enum Request {
     GetIntegrations {
         project_id: Option<ProjectId>,
     },
+    /// Signs in to the remote MCP server `serverId` (an id of [`Request::GetIntegrations`]'s
+    /// catalog, of `projectId`'s when given; a project the user doesn't trust is refused) once
+    /// in Brigadier, in the user's browser. Answers at once with the sign-in's id; how it went
+    /// comes from [`Request::GetMcpSignIn`]. The sign-in then serves every agent's workers.
+    SignInMcpServer {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
+    /// How sign-in `id` ([`Request::SignInMcpServer`]) went. Never carries a token.
+    GetMcpSignIn {
+        id: String,
+    },
     /// Adds an extra account of `provider` (a CLI home of its own) and opens the terminal
     /// that signs it in: the CLI's own sign-in, run with that home. Its output streams like
     /// [`Request::OpenTerminal`]'s; the account is checked again when it ends.
@@ -1938,6 +1950,12 @@ pub enum Response {
     },
     GetIntegrations {
         integrations: brigadier_core::manager::integrations::IntegrationsView,
+    },
+    SignInMcpServer {
+        id: String,
+    },
+    GetMcpSignIn {
+        status: brigadier_core::manager::McpSignInStatus,
     },
     AddAccount {
         account: AccountEntry,

@@ -1894,6 +1894,7 @@ impl SessionManager {
                 provider,
                 &cwd,
                 workspace.worktree.as_deref(),
+                &worker_grant,
             )
             .await;
         secret_values.extend(shared.secrets);
