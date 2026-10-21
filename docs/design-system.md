@@ -192,6 +192,11 @@ table is the current one.
 | App shell (app.pen) | `#975 TabMenu` | `app/shell/TabMenu.tsx` | `TabMenu` | |
 | App shell (app.pen) | `#950 HelpMenu` | `app/shell/HelpMenu.tsx` | `HelpMenu` | |
 | App shell (app.pen) | `#951 UpdateRow` | `app/shell/UpdateRow.tsx` | `UpdateRow` | |
+| App shell (app.pen) | `#891 CloneView` | `app/shell/dialogs/CloneView.tsx` | `CloneView` | the Add project parts it shares are in `app/shell/dialogs/addProjectParts.tsx` |
+| App shell (app.pen) | `#893 NewRepoView` | `app/shell/dialogs/NewRepoView.tsx` | `NewRepoView` | |
+| App shell (app.pen) | `#912 Field` | `app/shell/dialogs/Field.tsx` | `Field` | |
+| App shell (app.pen) | `#903 RemoveForm` | `app/shell/dialogs/RemoveForm.tsx` | `RemoveForm` | its head and actions row are in `app/shell/dialogs/removeProjectParts.tsx` |
+| App shell (app.pen) | `#904 Removed` | `app/shell/dialogs/Removed.tsx` | `Removed` | |
 | Side panel (app.pen) | `#412 AgentRow` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
 | Side panel (app.pen) | `#414 WorkerList` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
 | Side panel (app.pen) | `#416 WorkerDetail › worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |

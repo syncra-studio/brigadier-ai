@@ -1,21 +1,21 @@
 import {
   useEffect,
   useEffectEvent,
-  useId,
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type KeyboardEvent,
-  type ReactNode,
   type RefObject,
 } from "react";
 
-import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
+import { CancelButton, DEFAULT_PARENT, Footer, Header } from "@/app/shell/dialogs/addProjectParts";
+import { CloneView } from "@/app/shell/dialogs/CloneView";
+import { ErrorLine, errorText, PROJECT_DIALOG_CARD } from "@/app/shell/dialogs/fields";
+import { NewRepoView } from "@/app/shell/dialogs/NewRepoView";
 import { SettingsSearch } from "@/components/shared";
-import { ArrowLeft, Check, Folder, FolderOpen, Link, Plus, Spinner, X } from "@/components/icons";
+import { Check, Folder, FolderOpen, Link, Plus, Spinner } from "@/components/icons";
 import { Badge, Button } from "@/components/controls";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
+import { Dialog, DialogContent } from "@/components/overlays";
 import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
 import type { FolderCheck, RepoSuggestion } from "@/ipc/generated";
@@ -25,21 +25,16 @@ import {
   addProject,
   checkFolder,
   closeAddProject,
-  cloneProject,
   findRepos,
   showProject,
   useAddProject,
 } from "@/state/addProject";
-import { toast } from "@/state/toasts";
 
 /*
  * Add project, laid out to the user's design and drawn with the app's dialog parts: pick a git
  * repository found on this computer (or choose a folder), or clone one from a URL, or start a
  * new one.
  */
-
-/** Where clones and new repositories go unless the user changes it (made when missing). */
-const DEFAULT_PARENT = "~/code/";
 
 export function AddProjectDialog() {
   const open = useAddProject((s) => s.open);
@@ -88,109 +83,6 @@ function AddProject({ initialPath }: { initialPath: string }) {
 }
 
 // ----- the parts -----------------------------------------------------------------------------
-
-/** The title, its line and the close button; with `onBack`, a back arrow before them. */
-function Header({ title, line, onBack }: { title: string; line: string; onBack?: (() => void) | undefined }) {
-  return (
-    <div className={cn("flex gap-3.5 pt-6 pr-5 pb-5", onBack ? "pl-6" : "pl-7")}>
-      {onBack && (
-        <Button variant="ghost" size="icon-sm" className="text-toolbar-foreground" aria-label="Back" onClick={onBack}>
-          <ArrowLeft />
-        </Button>
-      )}
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <DialogTitle className={PROJECT_DIALOG_TITLE}>{title}</DialogTitle>
-        <DialogDescription className="leading-4.25">{line}</DialogDescription>
-      </div>
-      <DialogClose asChild>
-        <Button variant="ghost" size="icon-sm" className="text-toolbar-foreground" aria-label="Close">
-          <X />
-        </Button>
-      </DialogClose>
-    </div>
-  );
-}
-
-/** The bar along the bottom: `start` on the left, Cancel and the main button on the right. */
-function Footer({ start, children }: { start?: ReactNode; children: ReactNode }) {
-  return (
-    // The top line sits inside the bar's 60px, as drawn: it takes a pixel of the top padding.
-    <div className="border-divider flex items-center gap-2 border-t pt-3.75 pr-6 pb-4 pl-5">
-      <div className="flex min-w-0 flex-1 items-center gap-1">{start}</div>
-      {children}
-    </div>
-  );
-}
-
-function CancelButton({ label = "Cancel" }: { label?: string }) {
-  return (
-    <Button variant="ghost" size="sm" onClick={closeAddProject}>
-      {label}
-    </Button>
-  );
-}
-
-/** A field's label, with an optional note on the right. */
-function FieldLabel({ htmlFor, label, aside }: { htmlFor?: string; label: string; aside?: string | undefined }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <label htmlFor={htmlFor} className="text-foreground text-xs leading-3.75 font-medium">
-        {label}
-      </label>
-      {aside && <span className="text-muted-foreground text-xs leading-3.75">{aside}</span>}
-    </div>
-  );
-}
-
-/** A 42-high box for a field, in the app's field look (and the Input's when invalid): its icon, then its content. */
-const BOX =
-  "bg-muted/60 focus-within:bg-background focus-within:border-ring rounded-control flex h-10.5 items-center gap-2.5 border border-transparent transition-colors [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-muted-foreground has-aria-invalid:border-destructive/60 has-[input:disabled]:opacity-50";
-
-/** A field's own input inside its box. */
-const BOX_INPUT = "text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent font-mono text-xs outline-none";
-
-/**
- * Save to: the folder it goes in (`parent`, dimmer) and its own name a step brighter, with
- * Change… to choose another parent folder.
- */
-function SaveTo({
-  parent,
-  name,
-  aside,
-  disabled,
-  onParent,
-  onError,
-}: {
-  parent: string;
-  name: string;
-  aside?: string;
-  disabled?: boolean;
-  onParent: (parent: string) => void;
-  onError: (error: string) => void;
-}) {
-  const change = () => {
-    pickFolder(parent)
-      .then((picked) => {
-        if (picked) onParent(`${shortPath(picked).replace(/[/\\]+$/, "")}/`);
-      })
-      .catch((cause: unknown) => onError(errorText(cause)));
-  };
-  return (
-    <div className="flex flex-col gap-2">
-      <FieldLabel label="Save to" aside={aside} />
-      <div className={cn(BOX, "pr-1.5 pl-3")}>
-        <Folder />
-        <p data-slot="save-to" className="flex min-w-0 flex-1 font-mono text-xs">
-          <span className="text-muted-foreground min-w-0 truncate">{parent}</span>
-          <span className="text-foreground shrink-0">{name}</span>
-        </p>
-        <Button variant="outline" size="sm" disabled={disabled} onClick={change}>
-          Change…
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 /** The folder a path ends in, and the folder it is in ("~/code/" and "app" for ~/code/app). */
 function splitPath(path: string): { parent: string; name: string } {
@@ -476,203 +368,5 @@ function RepoRow({
         {chosen && <Check className="size-icon-xs" />}
       </span>
     </button>
-  );
-}
-
-// ----- Clone from URL ------------------------------------------------------------------------
-
-/** `owner/name` is a GitHub repository; anything else is taken as typed. */
-function cloneUrl(typed: string): string {
-  const url = typed.trim();
-  return /^[\w.-]+\/[\w.-]+$/.test(url) ? `https://github.com/${url.replace(/\.git$/, "")}.git` : url;
-}
-
-/** The folder a clone of `url` goes in: its last path part, without `.git`. */
-function folderFromUrl(url: string): string {
-  const last = url.trim().replace(/[/\\]+$/, "").split(/[/:\\]/).pop() ?? "";
-  return last.replace(/\.git$/, "");
-}
-
-function CloneView({ onBack }: { onBack: () => void }) {
-  const id = useId();
-  const [url, setUrl] = useState("");
-  const [parent, setParent] = useState(DEFAULT_PARENT);
-  const [error, setError] = useState<string | null>(null);
-  // The error is about the URL itself: its field shows it.
-  const [invalid, setInvalid] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  const folder = folderFromUrl(url);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (busy) return;
-    if (!url.trim()) {
-      setError("Paste the repository's URL.");
-      setInvalid(true);
-      return;
-    }
-    if (!folder) {
-      setError("That URL doesn't name a repository.");
-      setInvalid(true);
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    // The clone goes on if the dialog closes; its outcome then shows as a toast.
-    try {
-      const project = await cloneProject(cloneUrl(url), parent, folder, "");
-      if (mounted.current) closeAddProject();
-      showProject(project.id);
-      toast(`Cloned ${project.name}`);
-    } catch (cause) {
-      if (mounted.current) {
-        setError(errorText(cause));
-        setBusy(false);
-      } else {
-        toast(`Could not clone ${folder}: ${errorText(cause)}`, { tone: "error" });
-      }
-    }
-  };
-
-  return (
-    <form onSubmit={(event) => void submit(event)} className="flex flex-col">
-      <Header
-        title="Clone from URL"
-        line="Paste a link to a git repository. We'll copy it to your Mac and add it."
-        onBack={busy ? undefined : onBack}
-      />
-      <div className="flex flex-col gap-5.5 px-7 pt-1 pb-7">
-        <div className="flex flex-col gap-2">
-          <FieldLabel htmlFor={`${id}-url`} label="Repository URL" />
-          <div className={cn(BOX, "px-3")}>
-            <Link />
-            <input
-              id={`${id}-url`}
-              value={url}
-              autoFocus
-              spellCheck={false}
-              autoComplete="off"
-              disabled={busy}
-              placeholder="https://github.com/owner/repo.git"
-              aria-invalid={invalid || undefined}
-              onChange={(event) => {
-                setUrl(event.target.value);
-                setError(null);
-                setInvalid(false);
-              }}
-              className={BOX_INPUT}
-            />
-          </div>
-        </div>
-        <SaveTo
-          parent={parent}
-          name={folder}
-          aside="Named after the repository"
-          disabled={busy}
-          onParent={setParent}
-          onError={setError}
-        />
-        <ErrorLine error={error} className="leading-4.25" />
-      </div>
-      <Footer>
-        <CancelButton label={busy ? "Close" : "Cancel"} />
-        <Button size="sm" type="submit" disabled={busy}>
-          {busy && <Spinner className="size-icon-xs animate-spin" />}
-          {busy ? "Cloning…" : "Clone and add"}
-        </Button>
-      </Footer>
-    </form>
-  );
-}
-
-// ----- New repository ------------------------------------------------------------------------
-
-function NewRepoView({
-  initialParent,
-  initialName,
-  onBack,
-}: {
-  initialParent: string;
-  initialName: string;
-  onBack: () => void;
-}) {
-  const id = useId();
-  const [name, setName] = useState(initialName);
-  const [parent, setParent] = useState(initialParent);
-  const [error, setError] = useState<string | null>(null);
-  // The error is about the name itself: its field shows it.
-  const [invalid, setInvalid] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const folder = name.trim();
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (busy) return;
-    if (!folder || folder === "." || folder === ".." || /[/\\]/.test(folder)) {
-      setError(folder ? `"${folder}" can't be a folder name.` : "Name the repository.");
-      setInvalid(true);
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const project = await addProject(`${parent}${folder}`, "", true);
-      closeAddProject();
-      showProject(project.id);
-    } catch (cause) {
-      setError(errorText(cause));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form onSubmit={(event) => void submit(event)} className="flex flex-col">
-      <Header
-        title="New repository"
-        line="Name it and choose where it goes. Brigadier starts git in it and adds it."
-        onBack={onBack}
-      />
-      <div className="flex flex-col gap-5.5 px-7 pt-1 pb-7">
-        <div className="flex flex-col gap-2">
-          <FieldLabel htmlFor={`${id}-name`} label="Name" />
-          <div className={cn(BOX, "px-3")}>
-            <Plus />
-            <input
-              id={`${id}-name`}
-              value={name}
-              autoFocus
-              spellCheck={false}
-              autoComplete="off"
-              maxLength={200}
-              disabled={busy}
-              placeholder="my-project"
-              aria-invalid={invalid || undefined}
-              onChange={(event) => {
-                setName(event.target.value);
-                setError(null);
-                setInvalid(false);
-              }}
-              className={BOX_INPUT}
-            />
-          </div>
-        </div>
-        <SaveTo parent={parent} name={folder} disabled={busy} onParent={setParent} onError={setError} />
-        <ErrorLine error={error} className="leading-4.25" />
-      </div>
-      <Footer>
-        <CancelButton />
-        <Button size="sm" type="submit" disabled={busy}>
-          {busy && <Spinner className="size-icon-xs animate-spin" />}
-          Create and add
-        </Button>
-      </Footer>
-    </form>
   );
 }
