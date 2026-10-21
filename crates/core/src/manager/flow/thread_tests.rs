@@ -3096,13 +3096,8 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
     assert_eq!(fork.mcp_servers.len(), thread.mcp_servers.len());
     for (forked, own) in fork.mcp_servers.iter().zip(&thread.mcp_servers) {
         assert_eq!(
-            (
-                &forked.name,
-                &forked.command,
-                &forked.args,
-                forked.always_load
-            ),
-            (&own.name, &own.command, &own.args, own.always_load)
+            (&forked.name, &forked.transport, forked.always_load),
+            (&own.name, &own.transport, own.always_load)
         );
         assert_eq!(
             (

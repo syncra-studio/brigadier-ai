@@ -33,8 +33,9 @@ use std::time::Duration;
 
 use brigadier_providers::{
     Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, InputPart, ItemStatus,
-    LimitHit, McpServer, Origin, OutputHook, ProviderEvent, ProviderKind, ProviderSession,
-    Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput, TurnStatus,
+    LimitHit, McpServer, McpTransport, Origin, OutputHook, ProviderEvent, ProviderKind,
+    ProviderSession, Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput,
+    TurnStatus,
 };
 use brigadier_store::StreamPage;
 use tokio::sync::mpsc;
@@ -3638,6 +3639,7 @@ impl SessionManager {
                 ConversationKind::Chat => ToolSet::Chat,
             },
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             // The workspace is the thread's to work in, never its own to clean up: it is not
             // recorded under the thread's owner. A tab chat's checkout is read the same way.
             add_dirs: launch
@@ -3840,12 +3842,15 @@ impl SessionManager {
     ) -> McpServer {
         McpServer {
             name: "brigadier".into(),
-            command: self.config.daemon_exe.clone(),
-            args: vec![
-                "mcp".into(),
-                "--data-dir".into(),
-                self.data_dir.to_string_lossy().into_owned(),
-            ],
+            transport: McpTransport::Stdio {
+                command: self.config.daemon_exe.clone(),
+                args: vec![
+                    "mcp".into(),
+                    "--data-dir".into(),
+                    self.data_dir.to_string_lossy().into_owned(),
+                ],
+                cwd: None,
+            },
             env: vec![(MCP_GRANT_ENV.into(), grant)],
             tool_timeout_secs: Some(timeout_secs),
             trusted: true,

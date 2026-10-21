@@ -1949,6 +1949,7 @@ impl SessionManager {
             mcp_servers,
             tools: ToolSet::Lean,
             skill_plugins,
+            switched_off: Default::default(),
             add_dirs: match (&home, &workspace.worktree) {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
                 _ => Vec::new(),
