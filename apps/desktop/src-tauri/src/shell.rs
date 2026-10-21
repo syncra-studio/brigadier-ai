@@ -607,7 +607,17 @@ pub fn quit_on_exit(app: &AppHandle) {
 /// this returns (`terminate:` exits after `applicationWillTerminate:`), so `run_return` never
 /// returns and the update can't wait for it (#349).
 fn on_exit(stop_daemon: impl FnOnce()) {
-    if !QUITTING.swap(true, Ordering::AcqRel) {
+    on_exit_with(&QUITTING, stop_daemon, daemon_stopped);
+}
+
+/// [`on_exit`] with the flag that marks the quit and how it reads whether the daemon stopped.
+/// Tests pass their own: a set `QUITTING` silences the bridge's notices for the whole process.
+fn on_exit_with(
+    quitting: &AtomicBool,
+    stop_daemon: impl FnOnce(),
+    daemon_stopped: impl Fn() -> bool,
+) {
+    if !quitting.swap(true, Ordering::AcqRel) {
         stop_daemon();
     }
     crate::updates::finish(daemon_stopped());
@@ -667,7 +677,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use super::{DAEMON_STOPPED, Ordering, daemon_stopped, on_exit, wait_on_runtime};
+    use super::{AtomicBool, Ordering, on_exit_with, wait_on_runtime};
 
     /// A quit Apple event (the Dock, logout, AppleScript) ends the process right after the
     /// app's last event, so `run_return` never returns: the waiting update goes in at that
@@ -676,7 +686,13 @@ mod tests {
     fn a_quit_that_never_returns_from_the_run_loop_installs_the_waiting_update() {
         let installs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         crate::updates::wait_counting("0.1.0-nightly.202610190100", installs.clone());
-        on_exit(|| DAEMON_STOPPED.store(true, Ordering::Release));
+        let (quitting, stopped) = (AtomicBool::new(false), AtomicBool::new(false));
+        let daemon_stopped = || stopped.load(Ordering::Acquire);
+        on_exit_with(
+            &quitting,
+            || stopped.store(true, Ordering::Release),
+            daemon_stopped,
+        );
         assert_eq!(
             installs.load(Ordering::Acquire),
             1,
