@@ -792,6 +792,11 @@ fn main() {
             if let Err(err) = shell::install_app_menu(app.handle()) {
                 tracing::warn!(error = %err, "could not add File › Open Folder…");
             }
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window(shell::MAIN_WINDOW) {
+                let window = window.as_ref().window();
+                shell::set_window_icon(&window, window.scale_factor().unwrap_or(1.0));
+            }
             // No menu-bar host (e.g. a bare Linux session) must not stop the app.
             if let Err(err) = shell::install_tray(app.handle()) {
                 tracing::warn!(error = %err, "menu-bar item unavailable");
@@ -828,6 +833,13 @@ fn main() {
             }
         })
         .on_window_event(|window, event| {
+            // Moved to a screen of another scale, the window's icon is drawn for that one.
+            #[cfg(windows)]
+            if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = event
+                && window.label() == shell::MAIN_WINDOW
+            {
+                shell::set_window_icon(window, *scale_factor);
+            }
             if let WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 drops::record(paths);
             } else if let WindowEvent::CloseRequested { api, .. } = event

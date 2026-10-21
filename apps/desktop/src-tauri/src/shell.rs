@@ -160,10 +160,110 @@ pub fn set_running(app: &AppHandle, running: &[RunningChat]) -> tauri::Result<()
     tray.set_menu(Some(tray_menu(app, running)?))
 }
 
+/// icon.ico's entry for an icon of `wanted` px, or its nearest larger one: its size and PNG.
+/// Windows scales a larger icon down, which blurs the mark's stripes away; the small entries are
+/// drawn for their size (scripts/generate-icons.mjs).
+#[cfg(windows)]
+fn icon_entry(wanted: u32) -> tauri::Result<(u32, &'static [u8])> {
+    const ICO: &[u8] = include_bytes!("../icons/icon.ico");
+    let count = ICO
+        .get(4..6)
+        .map_or(0, |bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
+    let entries = (0..usize::from(count)).filter_map(|index| {
+        let entry = ICO.get(6 + 16 * index..22 + 16 * index)?;
+        let size = if entry[0] == 0 {
+            256
+        } else {
+            u32::from(entry[0])
+        };
+        let word = |at: usize| {
+            u32::from_le_bytes([entry[at], entry[at + 1], entry[at + 2], entry[at + 3]])
+        };
+        let (length, offset) = (word(8) as usize, word(12) as usize);
+        Some((size, ICO.get(offset..offset + length)?))
+    });
+    entries
+        .min_by_key(|(size, _)| (*size < wanted, size.abs_diff(wanted)))
+        .ok_or_else(|| tauri::Error::InvalidIcon(std::io::Error::other("icon.ico has no entries")))
+}
+
+/// Windows' small icon at `scale`, the title bar's and the notification area's: 16 px at 100%,
+/// 20 at 125%…
+#[cfg(windows)]
+fn small_icon(scale: f64) -> tauri::Result<Image<'static>> {
+    let (_, png) = icon_entry((16.0 * scale).round() as u32)?;
+    Image::from_bytes(png)
+}
+
+/// Gives the main window its icons for `scale`. Tauri gives it only a small icon, icon.ico's
+/// first entry (32 px), which Windows scales down to the title bar's and, with no large icon,
+/// to the taskbar's: the small one is set at the title bar's size, and the large one at the
+/// taskbar's.
+#[cfg(windows)]
+pub fn set_window_icon(window: &tauri::Window, scale: f64) {
+    if let Err(err) = small_icon(scale).and_then(|icon| window.set_icon(icon)) {
+        tracing::warn!(error = %err, "could not set the window's icon");
+    }
+    if let Err(err) = set_taskbar_icon(window, scale) {
+        tracing::warn!(error = %err, "could not set the window's taskbar icon");
+    }
+}
+
+/// Sets the window's large icon, which the taskbar draws (24 px at 100%), from the app's own
+/// icon resource (icon.ico, which tauri-build embeds as resource 32512) at the size of its entry
+/// for that, so Windows takes that entry as it is.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn set_taskbar_icon(window: &tauri::Window, scale: f64) -> tauri::Result<()> {
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyIcon, GWLP_HINSTANCE, GetWindowLongPtrW, HICON, ICON_BIG, IMAGE_ICON,
+        LR_DEFAULTCOLOR, LoadImageW, SendMessageW, WM_SETICON,
+    };
+    use windows::core::PCWSTR;
+
+    let (size, _) = icon_entry((24.0 * scale).round() as u32)?;
+    let hwnd = HWND(window.hwnd()?.0);
+    let side = i32::try_from(size).unwrap_or(32);
+    // SAFETY: `hwnd` is this live window's; the module that registered its class is the app's
+    // executable, whose resource 32512 is an icon. The icon loaded is the window's from here
+    // on, and the one it replaces was only ever set here (Tauri sets no large icon).
+    unsafe {
+        let module = HINSTANCE(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE) as *mut _);
+        let loaded = LoadImageW(
+            Some(module),
+            PCWSTR(32512 as *const u16),
+            IMAGE_ICON,
+            side,
+            side,
+            LR_DEFAULTCOLOR,
+        )
+        .map_err(|err| tauri::Error::InvalidIcon(std::io::Error::other(err)))?;
+        let previous = SendMessageW(
+            hwnd,
+            WM_SETICON,
+            Some(WPARAM(ICON_BIG as usize)),
+            Some(LPARAM(loaded.0 as isize)),
+        );
+        if previous.0 != 0 {
+            let _ = DestroyIcon(HICON(previous.0 as *mut _));
+        }
+    }
+    Ok(())
+}
+
 pub fn install_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = tray_menu(app, &[])?;
+    // The mark in black is macOS's template image; Windows shows the app's icon there.
+    #[cfg(windows)]
+    let icon = small_icon(
+        app.primary_monitor()?
+            .map_or(1.0, |monitor| monitor.scale_factor()),
+    )?;
+    #[cfg(not(windows))]
+    let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))?;
     TrayIconBuilder::with_id(TRAY)
-        .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        .icon(icon)
         .icon_as_template(true)
         .tooltip("Brigadier")
         .menu(&menu)
