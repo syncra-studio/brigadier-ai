@@ -24,7 +24,7 @@ test("plugins sign-in: every state on the Signing in board, the tile and the sig
   const signIn = (state: string) => seen[state]!.signIn!;
   for (const state of ["linear-reusing", "notion-needed", "notion-both", "notion-brigadier", "notion-undated", "notion-restored", "linear-refused", "linear-unknown", "linear-unchecked", "linear-native", "linear-partial", "linear-not-mac"]) {
     const page = seen[state]!;
-    assert.deepEqual(page.sections, ["Sign-in", "What it is", "Found in"], state);
+    assert.deepEqual(page.sections, ["Where it's used", "Sign-in", "What it is", "Found in"], state);
     assert.ok(page.text.includes(SECTION) && page.text.includes("macOS only for now") && page.text.endsWith(NOTE), state);
     assert.equal(page.overflow, false, state);
   }
@@ -77,5 +77,33 @@ test("plugins sign-in: every state on the Signing in board, the tile and the sig
     "cancelMcpSignIn sign-in-4",
     "askMcpSignInAgain ClaudeUser:linear",
     "signOutMcpServer CodexUser:notion",
+  ]);
+  // A restored attempt keeps polling once the daemon drops its pending id, until its end is read.
+  const notionWaiting = { ...waiting([willUse("Claude Code"), willUse("Codex")]), line: "Finish signing in to notion on the page that opened in your browser. Brigadier waits up to 5 minutes." };
+  assert.deepEqual(seen.droppedWaiting, notionWaiting);
+  assert.deepEqual(seen.droppedFailed, seen.timedOut!.signIn);
+  // A dropped connection keeps waiting; an attempt the daemon no longer knows ends as interrupted.
+  assert.deepEqual(seen.flakyWaiting, notionWaiting);
+  const interrupted = { ...seen.failed!.signIn!, line: "The sign-in was interrupted. Nothing was saved." };
+  assert.deepEqual(seen.interrupted, interrupted);
+  assert.deepEqual(seen.reopenGone, interrupted);
+  assert.deepEqual(seen.cancelledGone, { ...needed, alert: "" });
+  // Switched off, it doesn't claim any worker can use it; the agent rows still say where each sign-in is.
+  const off = seen.switchedOff as unknown as State & { off: boolean };
+  assert.equal(off.off, true);
+  assert.deepEqual(off.signIn, { title: "Off", line: "Brigadier doesn't give it to workers.", tile: "bg-foreground/5", spinner: false, actions: [], rows: [claudeSignedIn, row("Codex", "Uses the sign-in from Claude Code. No extra sign-in needed.", "Uses Claude Code's")] });
+  // A failure stays while no agent becomes usable; a sign-in made in an agent meanwhile clears it, whichever lands first.
+  assert.deepEqual(seen.partialFailed, { ...seen.failed!.signIn!, rows: [claudeSignedIn, row("Codex", "Not signed in")] });
+  const native = { title: "Every worker can use it", line: "Signed in through Claude Code and Codex, so every worker can use it.", tile: "bg-success/15", spinner: false, actions: [], rows: [claudeSignedIn, row("Codex", "Signed in through Codex's own setup", "Signed in")] };
+  assert.deepEqual(seen.recoveredAfter, native);
+  assert.deepEqual(seen.recoveredBefore, native);
+  assert.deepEqual(seen.reviewCalls, [
+    "signInMcpServer CodexUser:notion",
+    "signInMcpServer CodexUser:notion",
+    "cancelMcpSignIn sign-in-6",
+    "signInMcpServer CodexUser:notion",
+    "reopenMcpSignIn sign-in-7",
+    "signInMcpServer ClaudeUser:linear",
+    "signInMcpServer ClaudeUser:linear",
   ]);
 });

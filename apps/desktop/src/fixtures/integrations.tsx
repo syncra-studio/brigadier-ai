@@ -570,7 +570,11 @@ function snapshotFor(state: string): IntegrationSnapshot {
   }
   if (state === "pencil") snapshot.catalog.servers[3]!.transport = { kind: "stdio", command: "/Applications/Pencil.app/Contents/MacOS/pencil", args: ["mcp", "--stdio"] };
   if (state === "grill-me") snapshot.catalog.skills[3]!.description = "Interview you about a plan until every decision in it is pinned down, one question at a time.";
-  if (state === "delegator") snapshot.catalog.skills[1]!.description += ".";
+  if (state === "delegator") {
+    snapshot.catalog.skills[1]!.description += ".";
+    // Claude finds both delegators by itself, so switching one off for Claude hides both.
+    snapshot.catalog.skills[1]!.claudeOffByName = true;
+  }
   if (state === "claude-skill") snapshot.catalog.skills[9]!.description = "Build, edit and deploy full-stack sites, apps and games with Higgsfield.";
   if (state === "long-servers") {
     const [first, , third, fourth, , , seventh] = snapshot.catalog.servers;

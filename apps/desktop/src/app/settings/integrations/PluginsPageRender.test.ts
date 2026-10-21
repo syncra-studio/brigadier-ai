@@ -26,7 +26,7 @@ test("plugins: drawn server states, switch, details, search and config refresh",
   assert.match(catalog.text, /Couldn't read it: unknown type “websocket”/);
   assert.ok(!catalog.text.includes("Needs a sign-in"), "linear reuses Claude Code's sign-in");
   assert.match(catalog.text, /scratch and old-landing aren't trusted/);
-  assert.deepEqual(seen.linear!.sections, ["Sign-in", "What it is", "Found in"]);
+  assert.deepEqual(seen.linear!.sections, ["Where it's used", "Sign-in", "What it is", "Found in"]);
   assert.match(seen.linear!.text, /Every worker can use itSigned in through Claude Code\. Brigadier reuses that sign-in for Codex workers/);
   assert.ok(!seen.linear!.text.includes("mcp login"));
   assert.match(seen.pencil!.text, /Claude Code, Codex and Claude Desktop/);
