@@ -344,7 +344,10 @@ pub(crate) fn switched_off(
 ) -> SwitchedOff {
     let mut off = SwitchedOff::default();
     for server in &catalog.servers {
+        // A user's server under Brigadier's own name isn't one Brigadier gives: switching it
+        // off must not take Brigadier's own away.
         if settings.mcp_servers_off.contains(&server.id)
+            && !RESERVED.contains(&server.name.as_str())
             && catalog.server_native(server, session)
             && !off.servers.contains(&server.name)
         {
@@ -361,12 +364,19 @@ pub(crate) fn switched_off(
                     off.skill_names.push(skill.name.clone());
                 }
             }
-            // Codex knows a skill by the path it found it at; both forms are given.
+            // Codex knows a skill by the path it found it at; both forms are given. In a
+            // checkout it finds the project's skills there, not in the project's own folder.
             Agent::Codex => {
+                let in_checkout = session.project.filter(|_| session.in_checkout);
                 for dir in skill.entries.iter().chain([&skill.dir]) {
-                    let file = dir.join("SKILL.md");
-                    if !off.skill_files.contains(&file) {
-                        off.skill_files.push(file);
+                    let moved = in_checkout
+                        .and_then(|project| dir.strip_prefix(project).ok())
+                        .map(|relative| session.cwd.join(relative));
+                    for dir in [Some(dir.clone()), moved].into_iter().flatten() {
+                        let file = dir.join("SKILL.md");
+                        if !off.skill_files.contains(&file) {
+                            off.skill_files.push(file);
+                        }
                     }
                 }
             }
@@ -388,13 +398,15 @@ fn named_servers(
     settings: &Settings,
     shared: &mut Shared,
 ) {
-    let native: Vec<&Server> = catalog
+    let mut native: Vec<&Server> = catalog
         .servers
         .iter()
         .filter(|server| catalog.server_native(server, session))
         .collect();
     let mut taken: HashSet<String> = RESERVED.iter().map(|name| (*name).to_owned()).collect();
     taken.extend(native.iter().map(|server| server.name.clone()));
+    // A switched-off copy of its own is no copy it has: its name stays taken all the same.
+    native.retain(|server| !settings.mcp_servers_off.contains(&server.id));
     for id in ids {
         let Some(server) = catalog.server(id) else {
             tracing::warn!(id, "a task's integration is no longer configured; left out");
@@ -484,11 +496,24 @@ fn shared_skills(
     if chosen.is_empty() {
         return Ok(None);
     }
+    // A renamed skill's folder holds a copy of its `SKILL.md` and links to the files it had:
+    // a change to either is a new folder.
     let mut hasher = blake3::Hasher::new();
     for (name, skill) in &chosen {
         for part in [name.as_str(), &skill.dir.to_string_lossy(), &skill.name] {
             hasher.update(part.as_bytes());
             hasher.update(&[0]);
+        }
+        if *name != folder_name(&skill.name) {
+            hasher.update(&std::fs::read(skill.skill_md()).unwrap_or_default());
+            let mut files: Vec<_> = std::fs::read_dir(&skill.dir)
+                .map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+                .unwrap_or_default();
+            files.sort();
+            for file in files {
+                hasher.update(file.as_encoded_bytes());
+                hasher.update(&[0]);
+            }
         }
     }
     let agent = match session.agent {
