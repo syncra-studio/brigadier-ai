@@ -1,8 +1,10 @@
-import { ciPill, type CiWatchView, heldMerge, mergeWords, shortSha } from "@/app/conversation/activity/slotView";
-import { isRunRequest } from "@/app/conversation/blocks";
+import { useMemo } from "react";
+
+import { ciPill, ciWatches, heldMerge, mergeWords, runFailed, shortSha } from "@/app/conversation/activity/slotView";
+import { isRunRequest, isWorking } from "@/app/conversation/blocks";
 import { questionOpen } from "@/app/conversation/cards/questionRound";
-import type { CiRun, IntegratedCheck, OrchestratorStep, OrchestratorStepKind, ProviderKind } from "@/ipc/generated";
-import { type Board, liveRequest } from "@/state/board";
+import type { IntegratedCheck, OrchestratorStep, ProviderKind } from "@/ipc/generated";
+import { type Board, liveRequest, useBoard } from "@/state/board";
 
 /**
  * The Job card as a live summary of the session right now (J1): one headline, one detail line,
@@ -29,6 +31,8 @@ export type LiveJob = {
   /** When it ended: an outcome shows how long it took. */
   endedAtMs?: number | undefined;
   actions: LiveAction[];
+  /** Only the bare "Working": nothing more specific to say (a run's or plan's card says its own). */
+  plain?: true | undefined;
 };
 
 /** The thread's headline for the session now (`set_headline`), cleared by the user's next message. */
@@ -137,38 +141,8 @@ function reviewFacts(input: LiveInput): Fact[] {
   }
 }
 
-type CiWatchKind = Extract<OrchestratorStepKind, { type: "ciWatch" }>;
-
-/**
- * Every CI watch of the session's, its latest row each, oldest first: like the rail's `ciWatches`
- * but kept once over, so an outcome stays until the user's next message (J4).
- */
-function sessionWatches(steps: readonly OrchestratorStep[]): CiWatchView[] {
-  const watches = new Map<string, { latest: CiWatchKind; sinceMs: number; atMs: number }>();
-  for (const step of steps) {
-    if (step.kind.type !== "ciWatch" || isRunRequest(step.requestId)) continue;
-    const key = `${step.kind.repo}\n${step.kind.branch}\n${step.kind.sha}`;
-    const known = watches.get(key);
-    watches.set(key, { latest: step.kind, sinceMs: Math.min(known?.sinceMs ?? step.atMs, step.atMs), atMs: step.atMs });
-  }
-  return [...watches.values()]
-    .map(({ latest, sinceMs, atMs }) => ({
-      repo: latest.repo,
-      branch: latest.branch,
-      sha: latest.sha,
-      waiting: latest.waiting,
-      runs: latest.runs,
-      sinceMs,
-      result: latest.result ?? null,
-      endedAtMs: latest.result === undefined ? null : atMs,
-    }))
-    .toSorted((a, b) => a.sinceMs - b.sinceMs);
-}
-
-const CI_FAILED: readonly string[] = ["failure", "cancelled", "timed_out", "startup_failure", "action_required"];
-
 function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
-  const all = sessionWatches(steps);
+  const all = ciWatches(steps.filter((step) => !isRunRequest(step.requestId)));
   const live = all.filter((watch) => watch.result === null);
   // While a push is checked, its watch is the card's; once none is, the newest one's outcome.
   const watches = live.length > 0 ? live : all.slice(-1);
@@ -176,7 +150,7 @@ function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
   if (!newest) return [];
   const pill = ciPill(watches);
   const runs = watches.flatMap((watch) => watch.runs);
-  const failedRun = runs.find((run: CiRun) => run.status === "completed" && CI_FAILED.includes(run.conclusion));
+  const failedRun = runs.find(runFailed);
   const openRun = failedRun ?? runs.find((run) => run.status !== "completed") ?? runs[0];
   const actions: LiveAction[] = openRun?.url ? [{ type: "openCi", url: openRun.url }] : [];
   const detail = `${newest.branch} · ${shortSha(newest.sha)}`;
@@ -331,14 +305,21 @@ function pick(facts: readonly Fact[]): Fact | undefined {
   return facts.toSorted((a, b) => b.rank - a.rank || b.atMs - a.atMs)[0];
 }
 
+/** The newest of `facts`. */
+function latestOf(facts: readonly Fact[]): Fact | undefined {
+  return facts.toSorted((a, b) => b.atMs - a.atMs)[0];
+}
+
 export function liveJob(input: LiveInput): LiveJob | null {
   const since = lastMessageAtMs(input);
   const checks = sessionChecks(input);
   const facts = [...waitingFacts(input), ...workFailures(input), ...checkFacts(checks), ...reviewFacts(input), ...ciFacts(input.orchestratorSteps), ...mergeFacts(input, checks), ...stopFacts(input)];
+  // The thread or a worker at work, with nothing more to say: Working, naming no worker (J3).
   const live = liveRequest(input);
-  if (live) {
-    const span = live.live.worked?.at(-1);
-    facts.push({ kind: "running", rank: 1, tone: "running", headline: "Working", sinceMs: span?.fromMs ?? live.live.startedAtMs, atMs: live.live.startedAtMs, actions: [] });
+  const workers = Object.values(input.tasks).filter((task) => isWorking(task) && !isRunRequest(task.requestId));
+  const startedAtMs = live ? (live.live.worked?.at(-1)?.fromMs ?? live.live.startedAtMs) : Math.min(...workers.map((task) => task.createdAtMs));
+  if (live || workers.length > 0) {
+    facts.push({ kind: "running", rank: 1, tone: "running", headline: "Working", sinceMs: startedAtMs, atMs: startedAtMs, actions: [], plain: true });
   }
   const waiting = facts.filter((fact) => fact.kind === "waiting");
   // A failure or an outcome from before the user's last message is over with.
@@ -350,7 +331,9 @@ export function liveJob(input: LiveInput): LiveJob | null {
     .flatMap((fact) => fact.actions)
     .filter((action, index, all) => all.findIndex((other) => other.type === action.type) === index);
 
-  const shown = pick(waiting) ?? failed.toSorted((a, b) => b.atMs - a.atMs)[0] ?? pick(running) ?? done.toSorted((a, b) => b.atMs - a.atMs)[0];
+  // The bare Working says least: an outcome since the user's last message says more.
+  const specific = running.filter((fact) => !fact.plain);
+  const shown = pick(waiting) ?? latestOf(failed) ?? pick(specific) ?? latestOf(done) ?? pick(running);
   const headline = input.headline && input.headline.atMs >= since ? input.headline : null;
   // The thread's words go stale once something that needs the user, or a failure, came after them.
   const newer = [...waiting, ...failed].some((fact) => fact.atMs > (headline?.atMs ?? Number.POSITIVE_INFINITY));
@@ -368,4 +351,15 @@ export function liveJob(input: LiveInput): LiveJob | null {
   if (!shown) return null;
   const { kind: _kind, atMs: _atMs, rank: _rank, ...job } = shown;
   return { ...job, actions };
+}
+
+/** The board's session's live job; null while there is none or the board is another conversation's. */
+export function useLiveJob(conversationId: string): LiveJob | null {
+  const json = useBoard((s) => {
+    const board = s.board;
+    if (!board || board.conversationId !== conversationId) return null;
+    const job = liveJob(board);
+    return job ? JSON.stringify(job) : null;
+  });
+  return useMemo(() => (json ? (JSON.parse(json) as LiveJob) : null), [json]);
 }

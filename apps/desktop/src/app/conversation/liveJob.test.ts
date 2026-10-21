@@ -48,6 +48,9 @@ test("with nothing running and nothing waiting there is no card; while the threa
   const tasks = byId([{ id: "t1", title: "Shared MCP and skills", state: "running", requestId: "r1", createdAtMs: 20, updatedAtMs: 20 } as unknown as Task]);
   assert.deepEqual(words({ ...working, tasks }), ["running", "Working", null]);
   assert.equal(liveJob(input({ ...working, tasks }))!.sinceMs, 10);
+  // A worker at work after the thread's turn ended: still Working, from when it started.
+  assert.deepEqual(words({ ...idle, tasks }), ["running", "Working", null]);
+  assert.equal(liveJob(input({ ...idle, tasks }))!.sinceMs, 20);
 });
 
 test("checks: running with the command at work, failed with what failed, passed on the commit", () => {
@@ -145,6 +148,8 @@ test("a finished outcome stays until the next message; what still runs stays whe
   assert.equal(words({ ...next, integratedChecks: passed })![1], "Working");
   const running = byId([check(1, "abc", { type: "running", command: "x" }, 20)]);
   assert.equal(words({ ...next, integratedChecks: running })![1], "Running checks");
+  // While the thread goes on, an outcome since the last message says more than Working.
+  assert.equal(words({ ...working, integratedChecks: passed })![1], "Checks passed on abc");
   // Stopped: stays until the next message.
   assert.deepEqual(words({ requests: byId([request("r1", 10, { type: "stopped" }, 50)]) }), ["stopped", "Stopped", "You stopped it"]);
 });

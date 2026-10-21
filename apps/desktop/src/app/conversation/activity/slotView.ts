@@ -19,16 +19,13 @@ export type CiWatchView = {
   endedAtMs: number | null;
 };
 
-/** How long a watch's result stays on the pill once it ends. */
-export const CI_LINGER_MS = 4000;
-
 /**
- * Every CI watch still checking (SESSION-FIXES-PLAN.md Q1), oldest first. A watch files a new
- * row each time its runs change, one watch per repository, branch and sha; its latest row says
- * where it stands. One with a result is over: its result shows until `CI_LINGER_MS` after that
- * row, by `nowMs`, and then it goes; the thread tells the user the rest.
+ * Every CI watch (SESSION-FIXES-PLAN.md Q1), oldest first. A watch files a new row each time its
+ * runs change, one watch per repository, branch and sha; its latest row says where it stands.
+ * One with a result is over and stays, so the Job card keeps its outcome until the user's next
+ * message (J4).
  */
-export function ciWatches(steps: readonly OrchestratorStep[], nowMs: number): CiWatchView[] {
+export function ciWatches(steps: readonly OrchestratorStep[]): CiWatchView[] {
   const watches = new Map<string, { latest: CiWatchKind; sinceMs: number; atMs: number }>();
   for (const step of steps) {
     if (step.kind.type !== "ciWatch") continue;
@@ -37,7 +34,6 @@ export function ciWatches(steps: readonly OrchestratorStep[], nowMs: number): Ci
     watches.set(key, { latest: step.kind, sinceMs: Math.min(known?.sinceMs ?? step.atMs, step.atMs), atMs: step.atMs });
   }
   return [...watches.values()]
-    .filter(({ latest, atMs }) => latest.result === undefined || nowMs - atMs < CI_LINGER_MS)
     .map(({ latest, sinceMs, atMs }) => ({
       repo: latest.repo,
       branch: latest.branch,
@@ -59,15 +55,8 @@ function runDone(run: CiRun): boolean {
   return run.status === "completed";
 }
 
-function runFailed(run: CiRun): boolean {
+export function runFailed(run: CiRun): boolean {
   return runDone(run) && FAILED_CONCLUSIONS.includes(run.conclusion);
-}
-
-/** A run's words inside the open pill: its jobs while it runs, then how it ended. */
-export function ciRunWords(run: CiRun): string {
-  if (runDone(run)) return runFailed(run) ? "Failed" : run.conclusion === "skipped" ? "Skipped" : "Passed";
-  if (run.jobsTotal === 0) return run.status === "queued" ? "Queued" : "Starting";
-  return run.jobsDone < run.jobsTotal ? `${run.jobsDone} of ${run.jobsTotal} jobs done` : "Finishing up";
 }
 
 /**
@@ -101,11 +90,6 @@ export function ciPill(watches: readonly CiWatchView[]): { state: CiState; words
   if (watches.some((watch) => watch.result === "passed")) return { state: "passed", words: "CI passed" };
   if (watches.some((watch) => watch.result === "stopped")) return { state: "ended", words: "Stopped watching CI" };
   return { state: "ended", words: "No CI runs" };
-}
-
-/** The CI pill's words: see `ciPill`. */
-export function ciWords(watches: readonly CiWatchView[]): string {
-  return ciPill(watches).words;
 }
 
 /** The short sha a pill names a push by. */
@@ -179,13 +163,4 @@ export function mergeWords(merge: Pick<HeldMergeView, "base" | "waiting" | "merg
   if (merge.mergingIn) return `Merging after ${merge.base} is merged in`;
   if (merge.waiting > 0) return `Merging after ${merge.waiting} ${merge.waiting === 1 ? "worker finishes" : "workers finish"}`;
   return "Merging…";
-}
-
-export type SlotRow = "workers" | "ci" | "merge";
-
-/** The slot's rows, newest last (Q8.4): each by when it appeared. At most three, one of each. */
-export function slotRows(rows: Partial<Record<SlotRow, number>>): SlotRow[] {
-  return (Object.entries(rows) as [SlotRow, number][])
-    .toSorted(([, a], [, b]) => a - b)
-    .map(([row]) => row);
 }

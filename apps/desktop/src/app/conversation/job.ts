@@ -2,8 +2,8 @@ import type { JobStageState } from "@/components/conversation/elements/job-progr
 
 /**
  * A session's job (Q88): the steps it works through, in order. For a change: Building,
- * Reviewing, Fixing, Checks, Merging; for a phased plan, the steps of the phase at work. The Job
- * card shows it while a step is left, in one bar and one short line; its tab, step by step.
+ * Reviewing, Fixing, Checks, Merging; for a phased plan, the steps of the phase at work. Its tab
+ * shows it step by step; the Job card says what is happening now instead (liveJob.ts).
  */
 
 export type JobStepState = JobStageState;
@@ -27,11 +27,6 @@ export interface Job {
   /** The phase at work of a phased plan. */
   phase?: { number: number; of: number; title: string } | undefined;
   steps: readonly JobStep[];
-}
-
-/** A job is worth a card while one of its steps is not done. */
-export function jobShown(job: Job | null | undefined): job is Job {
-  return !!job && job.steps.some((step) => step.state !== "done");
 }
 
 /** "Phase 2 of 4". */

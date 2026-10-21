@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { type Job, jobLabel, jobShown } from "@/app/conversation/job";
+import { type Job, jobLabel } from "@/app/conversation/job";
 
 const job = (states: Job["steps"][number]["state"][], extra: Partial<Job> = {}): Job => ({
   steps: states.map((state, index) => ({ id: `s${index}`, name: ["Building", "Reviewing", "Checks", "Fixing"][index]!, state })),
@@ -22,11 +22,4 @@ test("the job's line names the step at work, how far it is, and a failure first"
     jobLabel(job(["done", "active"], { phase: { number: 2, of: 4, title: "Implement" } })),
     "Phase 2 of 4 · Reviewing",
   );
-});
-
-test("a job shows while a step is left, never once all are done", () => {
-  assert.equal(jobShown(job(["done", "active"])), true);
-  assert.equal(jobShown(job(["done", "done"])), false);
-  assert.equal(jobShown({ steps: [] }), false);
-  assert.equal(jobShown(null), false);
 });

@@ -1,54 +1,101 @@
-import { type ReactNode, useEffect } from "react";
+/** A standalone Vite entry, excluded from the app entry and production build. Synthetic data. */
+import { mockIPC } from "@tauri-apps/api/mocks";
+import { type ReactNode, useEffect, useMemo } from "react";
 import { createRoot } from "react-dom/client";
+import { createStore } from "zustand/vanilla";
 
-import { JobCard, StackCard, WaitCard } from "@/app/conversation/cards/JobCard";
-import { type Job, jobShown } from "@/app/conversation/job";
+import { StackCard, WaitCard } from "@/app/conversation/cards/JobCard";
+import { type Job } from "@/app/conversation/job";
+import { JobStack } from "@/app/conversation/JobStack";
 import { JobTimeline } from "@/app/side-panel/JobTab";
 import { SummaryRow, SummarySection } from "@/components/conversation";
+import { TooltipProvider } from "@/components/overlays";
+import { fixtureClick } from "@/fixtures/input";
+import type { CiRun, IntegratedCheck, IntegratedCheckState, OrchestratorStep, Plan, Preview, Question, Request, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
+import { type Board, BoardStoreContext, emptyBoard, type ShownApproval } from "@/state/board";
 
-// Each column is the summary's column of cards (PinnedSummary's STACK), at a fixed clock.
-const NOW = new Date(2026, 9, 19, 2, 0).getTime();
+// Each column is the summary's column of cards (PinnedSummary's STACK) for a session of its own,
+// its board holding the events of one moment. Times are a few minutes back from now.
+const NOW = Date.now();
 const MIN = 60_000;
+const T0 = NOW - 20 * MIN;
 
-const WORKING: Job = {
+/** What the Job card's buttons sent. */
+const sent: string[] = [];
+mockIPC((command, payload) => {
+  if (command === "open_url") sent.push(`open ${(payload as { url: string }).url}`);
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  sent.push(req.method);
+  return req.method === "cancelMerge" ? { method: req.method, text: "Cancelled" } : { method: req.method };
+});
+
+const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
+  ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
+const check = (n: number, tip: string, state: IntegratedCheckState, startedAtMs: number, endedAtMs: number | null = null): IntegratedCheck =>
+  ({ id: `check-${n}`, conversationId: "c", repo: "/r", branch: "b", tip, state, dueAtMs: startedAtMs, startedAtMs, endedAtMs, requests: ["r1"], tasks: [], rerun: false });
+const review = (state: ReviewState, startedAtMs: number, endedAtMs: number | null = null): ReviewRun =>
+  ({ id: "v1", conversationId: "c", requestId: "r1", taskId: null, kind: "code", notify: { type: "orchestrator" }, base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs, number: 1, items: [] }) as unknown as ReviewRun;
+const step = (atMs: number, kind: unknown): OrchestratorStep => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 });
+const ciRun = (workflow: string, status: string, conclusion: string, jobsDone = 0, jobsTotal = 0): CiRun =>
+  ({ workflow, url: `https://github.com/o/r/actions/runs/${workflow}`, status, conclusion, jobsDone, jobsTotal }) as unknown as CiRun;
+const ci = (atMs: number, runs: CiRun[], result?: string) =>
+  step(atMs, { type: "ciWatch", repo: "o/r", branch: "main", sha: "4e1c49e99aa", waiting: runs.length === 0, runs, ...(result ? { result } : {}) });
+const task = (id: string, state: Task["state"], extra: Partial<Task> = {}): Task =>
+  ({ id, number: 1, title: "Shared MCP and skills", kind: "implement", state, requestId: "r1", subject: null, error: null, createdAtMs: T0 + MIN, updatedAtMs: T0 + 2 * MIN, ...extra }) as unknown as Task;
+const byId = <T extends { id: string }>(items: T[]) => Object.fromEntries(items.map((item) => [item.id, item]));
+
+const working = { requests: byId([request("r1", T0, { type: "working" })]) };
+const ended = { requests: byId([request("r1", T0, { type: "done" }, NOW - MIN)]) };
+const held = step(T0 + 2 * MIN, { type: "mergeHeld", branch: "brigadier/s", base: "main", askedIn: "r1", consentedAtMs: T0 + 2 * MIN, condition: "workersFinish", waiting: ["t1"], tip: "abc" });
+const passedOn = (tip: string) => byId([check(1, tip, { type: "passed", commands: ["a", "b", "c", "d", "e"] }, T0 + 3 * MIN, T0 + 8 * MIN)]);
+const merged = (head: string) =>
+  step(T0 + 9 * MIN, { type: "merged", branch: "brigadier/s", base: "main", commits: 4, askedIn: null, head, mergeCommit: "4e1c49e0001" });
+const question: Question = { id: "q1", kind: { type: "orchestrator" }, answer: null, answeredAtMs: null, answers: [], createdAtMs: T0 + 5 * MIN, items: [{ question: "Build the page as drawn?", options: [] }] } as unknown as Question;
+const plan = {
+  id: "p1", conversationId: "c", requestId: "r1", position: 0, title: "Settings", body: "# Settings", state: { type: "approved" }, createdAtMs: T0, decidedAtMs: T0,
   steps: [
-    { id: "build", name: "Building", state: "done", startedAtMs: NOW - 42 * MIN, summary: "Two workers built it" },
-    { id: "review", name: "Reviewing", state: "active", count: "3 of 5", startedAtMs: NOW - 6 * MIN },
-    { id: "fix", name: "Fixing", state: "pending" },
-    { id: "checks", name: "Checks", state: "pending" },
-    { id: "merge", name: "Merging", state: "pending" },
+    { title: "Move settings", detail: null, taskId: "t1", stage: "building", startedAtMs: T0 + MIN, endedAtMs: null, outline: null },
+    { title: "Delete old store", detail: null, taskId: null, stage: "pending", startedAtMs: null, endedAtMs: null, outline: null },
+    { title: "Check", detail: null, taskId: null, stage: "pending", startedAtMs: null, endedAtMs: null, outline: null },
   ],
-};
+} as unknown as Plan;
 
-const FAILED: Job = {
-  steps: [
-    { id: "build", name: "Building", state: "done", startedAtMs: NOW - 50 * MIN, summary: "Two workers built it" },
-    { id: "review", name: "Reviewing", state: "done", startedAtMs: NOW - 20 * MIN, summary: "Review found 3 issues, all fixed" },
-    { id: "checks", name: "Checks", state: "failed", startedAtMs: NOW - 9 * MIN, summary: "2 tests failed in the desktop app" },
-    { id: "fix", name: "Fixing", state: "active", startedAtMs: NOW - 4 * MIN },
-    { id: "merge", name: "Merging", state: "pending" },
-  ],
+/** Each moment: the board's events, and the thread's headline where it set one. */
+const MOMENTS: Record<string, Partial<Board> & { headline?: { text: string; detail?: string; atMs: number } }> = {
+  // First: the page doesn't scroll (the app's root clips), and their buttons are clicked.
+  heldMerge: { ...working, tasks: byId([task("t1", "running")]), orchestratorSteps: [held] },
+  ciFailed: { ...ended, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "completed", "failure", 5, 5)], "failed")] },
+  idle: ended,
+  working: { ...working, tasks: byId([task("t1", "running")]) },
+  checksRunning: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests" }, T0 + 3 * MIN)]) },
+  checksFailed: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "failed", command: "pnpm test", status: "2 tests failed", output: null }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
+  checksPassed: { ...ended, integratedChecks: passedOn("4e1c49e999") },
+  reviewRunning: { ...working, reviews: byId([review({ type: "running" }, T0 + 3 * MIN)]) },
+  reviewFindings: { ...ended, reviews: byId([review({ type: "findings", count: 3 }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
+  reviewClean: { ...ended, reviews: byId([review({ type: "clean" }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
+  ciChecking: { ...working, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "in_progress", "", 3, 5)])] },
+  merging: { ...working, integratedChecks: passedOn("head111"), orchestratorSteps: [step(T0 + 9 * MIN, { type: "mergeRequested", id: "m1", branch: "brigadier/s", base: "main", origin: {} })] },
+  merged: { ...ended, integratedChecks: passedOn("head111"), orchestratorSteps: [merged("head111")] },
+  mergedUnchecked: { ...ended, integratedChecks: passedOn("other22"), orchestratorSteps: [merged("head111")] },
+  waitingAnswer: { ...working, questions: { q1: question } },
+  waitingApproval: { ...working, approvals: { a1: { id: "a1", state: { type: "pending" }, createdAtMs: T0 + 5 * MIN, subject: { type: "cli" } } as unknown as ShownApproval } },
+  workerFailed: { ...working, tasks: byId([task("t1", "failed", { error: "The registry tests failed" })]) },
+  devServer: {
+    ...working,
+    previews: byId([{ id: "p1", name: "The dev server", state: { type: "exited", code: 1, status: "Port 1420 is already in use" }, startedAtMs: T0 + MIN, endedAtMs: T0 + 2 * MIN } as unknown as Preview]),
+  },
+  stopped: { requests: byId([request("r1", T0, { type: "stopped" }, NOW - 2 * MIN)]) },
+  // The user wrote since the checks passed: the outcome is gone with the turn.
+  nextMessage: { requests: byId([request("r1", T0, { type: "done" }, T0 + 9 * MIN), request("r2", T0 + 10 * MIN, { type: "done" }, T0 + 11 * MIN)]), integratedChecks: passedOn("4e1c49e999") },
+  headline: {
+    ...working,
+    tasks: byId([task("t1", "running")]),
+    orchestratorSteps: [held],
+    headline: { text: "Investigating the dev server", detail: "Looking for what holds port 1420", atMs: T0 + 6 * MIN },
+  },
+  plan: { ...working, tasks: byId([task("t1", "running")]), plans: { p1: plan } },
 };
-
-// The checks failed and nothing works on them yet: the job waits, no step at work (#487).
-const STALLED: Job = {
-  steps: [
-    { id: "build", name: "Building", state: "done", startedAtMs: NOW - 50 * MIN, summary: "A worker built it" },
-    { id: "fix", name: "Fixing", state: "pending" },
-    { id: "checks", name: "Checks", state: "failed", startedAtMs: NOW - 19 * MIN, summary: "tools/full-checks.sh: exit 101" },
-  ],
-};
-
-const PHASED: Job = {
-  phase: { number: 2, of: 4, title: "Implement Windows paths" },
-  steps: [
-    { id: "p2-build", name: "Building", state: "done", startedAtMs: NOW - 30 * MIN },
-    { id: "p2-review", name: "Reviewing", state: "active", startedAtMs: NOW - 3 * MIN },
-    { id: "p2-checks", name: "Checks", state: "pending" },
-  ],
-};
-
-const DONE: Job = { steps: [{ id: "merge", name: "Merging", state: "done", startedAtMs: NOW - MIN }] };
 
 /** A stand-in for the context card: its surface and two of its rows. */
 function ContextCard() {
@@ -56,7 +103,7 @@ function ContextCard() {
     <StackCard className="pt-2 pb-2">
       <SummarySection foldKey="fixture-project" title="brigadier-ai">
         <SummaryRow meta={<span><span className="text-success">+380</span> <span className="text-destructive">−2</span></span>}>brigadier/web-ui</SummaryRow>
-        <SummaryRow meta="2 done">Workers</SummaryRow>
+        <SummaryRow meta="working">Shared MCP and skills</SummaryRow>
       </SummarySection>
     </StackCard>
   );
@@ -70,7 +117,31 @@ function Column({ id, children }: { id: string; children: ReactNode }) {
   );
 }
 
-const show = (job: Job) => (jobShown(job) ? <JobCard job={job} onOpen={() => {}} /> : null);
+function Session({ id, parts }: { id: string; parts: (typeof MOMENTS)[string] }) {
+  const store = useMemo(() => {
+    const { headline, ...rest } = parts;
+    const board = { ...emptyBoard(`session-${id}`), loaded: true, ...rest, ...(headline ? { headline } : {}) } as Board;
+    return createStore(() => ({ board, orchestrator: null }));
+  }, [id, parts]);
+  return (
+    <BoardStoreContext.Provider value={store}>
+      <Column id={id}>
+        <ContextCard />
+        <JobStack conversationId={`session-${id}`} />
+      </Column>
+    </BoardStoreContext.Provider>
+  );
+}
+
+const FAILED: Job = {
+  steps: [
+    { id: "build", name: "Building", state: "done", startedAtMs: NOW - 50 * MIN, summary: "Two workers built it" },
+    { id: "review", name: "Reviewing", state: "done", startedAtMs: NOW - 20 * MIN, summary: "Review found 3 issues, all fixed" },
+    { id: "checks", name: "Checks", state: "failed", startedAtMs: NOW - 9 * MIN, summary: "2 tests failed in the desktop app" },
+    { id: "fix", name: "Fixing", state: "active", startedAtMs: NOW - 4 * MIN },
+    { id: "merge", name: "Merging", state: "pending" },
+  ],
+};
 
 const FINDINGS = (
   <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 ps-4 text-xs">
@@ -80,79 +151,79 @@ const FINDINGS = (
   </ul>
 );
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function Fixture() {
   useEffect(() => {
-    const columns = [...document.querySelectorAll<HTMLElement>("[data-column]")];
-    const seen = Object.fromEntries(
-      columns.map((column) => [
-        column.dataset["column"],
-        {
-          cards: [...column.children].map((card) =>
-            card.querySelector('[data-slot="job-card"]') ? "job" : card.querySelector('[data-slot="schedule-card"]') ? "schedule" : "context",
-          ),
-          label: column.querySelector('[data-slot="job-progress"] span.truncate')?.textContent ?? null,
-          segments: [...column.querySelectorAll<HTMLElement>("[data-segment]")].map((segment) => segment.dataset["segment"]),
-          fills: [...column.querySelectorAll<HTMLElement>("[data-segment]")].map((segment) => segment.querySelector("span")?.style.width ?? ""),
-          line: [...column.querySelectorAll<HTMLElement>("[data-stage]")].map((stage) => `${stage.dataset["stage"]}:${stage.textContent}`),
-          detail: column.querySelector('[data-slot="job-progress"] p.text-xs')?.textContent ?? null,
-          shimmer: [...column.querySelectorAll<HTMLElement>("[data-stage].shimmer")].map((name) => name.textContent),
-          bar: column.querySelector('[data-slot="job-progress"] [role="progressbar"]')?.getAttribute("aria-valuenow") ?? null,
-          red: column.querySelector('[data-slot="job-progress"] .text-destructive') !== null,
-          spinning: column.querySelector('[data-slot="job-progress"] [class*="animate-spin"]') !== null,
-          schedule: column.querySelector('[data-slot="schedule-card"]')?.textContent ?? null,
+    let done = false;
+    void (async () => {
+      await sleep(100);
+      const columns = [...document.querySelectorAll<HTMLElement>("[data-column]")];
+      const seen = Object.fromEntries(
+        columns.map((column) => {
+          const card = column.querySelector('[data-slot="job-card"]');
+          return [
+            column.dataset["column"],
+            {
+              cards: [...column.children].map((child) =>
+                child.querySelector('[data-slot="job-card"]') ? "job" : child.querySelector('[data-slot="schedule-card"]') ? "schedule" : "context",
+              ),
+              tone: card?.querySelector<HTMLElement>('[data-slot="job-progress"]')?.dataset["state"] ?? null,
+              headline: card?.querySelector('[data-slot="job-progress"] span.truncate')?.textContent ?? null,
+              detail: card ? [...card.querySelectorAll('[data-slot="job-detail"]')].map((line) => line.textContent) : [],
+              buttons: card ? [...card.querySelectorAll("button")].map((button) => button.textContent) : [],
+              timer: card?.querySelector("time") !== null && card?.querySelector("time") !== undefined,
+              bar: card?.querySelector('[role="progressbar"]') ? [...card.querySelectorAll<HTMLElement>("[data-segment]")].map((segment) => segment.dataset["segment"]) : null,
+              line: card ? [...card.querySelectorAll<HTMLElement>("[data-stage]")].map((stage) => `${stage.dataset["stage"]}:${stage.textContent}`) : [],
+              spinning: card?.querySelector('[class*="animate-spin"]') !== null && card?.querySelector('[class*="animate-spin"]') !== undefined,
+              status: card?.querySelector('[role="status"]')?.textContent ?? null,
+              text: card?.textContent ?? "",
+              schedule: column.querySelector('[data-slot="schedule-card"]')?.textContent ?? null,
+            },
+          ];
+        }),
+      );
+      // The held merge's Cancel and CI's Open CI do what the rail's pills did.
+      const cancel = document.querySelector('[data-column="heldMerge"] [data-slot="merge-cancel"]');
+      if (cancel) await fixtureClick(cancel);
+      const openCi = document.querySelector('[data-column="ciFailed"] [data-slot="job-open-ci"]');
+      if (openCi) await fixtureClick(openCi);
+      await sleep(100);
+      const tab = document.querySelector('[data-shot="tab"]')!;
+      const steps = [...tab.querySelectorAll('[data-slot="timeline"] > li')];
+      if (done) return;
+      const result = document.createElement("pre");
+      result.id = "job-card-result";
+      result.textContent = JSON.stringify({
+        ...seen,
+        sent,
+        tab: {
+          steps: steps.map((item) => item.querySelector("div > span")?.textContent),
+          current: steps.map((item) => item.getAttribute("aria-current")),
+          findings: tab.querySelectorAll('[data-slot="timeline"] ul > li').length,
         },
-      ]),
-    );
-    const tab = document.querySelector('[data-shot="tab"]')!;
-    const steps = [...tab.querySelectorAll('[data-slot="timeline"] > li')];
-    const result = document.createElement("pre");
-    result.id = "job-card-result";
-    result.textContent = JSON.stringify({
-      ...seen,
-      tab: {
-        steps: steps.map((item) => item.querySelector("div > span")?.textContent),
-        current: steps.map((item) => item.getAttribute("aria-current")),
-        findings: tab.querySelectorAll('[data-slot="timeline"] ul > li').length,
-      },
-    });
-    document.body.append(result);
-    return () => result.remove();
+      });
+      document.body.append(result);
+    })();
+    return () => {
+      done = true;
+    };
   }, []);
   return (
-    <div className="flex flex-wrap items-start gap-6 p-6">
-      <Column id="working">
-        <ContextCard />
-        {show(WORKING)}
-      </Column>
-      <Column id="failed">
-        <ContextCard />
-        {show(FAILED)}
-      </Column>
-      <Column id="stalled">
-        <ContextCard />
-        {show(STALLED)}
-      </Column>
-      <Column id="phased">
-        <ContextCard />
-        {show(PHASED)}
-      </Column>
-      <Column id="scheduled">
-        <ContextCard />
-        <WaitCard title="Resumes at 4:00 AM" reason="when the Claude limit resets" atMs={NOW + 2 * 60 * MIN + 10 * MIN} nowMs={NOW} />
-      </Column>
-      {/* The context card hidden: the job and what waits take its place. */}
-      <Column id="hidden">
-        {show(WORKING)}
-        <WaitCard title="The overnight run ends at 7:30 AM" atMs={NOW + 5.5 * 60 * MIN} nowMs={NOW} />
-      </Column>
-      <Column id="done">
-        <ContextCard />
-        {show(DONE)}
-      </Column>
-      <div data-shot="tab" className="bg-background w-160">
-        <JobTimeline job={FAILED} details={{ review: FINDINGS }} />
+    <TooltipProvider>
+      <div className="flex flex-wrap items-start gap-6 p-6">
+        {Object.entries(MOMENTS).map(([id, parts]) => (
+          <Session key={id} id={id} parts={parts} />
+        ))}
+        <Column id="scheduled">
+          <ContextCard />
+          <WaitCard title="Resumes at 4:00 AM" reason="when the Claude limit resets" atMs={NOW + 2 * 60 * MIN + 10 * MIN} nowMs={NOW} />
+        </Column>
+        <div data-shot="tab" className="bg-background w-160">
+          <JobTimeline job={FAILED} details={{ review: FINDINGS }} />
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
