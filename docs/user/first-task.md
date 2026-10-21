@@ -11,8 +11,8 @@ The first time you open Brigadier it walks you through four short screens.
    **Sign in**, which opens its own sign-in in your browser; the card waits, then turns
    **Connected**. One that isn't installed offers **Install**, which opens its install guide.
    On Windows, **Install** runs the agent's own installer, then its sign-in; the card waits,
-   then turns **Connected**. You need at least one connected to continue; both is better, because each reviews the other's
-   work.
+   then turns **Connected**. You need at least one connected to continue; both is better,
+   because each reviews the other's work.
 4. **Choose your projects.** Brigadier lists the repositories you have used with Claude Code or
    Codex, all ticked. Untick any you don't want (**Select none** clears them all), **Add
    folder…** for another, then **Add** them, or **Continue without projects**.

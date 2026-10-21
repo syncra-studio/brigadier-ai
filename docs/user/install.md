@@ -44,7 +44,8 @@ It downloads `Brigadier-0.1.0-alpha-x64-setup.exe` from the release, checks its 
 installs it for you alone, with no administrator permission, in `%LOCALAPPDATA%\Brigadier`.
 The Windows installer isn't signed yet, so for now the checksum is its only check (a signed one
 must be signed by Brigadier's developer), and Windows SmartScreen warns if you run the
-installer yourself. It asks before it replaces an existing Brigadier. To read it first, download it and run `powershell -File install.ps1`.
+installer yourself. It asks before it replaces an existing Brigadier. To read it first,
+download it and run `powershell -File install.ps1`.
 
 Run the installer itself (`…-x64-setup.exe`) to choose another folder. Either way Brigadier
 appears in the Start menu, with a desktop shortcut, and keeps its data in

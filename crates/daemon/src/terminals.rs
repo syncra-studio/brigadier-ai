@@ -748,7 +748,6 @@ fn reap(terminal: &Terminal) -> Option<u32> {
     None
 }
 
-/// The user's shell: `$SHELL` on macOS and Linux, PowerShell on Windows.
 /// `path` with each of `folders` that exists and isn't on it yet added at its end, in order;
 /// `None` when none is added. `path` itself is kept as it is, first. Folders compare as
 /// Windows does, in any case and with or without a trailing separator.
@@ -781,6 +780,7 @@ fn with_folders(path: Option<&OsStr>, folders: &[PathBuf]) -> Option<OsString> {
     Some(joined)
 }
 
+/// The user's shell: `$SHELL` on macOS and Linux, PowerShell on Windows.
 fn default_shell() -> String {
     if cfg!(windows) {
         return "powershell.exe".into();
