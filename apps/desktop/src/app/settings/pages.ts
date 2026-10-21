@@ -7,6 +7,7 @@ import { COMPUTER_USE_ROWS, ComputerUsePage, computerUseAvailable } from "@/app/
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { GeneralPage } from "@/app/settings/GeneralPage";
 import { GENERAL_ROWS } from "@/app/settings/generalRows";
+import { PluginsPage, integrationSearchRows } from "@/app/settings/integrations/PluginsPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
 import { MEMORY_ROWS, MemoryPage } from "@/app/settings/MemoryPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/storage/StoragePage";
@@ -25,6 +26,7 @@ import {
   KeyboardShortcut,
   Mic,
   Robot,
+  Plugin,
   SettingsCog,
   SettingsSlider,
   Shuffle,
@@ -46,6 +48,8 @@ export type SettingsRowCopy = {
   readonly label: string;
   readonly description?: string;
   readonly target?: string;
+  /** A tab within the page, shown below a search result. */
+  readonly section?: string;
 };
 
 /** A group of the navigation; "end" is the last, set apart by its gap alone, without a title. */
@@ -145,6 +149,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     component: ProvidersPage,
     rows: Object.values(PROVIDERS_ROWS),
     prefetch: prefetchUsage,
+  },
+  {
+    id: "plugins",
+    label: "Plugins",
+    icon: Plugin,
+    group: "Agents",
+    component: PluginsPage,
+    get rows() { return integrationSearchRows(); },
   },
   {
     id: "routing",

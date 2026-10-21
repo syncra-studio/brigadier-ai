@@ -2619,6 +2619,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetAccounts => Response::GetAccounts {
             accounts: daemon.runtime.accounts_view(),
         },
+        Request::GetIntegrations { project_id } => Response::GetIntegrations {
+            integrations: daemon.sessions.integrations_view(project_id).await?,
+        },
         Request::RemoveAccount { id } => Response::RemoveAccount {
             settings: Box::new(heap(|| daemon.sessions.remove_account(&id)).await?),
         },

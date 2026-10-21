@@ -62,6 +62,7 @@ mod git_actions;
 mod inbox_store;
 mod instructions;
 mod integrated_checks;
+pub mod integrations;
 mod kept;
 #[cfg(all(test, unix))]
 mod kept_live_tests;
@@ -325,6 +326,9 @@ pub struct SessionManager {
     rules_given: std::sync::Mutex<
         std::collections::HashMap<ConversationId, (String, std::collections::HashSet<String>)>,
     >,
+    /// The MCP servers and skills of every agent's own configuration ([`integrations`]),
+    /// read from the CLIs' environment. Tests read an empty home unless they set one.
+    registry: std::sync::RwLock<Arc<brigadier_registry::Registry>>,
 }
 
 impl SessionManager {
@@ -398,6 +402,29 @@ impl SessionManager {
                 .fake(brigadier_sandbox::MachineLoad::default());
         }
         let app = Arc::new(app_call::AppHub::default());
+        let registry = {
+            #[cfg(not(test))]
+            let vars: Vec<(String, String)> = env
+                .vars()
+                .into_iter()
+                .filter_map(|(name, value)| {
+                    Some((name.into_string().ok()?, value.into_string().ok()?))
+                })
+                .collect();
+            #[cfg(test)]
+            let vars = vec![(
+                "HOME".to_owned(),
+                data_dir.join("integrations-home").display().to_string(),
+            )];
+            let registry = tokio::task::spawn_blocking(move || integrations::registry(vars))
+                .await
+                .map_err(|err| Error::Invalid(format!("reading the integrations: {err}")))?;
+            #[cfg(not(test))]
+            if let Err(err) = registry.watch() {
+                tracing::warn!(error = %err, "the integrations' configs aren't watched");
+            }
+            registry
+        };
         let manager = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             core,
@@ -406,6 +433,7 @@ impl SessionManager {
             config,
             git,
             data_dir,
+            registry: std::sync::RwLock::new(registry),
             grants: Grants::default(),
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),

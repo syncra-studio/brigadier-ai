@@ -216,6 +216,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       "Personal: Memory",
       "Personal: Keyboard shortcuts",
       "Agents: Providers",
+      "Agents: Plugins",
       "Agents: Routing",
       "Agents: Git",
       "Agents: Computer use",
@@ -232,17 +233,23 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
     }));
     assert.deepEqual(sections, [
       { title: "Personal", pages: ["General", "Voice", "Configuration", "Memory", "Keyboard shortcuts"] },
-      { title: "Agents", pages: ["Providers", "Routing", "Git", "Computer use"] },
+      { title: "Agents", pages: ["Providers", "Plugins", "Routing", "Git", "Computer use"] },
       { title: "Browser &amp; Data", pages: ["Browser", "Import Browser Data"] },
       { title: "System", pages: ["Storage", "Inspector"] },
       { title: null, pages: ["Archived chats"] },
     ]);
     type Result = { page: Page; row: unknown };
+    for (const label of ["MCP servers", "Skills"]) {
+      const result = (searchSettings(label) as { page: Page; row: { label: string } | null }[])[0];
+      assert.equal(result?.page.id, "plugins");
+      assert.equal(result?.row?.label, label);
+    }
     const first = (query: string) => (searchSettings(query) as Result[])[0];
     for (const [query, id, group] of [
       ["configurations", "configuration", "Personal"],
       ["configuration", "configuration", "Personal"],
       ["routing", "routing", "Agents"],
+      ["plugins", "plugins", "Agents"],
       ["usage", "providers", "Agents"],
       ["storage", "storage", "System"],
       ["import", "browserImport", "Browser & Data"],

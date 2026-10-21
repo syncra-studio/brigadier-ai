@@ -441,9 +441,27 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         args.push("-c".into());
         args.push(NO_SUB_AGENTS.into());
     }
-    if user_setup && tools != ToolSet::Thread {
+    // The user's own skills they switched off for Brigadier, by file, beside their own
+    // entries: the override replaces the list (docs/research/phase7-probes.md (d)).
+    if let Some(off) = session
+        .map(|session| &session.switched_off)
+        .filter(|off| user_setup && !off.skill_files.is_empty())
+    {
+        let entries: Vec<Value> = off
+            .codex_skill_config
+            .iter()
+            .cloned()
+            .chain(
+                off.skill_files
+                    .iter()
+                    .map(|file| json!({ "path": file.display().to_string(), "enabled": false })),
+            )
+            .collect();
         args.push("-c".into());
-        args.push(NO_SKILLS_CATALOG.into());
+        args.push(format!(
+            "skills.config={}",
+            toml_value(&Value::Array(entries))
+        ));
     }
     args.push("-c".into());
     args.push("notify=[]".into());
@@ -457,8 +475,8 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
 /// `codex resume` for `spec`'s thread in a terminal: the worker's own `--disable`/`-c` flags
 /// and thread config (as `-c` overrides), its model, effort and access as flags. A thread's
 /// sandbox and approvals are per process, not stored with it, so they are repeated; its
-/// developer instructions are stored. The MCP servers' variables (a grant) go in the
-/// terminal's environment, named in `env_vars`, never on the command line.
+/// developer instructions are stored. No MCP server's value (a grant, a token, a header) goes
+/// on the command line ([`terminal_servers`]).
 fn terminal_command(
     program: PathBuf,
     spec: &SessionSpec,
@@ -478,16 +496,7 @@ fn terminal_command(
     args.extend(app_server_args(Some(spec)).into_iter().skip(1));
     let mut variables = spec.env.clone();
     if let Some(Value::Object(servers)) = config.get_mut("mcp_servers") {
-        for server in &spec.mcp_servers {
-            if let Some(Value::Object(entry)) = servers.get_mut(&server.name) {
-                entry.remove("env");
-                entry.insert(
-                    "env_vars".into(),
-                    json!(server.env.iter().map(|(name, _)| name).collect::<Vec<_>>()),
-                );
-                variables.extend(server.env.iter().cloned());
-            }
-        }
+        terminal_servers(servers, env, &mut variables);
     }
     if let Some(model) = &spec.model {
         args.extend(["-m".into(), model.clone()]);
@@ -527,6 +536,144 @@ fn terminal_command(
         args,
         cwd,
         env: process.env,
+    }
+}
+
+/// Every server of a terminal's config (Brigadier's, the ones a task was given and a project's
+/// copied ones alike) with its values moved off the command line into the terminal's
+/// environment (`variables`). A stdio server's `env` becomes `env_vars`, which Codex passes on
+/// by name only (docs/research/phase7-probes.md (h)): a name another server or the terminal
+/// itself has with a different value is set from an alias of its own by a shell around the
+/// server (`/bin/sh -c 'export NAME="$ALIAS"; exec "$0" "$@"'`). Windows has no such shell, so
+/// there such a server is left out of the terminal. HTTP headers become `env_http_headers`
+/// with aliases (e).
+fn terminal_servers(
+    servers: &mut Map<String, Value>,
+    env: &CliEnv,
+    variables: &mut Vec<(String, String)>,
+) {
+    let value_of = |entry: &Value| entry.as_str().map(str::to_owned);
+    // Every value each name is given, the terminal's own included.
+    let mut given: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, value) in variables.iter() {
+        given.entry(name.clone()).or_default().push(value.clone());
+    }
+    for server in servers.values() {
+        for (name, value) in server
+            .get("env")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(value) = value_of(value) {
+                given.entry(name.clone()).or_default().push(value);
+            }
+        }
+    }
+    // Names given different values (by two servers, or by a server and the terminal).
+    let clashing: HashSet<String> = given
+        .iter()
+        .filter(|(name, values)| {
+            let own = variables
+                .iter()
+                .find(|(own, _)| own == *name)
+                .map(|(_, value)| value.clone())
+                .or_else(|| {
+                    env.var(name)
+                        .map(|value| value.to_string_lossy().into_owned())
+                });
+            values.iter().any(|value| *value != values[0])
+                || own.is_some_and(|own| own != values[0])
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut next_alias = 0;
+    let mut alias = |value: String, variables: &mut Vec<(String, String)>| {
+        let name = format!("BRIGADIER_MCP_{next_alias}");
+        next_alias += 1;
+        variables.push((name.clone(), value));
+        name
+    };
+    let mut left_out = Vec::new();
+    for (name, server) in servers.iter_mut() {
+        let Some(entry) = server.as_object_mut() else {
+            continue;
+        };
+        if let Some(Value::Object(headers)) = entry.remove("http_headers") {
+            let mut by_env = entry
+                .remove("env_http_headers")
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            for (header, value) in headers {
+                if let Some(value) = value_of(&value) {
+                    by_env.insert(header, json!(alias(value, variables)));
+                }
+            }
+            entry.insert("env_http_headers".into(), Value::Object(by_env));
+        }
+        let Some(Value::Object(values)) = entry.remove("env") else {
+            continue;
+        };
+        let values: Vec<(String, String)> = values
+            .iter()
+            .filter_map(|(key, value)| Some((key.clone(), value_of(value)?)))
+            .collect();
+        let mut passed: Vec<Value> = entry
+            .remove("env_vars")
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
+        if values.iter().any(|(key, _)| clashing.contains(key)) {
+            let shell_name = |key: &str| {
+                !key.is_empty()
+                    && !key.starts_with(|c: char| c.is_ascii_digit())
+                    && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            };
+            let command = entry
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let (Some(command), true) = (
+                command,
+                cfg!(unix) && values.iter().all(|(key, _)| shell_name(key)),
+            ) else {
+                left_out.push(name.clone());
+                continue;
+            };
+            let mut exports = Vec::new();
+            for (key, value) in values {
+                let alias = alias(value, variables);
+                exports.push(format!("{key}=\"${alias}\""));
+                passed.push(json!(alias));
+            }
+            let args: Vec<Value> = entry
+                .get("args")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let script = format!("export {}; exec \"$0\" \"$@\"", exports.join(" "));
+            entry.insert("command".into(), json!("/bin/sh"));
+            entry.insert(
+                "args".into(),
+                Value::Array(
+                    [json!("-c"), json!(script), json!(command)]
+                        .into_iter()
+                        .chain(args)
+                        .collect(),
+                ),
+            );
+        } else {
+            for (key, value) in values {
+                if !variables.iter().any(|(own, _)| *own == key) {
+                    variables.push((key.clone(), value));
+                }
+                passed.push(json!(key));
+            }
+        }
+        entry.insert("env_vars".into(), Value::Array(passed));
+    }
+    for name in left_out {
+        tracing::warn!(server = %name, "MCP server left out of the terminal: its variables need a shell around it");
+        servers.remove(&name);
     }
 }
 
@@ -1507,17 +1654,28 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
                 .collect()
         })
         .unwrap_or_default();
+    // The thread's config goes over the app-server's stdin, and Codex keeps none of it on
+    // disk (docs/research/phase7-probes.md (i)): each server's values are in its own entry.
     for server in &spec.mcp_servers {
-        let env: Map<String, Value> = server
+        let values: Map<String, Value> = server
             .env
             .iter()
             .map(|(name, value)| (name.clone(), Value::String(value.clone())))
             .collect();
-        let mut config = json!({
-            "command": server.command.display().to_string(),
-            "args": server.args,
-            "env": env,
-        });
+        let mut config = match &server.transport {
+            McpTransport::Stdio { command, args, cwd } => {
+                let mut config = json!({
+                    "command": command.display().to_string(),
+                    "args": args,
+                    "env": values,
+                });
+                if let Some(cwd) = cwd {
+                    config["cwd"] = json!(cwd.display().to_string());
+                }
+                config
+            }
+            McpTransport::Http { url } => json!({ "url": url, "http_headers": values }),
+        };
         if let Some(secs) = server.tool_timeout_secs {
             config["tool_timeout_sec"] = json!(secs);
         }
@@ -1532,7 +1690,11 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
         }
         servers.insert(server.name.clone(), config);
     }
-
+    // The user's own servers they switched off for Brigadier, a project's copied ones too
+    // (docs/research/phase7-probes.md (c)).
+    for name in &spec.switched_off.servers {
+        servers.insert(name.clone(), json!({ "enabled": false }));
+    }
     servers
 }
 
@@ -2632,6 +2794,7 @@ mod tests {
             mcp_servers: Vec::new(),
             tools,
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
             env: Vec::new(),
@@ -2736,11 +2899,9 @@ mod tests {
             for feature in DISABLED_FEATURES {
                 assert!(off.iter().any(|f| f == feature), "{tools:?}: {args:?}");
             }
-            assert_eq!(
-                args.windows(2)
-                    .filter(|pair| pair[0] == "-c" && pair[1] == NO_SKILLS_CATALOG)
-                    .count(),
-                usize::from(tools != ToolSet::Thread),
+            // Threads and workers alike see the skills' descriptions (PLAN.md §6 Phase 7).
+            assert!(
+                !args.iter().any(|arg| arg == NO_SKILLS_CATALOG),
                 "{tools:?}: {args:?}"
             );
             // No override disables an inherited server. Brigadier's own server is added
@@ -2751,8 +2912,11 @@ mod tests {
             let mut session = spec(tools, None);
             session.mcp_servers.push(McpServer {
                 name: "brigadier".into(),
-                command: "brigadier-mcp".into(),
-                args: Vec::new(),
+                transport: McpTransport::Stdio {
+                    command: "brigadier-mcp".into(),
+                    args: Vec::new(),
+                    cwd: None,
+                },
                 env: Vec::new(),
                 tool_timeout_secs: None,
                 trusted: true,
@@ -3200,5 +3364,218 @@ mod tests {
             assert!(!text.contains('`') && !text.contains("terminal"), "{text}");
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn server(name: &str, transport: McpTransport, env: &[(&str, &str)]) -> McpServer {
+        McpServer {
+            name: name.into(),
+            transport,
+            env: env
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            tool_timeout_secs: None,
+            trusted: false,
+            always_load: false,
+            prompt_tools: Vec::new(),
+        }
+    }
+
+    fn stdio(command: &str, cwd: Option<&str>) -> McpTransport {
+        McpTransport::Stdio {
+            command: command.into(),
+            args: vec!["serve".into()],
+            cwd: cwd.map(PathBuf::from),
+        }
+    }
+
+    /// A thread's config gives each server its own values (two servers may give one name
+    /// different ones), an HTTP server its URL and headers, a stdio server its folder, and
+    /// switches off what the user switched off, a project's copied server included.
+    #[test]
+    fn thread_config_servers_by_transport_and_switched_off() {
+        let mut session = spec(ToolSet::Lean, None);
+        session.mcp_servers = vec![
+            server("one", stdio("/bin/one", None), &[("TOKEN", "a")]),
+            server(
+                "two",
+                stdio("/bin/two", Some("/srv/two")),
+                &[("TOKEN", "b")],
+            ),
+            server(
+                "web",
+                McpTransport::Http {
+                    url: "https://mcp.example.com/mcp".into(),
+                },
+                &[("Authorization", "Bearer c")],
+            ),
+        ];
+        session.switched_off.servers = vec!["railway".into()];
+        let servers = mcp_config(&json!({}), &session);
+        assert_eq!(servers["one"]["env"], json!({"TOKEN": "a"}));
+        assert!(servers["one"].get("cwd").is_none());
+        assert_eq!(servers["two"]["env"], json!({"TOKEN": "b"}));
+        assert_eq!(servers["two"]["cwd"], "/srv/two");
+        assert_eq!(
+            servers["web"],
+            json!({"url": "https://mcp.example.com/mcp",
+                   "http_headers": {"Authorization": "Bearer c"}})
+        );
+        assert_eq!(servers["railway"], json!({"enabled": false}));
+    }
+
+    /// Workers and threads see their skills' descriptions; a skill the user switched off is
+    /// disabled by its file, beside the user's own `skills.config` entries.
+    #[test]
+    fn switched_off_skills_keep_the_users_own_entries() {
+        let mut session = spec(ToolSet::Lean, None);
+        session.switched_off.skill_files = vec![PathBuf::from("/h/.agents/skills/x/SKILL.md")];
+        session.switched_off.codex_skill_config =
+            vec![json!({"path": "/h/own/SKILL.md", "enabled": false})];
+        let args = app_server_args(Some(&session));
+        let at = args
+            .iter()
+            .position(|arg| arg.starts_with("skills.config="))
+            .expect("skills.config");
+        assert_eq!(args[at - 1], "-c");
+        assert_eq!(
+            args[at],
+            r#"skills.config=[{"enabled" = false, "path" = "/h/own/SKILL.md"}, {"enabled" = false, "path" = "/h/.agents/skills/x/SKILL.md"}]"#
+        );
+        // A sealed session doesn't load the user's skills at all.
+        let mut sealed = spec(ToolSet::Review, None);
+        sealed.switched_off = session.switched_off.clone();
+        assert!(
+            !app_server_args(Some(&sealed))
+                .iter()
+                .any(|arg| arg.starts_with("skills.config="))
+        );
+    }
+
+    /// `codex resume` in a terminal: no server's value is on the command line, a project's
+    /// copied server with literal values included. Names given different values start through
+    /// a shell that sets each from an alias (Unix); headers come from aliases.
+    #[test]
+    fn terminal_resume_keeps_every_servers_values_off_the_command_line() {
+        let mut session = spec(ToolSet::Lean, None);
+        session.mcp_servers = vec![
+            server("one", stdio("/bin/one", None), &[("TOKEN", "first-secret")]),
+            server(
+                "two",
+                stdio("/bin/two", None),
+                &[("TOKEN", "second-secret")],
+            ),
+            server(
+                "own",
+                stdio("/bin/own", None),
+                &[("BRIGADIER_GRANT", "grant-secret")],
+            ),
+            server(
+                "web",
+                McpTransport::Http {
+                    url: "https://mcp.example.com/mcp".into(),
+                },
+                &[("Authorization", "Bearer third-secret")],
+            ),
+        ];
+        let mut servers = mcp_config(&json!({}), &session);
+        // A trusted project's server, copied with the literal values of its config.
+        servers.insert(
+            "project".into(),
+            json!({"command": "/repo/bin/db", "args": [], "cwd": "/repo",
+                   "env": {"DB_PASSWORD": "fourth-secret"},
+                   "http_headers": {}}),
+        );
+        servers.insert(
+            "remote".into(),
+            json!({"url": "https://r.example.com", "http_headers": {"X-Key": "fifth-secret"},
+                   "env_http_headers": {"X-Other": "OTHER_VAR"}}),
+        );
+        let mut config = Map::new();
+        config.insert("mcp_servers".into(), Value::Object(servers));
+        let env = CliEnv::from_vars([("PATH".into(), "/usr/bin".into())]);
+        let command = terminal_command(
+            "/usr/local/bin/codex".into(),
+            &session,
+            "thread-1",
+            "/tmp".into(),
+            config,
+            false,
+            &env,
+        );
+        let line = command.args.join(" ");
+        for secret in [
+            "first-secret",
+            "second-secret",
+            "grant-secret",
+            "third-secret",
+            "fourth-secret",
+            "fifth-secret",
+        ] {
+            assert!(
+                !line.contains(secret),
+                "{secret} on the command line: {line}"
+            );
+        }
+        let var = |name: &str| {
+            command
+                .env
+                .iter()
+                .find(|(key, _)| key.to_str() == Some(name))
+                .and_then(|(_, value)| value.to_str().map(str::to_owned))
+        };
+        let override_of = |server: &str| -> String {
+            let at = command
+                .args
+                .iter()
+                .position(|arg| arg.starts_with("mcp_servers={"))
+                .unwrap();
+            let all = &command.args[at];
+            let start = all.find(&format!("\"{server}\" = ")).unwrap();
+            all[start..].to_owned()
+        };
+        // A name only one server has keeps its own name.
+        assert_eq!(var("BRIGADIER_GRANT").as_deref(), Some("grant-secret"));
+        assert!(override_of("own").contains(r#""env_vars" = ["BRIGADIER_GRANT"]"#));
+        assert_eq!(var("DB_PASSWORD").as_deref(), Some("fourth-secret"));
+        // The header's value comes from an alias.
+        let web = override_of("web");
+        assert!(
+            web.contains(r#""env_http_headers" = {"Authorization" = "BRIGADIER_MCP_"#),
+            "{web}"
+        );
+        let remote = override_of("remote");
+        assert!(remote.contains(r#""X-Other" = "OTHER_VAR""#), "{remote}");
+        assert!(remote.contains(r#""X-Key" = "BRIGADIER_MCP_"#), "{remote}");
+        if cfg!(unix) {
+            // TOKEN has two values: each server sets it from an alias of its own.
+            let one = override_of("one");
+            assert!(
+                one.starts_with(r#""one" = {"args" = ["-c", "export TOKEN=\"$BRIGADIER_MCP_"#),
+                "{one}"
+            );
+            assert!(one.contains(r#""/bin/one", "serve"]"#), "{one}");
+            assert!(one.contains(r#""command" = "/bin/sh""#), "{one}");
+            assert_eq!(var("TOKEN"), None);
+            let aliases: Vec<String> = command
+                .env
+                .iter()
+                .filter_map(|(key, value)| {
+                    Some((key.to_str()?.to_owned(), value.to_str()?.to_owned()))
+                })
+                .filter(|(key, _)| key.starts_with("BRIGADIER_MCP_"))
+                .map(|(_, value)| value)
+                .collect();
+            for secret in [
+                "first-secret",
+                "second-secret",
+                "Bearer third-secret",
+                "fifth-secret",
+            ] {
+                assert!(aliases.iter().any(|value| value == secret), "{aliases:?}");
+            }
+        } else {
+            assert!(!line.contains(r#""one" = "#) && !line.contains(r#""two" = "#));
+        }
     }
 }

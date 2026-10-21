@@ -479,6 +479,7 @@ dependencies = [
  "brigadier-git",
  "brigadier-index",
  "brigadier-providers",
+ "brigadier-registry",
  "brigadier-review",
  "brigadier-router",
  "brigadier-sandbox",
@@ -688,6 +689,14 @@ dependencies = [
 [[package]]
 name = "brigadier-registry"
 version = "0.1.0"
+dependencies = [
+ "notify",
+ "notify-debouncer-full",
+ "serde_json",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
+ "yaml-rust2",
+]
 
 [[package]]
 name = "brigadier-review"

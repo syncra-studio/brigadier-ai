@@ -226,7 +226,7 @@ const waiting = (method: string) => calls.some((call) => call.method === method 
 // ----- the layout ------------------------------------------------------------------------------
 
 const PAGES: SettingsPageId[] = [
-  "general", "voice", "configuration", "shortcuts", "providers", "routing", "git", "computerUse",
+  "general", "voice", "configuration", "shortcuts", "providers", "plugins", "routing", "git", "computerUse",
   "browser", "browserImport", "storage", "inspector", "archived",
 ];
 

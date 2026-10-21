@@ -33,8 +33,9 @@ use std::time::Duration;
 
 use brigadier_providers::{
     Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, InputPart, ItemStatus,
-    LimitHit, McpServer, Origin, OutputHook, ProviderEvent, ProviderKind, ProviderSession,
-    Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput, TurnStatus,
+    LimitHit, McpServer, McpTransport, Origin, OutputHook, ProviderEvent, ProviderKind,
+    ProviderSession, Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput,
+    TurnStatus,
 };
 use brigadier_store::StreamPage;
 use tokio::sync::mpsc;
@@ -3533,6 +3534,7 @@ impl SessionManager {
                 current.git_writing = writing;
                 current.browser = browser;
                 current.auto_merge = auto_merge;
+                current.integrations = self.thread_integrations(&conv.id).await;
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
@@ -3679,6 +3681,14 @@ impl SessionManager {
                 ConversationKind::Chat => ToolSet::Chat,
             },
             skill_plugins: Vec::new(),
+            // What the user switched off of its agent's own setup (`integrations`).
+            switched_off: match conv.kind {
+                ConversationKind::Session => {
+                    self.thread_switched_off(&conv.id, choice.provider, &dir)
+                        .await
+                }
+                ConversationKind::Chat => Default::default(),
+            },
             // The workspace is the thread's to work in, never its own to clean up: it is not
             // recorded under the thread's owner. A tab chat's checkout is read the same way.
             add_dirs: launch
@@ -3881,12 +3891,15 @@ impl SessionManager {
     ) -> McpServer {
         McpServer {
             name: "brigadier".into(),
-            command: self.config.daemon_exe.clone(),
-            args: vec![
-                "mcp".into(),
-                "--data-dir".into(),
-                self.data_dir.to_string_lossy().into_owned(),
-            ],
+            transport: McpTransport::Stdio {
+                command: self.config.daemon_exe.clone(),
+                args: vec![
+                    "mcp".into(),
+                    "--data-dir".into(),
+                    self.data_dir.to_string_lossy().into_owned(),
+                ],
+                cwd: None,
+            },
             env: vec![(MCP_GRANT_ENV.into(), grant)],
             tool_timeout_secs: Some(timeout_secs),
             trusted: true,
@@ -6647,6 +6660,7 @@ impl SessionManager {
                 current.git_writing = prompts::git_writing(&self.core.settings());
                 current.browser = self.core.settings().browser_enabled;
                 current.auto_merge = self.auto_merge_in(&conv.id);
+                current.integrations = self.thread_integrations(&conv.id).await;
                 current.due = due;
                 if let Some(cli) = conv.live_cli().await {
                     current.provider = cli.provider;

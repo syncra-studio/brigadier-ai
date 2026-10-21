@@ -208,6 +208,7 @@ impl SessionManager {
                     role: task.role,
                     phase: task.phase,
                     rerun: Some(rerun),
+                    integrations: task.integrations.clone(),
                     ..TaskExtra::default()
                 },
             )

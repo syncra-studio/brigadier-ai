@@ -1012,6 +1012,13 @@ pub struct Settings {
     pub browser_downloads_dir: String,
     /// The built-in browser asks where to save each download.
     pub browser_ask_downloads: bool,
+    /// MCP servers switched off for Brigadier, by catalog id (`claude:user:railway`): no thread
+    /// or worker gets them, their agent's own included. A change takes effect at each
+    /// session's next start or resume.
+    pub mcp_servers_off: Vec<String>,
+    /// Skills switched off for Brigadier, by catalog id (`agents:user:<folder>`), as for
+    /// [`Self::mcp_servers_off`].
+    pub skills_off: Vec<String>,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -1199,6 +1206,8 @@ impl Default for Settings {
             browser_full_url: false,
             browser_downloads_dir: String::new(),
             browser_ask_downloads: false,
+            mcp_servers_off: Vec::new(),
+            skills_off: Vec::new(),
             settings_version: SETTINGS_VERSION,
         }
     }

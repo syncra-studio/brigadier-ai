@@ -2153,6 +2153,8 @@ mod honesty_tests;
 #[cfg(unix)]
 mod integrated_checks_tests;
 #[cfg(unix)]
+mod integrations_tests;
+#[cfg(unix)]
 mod interrupted_turn_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]

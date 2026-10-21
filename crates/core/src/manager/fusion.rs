@@ -44,6 +44,7 @@ pub(crate) struct FusedBrief {
     pub areas: Option<Vec<brigadier_router::Area>>,
     pub floor: Option<brigadier_router::QualityTier>,
     pub needs: Vec<brigadier_router::Capability>,
+    pub integrations: Vec<String>,
 }
 
 /// What a fused task's report does when it comes in.
@@ -81,6 +82,7 @@ impl SessionManager {
             areas,
             floor,
             needs,
+            integrations,
         } = brief;
         if args.kind != TaskKind::Research {
             return Err(Error::Invalid(
@@ -132,6 +134,7 @@ impl SessionManager {
                             label: LABELS[index].to_owned(),
                             delivered: false,
                         }),
+                        integrations: integrations.clone(),
                         ..Default::default()
                     },
                 )

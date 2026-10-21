@@ -1349,6 +1349,7 @@ impl SessionManager {
             review_settled: false,
             live_look: extra.live_look,
             fresh_commit: extra.fresh_commit,
+            integrations: extra.integrations,
             brain: Default::default(),
             resuming: false,
             takeover: None,
@@ -1886,6 +1887,20 @@ impl SessionManager {
             mcp_servers.push(kit.server);
             skill_plugins.push(kit.plugin);
         }
+        // The servers its task names that its agent lacks, the skills its agent doesn't find
+        // by itself, and what the user switched off (`integrations`).
+        let shared = self
+            .worker_shared(
+                &conversation_id,
+                &task.integrations,
+                provider,
+                &cwd,
+                workspace.worktree.as_deref(),
+            )
+            .await;
+        secret_values.extend(shared.secrets);
+        mcp_servers.extend(shared.servers);
+        skill_plugins.extend(shared.skills);
         // A Claude worker's turn ends only with its report, or rightly waiting (BUILD-PLAN E2).
         let stop_hook = (task.route.choice.provider == ProviderKind::Claude).then(|| {
             let grant = self.grants.issue(
@@ -1951,6 +1966,7 @@ impl SessionManager {
             mcp_servers,
             tools: ToolSet::Lean,
             skill_plugins,
+            switched_off: shared.switched_off,
             add_dirs: match (&home, &workspace.worktree) {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
                 _ => Vec::new(),
@@ -5654,6 +5670,9 @@ pub(crate) struct TaskExtra {
     pub rerun: Option<brigadier_router::Rerun>,
     /// Its part in a fused pair (see `fusion`).
     pub fusion: Option<crate::work::Fusion>,
+    /// The catalog ids of the MCP servers it gets besides its agent's own
+    /// (`delegate_task`'s `integrations`).
+    pub integrations: Vec<String>,
 }
 
 /// The router's category for a task: design work when it makes designs or images
