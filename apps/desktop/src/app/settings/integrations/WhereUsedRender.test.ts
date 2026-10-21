@@ -10,7 +10,7 @@ type Where = { labels: string[]; description: string; radios: Radio[]; summary: 
 type Row = { title: string; line: string; end: string };
 type Switch = { label: string; checked: string; disabled: boolean };
 type State = { title: string; description: string; sections: string[]; text: string; switches: Switch[]; overflow: boolean; signIn: { title: string; line: string; rows: Row[] } | null; where: Where; settings?: unknown };
-type Picker = { name: string; placeholder: string; label: string; projects: { name: string; path: string; state: string; disabled: boolean }[]; footer: string };
+type Picker = { name: string; placeholder: string; label: string; projects: { name: string; path: string; state: string; disabled: boolean }[]; footer: string; bounded: boolean; scrolls: string };
 
 const PENCIL = "ClaudeUser:pencil";
 const API = "ClaudeProjectFile:steady-app:steady-api";
@@ -173,6 +173,8 @@ test("plugins where it's used: every screen and component state on the board, an
       { name: "old-landing", path: "~/Code/old-landing", state: "Not trusted", disabled: true },
     ],
     footer,
+    bounded: true,
+    scrolls: "auto",
   });
   assert.deepEqual(seen.pickerFound, { ...picker, projects: [picker.projects[1]] });
 

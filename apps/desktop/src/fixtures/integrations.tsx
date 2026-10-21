@@ -751,6 +751,9 @@ function readPicker() {
     label: text(picker.querySelector("p")),
     projects: all("button", picker).map((button) => ({ name: text(button.querySelector("span > span")), path: text(button.querySelector("span > span + span")), state: text(button.querySelector(":scope > span:last-child:not(:nth-child(2))")), disabled: (button as HTMLButtonElement).disabled })),
     footer: text(picker.querySelector("p:last-child")),
+    // Bound to the room the window leaves, with only the projects scrolling.
+    bounded: getComputedStyle(picker).maxHeight !== "none",
+    scrolls: getComputedStyle(picker.querySelector("button")!.parentElement!).overflowY,
   };
 }
 /** The tooltip a pointer over `node` shows. */

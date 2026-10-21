@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { everywhere, inProject, mergeViews, projectView, signIn, snapshotOf, type SwitchSettings } from "@/app/settings/integrations/live";
-import type { IntegrationsView, McpServerView, Project, ProjectSwitches, Settings, SignInState, SkillView } from "@/ipc/generated";
+import { everywhere, inProject, mergeViews, signIn, snapshotOf, type SwitchSettings } from "@/app/settings/integrations/live";
+import type { IntegrationsView, McpServerView, Project, ProjectSwitches, SignInState, SkillView } from "@/ipc/generated";
 
 const railway = (source: string, id: string, off: boolean, nativeTo: McpServerView["nativeTo"]): McpServerView => ({
   id, name: "railway", source, project: null, off, nativeTo, signIn: null, pendingSignIn: null, copyKey: "railway-key",
@@ -34,7 +34,7 @@ test("live catalog: one row per server found in several configs, its switch cove
   };
   const app = project("brigadier-ai", "/Users/me/Development/brigadier-ai", true);
   const db: McpServerView = { ...railway("Claude Code (project)", "claude:project:/Users/me/Development/brigadier-ai:db", false, ["claude"]), name: "db", project: "/Users/me/Development/brigadier-ai" };
-  const view = mergeViews(user, [{ ...user, servers: [...user.servers, db] }]);
+  const view = mergeViews(user, [["/Users/me/Development/brigadier-ai", { ...user, servers: [...user.servers, db] }]]);
   const { snapshot, members, targets } = snapshotOf(view, [app, project("scratch", "/Users/me/scratch", false)], ["scratch"], 1);
 
   const [rail, lin, dbRow, figma] = snapshot.catalog.servers;
@@ -148,31 +148,45 @@ test("used in every project: on by default everywhere, and back in its project i
   assert.deepEqual(everywhere(switches({ skillsOff: [skill] }), "skill", [skill], "app", true), switches({ skillsEverywhere: [skill], projectSwitches: [entry("app", { skillsOff: [skill] })] }));
 });
 
-test("project view: a project's own catalog, with other projects' items used everywhere, and where a server runs", () => {
+test("project view: each project's catalog as the daemon reads it, and the list takes each item from its own project's", () => {
   const app = project("app", "/Users/me/app", true);
   const webProject = project("web", "/Users/me/web", true);
   const user: IntegrationsView = { servers: [linear], skills: [shared], problems: [] };
-  // In app, its .mcp.json's linear overrides the user's, and the user's grill-me is linked into its .claude/skills.
-  const appLinear: McpServerView = { ...linear, id: "claude:project:/Users/me/app:linear", source: "Claude Code (project)", project: "/Users/me/app", transport: { type: "http", url: "https://linear.example/mcp", headers: [] } };
-  const appSkill: SkillView = { ...shared, locations: [...shared.locations, { path: "/Users/me/app/.claude/skills/grill-me", linkedTo: "/Users/me/.agents/skills/grill-me", nativeTo: ["claude"] }] };
-  const appOwn: IntegrationsView = { servers: [appLinear], skills: [appSkill], problems: [] };
   const api: McpServerView = { ...railway("Claude Code (project)", "claude:project:/Users/me/web:api", false, ["claude"]), name: "api", project: "/Users/me/web", copyKey: "api-key", transport: { type: "stdio", command: "node", args: ["index.js"], env: [], cwd: "/Users/me/web/tools/api" } };
-  const db: McpServerView = { ...api, id: "claude:project:/Users/me/web:db", name: "db", copyKey: "db-key" };
-  const webOwn: IntegrationsView = { servers: [linear, api, db], skills: [shared], problems: [] };
-  const settings = { serversEverywhere: [api.id], skillsEverywhere: [] };
-
-  const inApp = projectView(appOwn, "/Users/me/app", new Map([["/Users/me/app", appOwn], ["/Users/me/web", webOwn]]), settings);
-  assert.deepEqual(inApp.servers.map((item) => item.id), [appLinear.id, api.id]);
-  const merged = mergeViews(user, [appOwn, webOwn]);
-  const { snapshot, members } = snapshotOf(merged, [app, webProject], [], 2, { ...settings, projectSwitches: [] } as unknown as Settings, { app: inApp });
+  // In app, its .mcp.json's linear overrides the user's; web's api is used everywhere, which Claude doesn't load in app.
+  const appLinear: McpServerView = { ...linear, id: "claude:project:/Users/me/app:linear", source: "Claude Code (project)", project: "/Users/me/app", transport: { type: "http", url: "https://linear.example/mcp", headers: [] } };
+  const appOwn: IntegrationsView = { servers: [appLinear, { ...api, nativeTo: [] }], skills: [shared], problems: [] };
+  const webOwn: IntegrationsView = { servers: [linear, api], skills: [shared], problems: [] };
+  const merged = mergeViews(user, [["/Users/me/app", appOwn], ["/Users/me/web", webOwn]]);
+  assert.deepEqual(merged.servers.map((item) => [item.id, item.nativeTo]), [[linear.id, ["claude"]], [appLinear.id, ["claude"]], [api.id, ["claude"]]]);
+  const { snapshot } = snapshotOf(merged, [app, webProject], [], 2, undefined, { app: appOwn });
   const view = snapshot.catalog.projectCatalogs!.app!;
-  // The project's own version, not the merged catalog's first one.
-  assert.deepEqual(view.servers.map((item) => [item.name, item.project, item.transport]), [
-    ["linear", "app", { kind: "http", url: "https://linear.example/mcp" }],
-    ["api", "web", { kind: "stdio", command: "node", args: ["index.js"], cwd: "~/web/tools/api" }],
+  assert.deepEqual(view.servers.map((item) => [item.name, item.project, item.nativeAgents, item.transport]), [
+    ["linear", "app", ["claude"], { kind: "http", url: "https://linear.example/mcp" }],
+    ["api", "web", [], { kind: "stdio", command: "node", args: ["index.js"], cwd: "~/web/tools/api" }],
   ]);
-  assert.deepEqual(view.skills[0]!.locations, ["~/.agents/skills/grill-me", "~/.claude/skills/grill-me", "~/app/.claude/skills/grill-me"]);
-  assert.deepEqual(snapshot.catalog.skills[0]!.locations, ["~/.agents/skills/grill-me", "~/.claude/skills/grill-me"]);
-  assert.deepEqual(members.get(appLinear.id), [appLinear.id]);
-  assert.equal(snapshot.catalog.servers.find((item) => item.id === linear.id)!.transport.kind, "http");
+});
+
+/** A copy of web's api server. */
+const copy = (id: string, source: string, nativeTo: McpServerView["nativeTo"]): McpServerView => ({ ...railway(source, id, false, nativeTo), name: "api", project: "/Users/me/web", copyKey: "api-key" });
+
+test("a server's row covers its copies in every catalog, so its switch turns every copy off", () => {
+  const app = project("app", "/Users/me/app", true);
+  const webProject = project("web", "/Users/me/web", true);
+  const check = (user: IntegrationsView, web: IntegrationsView, inApp: IntegrationsView, all: string[]) => {
+    const { snapshot, members } = snapshotOf(mergeViews(user, [["/Users/me/app", inApp], ["/Users/me/web", web]]), [app, webProject], [], 2, undefined, { app: inApp, web });
+    const rows = [...snapshot.catalog.servers, ...Object.values(snapshot.catalog.projectCatalogs!).flatMap((item) => item.servers)].filter((row) => row.name === "api");
+    for (const row of rows) {
+      assert.deepEqual(row.ids!.toSorted(), all.toSorted());
+      assert.deepEqual(members.get(row.id)!.toSorted(), all.toSorted());
+    }
+  };
+  // Used everywhere, then copied into Codex's config in web: app's catalog has only the first copy.
+  const claude = copy("claude:project:/Users/me/web:api", "Claude Code (project)", ["claude"]);
+  const codex = copy("codex:project:/Users/me/web:api", "Codex (project)", ["codex"]);
+  const empty: IntegrationsView = { servers: [], skills: [], problems: [] };
+  check(empty, { ...empty, servers: [claude, codex] }, { ...empty, servers: [{ ...claude, nativeTo: [] }] }, [claude.id, codex.id]);
+  // A Claude local-scope copy and a .mcp.json copy are one row; another project's catalog has only the local one.
+  const local = copy("claude:local:/Users/me/web:api", "Claude Code (local)", ["claude"]);
+  check({ ...empty, servers: [local] }, { ...empty, servers: [local, claude] }, { ...empty, servers: [{ ...local, nativeTo: [] }] }, [local.id, claude.id]);
 });

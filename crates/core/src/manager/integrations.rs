@@ -25,13 +25,13 @@ use std::sync::{Arc, OnceLock};
 use brigadier_providers::{McpServer, McpTransport, ProviderKind, SwitchedOff};
 use brigadier_registry::{
     Agent, Catalog, CodexStore, FindError, OAuthClient, Owner, Probe, Registry, Roots, Secret,
-    Server, Session, SignIn, SignInStores, Transport, identity, owner_agent,
+    Server, Session, SignIn, SignInStores, Source, Transport, identity, owner_agent,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::SessionManager;
-use super::mcp_auth::{Homes, McpSignInStatus, Open, Place, Prober, Route};
+use super::mcp_auth::{Homes, McpAuth, McpSignInStatus, Open, Place, Prober, Route};
 use crate::model::{ConversationId, ProjectId, Settings};
 use crate::{Error, Result};
 
@@ -1000,7 +1000,8 @@ pub(crate) fn thread_section(
 
 /// `registry`'s catalog for sessions in `repo`, with the items of the projects at `others` that
 /// the user uses in every project. A skill switched off by `switches` isn't taken, so it can't
-/// stand in for a switched-on copy of it from another project.
+/// stand in for a switched-on copy of it from another project. A Claude local-scope server is
+/// its folder's own: sessions elsewhere get it only once the user uses it in every project.
 fn catalog_for(
     registry: &Registry,
     repo: Option<&Path>,
@@ -1009,6 +1010,11 @@ fn catalog_for(
 ) -> Catalog {
     let settings = switches.settings;
     let mut catalog = registry.catalog(repo);
+    catalog.servers.retain(|server| {
+        server.source != Source::ClaudeLocal
+            || server.project.as_deref() == repo
+            || settings.servers_everywhere.contains(&server.id)
+    });
     for other in others {
         registry.adopt(
             &mut catalog,
@@ -1020,6 +1026,25 @@ fn catalog_for(
         );
     }
     catalog
+}
+
+/// Settings' view of the catalog sessions in `repo` get ([`catalog_for`]), or without a `repo`
+/// the user's, with every folder's local-scope servers.
+fn settings_view(
+    registry: &Registry,
+    repo: Option<&Path>,
+    others: &[PathBuf],
+    switches: &Switches<'_>,
+    auth: &McpAuth,
+) -> IntegrationsView {
+    // The user's catalog keeps every local-scope server, so the list finds it under its project.
+    let catalog = match repo {
+        Some(_) => catalog_for(registry, repo, others, switches),
+        None => registry.catalog(None),
+    };
+    // Settings polls: its reads never ask the user.
+    let stores = auth.prober(registry.roots(), catalog.codex_store, true);
+    view(&catalog, repo, switches.settings, &stores)
 }
 
 impl SessionManager {
@@ -1078,12 +1103,13 @@ impl SessionManager {
             .collect()
     }
 
-    /// Settings' catalog: the user's servers and skills, and `project`'s (its first repository)
-    /// once the user trusts its folder.
+    /// Settings' catalog: the user's servers and skills, and once the user trusts `project`'s
+    /// folder (its first repository), the catalog its sessions get: its own, with the other
+    /// projects' items used everywhere and its exceptions.
     pub async fn integrations_view(&self, project: Option<ProjectId>) -> Result<IntegrationsView> {
-        let repo = match project {
+        let repo = match &project {
             Some(id) => {
-                let project = self.core.project(&id)?;
+                let project = self.core.project(id)?;
                 let repo = project
                     .repos
                     .first()
@@ -1095,11 +1121,23 @@ impl SessionManager {
         };
         let (registry, settings, auth) =
             (self.registry(), self.core.settings(), self.mcp_auth.clone());
+        let others = match &repo {
+            Some(repo) => self.everywhere_repos(&settings, Some(repo)),
+            None => Vec::new(),
+        };
+        let project = repo.as_ref().and(project);
         super::blocking(move || {
-            let catalog = registry.catalog(repo.as_deref());
-            // Settings polls: its reads never ask the user.
-            let stores = auth.prober(registry.roots(), catalog.codex_store, true);
-            Ok(view(&catalog, repo.as_deref(), &settings, &stores))
+            let switches = Switches {
+                settings: &settings,
+                project: project.as_ref(),
+            };
+            Ok(settings_view(
+                &registry,
+                repo.as_deref(),
+                &others,
+                &switches,
+                &auth,
+            ))
         })
         .await
     }
@@ -1642,6 +1680,106 @@ mod tests {
         );
         let ids: Vec<&String> = catalog.skills.iter().map(|skill| &skill.id).collect();
         assert_eq!(ids, [&theirs_id]);
+    }
+
+    #[test]
+    fn a_projects_settings_view_is_the_catalog_its_sessions_get() {
+        let home = home();
+        let (repo, other) = (home.join("repo"), home.join("steady"));
+        write(
+            &other.join(".mcp.json"),
+            r#"{"mcpServers": {"steady-api": {"command": "steady"}}}"#,
+        );
+        let skill = "---\nname: deploy\ndescription: Deploys.\n---\n";
+        write(&other.join(".claude/skills/deploy/SKILL.md"), skill);
+        // This project has the same skill, file for file.
+        write(&repo.join(".claude/skills/deploy/SKILL.md"), skill);
+        let registry = Registry::new(roots(&home));
+        let theirs = Catalog::read(&roots(&home), Some(&other));
+        let settings = Settings {
+            servers_everywhere: vec![theirs.servers[0].id.clone()],
+            skills_everywhere: vec![theirs.skills[0].id.clone()],
+            ..Settings::default()
+        };
+        let project = ProjectId("repo".into());
+        let switches = Switches {
+            settings: &settings,
+            project: Some(&project),
+        };
+        let auth = McpAuth::new(Arc::new(Memory::default()), Arc::new(|_: &str| false));
+        let view = settings_view(
+            &registry,
+            Some(&repo),
+            std::slice::from_ref(&other),
+            &switches,
+            &auth,
+        );
+        // The other project's server is there, but Claude in this project doesn't load it.
+        let server = view
+            .servers
+            .iter()
+            .find(|server| server.name == "steady-api")
+            .expect("the server used everywhere");
+        assert!(server.native_to.is_empty());
+        // The identical skill is one, this project's own copy, which its workers find.
+        let deploys: Vec<&SkillView> = view
+            .skills
+            .iter()
+            .filter(|skill| skill.name == "deploy")
+            .collect();
+        assert_eq!(deploys.len(), 1);
+        assert_ne!(deploys[0].id, theirs.skills[0].id);
+        assert!(deploys[0].native_to.contains(&ProviderKind::Claude));
+        // The user's view alone doesn't take it in.
+        let user = settings_view(&registry, None, &[], &switches, &auth);
+        assert!(
+            user.servers
+                .iter()
+                .all(|server| server.name != "steady-api")
+        );
+    }
+
+    #[test]
+    fn a_local_scope_server_stays_in_its_folder_until_used_everywhere() {
+        let home = home();
+        let (a, b) = (home.join("a"), home.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        write(
+            &home.join(".claude.json"),
+            &format!(
+                r#"{{"projects": {{"{}": {{"mcpServers": {{"local-db": {{"command": "db"}}}}}}}}}}"#,
+                a.display()
+            ),
+        );
+        let registry = Registry::new(roots(&home));
+        let id = registry.catalog(None).find("local-db").unwrap().id.clone();
+        let named = |settings: &Settings, repo: &Path| {
+            let switches = Switches {
+                settings,
+                project: None,
+            };
+            let catalog = catalog_for(&registry, Some(repo), &[], &switches);
+            resolve(&catalog, &["local-db".into()], &switches)
+        };
+        let settings = Settings::default();
+        assert_eq!(named(&settings, &a).unwrap(), std::slice::from_ref(&id));
+        assert!(named(&settings, &b).is_err());
+        let everywhere = Settings {
+            servers_everywhere: vec![id.clone()],
+            ..Settings::default()
+        };
+        assert_eq!(named(&everywhere, &b).unwrap(), std::slice::from_ref(&id));
+        // Settings' list still finds it, under its folder.
+        let auth = McpAuth::new(Arc::new(Memory::default()), Arc::new(|_: &str| false));
+        let switches = Switches {
+            settings: &settings,
+            project: None,
+        };
+        let user = settings_view(&registry, None, &[], &switches, &auth);
+        assert!(user.servers.iter().any(|server| server.id == id));
+        let in_b = settings_view(&registry, Some(&b), &[], &switches, &auth);
+        assert!(in_b.servers.iter().all(|server| server.id != id));
     }
 
     #[test]

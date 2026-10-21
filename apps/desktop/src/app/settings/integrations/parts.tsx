@@ -143,13 +143,14 @@ function ProjectPicker({ name, on, projects, exceptions, busy, onPick }: {
   const shown = projects.filter((project) => `${project.name} ${project.path}`.toLowerCase().includes(find.toLowerCase().trim()));
   return <Popover open={open} onOpenChange={(value) => { setOpen(value); setFind(""); }}>
     <PopoverTrigger asChild><Button variant="soft" size="sm" disabled={busy}>{on ? <MinusCircle className="size-3.5" /> : <Plus className="size-3.5" />}Turn {turn} in a project…</Button></PopoverTrigger>
-    <PopoverContent align="end" aria-label={`Turn ${name} ${turn} in…`} className="flex w-85 flex-col gap-0.5 rounded-2xl p-1.5">
+    <PopoverContent align="end" aria-label={`Turn ${name} ${turn} in…`} className="flex max-h-(--radix-popover-content-available-height) w-85 flex-col gap-0.5 rounded-2xl p-1.5">
       <label className="border-divider flex h-8.5 shrink-0 items-center gap-2 border-b px-2.5">
         <Search className="text-foreground/50 size-3.5 shrink-0" />
         <input aria-label="Find a project" placeholder="Find a project" value={find} onChange={(event) => setFind(event.target.value)} className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-label outline-none" />
       </label>
-      <p className="text-foreground/50 px-2.5 pt-1.5 pb-1 text-tiny font-medium">Turn {name} {turn} in…</p>
-      {shown.map((project) => {
+      <p className="text-foreground/50 shrink-0 px-2.5 pt-1.5 pb-1 text-tiny font-medium">Turn {name} {turn} in…</p>
+      {/* Only the projects scroll: the find field and the footer stay put. */}
+      <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">{shown.map((project) => {
         const done = exceptions.some((item) => item.id === project.id);
         const locked = !project.trusted;
         const Icon = locked ? Lock : Folder;
@@ -158,8 +159,8 @@ function ProjectPicker({ name, on, projects, exceptions, busy, onPick }: {
           <span className="flex min-w-0 flex-1 flex-col gap-px"><span className="truncate text-label">{project.name}</span><span className="text-foreground/50 truncate font-mono text-tiny">{project.path}</span></span>
           {done ? <span className="text-foreground/50 flex shrink-0 items-center gap-1 text-xs"><Check className="size-3" />Already {turn} here</span> : locked && <span className="text-foreground/50 shrink-0 text-xs">Not trusted</span>}
         </button>;
-      })}
-      <p className="border-divider text-foreground/50 border-t px-2.5 pt-2 pb-1.5 text-tiny leading-integration">Brigadier only reads trusted projects. Trust one from its menu in the sidebar.</p>
+      })}</div>
+      <p className="border-divider text-foreground/50 shrink-0 border-t px-2.5 pt-2 pb-1.5 text-tiny leading-integration">Brigadier only reads trusted projects. Trust one from its menu in the sidebar.</p>
     </PopoverContent>
   </Popover>;
 }

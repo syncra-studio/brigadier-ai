@@ -177,33 +177,23 @@ function trusted(project: Project): boolean {
 
 const known = (list: { id: string }[], id: string) => list.some((item) => item.id === id);
 
-/** The user's catalog plus each trusted project's own entries. */
-export function mergeViews(user: IntegrationsView, perProject: IntegrationsView[]): IntegrationsView {
+/**
+ * The user's catalog plus each trusted project's own entries, by its folder. A project's
+ * catalog also holds other projects' items used everywhere, read as that project sees them:
+ * the list takes each item from its own project's.
+ */
+export function mergeViews(user: IntegrationsView, perProject: [string, IntegrationsView][]): IntegrationsView {
   const merged: IntegrationsView = { servers: [...user.servers], skills: [...user.skills], problems: [...user.problems] };
-  for (const view of perProject) {
-    merged.servers.push(...view.servers.filter((item) => !known(merged.servers, item.id)));
-    merged.skills.push(...view.skills.filter((item) => !known(merged.skills, item.id)));
-    merged.problems.push(...view.problems.filter((item) => !known(merged.problems, item.id)));
+  for (const [root, view] of perProject) {
+    merged.servers.push(...view.servers.filter((item) => item.project === root && !known(merged.servers, item.id)));
+    merged.skills.push(...view.skills.filter((item) => ownedBy(item.id, root) && !known(merged.skills, item.id)));
+    merged.problems.push(...view.problems.filter((item) => item.project === root && !known(merged.problems, item.id)));
   }
   return merged;
 }
 
 /** The daemon's server and project a sign-in request names. */
 export type SignInTarget = { serverId: string; projectId: string | null };
-
-/**
- * What sessions in the project at `root` find: its own catalog, with the items of the other
- * trusted projects (`others`, by folder) that the user uses in every project.
- */
-export function projectView(own: IntegrationsView, root: string, others: Map<string, IntegrationsView>, settings: Pick<Settings, "serversEverywhere" | "skillsEverywhere">): IntegrationsView {
-  const merged: IntegrationsView = { servers: [...own.servers], skills: [...own.skills], problems: [...own.problems] };
-  for (const [folder, view] of others) {
-    if (folder === root) continue;
-    merged.servers.push(...view.servers.filter((item) => item.project === folder && settings.serversEverywhere.includes(item.id) && !known(merged.servers, item.id)));
-    merged.skills.push(...view.skills.filter((item) => ownedBy(item.id, folder) && settings.skillsEverywhere.includes(item.id) && !known(merged.skills, item.id)));
-  }
-  return merged;
-}
 
 /** The rows of one catalog, with the daemon ids behind each server row and what a sign-in to it names. */
 function rowsOf(view: IntegrationsView, projects: Project[]) {
@@ -215,12 +205,29 @@ function rowsOf(view: IntegrationsView, projects: Project[]) {
   };
 }
 
+/** Each server id's copies across catalogs: groups that share a copy are one server's. */
+function copiesOf(groups: McpServerView[][]): Map<string, string[]> {
+  const copies = new Map<string, string[]>();
+  for (const group of groups) {
+    const ids = new Set(group.map((member) => member.id));
+    for (const member of group) for (const other of copies.get(member.id) ?? []) ids.add(other);
+    const all = [...ids];
+    for (const id of all) copies.set(id, all);
+  }
+  return copies;
+}
+
 /** The page's snapshot of the daemon's `view` (and each trusted project's, by id), the daemon ids behind each server row and what a sign-in to it names. */
 export function snapshotOf(view: IntegrationsView, projects: Project[], untrusted: string[], trustedCount: number, settings?: Settings, projectViews: Record<string, IntegrationsView> = {}) {
   const rows = rowsOf(view, projects);
   const perProject = Object.entries(projectViews).map(([id, item]) => [id, rowsOf(item, projects)] as const);
   const allGroups = [...rows.groups, ...perProject.flatMap(([, item]) => item.groups)];
-  const members = new Map(allGroups.map((group) => [group[0]!.id, group.map((member) => member.id)]));
+  const members = copiesOf(allGroups);
+  // A row's switch and exceptions cover its copies in every catalog, not only in its own.
+  for (const row of [...rows.servers, ...perProject.flatMap(([, item]) => item.servers)]) {
+    const copies = members.get(row.id);
+    if (copies) row.ids = copies;
+  }
   const targets = new Map<string, SignInTarget>(allGroups.map(([first]) => [first!.id, {
     serverId: first!.id,
     projectId: first!.project ? projects.find((project) => project.repos[0]?.path === first!.project)?.id ?? null : null,
@@ -333,10 +340,10 @@ export function liveIntegrations(): IntegrationAdapter {
         ...trustedProjects.map((project) => request({ method: "getIntegrations", projectId: project.id })),
       ]);
       const views = perProject.map((answer) => answer.integrations);
-      const view = mergeViews(user.integrations, views);
+      const view = mergeViews(user.integrations, trustedProjects.map((project, index) => [project.repos[0]!.path, views[index]!]));
       const settings = useApp.getState().settings;
-      const folders = new Map(trustedProjects.map((project, index) => [project.repos[0]!.path, views[index]!]));
-      const projectViews = Object.fromEntries(trustedProjects.map((project, index) => [project.id, projectView(views[index]!, project.repos[0]!.path, folders, settings)]));
+      // Each project's catalog as its sessions get it, with the items used everywhere.
+      const projectViews = Object.fromEntries(trustedProjects.map((project, index) => [project.id, views[index]!]));
       const result = snapshotOf(view, projects, projects.filter((project) => !trusted(project)).map((project) => project.name), trustedProjects.length, settings, projectViews);
       members = result.members;
       targets = result.targets;
