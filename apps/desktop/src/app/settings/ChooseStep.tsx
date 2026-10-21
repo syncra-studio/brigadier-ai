@@ -2,8 +2,7 @@ import { useState } from "react";
 
 import { FlowHeader } from "@/app/settings/FlowHeader";
 import { ProfilePick } from "@/app/settings/ProfilePick";
-import { CheckboxRow } from "@/app/shell/dialogs/fields";
-import { Button } from "@/components/controls";
+import { Button, CheckboxRow } from "@/components/controls";
 import { DialogFooter } from "@/components/overlays";
 import type { ImportSource } from "@/ipc/generated";
 import { counted } from "@/state/browserImport";

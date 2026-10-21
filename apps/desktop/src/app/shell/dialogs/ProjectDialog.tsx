@@ -2,8 +2,8 @@ import { useId, useState, type FormEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { Field } from "@/app/shell/dialogs/Field";
-import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
-import { Button, Input, Switch } from "@/components/controls";
+import { errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
+import { Button, Input, Switch, ErrorLine } from "@/components/controls";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/overlays";
 import { Plus, Trash, X } from "@/components/icons";
 import { pickFolder } from "@/ipc/client";

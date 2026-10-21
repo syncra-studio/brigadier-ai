@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ErrorLine } from "@/app/shell/dialogs/fields";
+import { ErrorLine } from "@/components/controls";
 import { agentState } from "@/app/setup/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/settings/providers/AccountRows";
 import { OVERVIEW_ROWS } from "@/app/settings/providers/AgentsOverview";

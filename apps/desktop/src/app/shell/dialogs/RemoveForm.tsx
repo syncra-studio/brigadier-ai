@@ -1,9 +1,9 @@
 import { useId, useState, type ReactNode } from "react";
 
-import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
 import { Actions, Head } from "@/app/shell/dialogs/removeProjectParts";
 import { Branch, Chats, Folder } from "@/components/icons";
-import { Button, Checkbox } from "@/components/controls";
+import { Button, Checkbox, ErrorLine } from "@/components/controls";
 import type { ProjectRemoval, RemovalBranch, RemoveProjectReport } from "@/ipc/generated";
 import { formatBytes, shortPath } from "@/lib/format";
 import { removeProject } from "@/state/actions";

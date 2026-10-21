@@ -1,6 +1,5 @@
-import { ErrorLine } from "@/app/shell/dialogs/fields";
 import { FeedbackResults, sentLine, sentTitle, stepProgress, unsentLine, useSystemWord } from "@/app/shell/feedback/FeedbackResults";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import { ArrowUpRight, X } from "@/components/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
 import { ProgressLine } from "@/components/shared";

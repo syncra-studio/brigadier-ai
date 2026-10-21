@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ErrorLine } from "@/app/shell/dialogs/fields";
+import { ErrorLine } from "@/components/controls";
 import { Cursor } from "@/components/icons";
 
 /** The helper app, to drag into the list in System Settings. */

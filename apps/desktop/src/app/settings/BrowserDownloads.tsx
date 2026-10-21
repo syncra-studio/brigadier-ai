@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 
-import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
 import { DownloadRow } from "@/app/settings/DownloadRow";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import { Download } from "@/components/icons";
 import { EmptyState, SettingsCard, SettingsSearch } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";

@@ -1,8 +1,8 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { TickRow } from "@/app/settings/TickRow";
-import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
-import { Button, Segmented } from "@/components/controls";
+import { errorText } from "@/app/shell/dialogs/fields";
+import { Button, Segmented, ErrorLine } from "@/components/controls";
 import { DialogFooter } from "@/components/overlays";
 import { Download, Globe, Images, SettingsCog, Trash } from "@/components/icons";
 import { SettingsCard } from "@/components/shared";

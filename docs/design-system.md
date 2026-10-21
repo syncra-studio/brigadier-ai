@@ -120,7 +120,7 @@ table is the current one.
 | Primitives · Controls | `Settings Select` | `components/controls/settings-select.tsx` | `SettingsSelect`, `SettingsSelectTrigger`, `selectTrigger` (class string) | |
 | Primitives · Controls | `Switch/On`, `Switch/Off` | `components/controls/switch.tsx` | `Switch` | |
 | Primitives · Controls | `Checkbox/Off`, `Checkbox/On`, `Checkbox/Mixed` | `components/controls/checkbox.tsx` | `Checkbox`, `CheckboxMark` | |
-| Primitives · Controls | `Checkbox Row` | `app/shell/dialogs/fields.tsx` | `CheckboxRow` | in app |
+| Primitives · Controls | `Checkbox Row` | `components/controls/checkbox-row.tsx` | `CheckboxRow` | |
 | Primitives · Controls | `Kbd`, `Kbd/Tooltip`, `Kbd/On button` | `components/controls/kbd.tsx` | `Kbd` (`variant` key/chip; the tooltip and button pills follow where it sits) | |
 | Primitives · Controls | `KbdGroup` | — | — | Pen only: keys sit side by side in their parent |
 | Primitives · Controls | `TabsList`, `TabsList/Line`, `TabsList/Vertical`, `Tab/Active`, `Tab/Inactive`, `Tab/Line Active`, `Tab/Line Inactive` | `components/controls/tabs.tsx` | `Tabs`, `TabsList` (`variant` default/line, orientation), `TabsTrigger`, `TabsContent` | |
@@ -132,7 +132,7 @@ table is the current one.
 | Primitives · Controls | `Separator/Horizontal`, `Separator/Vertical` | — | — | Pen only: the code draws rules with border classes (`separator.tsx` was removed) |
 | Primitives · Controls | `RoundBadge/Plain`, `RoundBadge/Done` | `components/controls/round-badge.tsx` | `RoundBadge` (`tone`) | |
 | Primitives · Controls | `Dot` | `components/shared/state-dot.tsx` | `StateDot` (`color`) | |
-| Primitives · Controls | `ErrorLine` | `app/shell/dialogs/fields.tsx` | `ErrorLine` | in app |
+| Primitives · Controls | `ErrorLine` | `components/controls/error-line.tsx` | `ErrorLine` | |
 | Primitives · Controls | `Nav Row` | `components/controls/nav-row.tsx` | `NavRow` | |
 | Primitives · Menus, popovers & dialogs | `Menu`, `Menu Item`, `Menu Item/Check`, `Menu Item/Radio`, `Menu Item/Sub`, `Menu Label`, `Menu Separator` | `components/overlays/dropdown-menu.tsx` | `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioItem`, `DropdownMenuSubTrigger`, `DropdownMenuLabel` (`variant` caps/heading), `DropdownMenuSeparator` | |
 | Primitives · Menus, popovers & dialogs | — | `components/overlays/dropdown-menu.tsx` | `MenuRow` | code only (the two-line menu row) |

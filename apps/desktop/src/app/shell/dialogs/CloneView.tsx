@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import { BOX, BOX_INPUT, CancelButton, DEFAULT_PARENT, FieldLabel, Footer, Header, SaveTo } from "@/app/shell/dialogs/addProjectParts";
-import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
 import { Link, Spinner } from "@/components/icons";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import { cn } from "@/lib/utils";
 import { closeAddProject, cloneProject, showProject } from "@/state/addProject";
 import { toast } from "@/state/toasts";

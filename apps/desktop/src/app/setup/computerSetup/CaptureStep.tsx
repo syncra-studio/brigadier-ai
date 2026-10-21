@@ -2,8 +2,7 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { SetupPanel } from "@/app/setup/computerSetup/SetupPanel";
-import { ErrorLine } from "@/app/shell/dialogs/fields";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import { confirmComputerCapture } from "@/state/computerUse";
 
 export function CaptureStep() {

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 
-import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
 import { DayGroup } from "@/app/settings/DayGroup";
 import { FilterMenu } from "@/app/settings/FilterMenu";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { VisitRow } from "@/app/settings/VisitRow";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import { EmptyState, SettingsSearch } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";

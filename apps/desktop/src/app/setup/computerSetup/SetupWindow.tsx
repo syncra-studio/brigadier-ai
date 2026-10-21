@@ -5,8 +5,7 @@ import { CaptureStep } from "@/app/setup/computerSetup/CaptureStep";
 import { PermissionStep } from "@/app/setup/computerSetup/PermissionStep";
 import { SetupPanel } from "@/app/setup/computerSetup/SetupPanel";
 import { StepRailItem } from "@/app/setup/computerSetup/StepRailItem";
-import { ErrorLine } from "@/app/shell/dialogs/fields";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import type { ComputerUseStatus } from "@/ipc/generated";
 import { checkComputerUse, refreshComputerUse, useComputerUse } from "@/state/computerUse";
 

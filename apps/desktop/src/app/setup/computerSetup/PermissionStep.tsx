@@ -1,8 +1,7 @@
 import { useAction } from "@/app/conversation/useAction";
 import { HelperCard } from "@/app/setup/computerSetup/HelperCard";
 import { SetupPanel } from "@/app/setup/computerSetup/SetupPanel";
-import { ErrorLine } from "@/app/shell/dialogs/fields";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import type { ComputerPermission } from "@/ipc/generated";
 import { openPrivacySettings } from "@/state/computerUse";
 

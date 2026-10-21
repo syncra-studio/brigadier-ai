@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { ErrorLine } from "@/app/shell/dialogs/fields";
+import { ErrorLine } from "@/components/controls/error-line";
 import { cn } from "@/lib/utils";
 
 /**

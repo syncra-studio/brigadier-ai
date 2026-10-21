@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 
-import { ErrorLine, errorText, PROJECT_DIALOG_CARD } from "@/app/shell/dialogs/fields";
+import { errorText, PROJECT_DIALOG_CARD } from "@/app/shell/dialogs/fields";
 import { RemoveForm } from "@/app/shell/dialogs/RemoveForm";
 import { Removed } from "@/app/shell/dialogs/Removed";
 import { Actions, Head } from "@/app/shell/dialogs/removeProjectParts";
 import { Spinner } from "@/components/icons";
-import { Button } from "@/components/controls";
+import { Button, ErrorLine } from "@/components/controls";
 import { Dialog, DialogContent } from "@/components/overlays";
 import type { Project, ProjectRemoval, RemoveProjectReport } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

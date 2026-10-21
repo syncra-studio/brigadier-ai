@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
+import { ErrorLine } from "@/components/controls";
+import { errorText } from "@/app/shell/dialogs/fields";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { SiteRow } from "@/app/settings/SiteRow";
 import { EmptyState, SettingsCard } from "@/components/shared";

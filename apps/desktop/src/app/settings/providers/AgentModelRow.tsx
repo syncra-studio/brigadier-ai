@@ -2,7 +2,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { ROW_LINE, ROW_TITLE } from "@/app/settings/providers/parts";
 import { bestFor } from "@/app/settings/routing/models";
 import { SettingsSwitch } from "@/app/settings/parts";
-import { ErrorLine } from "@/app/shell/dialogs/fields";
+import { ErrorLine } from "@/components/controls";
 import { InfoCircle } from "@/components/icons";
 import type { MergedModel, ModelInfo, ProviderKind } from "@/ipc/generated";
 import { isExpensive, TIER_LABELS } from "@/lib/routing";

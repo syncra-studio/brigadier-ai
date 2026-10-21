@@ -10,11 +10,11 @@ import {
 
 import { CancelButton, DEFAULT_PARENT, Footer, Header } from "@/app/shell/dialogs/addProjectParts";
 import { CloneView } from "@/app/shell/dialogs/CloneView";
-import { ErrorLine, errorText, PROJECT_DIALOG_CARD } from "@/app/shell/dialogs/fields";
+import { errorText, PROJECT_DIALOG_CARD } from "@/app/shell/dialogs/fields";
 import { NewRepoView } from "@/app/shell/dialogs/NewRepoView";
 import { SettingsSearch } from "@/components/shared";
 import { Check, Folder, FolderOpen, Link, Plus, Spinner } from "@/components/icons";
-import { Badge, Button } from "@/components/controls";
+import { Badge, Button, ErrorLine } from "@/components/controls";
 import { Dialog, DialogContent } from "@/components/overlays";
 import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
