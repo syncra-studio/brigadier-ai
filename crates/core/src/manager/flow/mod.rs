@@ -2161,6 +2161,8 @@ mod kept_output_tests;
 #[cfg(unix)]
 mod lean_work_tests;
 #[cfg(unix)]
+mod limited_input_tests;
+#[cfg(unix)]
 mod litter_tests;
 #[cfg(unix)]
 mod local_commit_tests;
