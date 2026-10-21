@@ -141,7 +141,7 @@ async function drive(): Promise<Record<string, unknown>> {
   await frames();
   seen.freshClosed = !open() && !card();
 
-  select({ type: "conversation", id: "first" });
+  await select({ type: "conversation", id: "first" });
   await until(() => bubble() && measured(), "the session's thread");
   await frames();
   seen.layout = useSummary.getState().layout;
@@ -165,16 +165,16 @@ async function drive(): Promise<Record<string, unknown>> {
   revealNewPreviews([{ stream: "conversation:first", event: { type: "previewUpdated", preview } }] as unknown as EventEnvelope[]);
   await frames();
   seen.closedAfterPreview = !open();
-  select({ type: "conversation", id: "other" });
+  await select({ type: "conversation", id: "other" });
   await until(() => useBoard.getState().board?.conversationId === "other", "the other session");
-  select({ type: "conversation", id: "first" });
+  await select({ type: "conversation", id: "first" });
   await until(() => bubble() && useBoard.getState().board?.loaded, "the session again");
   await frames();
   seen.closedOnReturn = !open();
 
   await fixtureInput({ type: "viewport", width: 760, height: 900 });
   await until(() => useSummary.getState().layout === "float", "the narrow pane to float the card");
-  select({ type: "conversation", id: "narrow" });
+  await select({ type: "conversation", id: "narrow" });
   await until(() => useBoard.getState().board?.conversationId === "narrow" && useBoard.getState().board?.loaded, "the narrow session");
   await frames();
   setUp("narrow");

@@ -15,6 +15,7 @@ import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { AttachmentRef, Conversation, ConversationView as View, Message, QueuedMessage, Request, UserRequest } from "@/ipc/generated";
 import { select } from "@/state/actions";
+import { updateBoard } from "@/state/board";
 import { setRichComposer } from "@/state/composerMode";
 import { useApp } from "@/state/store";
 
@@ -94,6 +95,9 @@ mockIPC((command, payload) => {
         attachments: req.attachments, mentions: req.mentions, createdAtMs: Date.now(), model: null,
         requestId: `sent-request-${sequence}`, parentId: null,
       };
+      // Its request comes with it, as the daemon writes them: here it is answered at once.
+      const answered = { ...request, id: message.requestId!, preview: req.text, startedAtMs: message.createdAtMs, endedAtMs: message.createdAtMs };
+      updateBoard(id, (board) => ({ ...board, requests: { ...board.requests, [answered.id]: answered } }));
       return { method: req.method, outcome: { type: "sent", message } };
     }
     default:
@@ -309,7 +313,7 @@ async function drive() {
   document.body.append(result);
 }
 
-select({ type: "conversation", id });
+await select({ type: "conversation", id });
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <SidebarProvider className="bg-background flex h-screen flex-col" defaultOpen={false}>

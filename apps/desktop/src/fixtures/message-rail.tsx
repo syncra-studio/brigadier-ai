@@ -225,7 +225,7 @@ async function until(check: () => boolean): Promise<boolean> {
 }
 
 async function open(id: string): Promise<void> {
-  select({ type: "conversation", id });
+  await select({ type: "conversation", id });
   await settle(LOAD_MS + 400);
 }
 
