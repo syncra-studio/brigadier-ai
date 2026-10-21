@@ -186,6 +186,10 @@ table is the current one.
 | Inspector (settings.pen) | `#1011 InjectionRowView` | `app/inspector/InjectionRowView.tsx` | `InjectionRowView` | |
 | Inspector (settings.pen) | `#1012 GenerationHeader` | `app/inspector/GenerationHeader.tsx` | `GenerationHeader` | |
 | Inspector (settings.pen) | `#1013 InjectionList` | `app/inspector/InjectionList.tsx` | `InjectionList` | |
+| Inspector (settings.pen) | `#1020 BlobText` | `app/inspector/BlobText.tsx` | `BlobText` | |
+| Inspector (settings.pen) | `#1021 RebirthDetail` | `app/inspector/RebirthDetail.tsx` | `RebirthDetail` | |
+| Inspector (settings.pen) | `#1022 RebirthDetail › briefing sections table` | `app/inspector/BriefingSectionsTable.tsx` | `BriefingSectionsTable` | |
+| Inspector (settings.pen) | `#1023 RebirthRowView` | `app/inspector/RebirthRowView.tsx` | `RebirthRowView` | |
 
 ## Icons
 
