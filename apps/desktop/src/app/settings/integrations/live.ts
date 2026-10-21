@@ -53,12 +53,14 @@ function sourceFile(kind: IntegrationSource, project: string | null): string {
 
 const agentOf = (provider: ProviderKind): IntegrationAgent => provider;
 
-/** How an agent's workers are signed in; one sign-in Brigadier can't reuse yet is needed. */
+/** How an agent's workers are signed in; Brigadier's own shows as native until its design exists. */
 function signIn(state: SignInState): IntegrationSignIn {
   switch (state.type) {
-    case "native": return { kind: "native" };
+    case "native":
+    case "inBrigadier": return { kind: "native" };
     case "reusableFrom": return { kind: "reusable", from: agentOf(state.agent) };
-    default: return { kind: "required" };
+    case "needed":
+    case "unknown": return { kind: "required" };
   }
 }
 

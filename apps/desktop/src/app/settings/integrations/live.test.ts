@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { mergeViews, snapshotOf } from "@/app/settings/integrations/live";
-import type { IntegrationsView, McpServerView, Project, SkillView } from "@/ipc/generated";
+import type { IntegrationsView, McpServerView, Project, SignInState, SkillView } from "@/ipc/generated";
 
 const railway = (source: string, id: string, off: boolean, nativeTo: McpServerView["nativeTo"]): McpServerView => ({
   id, name: "railway", source, project: null, off, nativeTo, signIn: null,
@@ -44,6 +44,10 @@ test("live catalog: one row per server found in several configs, its switch cove
   assert.deepEqual(members.get(rail!.id), ["claude:user:railway", "codex:user:railway"]);
   assert.deepEqual(snapshot.switches.mcpServersOff, ["claude:user:railway"]);
   assert.deepEqual(lin!.signIn, { claude: { kind: "native" }, codex: { kind: "required" } });
+  const signIns = (claude: SignInState, codex: SignInState) =>
+    snapshotOf(mergeViews({ ...user, servers: [{ ...linear, signIn: { claude, codex } }], problems: [] }, []), [], [], 1).snapshot.catalog.servers[0]!.signIn;
+  assert.deepEqual(signIns({ type: "inBrigadier" }, { type: "reusableFrom", agent: "claude" }), { claude: { kind: "native" }, codex: { kind: "reusable", from: "claude" } });
+  assert.deepEqual(signIns({ type: "needed" }, { type: "unknown" }), { claude: { kind: "required" }, codex: { kind: "required" } });
   assert.equal(dbRow!.project, "brigadier-ai");
   assert.deepEqual(dbRow!.sourceFiles, [{ source: "ClaudeProjectFile", path: "~/Development/brigadier-ai/.mcp.json" }]);
   assert.equal(figma!.error, "Unsupported address “ws://”: only http and https");
