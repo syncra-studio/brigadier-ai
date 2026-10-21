@@ -190,6 +190,14 @@ table is the current one.
 | Inspector (settings.pen) | `#1021 RebirthDetail` | `app/inspector/RebirthDetail.tsx` | `RebirthDetail` | |
 | Inspector (settings.pen) | `#1022 RebirthDetail › briefing sections table` | `app/inspector/BriefingSectionsTable.tsx` | `BriefingSectionsTable` | |
 | Inspector (settings.pen) | `#1023 RebirthRowView` | `app/inspector/RebirthRowView.tsx` | `RebirthRowView` | |
+| Conversation (app.pen) | `#276 ApprovalAction › inline: Reply… button` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | |
+| Conversation (app.pen) | `#279 CardDictate` | `app/conversation/CardDictate.tsx` | `CardDictate` | |
+| Conversation (app.pen) | `#280 ChoiceCard` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |
+| Conversation (app.pen) | `#281 QuestionAction` | `app/conversation/QuestionAction.tsx` | `QuestionAction` | |
+| Conversation (app.pen) | `#283 ImplementPlanAction` | `app/conversation/ImplementPlanAction.tsx` | `ImplementPlanAction` | |
+| Conversation (app.pen) | `#284 PlanAction` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
+| Conversation (app.pen) | `#285 PhasePlanAction` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
+| Conversation (app.pen) | `#286 OvernightAction` | `app/conversation/OvernightAction.tsx` | `OvernightAction` | |
 
 ## Icons
 
