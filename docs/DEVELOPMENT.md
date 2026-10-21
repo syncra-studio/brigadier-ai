@@ -96,6 +96,11 @@ release build. The other checks are as on the Mac, with these differences:
 
 - Run them from Git Bash. `tools/full-checks.sh` takes its niceness from `nice` there (its
   `ps` has no `-o`).
+- Cargo's default job count can take a 32 GB machine past 80% of its memory. Per crate
+  (`-p <crate>`), `CARGO_BUILD_JOBS=4` peaks at 35–60%. A `--workspace` build, clippy or test
+  compiles `brigadier-daemon`, `brigadier-ipc` and `brigadier-desktop` side by side: 86% at
+  8 jobs and 80–85% at 4, but 61% at `CARGO_BUILD_JOBS=1`. `tools/full-checks.sh` sets no job
+  count, so run it as `CARGO_BUILD_JOBS=1 tools/full-checks.sh`.
 - `pnpm test` runs four files at a time on Windows unless `--test-concurrency` says otherwise:
   each render test's headless browser is a dozen processes there, and a file per core takes
   the whole machine. The render tests take Playwright's headless shell from
