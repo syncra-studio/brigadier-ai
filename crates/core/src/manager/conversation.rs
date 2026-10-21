@@ -2848,11 +2848,13 @@ impl SessionManager {
             return None;
         }
         // Recheck under the same lock as turn completion: a later turn may have answered
-        // since the checks runner chose the request that was deferred then.
+        // since the checks runner chose the request that was deferred then. One whose turn
+        // still runs hasn't deferred yet: the pass waits in the inbox, and that turn's end
+        // keeps it for a [quiet] or drops it for an answer (#512).
         if envelope.optional_check_pass()
-            && request
-                .as_ref()
-                .is_none_or(|request| !state.deferred.contains(request))
+            && request.as_ref().is_none_or(|request| {
+                !state.deferred.contains(request) && state.request.as_ref() != Some(request)
+            })
         {
             return None;
         }

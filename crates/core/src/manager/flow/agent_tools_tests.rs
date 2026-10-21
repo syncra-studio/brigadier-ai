@@ -327,9 +327,147 @@ async fn full_checks_past_the_calls_wait_tell_their_verdict_as_a_message() {
     .await;
     let said = replies.lock().unwrap()[0].clone();
     assert!(said.contains("still run"), "{said}");
+    // The call's wait can end before the run's tree is set up on a loaded machine.
+    let repo = flow.repo.clone();
+    flow.until("the checks started", |_| full_runs(&repo) > 0)
+        .await;
     assert_eq!(full_runs(&flow.repo), 1);
     std::fs::remove_file(&hold).unwrap();
     flow.until("the verdict came as a message", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("[checks passed at "))
+    })
+    .await;
+    flow.settled().await;
+    flow.stop().await;
+}
+
+/// #512: background full checks that pass before the thread's turn ends ([quiet]) still tell
+/// their verdict as a message: the turn's answer wasn't deferred yet when they ended, and the
+/// pass was dropped as an optional one, leaving the request Done with nothing told.
+#[tokio::test]
+async fn a_background_pass_before_the_threads_quiet_still_comes_as_a_message() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (seen, log, go) = (inputs.clone(), replies.clone(), release.clone());
+    let flow = Flow::start(
+        "run-checks-background-early",
+        checks_options(),
+        script(move |turn| {
+            let (seen, log, go) = (seen.clone(), log.clone(), go.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    seen.lock().unwrap().push(turn.input.clone());
+                    if turn.input.contains("Check it") {
+                        let reply = turn.call("run_checks", json!({})).await;
+                        log.lock().unwrap().push(reply.text);
+                        // The turn ends only once the checks have passed.
+                        while !go.load(std::sync::atomic::Ordering::SeqCst) {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+                        return Reply::text("[quiet]");
+                    }
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    let hold = flow.repo.join(".git/hold-checks");
+    std::fs::write(&hold, "").unwrap();
+    flow.say("Check it").await;
+    flow.until("the call went to the background", |_| {
+        !replies.lock().unwrap().is_empty()
+    })
+    .await;
+    assert!(replies.lock().unwrap()[0].contains("still run"));
+    std::fs::remove_file(&hold).unwrap();
+    flow.until("the checks passed while the turn still ran", |board| {
+        asked_runs(board)
+            .iter()
+            .any(|run| matches!(run.state, crate::work::IntegratedCheckState::Passed { .. }))
+    })
+    .await;
+    release.store(true, std::sync::atomic::Ordering::SeqCst);
+    flow.until("the verdict came as a message", |_| {
+        inputs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|input| input.contains("[checks passed at "))
+    })
+    .await;
+    flow.settled().await;
+    flow.stop().await;
+}
+
+/// A later request's run_checks at a commit whose checks still run joins that run: the run
+/// records it, so its verdict comes to that request too once the call has gone on.
+#[tokio::test]
+async fn a_later_run_checks_at_a_running_commit_joins_it() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (seen, log) = (inputs.clone(), replies.clone());
+    let flow = Flow::start(
+        "run-checks-join",
+        checks_options(),
+        script(move |turn| {
+            let (seen, log) = (seen.clone(), log.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    seen.lock().unwrap().push(turn.input.clone());
+                    if turn.input.contains("Start the checks") {
+                        let reply = turn.call("run_checks", json!({})).await;
+                        log.lock().unwrap().push(reply.text);
+                        return Reply::text("They run in the background.");
+                    }
+                    if turn.input.contains("Check it") {
+                        let reply = turn.call("run_checks", json!({})).await;
+                        log.lock().unwrap().push(reply.text);
+                        return Reply::text("[quiet]");
+                    }
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    let hold = flow.repo.join(".git/hold-checks");
+    std::fs::write(&hold, "").unwrap();
+    flow.say("Start the checks").await;
+    // Answered, the first request is over while its checks still run.
+    flow.until("the first request was answered", |board| {
+        replies.lock().unwrap().len() == 1
+            && board
+                .requests
+                .values()
+                .all(|request| request.state == crate::work::RequestState::Done)
+    })
+    .await;
+    flow.say("Check it").await;
+    let board = flow
+        .until("the second call went to the background", |_| {
+            replies.lock().unwrap().len() == 2
+        })
+        .await;
+    assert!(replies.lock().unwrap()[1].contains("still run"));
+    let repo = flow.repo.clone();
+    flow.until("the checks started", |_| full_runs(&repo) > 0)
+        .await;
+    assert_eq!(full_runs(&flow.repo), 1, "one run for both");
+    let runs = asked_runs(&board);
+    assert_eq!(runs.len(), 1, "{runs:#?}");
+    assert_eq!(
+        runs[0].requests.len(),
+        2,
+        "both requests are on it: {runs:#?}"
+    );
+    std::fs::remove_file(&hold).unwrap();
+    flow.until("the verdict came to the later request as a message", |_| {
         inputs
             .lock()
             .unwrap()

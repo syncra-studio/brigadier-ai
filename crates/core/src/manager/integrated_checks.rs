@@ -70,12 +70,13 @@ pub(crate) struct IntegratedChecks {
     /// Each session's queue runner, while it has a due check.
     jobs: tokio::sync::Mutex<HashMap<ConversationId, Arc<Job>>>,
     /// Held while a session's checks are read, changed and recorded.
-    records: tokio::sync::Mutex<()>,
+    pub(super) records: tokio::sync::Mutex<()>,
     /// Woken each time a check ends.
     ended: tokio::sync::Notify,
-    /// The `run_checks` runs whose verdict the thread's call still waits for: their end is
-    /// told in the call, not as a message. Held while a check's end is told.
-    in_call: tokio::sync::Mutex<std::collections::HashSet<String>>,
+    /// The `run_checks` runs whose verdict the thread's call still waits for, by session and
+    /// check (a check's id is its session's own): their end is told in the call, not as a
+    /// message. Held while a check's end is told.
+    in_call: tokio::sync::Mutex<std::collections::HashSet<(ConversationId, String)>>,
 }
 
 /// A session's queue runner.
@@ -320,7 +321,8 @@ impl SessionManager {
         let check = self
             .ask_full_checks(id, &workspace.repo, &workspace.branch, &tip, request, rerun)
             .await?;
-        self.integrated.in_call.lock().await.insert(check.clone());
+        let claim = (id.clone(), check.clone());
+        self.integrated.in_call.lock().await.insert(claim.clone());
         self.run_due_checks(id).await;
         let deadline = tokio::time::Instant::now() + CALL_WAIT;
         loop {
@@ -338,14 +340,14 @@ impl SessionManager {
                 let mut waiting = self.integrated.in_call.lock().await;
                 let board = self.core.board(id).await?;
                 let Some(now) = board.integrated_checks.get(&check) else {
-                    waiting.remove(&check);
+                    waiting.remove(&claim);
                     return Err(Error::Invalid("the checks' record is gone".into()));
                 };
                 if now.state.is_final() {
                     drop(waiting);
                     return Ok(self.checks_verdict(now).await);
                 }
-                waiting.remove(&check);
+                waiting.remove(&claim);
                 return Ok(format!(
                     "The full checks still run on `{}` at {} ({check}), in the background: their result comes as a message [checks … at {}]. Carry on with what doesn't depend on them, or reply {}; don't call run_checks again for it.",
                     now.branch,
@@ -380,6 +382,15 @@ impl SessionManager {
                 return Ok(check.id.clone());
             }
             Some((IntegratedCheckState::Due | IntegratedCheckState::Running { .. }, check)) => {
+                // This request waits for it too: its verdict comes to it if the call doesn't
+                // tell it (the runner's next record keeps the request, see `store_run`).
+                if let Some(request) = request
+                    && !check.requests.contains(&request)
+                {
+                    let mut joined = check.clone();
+                    joined.requests.push(request);
+                    self.store_check(&joined).await;
+                }
                 return Ok(check.id.clone());
             }
             _ => {}
@@ -874,7 +885,8 @@ impl SessionManager {
             self.release_checked_holds(id).await;
         }
         // A `run_checks` call still waiting tells its verdict itself.
-        if self.integrated.in_call.lock().await.remove(&check.id) {
+        let claim = (id.clone(), check.id.clone());
+        if self.integrated.in_call.lock().await.remove(&claim) {
             self.check_held_merge(id).await;
             self.settle_requests(id).await;
             return;

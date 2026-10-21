@@ -1607,6 +1607,10 @@ impl SessionManager {
         }
         let root = repo_root(&tree).unwrap_or_else(|| tree.clone());
         let tip = self.head_of(&tree).await.unwrap_or_default();
+        let requests = self.request_for(id, Some(task)).await.into_iter().collect();
+        // Its number is taken and recorded under the same lock as every other check's, so
+        // two runs never share one.
+        let records = self.integrated.records.lock().await;
         let board = self.core.board(id).await?;
         let branch = board
             .tasks
@@ -1629,7 +1633,7 @@ impl SessionManager {
             due_at_ms: now_ms(),
             started_at_ms: Some(now_ms()),
             ended_at_ms: None,
-            requests: self.request_for(id, Some(task)).await.into_iter().collect(),
+            requests,
             tasks: Vec::new(),
             rerun,
             asked: Some(crate::work::ChecksAsked {
@@ -1639,6 +1643,7 @@ impl SessionManager {
         };
         drop(board);
         self.store_check(&check).await;
+        drop(records);
         let mut passed: Vec<String> = Vec::new();
         let mut failure = None;
         for (command, workdir) in &commands {
