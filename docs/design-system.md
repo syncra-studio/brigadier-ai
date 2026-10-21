@@ -318,6 +318,11 @@ table is the current one.
 | Settings (settings.pen) | `#788 AutoPicks` | `app/settings/routing/AutoPicks.tsx` | `AutoPicks` | |
 | Settings (settings.pen) | `#790 OrderList` | `app/settings/routing/OrderList.tsx` | `OrderList` | |
 | Settings (settings.pen) | `#791 OrderPlace` | `app/settings/routing/OrderPlace.tsx` | `OrderPlace` | |
+| Setup (app.pen) | `#823 SetupWindow › step rail item` | `app/setup/computerSetup/StepRailItem.tsx` | `StepRailItem` | |
+| Setup (app.pen) | `#824 Panel` | `app/setup/computerSetup/SetupPanel.tsx` | `SetupPanel` | |
+| Setup (app.pen) | `#825 PermissionStep` | `app/setup/computerSetup/PermissionStep.tsx` | `PermissionStep` | |
+| Setup (app.pen) | `#826 HelperCard` | `app/setup/computerSetup/HelperCard.tsx` | `HelperCard` | |
+| Setup (app.pen) | `#827 CaptureStep` | `app/setup/computerSetup/CaptureStep.tsx` | `CaptureStep` | |
 
 ## Icons
 
