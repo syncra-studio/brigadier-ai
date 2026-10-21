@@ -1,6 +1,6 @@
 import { type FC, useMemo, useState } from "react";
 
-import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
+import { type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import { StripRow } from "@/app/conversation/activity/StripRow";
 import { useAction } from "@/app/conversation/useAction";
 import { WorkerGlyph } from "@/components/conversation";
@@ -9,22 +9,13 @@ import { ChevronRight, StopCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { stopWorkers } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { useApp } from "@/state/store";
 
 /** The Workers strip's view, live: `null` while it has nothing to show. */
 export function useWorkersStrip(conversationId: string): StripView | null {
-  const items = useApp((s) => s.threads[conversationId]?.items);
-  const hasMore = useApp((s) => s.threads[conversationId]?.hasMore ?? false);
-  const requests = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.requests : undefined));
-  const replies = useMemo(() => lastReplies(items ?? [], requests), [items, requests]);
-  const loadedFromMs = useMemo(
-    () => (hasMore && items && items.length > 0 ? Math.min(...items.map((message) => message.createdAtMs)) : null),
-    [hasMore, items],
-  );
   const json = useBoard((s) => {
     const board = s.board;
     if (board?.conversationId !== conversationId) return null;
-    const view = workersStrip(Object.values(board.tasks), replies, board.workerSteps, loadedFromMs);
+    const view = workersStrip(Object.values(board.tasks));
     return view ? JSON.stringify(view) : null;
   });
   return useMemo(() => (json ? (JSON.parse(json) as StripView) : null), [json]);
@@ -32,9 +23,9 @@ export function useWorkersStrip(conversationId: string): StripView | null {
 
 /**
  * The Workers strip, a row of the composer's status slot (THREAD-UX-PLAN.md §3.5,
- * SESSION-FIXES-PLAN.md Q8): while workers run or wait, and until the thread's answer reports
- * those that finished. Collapsed it counts them; open, one row each, and Stop all. Each
- * worker's progress lives here, not under the thread's live line.
+ * SESSION-FIXES-PLAN.md Q8): while workers run or wait, those only; finished ones are the
+ * context card's. Collapsed it counts them; open, one row each, and Stop all. Each worker's
+ * progress lives here, not under the thread's live line.
  */
 export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ conversationId, view }) => {
   const [open, setOpen] = useState(false);

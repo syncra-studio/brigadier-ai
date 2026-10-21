@@ -10,7 +10,9 @@ import { WorkersTab } from "@/app/side-panel/Agents";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { Task } from "@/ipc/generated";
-import { emptyBoard, useBoard } from "@/state/board";
+import { createStore } from "zustand/vanilla";
+
+import { BoardStoreContext, emptyBoard, useBoard } from "@/state/board";
 const base = Object.values(night.tasks)[0] as unknown as Task;
 // One request, not answered yet: its finished worker stays in the strip.
 const conversationId = "worker-fixture";
@@ -24,6 +26,12 @@ const tasks = { active: task("active", 1, "running"), blocked: task("blocked", 2
   // Stopped before it landed: it counts as stopped, never as done (BUILD-PLAN A7).
   stopped: task("stopped", 5, "stopped") };
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, tasks } });
+// A session whose workers all finished: no strip.
+const idleId = "worker-fixture-idle";
+const idleBoard = createStore(() => ({
+  board: { ...emptyBoard(idleId), loaded: true, tasks: { done: { ...tasks.completed, conversationId: idleId }, stopped: { ...tasks.stopped, conversationId: idleId } } },
+  orchestrator: null,
+}));
 // What the page asked the daemon (a worker's Stop sends `stopTask`).
 const sent: string[] = [];
 mockIPC((cmd, args) => {
@@ -45,6 +53,7 @@ function Fixture() {
       summary: document.querySelector('[aria-label="Session workers"]')?.textContent,
       list: document.querySelector('[data-slot="worker-list"]')?.textContent,
       strip: document.querySelector('[data-slot="workers-strip"]')?.textContent,
+      noStrip: document.querySelector('[data-slot="idle-strip"]')?.childElementCount === 0,
       stripRows: document.querySelectorAll('[data-slot="workers-strip-row"]').length,
       stripStops: [...document.querySelectorAll<HTMLButtonElement>('[data-slot="workers-strip"] [data-slot="worker-stop"]')].map((button) => button.getAttribute("aria-label")),
       listStops: [...document.querySelectorAll<HTMLButtonElement>('[data-slot="worker-list"] [data-slot="worker-stop"]')].map((button) => button.getAttribute("aria-label")),
@@ -66,6 +75,9 @@ function Fixture() {
       <WorkersSummary conversationId={conversationId} />
       <div data-slot="worker-list"><WorkersTab conversationId={conversationId} /></div>
       <StripOf conversationId={conversationId} />
+      <BoardStoreContext.Provider value={idleBoard}>
+        <div data-slot="idle-strip"><StripOf conversationId={idleId} /></div>
+      </BoardStoreContext.Provider>
       <AgentsPanelContext.Provider value={{ panel: "active", setPanel }}>
         <div data-slot="worker-view"><WorkersTab conversationId={conversationId} /></div>
       </AgentsPanelContext.Provider>

@@ -51,7 +51,7 @@ function chromium(): string {
   throw new Error("Worker activity rendering test needs Chromium. Set CHROME_BIN to an installed Chrome/Chromium.");
 }
 
-type Rendering = { thread: Record<string, string>; summary: string; list: string; strip: string; stripRows: number; avatars: number[]; stripStops: string[]; listStops: string[]; headerStop?: string; doneHeaderStop: boolean; sent: string[] };
+type Rendering = { noStrip: boolean; thread: Record<string, string>; summary: string; list: string; strip: string; stripRows: number; avatars: number[]; stripStops: string[]; listStops: string[]; headerStop?: string; doneHeaderStop: boolean; sent: string[] };
 
 // Vite serves the real React components, and Chromium clicks the real Collapsible trigger.
 // Disposable profiles and Vite's cache use the system temporary folder, never the app's data.
@@ -137,10 +137,14 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
     ].join("\n"));
   }
   const rendering = JSON.parse(serialized) as Rendering;
-  // The Workers strip counts them in one line and, open, lists each with Stop all.
-  assert.match(rendering.strip, /1 worker working · 2 waiting · 1 done · 1 stopped/);
+  // The Workers strip counts only those at work in one line and, open, lists each with Stop all:
+  // the finished ones (done, stopped) are the context card's.
+  assert.match(rendering.strip, /^1 worker working · 2 waiting/);
+  assert.doesNotMatch(rendering.strip, /done|stopped/);
   assert.match(rendering.strip, /Stop all/);
-  assert.equal(rendering.stripRows, 5);
+  assert.equal(rendering.stripRows, 3);
+  // With no worker at work, no strip.
+  assert.equal(rendering.noStrip, true);
   // Each worker that runs or waits has its own Stop, on its row and in its view's header; a
   // click sends that worker's stop (UI audit M4).
   assert.deepEqual(rendering.stripStops, ["Stop Check active", "Stop Check blocked", "Stop Check queued"]);
