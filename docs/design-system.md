@@ -190,6 +190,18 @@ table is the current one.
 | Inspector (settings.pen) | `#1021 RebirthDetail` | `app/inspector/RebirthDetail.tsx` | `RebirthDetail` | |
 | Inspector (settings.pen) | `#1022 RebirthDetail › briefing sections table` | `app/inspector/BriefingSectionsTable.tsx` | `BriefingSectionsTable` | |
 | Inspector (settings.pen) | `#1023 RebirthRowView` | `app/inspector/RebirthRowView.tsx` | `RebirthRowView` | |
+| Inspector (settings.pen) | `#1039 Section (Brain)` | `app/inspector/brain/BrainSection.tsx` | `BrainSection` | |
+| Inspector (settings.pen) | `#1040 Detail (Brain)` | `app/inspector/brain/BrainDetail.tsx` | `BrainDetail` | |
+| Inspector (settings.pen) | `#1041 Progress` | `app/inspector/brain/BrainProgress.tsx` | `BrainProgress` | |
+| Inspector (settings.pen) | `#1043 BrainOverviewView › nodes-by-kind list` | `app/inspector/brain/NodesByKindList.tsx` | `NodesByKindList` | |
+| Inspector (settings.pen) | `#1044 indexState` | `app/inspector/brain/IndexState.tsx` | `IndexState` | |
+| Inspector (settings.pen) | `#1045 IndexSection` | `app/inspector/brain/IndexSection.tsx` | `IndexSection` | |
+| Inspector (settings.pen) | `#1046 embedderState` | `app/inspector/brain/EmbedderState.tsx` | `EmbedderState` | |
+| Inspector (settings.pen) | `#1047 EmbedderSection` | `app/inspector/brain/EmbedderSection.tsx` | `EmbedderSection` | |
+| Inspector (settings.pen) | `#1048 WorkersSection` | `app/inspector/brain/WorkersSection.tsx` | `WorkersSection` | |
+| Inspector (settings.pen) | `#1049 JobRow` | `app/inspector/brain/JobRow.tsx` | `JobRow` | |
+| Inspector (settings.pen) | `#1050 JobsSection` | `app/inspector/brain/JobsSection.tsx` | `JobsSection` | |
+| Inspector (settings.pen) | `#1051 DeveloperActions` | `app/inspector/brain/DeveloperActions.tsx` | `DeveloperActions` | |
 | Conversation (app.pen) | `#276 ApprovalAction › inline: Reply… button` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | |
 | Conversation (app.pen) | `#279 CardDictate` | `app/conversation/CardDictate.tsx` | `CardDictate` | |
 | Conversation (app.pen) | `#280 ChoiceCard` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |

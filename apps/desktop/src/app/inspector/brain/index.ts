@@ -1,0 +1,15 @@
+// Brain tab parts drawn as their own cards on the Inspector boards in settings.pen.
+// Code outside this folder takes them from here.
+
+export * from "./BrainDetail";
+export * from "./BrainProgress";
+export * from "./BrainSection";
+export * from "./DeveloperActions";
+export * from "./EmbedderSection";
+export * from "./EmbedderState";
+export * from "./IndexSection";
+export * from "./IndexState";
+export * from "./JobRow";
+export * from "./JobsSection";
+export * from "./NodesByKindList";
+export * from "./WorkersSection";
