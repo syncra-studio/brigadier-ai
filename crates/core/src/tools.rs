@@ -724,6 +724,11 @@ pub struct PreviewLog {
     /// How many of its last lines to show (default 40, at most 400).
     #[serde(default)]
     pub tail_lines: Option<u32>,
+    /// While it is starting (building), wait up to this many seconds (at most 300) for it to
+    /// run or end, then show its log. Wait this way, never with sleep in a command: the wait
+    /// ends the moment it runs.
+    #[serde(default)]
+    pub wait_secs: Option<u32>,
 }
 
 /// `query_brain`: ask the Project Brain.

@@ -1115,7 +1115,7 @@ heartbeat('parent')
     );
     let log = flow
         .manager
-        .preview_log(&flow.conversation, Some(&preview.id), None)
+        .preview_log(&flow.conversation, Some(&preview.id), None, None)
         .await
         .unwrap();
     assert!(log.contains("paused by the user"), "{log}");
@@ -1341,12 +1341,44 @@ async fn a_web_preview_runs_once_its_url_answers() {
     );
     let log = flow
         .manager
-        .preview_log(&flow.conversation, None, None)
+        .preview_log(&flow.conversation, None, None, None)
         .await
         .unwrap();
     assert!(log.contains("starting, not ready yet"), "{log}");
+    assert!(
+        started.contains("call preview_log with wait_secs"),
+        "{started}"
+    );
+    // A wait ends after its seconds while it still starts (#510)...
+    let log = flow
+        .manager
+        .preview_log(&flow.conversation, None, None, Some(1))
+        .await
+        .unwrap();
+    assert!(log.contains("starting, not ready yet"), "{log}");
+    // ...and the moment it runs.
+    let waiting = {
+        let manager = flow.manager.clone();
+        let conversation = flow.conversation.clone();
+        tokio::spawn(async move {
+            manager
+                .preview_log(&conversation, None, None, Some(300))
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!waiting.is_finished());
 
     answer.send(true).unwrap();
+    let waited = tokio::time::timeout(Duration::from_secs(30), waiting)
+        .await
+        .expect("the wait ends once it runs")
+        .unwrap()
+        .unwrap();
+    assert!(
+        waited.starts_with("[preview-1 \"site\" running, pid "),
+        "{waited}"
+    );
     let board = flow
         .until("the preview to be ready", |board| {
             state_of(board, "preview-1") == PreviewState::Running
@@ -1358,7 +1390,7 @@ async fn a_web_preview_runs_once_its_url_answers() {
     );
     let log = flow
         .manager
-        .preview_log(&flow.conversation, None, None)
+        .preview_log(&flow.conversation, None, None, None)
         .await
         .unwrap();
     assert!(

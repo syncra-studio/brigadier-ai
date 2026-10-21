@@ -252,7 +252,7 @@ pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: be
 
 /// How a worker runs a dev server or app: through Brigadier, so it shows in the session's
 /// Activities with a Stop (issue #203).
-pub(crate) const WORKER_PREVIEWS: &str = "Run dev servers and apps with start_preview, never with `&`, nohup or `open`: they show in the session's Activities, with a Stop. Build and launch a desktop app as one start_preview with `kind: \"app\"` (`<build> && \"<the .app>/Contents/MacOS/<binary>\"`, the app in the foreground): it reads Building, then Starting, then Running. A preview you start lasts only while your task is alive: it stops when your task ends and its folder goes.";
+pub(crate) const WORKER_PREVIEWS: &str = "Run dev servers and apps with start_preview, never with `&`, nohup or `open`: they show in the session's Activities, with a Stop. Build and launch a desktop app as one start_preview with `kind: \"app\"` (`<build> && \"<the .app>/Contents/MacOS/<binary>\"`, the app in the foreground): it reads Building, then Starting, then Running. To wait for one, call preview_log with wait_secs, never sleep in a command. A preview you start lasts only while your task is alive: it stops when your task ends and its folder goes.";
 
 /// The session thread's role (THREAD-PLAN.md Q1), with the user's preferences from the Personal
 /// Brain. `provider`: the thread's CLI, which picks how it runs long commands; `start_workers`:
@@ -2875,7 +2875,7 @@ const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's 
 pub(crate) fn worker_computer(dev_app: Option<&str>) -> String {
     let start = dev_app.map_or_else(String::new, |command| format!(" ({command})"));
     format!(
-        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then check each change in its window with the computer tools, as their skill says: read the window's structure before pixels, and check each step's effect in the next read.\n- Put what you saw, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- Act only on windows you launched or the task names.\n- Screenshots the task asks to save (live-1.png, …) are made as it says."
+        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then check each change in its window with the computer tools, as their skill says: read the window's structure before pixels, and check each step's effect in the next read.\n- Put what you saw, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- When the task names an app the session already runs (the user's or the thread's dev app), check in that one: find its window with list_windows, and never start a second copy beside it.\n- Act only on windows you launched or the task names.\n- Screenshots the task asks to save (live-1.png, …) are made as it says."
     )
 }
 
@@ -3775,6 +3775,8 @@ mod tests {
         assert!(brief.contains("check each step's effect in the next read"));
         assert!(brief.contains("never /Applications/Brigadier.app"));
         assert!(brief.contains("Act only on windows you launched or the task names"));
+        // #510: the app the session already runs is the one checked, never a second copy.
+        assert!(brief.contains("never start a second copy beside it"));
         assert!(brief.contains("You change nothing: your worktree is the session's landed work"));
         assert!(!brief.contains("submit_outline"));
         assert!(!brief.contains("call request_review once"));

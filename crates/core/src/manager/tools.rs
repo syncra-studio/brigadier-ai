@@ -723,7 +723,10 @@ impl SessionManager {
                 crate::heap(|| self.stop_preview_tool(id, args.id.as_deref(), None)).await
             }
             OrchestratorCall::PreviewLog(args) => {
-                crate::heap(|| self.preview_log(id, args.id.as_deref(), args.tail_lines)).await
+                crate::heap(|| {
+                    self.preview_log(id, args.id.as_deref(), args.tail_lines, args.wait_secs)
+                })
+                .await
             }
             OrchestratorCall::ListSessions(args) => {
                 crate::heap(|| self.list_sessions(id, args.query.as_deref(), args.project)).await
@@ -1030,6 +1033,7 @@ impl SessionManager {
                         &task_id,
                         args.id.as_deref(),
                         args.tail_lines,
+                        args.wait_secs,
                     )
                 })
                 .await
