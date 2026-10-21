@@ -42,9 +42,9 @@ says so; its row in the sidebar opens it again.
 
 ## Agents in the browser
 
-On macOS and Windows the thread and its workers can use the built-in browser themselves: open a page, read
-it, click, type and take a screenshot. Their page is a normal browser tab of the session, with
-your sign-ins, and it opens in the background. Switch to it to watch.
+On macOS and Windows the thread and its workers can use the built-in browser themselves: open a
+page, read it, click, type and take a screenshot. Their page is a normal browser tab of the
+session, with your sign-ins, and it opens in the background. Switch to it to watch.
 
 - **You take over** by using the page: a click, a key or a scroll pauses the agent. The tab says
   so, and **Continue** hands it back.
