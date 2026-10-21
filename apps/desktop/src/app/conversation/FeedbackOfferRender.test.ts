@@ -3,9 +3,9 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-// While its request runs, the thread's feedback offer waits: only the finished request's shows.
+// While its turn runs, the thread's feedback offer waits: only the finished request's shows.
 test("a feedback offer never shows mid-turn", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "feedback-offer.html?drive=1", "feedback-offer-result", 15000)) as Record<string, unknown>;
+  const seen = JSON.parse(await renderFixturePage(t, "feedback-offer.html?drive=1&turn=1", "feedback-offer-result", 15000)) as Record<string, unknown>;
   // No writer for this one: its own text is its one report.
   assert.deepEqual(seen.cards, [["Typo fixes take longBug"]]);
 });
@@ -15,6 +15,13 @@ const REPORTS = [
   "Stop doesn't stop a running workerAlready reported",
   "Pin a chat to the top of the sidebarIdea",
 ];
+
+// #486: the reply said "the card below" while the request's worker ran on, and no card showed.
+// The turn that made the offer is over: it shows, though the request still works.
+test("a feedback offer shows once its turn ends, while the request's workers run on", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "feedback-offer.html?drive=1", "feedback-offer-result", 15000)) as Record<string, unknown>;
+  assert.deepEqual(seen.cards, [["Typo fixes take longBug"], REPORTS]);
+});
 
 // A turn the user stopped has ended too: its offer shows, to answer.
 test("a feedback offer shows after a stopped turn", { timeout: 60000 }, async (t) => {
