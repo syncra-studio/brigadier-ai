@@ -96,7 +96,38 @@ const groups = () =>
     (group) => text(group.querySelector("header > button")) + text(group.querySelector("header > span:last-child")),
   );
 const box = () => document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')!;
-const commitButton = () => box().closest("div")!.parentElement!.querySelector<HTMLButtonElement>(":scope > div:nth-child(2) > button")!;
+/**
+ * Whether the empty box shows its whole placeholder: its lines, laid out as the box does, fit its
+ * height. Measured as WebKit sizes an empty box, by its rows alone (Chromium sizes it to the
+ * placeholder, WebKit doesn't).
+ */
+function placeholderFits(): { fits: boolean; lines: number } {
+  const webkit = document.createElement("style");
+  webkit.textContent = "textarea { field-sizing: fixed !important; }";
+  document.head.append(webkit);
+  const field = box();
+  const style = getComputedStyle(field);
+  const probe = document.createElement("div");
+  probe.textContent = field.placeholder;
+  Object.assign(probe.style, {
+    position: "absolute",
+    visibility: "hidden",
+    boxSizing: "content-box",
+    width: `${field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)}px`,
+    font: style.font,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+  });
+  document.body.append(probe);
+  const needed = probe.getBoundingClientRect().height;
+  probe.remove();
+  const room = field.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  webkit.remove();
+  return { fits: room + 0.5 >= needed, lines: Math.round(needed / parseFloat(style.lineHeight)) };
+}
+const commitButton = () => box().closest("div")!.parentElement!.parentElement!.querySelector<HTMLButtonElement>(":scope > div:nth-child(2) > button")!;
 /** Opens a menu from the keyboard: a closed menu that stays mounted would swallow a pointer press. */
 const openMenu = (trigger: HTMLElement | undefined) => {
   trigger?.focus();
@@ -121,6 +152,7 @@ function Fixture() {
       await until(() => groups().length === 2);
       seen.groups = groups();
       seen.placeholder = box().placeholder;
+      seen.placeholderFits = placeholderFits();
       seen.commit = text(commitButton());
       seen.branch = text(document.querySelector('[data-slot="source-branch"]'));
       seen.panelText = text(document.querySelector('[data-slot="source-panel"]'));

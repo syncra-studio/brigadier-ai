@@ -11,6 +11,8 @@ test("the Source panel commits from its menu, merges a branch in, lists its conf
   assert.equal(seen.error, undefined, JSON.stringify(seen));
   assert.deepEqual(seen.groups, ["Staged Changes1", "Changes2"]);
   assert.equal(seen.placeholder, 'Message (⌘⏎ to commit on "brigadier/912a9469/session")');
+  // The empty box is as tall as its placeholder, which wraps in the panel (#490).
+  assert.deepEqual(seen.placeholderFits, { fits: true, lines: 2 });
   assert.equal(seen.commit, "Commit");
   assert.equal(seen.branch, "brigadier/912a9469/session2");
   assert.doesNotMatch(String(seen.panelText), /Leave out AI co-author lines|Review all/);

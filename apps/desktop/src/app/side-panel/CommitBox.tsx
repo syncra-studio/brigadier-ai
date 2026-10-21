@@ -104,24 +104,31 @@ export const CommitBox: FC<{
   };
   const writing = busy !== null && busy !== "write" && !message.trim() && !merging;
   const label = merging || rebasing ? "Continue" : "Commit";
+  const placeholder = `Message (${mac ? "⌘⏎" : "Ctrl+⏎"} to commit on "${state?.branch ?? "…"}")`;
   return (
     <div className="flex shrink-0 flex-col gap-2 px-2 pb-1">
       <div className="border-border rounded-control focus-within:border-ring flex items-start border">
-        <textarea
-          rows={1}
-          value={rebasing ? rebasing.message : message}
-          disabled={busy !== null || rebasing !== null}
-          aria-label="Commit message"
-          placeholder={`Message (${mac ? "⌘⏎" : "Ctrl+⏎"} to commit on "${state?.branch ?? "…"}")`}
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && (mac ? event.metaKey : event.ctrlKey)) {
-              event.preventDefault();
-              commit("commit");
-            }
-          }}
-          className="placeholder:text-muted-foreground field-sizing-content max-h-40 min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none"
-        />
+        {/* An empty box is as tall as its placeholder: WebKit sizes it to one line (#490). */}
+        <div className="grid min-w-0 flex-1">
+          <span aria-hidden className="invisible col-start-1 row-start-1 max-h-40 overflow-hidden px-2 py-1.5 text-sm break-words whitespace-pre-wrap">
+            {(rebasing ? rebasing.message : message) ? "" : placeholder}
+          </span>
+          <textarea
+            rows={1}
+            value={rebasing ? rebasing.message : message}
+            disabled={busy !== null || rebasing !== null}
+            aria-label="Commit message"
+            placeholder={placeholder}
+            onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (mac ? event.metaKey : event.ctrlKey)) {
+                event.preventDefault();
+                commit("commit");
+              }
+            }}
+            className="placeholder:text-muted-foreground field-sizing-content col-start-1 row-start-1 max-h-40 w-full min-w-0 resize-none bg-transparent px-2 py-1.5 text-sm outline-none"
+          />
+        </div>
         <TooltipIconButton
           tooltip="Generate Commit Message"
           size="icon-xs"
