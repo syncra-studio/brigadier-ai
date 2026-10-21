@@ -64,9 +64,10 @@ from variables Brigadier names, so an alias needs nothing more.
 The user's Claude project config has `atlassian` (`https://mcp.atlassian.com/v2/mcp`, no
 headers: Claude signs in with OAuth). Given to Codex by `-c` with its URL only, Codex logged
 `AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=…" })` and
-the server had no tools. A remote server with no credentials of its own in the config is marked
-`needs_sign_in` in the catalog: the other agent needs its own sign-in (`codex mcp login <name>`,
-or `/mcp` in Claude).
+the server had no tools. A remote server with no credentials of its own in the config signs in
+with OAuth, so the catalog gives it a sign-in state per agent (`signs_in`, `Catalog::sign_in`):
+signed in natively for the agent whose config holds it, unknown for the other until Brigadier can
+reuse that sign-in (j) or hold its own.
 
 ## (g) Claude: `cwd`, and `${VAR}` in env and headers
 
@@ -92,6 +93,53 @@ A thread started over `codex app-server` with `config.mcp_servers.e4.env = {PROB
 SECRETNOECHO555` over the whole scratch `CODEX_HOME` (rollouts under `sessions/`, every
 `*.sqlite`, `-wal` and `-shm`, logs) found nothing. The value the tool itself returned is in the
 rollout, as any tool output is.
+
+## (j) Where each CLI keeps an MCP OAuth sign-in (macOS)
+
+Named (j) because (i) is the rollout probe above. Found from the JavaScript embedded in the
+Claude Code 2.1.306 binary, and from the codex-rs source with its key strings checked in the
+codex-cli 0.163.0 binary. No Keychain item, credential file or token was read; only whether the
+fallback files exist (`~/.claude/.credentials.json`, `~/.codex/.credentials.json` and
+`~/.codex/secrets/` don't, so both keep their sign-ins in the Keychain here).
+
+Claude Code:
+- One Keychain generic password holds every credential: the claude.ai login, the API key and
+  each MCP server. Service `Claude Code-credentials`; with `CLAUDE_CONFIG_DIR` set,
+  `Claude Code-credentials-<first 8 hex of sha256(config dir)>`
+  (`CLAUDE_SECURESTORAGE_CONFIG_DIR` overrides the hashed folder). Account `$USER`, or
+  `claude-code-user` when that isn't `[a-zA-Z0-9._-]+`. Fallback file: `.credentials.json`
+  (0600) in the config folder, used only when the Keychain write fails outright.
+- Shape (JSON): top-level `claudeAiOauth`, `primaryApiKey`, `mcpOAuth`, `mcpOAuthClientConfig`.
+  `mcpOAuth.<key>`, where key is `<name>|<first 16 hex of sha256(JSON {type,url,headers})>`, has
+  `serverName`, `serverUrl`, `accessToken`, `refreshToken`, `expiresAt` (ms), `scope`,
+  `clientId`, `clientSecret`, `redirectUri`, `issuer`, `stepUpScope`, `discoveryState`.
+- The client registration is stored with the token (`clientId`, `clientSecret`, `redirectUri`).
+- Refresh: proactively when 300 s or less remain, under a lock file
+  `<config dir>/mcp-refresh-<key>.lock` (stale after 60 s), re-reading the store first to adopt
+  another process's fresh token; the new token is written back to the same item (keeping the old
+  refresh token when the server sends none), under `.storage-write`. `invalid_grant` clears the
+  tokens, `invalid_client` the registration too.
+
+Codex:
+- `mcp_oauth_credentials_store = auto | file | keyring` (default `auto`: the Keychain, then the
+  file when that write fails). Keychain: one generic password per server, service
+  `Codex MCP Credentials`, account `<name>|<first 16 hex of sha256(JSON {"type":"http","url",
+  "headers":{}})>`. File: `$CODEX_HOME/.credentials.json`.
+- Shape: the Keychain value has `server_name`, `url`, `issuer`, `client_id`, `token_response`
+  (`access_token`, `token_type`, `expires_in`, `refresh_token`, `scope`) and `expires_at` (ms);
+  the file maps the same key to `server_name`, `server_url`, `issuer`, `client_id`,
+  `access_token`, `expires_at`, `refresh_token`, `scopes`.
+- `client_id` is stored; no `client_secret` (a pre-registered one comes from
+  `[mcp_servers.<name>.oauth] client_secret`).
+- Refresh: before every MCP request when 30 s or less remain, under
+  `$CODEX_HOME/mcp-oauth-locks/<sha256(key)>.lock` (60 s), re-reading the store first and saving
+  the new token to the same store before using it; tokens are saved again after each tool call.
+  A 401 after that returns "Authentication required" and the call isn't replayed.
+
+Not confirmed: whether the two keys match for the same server (it depends on the JSON key order
+each hashes), and how Claude normalises the config folder before hashing it. Reusing a sign-in
+across agents therefore means reading one store and writing the refreshed token back to it under
+that CLI's own lock, which a follow-up task builds.
 
 ## What Brigadier does with them
 
