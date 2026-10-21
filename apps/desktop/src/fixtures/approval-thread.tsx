@@ -5,7 +5,7 @@
  * command, a landing, an action, an outline, a peer message, a browser action, and a card with no
  * subtitle and no body. IPC is mocked, no daemon.
  *
- * `?case=<id>` shows one card alone (for a screenshot); `?drive=1` writes each card's header, body
+ * `?case=<id>[,<id>...]` selects cards for a screenshot; `?drive=1` writes each card's header, body
  * and footer measures to `<pre id="approval-thread-result">` (ApprovalThreadRender.test.ts).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -67,11 +67,11 @@ const tasks = {
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, approvals, tasks } });
 mockIPC((command, payload) => (command === "ipc_request" ? { method: (payload as { request: { method: string } }).request.method } : null));
 
-const only = query.get("case");
+const only = query.get("case")?.split(",");
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <div className="flex w-190 flex-col gap-6 p-6">
-      {CARDS.filter(([id]) => !only || id === only).map(([id]) => (
+      {CARDS.filter(([id]) => !only || only.includes(id)).map(([id]) => (
         <div key={id} data-case={id}>
           <ApprovalCardView cardId={id} />
         </div>
@@ -97,6 +97,13 @@ function measure(id: string) {
   const body = card.querySelector<HTMLElement>("[data-slot=approval-card-body]");
   const footer = card.querySelector<HTMLElement>("[data-slot=approval-card-footer]");
   const footerStyle = footer ? getComputedStyle(footer) : null;
+  const text = body?.querySelector<HTMLElement>("[data-selectable]");
+  const textStyle = text ? getComputedStyle(text) : null;
+  const firstLetter = document.createRange();
+  if (text?.firstChild) {
+    firstLetter.setStart(text.firstChild, 0);
+    firstLetter.setEnd(text.firstChild, 1);
+  }
   return {
     header: pad(header),
     body: pad(body),
@@ -107,12 +114,28 @@ function measure(id: string) {
     // The footer is as tall as its words: no height of its own.
     footerFits: !!footer && !!footerStyle && Math.round(footer.getBoundingClientRect().height - px(footerStyle.paddingTop) - px(footerStyle.paddingBottom)) === Math.round(px(footerStyle.lineHeight)),
     bodyHeight: body ? Math.round(body.getBoundingClientRect().height) : null,
+    codeBoxes: body?.querySelectorAll(".bg-code-surface").length ?? 0,
+    textInset: text ? Math.round(firstLetter.getBoundingClientRect().left - left) : null,
+    textSize: textStyle ? px(textStyle.fontSize) : null,
+    textWeight: textStyle?.fontWeight,
+    foreground: textStyle?.color === getComputedStyle(card).color,
+    whiteSpace: textStyle?.whiteSpace,
+    text: text?.textContent,
+    textHeight: text?.getBoundingClientRect().height,
+    contentFits: !!body && !!text && text.getBoundingClientRect().right <= body.getBoundingClientRect().right - px(getComputedStyle(body).paddingRight) && [body, ...body.querySelectorAll("*")].every((part) => part.scrollHeight <= part.clientHeight + 1 && part.scrollWidth <= part.clientWidth + 1),
   };
 }
 
 async function drive() {
   await wait(100);
-  return Object.fromEntries(CARDS.map(([id]) => [id, measure(id)]));
+  const cards = Object.fromEntries(CARDS.map(([id]) => [id, measure(id)]));
+  // Exercise long prose and an unbroken path in the real body, without changing screenshot copy.
+  const longProse = Object.fromEntries(["action", "outline", "peer", "browser"].map((id) => {
+    const text = document.querySelector(`[data-case="${id}"] [data-selectable]`);
+    if (text) text.textContent = `${"A long explanation that must wrap and remain fully visible. ".repeat(100)}\nhttps://example.com/${"long-path-".repeat(100)}`;
+    return [id, measure(id)];
+  }));
+  return { ...cards, longProse };
 }
 
 if (query.get("drive") === "1") {

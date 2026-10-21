@@ -128,28 +128,28 @@ function describe(
         icon: <Sparkle />,
         title: subject.action,
         subtitle: by,
-        body: <ToolBox prose>{subject.details}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.details}</p>,
       };
     case "outline":
       return {
         icon: <Sparkle />,
         title: "Start this plan?",
         subtitle: byline(by, subject.title),
-        body: <ToolBox prose>{subject.outline}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.outline}</p>,
       };
     case "peerMessage":
       return {
         icon: <Sparkle />,
         title: `Send a message to ${subject.title} in ${subject.project}?`,
         subtitle: by,
-        body: <ToolBox prose>{subject.text}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.text}</p>,
       };
     case "browser":
       return {
         icon: <Globe />,
         title: subject.question,
         subtitle: by,
-        body: <ToolBox prose>{subject.details}</ToolBox>,
+        body: <p data-selectable className="text-foreground text-sm font-normal whitespace-pre-wrap wrap-anywhere">{subject.details}</p>,
       };
   }
 }
