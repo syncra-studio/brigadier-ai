@@ -41,7 +41,7 @@ export function AppUpdatePill() {
         ) : (
           <DownloadSimple aria-hidden />
         )}
-        {expanded && <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />}
+        {expanded && <BrigadierGlyph aria-hidden smallCut={14} className="size-icon-sm mx-0.5 shrink-0" />}
       </TooltipIconButton>
     </BarItem>
   );

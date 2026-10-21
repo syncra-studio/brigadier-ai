@@ -7,6 +7,8 @@
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 /* macOS draws the traffic lights over the window content (overlay title bar). */
 @custom-variant macos (&:where([data-platform="macos"], [data-platform="macos"] *));
+/* Windows draws a point with one pixel on most screens (100–150%): marks cut for that grid. */
+@custom-variant windows (&:where([data-platform="windows"], [data-platform="windows"] *));
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
 /* The thread's column and its composer's inside the element: the thread's pane moves them aside
    for the pinned summary. */

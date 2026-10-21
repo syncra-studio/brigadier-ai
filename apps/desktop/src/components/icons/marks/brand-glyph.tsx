@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type FC, type SVGProps } from "react";
 
+import { smallMark } from "./small-mark";
+
 /**
  * Brigadier's mark, the striped disc: a solid core with bars through it and fifteen thin
  * strokes around it, on the 256-unit grid of its master (`src-tauri/icons/mark.svg`, which
@@ -8,6 +10,10 @@ import { useEffect, useRef, useState, type FC, type SVGProps } from "react";
  * rightward through the disc's outline like a turning globe, each taking the height of the
  * column ahead as it goes, then coast to rest on the master's pose. The first launch's intro
  * turns it the same way once its strokes have gathered.
+ *
+ * Drawn small (`smallCut`), Windows shows the cut for that pixel size instead (small-mark.ts):
+ * the master's strokes are under a pixel there. Both are in the one image, which stays hidden
+ * from screen readers, and macOS draws the master as before.
  */
 
 /** The strokes and bars stand in columns this far apart, the first centred at x 27.2. */
@@ -116,15 +122,38 @@ type BrigadierGlyphProps = SVGProps<SVGSVGElement> & {
   spinOnHover?: boolean;
   /** Spin the disc while true (the first launch's intro turns it once). */
   spinning?: boolean;
+  /** The size in points it is drawn at, when small: Windows draws the cut for that grid. */
+  smallCut?: number;
+};
+
+/** The small cut on the master's 256-unit grid, for the `windows` variant to show. */
+const SmallCut: FC<{ size: number }> = ({ size }) => {
+  const { stripes, core } = smallMark(size);
+  return (
+    <g className="hidden windows:inline" transform={`scale(${256 / size})`}>
+      {stripes.map(([x, y, width, height]) => (
+        <rect key={x} x={x} y={y} width={width} height={height} />
+      ))}
+      <circle cx={core.cx} cy={core.cy} r={core.r} />
+    </g>
+  );
 };
 
 export const BrigadierGlyph: FC<BrigadierGlyphProps> = ({
   spinOnHover = false,
   spinning = false,
+  smallCut,
   ...props
 }) => {
   const [hovered, setHovered] = useState(false);
   const { stripes, coreBars } = markPaths(useSpinOffset(spinning || (spinOnHover && hovered)));
+  const master = (
+    <>
+      {stripes.map((d, i) => d && <path key={COLUMNS[i]} d={d} />)}
+      <circle cx={128} cy={128} r={59} />
+      {coreBars.map((d, i) => d && <path key={COLUMNS[i]} d={d} />)}
+    </>
+  );
   return (
     <svg
       viewBox="0 0 256 256"
@@ -134,9 +163,14 @@ export const BrigadierGlyph: FC<BrigadierGlyphProps> = ({
       onPointerLeave={spinOnHover ? () => setHovered(false) : undefined}
       {...props}
     >
-      {stripes.map((d, i) => d && <path key={COLUMNS[i]} d={d} />)}
-      <circle cx={128} cy={128} r={59} />
-      {coreBars.map((d, i) => d && <path key={COLUMNS[i]} d={d} />)}
+      {smallCut ? (
+        <>
+          <g className="windows:hidden">{master}</g>
+          <SmallCut size={smallCut} />
+        </>
+      ) : (
+        master
+      )}
     </svg>
   );
 };

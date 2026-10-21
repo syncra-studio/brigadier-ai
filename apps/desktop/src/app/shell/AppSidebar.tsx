@@ -282,7 +282,7 @@ export function AppSidebar() {
       <NavHeader
         title={
           <span className="-ms-0.5 flex items-center gap-2">
-            <BrigadierGlyph className="size-5 shrink-0" />
+            <BrigadierGlyph smallCut={20} className="size-5 shrink-0" />
             Brigadier
           </span>
         }
@@ -474,7 +474,7 @@ export function StripMark() {
         className="group/mark"
         onClick={() => setOpen(true)}
       >
-        <BrigadierGlyph className="size-5! group-hover/mark:hidden group-focus-visible/mark:hidden" />
+        <BrigadierGlyph smallCut={20} className="size-5! group-hover/mark:hidden group-focus-visible/mark:hidden" />
         <Sidebar className="hidden group-hover/mark:block group-focus-visible/mark:block" />
       </TooltipIconButton>
     </div>
