@@ -36,7 +36,7 @@ test("the Job card says what is happening right now, from the board's events, an
   assert.equal(seen["working"]!.spinning, true);
 
   // Checks (run_checks): running with the command at work, failed with what failed, passed on the commit.
-  assert.deepEqual(card("checksRunning"), { tone: "running", headline: "Running checks", detail: ["Now: desktop tests"], buttons: [] });
+  assert.deepEqual(card("checksRunning"), { tone: "running", headline: "Running checks · 3 of 5", detail: ["Now: desktop tests"], buttons: [] });
   assert.deepEqual(card("checksFailed"), { tone: "failed", headline: "Checks failed", detail: ["pnpm test: 2 tests failed"], buttons: [] });
   assert.equal(seen["checksFailed"]!.spinning, false);
   assert.deepEqual(card("checksPassed"), { tone: "done", headline: "Checks passed on 4e1c49e", detail: ["5 of 5 passed"], buttons: [] });

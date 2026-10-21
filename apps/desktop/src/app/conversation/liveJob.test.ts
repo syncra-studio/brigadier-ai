@@ -8,8 +8,16 @@ import type { CiRun, IntegratedCheck, IntegratedCheckState, OrchestratorStep, Pr
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
 
-const check = (n: number, tip: string, state: IntegratedCheckState, startedAtMs = 100, endedAtMs: number | null = null): IntegratedCheck =>
-  ({ id: `check-${n}`, conversationId: "c", repo: "/r", branch: "b", tip, state, dueAtMs: startedAtMs, startedAtMs, endedAtMs, requests: ["r1"], tasks: [], rerun: false });
+/** A `run_checks` run: the thread's full checks unless `asked` says otherwise (null: one Brigadier started itself). */
+const check = (
+  n: number,
+  tip: string,
+  state: IntegratedCheckState,
+  startedAtMs = 100,
+  endedAtMs: number | null = null,
+  asked: { taskId: string | null; scope: "full" | "change" } | null = { taskId: null, scope: "full" },
+): IntegratedCheck =>
+  ({ id: `check-${n}`, conversationId: "c", repo: "/r", branch: "b", tip, state, dueAtMs: startedAtMs, startedAtMs, endedAtMs, requests: ["r1"], tasks: [], rerun: false, ...(asked ? { asked } : {}) }) as IntegratedCheck;
 
 const review = (id: string, startedAtMs: number, state: ReviewState, endedAtMs: number | null = null): ReviewRun =>
   ({ id, conversationId: "c", requestId: "r1", taskId: null, kind: "code", base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs, number: 1, items: [] }) as unknown as ReviewRun;
@@ -69,6 +77,12 @@ test("checks: running with the command at work, failed with what failed, passed 
     "Checks passed on 4e1c49e",
     "5 of 5 passed",
   ]);
+  // run_checks counts its commands: the one at work is the third of five.
+  const counted = { type: "running", command: "desktop tests", done: 2, total: 5 } as IntegratedCheckState;
+  assert.deepEqual(words({ ...working, integratedChecks: byId([check(1, "4e1c49e999", counted)]) })!.slice(0, 2), ["running", "Running checks · 3 of 5"]);
+  // A worker's own checks are its row's, not the card's.
+  const workers = byId([check(1, "4e1c49e999", counted, 100, null, { taskId: "t1", scope: "change" })]);
+  assert.deepEqual(words({ ...working, integratedChecks: workers })![1], "Working");
   // Only the newest run counts: a pass after a failure is the outcome.
   const both = byId([check(1, "aaa", { type: "failed", command: "x", status: "1", output: null }, 60, 70), check(2, "bbbbbbb1", { type: "passed", commands: ["a"] }, 80, 90)]);
   assert.equal(words({ ...idle, integratedChecks: both })![1], "Checks passed on bbbbbbb");
@@ -95,6 +109,9 @@ test("merge: merging, merged with checks passed only on the merged commit, never
   ]);
   // Merged anyway, or with checks on another commit: no claim.
   assert.equal(words({ ...idle, integratedChecks: passed, orchestratorSteps: [merged("other22")] })![1], "Merged into main");
+  // Nor a pass of checks Brigadier ran by itself, or of a worker's change only.
+  const unasked = byId([check(1, "head111", { type: "passed", commands: ["a"] }, 60, 70, null)]);
+  assert.equal(words({ ...idle, integratedChecks: unasked, orchestratorSteps: [merged("head111")] })![1], "Merged into main");
   const requested = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {} } as unknown as OrchestratorStep["kind"]);
   assert.deepEqual(words({ ...working, integratedChecks: passed, orchestratorSteps: [requested] }), ["running", "Merging into main", "Checks passed on head111"]);
 });

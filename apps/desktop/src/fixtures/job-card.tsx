@@ -32,8 +32,9 @@ mockIPC((command, payload) => {
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
+/** The thread's run_checks run. */
 const check = (n: number, tip: string, state: IntegratedCheckState, startedAtMs: number, endedAtMs: number | null = null): IntegratedCheck =>
-  ({ id: `check-${n}`, conversationId: "c", repo: "/r", branch: "b", tip, state, dueAtMs: startedAtMs, startedAtMs, endedAtMs, requests: ["r1"], tasks: [], rerun: false });
+  ({ id: `check-${n}`, conversationId: "c", repo: "/r", branch: "b", tip, state, dueAtMs: startedAtMs, startedAtMs, endedAtMs, requests: ["r1"], tasks: [], rerun: false, asked: { taskId: null, scope: "full" } }) as IntegratedCheck;
 const review = (state: ReviewState, startedAtMs: number, endedAtMs: number | null = null): ReviewRun =>
   ({ id: "v1", conversationId: "c", requestId: "r1", taskId: null, kind: "code", notify: { type: "orchestrator" }, base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs, number: 1, items: [] }) as unknown as ReviewRun;
 const step = (atMs: number, kind: unknown): OrchestratorStep => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 });
@@ -68,7 +69,7 @@ const MOMENTS: Record<string, Partial<Board>> = {
   ciFailed: { ...ended, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "completed", "failure", 5, 5)], "failed")] },
   idle: ended,
   working: { ...working, tasks: byId([task("t1", "running")]) },
-  checksRunning: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests" }, T0 + 3 * MIN)]) },
+  checksRunning: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests", done: 2, total: 5 } as IntegratedCheckState, T0 + 3 * MIN)]) },
   checksFailed: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "failed", command: "pnpm test", status: "2 tests failed", output: null }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
   checksPassed: { ...ended, integratedChecks: passedOn("4e1c49e999") },
   reviewRunning: { ...working, reviews: byId([review({ type: "running" }, T0 + 3 * MIN)]) },
