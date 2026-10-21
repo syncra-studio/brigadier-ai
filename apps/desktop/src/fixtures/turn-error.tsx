@@ -82,7 +82,9 @@ async function drive() {
     summary: row.querySelector('[data-slot="error-state-summary"]')?.textContent ?? null,
     detailsOpen: details?.open ?? null,
     rawShownBefore: document.body.innerText.includes("Internal server error"),
-    notices: [...document.querySelectorAll('ul[aria-label="Notices"] > li')].map((item) => item.textContent),
+    notices: [...document.querySelectorAll('[aria-label="Notices"] li[data-level] [data-slot="notice-text"]')].map((item) => item.textContent),
+    // One tray on the composer's rail (#506): the notices' card is a rail card, its rows inside it.
+    tray: document.querySelector('[data-slot="composer-rail"] > [data-slot="composer-rail-item"][aria-label="Notices"]')?.getAttribute("data-variant") ?? null,
   };
   details?.querySelector("summary")?.click();
   await pause();

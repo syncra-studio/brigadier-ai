@@ -17,6 +17,7 @@ test("a failed session turn reads calmly: one row, raw words under Details, Try 
     rawShownAfter: boolean;
     copy: string | null;
     notices: string[];
+    tray: string | null;
     tryAgain: boolean;
     sent: string[];
     bare: { text: string | null; details: number | null; buttons: number | null };
@@ -32,6 +33,8 @@ test("a failed session turn reads calmly: one row, raw words under Details, Try 
   assert.equal(seen.rawShownAfter, true);
   assert.equal(seen.copy, "Copy");
   assert.deepEqual(seen.notices, ["The sandbox isn't available here: commands run without it."]);
+  // Notices are one card joined to the composer's top, not strips of their own above it.
+  assert.equal(seen.tray, "card");
   // A session's Try again sends "Try again." the way the composer does.
   assert.equal(seen.tryAgain, true);
   assert.deepEqual(seen.sent, ["Try again."]);
