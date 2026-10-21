@@ -323,6 +323,14 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
 
 **Goal:** Every capability on the machine, available to every vendor.
 
+**Status (2026-10-21):** the backend of shared MCP servers and skills is built (`crates/registry`, `manager/integrations.rs`; probes in `docs/research/phase7-probes.md`, live run in `docs/evidence/2026-10-21-phase7-sharing.md`):
+- A catalog of every MCP server and skill: importers for `~/.claude.json` (honoring `CLAUDE_CONFIG_DIR`), `.mcp.json`, `$CODEX_HOME/config.toml` and a trusted project's Codex layers, Claude Desktop and Cursor; skills from `~/.agents/skills`, `~/.claude/skills`, `$CODEX_HOME/skills` and a trusted project's `.claude/skills` and `.agents/skills`; a debounced watcher. Brigadier only reads these configs.
+- The catalog over IPC (`getIntegrations`, generated TS types; env and header values never cross it, only their names) and the switches as Settings fields (`mcpServersOff`, `skillsOff`; default on, a change applies at each session's next start or resume).
+- Each worker keeps its agent's own servers; `delegate_task`'s `integrations` adds named servers from the other agent, Claude Desktop or Cursor, with per-server env aliases. HTTP servers and a stdio server's own folder in both adapters.
+- Every switched-on skill reaches every worker (a Brigadier plugin folder for Claude, an extra skill root for Codex); switched-off servers and skills are kept from threads and workers. The thread gets a short list of the servers a worker gets only when named.
+
+Not built: the Plugins and Skills screens in Settings, reusing a remote server's OAuth sign-in across agents (the catalog reports a per-agent sign-in state only), Claude and Codex plugins, local models, and the ACP adapter.
+
 **Deliverables**
 - **Unified registry:**
   - **Plugins screen:** MCP servers and connectors, each with its own auth, on/off switch, and permissions.
