@@ -13,11 +13,13 @@
 // changes, because macOS keys the Accessibility and Screen Recording grants to it. It is signed
 // with APPLE_SIGNING_IDENTITY when set, otherwise ad hoc.
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, chmodSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { canSandbox, nestedSwiftEnv } from "./nested-swift.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -90,25 +92,11 @@ const helperDir = resolve(repoRoot, "helpers/computer-use");
 // The helper is its own workspace; its output lives beside the main build's.
 const helperTargetDir = join(targetDir, "computer-use");
 
-/**
- * The environment the helper builds in. Its Swift bridges are SwiftPM packages, and SwiftPM
- * compiles their manifests under sandbox-exec, which macOS refuses inside another sandbox (a
- * Brigadier session's preview or command, #510). There, tools/nested-swift's `swift` builds
- * with --disable-sandbox and the outer sandbox still holds.
- */
+/** The environment the helper builds in: inside a sandbox, SwiftPM keeps it (nested-swift.mjs). */
 function helperEnv() {
-  // The probe denies something: inside a sandbox that allows everything, an identical profile
-  // still applies.
-  const strict = '(version 1)(allow default)(deny file-write* (literal "/private/var/empty/nested-probe"))';
-  const probe = spawnSync("/usr/bin/sandbox-exec", ["-p", strict, "/usr/bin/true"]);
-  if (probe.status === 0) return process.env;
-  const swift = execFileSync("/bin/sh", ["-c", "command -v swift"], { encoding: "utf8" }).trim();
+  if (canSandbox()) return process.env;
   console.log("SwiftPM uses the existing sandbox (--disable-sandbox)");
-  return {
-    ...process.env,
-    BRIGADIER_SWIFT: swift,
-    PATH: `${resolve(repoRoot, "tools/nested-swift")}${delimiter}${process.env.PATH}`,
-  };
+  return nestedSwiftEnv(repoRoot, process.env);
 }
 
 /** Builds the helper for `triple` and returns the path of the produced binary. */
