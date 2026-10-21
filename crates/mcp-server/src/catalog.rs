@@ -11,11 +11,11 @@ use brigadier_core::tools::{
     OfferFeedback, OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog,
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
     RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
-    ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
-    SaveReport, SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession, StartPreview,
-    StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
-    SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun, ThreadRunCheck,
-    ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    ReviewPlan, Role, RouteFollowUp, RunCheck, RunChecks, RunCommand, RunTools, RunUnsandboxed,
+    SaveMemory, SaveReport, SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession,
+    StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline,
+    SubmitReport, SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun,
+    ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -306,10 +306,19 @@ branches, ended reviews' checkouts), by Brigadier's own records, and says what w
 stayed and why. Brigadier already cleans up after you; never delete branches, worktrees or temp \
 folders by hand.";
 
-const RERUN_CHECKS: &str = "Runs the session's full checks again at its branch's tip, now and \
-without kept results. They already run on their own once after each landing (and after your \
-own commits), so call this only after [checks couldn't run …] once what stopped them is fixed, \
-or when a failure wasn't the code's (a flaky test, the machine). Their result comes as a message.";
+const RUN_CHECKS: &str = "Run the project's full checks (tests, lints, builds) on the session \
+branch's commit now, in a checkout of their own. Commit first: uncommitted changes aren't in it. \
+Brigadier never runs them by itself: call it before every merge into main, which goes through \
+only once they passed on that exact commit. Its reply has the verdict and, on a failure, the \
+command and its output; past a minute they go on in the background and the result comes as a \
+[checks … at <commit>] message. A pass at the same commit answers at once; `rerun` runs them \
+again (a flaky test, the machine).";
+
+const WORKER_RUN_CHECKS: &str = "Run the checks your change calls for (those of the packages you \
+changed) in your checkout, and get the verdict: the commands that passed, or the one that \
+failed with its output. Call it before submit_report and fix what fails. The full suite of the \
+whole project is the thread's to run, once, after landing. `rerun` runs them again rather than \
+answering from earlier runs.";
 
 const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
 one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
@@ -925,7 +934,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("clean_up", CLEAN_UP, no_arguments()),
-        tool("rerun_checks", RERUN_CHECKS, no_arguments()),
+        tool("run_checks", RUN_CHECKS, input_schema::<RunChecks>()),
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
         tool("read_page", READ_PAGE, input_schema::<ReadPage>()),
         tool("write_page", WRITE_PAGE, input_schema::<WritePage>()),
@@ -1001,6 +1010,7 @@ fn worker_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("run_check", WORKER_RUN_CHECK, input_schema::<RunCheck>()),
+        tool("run_checks", WORKER_RUN_CHECKS, input_schema::<RunChecks>()),
         tool(
             "start_preview",
             WORKER_START_PREVIEW,
@@ -1057,6 +1067,7 @@ fn chat_tools() -> Vec<Tool> {
 /// no bench run called it.
 pub const THREAD_ALWAYS_LOADED: &[&str] = &[
     "run_check",
+    "run_checks",
     "read_artifact",
     "ask_user",
     "note_for_user",
@@ -1241,12 +1252,22 @@ pub enum ParseError {
     UnknownTool(String),
     /// The arguments do not match the tool's schema.
     BadArguments { tool: String, reason: String },
+    /// A tool that is gone, called by a session that started before: what to call instead.
+    Retired { tool: String, instead: &'static str },
 }
+
+/// Tools that are gone, and what a session that still calls one is told to do instead
+/// (BUILD-PLAN rule R).
+const RETIRED: &[(&str, &str)] = &[(
+    "rerun_checks",
+    "call run_checks with rerun true. Brigadier no longer runs the checks by itself: run_checks runs them, and a merge into main needs them passed on its commit.",
+)];
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownTool(name) => write!(f, "There is no tool named {name:?} for you."),
+            Self::Retired { tool, instead } => write!(f, "{tool} is gone: {instead}"),
             Self::BadArguments { tool, reason } => {
                 write!(f, "Invalid arguments for {tool}: {reason}")
             }
@@ -1264,7 +1285,13 @@ pub fn parse_call(
     // Models sometimes send `null` for an optional argument; it means "left out".
     arguments.retain(|_, value| !value.is_null());
     let arguments = Value::Object(arguments);
-    let unknown = || ParseError::UnknownTool(name.to_owned());
+    let unknown = || match RETIRED.iter().find(|(tool, _)| *tool == name) {
+        Some((tool, instead)) => ParseError::Retired {
+            tool: (*tool).to_owned(),
+            instead,
+        },
+        None => ParseError::UnknownTool(name.to_owned()),
+    };
     if has_browser_tools(role)
         && let Some(call) = browser_call(name, &arguments)
     {
@@ -1322,7 +1349,7 @@ pub fn parse_call(
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
                 "clean_up" => OrchestratorCall::CleanUp,
-                "rerun_checks" => OrchestratorCall::RerunChecks,
+                "run_checks" => OrchestratorCall::RunChecks(args(name, arguments)?),
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 "read_page" => OrchestratorCall::ReadPage(args(name, arguments)?),
                 "write_page" => OrchestratorCall::WritePage(args(name, arguments)?),
@@ -1360,6 +1387,7 @@ pub fn parse_call(
                 "code_refs" => WorkerCall::CodeRefs(args::<CodeRefs>(name, arguments)?),
                 "project_map" => WorkerCall::ProjectMap,
                 "run_check" => WorkerCall::RunCheck(args::<RunCheck>(name, arguments)?),
+                "run_checks" => WorkerCall::RunChecks(args::<RunChecks>(name, arguments)?),
                 "start_preview" => WorkerCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => WorkerCall::StopPreview(args(name, arguments)?),
                 "preview_log" => WorkerCall::PreviewLog(args(name, arguments)?),
@@ -2483,6 +2511,42 @@ mod tests {
         }
         let late = serde_json::json!({ "note": "Adds NOTES.md." });
         assert!(parse_call(&thread, "propose_merge", late.as_object().cloned()).is_err());
+    }
+
+    /// rerun_checks is gone: run_checks takes its place, for the thread and for workers, and
+    /// a session that started before is told what to call instead (BUILD-PLAN rule R).
+    #[test]
+    fn run_checks_replaces_rerun_checks() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        for role in [thread.clone(), worker(false), worker(true)] {
+            let tools = tools_for(&role);
+            assert!(
+                tools.iter().any(|tool| tool.name == "run_checks"),
+                "{role:?}"
+            );
+            assert!(
+                tools.iter().all(|tool| tool.name != "rerun_checks"),
+                "{role:?}"
+            );
+        }
+        let rerun = serde_json::json!({ "rerun": true });
+        assert!(matches!(
+            parse_call(&thread, "run_checks", rerun.as_object().cloned()),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::RunChecks(args))) if args.rerun
+        ));
+        assert!(matches!(
+            parse_call(&worker(false), "run_checks", None),
+            Ok(ToolCall::Worker(WorkerCall::RunChecks(args))) if !args.rerun
+        ));
+        let late = parse_call(&thread, "rerun_checks", None).unwrap_err();
+        assert!(
+            late.to_string()
+                .starts_with("rerun_checks is gone: call run_checks with rerun true"),
+            "{late}"
+        );
     }
 
     #[test]

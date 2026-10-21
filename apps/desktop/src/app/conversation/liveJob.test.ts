@@ -62,7 +62,7 @@ test("with nothing running and nothing waiting there is no card; while the threa
 });
 
 test("checks: running with the command at work, failed with what failed, passed on the commit", () => {
-  assert.deepEqual(words({ ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests" })]) }), [
+  assert.deepEqual(words({ ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests", done: 0, total: 1 })]) }), [
     "running",
     "Running checks",
     "Now: desktop tests",
@@ -137,7 +137,7 @@ test("the held merge and CI are the card's now, their buttons with them; CI's ou
 
 test("waiting on you points at the cards below, never copying them, and comes before anything else", () => {
   const questions = byId([question("q1", 40)]);
-  const busy = { ...working, questions, integratedChecks: byId([check(1, "abc", { type: "running", command: "x" })]) };
+  const busy = { ...working, questions, integratedChecks: byId([check(1, "abc", { type: "running", command: "x", done: 0, total: 1 })]) };
   assert.deepEqual(words(busy), ["waiting", "Waiting for your answer below", null]);
   assert.deepEqual(words({ ...working, questions: byId([question("q1", 40, "merge")]) })!.slice(0, 2), ["waiting", "Waiting for your yes below"]);
   const approvals = byId([{ id: "a1", state: { type: "pending" }, createdAtMs: 40, subject: { type: "cli" } } as unknown as ShownApproval]);
@@ -163,7 +163,7 @@ test("a finished outcome stays until the next message; what still runs stays whe
   assert.equal(words({ ...idle, integratedChecks: passed })![1], "Checks passed on abc");
   const next = { requests: byId([request("r1", 10, { type: "done" }, 50), request("r2", 60, { type: "working" })]) };
   assert.equal(words({ ...next, integratedChecks: passed })![1], "Working");
-  const running = byId([check(1, "abc", { type: "running", command: "x" }, 20)]);
+  const running = byId([check(1, "abc", { type: "running", command: "x", done: 0, total: 1 }, 20)]);
   assert.equal(words({ ...next, integratedChecks: running })![1], "Running checks");
   // While the thread goes on, an outcome since the last message says more than Working.
   assert.equal(words({ ...working, integratedChecks: passed })![1], "Checks passed on abc");

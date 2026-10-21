@@ -505,6 +505,17 @@ pub struct RunCommand {
     pub timeout_secs: Option<u64>,
 }
 
+/// `run_checks`: the thread's runs the project's full checks (builds included) on the session
+/// branch's commit; a worker's runs the checks its change calls for, in its own checkout.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunChecks {
+    /// Run them again even where an earlier run's result would answer (a flaky test, the
+    /// machine).
+    #[serde(default)]
+    pub rerun: bool,
+}
+
 /// `run_check`: a check (tests, lint, typecheck, build) run in the caller's tree, its result
 /// kept per tree; without a command, the checks the tree's changes affect (THREAD-PLAN.md Q8
 /// lever 3). For workers and the thread alike.
@@ -1387,7 +1398,7 @@ pub enum OrchestratorCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     CleanUp,
-    RerunChecks,
+    RunChecks(RunChecks),
     ReviewPlan(ReviewPlan),
     ReadPage(ReadPage),
     WritePage(WritePage),
@@ -1447,7 +1458,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "code_refs",
     "project_map",
     "clean_up",
-    "rerun_checks",
+    "run_checks",
     "review_plan",
     "read_page",
     "write_page",
@@ -1534,7 +1545,7 @@ impl OrchestratorCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::CleanUp => "clean_up",
-            Self::RerunChecks => "rerun_checks",
+            Self::RunChecks(_) => "run_checks",
             Self::ReviewPlan(_) => "review_plan",
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",
@@ -1839,6 +1850,7 @@ pub enum WorkerCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     RunCheck(RunCheck),
+    RunChecks(RunChecks),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
@@ -1858,6 +1870,7 @@ impl WorkerCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::RunCheck(_) => "run_check",
+            Self::RunChecks(_) => "run_checks",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",

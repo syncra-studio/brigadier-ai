@@ -319,7 +319,7 @@ How to work:
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
-- The session's full checks run once per request, on their own; run more yourself when it's worth it, and never ask the user how much to check. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then rerun_checks.
+- {RUN_CHECKS_RULE}
 - Reviews by the other vendor scale with risk: one per landing of a worker's; your own changes get one once, since the last review, they pass 150 lines or 5 files of code (not tests/docs), or you mark one risky (run_check's risky); a tiny edit gets none. While a review of your work runs, reply {quiet}; fix its valid findings before your final answer.
 - A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end (fresh: true sees only request, constraints, done_when, commit; own work too).
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
@@ -432,6 +432,25 @@ macro_rules! headline_rule {
         "When what you are doing changes, say it with set_headline for the user's Job card: a few plain words (\"Starting the dev server\"), and one line of what comes next. Not for every step."
     };
 }
+
+macro_rules! run_checks_rule {
+    () => {
+        "Run the project's full checks with run_checks before every merge into main: a merge goes through only once they passed on its exact commit. Never ask the user how much to check. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then run_checks with rerun true."
+    };
+}
+
+/// When the thread runs the full checks (thread-truth grill Q5).
+pub(crate) const RUN_CHECKS_RULE: &str = run_checks_rule!();
+
+macro_rules! worker_run_checks_rule {
+    () => {
+        "Before submit_report, commit and call run_checks: it runs the checks of your own change; fix what fails and call it again."
+    };
+}
+
+/// When a worker runs its change's checks.
+#[cfg(test)]
+pub(crate) const WORKER_RUN_CHECKS_RULE: &str = worker_run_checks_rule!();
 
 /// The thread writes the session's headline (thread-truth grill J2).
 pub(crate) const HEADLINE_RULE: &str = headline_rule!();
@@ -1291,6 +1310,18 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", headline_rule!()),
         worker: "",
     },
+    Revision {
+        number: RUN_CHECKS_REVISION,
+        thread: concat!(
+            "From now on, rerun_checks is gone and run_checks takes its place: it runs the project's full checks on your session branch's commit now and answers with the verdict (past a minute the result comes as a message). ",
+            run_checks_rule!()
+        ),
+        worker: concat!(
+            "From now on: ",
+            worker_run_checks_rule!(),
+            " The project's full checks are the thread's."
+        ),
+    },
 ];
 
 /// The instructions' current revision.
@@ -1871,6 +1902,9 @@ pub(crate) const FEEDBACK_ASKED_REVISION: u32 = 123;
 /// The thread keeps the session's headline current with set_headline, for the Job card
 /// (thread-truth grill J2, 10-21).
 pub(crate) const HEADLINE_REVISION: u32 = 124;
+/// run_checks replaces rerun_checks: the thread runs the full checks before a merge into
+/// main, a worker its change's checks before its report (thread-truth grill Q5, Q6).
+pub(crate) const RUN_CHECKS_REVISION: u32 = 125;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2552,8 +2586,11 @@ const WORKER_CODE_TOOLS: &str = "
 const CODEX_READING: &str = "\n- Read a file with one `sed -n 'a,bp' <full path>` for the lines you need (several ranges in one call when you need them), never `cd` and then `cat` a whole file.";
 
 /// How every worker runs its checks (THREAD-PLAN.md Q8 lever 3).
-const WORKER_CHECKS: &str = "
-- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell. Run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched: never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the session's full checks run once on everyone's work, and a failure comes back to you. Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
+const WORKER_CHECKS: &str = concat!(
+    "\n- ",
+    worker_run_checks_rule!(),
+    " Run any other check (tests, lint, typecheck, build, formatting) with run_check, not your shell: only the checks of your own change and the type and lint of what you touched, never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the thread runs the project's full checks on everyone's work, and a failure comes back to you. Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss."
+);
 
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
@@ -3559,7 +3596,8 @@ mod tests {
     #[test]
     fn workers_check_focused_read_from_the_index_and_codex_reads_ranges() {
         let claude = worker(&task("claude", Some("lead")));
-        assert!(claude.contains("Run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched: never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the session's full checks run once on everyone's work, and a failure comes back to you."));
+        assert!(claude.contains(WORKER_RUN_CHECKS_RULE));
+        assert!(claude.contains("only the checks of your own change and the type and lint of what you touched, never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the thread runs the project's full checks on everyone's work, and a failure comes back to you."));
         assert!(claude.contains("check your own change: the checks of what you touched (its tests, format, lint, types), never the whole suite or an app build."));
         assert!(!claude.contains("full suite once"));
         assert!(!claude.contains("the full test suite"));
@@ -4216,9 +4254,9 @@ mod environment_tests {
                         run.is_none()
                     );
                     assert!(prompt.contains("How to write code:"));
-                    // Full checks once per request, reviews scaled with risk, extra care
+                    // The full checks before a merge, reviews scaled with risk, extra care
                     // only for a big job (B1, B2).
-                    assert!(prompt.contains("The session's full checks run once per request"));
+                    assert!(prompt.contains("before every merge into main: a merge goes through only once they passed on its exact commit"));
                     assert!(prompt.contains("not your shell, before your final answer"));
                     assert!(prompt.contains("Reviews by the other vendor scale with risk"));
                     assert!(prompt.contains("or you mark one risky"));
@@ -4374,9 +4412,9 @@ mod environment_tests {
                 text.contains("workers can open apps, look at them and use them with the computer tools; you can't"),
                 cfg!(target_os = "macos")
             );
-            // The full checks run once per request, never by it or a worker (§11, BUILD-PLAN
-            // B1); landing at once is in the rules for workers.
-            assert!(text.contains("The session's full checks run once per request, on their own; run more yourself when it's worth it, and never ask the user how much to check."));
+            // The full checks are the thread's to run before a merge (thread-truth grill Q5);
+            // landing at once is in the rules for workers.
+            assert!(text.contains("before every merge into main: a merge goes through only once they passed on its exact commit. Never ask the user how much to check."));
             assert!(WORKER_RULES.contains("each report at once"));
             assert!(!text.contains("Never run the full suite"));
             // Git is the thread's call (Q61); the three approvals stay, whoever asks.
@@ -5003,7 +5041,10 @@ mod environment_tests {
             !note.contains("browser_"),
             "the tools named only where they are"
         );
-        assert_eq!(revision_note(VISIBLE_PROOF_REVISION - 1, true), None);
+        assert_eq!(
+            revision_note(VISIBLE_PROOF_REVISION - 1, true),
+            revision_note(VISIBLE_PROOF_REVISION, true)
+        );
     }
 
     /// While the built-in browser is on, the instructions don't mention it: the browser tools
@@ -5099,7 +5140,9 @@ mod environment_tests {
                 .unwrap()
                 .contains(REVISED_ANSWER)
         );
-        assert!(revision_note(BREAKDOWN_REVISION, true).is_none());
+        assert!(
+            revision_note(BREAKDOWN_REVISION - 1, true) == revision_note(BREAKDOWN_REVISION, true)
+        );
     }
 
     /// Q73: work found outside the request is offered as a session of its own, never done here
@@ -5128,7 +5171,10 @@ mod environment_tests {
             !revision_note(OFFER_SESSION_REVISION, false)
                 .is_some_and(|note| note.contains(OFFER_SESSION_RULE))
         );
-        assert!(revision_note(REVISED_ANSWER_REVISION, true).is_none());
+        assert!(
+            revision_note(REVISED_ANSWER_REVISION - 1, true)
+                == revision_note(REVISED_ANSWER_REVISION, true)
+        );
     }
 
     fn session(permission: &str) -> Conversation {
@@ -5738,7 +5784,10 @@ mod environment_tests {
             ),
             "{note}"
         );
-        assert!(revision_note(SEPARATE_FOLLOW_UP_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(SEPARATE_FOLLOW_UP_REVISION - 1, true)
+                == revision_note(SEPARATE_FOLLOW_UP_REVISION, true)
+        );
     }
 
     /// The queue decides again (user, 10-20): open threads hear once that a message sent
@@ -5889,7 +5938,10 @@ mod environment_tests {
         }
         assert!(note.contains("save it with save_report"));
         assert!(note.contains("split it across 2 to 4 research workers"));
-        assert!(revision_note(ANSWER_FORMAT_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(ANSWER_FORMAT_REVISION - 1, true)
+                == revision_note(ANSWER_FORMAT_REVISION, true)
+        );
     }
 
     /// Q79, the 10-18 live checks (#319): a research answer broke the voice's no-bold-labels rule
@@ -5997,7 +6049,7 @@ mod environment_tests {
     fn open_threads_hear_once_to_ask_one_clarifying_card_before_research() {
         let note = revision_note(CLARIFY_REVISION - 1, false).unwrap();
         assert!(note.contains(CHAT_THREAD_RULES[0]), "{note}");
-        assert!(revision_note(CLARIFY_REVISION - 1, true).is_none());
+        assert!(revision_note(CLARIFY_REVISION - 1, true) == revision_note(CLARIFY_REVISION, true));
         let rule = thread(
             &session("approveForMe"),
             None,
@@ -6123,7 +6175,9 @@ mod environment_tests {
         assert_eq!(told.contract, Some(CHAT_CONTRACT));
         assert!(notes(&told, &now).is_empty());
         let note = revision_note(GRILLING_REVISION - 1, false).unwrap();
-        assert!(revision_note(GRILLING_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(GRILLING_REVISION - 1, true) == revision_note(GRILLING_REVISION, true)
+        );
         let rule = thread(
             &session("approveForMe"),
             None,
@@ -6151,7 +6205,10 @@ mod environment_tests {
             "Never write \"Recommended\" in an option",
         ];
         let note = revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, false).unwrap();
-        assert!(revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, true)
+                == revision_note(FUSED_INTERVIEW_FIXES_REVISION, true)
+        );
         let now = Current::chat(Vec::new());
         for contract in [CHAT_FUSION_CONTRACT, CHAT_FIXES_CONTRACT - 1] {
             let mut told = now.told();
@@ -6293,7 +6350,10 @@ mod environment_tests {
             "never tell the user to save one under your answer",
         ];
         let note = revision_note(INLINE_FILES_REVISION - 1, false).unwrap();
-        assert!(revision_note(INLINE_FILES_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(INLINE_FILES_REVISION - 1, true)
+                == revision_note(INLINE_FILES_REVISION, true)
+        );
         let now = Current::chat(Vec::new());
         for contract in [CHAT_THREAD_CONTRACT, CHAT_FILES_CONTRACT - 1] {
             let mut told = now.told();
@@ -6479,7 +6539,7 @@ mod environment_tests {
             assert!(note.contains(words), "{words}");
         }
         assert!(
-            revision_note(APP_TOOLS_REVISION - 1, true).is_none(),
+            revision_note(APP_TOOLS_REVISION - 1, true) == revision_note(APP_TOOLS_REVISION, true),
             "workers hear nothing"
         );
         assert!(
@@ -6537,7 +6597,7 @@ mod environment_tests {
             true,
         );
         let note = revision_note(START_REVISION - 1, false).unwrap();
-        assert!(revision_note(START_REVISION - 1, true).is_none());
+        assert!(revision_note(START_REVISION - 1, true) == revision_note(START_REVISION, true));
         for words in words {
             assert_eq!(chat(&[]).matches(words).count(), 1, "{words}");
             assert_eq!(rule.matches(words).count(), 1, "{words}");
@@ -6594,7 +6654,7 @@ mod environment_tests {
         for words in FUSION_RULES {
             assert!(note.contains(words), "{words}");
         }
-        assert!(revision_note(FUSION_REVISION - 1, true).is_none());
+        assert!(revision_note(FUSION_REVISION - 1, true) == revision_note(FUSION_REVISION, true));
         let rule = thread(
             &session("approveForMe"),
             None,

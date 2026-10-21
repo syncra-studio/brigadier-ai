@@ -673,7 +673,9 @@ impl SessionManager {
             }
             OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
             OrchestratorCall::CleanUp => crate::heap(|| self.clean_up(id)).await,
-            OrchestratorCall::RerunChecks => crate::heap(|| self.rerun_checks(id)).await,
+            OrchestratorCall::RunChecks(args) => {
+                crate::heap(|| self.run_checks_tool(id, args.rerun)).await
+            }
             OrchestratorCall::ReviewPlan(args) => {
                 crate::heap(|| self.review_thread_plan(id, args)).await
             }
@@ -1006,6 +1008,9 @@ impl SessionManager {
             WorkerCall::RunCheck(args) => {
                 self.run_check_tool(&conversation_id, Some(&task_id), args)
                     .await
+            }
+            WorkerCall::RunChecks(args) => {
+                crate::heap(|| self.worker_run_checks(&conversation_id, &task_id, args.rerun)).await
             }
             WorkerCall::StartPreview(args) => {
                 crate::heap(|| self.start_worker_preview(&conversation_id, &task_id, args)).await

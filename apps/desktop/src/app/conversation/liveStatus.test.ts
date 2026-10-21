@@ -257,7 +257,7 @@ test("a long run the request waits on says what runs and since when, rather than
   // While the thread itself works, its own line says what it does.
   assert.deepEqual(head(input({ ...leading, backgroundRuns: byId([run()]) })), { text: "Thinking", tone: "busy" });
   // The session's full checks a request's answer waits on.
-  const check = { id: "check-1", conversationId: "c", repo: "/r", branch: "b", tip: "abc", state: { type: "running", command: "cargo test" },
+  const check = { id: "check-1", conversationId: "c", repo: "/r", branch: "b", tip: "abc", state: { type: "running", command: "cargo test", done: 0, total: 1 },
     dueAtMs: 500, startedAtMs: 2_000, endedAtMs: null, requests: ["r1"], tasks: [], rerun: false } as IntegratedCheck;
   assert.deepEqual(head(input({ integratedChecks: byId([check]) })), { text: "Running the full checks", tone: "busy", sinceMs: 2_000, run: true });
   // Due, they haven't started: never "Running" while the thread says they haven't run (#108).

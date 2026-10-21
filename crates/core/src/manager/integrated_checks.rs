@@ -13,13 +13,13 @@
 //!   only once its requests have settled ([`super::requests::request_settled`]): no turn of
 //!   theirs runs or waits, no worker of theirs runs or lands, no review of their work runs or
 //!   is about to tell its findings, and no landing is under way. Then one run checks the
-//!   branch's tip at that moment. A merge's check and `rerun_checks` start at once.
+//!   branch's tip at that moment. A merge's check and `run_checks` start at once.
 //! - **One run at a time per session**, in a checkout of its own (`checks/<id>/tree`, owned by
 //!   [`checks_owner`]): made warm once, then moved to each tip, so its build output stays and
 //!   no landing changes files under a running build. Its dependency installs are made again
 //!   when the files that pin them change. The commands are the project's own full checks
 //!   (`checks::full_checks`), each through `run_check`'s keyed cache, so the same files under
-//!   the same inputs never run again unless the thread asks (`rerun_checks`), and always with
+//!   the same inputs never run again unless the thread asks (`run_checks` with `rerun`), and always with
 //!   the build lease.
 //! - **The result** reaches the thread: a failure with its command, output and the tasks that
 //!   landed since the checks last passed, for the thread to send back to the worker that broke
@@ -58,6 +58,9 @@ const SETTLED_POLL: Duration = Duration::from_secs(2);
 /// started at once: a project's quick or kept checks answer it there, others hold it.
 /// Tests wait less for a check they hold on purpose.
 pub(crate) const MERGE_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 30 });
+/// How long `run_checks` holds the thread's call for the verdict before it goes on in the
+/// background, its result then coming as a message.
+const CALL_WAIT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 60 });
 /// How long one command of the full checks may run.
 const FULL_CHECK_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// How long an install of the checkout's dependencies may run.
@@ -86,6 +89,9 @@ pub(crate) struct IntegratedChecks {
     records: tokio::sync::Mutex<()>,
     /// Woken each time a check ends.
     ended: tokio::sync::Notify,
+    /// The `run_checks` runs whose verdict the thread's call still waits for: their end is
+    /// told in the call, not as a message. Held while a check's end is told.
+    in_call: tokio::sync::Mutex<std::collections::HashSet<String>>,
     /// Tests: the settle wait instead of [`SETTLE`] (100 ms when unset).
     #[cfg(test)]
     pub(crate) settle: std::sync::Mutex<Option<Duration>>,
@@ -267,14 +273,14 @@ pub(crate) fn standing_lines(board: &crate::board::Board, now_ms: i64) -> Vec<St
                     minutes(check.started_at_ms)
                 ),
                 IntegratedCheckState::Passed { .. } => format!(
-                    "Full checks: passed on {at}, {} ago. A newer commit makes them due again.",
+                    "Full checks: passed on {at}, {} ago. A newer commit needs run_checks again.",
                     minutes(check.ended_at_ms)
                 ),
                 IntegratedCheckState::Failed {
                     command, status, ..
                 } => format!("Full checks: failed on {at}: `{command}` ({status})."),
                 IntegratedCheckState::Interrupted { reason } => {
-                    format!("Full checks: couldn't finish on {at} ({reason}); rerun_checks runs them again.")
+                    format!("Full checks: couldn't finish on {at} ({reason}); run_checks with rerun true runs them again.")
                 }
             }
         }
@@ -398,9 +404,11 @@ impl SessionManager {
         })
     }
 
-    /// `rerun_checks`: the session's full checks run again at its tip, at once, without
-    /// kept results.
-    pub(crate) async fn rerun_checks(&self, id: &ConversationId) -> Result<String> {
+    /// The thread's `run_checks`: the project's full checks on the session branch's commit
+    /// now, started at once. A pass of an earlier call at that commit answers it (unless
+    /// `rerun`), one running there is waited for; the call holds up to [`CALL_WAIT`] for the
+    /// verdict, then it goes on in the background and its result comes as a message.
+    pub(crate) async fn run_checks_tool(&self, id: &ConversationId, rerun: bool) -> Result<String> {
         let workspace = self
             .recorded_workspace(id)
             .ok_or_else(|| Error::Invalid("this session has no checkout to check yet".into()))?;
@@ -418,21 +426,101 @@ impl SessionManager {
         })
         .await?;
         let request = self.request_for(id, None).await;
-        self.make_due(
-            id,
-            &workspace.repo,
-            &workspace.branch,
-            &tip,
-            request,
-            Due::Rerun,
-        )
-        .await;
+        let check = self
+            .ask_full_checks(id, &workspace.repo, &workspace.branch, &tip, request, rerun)
+            .await?;
+        self.integrated.in_call.lock().await.insert(check.clone());
         self.run_due_checks(id).await;
-        Ok(format!(
-            "The session's full checks run again on `{}` at {}, without kept results. Their result comes as a message; reply [quiet] meanwhile.",
-            workspace.branch,
-            short(&tip.0)
-        ))
+        let deadline = tokio::time::Instant::now() + CALL_WAIT;
+        loop {
+            let ended = self.integrated.ended.notified();
+            let board = self.core.board(id).await?;
+            if let Some(done) = board
+                .integrated_checks
+                .get(&check)
+                .filter(|done| done.state.is_final())
+            {
+                // Its end is told here: after_check leaves it out of the messages.
+                return Ok(self.checks_verdict(done).await);
+            }
+            if tokio::time::timeout_at(deadline, ended).await.is_err() {
+                let mut waiting = self.integrated.in_call.lock().await;
+                let board = self.core.board(id).await?;
+                let Some(now) = board.integrated_checks.get(&check) else {
+                    waiting.remove(&check);
+                    return Err(Error::Invalid("the checks' record is gone".into()));
+                };
+                if now.state.is_final() {
+                    drop(waiting);
+                    return Ok(self.checks_verdict(now).await);
+                }
+                waiting.remove(&check);
+                return Ok(format!(
+                    "The full checks still run on `{}` at {} ({check}), in the background: their result comes as a message [checks … at {}]. Carry on with what doesn't depend on them, or reply {}; don't call run_checks again for it.",
+                    now.branch,
+                    short(&now.tip),
+                    short(&now.tip),
+                    super::prompts::QUIET,
+                ));
+            }
+        }
+    }
+
+    /// A `run_checks` run of the full checks at `tip` of `branch`, by its id: an earlier
+    /// call's pass there (unless `rerun`), one due or running there, or a new one, due at once.
+    async fn ask_full_checks(
+        &self,
+        id: &ConversationId,
+        repo: &Path,
+        branch: &str,
+        tip: &Oid,
+        request: Option<String>,
+        rerun: bool,
+    ) -> Result<String> {
+        let _records = self.integrated.records.lock().await;
+        let board = self.core.board(id).await?;
+        let asked_here = board
+            .integrated_checks
+            .values()
+            .filter(|check| check.branch == branch && check.tip == tip.0 && full_by_thread(check))
+            .max_by_key(|check| integrated_check_number(&check.id));
+        match asked_here.map(|check| (&check.state, check)) {
+            Some((IntegratedCheckState::Passed { .. }, check)) if !rerun => {
+                return Ok(check.id.clone());
+            }
+            Some((IntegratedCheckState::Due | IntegratedCheckState::Running { .. }, check)) => {
+                return Ok(check.id.clone());
+            }
+            _ => {}
+        }
+        let check = IntegratedCheck {
+            id: next_check_id(&board),
+            conversation_id: id.clone(),
+            repo: repo.to_string_lossy().into_owned(),
+            branch: branch.to_owned(),
+            tip: tip.0.clone(),
+            state: IntegratedCheckState::Due,
+            due_at_ms: now_ms() - AT_ONCE,
+            started_at_ms: None,
+            ended_at_ms: None,
+            requests: request.into_iter().collect(),
+            tasks: Vec::new(),
+            rerun,
+            asked: Some(crate::work::ChecksAsked {
+                task_id: None,
+                scope: crate::work::ChecksScope::Full,
+            }),
+        };
+        self.store_check(&check).await;
+        Ok(check.id)
+    }
+
+    /// What the thread is told of a `run_checks` run's end, in its call.
+    async fn checks_verdict(&self, check: &IntegratedCheck) -> String {
+        match self.check_message(check, true, true).await {
+            Some((text, _)) => text,
+            None => format!("[checks at {}] They ended.", short(&check.tip)),
+        }
     }
 
     /// Wakes the session's queue, when it has one: a check waiting for its requests to settle
@@ -570,6 +658,7 @@ impl SessionManager {
                     requests: request.into_iter().collect(),
                     tasks: Vec::new(),
                     rerun,
+                    asked: None,
                 }
             }
         };
@@ -615,7 +704,7 @@ impl SessionManager {
         self.store_check(check).await;
     }
 
-    async fn store_check(&self, check: &IntegratedCheck) {
+    pub(super) async fn store_check(&self, check: &IntegratedCheck) {
         if let Err(err) = self
             .core
             .record_conversation(
@@ -662,7 +751,14 @@ impl SessionManager {
                         .integrated_checks
                         .values()
                         .filter(|check| check.state == IntegratedCheckState::Due)
-                        .min_by_key(|check| integrated_check_number(&check.id))
+                        // One asked for at once never waits behind one that waits for its
+                        // requests to settle.
+                        .min_by_key(|check| {
+                            (
+                                waits_for_requests(check),
+                                integrated_check_number(&check.id),
+                            )
+                        })
                         .cloned(),
                     Err(_) => None,
                 };
@@ -722,7 +818,7 @@ impl SessionManager {
         // A local checkout's changes stay uncommitted: its checks run on a snapshot of its
         // files as they stand now, never in the user's checkout (BUILD-PLAN B2).
         let local = self.local_checkout(id).is_some_and(|(_, branch)| {
-            branch == due.branch && (due.rerun || waits_for_requests(&due))
+            branch == due.branch && (due.rerun || due.asked.is_some() || waits_for_requests(&due))
         });
         let tip = if local {
             crate::heap(|| self.snapshot_local(&repo)).await.map(Some)
@@ -750,7 +846,10 @@ impl SessionManager {
             }
             match &tip {
                 // Run at the branch's tip now: a landing that made it moved the due check too.
-                Ok(Some(tip)) => check.tip = tip.0.clone(),
+                // One `run_checks` asked for checks the commit it was asked at, or a local
+                // checkout's files as they stand now.
+                Ok(Some(tip)) if check.asked.is_none() || local => check.tip = tip.0.clone(),
+                Ok(Some(_)) => {}
                 Ok(None) => {
                     check.state = IntegratedCheckState::Interrupted {
                         reason: format!("its branch `{}` is gone", check.branch),
@@ -763,7 +862,11 @@ impl SessionManager {
                 }
             }
             if check.state == IntegratedCheckState::Due {
-                check.state = IntegratedCheckState::Running { command: None };
+                check.state = IntegratedCheckState::Running {
+                    command: None,
+                    done: 0,
+                    total: 0,
+                };
             }
             check.started_at_ms = Some(now_ms());
             self.store_check(&check).await;
@@ -842,9 +945,12 @@ impl SessionManager {
             Err(err) => return interrupted(format!("its checks couldn't be listed: {err}")),
         };
         let mut passed = Vec::new();
+        let total = u32::try_from(commands.len()).unwrap_or(u32::MAX);
         for (command, workdir) in commands {
             check.state = IntegratedCheckState::Running {
                 command: Some(command.clone()),
+                done: u32::try_from(passed.len()).unwrap_or(u32::MAX),
+                total,
             };
             self.store_run(check).await;
             let done = match self
@@ -1071,6 +1177,12 @@ impl SessionManager {
         if matches!(check.state, IntegratedCheckState::Passed { .. }) {
             self.release_checked_holds(id).await;
         }
+        // A `run_checks` call still waiting tells its verdict itself.
+        if self.integrated.in_call.lock().await.remove(&check.id) {
+            self.check_held_merge(id).await;
+            self.settle_requests(id).await;
+            return;
+        }
         // Every independent request that deferred to this run gets its own outcome.
         let mut requests: Vec<_> = self
             .waiting_requests(check)
@@ -1176,7 +1288,8 @@ impl SessionManager {
                 } else {
                     String::new()
                 };
-                if !waited && look.is_empty() {
+                // A run_checks run's pass is told even when no answer waits for it.
+                if !waited && look.is_empty() && check.asked.is_none() {
                     return None;
                 }
                 let covered = if tasks.is_empty() {
@@ -1235,7 +1348,7 @@ impl SessionManager {
                 };
                 Some((
                     format!(
-                        "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}{known}\nThey don't hold a merge; you judge what follows. A break in the code goes back to the task that broke it in one fix task (role fix, subject that task: it resumes the worker's own session), with the failing command and the lines that show why; once it lands they run again on their own. A failure that isn't the code's (a flaky test, the machine): rerun_checks, or leave it.",
+                        "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}{known}\nA merge into main needs them to pass on its exact commit. A break in the code is fixed by you, or goes back to the task that broke it in one fix task (role fix, subject that task: it resumes the worker's own session) with the failing command and the lines that show why; then call run_checks again. A failure that isn't the code's (a flaky test, the machine): run_checks with rerun true.",
                         branch = check.branch,
                         whole = output
                             .as_ref()
@@ -1247,7 +1360,7 @@ impl SessionManager {
             }
             IntegratedCheckState::Interrupted { reason } => Some((
                 format!(
-                    "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked. Fix what stops them if you can, then call rerun_checks.",
+                    "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked. Fix what stops them if you can, then call run_checks with rerun true.",
                     check.branch
                 ),
                 false,
@@ -1435,12 +1548,32 @@ impl SessionManager {
     }
 }
 
+/// The next free check id of a conversation's board (`check-<n>`).
+pub(super) fn next_check_id(board: &crate::board::Board) -> String {
+    let number = board
+        .integrated_checks
+        .keys()
+        .map(|id| integrated_check_number(id))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    format!("check-{number}")
+}
+
+/// Whether `check` is a run of the full checks the thread asked for with `run_checks`: the
+/// only kind a merge into main counts.
+pub(crate) fn full_by_thread(check: &IntegratedCheck) -> bool {
+    check.asked.as_ref().is_some_and(|asked| {
+        asked.task_id.is_none() && asked.scope == crate::work::ChecksScope::Full
+    })
+}
+
 /// When a due check is made due at once (a merge waits for it), its due time is set this far
 /// back.
 const AT_ONCE: i64 = i64::MAX / 4;
 
 /// Whether `due` waits for its requests to settle before it starts: made due by a commit or a
-/// landing, not by a merge or `rerun_checks`, which start at once.
+/// landing, not by a merge or `run_checks`, which start at once.
 fn waits_for_requests(due: &IntegratedCheck) -> bool {
     !due.rerun && due.due_at_ms > -AT_ONCE / 2
 }
@@ -1635,6 +1768,7 @@ test result: FAILED. 1 passed; 3 failed";
             requests: vec!["r1".into()],
             tasks: Vec::new(),
             rerun: false,
+            asked: None,
         }
     }
 
@@ -1701,13 +1835,17 @@ test result: FAILED. 1 passed; 3 failed";
         assert_eq!(
             standing_lines(&board, 5 * 60_000),
             [
-                "Full checks: passed on `work` at a1, 5 min ago. A newer commit makes them due again."
+                "Full checks: passed on `work` at a1, 5 min ago. A newer commit needs run_checks again."
             ]
         );
         let mut running = check(
             "check-2",
             "b2",
-            IntegratedCheckState::Running { command: None },
+            IntegratedCheckState::Running {
+                command: None,
+                done: 0,
+                total: 0,
+            },
         );
         running.started_at_ms = Some(60_000);
         board.integrated_checks.insert(running.id.clone(), running);

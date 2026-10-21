@@ -1794,6 +1794,31 @@ pub struct IntegratedCheck {
     /// Asked for again by the thread: kept results don't answer it.
     #[serde(default)]
     pub rerun: bool,
+    /// Who asked for it with `run_checks`, and what it checks. None on a run Brigadier started
+    /// by itself (before 10-21): such a run never counts for a merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub asked: Option<ChecksAsked>,
+}
+
+/// Who called `run_checks`, and what its run checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecksAsked {
+    /// The worker that asked; none for the thread.
+    pub task_id: Option<TaskId>,
+    pub scope: ChecksScope,
+}
+
+/// What a `run_checks` run checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ChecksScope {
+    /// The project's full checks, builds included, on the session branch's commit (the
+    /// thread's).
+    Full,
+    /// The checks of the packages a worker's change touched, in its own checkout.
+    Change,
 }
 
 /// Where an integrated check stands.
@@ -1809,6 +1834,11 @@ pub enum IntegratedCheckState {
     Running {
         /// The command running now.
         command: Option<String>,
+        /// How many of its commands ended so far, of `total` (0 of 0 while they are listed).
+        #[serde(default)]
+        done: u32,
+        #[serde(default)]
+        total: u32,
     },
     /// Every command passed.
     Passed { commands: Vec<String> },
