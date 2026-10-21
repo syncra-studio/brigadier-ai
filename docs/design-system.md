@@ -227,6 +227,12 @@ table is the current one.
 | Side panel (app.pen) | `#467 CommitBox` | `app/side-panel/CommitBox.tsx` | `CommitBox` | |
 | Side panel (app.pen) | `#977 CommitBox › commit actions menu` | `app/side-panel/CommitActionsMenu.tsx` | `CommitActionsMenu` | |
 | Side panel (app.pen) | `#976 SourcePanel › More Actions menu` | `app/side-panel/SourceMoreMenu.tsx` | `SourceMoreMenu` | |
+| Side panel (app.pen) | `#440 SummaryContent` | `app/conversation/SummaryContent.tsx` | `SummaryContent` | |
+| Side panel (app.pen) | `#965 FloatingSummary` | `app/conversation/FloatingSummary.tsx` | `FloatingSummary` | |
+| Side panel (app.pen) | `#426 SourceRow` | `app/conversation/SourceRow.tsx` | `SourceRow` | |
+| Side panel (app.pen) | `#439 BranchRow` | `app/conversation/BranchRow.tsx` | `BranchRow` | |
+| Side panel (app.pen) | `#446 JobStack` | `app/conversation/JobStack.tsx` | `JobStack` | |
+| Side panel (app.pen) | `#964 Sources › View all links popover` | `app/conversation/AllLinksPopover.tsx` | `AllLinksPopover` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
