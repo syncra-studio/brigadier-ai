@@ -1,21 +1,14 @@
 import { useEffect, useState } from "react";
 
-import { TooltipIconButton, Button } from "@/components/controls";
+import { TooltipIconButton } from "@/components/controls";
 import { BarItem, ITEM_MS } from "@/app/shell/BarItem";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
+import { UPDATE_NAMES, UpdateRow } from "@/app/shell/UpdateRow";
 import { footMenuPlacement } from "@/app/shell/sidebar/nav";
-import { BrigadierGlyph, Check, Copy, DownloadSimple, ProviderGlyph, Spinner, X } from "@/components/icons";
-import { Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { BrigadierGlyph, Check, DownloadSimple, ProviderGlyph, Spinner } from "@/components/icons";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { useSidebar } from "@/components/layout";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import type { UpdateItem, UpdateTarget } from "@/ipc/generated";
-import { pillClick, shownUpdates, skipUpdate, startUpdate, useUpdates } from "@/state/updates";
-
-const UPDATE_NAMES: Record<UpdateTarget, string> = {
-  app: "Brigadier",
-  claude: PROVIDER_LABELS.claude,
-  codex: PROVIDER_LABELS.codex,
-};
+import type { UpdateItem } from "@/ipc/generated";
+import { pillClick, shownUpdates, startUpdate, useUpdates } from "@/state/updates";
 
 const CLIS = ["claude", "codex"] as const;
 
@@ -136,86 +129,4 @@ function rowLabel(items: readonly UpdateItem[]): string {
   if (items.some((item) => item.progress.type === "updating")) return `Updating ${names}`;
   if (items.every((item) => item.progress.type === "updated")) return `${names} updated`;
   return `${names} ${items.length > 1 ? "updates" : "update"} available`;
-}
-
-function UpdateRow({ item }: { item: UpdateItem }) {
-  const asked = useUpdates((s) => s.errors[item.target]);
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  const name = UPDATE_NAMES[item.target];
-  const { progress, action } = item;
-  const shownError = asked ?? (progress.type === "failed" ? progress.error : null);
-  const take = () => void startUpdate(item);
-  return (
-    <div className="flex flex-col gap-1.5 rounded-md px-1.5 py-1.5">
-      <div className="flex items-center gap-2.5">
-        {item.target === "app" ? (
-          <BrigadierGlyph aria-hidden className="size-icon-md shrink-0" />
-        ) : (
-          <ProviderGlyph provider={item.target} className="size-icon-md shrink-0" />
-        )}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm">{name}</span>
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {progress.type === "updated"
-              ? `Updated to ${item.current}`
-              : `${item.current} → ${item.latest}`}
-          </span>
-        </div>
-        {progress.type === "updating" ? (
-          <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
-            <Spinner className="size-icon-sm animate-spin" />
-            Updating…
-          </span>
-        ) : progress.type === "updated" ? (
-          <Check aria-label="Updated" className="text-muted-foreground size-icon-sm shrink-0" />
-        ) : (
-          <>
-            {action.type !== "manual" && (
-              <Button size="sm" variant="outline" onClick={take}>
-                {action.type === "download"
-                  ? "Download"
-                  : progress.type === "failed"
-                    ? "Try again"
-                    : "Update"}
-              </Button>
-            )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`Skip ${name} ${item.latest}`}
-                  onClick={() => skipUpdate(item)}
-                >
-                  <X />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Skip this version</TooltipContent>
-            </Tooltip>
-          </>
-        )}
-      </div>
-      {action.type === "manual" && progress.type === "available" && (
-        <div className="flex flex-col gap-1 ps-7">
-          <span className="text-muted-foreground text-xs">Run this in a terminal to update:</span>
-          <div className="bg-muted/50 flex items-center gap-1 rounded-sm ps-2">
-            <code className="min-w-0 flex-1 truncate font-mono text-xs">{action.command}</code>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label={isCopied ? "Copied" : "Copy the command"}
-              onClick={() => copyToClipboard(action.command)}
-            >
-              {isCopied ? <Check /> : <Copy />}
-            </Button>
-          </div>
-        </div>
-      )}
-      {shownError && (
-        <p role="alert" className="text-warning ps-7 text-xs whitespace-pre-line">
-          {shownError}
-        </p>
-      )}
-    </div>
-  );
 }

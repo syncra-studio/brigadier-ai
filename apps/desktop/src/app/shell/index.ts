@@ -4,6 +4,7 @@
 export * from "./BarDivider";
 export * from "./ChatTab";
 export * from "./Flyout";
+export * from "./HelpMenu";
 export * from "./NewChatRow";
 export * from "./PageCorners";
 export * from "./PageSurface";
@@ -13,3 +14,4 @@ export * from "./ProviderUsage";
 export * from "./SessionTab";
 export * from "./SidebarHeader";
 export * from "./TabMenu";
+export * from "./UpdateRow";

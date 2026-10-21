@@ -1,23 +1,16 @@
-import { type ReactNode, useRef } from "react";
+import type { ReactNode } from "react";
 
 import { TooltipIconButton } from "@/components/controls";
 import { AppUpdatePill } from "@/app/shell/AppUpdatePill";
 import { KeepAwakeMenu, UsageMenu } from "@/app/shell/BarStatus";
 import { useShortcuts } from "@/app/shortcuts";
 import { preloadSettings } from "@/app/settings/lazy";
-import { footMenuPlacement } from "@/app/shell/sidebar/nav";
+import { HelpMenu } from "@/app/shell/HelpMenu";
 import { UpdatesRow } from "@/app/shell/UpdatesRow";
-import { Comment, HelpIcon, Keyboard, Settings } from "@/components/icons";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/overlays";
+import { Settings } from "@/components/icons";
 import { useSidebar } from "@/components/layout";
 import { cn } from "@/lib/utils";
-import { openSettings, toggleSettings } from "@/state/actions";
-import { openFeedback } from "@/state/feedback";
+import { toggleSettings } from "@/state/actions";
 
 /**
  * The icons at the sidebar's foot, outside Settings: keeping awake, the agents' usage, updates
@@ -95,46 +88,5 @@ function Moving({
     >
       {children}
     </div>
-  );
-}
-
-/** Help at the sidebar's foot: a life ring that opens Send feedback… and Keyboard shortcuts. */
-function HelpMenu() {
-  const { open } = useSidebar();
-  // Send feedback opens once the menu has closed, so its note keeps the keyboard rather than the
-  // closing menu handing it back to Help.
-  const toFeedback = useRef(false);
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <TooltipIconButton look="strip" side={open ? "top" : "right"} tooltip="Help">
-          <HelpIcon />
-        </TooltipIconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        {...(open ? ({ side: "top", align: "end" } as const) : footMenuPlacement(false))}
-        // The design's width: sized to its two rows it read as an oval rather than a menu.
-        className="w-60"
-        onCloseAutoFocus={(event) => {
-          if (!toFeedback.current) return;
-          toFeedback.current = false;
-          event.preventDefault();
-          openFeedback();
-        }}
-      >
-        <DropdownMenuItem
-          onSelect={() => {
-            toFeedback.current = true;
-          }}
-        >
-          <Comment />
-          Send feedback…
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openSettings("shortcuts")}>
-          <Keyboard />
-          Keyboard shortcuts
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

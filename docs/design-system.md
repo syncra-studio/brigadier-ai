@@ -190,6 +190,8 @@ table is the current one.
 | App shell (app.pen) | `#94 SessionTabBar › Chat tab` | `app/shell/ChatTab.tsx` | `ChatTab` | |
 | App shell (app.pen) | `#95 SessionTabBar › session tab` | `app/shell/SessionTab.tsx` | `SessionTab` | |
 | App shell (app.pen) | `#975 TabMenu` | `app/shell/TabMenu.tsx` | `TabMenu` | |
+| App shell (app.pen) | `#950 HelpMenu` | `app/shell/HelpMenu.tsx` | `HelpMenu` | |
+| App shell (app.pen) | `#951 UpdateRow` | `app/shell/UpdateRow.tsx` | `UpdateRow` | |
 | Side panel (app.pen) | `#412 AgentRow` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
 | Side panel (app.pen) | `#414 WorkerList` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
 | Side panel (app.pen) | `#416 WorkerDetail › worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |
