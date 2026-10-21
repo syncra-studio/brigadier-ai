@@ -101,6 +101,7 @@ import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
+import { turnStopping, useStopping } from "@/state/stopping";
 import { placeOf } from "@/state/terminalPlaces";
 import {
   emptyThread,
@@ -562,7 +563,9 @@ export function ConversationView({
     setup?.type === "chat" ? setup.model : setup?.type === "session" ? setup.orchestrator : null;
   const running = run === "running" || run === "starting";
   // Messages waiting for quota: nothing runs, but Stop (and Esc) drops them.
-  const waitingForQuota = conversation?.quotaWait != null;
+  // The user's Stop shows at once (#498), messages waiting for quota dropped with it.
+  const stopping = useStopping((s) => turnStopping(s.stops, conversationId));
+  const waitingForQuota = conversation?.quotaWait != null && !stopping;
   const reworkable = useBoard((s) =>
     s.board?.conversationId === conversationId && s.board ? reworkableRequest(s.board) : null,
   );

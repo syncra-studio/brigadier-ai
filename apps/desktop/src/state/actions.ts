@@ -11,6 +11,7 @@ import type {
   ConversationStatus,
   DiffStat,
   ForkPlace,
+  LifecycleOutcome,
   Mention,
   MessageMatches,
   MessageQueue,
@@ -37,6 +38,9 @@ import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
+import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
+import { realActivity, onRealActivity } from "@/state/activity";
+import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
   boardFromView,
   type Board,
@@ -633,6 +637,8 @@ export async function send(
   // A message that waits shows in the queue, not the thread; a steered one arrives as an event.
   const waits = running || working || (slot !== null && !!queue?.paused);
   const localId = waits ? null : crypto.randomUUID();
+  // Whatever a Stop just showed, what it sends now shows as it really is.
+  dropTurnStops(conversationId);
   if (localId) {
     // The thread places the turn it starts once it shows, under this id (see `shownIdOf`).
     expectSentTurn(conversationId, localId);
@@ -941,18 +947,82 @@ export async function resumeQueue(conversationId: string): Promise<void> {
   showQueue(conversationId, queue);
 }
 
-/** Stops the running turn; the queue pauses until resumed. */
+/** How long a stop the daemon made may show before its real state does, at most. */
+const STOP_SETTLE_MS = 10_000;
+
+/**
+ * Shows `stop` at once while `run` makes it (#498): the daemon ends a turn or a worker only once
+ * its process has. A failed stop shows the real state again and throws. One made shows until
+ * the real state says it too, `STOP_SETTLE_MS` at most; `stopped`, the workers it stopped.
+ */
+async function showStopped<T>(
+  stop: Omit<Stop, "id" | "atMs">,
+  run: () => Promise<T>,
+  stopped?: (result: T) => readonly string[],
+): Promise<T> {
+  const shown = addStop(stop);
+  let result: T;
+  try {
+    result = await run();
+  } catch (error) {
+    dropStop(shown.id);
+    throw error;
+  }
+  if (stopped) keepStopping(shown.id, stopped(result));
+  const settled = useStopping.getState().stops.find((each) => each.id === shown.id);
+  if (settled) settleStop(settled);
+  return result;
+}
+
+/** Whether `stop` shows in the real state: its workers over, its turn and answers ended. */
+function stopShows(stop: Stop): boolean {
+  const board = boardOf(stop.conversationId);
+  const activity = realActivity(stop.conversationId);
+  const over = stop.tasks.every((id) => {
+    const task = board?.tasks[id];
+    return task ? workerDone(task) : !(id in (activity?.tasks ?? {}));
+  });
+  if (!over || !stop.turn) return over;
+  const run = board?.run ?? activity?.run ?? "idle";
+  const answering = Object.values(board?.requests ?? {}).some(
+    (each) => each.state.type === "working" || each.state.type === "waiting",
+  );
+  return run !== "running" && run !== "starting" && !answering;
+}
+
+function settleStop(stop: Stop): void {
+  if (stopShows(stop)) {
+    dropStop(stop.id);
+    return;
+  }
+  const check = () => {
+    if (stopShows(stop)) done();
+  };
+  const offActivity = onRealActivity(check);
+  const offBoard = useBoard.subscribe(check);
+  const timer = setTimeout(done, STOP_SETTLE_MS);
+  function done() {
+    offActivity();
+    offBoard();
+    clearTimeout(timer);
+    dropStop(stop.id);
+  }
+}
+
+/** Stops the running turn; the queue pauses until resumed. It shows stopped at once. */
 export async function interrupt(conversationId: string): Promise<void> {
   const tasks = useBoard.getState().board;
   const ids = tasks?.conversationId === conversationId
     ? Object.values(tasks.tasks).filter((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)).map((task) => task.id)
     : [];
-  // The turn first: the workers' stop then reaches the thread before its next turn, not
-  // inside the one ending.
-  const [interrupted] = await Promise.allSettled([request({ method: "interrupt", conversationId })]);
-  const results = [interrupted, ...await Promise.allSettled(ids.map(stopTask))];
-  const failed = results.find((result) => result.status === "rejected");
-  if (failed?.status === "rejected") throw failed.reason;
+  await showStopped({ conversationId, turn: true, tasks: ids }, async () => {
+    // The turn first: the workers' stop then reaches the thread before its next turn, not
+    // inside the one ending.
+    const [interrupted] = await Promise.allSettled([request({ method: "interrupt", conversationId })]);
+    const results = [interrupted, ...await Promise.allSettled(ids.map(stopTask))];
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+  });
 }
 
 /** Stops a preview the thread started, or every running one of the conversation. */
@@ -1159,10 +1229,17 @@ export async function stopTask(taskId: string): Promise<void> {
   await request({ method: "stopTask", taskId });
 }
 
-/** Stop all: stops every running or waiting worker of the conversation; the ids stopped. */
+/**
+ * Stop all: stops every running or waiting worker of the conversation; the ids stopped. They
+ * show stopped at once.
+ */
 export async function stopWorkers(conversationId: string): Promise<string[]> {
-  const { taskIds } = await request({ method: "stopWorkers", conversationId });
-  return taskIds;
+  const ids = Object.values(boardOf(conversationId)?.tasks ?? {}).filter(workerStoppable).map((task) => task.id);
+  return showStopped(
+    { conversationId, turn: false, tasks: ids },
+    async () => (await request({ method: "stopWorkers", conversationId })).taskIds,
+    (stopped) => stopped,
+  );
 }
 
 export async function pauseTask(taskId: string): Promise<void> {
@@ -1441,11 +1518,34 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Brings an archived conversation back; throws if it can't be. */
+/**
+ * Brings an archived conversation back: it is back at once (#499); if it can't be, it is
+ * archived again and this throws.
+ */
 export async function restore(id: string): Promise<void> {
-  const [outcome] = (await request({ method: "restore", ids: [id] })).outcomes;
-  if (outcome?.conversation) storeConversation(outcome.conversation);
-  else throw new Error(outcome?.error ?? "It couldn't be brought back.");
+  const before = useApp.getState().conversations[id];
+  if (before?.lifecycle === "archived") storeConversation({ ...before, lifecycle: "active" });
+  let outcome: LifecycleOutcome | undefined;
+  try {
+    [outcome] = (await request({ method: "restore", ids: [id] })).outcomes;
+  } catch (error) {
+    unrestore(before);
+    throw error;
+  }
+  // Not when it was deleted meanwhile.
+  if (outcome?.conversation) {
+    if (useApp.getState().conversations[id]) storeConversation(outcome.conversation);
+    return;
+  }
+  unrestore(before);
+  throw new Error(outcome?.error ?? "It couldn't be brought back.");
+}
+
+/** An archived conversation whose restore failed is archived again, unless something newer came in. */
+function unrestore(before: Conversation | undefined): void {
+  if (before?.lifecycle === "archived" && useApp.getState().conversations[before.id]?.lifecycle === "active") {
+    storeConversation(before);
+  }
 }
 
 /** Takes conversations out of the app's state (they are being deleted). */

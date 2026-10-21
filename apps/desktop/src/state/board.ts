@@ -4,6 +4,7 @@ import { createStore, type StoreApi, useStore } from "zustand";
 import { liveActivity, toolName } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { showConversationNotice, shownNotice } from "@/state/notices";
+import { type Stop, stopsOf, useStopping } from "@/state/stopping";
 
 import type {
   AgentMcpServers,
@@ -178,12 +179,60 @@ const sideBoards = new Set<BoardStore>();
 /** The board the components below read: the open conversation's, unless a side chat's. */
 export const BoardStoreContext = createContext<BoardStore>(mainBoard);
 
+/** A worker that is over, as the board shows it. */
+const WORKER_OVER: ReadonlySet<Task["state"]> = new Set(["reported", "landed", "done", "rejected", "stopped", "failed"]);
+
+/** `board` as the user's stops under way show it: their workers stopped, a stopped turn over. */
+export function stoppedBoard(board: Board, stops: readonly Stop[]): Board {
+  let shown = board;
+  for (const stop of stopsOf(stops, board.conversationId)) {
+    let tasks = shown.tasks;
+    for (const id of stop.tasks) {
+      const task = tasks[id];
+      if (!task || WORKER_OVER.has(task.state)) continue;
+      tasks = { ...tasks, [id]: { ...task, state: "stopped", updatedAtMs: Math.max(task.updatedAtMs, stop.atMs) } };
+    }
+    if (tasks !== shown.tasks) shown = { ...shown, tasks };
+    if (!stop.turn) continue;
+    // The answers it worked on end with the turn, as the daemon ends them.
+    const open = Object.values(shown.requests).filter(
+      (request) => request.state.type === "working" || request.state.type === "waiting",
+    );
+    const running = shown.run === "running" || shown.run === "starting";
+    if (!running && open.length === 0 && shown.doing === null) continue;
+    shown = {
+      ...shown,
+      run: running ? "idle" : shown.run,
+      doing: null,
+      requests: open.length === 0
+        ? shown.requests
+        : { ...shown.requests, ...Object.fromEntries(open.map((request) => [request.id, { ...request, state: { type: "stopped" } as const }])) },
+    };
+  }
+  return shown;
+}
+
+const shownStates = new WeakMap<BoardState, { stops: readonly Stop[]; state: BoardState }>();
+
+/** `state` with its board as the stops under way show it; the same state when none touch it. */
+function shownState(state: BoardState, stops: readonly Stop[]): BoardState {
+  const { board } = state;
+  if (!board || stopsOf(stops, board.conversationId).length === 0) return state;
+  const cached = shownStates.get(state);
+  if (cached?.stops === stops) return cached.state;
+  const shown = { ...state, board: stoppedBoard(board, stops) };
+  shownStates.set(state, { stops, state: shown });
+  return shown;
+}
+
 /**
- * Reads the board of the view it renders in. `getState`/`setState` are the open
- * conversation's board, for code outside any view.
+ * Reads the board of the view it renders in, as the user's stops under way show it (#498).
+ * `getState`/`setState` are the open conversation's board as it really is, for code outside
+ * any view.
  */
 export function useBoard<T>(selector: (state: BoardState) => T): T {
-  return useStore(useContext(BoardStoreContext), selector);
+  const stops = useStopping((s) => s.stops);
+  return useStore(useContext(BoardStoreContext), (state) => selector(shownState(state, stops)));
 }
 useBoard.getState = mainBoard.getState;
 useBoard.setState = mainBoard.setState;
