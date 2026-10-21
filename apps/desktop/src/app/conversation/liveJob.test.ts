@@ -78,7 +78,7 @@ test("checks: running with the command at work, failed with what failed, passed 
     "5 of 5 passed",
   ]);
   // run_checks counts its commands: the one at work is the third of five.
-  const counted = { type: "running", command: "desktop tests", done: 2, total: 5 } as IntegratedCheckState;
+  const counted: IntegratedCheckState = { type: "running", command: "desktop tests", done: 2, total: 5 };
   assert.deepEqual(words({ ...working, integratedChecks: byId([check(1, "4e1c49e999", counted)]) })!.slice(0, 2), ["running", "Running checks · 3 of 5"]);
   // A worker's own checks are its row's, not the card's.
   const workers = byId([check(1, "4e1c49e999", counted, 100, null, { taskId: "t1", scope: "change" })]);

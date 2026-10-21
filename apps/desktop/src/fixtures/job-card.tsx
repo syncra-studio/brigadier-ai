@@ -69,7 +69,7 @@ const MOMENTS: Record<string, Partial<Board>> = {
   ciFailed: { ...ended, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "completed", "failure", 5, 5)], "failed")] },
   idle: ended,
   working: { ...working, tasks: byId([task("t1", "running")]) },
-  checksRunning: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests", done: 2, total: 5 } as IntegratedCheckState, T0 + 3 * MIN)]) },
+  checksRunning: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests", done: 2, total: 5 }, T0 + 3 * MIN)]) },
   checksFailed: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "failed", command: "pnpm test", status: "2 tests failed", output: null }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
   checksPassed: { ...ended, integratedChecks: passedOn("4e1c49e999") },
   reviewRunning: { ...working, reviews: byId([review({ type: "running" }, T0 + 3 * MIN)]) },

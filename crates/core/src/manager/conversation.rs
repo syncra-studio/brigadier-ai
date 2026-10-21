@@ -157,7 +157,7 @@ pub enum SendOutcome {
 pub(crate) const CLEAN_REVIEW: &str = "review of your commits · clean";
 
 /// Something for the orchestrator's next turn.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Envelope {
     pub kind: InjectionKind,
     /// Short label for the Inspector ("report task-3").
@@ -354,9 +354,13 @@ struct ConvState {
     pending: Vec<Message>,
     /// The chain of the running turn's newest input ([`TurnChain`]).
     chain: Option<TurnChain>,
-    /// The messages of other sessions the running (or last) turn took, with their requests:
-    /// they go again, first, when a usage limit hands the turn over.
-    in_turn_peers: Vec<(Envelope, Option<String>)>,
+    /// What the running turn took from the inbox (worker reports, check results, messages of
+    /// other sessions steered in), with their requests: they go again, first, when a usage
+    /// limit or a rebirth hands the turn over (#508).
+    in_turn_envelopes: Vec<(Envelope, Option<String>)>,
+    /// Those of a turn cut short by an account's limit that the CLI had already begun: in the
+    /// session the next turn resumes, which says to carry on instead of reading them again.
+    continuing_envelopes: Vec<Envelope>,
     /// Notes about messages between sessions, by message id, which the next turn carries,
     /// starting none of its own: a reply that came after its request was over (stopped, or
     /// its overnight run ended), and the user's answer to a send that waited for their OK.
@@ -504,11 +508,20 @@ struct ConvState {
 }
 
 impl ConvState {
-    /// A usage limit hands the turn over: the messages of other sessions it took go again,
-    /// first (they were seen, so nothing else would bring them back).
-    fn carry_peers(&mut self) {
-        let peers = std::mem::take(&mut self.in_turn_peers);
-        self.inbox.splice(0..0, peers);
+    /// A usage limit or a rebirth hands the turn over: what it took from the inbox goes again,
+    /// first (it was taken, so nothing else would bring it back). `landed`: the CLI had begun
+    /// the turn and its session goes on, so the next turn says to carry on with them instead.
+    /// Answers what went back, to keep so.
+    fn carry_envelopes(&mut self, landed: bool) -> Vec<(Envelope, Option<String>)> {
+        let carried = std::mem::take(&mut self.in_turn_envelopes);
+        if landed {
+            self.continuing_envelopes = carried
+                .iter()
+                .map(|(envelope, _)| envelope.clone())
+                .collect();
+        }
+        self.inbox.splice(0..0, carried.iter().cloned());
+        carried
     }
 
     /// The requests and follow-ups marked as waiting behind a command, unless none are.
@@ -2192,7 +2205,7 @@ impl SessionManager {
         };
         state.chain = Some(chain);
         state
-            .in_turn_peers
+            .in_turn_envelopes
             .push((envelope.clone(), Some(request.to_owned())));
         let into = if reply {
             None
@@ -3141,11 +3154,7 @@ impl SessionManager {
                 state.asked_user.clear();
             }
             state.in_turn = users.clone();
-            state.in_turn_peers = envelopes
-                .iter()
-                .filter(|(envelope, _)| envelope.peer_message().is_some())
-                .cloned()
-                .collect();
+            state.in_turn_envelopes.clone_from(&envelopes);
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
             break (users, envelopes, request, origin, notes);
@@ -3218,10 +3227,22 @@ impl SessionManager {
             });
             (reseed, briefing)
         };
+        let (landed, landed_envelopes) = {
+            let mut state = conv.state.lock().await;
+            (
+                std::mem::take(&mut state.continuing),
+                std::mem::take(&mut state.continuing_envelopes),
+            )
+        };
+        // What the resumed session already holds isn't read again: it carries on with it.
+        let unread: Vec<(Envelope, Option<String>)> = envelopes
+            .iter()
+            .filter(|(envelope, _)| !landed_envelopes.contains(envelope))
+            .cloned()
+            .collect();
         let notes = self
-            .request_notes(&conv.id, &envelopes, origin.as_deref())
+            .request_notes(&conv.id, &unread, origin.as_deref())
             .await;
-        let landed = std::mem::take(&mut conv.state.lock().await.continuing);
         let unsent: Vec<Message> = users
             .iter()
             .filter(|message| !landed.contains(&message.id))
@@ -3230,7 +3251,7 @@ impl SessionManager {
         let mut input = self
             .turn_input(&conv, &unsent, &[user_notes, notes.clone()].concat())
             .await;
-        if unsent.len() < users.len() {
+        if unsent.len() < users.len() || unread.len() < envelopes.len() {
             let stalled = conv.state.lock().await.watchdog.take_carry_note();
             input.prepend_text(if stalled {
                 watchdog::CARRY_ON
@@ -3296,7 +3317,7 @@ impl SessionManager {
         for message in &unsent {
             self.log_user_injection(&conv, message).await;
         }
-        for ((envelope, _), note) in envelopes.iter().zip(&notes) {
+        for ((envelope, _), note) in unread.iter().zip(&notes) {
             self.log_injection(
                 &conv.id,
                 envelope.kind,
@@ -5107,6 +5128,7 @@ impl SessionManager {
                         state.unshown_error = None;
                         state.last_reply = None;
                         state.in_turn.clear();
+                        state.in_turn_envelopes.clear();
                         state.outcomes.remove(&request);
                         state.stopped_open.remove(&request);
                         state.request = Some(request.clone());
@@ -5502,6 +5524,9 @@ impl SessionManager {
                     request: served.clone(),
                     stopped: false,
                 });
+            } else {
+                // Read: nothing of it goes again.
+                state.in_turn_envelopes.clear();
             }
             if let Some(request) = &served
                 && let Some(ended) = ended.clone()
@@ -6008,7 +6033,9 @@ impl SessionManager {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
-                state.carry_peers();
+                // A fresh session never read them.
+                let envelopes = state.carry_envelopes(false);
+                self.keep_carried(&conv.id, &envelopes).await;
             }
             stopped
         };
@@ -6068,7 +6095,8 @@ impl SessionManager {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
-                state.carry_peers();
+                let envelopes = state.carry_envelopes(landed);
+                self.keep_carried(&conv.id, &envelopes).await;
             }
             stopped
         };
@@ -6131,7 +6159,8 @@ impl SessionManager {
             let mut pending = carried;
             pending.append(&mut state.pending);
             state.pending = pending;
-            state.carry_peers();
+            let envelopes = state.carry_envelopes(false);
+            self.keep_carried(&conv.id, &envelopes).await;
             // The request isn't over: its messages wait.
             if let Some(request) = &served {
                 state.outcomes.remove(request);
