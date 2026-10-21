@@ -1576,6 +1576,14 @@ pub struct SubmitOutline {
     pub outline: String,
 }
 
+/// `note_progress`: where a worker is in its plan, shown under its name while it works.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoteProgress {
+    /// A few words on where you are, such as "Step 3 of 5: wiring the exporter" (one line).
+    pub note: String,
+}
+
 /// A file the worker saved in its scratch folder, attached to its report.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1815,6 +1823,7 @@ pub enum WorkerCall {
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
+    NoteProgress(NoteProgress),
 }
 
 impl WorkerCall {
@@ -1833,6 +1842,7 @@ impl WorkerCall {
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",
+            Self::NoteProgress(_) => "note_progress",
         }
     }
 }

@@ -132,8 +132,8 @@ export type Board = {
   activity: Record<string, string>;
   /** Each worker's latest reply, its first line, and when it came (from its live events). */
   summaries: Record<string, WorkerSummary>;
-  /** Each worker's latest progress note, where it is in its plan, by task id. */
-  notes?: Record<string, string>;
+  /** Each worker's latest progress note (note_progress), where it is in its plan, and when it came. */
+  notes?: Record<string, WorkerSummary>;
   /** How many times each worker changed files or ran a command (from its live events). */
   edits: Record<string, number>;
   /** What each worker at work on a change changed in its worktree so far, as last read. */
@@ -454,7 +454,8 @@ function activityOf(event: ProviderEvent): string | null | undefined {
     case "command":
       return event.command ? firstLine(liveActivity({ command: event.command })) : undefined;
     case "toolCall":
-      return liveActivity(event);
+      // A progress note shows on a line of its own; the live line keeps what the worker does.
+      return toolName(event.name) === "note_progress" ? undefined : liveActivity(event);
     case "fileChanges":
       return `Editing ${event.changes.length} file${event.changes.length === 1 ? "" : "s"}`;
     case "approvalRequested":
@@ -467,6 +468,23 @@ function activityOf(event: ProviderEvent): string | null | undefined {
     default:
       return undefined;
   }
+}
+
+/** A note_progress call's note, from its input once complete. */
+function progressNote(input: string | null): string | null {
+  try {
+    const note = (JSON.parse(input ?? "") as { note?: unknown }).note;
+    return typeof note === "string" ? firstLine(note.trim()) || null : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A worker's progress note from its current attempt, if it posted one. */
+export function workerNote(board: Board | null | undefined, taskId: string): string | undefined {
+  const note = board?.notes?.[taskId];
+  const task = board?.tasks[taskId];
+  return note && note.atMs >= (task?.attempts.at(-1)?.startedAtMs ?? task?.createdAtMs ?? 0) ? note.text : undefined;
 }
 
 function firstLine(text: string): string {
@@ -728,6 +746,9 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       if (reply.type === "message" && reply.role === "assistant") {
         const text = firstLine(reply.text);
         if (text) next = { ...next, summaries: { ...next.summaries, [taskId]: { text, atMs } } };
+      } else if (reply.type === "toolCall" && toolName(reply.name) === "note_progress") {
+        const text = progressNote(reply.input);
+        if (text && next.notes?.[taskId]?.text !== text) next = { ...next, notes: { ...next.notes, [taskId]: { text, atMs } } };
       } else if (
         (reply.type === "fileChanges" || reply.type === "command") &&
         reply.status !== "inProgress"

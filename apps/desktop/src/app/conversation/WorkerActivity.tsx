@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { taskActivityLines, taskActivityTicks } from "@/app/conversation/taskActivity";
 import { useActivityClock } from "@/hooks/use-activity-clock";
-import { useBoard } from "@/state/board";
+import { useBoard, workerNote } from "@/state/board";
 
 export function useTaskActivityLine(taskId: string, withTime = true) {
   const active = useBoard((s) => {
@@ -20,7 +20,7 @@ export function useTaskActivityLine(taskId: string, withTime = true) {
         task,
         activity: board?.activity[id],
         diff: board?.diffs[id],
-        note: board?.notes?.[id],
+        note: workerNote(board, id),
         summary: summary && summary.atMs >= (task?.attempts.at(-1)?.startedAtMs ?? task?.createdAtMs ?? 0)
           ? summary.text
           : undefined,

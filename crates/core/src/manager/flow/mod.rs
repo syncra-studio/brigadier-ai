@@ -402,6 +402,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
         "review_code" => ToolCall::Worker(W::ReviewCode),
+        "note_progress" => ToolCall::Worker(W::NoteProgress(arg(name, args))),
         "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),

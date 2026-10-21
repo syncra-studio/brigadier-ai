@@ -1276,6 +1276,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, when the user asks you to report something to Brigadier's developers (\"report this\", \"file that as a bug\"), call offer_feedback with asked true, drafted from this conversation in their words: its card's Send files it on GitHub as them.",
         worker: "",
     },
+    Revision {
+        number: PROGRESS_NOTE_REVISION,
+        thread: "",
+        worker: "From now on, on work of several steps, say where you are with note_progress as you start each one (\"Step 3 of 5: wiring the exporter\"): the user sees it under your name until your next note.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1853,6 +1858,9 @@ pub(crate) const SEPARATE_FOLLOW_UP_REVISION: u32 = 122;
 /// The user may ask the thread to report something to Brigadier's developers ("report this"):
 /// it offers the feedback card with `asked`, which an earlier offer doesn't refuse (#471).
 pub(crate) const FEEDBACK_ASKED_REVISION: u32 = 123;
+/// A worker says where it is in its plan with note_progress, shown under its name in the
+/// Workers strip and the context card.
+pub(crate) const PROGRESS_NOTE_REVISION: u32 = 124;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2729,7 +2737,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
     let alone = if task.gate_link.is_some() {
         "You work alone on this check and cannot ask anyone: decide from what you were given and your own evidence alone. Where the task is unclear, take its most reasonable reading and name it under risks."
     } else {
-        "You report to the thread, which speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_thread: one question at a time, with the options you see and the one you recommend. It waits for the answer."
+        "You report to the thread, which speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_thread: one question at a time, with the options you see and the one you recommend. It waits for the answer. On work of several steps, say where you are with note_progress as you start each one (\"Step 3 of 5: wiring the exporter\"): the user sees it under your name."
     };
     let code_rules = match (task.kind, &task.mockup) {
         (TaskKind::Implement, Some(MockupPart::Builds)) => {

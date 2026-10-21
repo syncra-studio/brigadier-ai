@@ -952,6 +952,16 @@ impl SessionManager {
                     .await
             }
             WorkerCall::ReviewCode => self.review_code(&conversation_id, &task_id).await,
+            // The app shows the note from the call itself, in the worker's live events.
+            WorkerCall::NoteProgress(args) => {
+                if args.note.trim().is_empty() {
+                    Err(Error::Invalid(
+                        "Give the note: a few words on where you are.".into(),
+                    ))
+                } else {
+                    Ok("Noted: it shows under your name until your next note.".into())
+                }
+            }
             WorkerCall::QueryBrain(args) => {
                 self.note_brain_query(&conversation_id, &task_id).await;
                 // A claim's source is re-read where the worker works.

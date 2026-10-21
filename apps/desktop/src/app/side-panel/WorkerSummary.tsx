@@ -8,7 +8,7 @@ import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip
 import { SummaryRowButton, SummarySection, WorkerGlyph } from "@/components/conversation";
 import type { DiffStat, Task } from "@/ipc/generated";
 import { refreshWorkerDiffs } from "@/state/actions";
-import { useBoard } from "@/state/board";
+import { useBoard, workerNote } from "@/state/board";
 
 /**
  * The session's worker summary and background diff refresh.
@@ -79,7 +79,7 @@ const WORKER_LINES = 3;
 const WorkerLineRow: FC<{ task: Task }> = ({ task }) => {
   const name = useWorkerName(task.id);
   const stat = useBoard((s) => workerStat(task, s.board?.diffs));
-  const note = useBoard((s) => s.board?.notes?.[task.id]?.trim());
+  const note = useBoard((s) => workerNote(s.board, task.id));
   const { setPanel } = useContext(AgentsPanelContext);
   return (
     <SummaryRowButton

@@ -6,7 +6,7 @@ import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { BackgroundRun, IntegratedCheck, OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
-import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval } from "@/state/board";
+import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval, workerNote } from "@/state/board";
 
 const base = Object.values(night.tasks)[0] as unknown as Task;
 let next = 0;
@@ -179,6 +179,27 @@ test("a worker's live line says what it does in plain words, never a raw tool na
     "Running git status");
   assert.equal(live({ type: "toolCall", itemId: "y", name: "mcp__brigadier__project_map", input: null, status: "inProgress", output: null }),
     "Listing files");
+});
+
+const toolCall = (name: string, given: unknown) => ({ type: "toolCall", itemId: name, name, input: JSON.stringify(given), status: "completed", output: null });
+
+test("an integration's live line names its action, and a worker's progress note keeps to its own line", () => {
+  const worker = task({ attempts: [{ startedAtMs: 5 }] as never });
+  const board = { ...emptyBoard("c"), tasks: byId([worker]) };
+  const apply = (from: Board, event: unknown, atMs = 10) => applyToBoard(from, { seq: 1, stream: `task:${worker.id}`, streamSeq: atMs, atMs,
+    event: { type: "workerEvent", conversationId: "c", taskId: worker.id, event } as never });
+  const designing = apply(board, { ...toolCall("mcp__pencil__batch_design", { filePath: "landing.pen" }), status: "inProgress" });
+  assert.equal(designing.activity[worker.id], "Pencil: batch design");
+  // The note leaves the live line as it was, and shows from this attempt only.
+  const noted = apply(designing, toolCall("mcp__brigadier__note_progress", { note: "Scene 4 of 12: pricing section\nmore" }));
+  assert.equal(noted.activity[worker.id], "Pencil: batch design");
+  assert.equal(workerNote(noted, worker.id), "Scene 4 of 12: pricing section");
+  assert.equal(taskActivityLines({ task: worker, note: workerNote(noted, worker.id) }, 20).second, "Scene 4 of 12: pricing section");
+  const retried = { ...noted, tasks: byId([{ ...worker, attempts: [{ startedAtMs: 50 }] as never }]) };
+  assert.equal(workerNote(retried, worker.id), undefined);
+  // A note with no text, or input that isn't JSON yet, changes nothing.
+  assert.equal(apply(designing, toolCall("note_progress", { note: "  " })).notes, undefined);
+  assert.equal(apply(designing, { ...toolCall("note_progress", {}), input: "{\"no" }).notes, undefined);
 });
 
 test("the thread's own tool steps show as their rows, never as Thinking or a worker", () => {

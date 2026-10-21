@@ -7,15 +7,15 @@ use brigadier_core::tools::{
     AnswerWorker, AppToolCall, ApproveOutline, AskOrchestrator, AskUser, AttachProof, BrowserClick,
     BrowserNavigate, BrowserOpen, BrowserTabRef, BrowserToolCall, BrowserType, CHAT_THREAD_TOOLS,
     ChatCall, CiPush, CloseTab, CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall,
-    LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, OfferFeedback,
-    OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight,
-    ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal, RecordFindings,
-    RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate, ReviewPlan,
-    Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SaveReport,
-    SearchTranscript, SettleStep, SettleWait, ShowSession, StartPreview, StartVerifier, StopMerge,
-    StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess,
-    SuggestSetting, TabChatCall, TabTools, TerminalRun, ThreadRunCheck, ToolCall, WaitForReplies,
-    WorkerCall, WritePage, WriteTabFile,
+    LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, NoteProgress,
+    OfferFeedback, OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog,
+    ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
+    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
+    ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
+    SaveReport, SearchTranscript, SettleStep, SettleWait, ShowSession, StartPreview, StartVerifier,
+    StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
+    SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun, ThreadRunCheck,
+    ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -562,6 +562,11 @@ the answer comes back. Ask only when you cannot sensibly go on without the answe
 up with query_brain and the code tools first. If none comes within the hour, an operational \
 question goes on with its `safe_default`; any other keeps waiting.";
 
+const NOTE_PROGRESS: &str = "Say where you are in your plan, in a few words on one line \
+(\"Step 3 of 5: wiring the exporter\", \"Scene 4 of 12: pricing section\"): the user sees it under \
+your name while you work, until your next note. On work of several steps or over a few minutes, \
+post one as you start each step. It returns at once and tells no one else.";
+
 const WORKER_QUERY_BRAIN: &str = "Ask the Project Brain (read-only): what Brigadier knows \
 about this project (its modules, earlier findings, decisions, conventions, contracts) and the \
 user's preferences, each with where it came from. Fast and cheap: ask it before reading widely. \
@@ -971,6 +976,11 @@ fn worker_tools() -> Vec<Tool> {
         ),
         tool("review_code", REVIEW_CODE, no_arguments()),
         tool(
+            "note_progress",
+            NOTE_PROGRESS,
+            input_schema::<NoteProgress>(),
+        ),
+        tool(
             "submit_report",
             SUBMIT_REPORT,
             input_schema::<SubmitReport>(),
@@ -1340,6 +1350,7 @@ pub fn parse_call(
                 "start_preview" => WorkerCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => WorkerCall::StopPreview(args(name, arguments)?),
                 "preview_log" => WorkerCall::PreviewLog(args(name, arguments)?),
+                "note_progress" => WorkerCall::NoteProgress(args::<NoteProgress>(name, arguments)?),
                 _ => return Err(unknown()),
             };
             Ok(ToolCall::Worker(call))
@@ -2250,6 +2261,26 @@ mod tests {
                 parse_call(&worker(checks), "preview_log", None),
                 Ok(ToolCall::Worker(WorkerCall::PreviewLog(_)))
             ));
+        }
+    }
+
+    /// Every worker, checkers too, may say where it is in its plan; the thread has no such tool.
+    #[test]
+    fn workers_note_their_progress() {
+        for checks in [false, true] {
+            assert!(
+                tools_for(&worker(checks))
+                    .iter()
+                    .any(|tool| tool.name == "note_progress"),
+                "{checks}"
+            );
+            let arguments = serde_json::json!({ "note": "Step 3 of 5: wiring the exporter" });
+            assert!(matches!(
+                parse_call(&worker(checks), "note_progress", arguments.as_object().cloned()),
+                Ok(ToolCall::Worker(WorkerCall::NoteProgress(args)))
+                    if args.note.starts_with("Step 3 of 5")
+            ));
+            assert!(parse_call(&worker(checks), "note_progress", None).is_err());
         }
     }
 
