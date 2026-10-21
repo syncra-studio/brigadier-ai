@@ -1,4 +1,4 @@
-import { createContext, type FC, type ReactNode, useEffect, useState } from "react";
+import { createContext, type FC, useEffect, useState } from "react";
 
 import type { ContextUsage, ConversationStatus, QuotaWindow } from "@/ipc/generated";
 
@@ -11,7 +11,8 @@ import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 import { ComposerRailItem } from "@/components/conversation";
-import { UsageBar } from "@/components/shared";
+import { LimitBar } from "@/app/conversation/LimitBar";
+import { StatusCardRow } from "@/app/conversation/StatusCardRow";
 
 /** Whether the open conversation shows the `/status` card above its composer. */
 export const StatusCardContext = createContext<{ open: boolean; setOpen: (open: boolean) => void }>({
@@ -47,24 +48,6 @@ export function resetsAt(ms: number, window: QuotaWindow): string {
   }
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
-
-const Row: FC<{ label: string; children: ReactNode }> = ({ label, children }) => (
-  <>
-    <dt className="text-muted-foreground">{label}</dt>
-    <dd className="flex min-w-0 items-center gap-2">{children}</dd>
-  </>
-);
-
-/** A usage window's bar: the share left, filled; the share used, faint. */
-/** What is left of a window, coloured by how much is used (from 80% and from 90%). */
-const LimitBar: FC<{ left: number }> = ({ left }) => (
-  <UsageBar
-    value={left}
-    fill={usageTone(100 - left, { normal: { fill: "bg-foreground" } }).fill}
-    size="md"
-    className="w-28"
-  />
-);
 
 /**
  * The `/status` card, attached above the composer: the model's CLI session, how much context
@@ -124,11 +107,11 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
           </p>
         ) : (
           <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 font-mono text-xs">
-            <Row label="Session/Thread:">
+            <StatusCardRow label="Session/Thread:">
               <span className="truncate">{status ? (status.nativeId ?? "not started yet") : "…"}</span>
-            </Row>
+            </StatusCardRow>
             {!session && (
-              <Row label="Context:">
+              <StatusCardRow label="Context:">
                 {shown ? (
                   <span className="truncate">
                     {shown.value}
@@ -137,12 +120,12 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
                 ) : (
                   <span className="text-muted-foreground">no usage yet</span>
                 )}
-              </Row>
+              </StatusCardRow>
             )}
             {status?.quota?.windows.map((window) => {
               const left = Math.max(0, Math.min(100, Math.round(100 - window.usedPercent)));
               return (
-                <Row key={window.id} label={`${windowName(window)} limit:`}>
+                <StatusCardRow key={window.id} label={`${windowName(window)} limit:`}>
                   <LimitBar left={left} />
                   <span className="truncate">
                     <span className={usageTone(100 - left, { normal: { text: "" } }).text}>{left}% left</span>
@@ -150,7 +133,7 @@ export const StatusCard: FC<{ conversationId: string; onClose: () => void }> = (
                       <span className="text-muted-foreground"> (resets {resetsAt(window.resetsAtMs, window)})</span>
                     )}
                   </span>
-                </Row>
+                </StatusCardRow>
               );
             })}
           </dl>

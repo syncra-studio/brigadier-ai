@@ -1,8 +1,5 @@
 import {
-  forwardRef,
   type KeyboardEvent,
-  type ReactNode,
-  useEffect,
   useId,
   useMemo,
   useState,
@@ -11,31 +8,27 @@ import {
 
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 
-import { resetsAt, windowName } from "@/app/conversation/StatusCard";
+import { PickerRow } from "@/app/conversation/PickerRow";
+import { RailPill } from "@/app/conversation/RailPill";
+import { MENU, ROW, ROW_ACTIVE } from "@/app/conversation/railMenu";
+import { UsageRemaining } from "@/app/conversation/UsageRemaining";
 
-import { composerPill } from "@/components/conversation";
-
-import { MenuRow, Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 
 import {
   Branch,
   BranchAlt,
   Check,
-  ChevronDown,
-  ChevronRight,
   Folder,
   Plus,
-  SpeedometerLatencySpeed,
   X,
 } from "@/components/icons";
 
-import type { Project, QuotaWindow } from "@/ipc/generated";
-
-import { usageTone } from "@/lib/quota";
+import type { Project } from "@/ipc/generated";
 
 import { cn } from "@/lib/utils";
 
-import { loadProviders, select } from "@/state/actions";
+import { select } from "@/state/actions";
 
 import { openAddProject } from "@/state/addProject";
 
@@ -49,31 +42,6 @@ import { SettingsSearch } from "@/components/shared";
  * a menu upward. A session's repository and environment are fixed once it starts, so the bar
  * goes with the first send.
  */
-
-/** The menu surface, shared by the rail's menus. */
-const MENU = "rounded-menu p-1";
-const ROW =
-  "rounded-capsule min-h-control-sm flex w-full items-center gap-2 px-2 text-start text-sm outline-none transition-colors [&_svg]:size-icon-md [&_svg]:shrink-0";
-const ROW_ACTIVE = "bg-foreground/8";
-
-/** A rail trigger: the composer's pill, in the rail's bright text. */
-const RailPill = forwardRef<
-  HTMLButtonElement,
-  { icon: ReactNode; label: string; title?: string; children: ReactNode }
->(({ icon, label, title, children, ...props }, ref) => (
-  <button
-    ref={ref}
-    type="button"
-    aria-label={label}
-    title={title}
-    className={cn(composerPill, "text-foreground max-w-xs")}
-    {...props}
-  >
-    {icon}
-    <span className="truncate">{children}</span>
-  </button>
-));
-RailPill.displayName = "RailPill";
 
 /** ↑/↓ over a list of rows, Enter picks the highlighted one. */
 function useHighlight(count: number, query: string) {
@@ -204,18 +172,15 @@ export function ProjectCombobox({
             className="max-h-command-list overflow-y-auto"
           >
             {shown.map((entry) => (
-              <button
+              <PickerRow
                 key={entry.id}
-                type="button"
-                role="option"
-                aria-selected={entry.id === project?.id}
+                icon={<Folder />}
+                title={entry.name}
+                selected={entry.id === project?.id}
+                highlighted={highlighted === entry.id}
                 onPointerMove={() => setIndex(rows.findIndex((row) => row.key === entry.id))}
                 onClick={() => choose(entry.id)}
-                className={cn(ROW, highlighted === entry.id && ROW_ACTIVE)}
-              >
-                <MenuRow icon={<Folder />} title={entry.name} />
-                {entry.id === project?.id && <Check />}
-              </button>
+              />
             ))}
           </div>
           {shown.length === 0 && !typedPath && (
@@ -252,54 +217,6 @@ export function ProjectCombobox({
 }
 
 // ----- where the session works -----------------------------------------------------------
-
-/** A usage window's name: "Weekly", "5h". */
-function usageName(window: QuotaWindow): string {
-  return window.windowMinutes === 10080 ? "Weekly" : windowName(window);
-}
-
-/** "Usage remaining ›": the model's provider's windows, expanded in place. */
-function UsageRemaining({ provider }: { provider: string }) {
-  const [open, setOpen] = useState(false);
-  const view = useApp((s) => s.providers.view);
-  useEffect(() => {
-    if (open && !view) void loadProviders().catch(() => {});
-  }, [open, view]);
-  const windows =
-    view?.providers.find((overview) => overview.provider === provider)?.quota?.windows ?? [];
-  return (
-    <>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className={cn(ROW, "hover:bg-foreground/8")}
-      >
-        <SpeedometerLatencySpeed />
-        <span className="flex-1">Usage remaining</span>
-        {open ? <ChevronDown /> : <ChevronRight />}
-      </button>
-      {open && (
-        <div className="flex flex-col gap-1 px-2 pb-1 ps-8 text-sm">
-          {windows.length === 0 && (
-            <p className="text-muted-foreground">{view ? "Not reported yet" : "Loading…"}</p>
-          )}
-          {windows.map((window) => (
-            <p key={window.id} className="flex items-center gap-2">
-              <span className="flex-1">{usageName(window)}</span>
-              <span className={cn("tabular-nums", usageTone(window.usedPercent, { normal: { text: "" } }).text)}>
-                {Math.max(0, Math.round(100 - window.usedPercent))}%
-              </span>
-              {window.resetsAtMs !== null && (
-                <span className="text-muted-foreground">{resetsAt(window.resetsAtMs, window)}</span>
-              )}
-            </p>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
 
 /**
  * The "Work in" menu: where the session works, always a new worktree of its own (only migrated

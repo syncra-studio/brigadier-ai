@@ -340,6 +340,12 @@ table is the current one.
 | Settings (settings.pen) | `#713 Size` | `app/settings/storage/StorageSize.tsx` | `StorageSize` | |
 | Settings (settings.pen) | `#714 UnusedRow` | `app/settings/storage/UnusedRow.tsx` | `UnusedRow` | |
 | Settings (settings.pen) | `#719 UsageCard` | `app/settings/storage/UsageCard.tsx` | `UsageCard` | |
+| Conversation (app.pen) | `#320 QueueCard › inline: moved message notice` | `app/conversation/MovedMessageNotice.tsx` | `MovedMessageNotice` | |
+| Conversation (app.pen) | `#321 RailPill` | `app/conversation/RailPill.tsx` | `RailPill` | |
+| Conversation (app.pen) | `#970 ProjectCombobox › picker row` | `app/conversation/PickerRow.tsx` | `PickerRow` | |
+| Conversation (app.pen) | `#971 UsageRemaining` | `app/conversation/UsageRemaining.tsx` | `UsageRemaining` | |
+| Conversation (app.pen) | `#330 StatusCard › Row` | `app/conversation/StatusCardRow.tsx` | `StatusCardRow` | |
+| Conversation (app.pen) | `#331 StatusCard › LimitBar` | `app/conversation/LimitBar.tsx` | `LimitBar` | |
 
 ## Icons
 

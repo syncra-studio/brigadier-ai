@@ -6,7 +6,6 @@ import {
   Play,
   Stack,
   Trash,
-  X,
 } from "@/components/icons";
 import { normalizedImages } from "@/lib/inlineImages";
 import { namedImages } from "@/app/conversation/inlineImages";
@@ -29,6 +28,7 @@ import type { AttachmentRef, MovedMessage, QueuedMessage } from "@/ipc/generated
 import { cn } from "@/lib/utils";
 import { deleteQueued, openQueuedAsSession, openQueuedInSideChat, resumeQueue, runQueuedHere, settleMoved } from "@/state/actions";
 import { HeldNote } from "@/app/conversation/HeldNote";
+import { MovedMessageNotice } from "@/app/conversation/MovedMessageNotice";
 import { useBoard } from "@/state/board";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
@@ -254,31 +254,13 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
           );
         })}
         {moved.map((notice) => (
-          <li
+          <MovedMessageNotice
             key={notice.id}
-            data-slot="message-queue-moved"
-            className="text-muted-foreground min-h-row flex items-center gap-2 ps-3 pe-1 text-sm"
-          >
-            <span className="min-w-0 flex-1 truncate" title={notice.text}>
-              Sent to “{notice.toTitle}”: {notice.text}
-            </span>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={action.busy}
-              onClick={() => action.run(() => settleMoved(conversationId, notice.id, true))}
-            >
-              Undo
-            </Button>
-            <TooltipIconButton
-              tooltip="Dismiss"
-              side="top"
-              className="text-muted-foreground"
-              onClick={() => action.run(() => settleMoved(conversationId, notice.id, false))}
-            >
-              <X />
-            </TooltipIconButton>
-          </li>
+            notice={notice}
+            busy={action.busy}
+            onUndo={() => action.run(() => settleMoved(conversationId, notice.id, true))}
+            onDismiss={() => action.run(() => settleMoved(conversationId, notice.id, false))}
+          />
         ))}
       </MessageQueue>
       {action.error && (
