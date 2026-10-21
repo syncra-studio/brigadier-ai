@@ -64,9 +64,14 @@
 
     # Signed by Brigadier's developer, or not installed.
     $signature = Get-AuthenticodeSignature -FilePath $setup
-    if ($signature.Status -ne 'Valid') { Fail 'The installer signature is invalid.' }
-    if ($signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -ne $publisher) {
-      Fail 'The installer is not signed by the Brigadier developer.'
+    # Unsigned is accepted, on the checksum alone, until Windows releases are signed.
+    if ($signature.Status -eq 'NotSigned') {
+      Write-Host 'The installer is not signed yet; it was verified by its checksum only.'
+    } else {
+      if ($signature.Status -ne 'Valid') { Fail 'The installer signature is invalid.' }
+      if ($signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -ne $publisher) {
+        Fail 'The installer is not signed by the Brigadier developer.'
+      }
     }
 
     if (Test-Path -LiteralPath $target -PathType Leaf) { Fail "$target is a file, not a folder." }

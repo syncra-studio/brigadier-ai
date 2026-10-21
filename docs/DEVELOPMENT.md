@@ -371,9 +371,10 @@ webview's folders `%APPDATA%\ai.brigadier.app` and `%LOCALAPPDATA%\ai.brigadier.
 same installer (`/UPDATE`) over the installed one; a reinstall keeps the data too.
 
 The installer isn't Authenticode-signed yet: Windows SmartScreen warns before it runs, and
-`scripts/install.ps1` refuses it. Signing needs a code-signing certificate for SYNCRA SRL, named
-in `tauri.windows.conf.json` (`bundle.windows.certificateThumbprint` for one in the build
-machine's certificate store, or `bundle.windows.signCommand` for a signing service). The
+`scripts/install.ps1` accepts it on its checksum alone. Signing needs a code-signing certificate
+for SYNCRA SRL, named in `tauri.windows.conf.json` (`bundle.windows.certificateThumbprint` for
+one in the build machine's certificate store, or `bundle.windows.signCommand` for a signing
+service). The
 nightly's Windows job uploads the installer and its `SHA256SUMS` as the `installer-Windows`
 artifact on every run. With the updater key secrets (`TAURI_SIGNING_PRIVATE_KEY`,
 `UPDATER_PUBKEY`) it builds it with the nightly's or the tag's version and feed, and adds the
@@ -383,7 +384,9 @@ release jobs don't take them, so no Windows file is published.
 `scripts/install.ps1` is install.sh's counterpart: `irm <raw URL>/install.ps1 | iex`, or
 `powershell -File scripts\install.ps1`. It downloads `SHA256SUMS` and
 `Brigadier-<version>-x64-setup.exe` from the release (`BRIGADIER_RELEASE_URL` reads them from
-elsewhere), checks the checksum and that a valid Authenticode signature names SYNCRA SRL, asks
+elsewhere) and checks the checksum, refusing a missing entry or a mismatch. It refuses an
+Authenticode signature that isn't valid or doesn't name SYNCRA SRL; until Windows releases are
+signed it accepts an unsigned installer and says it was verified by its checksum only. It asks
 before it replaces an installed Brigadier, refuses while Brigadier runs from there, and runs the
 installer silently into `BRIGADIER_INSTALL_DIR`, the installed folder or
 `%LOCALAPPDATA%\Brigadier`. A release bumps its version with install.sh's.
