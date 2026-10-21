@@ -50,18 +50,22 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
   respected under any of the model's names, and under 99% of the 5-hour window), the one whose
   weekly window resets soonest, so quota that would be lost first is used first. An unknown
   reset sorts last; a tie goes to the most left, then to the earliest added. Being the default
-  wins nothing. With switching off, or with no account ready, the default (which then reads as
-  limited, and routing moves the work to the other agent, as before).
+  wins nothing. With switching off, the account picked with Use (the default) while it can take
+  work, then another that can (`accounts::ready`): work leaves the agent only once none of its
+  accounts can take it (#505). With no account ready, the default (which then reads as limited,
+  and routing moves the work to the other agent, as before).
 - **A conversation keeps its account.** With switching on and more than one account of the
   agent, a conversation records the account it starts on in its setup, so a later start of its
   CLI stays where its cache is; only a hard stop (below) moves it.
-- **When a chat hits a limit** with switching on and another account of the same agent left,
+- **When a chat hits a limit** with another account of the same agent left (with switching off,
+  the one picked with Use first),
   the chat closes its CLI, records the new account in its setup and resumes the same session
   there. If the CLI had already begun the turn, it is told to continue rather than sent the
   message again, so nothing runs twice (a message that never reached the old CLI still goes).
   A note in the chat says what happened, in place of the CLI's own limit message. Only when every
-  account of the agent is used up does the cross-agent fallback run. With switching off, the
-  fallback runs at once. A worker hands its task to the next route as before, which now starts
+  account of the agent is used up does the cross-agent fallback run, whichever way the switch
+  is. When that stand-in steps back, it goes onto an account with room, not back onto one still
+  at its limit. A worker hands its task to the next route as before, which now starts
   on the lead account; "Open in terminal" reopens a worker on the account its session ran on.
 - **Settings** keep only names and ids: `Settings.accounts` (`id`, `provider`, `name`,
   `default`, `addedAtMs`), `Settings.manualAccounts` and `Settings.switchProviders` (on by
@@ -88,7 +92,8 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
 
 - `cargo test -p brigadier-core --lib accounts` runs the flow tests: a limit moves a chat to
   another account and its work is done once; every account limited falls back to the other
-  agent; switching off falls back at once; a one-click switch resumes the same session; two
+  agent; switching off moves to the picked account, and falls back only once every account is
+  limited; a stand-in steps back onto an account with room; a one-click switch resumes the same session; two
   chats run on two accounts at once; a worker's task carries on with another account; removal
   is refused while an account is in use.
 - `cargo test -p brigadier-providers accounts` covers homes, links and the env overlay.

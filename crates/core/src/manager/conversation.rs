@@ -6435,6 +6435,25 @@ impl SessionManager {
         if !changed && !self.choice_available(&fallback.replaces).await {
             return;
         }
+        // The account it names may still be at its limit while another took over as lead: it
+        // goes back on one that can take it, never on the limited one (which would hand it
+        // straight back to the stand-in, #505).
+        let mut move_to = None;
+        if !changed {
+            let account = self.runtime.account_for(&fallback.replaces);
+            if !self
+                .account_frees_choice(&fallback.replaces, &account)
+                .await
+            {
+                match self
+                    .runtime
+                    .switch_target(&account, fallback.replaces.model.as_deref())
+                {
+                    Some(next) => move_to = Some(next),
+                    None => return,
+                }
+            }
+        }
         let cli = {
             let mut state = conv.state.lock().await;
             if state.busy || state.closing {
@@ -6450,6 +6469,13 @@ impl SessionManager {
         }
         if let Err(err) = self.core.set_fallback(&conv.id, None).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not end the stand-in model"; conversation = %conv.id, error = %err);
+        }
+        if let Some(next) = &move_to
+            && let Err(err) = self
+                .run_on_account(&conv.id, &fallback.replaces, next)
+                .await
+        {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it moved to"; conversation = %conv.id, error = %err);
         }
         {
             let mut state = conv.state.lock().await;

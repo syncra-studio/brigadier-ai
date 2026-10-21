@@ -1,6 +1,6 @@
 //! Several accounts of a CLI: a chat moves to another account of the same provider when its
-//! account hits a limit, falls back to the other provider only when every account is used up
-//! (or switching is off), and switches account in one step, resuming its session.
+//! account hits a limit (also with switching off), falls back to the other provider only when
+//! every account is used up, and switches account in one step, resuming its session.
 
 use std::sync::{Arc, Mutex};
 
@@ -278,11 +278,82 @@ async fn the_stand_in_names_codex_and_the_soonest_reset_of_every_account() {
     flow.stop().await;
 }
 
+/// #505: account switching is off (Use picked `acct-c`) while the session still runs on
+/// `acct-b`, where it hits its limit. Another Claude account has quota, so the session goes on
+/// on Claude, on the picked account, and says so; Codex doesn't stand in.
 #[tokio::test]
-async fn with_switching_off_a_limit_falls_back_to_the_other_provider_at_once() {
+async fn with_switching_off_a_limit_moves_the_session_to_the_picked_account() {
     let log = Log::default();
     let flow = Flow::start(
         "accounts-switch-off",
+        Options::default(),
+        logging(&log, |turn| {
+            match (turn.provider, turn.account.as_deref()) {
+                (ProviderKind::Claude, Some("acct-b")) => Reply::limited(),
+                (ProviderKind::Claude, _) => Reply::text("Done."),
+                (ProviderKind::Codex, _) => Reply::text("Done on Codex."),
+            }
+        }),
+    )
+    .await;
+    flow.add_accounts(
+        &[
+            (ProviderKind::Claude, "acct-b"),
+            (ProviderKind::Claude, "acct-c"),
+        ],
+        true,
+    )
+    .await;
+    let before = flow.core.settings();
+    let mut settings = before.clone();
+    for entry in &mut settings.accounts {
+        entry.default = entry.id == "acct-c";
+    }
+    let settings = crate::accounts::edited(&before, settings);
+    assert_eq!(settings.manual_accounts, [ProviderKind::Claude]);
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    on_account(&flow, "acct-b").await;
+    flow.say("Do the thing.").await;
+    flow.until("a second turn", |_| seen(&log).len() >= 2).await;
+    flow.settled().await;
+    let path: Vec<_> = seen(&log)
+        .iter()
+        .map(|turn| (turn.provider, turn.account.clone()))
+        .collect();
+    assert_eq!(
+        path,
+        [
+            (ProviderKind::Claude, Some("acct-b".into())),
+            (ProviderKind::Claude, Some("acct-c".into())),
+        ]
+    );
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    assert!(
+        conversation.fallback.is_none(),
+        "{:?}",
+        conversation.fallback
+    );
+    assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-c"));
+    let notices = notices(&flow).await;
+    assert!(
+        notices.iter().any(|text| text
+            == "Claude Code hit its usage limit on Account acct-b; continuing on Account acct-c."),
+        "{notices:#?}"
+    );
+    assert!(
+        !notices.iter().any(|text| text.contains("Codex")),
+        "{notices:#?}"
+    );
+    flow.stop().await;
+}
+
+/// With switching off and every Claude account at its limit, Codex stands in, as with it on.
+#[tokio::test]
+async fn with_switching_off_and_every_account_at_its_limit_codex_stands_in() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-switch-off-all-limited",
         Options::default(),
         logging(&log, |turn| match turn.provider {
             ProviderKind::Claude => Reply::limited(),
@@ -306,9 +377,113 @@ async fn with_switching_off_a_limit_falls_back_to_the_other_provider_at_once() {
         .collect();
     assert_eq!(
         path,
-        [(ProviderKind::Claude, None), (ProviderKind::Codex, None)]
+        [
+            (ProviderKind::Claude, None),
+            (ProviderKind::Claude, Some("acct-b".into())),
+            (ProviderKind::Codex, None),
+        ]
+    );
+    let notices = notices(&flow).await;
+    assert!(
+        notices.iter().any(|text| text
+            .starts_with("Every Claude Code account hit its usage limit; continuing on Codex ")),
+        "{notices:#?}"
     );
     flow.stop().await;
+}
+
+/// #505: Codex stands in while every Claude account is at its limit; then the computer's login
+/// has room again, while the account the session last ran on is still limited. The stand-in
+/// steps back onto the login that has room, never onto the limited account (which would hand
+/// each turn straight back to Codex).
+#[tokio::test]
+async fn a_stand_in_steps_back_onto_an_account_with_room() {
+    let log = Log::default();
+    let freed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let room = freed.clone();
+    let flow = Flow::start(
+        "accounts-stand-in-steps-back",
+        Options::default(),
+        logging(&log, move |turn| {
+            match (turn.provider, turn.account.as_deref()) {
+                (ProviderKind::Claude, None) if room.load(std::sync::atomic::Ordering::SeqCst) => {
+                    Reply::text("Done.")
+                }
+                (ProviderKind::Claude, _) => Reply::limited(),
+                (ProviderKind::Codex, _) => Reply::text("Done on Codex."),
+            }
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.say("First.").await;
+    flow.until("a Codex turn", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    // The computer's login has room again; acct-b is still at its limit.
+    freed.store(true, std::sync::atomic::Ordering::SeqCst);
+    report_weekly(&flow, None, 7.0, 37).await;
+    flow.say("Second.").await;
+    flow.until("a fourth turn", |_| seen(&log).len() >= 4).await;
+    flow.settled().await;
+    let path: Vec<_> = seen(&log)
+        .iter()
+        .map(|turn| (turn.provider, turn.account.clone()))
+        .collect();
+    assert_eq!(
+        path,
+        [
+            (ProviderKind::Claude, None),
+            (ProviderKind::Claude, Some("acct-b".into())),
+            (ProviderKind::Codex, None),
+            (ProviderKind::Claude, None),
+        ]
+    );
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    assert!(
+        conversation.fallback.is_none(),
+        "{:?}",
+        conversation.fallback
+    );
+    assert_eq!(orchestrator(&flow).account.as_deref(), Some("own"));
+    flow.stop().await;
+}
+
+/// The session's orchestrator, named to run on `account` (as one that moved there is).
+async fn on_account(flow: &Flow, account: &str) {
+    let Some(Setup::Session {
+        repo,
+        environment,
+        permission,
+        orchestrator,
+        workers_see_uncommitted,
+        plan_mode,
+    }) = flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a session");
+    };
+    flow.manager
+        .set_setup(
+            flow.conversation.clone(),
+            Setup::Session {
+                repo,
+                environment,
+                permission,
+                orchestrator: ModelChoice {
+                    account: Some(account.into()),
+                    ..orchestrator
+                },
+                workers_see_uncommitted,
+                plan_mode,
+            },
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -884,7 +1059,8 @@ async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
     assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
     assert_eq!(published_in_use(&flow).await, vec![None]);
 
-    // Use picks an account: it turns Claude's account switching off, and work runs there.
+    // Use picks an account: it turns Claude's account switching off. Used up, it can't take
+    // work, so work runs on another account that can (#505).
     let before = flow.core.settings();
     let mut settings = before.clone();
     for entry in &mut settings.accounts {
@@ -894,9 +1070,12 @@ async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
     assert_eq!(settings.manual_accounts, [ProviderKind::Claude]);
     flow.core.update_settings(settings).await.unwrap();
     flow.manager.runtime.sync_accounts().await;
+    assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
+    // With room again, work runs there, though another account's week ends sooner.
+    report_weekly(&flow, Some("acct-c"), 20.0, 40).await;
     assert_eq!(
         in_use(&flow).await,
-        (vec![Some("acct-c".into())], Some(100.0))
+        (vec![Some("acct-c".into())], Some(20.0))
     );
     assert_eq!(published_in_use(&flow).await, vec![Some("acct-c".into())]);
 

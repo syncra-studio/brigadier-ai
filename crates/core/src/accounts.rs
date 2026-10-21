@@ -2,7 +2,7 @@
 //!
 //! Each provider has the user's own login (the one their terminal uses) and any extra accounts
 //! added in Settings → Accounts ([`crate::model::AccountEntry`], each a CLI home of its own:
-//! `brigadier_providers::accounts`). [`select`] is the one rule for which of them new work
+//! `brigadier_providers::accounts`). [`select`] (with [`ready`] under it) is the one rule for which of them new work
 //! starts on, which one a conversation moves to when its account hits a limit, and whose quota
 //! routing and the Usage page show for the provider.
 
@@ -107,12 +107,9 @@ pub struct Candidate {
     pub quota: Option<QuotaSnapshot>,
 }
 
-/// The provider's account work starts on (for `model`, when it has windows of its own). With
-/// switching on: of the accounts that can take work (signed in, not in `avoid`, room left for
-/// `model`, every window that limits it under the share routing counts as used up), the one whose weekly window resets soonest, so
-/// the quota that is lost first is used first. An unknown reset sorts last; a tie goes to the
-/// most left, then to the earliest added. With switching off, or with no account ready, the
-/// default (it then reads as limited, and routing moves the work to another provider).
+/// The provider's account work starts on (for `model`, when it has windows of its own): as
+/// [`ready`] picks it, else (no account ready) the default, which then reads as limited, so
+/// routing moves the work to another provider.
 ///
 /// An account an earlier choice already left at its limit is passed in `avoid`.
 pub fn select(
@@ -122,19 +119,49 @@ pub fn select(
     candidates: &[Candidate],
     avoid: &[AccountRef],
 ) -> AccountRef {
-    let default = AccountRef::new(
+    ready(settings, provider, model, candidates, avoid)
+        .unwrap_or_else(|| default_account(settings, provider))
+}
+
+/// The account work goes to among those that can take it, `None` when none can. With
+/// switching off, the account picked with Use (the default) while it can; once it can't, or
+/// with switching on, [`soonest_ready`]'s choice: another account of the provider goes before
+/// another provider (#505).
+pub fn ready(
+    settings: &Settings,
+    provider: ProviderKind,
+    model: Option<&str>,
+    candidates: &[Candidate],
+    avoid: &[AccountRef],
+) -> Option<AccountRef> {
+    if !settings.switches_accounts(provider) {
+        let default = default_account(settings, provider);
+        let pinned: Vec<Candidate> = candidates
+            .iter()
+            .filter(|candidate| candidate.account == default)
+            .cloned()
+            .collect();
+        if let Some(account) = soonest_ready(settings, provider, model, &pinned, avoid) {
+            return Some(account);
+        }
+    }
+    soonest_ready(settings, provider, model, candidates, avoid)
+}
+
+/// The account picked as `provider`'s default: an extra one, else the user's own login.
+fn default_account(settings: &Settings, provider: ProviderKind) -> AccountRef {
+    AccountRef::new(
         provider,
         settings
             .default_account(provider)
             .map(|account| account.id.clone()),
-    );
-    if !settings.switches_accounts(provider) {
-        return default;
-    }
-    soonest_ready(settings, provider, model, candidates, avoid).unwrap_or(default)
+    )
 }
 
-/// [`select`]'s choice among the accounts that can take work, `None` when none can.
+/// Of the accounts that can take work (signed in, not in `avoid`, room left for `model`, every
+/// window that limits it under the share routing counts as used up), the one whose weekly
+/// window resets soonest, so the quota that is lost first is used first. An unknown reset sorts
+/// last; a tie goes to the most left, then to the earliest added. `None` when none can.
 pub fn soonest_ready(
     settings: &Settings,
     provider: ProviderKind,
@@ -512,8 +539,8 @@ mod tests {
             candidate(Some("home"), 20.0, false),
         ];
         assert_eq!(pick(&settings(None, true), &all), Some("home".into()));
-        // Switching off: the default, limited as it is (routing then moves on).
-        assert_eq!(pick(&settings(None, false), &all), None);
+        // Switching off with the default limited: another account that can take it (#505).
+        assert_eq!(pick(&settings(None, false), &all), Some("home".into()));
         // Every account used up: the default.
         let spent = [
             candidate(None, 100.0, true),
@@ -577,6 +604,37 @@ mod tests {
         let mut off = on.clone();
         off.manual_accounts.push(ProviderKind::Claude);
         assert_eq!(pick(&off, &all), Some("work".into()));
+    }
+
+    #[test]
+    fn a_picked_account_takes_work_while_it_can_and_another_after() {
+        let off = settings(Some("work"), false);
+        let mut all = vec![
+            candidate(None, 10.0, false),
+            candidate(Some("work"), 20.0, false),
+            candidate(Some("home"), 0.0, false),
+        ];
+        // The picked one while it has room, though another has more.
+        assert_eq!(pick(&off, &all), Some("work".into()));
+        // At its limit, another account of the provider before another provider (#505).
+        all[1] = candidate(Some("work"), 100.0, true);
+        assert_eq!(pick(&off, &all), Some("home".into()));
+        let moved = ready(
+            &off,
+            ProviderKind::Claude,
+            None,
+            &all,
+            &[AccountRef::new(ProviderKind::Claude, Some("home".into()))],
+        );
+        assert_eq!(moved.and_then(|account| account.account), None);
+        // None ready: the picked one, read as limited.
+        let spent = [
+            candidate(None, 100.0, true),
+            candidate(Some("work"), 100.0, true),
+            candidate(Some("home"), 100.0, true),
+        ];
+        assert_eq!(pick(&off, &spent), Some("work".into()));
+        assert_eq!(ready(&off, ProviderKind::Claude, None, &spent, &[]), None);
     }
 
     #[test]
