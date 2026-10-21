@@ -746,7 +746,7 @@ fn installer_spec(ops: &Ops, provider: ProviderKind) -> SpawnSpec {
     let line = (ops.installer)(provider);
     let spec = if cfg!(windows) {
         ops.env
-            .spec(&PathBuf::from("powershell.exe"))
+            .installer_spec(&PathBuf::from("powershell.exe"))
             .arg("-NoProfile")
             .arg("-NonInteractive")
             .arg("-ExecutionPolicy")

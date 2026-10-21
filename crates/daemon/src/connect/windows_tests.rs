@@ -40,8 +40,16 @@ impl Home {
         home
     }
 
+    /// Where the vendor's installer puts the agent: Codex's in `%LOCALAPPDATA%`.
+    fn bin(&self, provider: ProviderKind) -> PathBuf {
+        match provider {
+            ProviderKind::Claude => self.0.join(r".local\bin"),
+            ProviderKind::Codex => self.0.join(r"AppData\Local\Programs\OpenAI\Codex\bin"),
+        }
+    }
+
     fn install(&self, provider: ProviderKind) {
-        let bin = self.0.join(".local/bin");
+        let bin = self.bin(provider);
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::copy(
             self.0.join("fake-agent.exe"),
@@ -80,6 +88,7 @@ switch ($mode) {
     hang { Start-Sleep 60; exit 0 }
 }
 $bin = Join-Path $root '.local\bin'
+if ($env:BRIGADIER_CONNECT_TEST_PROVIDER -eq 'codex') { $bin = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin' }
 New-Item -ItemType Directory -Force $bin | Out-Null
 Copy-Item (Join-Path $root 'fake-agent.exe') (Join-Path $bin ($env:BRIGADIER_CONNECT_TEST_PROVIDER + '.exe'))
 "#;
@@ -104,6 +113,10 @@ fn ops(home: &Home, provider: ProviderKind) -> Ops {
     let mut vars = std::collections::BTreeMap::from([
         ("HOME".into(), home.0.clone().into_os_string()),
         ("USERPROFILE".into(), home.0.clone().into_os_string()),
+        (
+            "LOCALAPPDATA".into(),
+            home.0.join(r"AppData\Local").into_os_string(),
+        ),
         (
             "BRIGADIER_CONNECT_TEST_HOME".into(),
             home.0.clone().into_os_string(),
@@ -205,6 +218,10 @@ async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
         assert_eq!(spec.program, Path::new("powershell.exe"));
         assert_eq!(spec.cwd.as_ref(), Some(&home.0));
         assert!(spec.args.iter().any(|arg| arg == "-NonInteractive"));
+        // The system's tar and curl, not Git's, for the vendor's install.ps1.
+        let path = spec.env.iter().find(|(key, _)| key == "PATH").unwrap();
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        assert_eq!(std::env::split_paths(&path.1).next(), Some(system));
         let (outcome, seen) = run(&ops, provider).await;
         assert_eq!(outcome, Some(ConnectProgress::Connected));
         assert_eq!(
@@ -215,8 +232,7 @@ async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
         assert_eq!(
             status.path.map(PathBuf::from),
             Some(
-                home.0
-                    .join(".local/bin")
+                home.bin(provider)
                     .join(format!("{}.exe", provider.binary()))
             )
         );
@@ -381,4 +397,140 @@ fn the_link_helper_rejects_non_web_or_extra_arguments() {
         assert!(!status.success());
         assert!(catcher.link().is_none());
     }
+}
+
+/// Connect with the vendor's real installer and sign-in, in a scratch home, up to the sign-in's
+/// link: `BRIGADIER_CONNECT_LIVE` names the agent (`claude` or `codex`),
+/// `BRIGADIER_CONNECT_LIVE_HOME` the home (left for the caller to look at and remove), and
+/// `BRIGADIER_CONNECT_LIVE_PATH_FIRST` a folder put first on PATH (Git's tools, as Git Bash
+/// has them). It downloads the agent, and its installer may add its folder to the user's PATH
+/// in the registry: back that up first. No account is used: the sign-in is cancelled once its
+/// link reaches Brigadier, or a minute after it starts (an agent that ignores `BROWSER` opens
+/// the page itself).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "downloads a real agent and may change the user's PATH; run by hand"]
+async fn live_install_up_to_the_sign_in_link() {
+    let (Ok(agent), Some(home)) = (
+        std::env::var("BRIGADIER_CONNECT_LIVE"),
+        std::env::var_os("BRIGADIER_CONNECT_LIVE_HOME"),
+    ) else {
+        return;
+    };
+    let provider = match agent.as_str() {
+        "claude" => ProviderKind::Claude,
+        "codex" => ProviderKind::Codex,
+        other => panic!("BRIGADIER_CONNECT_LIVE names no agent: {other}"),
+    };
+    let home = PathBuf::from(home);
+    let system = PathBuf::from(std::env::var_os("SystemRoot").expect("Windows system folder"));
+    let first = std::env::var_os("BRIGADIER_CONNECT_LIVE_PATH_FIRST").map(PathBuf::from);
+    let path = std::env::join_paths(first.into_iter().chain([
+        system.join(r"System32\WindowsPowerShell\v1.0"),
+        system.join("System32"),
+        system.clone(),
+    ]))
+    .unwrap();
+    let mut vars = std::collections::BTreeMap::from([
+        ("HOME".into(), home.clone().into_os_string()),
+        ("USERPROFILE".into(), home.clone().into_os_string()),
+        (
+            "APPDATA".into(),
+            home.join(r"AppData\Roaming").into_os_string(),
+        ),
+        (
+            "LOCALAPPDATA".into(),
+            home.join(r"AppData\Local").into_os_string(),
+        ),
+        ("TEMP".into(), home.join("Temp").into_os_string()),
+        ("TMP".into(), home.join("Temp").into_os_string()),
+        ("PATH".into(), path),
+        ("SystemRoot".into(), system.into_os_string()),
+    ]);
+    for key in [
+        "COMSPEC",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+        "windir",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            vars.insert(key.into(), value);
+        }
+    }
+    for dir in ["AppData/Roaming", "AppData/Local", "Temp"] {
+        std::fs::create_dir_all(home.join(dir)).unwrap();
+    }
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_test_writer()
+        .try_init();
+    let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+        data_dir: Some(home.join("brigadier-data")),
+    })
+    .unwrap();
+    let env = Arc::new(CliEnv::from_vars(vars));
+    let agent: Arc<dyn Provider> = match provider {
+        ProviderKind::Claude => Arc::new(Claude::new(platform.clone(), env.clone())),
+        ProviderKind::Codex => Arc::new(Codex::new(platform.clone(), env.clone())),
+    };
+    let link = home.join("brigadier-opened-link");
+    let opened = link.clone();
+    let marks = env.clone();
+    let ops = Ops {
+        platform,
+        env: env.clone(),
+        status: Arc::new(move |_| {
+            let agent = agent.clone();
+            Box::pin(async move { agent.status().await })
+        }),
+        installer: Arc::new(|provider| provider.install_command(true).to_owned()),
+        install_timeout: INSTALL_TIMEOUT,
+        sign_in_timeout: Duration::from_secs(5 * 60),
+        poll: POLL_EVERY,
+        mark: Arc::new(move |provider| LoginMark::of(provider, &marks)),
+        unwatched_poll: UNWATCHED_POLL,
+        linger: LINGER,
+        open_link: Arc::new(move |link| std::fs::write(&opened, link).unwrap()),
+    };
+    assert!(
+        (ops.status)(provider).await.path.is_none(),
+        "{provider} counts as installed before its installer ran"
+    );
+
+    let seen = Mutex::new(Vec::new());
+    let cancel = CancellationToken::new();
+    let mut codes = no_codes();
+    let report = |step| seen.lock().unwrap().push(step);
+    let attempt = connect(&ops, provider, &cancel, &report, &mut codes);
+    tokio::pin!(attempt);
+    let mut signing = None;
+    let outcome = loop {
+        tokio::select! {
+            outcome = &mut attempt => break outcome.map(|ended| ended.progress),
+            () = tokio::time::sleep(Duration::from_millis(200)) => {}
+        }
+        if seen.lock().unwrap().contains(&ConnectProgress::SigningIn) {
+            let since = *signing.get_or_insert_with(tokio::time::Instant::now);
+            if link.exists() || since.elapsed() > Duration::from_secs(60) {
+                cancel.cancel();
+            }
+        }
+    };
+    let steps = seen.lock().unwrap().clone();
+    let status = (ops.status)(provider).await;
+    let handed_back = std::fs::read_to_string(&link).ok();
+    eprintln!("{provider}: outcome {outcome:?}; steps {steps:?}");
+    eprintln!("{provider}: status {status:?}");
+    eprintln!("{provider}: sign-in link handed back through BROWSER: {handed_back:?}");
+    assert_eq!(outcome, None, "Connect ended before it was cancelled");
+    assert_eq!(
+        steps,
+        [ConnectProgress::Installing, ConnectProgress::SigningIn]
+    );
+    let folder = env.installer_folder(provider).unwrap();
+    assert_eq!(
+        status.path.map(PathBuf::from),
+        Some(folder.join(format!("{}.exe", provider.binary())))
+    );
+    assert!(!status.logged_in);
 }

@@ -221,7 +221,12 @@ async fn run_update(daemon: &Daemon, item: &UpdateItem) -> (String, UpdateProgre
             None => return failed("Brigadier can't run this update".into()),
         }
     };
-    let mut spec = env.spec(&program);
+    // A native `update` runs the vendor's installer again.
+    let mut spec = if faked {
+        env.spec(&program)
+    } else {
+        env.installer_spec(&program)
+    };
     spec.args = args;
     spec.cwd = env.home();
     tracing::info!(target = ?item.target, program = %program.display(), "updating");

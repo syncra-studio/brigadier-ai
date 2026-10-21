@@ -47,13 +47,13 @@ impl CliEnv {
     /// Captures the login shell's environment. This spawns the shell, so call it off the async
     /// runtime. Falls back to this process's environment when the shell cannot be run.
     pub fn capture(platform: &Arc<dyn Platform>) -> Self {
-        let mut vars = match platform.shell().login_environment() {
+        let mut vars = named(match platform.shell().login_environment() {
             Ok(vars) => vars,
             Err(err) => {
                 tracing::warn!(error = %err, "login environment unavailable; using the daemon's");
                 std::env::vars_os().collect()
             }
-        };
+        });
         for name in NESTED_SESSION_VARS {
             vars.remove(OsStr::new(name));
         }
@@ -67,7 +67,7 @@ impl CliEnv {
     /// Exactly these variables: for tests, and tools that run a CLI they set up themselves.
     pub fn from_vars(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         Self {
-            vars: vars.into_iter().collect(),
+            vars: named(vars),
             chosen: Arc::default(),
         }
     }
@@ -75,7 +75,7 @@ impl CliEnv {
     /// These variables, sharing this environment's chosen binaries (an extra account's).
     pub(crate) fn with_vars(&self, vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         Self {
-            vars: vars.into_iter().collect(),
+            vars: named(vars),
             chosen: self.chosen.clone(),
         }
     }
@@ -112,15 +112,22 @@ impl CliEnv {
         })
     }
 
-    /// Where the agent's own native installer puts its binary: `~/.local/bin` for both (Codex's
-    /// moves with `CODEX_INSTALL_DIR`). The login PATH may not hold it: Claude Code's installer
-    /// leaves the shell profiles alone, and Codex's adds it to a profile read after this
-    /// environment was captured. So a binary there counts as installed, PATH first.
+    /// Where the agent's own native installer puts its binary: `~/.local/bin` for both, except
+    /// Codex's on Windows, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` (Codex's moves with
+    /// `CODEX_INSTALL_DIR`). The login PATH may not hold it: Claude Code's installer leaves the
+    /// shell profiles alone, and Codex's adds it to a profile (on Windows the user's PATH) read
+    /// after this environment was captured. So a binary there counts as installed, PATH first.
     pub fn installer_folder(&self, provider: ProviderKind) -> Option<PathBuf> {
         if provider == ProviderKind::Codex
             && let Some(dir) = self.var("CODEX_INSTALL_DIR").filter(|dir| !dir.is_empty())
         {
             return Some(PathBuf::from(dir));
+        }
+        if provider == ProviderKind::Codex && cfg!(windows) {
+            return self
+                .var("LOCALAPPDATA")
+                .filter(|dir| !dir.is_empty())
+                .map(|dir| Path::new(dir).join(r"Programs\OpenAI\Codex\bin"));
         }
         // Only this environment's own home (USERPROFILE on Windows): one without it (a test's)
         // looks nowhere else.
@@ -153,7 +160,12 @@ impl CliEnv {
     }
 
     pub fn var(&self, name: &str) -> Option<&OsStr> {
-        self.vars.get(OsStr::new(name)).map(OsString::as_os_str)
+        let name = if cfg!(windows) {
+            name.to_ascii_uppercase()
+        } else {
+            name.to_owned()
+        };
+        self.vars.get(OsStr::new(&name)).map(OsString::as_os_str)
     }
 
     /// A spawn spec for `program` with exactly this environment.
@@ -169,6 +181,41 @@ impl CliEnv {
             ..SpawnSpec::default()
         }
     }
+
+    /// A spawn spec for an agent's own installer or updater, `program`. On Windows the system's
+    /// own tools come first on PATH: Codex's install.ps1 unpacks with the first `tar`, and
+    /// Git's GNU tar (first on a PATH from Git Bash) reads `C:\…` as a remote host, unpacks
+    /// nothing, and the install fails ("did not contain the expected package layout").
+    pub fn installer_spec(&self, program: &Path) -> SpawnSpec {
+        let mut spec = self.spec(program);
+        if cfg!(windows)
+            && let Some(root) = self.var("SYSTEMROOT")
+        {
+            let rest = self.vars.get(OsStr::new("PATH"));
+            let dirs = std::iter::once(Path::new(root).join("System32"))
+                .chain(rest.into_iter().flat_map(std::env::split_paths));
+            if let Ok(path) = std::env::join_paths(dirs) {
+                spec.env.retain(|(key, _)| key != "PATH");
+                spec.env.push(("PATH".into(), path));
+            }
+        }
+        spec
+    }
+}
+
+/// Windows finds a variable by its name in any case, and names the same one differently
+/// (`Path` from Explorer, `PATH` from Git Bash): there they are kept by their capital name, so
+/// `PATH` finds either.
+fn named(vars: impl IntoIterator<Item = (OsString, OsString)>) -> BTreeMap<OsString, OsString> {
+    vars.into_iter()
+        .map(|(key, value)| {
+            if cfg!(windows) {
+                (key.to_ascii_uppercase(), value)
+            } else {
+                (key, value)
+            }
+        })
+        .collect()
 }
 
 /// Toolchains that install their programs in a folder of the home directory and add it to
@@ -537,5 +584,75 @@ mod tests {
         ]);
         add_toolchain_bins(&mut moved);
         assert_eq!(moved[OsStr::new("PATH")], OsString::from("/usr/bin"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_variables_are_found_whatever_their_case() {
+        // As Explorer starts the app: `Path`, `SystemRoot`.
+        let env = CliEnv::from_vars(vars(&[
+            ("Path", OsStr::new(r"C:\Windows\System32;C:\tools")),
+            ("SystemRoot", OsStr::new(r"C:\Windows")),
+        ]));
+        assert_eq!(
+            env.var("PATH"),
+            Some(OsStr::new(r"C:\Windows\System32;C:\tools"))
+        );
+        assert_eq!(env.var("SystemRoot"), Some(OsStr::new(r"C:\Windows")));
+        assert_eq!(
+            env.which("cmd"),
+            Some(PathBuf::from(r"C:\Windows\System32\cmd.exe"))
+        );
+        let names: Vec<_> = env.vars().into_iter().map(|(key, _)| key).collect();
+        assert_eq!(names, ["PATH", "SYSTEMROOT"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_installs_under_local_app_data_on_windows() {
+        let env = CliEnv::from_vars(vars(&[
+            ("USERPROFILE", OsStr::new(r"C:\Users\a b")),
+            ("LOCALAPPDATA", OsStr::new(r"C:\Users\a b\AppData\Local")),
+        ]));
+        assert_eq!(
+            env.installer_folder(ProviderKind::Codex),
+            Some(PathBuf::from(
+                r"C:\Users\a b\AppData\Local\Programs\OpenAI\Codex\bin"
+            ))
+        );
+        assert_eq!(
+            env.installer_folder(ProviderKind::Claude),
+            Some(PathBuf::from(r"C:\Users\a b\.local\bin"))
+        );
+        let moved = CliEnv::from_vars(vars(&[
+            ("LOCALAPPDATA", OsStr::new(r"C:\Users\a b\AppData\Local")),
+            ("CODEX_INSTALL_DIR", OsStr::new(r"D:\codex")),
+        ]));
+        assert_eq!(
+            moved.installer_folder(ProviderKind::Codex),
+            Some(PathBuf::from(r"D:\codex"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installers_find_the_system_tools_first_on_windows() {
+        let env = CliEnv::from_vars(vars(&[
+            ("Path", OsStr::new(r"C:\Program Files\Git\usr\bin;C:\tools")),
+            ("SystemRoot", OsStr::new(r"C:\Windows")),
+        ]));
+        let spec = env.installer_spec(Path::new("powershell.exe"));
+        let paths: Vec<_> = spec.env.iter().filter(|(key, _)| key == "PATH").collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths[0].1,
+            r"C:\Windows\System32;C:\Program Files\Git\usr\bin;C:\tools"
+        );
+        // Anything else runs with the PATH as it is.
+        let plain = env.spec(Path::new("codex.exe"));
+        assert!(plain.env.contains(&(
+            "PATH".into(),
+            r"C:\Program Files\Git\usr\bin;C:\tools".into()
+        )));
     }
 }
