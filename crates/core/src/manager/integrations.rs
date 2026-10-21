@@ -1061,10 +1061,7 @@ mod tests {
             .unwrap();
         assert_eq!(server.source, "Claude Code (plugin)");
         assert_eq!(server.plugin.as_deref(), Some("docs@market"));
-        assert_eq!(
-            server.file,
-            claude.join(".mcp.json").display().to_string()
-        );
+        assert_eq!(server.file, claude.join(".mcp.json").display().to_string());
         let _ = std::fs::remove_dir_all(&home);
     }
 }
