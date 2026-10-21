@@ -1,7 +1,8 @@
 //! OAuth for remote MCP servers (the MCP authorization spec, OAuth 2.1): finding a server's
 //! authorization server, renewing a sign-in with its refresh token, and signing in once in
-//! Brigadier with PKCE, dynamic client registration and a loopback redirect. No token value is
-//! ever logged or put in an error.
+//! Brigadier with PKCE, dynamic client registration and a loopback redirect. An error is a short
+//! plain sentence for the user, its technical cause only logged; no token value is ever logged
+//! or put in an error.
 
 use std::time::Duration;
 
@@ -23,24 +24,35 @@ const SIGN_IN_WAIT: Duration = Duration::from_secs(300);
 /// Why a renewal or a sign-in failed: never a value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum OAuthError {
-    /// The authorization server refused the refresh token (`invalid_grant`): the sign-in is
-    /// over.
+    /// The authorization server refused the grant (`invalid_grant`, or the user declined in
+    /// the browser): a renewed sign-in is over.
     Refused,
+    /// The user didn't finish signing in in time.
+    TimedOut,
+    /// Why else, as a short plain sentence.
     Failed(String),
 }
 
 impl std::fmt::Display for OAuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Refused => f.write_str("the authorization server refused the stored sign-in"),
+            Self::Refused => f.write_str("The server didn't accept the sign-in."),
+            Self::TimedOut => f.write_str("Timed out after 5 minutes. Nothing was saved."),
             Self::Failed(reason) => f.write_str(reason),
         }
     }
 }
 
-fn failed(what: &str, err: impl std::fmt::Display) -> OAuthError {
-    OAuthError::Failed(format!("{what}: {err}"))
+/// `plain`, the user's reason, for `err`, which is only logged.
+fn failed(plain: &str, err: impl std::fmt::Display) -> OAuthError {
+    tracing::info!(error = %err, "{plain}");
+    OAuthError::Failed(plain.to_owned())
 }
+
+/// The plain reason when the server can't be reached.
+const UNREACHABLE: &str = "The server couldn't be reached.";
+/// The plain reason when the sign-in can't wait for the browser.
+const NOT_STARTED: &str = "The sign-in couldn't be started.";
 
 /// What a server's authorization server says of itself (RFC 8414).
 #[derive(Debug, Clone, Deserialize)]
@@ -127,7 +139,8 @@ pub(crate) async fn discover(
     server_url: &str,
     headers: &[(String, Secret)],
 ) -> Result<Discovered, OAuthError> {
-    let server = Url::parse(server_url).map_err(|err| failed("the server's address", err))?;
+    let server =
+        Url::parse(server_url).map_err(|err| failed("The server's address isn't valid.", err))?;
     let mut probe = http
         .post(server.clone())
         .header(CONTENT_TYPE, "application/json")
@@ -164,7 +177,8 @@ pub(crate) async fn discover(
         .as_ref()
         .and_then(|resource| resource.authorization_servers.first())
         .map_or_else(|| server.origin().ascii_serialization(), Clone::clone);
-    let issuer = Url::parse(&issuer).map_err(|err| failed("the authorization server", err))?;
+    let issuer = Url::parse(&issuer)
+        .map_err(|err| failed("The server names a sign-in address that isn't valid.", err))?;
     let mut auth = None;
     for name in ["oauth-authorization-server", "openid-configuration"] {
         for url in well_known(&issuer, name) {
@@ -185,7 +199,7 @@ pub(crate) async fn discover(
         auth = get_json::<AuthServer>(http, &url).await;
     }
     let auth = auth.ok_or_else(|| {
-        OAuthError::Failed("the server's authorization server wasn't found".into())
+        OAuthError::Failed("Brigadier couldn't find where this server signs in.".into())
     })?;
     let (resource, scopes) = match resource {
         Some(found) => (
@@ -249,22 +263,27 @@ async fn token_request(
         .body(body)
         .send()
         .await
-        .map_err(|err| failed("the token request", err.without_url()))?;
+        .map_err(|err| failed(UNREACHABLE, err.without_url()))?;
     let status = response.status();
     let bytes = response
         .bytes()
         .await
-        .map_err(|err| failed("the token answer", err.without_url()))?;
+        .map_err(|err| failed(UNREACHABLE, err.without_url()))?;
     if !status.is_success() {
         let error = serde_json::from_slice::<ErrorAnswer>(&bytes).map(|answer| answer.error);
         return Err(match error {
             Ok(error) if error == "invalid_grant" => OAuthError::Refused,
-            Ok(error) => OAuthError::Failed(format!("the token request failed: {error}")),
-            Err(_) => OAuthError::Failed(format!("the token request failed: {status}")),
+            Ok(error) => {
+                OAuthError::Failed(format!("The server answered with an error ({error})."))
+            }
+            Err(_) => OAuthError::Failed(format!(
+                "The server answered with an error ({}).",
+                status.as_u16()
+            )),
         });
     }
     serde_json::from_slice(&bytes)
-        .map_err(|_| OAuthError::Failed("the token answer wasn't understood".into()))
+        .map_err(|_| OAuthError::Failed("The server's answer wasn't understood.".into()))
 }
 
 /// When a token that lives `expires_in` seconds from now expires (ms since the epoch).
@@ -283,7 +302,7 @@ pub(crate) async fn refresh(
     let refresh_token = credential
         .refresh_token
         .as_ref()
-        .ok_or_else(|| OAuthError::Failed("the sign-in has no refresh token".into()))?;
+        .ok_or_else(|| OAuthError::Failed("The sign-in has no refresh token.".into()))?;
     let mut form = vec![
         ("grant_type", "refresh_token".to_owned()),
         ("refresh_token", refresh_token.expose().to_owned()),
@@ -310,13 +329,14 @@ pub(crate) async fn refresh(
         client_id: credential.client_id.clone(),
         client_secret: credential.client_secret.clone(),
         token_endpoint: Some(endpoint.to_owned()),
+        since: credential.since,
         found: credential.found.clone(),
     })
 }
 
 fn random(bytes: usize) -> Result<String, OAuthError> {
     let mut buffer = vec![0u8; bytes];
-    getrandom::fill(&mut buffer).map_err(|err| failed("randomness", err))?;
+    getrandom::fill(&mut buffer).map_err(|err| failed(NOT_STARTED, err))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buffer))
 }
 
@@ -347,25 +367,24 @@ async fn register(
         .body(body.to_string())
         .send()
         .await
-        .map_err(|err| {
-            failed(
-                "registering with the authorization server",
-                err.without_url(),
-            )
-        })?;
+        .map_err(|err| failed(UNREACHABLE, err.without_url()))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(OAuthError::Failed(format!(
-            "the authorization server refused the registration: {status}"
-        )));
+        tracing::info!(
+            status = status.as_u16(),
+            "the client registration was refused"
+        );
+        return Err(OAuthError::Failed(
+            "The server didn't let Brigadier register to sign in.".into(),
+        ));
     }
     let registered: Registered = serde_json::from_slice(
         &response
             .bytes()
             .await
-            .map_err(|err| failed("the registration", err.without_url()))?,
+            .map_err(|err| failed(UNREACHABLE, err.without_url()))?,
     )
-    .map_err(|_| OAuthError::Failed("the registration answer wasn't understood".into()))?;
+    .map_err(|_| OAuthError::Failed("The server's answer wasn't understood.".into()))?;
     Ok(OAuthClient {
         client_id: Some(registered.client_id),
         client_secret: registered
@@ -382,7 +401,7 @@ async fn callback(listener: tokio::net::TcpListener, state: &str) -> Result<Stri
         let (mut stream, _) = listener
             .accept()
             .await
-            .map_err(|err| failed("the sign-in's redirect", err))?;
+            .map_err(|err| failed(NOT_STARTED, err))?;
         let mut head = Vec::new();
         let mut buffer = [0u8; 2048];
         while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < 16 * 1024 {
@@ -420,11 +439,12 @@ async fn callback(listener: tokio::net::TcpListener, state: &str) -> Result<Stri
         }
         let outcome = match (value("code"), value("error")) {
             (Some(code), _) => Ok(code),
-            (None, Some(error)) => Err(OAuthError::Failed(format!(
-                "the sign-in was refused: {error}"
-            ))),
+            (None, Some(error)) => {
+                tracing::info!(%error, "the sign-in was refused in the browser");
+                Err(OAuthError::Refused)
+            }
             (None, None) => Err(OAuthError::Failed(
-                "the sign-in brought no code back".into(),
+                "The browser brought no sign-in back.".into(),
             )),
         };
         let page = if outcome.is_ok() {
@@ -456,10 +476,11 @@ pub(crate) async fn sign_in(
     open: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Credential, OAuthError> {
     let found = discover(http, server_url, headers).await?;
-    let authorize =
-        found.auth.authorization_endpoint.clone().ok_or_else(|| {
-            OAuthError::Failed("the authorization server has no sign-in page".into())
-        })?;
+    let authorize = found
+        .auth
+        .authorization_endpoint
+        .clone()
+        .ok_or_else(|| OAuthError::Failed("The server has no sign-in page.".into()))?;
     if !found.auth.code_challenge_methods_supported.is_empty()
         && !found
             .auth
@@ -468,15 +489,15 @@ pub(crate) async fn sign_in(
             .any(|method| method == "S256")
     {
         return Err(OAuthError::Failed(
-            "the authorization server doesn't support PKCE (S256)".into(),
+            "The server's sign-in doesn't support PKCE, which Brigadier needs.".into(),
         ));
     }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
-        .map_err(|err| failed("the sign-in's redirect", err))?;
+        .map_err(|err| failed(NOT_STARTED, err))?;
     let port = listener
         .local_addr()
-        .map_err(|err| failed("the sign-in's redirect", err))?
+        .map_err(|err| failed(NOT_STARTED, err))?
         .port();
     let redirect = format!("http://127.0.0.1:{port}/callback");
     let client = match configured.filter(|client| client.client_id.is_some()) {
@@ -484,7 +505,8 @@ pub(crate) async fn sign_in(
         None => {
             let endpoint = found.auth.registration_endpoint.as_deref().ok_or_else(|| {
                 OAuthError::Failed(
-                    "the server takes no new clients and its config names none".into(),
+                    "The server doesn't let new apps sign in, and its config names no client."
+                        .into(),
                 )
             })?;
             register(http, endpoint, &redirect).await?
@@ -495,7 +517,8 @@ pub(crate) async fn sign_in(
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(Sha256::digest(verifier.as_bytes()));
     let state = random(16)?;
-    let mut link = Url::parse(&authorize).map_err(|err| failed("the sign-in page", err))?;
+    let mut link = Url::parse(&authorize)
+        .map_err(|err| failed("The server's sign-in page isn't valid.", err))?;
     {
         let mut query = link.query_pairs_mut();
         query
@@ -513,7 +536,7 @@ pub(crate) async fn sign_in(
     open(link.as_str());
     let code = tokio::time::timeout(SIGN_IN_WAIT, callback(listener, &state))
         .await
-        .map_err(|_| OAuthError::Failed("the sign-in wasn't finished in 5 minutes".into()))??;
+        .map_err(|_| OAuthError::TimedOut)??;
     let answer = token_request(
         http,
         &found.auth.token_endpoint,
@@ -538,6 +561,7 @@ pub(crate) async fn sign_in(
         client_id: Some(client_id),
         client_secret: client.client_secret,
         token_endpoint: Some(found.auth.token_endpoint),
+        since: Some(now_ms()),
         found: Found::Own,
     })
 }

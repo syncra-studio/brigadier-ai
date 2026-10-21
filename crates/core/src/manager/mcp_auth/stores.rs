@@ -119,6 +119,8 @@ pub(crate) struct Credential {
     pub client_secret: Option<Secret>,
     /// The authorization server's token endpoint, when the store has it.
     pub token_endpoint: Option<String>,
+    /// When the user signed in (ms since the epoch): Brigadier's own sign-ins only.
+    pub since: Option<u64>,
     pub found: Found,
 }
 
@@ -126,6 +128,7 @@ impl fmt::Debug for Credential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Credential")
             .field("expires_at", &self.expires_at)
+            .field("since", &self.since)
             .field("found", &self.found)
             .finish_non_exhaustive()
     }
@@ -404,6 +407,9 @@ struct Own {
     client_id: Option<String>,
     client_secret: Option<String>,
     token_endpoint: Option<String>,
+    /// When the user signed in (ms since the epoch).
+    #[serde(default)]
+    since: Option<u64>,
 }
 
 fn secret(value: Option<String>) -> Option<Secret> {
@@ -442,6 +448,7 @@ impl Stores {
                     client_id: own.client_id,
                     client_secret: secret(own.client_secret),
                     token_endpoint: own.token_endpoint,
+                    since: own.since,
                     found: Found::Own,
                 }))
             }
@@ -492,19 +499,23 @@ impl Stores {
                 .discovery_state
                 .and_then(|state| state.authorization_server_metadata)
                 .and_then(|metadata| metadata.token_endpoint),
+            since: None,
             found,
         }))
     }
 
     /// Whether Codex reads `store` from its Keychain and from its file, as it does: the
     /// Keychain first by default. Off macOS its keyring is one Brigadier doesn't read.
-    fn codex_backends(store: CodexStore) -> Option<(bool, bool)> {
+    fn codex_backends(store: CodexStore) -> Result<(bool, bool), StoreError> {
         let keychain = cfg!(target_os = "macos");
         match store {
-            CodexStore::Auto => Some((keychain, true)),
-            CodexStore::File => Some((false, true)),
-            CodexStore::Keyring if keychain => Some((true, false)),
-            CodexStore::Keyring | CodexStore::Other => None,
+            CodexStore::Auto => Ok((keychain, true)),
+            CodexStore::File => Ok((false, true)),
+            CodexStore::Keyring if keychain => Ok((true, false)),
+            CodexStore::Keyring => Err(StoreError::Unsupported),
+            CodexStore::Other => Err(StoreError::Failed(
+                "Codex keeps its sign-ins where Brigadier doesn't read".into(),
+            )),
         }
     }
 
@@ -516,11 +527,7 @@ impl Stores {
         store: CodexStore,
         quiet: bool,
     ) -> Result<Option<Credential>, StoreError> {
-        let Some((keychain, file)) = Self::codex_backends(store) else {
-            return Err(StoreError::Failed(
-                "Codex keeps its sign-ins where Brigadier doesn't read".into(),
-            ));
-        };
+        let (keychain, file) = Self::codex_backends(store)?;
         if keychain {
             let mut failure = None;
             for key in keys {
@@ -549,6 +556,7 @@ impl Stores {
                     client_id: item.client_id,
                     client_secret: None,
                     token_endpoint: None,
+                    since: None,
                     found: Found::CodexItem(key.clone()),
                 }));
             }
@@ -560,9 +568,17 @@ impl Stores {
         if !file {
             return Ok(None);
         }
+        // Off macOS Codex may keep it in a keyring Brigadier doesn't read, before its file.
+        let unread = || {
+            if store == CodexStore::Auto && !keychain {
+                Err(StoreError::Unsupported)
+            } else {
+                Ok(None)
+            }
+        };
         let _shared = locks::codex(&self.homes.codex_lock("file-store.lock"), true)?;
         let Some(bytes) = read_file(&self.homes.codex_file())? else {
-            return Ok(None);
+            return unread();
         };
         let picked = Pick::<CodexFileEntry> {
             keys,
@@ -571,19 +587,21 @@ impl Stores {
         .deserialize(&mut serde_json::Deserializer::from_slice(&bytes))
         .map_err(|err| failed("Codex's credentials file", err))?;
         drop(bytes);
-        Ok(picked
-            .filter(|(_, entry)| {
-                !entry.executor_owned && entry.server_url == url && entry.server_name == name
-            })
-            .map(|(key, entry)| Credential {
-                access_token: Secret::new(entry.access_token),
-                refresh_token: secret(entry.refresh_token),
-                expires_at: entry.expires_at,
-                client_id: entry.client_id,
-                client_secret: None,
-                token_endpoint: None,
-                found: Found::CodexFile(key),
-            }))
+        let Some((key, entry)) = picked.filter(|(_, entry)| {
+            !entry.executor_owned && entry.server_url == url && entry.server_name == name
+        }) else {
+            return unread();
+        };
+        Ok(Some(Credential {
+            access_token: Secret::new(entry.access_token),
+            refresh_token: secret(entry.refresh_token),
+            expires_at: entry.expires_at,
+            client_id: entry.client_id,
+            client_secret: None,
+            token_endpoint: None,
+            since: None,
+            found: Found::CodexFile(key),
+        }))
     }
 
     /// The owner's lock around renewing `place`'s sign-in, as the owning CLI takes it.
@@ -772,11 +790,17 @@ impl Stores {
                 .as_ref()
                 .map(|secret| secret.expose().to_owned()),
             token_endpoint: credential.token_endpoint.clone(),
+            since: credential.since,
         };
         let bytes = Zeroizing::new(
             serde_json::to_vec(&own).map_err(|err| failed("Brigadier's sign-in", err))?,
         );
         self.keychain
             .set(OWN_SERVICE, &sha256_hex(identity), &bytes)
+    }
+
+    /// Deletes Brigadier's own sign-in to the server `identity` names, if it has one.
+    pub(crate) fn remove_own(&self, identity: &str) -> Result<(), StoreError> {
+        self.keychain.remove_own(&sha256_hex(identity))
     }
 }

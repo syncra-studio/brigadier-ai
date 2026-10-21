@@ -20,18 +20,18 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use brigadier_providers::{McpServer, McpTransport, ProviderKind, SwitchedOff};
 use brigadier_registry::{
-    Agent, Catalog, FindError, OAuthClient, Owner, Probe, Registry, Roots, Secret, Server, Session,
-    SignIn, SignInStores, Transport, identity, owner_agent,
+    Agent, Catalog, CodexStore, FindError, OAuthClient, Owner, Probe, Registry, Roots, Secret,
+    Server, Session, SignIn, SignInStores, Transport, identity, owner_agent,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::SessionManager;
-use super::mcp_auth::{Homes, McpSignInStatus, Place, Prober, Route};
+use super::mcp_auth::{Homes, McpSignInStatus, Open, Place, Prober, Route};
 use crate::model::{ConversationId, ProjectId, Settings};
 use crate::{Error, Result};
 
@@ -88,11 +88,18 @@ pub struct McpServerView {
     /// A remote server that signs in with OAuth: how each agent's workers in the project are
     /// signed in to it. `None`: it doesn't sign in.
     pub sign_in: Option<SignInView>,
+    /// The sign-in in Brigadier to it waiting for the user, if one is: its id, as
+    /// `SignInMcpServer` gave it.
+    pub pending_sign_in: Option<String>,
     /// The agents whose workers in the project have it by themselves; any other gets it only
     /// when a task names it.
     pub native_to: Vec<ProviderKind>,
     /// Switched off for Brigadier: no thread or worker gets it.
     pub off: bool,
+    /// The same for two copies of one server (with the same name and project): a hash of its
+    /// transport with its environment and header values, keyed afresh at each daemon start, so
+    /// it tells no value.
+    pub copy_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -136,29 +143,105 @@ pub enum SignInState {
     Native,
     /// The sign-in another agent stored can serve it.
     ReusableFrom { agent: ProviderKind },
-    /// Brigadier's own sign-in serves it, to every agent.
-    InBrigadier,
+    /// Brigadier's own sign-in serves it, to every agent: made at `since_ms` (ms since the
+    /// epoch), when known.
+    InBrigadier { since_ms: Option<i64> },
     /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
     Needed,
-    /// Not known: a store couldn't be read without asking the user, or they said no.
+    /// Not known yet: a store couldn't be read without asking the user, or it failed.
     Unknown,
+    /// `agent`'s stored sign-in can't be reused: macOS wasn't allowed to let Brigadier read
+    /// it. `AskMcpSignInAgain` reads it again.
+    NotAllowed { agent: ProviderKind },
+    /// Sign-ins to it can't be checked or kept on this system.
+    Unsupported,
 }
 
-impl From<SignIn> for SignInState {
-    fn from(sign_in: SignIn) -> Self {
+fn provider(agent: Agent) -> ProviderKind {
+    match agent {
+        Agent::Claude => ProviderKind::Claude,
+        Agent::Codex => ProviderKind::Codex,
+    }
+}
+
+impl SignInState {
+    /// `sign_in`, with when Brigadier's own sign-in was made (ms since the epoch).
+    fn of(sign_in: SignIn, since: Option<u64>) -> Self {
         match sign_in {
             SignIn::Native => Self::Native,
             SignIn::ReusableFrom(agent) => Self::ReusableFrom {
-                agent: match agent {
-                    Agent::Claude => ProviderKind::Claude,
-                    Agent::Codex => ProviderKind::Codex,
-                },
+                agent: provider(agent),
             },
-            SignIn::InBrigadier => Self::InBrigadier,
+            SignIn::InBrigadier => Self::InBrigadier {
+                since_ms: since.and_then(|ms| i64::try_from(ms).ok()),
+            },
             SignIn::Needed => Self::Needed,
             SignIn::Unknown => Self::Unknown,
+            SignIn::NotAllowed(agent) => Self::NotAllowed {
+                agent: provider(agent),
+            },
+            SignIn::Unsupported => Self::Unsupported,
         }
     }
+}
+
+/// `pairs` with their values, in order.
+fn sorted(pairs: &[(String, Secret)]) -> Vec<(&str, &str)> {
+    let mut pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.expose()))
+        .collect();
+    pairs.sort_unstable();
+    pairs
+}
+
+/// [`McpServerView::copy_key`] of `transport`.
+fn copy_key(transport: &Transport) -> String {
+    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
+    let key = KEY.get_or_init(|| {
+        let mut key = [0; 32];
+        key[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        key[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        key
+    });
+    let mut hasher = blake3::Hasher::new_keyed(key);
+    let mut part = |text: &str| {
+        hasher.update(&(text.len() as u64).to_le_bytes());
+        hasher.update(text.as_bytes());
+    };
+    match transport {
+        Transport::Stdio {
+            command, args, env, ..
+        } => {
+            part("stdio");
+            part(command);
+            part(&args.len().to_string());
+            for arg in args {
+                part(arg);
+            }
+            let env = sorted(env);
+            part(&env.len().to_string());
+            for (name, value) in env {
+                part(name);
+                part(value);
+            }
+            part(
+                &transport
+                    .working_dir()
+                    .map(|dir| dir.display().to_string())
+                    .unwrap_or_default(),
+            );
+        }
+        Transport::Http { url, headers } => {
+            part("http");
+            part(url);
+            for (name, value) in sorted(headers) {
+                part(name);
+                part(value);
+            }
+        }
+    }
+    hasher.finalize().to_hex()[..32].to_owned()
 }
 
 /// One skill folder, wherever it is found.
@@ -228,6 +311,12 @@ fn worker_session<'a>(provider: ProviderKind, project: Option<&'a Path>) -> Sess
     }
 }
 
+/// The project whose setup a worker of a session in `repo` loads: only one with a checkout of
+/// it starts in it.
+fn worker_project(repo: Option<&Path>, has_checkout: bool) -> Option<&Path> {
+    repo.filter(|_| has_checkout)
+}
+
 /// The agents whose workers in `project` have `server` by themselves.
 fn server_native_to(
     catalog: &Catalog,
@@ -245,7 +334,7 @@ pub(crate) fn view(
     catalog: &Catalog,
     project: Option<&Path>,
     settings: &Settings,
-    stores: &dyn SignInStores,
+    stores: &Prober<'_>,
 ) -> IntegrationsView {
     let names = |pairs: &[(String, brigadier_registry::Secret)]| {
         pairs.iter().map(|(name, _)| name.clone()).collect()
@@ -279,14 +368,19 @@ pub(crate) fn view(
                 let state = |provider| {
                     catalog
                         .sign_in(server, &worker_session(provider, project), stores)
-                        .map(SignInState::from)
+                        .map(|sign_in| SignInState::of(sign_in, stores.signed_in_at(server)))
                 };
                 state(ProviderKind::Claude)
                     .zip(state(ProviderKind::Codex))
                     .map(|(claude, codex)| SignInView { claude, codex })
             },
+            pending_sign_in: server
+                .signs_in
+                .then(|| stores.pending_sign_in(server))
+                .flatten(),
             native_to: server_native_to(catalog, server, project),
             off: settings.mcp_servers_off.contains(&server.id),
+            copy_key: copy_key(&server.transport),
         })
         .collect();
     let skills = catalog
@@ -343,6 +437,12 @@ pub(crate) fn view(
     }
 }
 
+fn switched_off_error(entry: &str) -> String {
+    format!(
+        "integration `{entry}` is switched off for Brigadier (the user's setting): no worker gets it"
+    )
+}
+
 /// The ids of the servers `entries` name (a name or an id each), or why one can't be given.
 pub(crate) fn resolve(
     catalog: &Catalog,
@@ -360,6 +460,12 @@ pub(crate) fn resolve(
             !settings.mcp_servers_off.contains(&server.id)
         }) {
             Ok(server) => server,
+            // Only switched-off servers have the name.
+            Err(FindError::Unknown)
+                if !matches!(catalog.find_among(entry, |_| true), Err(FindError::Unknown)) =>
+            {
+                return Err(switched_off_error(entry));
+            }
             Err(FindError::Unknown) => {
                 let mut known: Vec<&str> = catalog
                     .servers
@@ -392,9 +498,7 @@ pub(crate) fn resolve(
             ));
         }
         if settings.mcp_servers_off.contains(&server.id) {
-            return Err(format!(
-                "integration `{entry}` is switched off for Brigadier (the user's setting): no worker gets it"
-            ));
+            return Err(switched_off_error(entry));
         }
         if !ids.contains(&server.id) {
             ids.push(server.id.clone());
@@ -923,35 +1027,37 @@ impl SessionManager {
         .await
     }
 
-    /// Starts a sign-in in Brigadier to the server `server_id` (of `project`'s catalog, when
-    /// given and trusted), in the user's browser (`open`): its id at once, for
-    /// [`Self::mcp_sign_in`]. The sign-in then serves every agent's workers.
-    pub async fn sign_in_mcp_server(
+    /// `project`'s first repository, when given: refused while the user doesn't trust its
+    /// folder.
+    fn trusted_project_repo(&self, project: Option<ProjectId>) -> Result<Option<PathBuf>> {
+        let Some(id) = project else {
+            return Ok(None);
+        };
+        let project = self.core.project(&id)?;
+        let repo = project
+            .repos
+            .first()
+            .map(|repo| repo.path.clone())
+            .ok_or_else(|| Error::Invalid("the project has no repository".into()))?;
+        if !project.counts_trusted(&repo) {
+            return Err(Error::Invalid(
+                "the project's folder isn't trusted: its servers aren't read".into(),
+            ));
+        }
+        Ok(Some(PathBuf::from(repo)))
+    }
+
+    /// The server `server_id` that signs in with OAuth, of `project`'s catalog when given and
+    /// trusted (else the user's), with that catalog.
+    async fn signing_server(
         &self,
         server_id: &str,
         project: Option<ProjectId>,
-        open: Arc<dyn Fn(&str) + Send + Sync>,
-    ) -> Result<String> {
-        let repo = match project {
-            Some(id) => {
-                let project = self.core.project(&id)?;
-                let repo = project
-                    .repos
-                    .first()
-                    .map(|repo| repo.path.clone())
-                    .ok_or_else(|| Error::Invalid("the project has no repository".into()))?;
-                if !project.counts_trusted(&repo) {
-                    return Err(Error::Invalid(
-                        "the project's folder isn't trusted: its servers aren't read".into(),
-                    ));
-                }
-                Some(PathBuf::from(repo))
-            }
-            None => None,
-        };
+    ) -> Result<(Catalog, Server)> {
+        let repo = self.trusted_project_repo(project)?;
         let registry = self.registry();
         let server_id = server_id.to_owned();
-        let (server, homes) = super::blocking(move || {
+        super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
             let server = catalog
                 .server(&server_id)
@@ -963,15 +1069,43 @@ impl SessionManager {
                     server.name
                 )));
             }
-            Ok((server, Homes::new(registry.roots())))
+            Ok((catalog, server))
         })
-        .await?;
+        .await
+    }
+
+    /// Where Brigadier keeps its own sign-in to `server`.
+    fn own_place(server: &Server) -> Result<Place> {
+        Place::of(Owner::Brigadier, server, CodexStore::default())
+            .ok_or_else(|| Error::Invalid(format!("`{}` isn't a remote server", server.name)))
+    }
+
+    /// Starts a sign-in in Brigadier to the server `server_id` (of `project`'s catalog, when
+    /// given and trusted), in the user's browser (`open`): its id at once, for
+    /// [`Self::mcp_sign_in`]. The sign-in then serves every agent's workers. One already
+    /// waiting for the server is kept: its page opens again and its id comes back.
+    pub async fn sign_in_mcp_server(
+        &self,
+        server_id: &str,
+        project: Option<ProjectId>,
+        open: Open,
+    ) -> Result<String> {
+        if !self.mcp_auth.keeps_sign_ins() {
+            return Err(Error::Invalid(
+                "Sign-ins can't be kept on this system: Brigadier keeps them in the macOS Keychain."
+                    .into(),
+            ));
+        }
+        let (_, server) = self.signing_server(server_id, project).await?;
+        let homes = Homes::new(self.registry().roots());
         let auth = self.mcp_auth.clone();
-        let id = auth.begin_sign_in();
-        let running = id.clone();
-        self.spawn(async move {
-            auth.sign_in(&running, &server, homes, &*open).await;
-        });
+        let (id, cancelled) = auth.begin_sign_in(Self::own_place(&server)?, open);
+        if let Some(cancelled) = cancelled {
+            let running = id.clone();
+            self.spawn(async move {
+                auth.sign_in(&running, &server, homes, cancelled).await;
+            });
+        }
         Ok(id)
     }
 
@@ -980,6 +1114,70 @@ impl SessionManager {
         self.mcp_auth
             .sign_in_status(id)
             .ok_or_else(|| Error::Invalid(format!("no sign-in `{id}`")))
+    }
+
+    /// Stops sign-in `id` while it waits for the browser: nothing is kept, and it reads as
+    /// cancelled.
+    pub fn cancel_mcp_sign_in(&self, id: &str) -> Result<()> {
+        self.mcp_auth.cancel_sign_in(id).map_err(Error::Invalid)
+    }
+
+    /// Opens sign-in `id`'s page in the browser again, while it waits.
+    pub fn reopen_mcp_sign_in(&self, id: &str) -> Result<()> {
+        self.mcp_auth.reopen_sign_in(id).map_err(Error::Invalid)
+    }
+
+    /// Deletes Brigadier's own sign-in to the server `server_id`, if it has one: never Claude's
+    /// or Codex's.
+    pub async fn sign_out_mcp_server(
+        &self,
+        server_id: &str,
+        project: Option<ProjectId>,
+    ) -> Result<()> {
+        let (_, server) = self.signing_server(server_id, project).await?;
+        let homes = Homes::new(self.registry().roots());
+        self.mcp_auth
+            .sign_out(&Self::own_place(&server)?, homes)
+            .await
+            .map_err(Error::Invalid)
+    }
+
+    /// Reads the agents' stored sign-ins to the server `server_id` again, though the user
+    /// refused it before: macOS asks them again. Returns at once; the catalog shows the
+    /// outcome.
+    pub async fn ask_mcp_sign_in_again(
+        &self,
+        server_id: &str,
+        project: Option<ProjectId>,
+    ) -> Result<()> {
+        let (catalog, server) = self.signing_server(server_id, project).await?;
+        let (registry, auth) = (self.registry(), self.mcp_auth.clone());
+        let id = identity(&server.transport);
+        let entries: Vec<(Agent, Server)> = catalog
+            .servers
+            .into_iter()
+            .filter(|entry| entry.signs_in && identity(&entry.transport) == id)
+            .filter_map(|entry| Some((owner_agent(entry.source)?, entry)))
+            .collect();
+        let asking = auth.prober(registry.roots(), catalog.codex_store, false);
+        let places: Vec<Place> = entries
+            .iter()
+            .filter_map(|(agent, entry)| asking.place((*agent).into(), entry))
+            .collect();
+        drop(asking);
+        auth.ask_again(&places);
+        let codex_store = catalog.codex_store;
+        self.spawn(async move {
+            let _ = super::blocking(move || {
+                let asking = auth.prober(registry.roots(), codex_store, false);
+                for (agent, entry) in &entries {
+                    asking.probe((*agent).into(), entry);
+                }
+                Ok(())
+            })
+            .await;
+        });
+        Ok(())
     }
 
     /// The ids of the servers a task's `integrations` name, in the session's trusted project.
@@ -1021,12 +1219,15 @@ impl SessionManager {
         );
         let (ids, cwd, data_dir) = (ids.to_vec(), cwd.to_owned(), self.data_dir.clone());
         let in_checkout = checkout == Some(cwd.as_path());
+        let has_checkout = checkout.is_some();
         let made = super::blocking(move || {
+            // A task can name a server of the project, but a worker without a checkout starts
+            // without the project's setup.
             let catalog = registry.catalog(repo.as_deref());
             let session = Session {
                 agent: agent(provider),
                 cwd: &cwd,
-                project: repo.as_deref(),
+                project: worker_project(repo.as_deref(), has_checkout),
                 in_checkout,
             };
             let mut shared = Shared {

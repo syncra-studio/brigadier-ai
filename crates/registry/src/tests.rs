@@ -1210,4 +1210,30 @@ client_secret = "csecret"
         state(&stores, globex, &claude),
         Some(SignIn::ReusableFrom(Agent::Codex))
     );
+
+    // The user didn't let Brigadier read Claude's store: that comes first, before what isn't
+    // known, and a usable sign-in elsewhere still serves.
+    let stores = FakeStores::default()
+        .with(Owner::Claude, "claude:user:linear", Probe::Refused)
+        .with(Owner::Brigadier, "claude:user:linear", Probe::Unknown);
+    assert_eq!(
+        state(&stores, linear, &codex),
+        Some(SignIn::NotAllowed(Agent::Claude))
+    );
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::Native));
+    let stores = stores.with(Owner::Codex, "codex:user:lin", Probe::Usable);
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::Native));
+    assert_eq!(state(&stores, lin, &codex), Some(SignIn::Native));
+    let stores = FakeStores::default()
+        .with(Owner::Claude, "claude:user:linear", Probe::Refused)
+        .with(Owner::Brigadier, "claude:user:linear", Probe::Usable);
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::InBrigadier));
+
+    // A system whose stores Brigadier can't read: unsupported, unless something is unknown.
+    let stores = FakeStores::default()
+        .with(Owner::Claude, "claude:user:linear", Probe::Unsupported)
+        .with(Owner::Brigadier, "claude:user:linear", Probe::Unsupported);
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::Unsupported));
+    let stores = stores.with(Owner::Codex, "codex:user:lin", Probe::Unknown);
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::Unknown));
 }

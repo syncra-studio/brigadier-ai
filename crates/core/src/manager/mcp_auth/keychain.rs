@@ -2,6 +2,8 @@
 
 use zeroize::Zeroizing;
 
+use super::stores::OWN_SERVICE;
+
 /// Why a store couldn't be read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StoreError {
@@ -9,8 +11,21 @@ pub(crate) enum StoreError {
     Denied,
     /// Reading it now would ask the user (a quiet read), or another read is asking them.
     Busy,
+    /// A store Brigadier can't read or write on this system.
+    Unsupported,
     /// There is no such store here, or it failed: the reason, never a value.
     Failed(String),
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Denied => f.write_str("macOS wasn't allowed to let Brigadier read it"),
+            Self::Busy => f.write_str("the Keychain is asking the user"),
+            Self::Unsupported => f.write_str("sign-ins can't be read or kept on this system"),
+            Self::Failed(reason) => f.write_str(reason),
+        }
+    }
 }
 
 /// Generic passwords, by service and account.
@@ -29,6 +44,13 @@ pub(crate) trait Keychain: Send + Sync {
     fn update(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError>;
     /// Makes or replaces one of Brigadier's own items.
     fn set(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError>;
+    /// Deletes Brigadier's own item `account` ([`OWN_SERVICE`]), if there is one: never an item
+    /// of another service.
+    fn remove_own(&self, account: &str) -> Result<(), StoreError>;
+    /// Whether there is a Keychain here at all.
+    fn supported(&self) -> bool {
+        true
+    }
 }
 
 /// The login Keychain (macOS).
@@ -48,7 +70,7 @@ mod mac {
     use security_framework::passwords;
     use zeroize::Zeroizing;
 
-    use super::{Keychain, StoreError, System};
+    use super::{Keychain, OWN_SERVICE, StoreError, System};
 
     /// `errSecItemNotFound`.
     const NOT_FOUND: i32 = -25300;
@@ -126,28 +148,45 @@ mod mac {
             let _asking = PROMPTS.lock().unwrap_or_else(|p| p.into_inner());
             passwords::set_generic_password(service, account, data).map_err(|err| error(err.code()))
         }
+
+        fn remove_own(&self, account: &str) -> Result<(), StoreError> {
+            let _asking = PROMPTS.lock().unwrap_or_else(|p| p.into_inner());
+            match passwords::delete_generic_password(OWN_SERVICE, account) {
+                Ok(()) => Ok(()),
+                Err(err) if err.code() == NOT_FOUND => Ok(()),
+                Err(err) => Err(error(err.code())),
+            }
+        }
     }
 }
 
-/// No Keychain on this system: every store in it is unknown.
+/// No Keychain on this system: no store in it can be read or kept.
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub(crate) struct Missing;
 
 impl Keychain for Missing {
     fn get(&self, _: &str, _: &str, _: bool) -> Result<Option<Zeroizing<Vec<u8>>>, StoreError> {
-        Err(StoreError::Failed("there is no Keychain here".into()))
+        Err(StoreError::Unsupported)
     }
 
     fn exists(&self, _: &str, _: &str) -> Result<bool, StoreError> {
-        Err(StoreError::Failed("there is no Keychain here".into()))
+        Err(StoreError::Unsupported)
     }
 
     fn update(&self, _: &str, _: &str, _: &[u8]) -> Result<(), StoreError> {
-        Err(StoreError::Failed("there is no Keychain here".into()))
+        Err(StoreError::Unsupported)
     }
 
     fn set(&self, _: &str, _: &str, _: &[u8]) -> Result<(), StoreError> {
-        Err(StoreError::Failed("there is no Keychain here".into()))
+        Err(StoreError::Unsupported)
+    }
+
+    fn remove_own(&self, _: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    fn supported(&self) -> bool {
+        false
     }
 }
 
@@ -220,6 +259,14 @@ impl Keychain for Memory {
 
     fn set(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError> {
         self.put(service, account, data);
+        Ok(())
+    }
+
+    fn remove_own(&self, account: &str) -> Result<(), StoreError> {
+        self.items
+            .lock()
+            .unwrap()
+            .remove(&(OWN_SERVICE.into(), account.into()));
         Ok(())
     }
 }
