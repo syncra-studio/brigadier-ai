@@ -54,6 +54,19 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
   assert.deepEqual(seen.jargon, []);
 });
 
+// On Windows Install is Connect, as in Settings › Providers: the agent's own installer runs, the
+// card says so and waits, then waits for the sign-in and turns Connected. No guide opens.
+test("onboarding: on Windows Install installs and signs in", { timeout: 60000 }, async (t) => {
+  const seen = parse(
+    await renderFixtureLive(t, "onboarding-agents.html?drive=1&windows=1", "onboarding-agents-result", 30000),
+  );
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen.installing, { name: "Claude Code", line: "Installing Claude Code…", action: "Waiting…" });
+  assert.deepEqual(seen.waiting, { name: "Claude Code", line: "Complete sign-in in your browser", action: "Waiting…" });
+  assert.deepEqual(seen.connected, { name: "Claude Code", line: "Max plan", action: "Connected" });
+  assert.deepEqual(seen.asked, ["connectAgent claude"]);
+});
+
 // With no agent connected, the one found on this computer comes first and Continue waits, on
 // Enter too.
 test("onboarding: no agent connected holds Continue", { timeout: 60000 }, async (t) => {

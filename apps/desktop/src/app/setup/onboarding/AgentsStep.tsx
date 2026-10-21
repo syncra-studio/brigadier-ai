@@ -16,7 +16,8 @@ import { useApp } from "@/state/store";
 // sign-in in the daemon first; ProviderKind holds only these two.
 const PROVIDERS: readonly ProviderKind[] = ["claude", "codex"];
 
-// Install opens each vendor's own install page.
+// Install opens each vendor's own install page; on Windows it is Connect (the vendor's PowerShell
+// installer, then its sign-in), as in Settings › Providers.
 const INSTALL_GUIDES: Record<ProviderKind, string> = {
   claude: "https://code.claude.com/docs/en/setup",
   codex: "https://github.com/openai/codex",
@@ -49,12 +50,14 @@ function listNames(names: readonly string[]): string {
  * first, then those found on this computer, then the rest, in the order the first check found
  * them. Each card says how its agent stands and offers the one thing it needs next: Sign in
  * (the agent's own sign-in, in the browser; the card waits until it comes back) or Install (its
- * install guide, in the browser; the agents are checked again when the window comes back).
+ * install guide, in the browser; the agents are checked again when the window comes back; on
+ * Windows the agent's own installer, then its sign-in, the card waiting meanwhile).
  * Only the cards scroll; Continue needs one connected agent.
  */
 export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
   const connected = useApp((s) => s.connection.status === "connected");
   const mac = useApp((s) => s.info?.platform === "macos");
+  const windows = useApp((s) => s.info?.platform === "windows");
   const agents = useAgents();
   // The order is set once every agent has been checked, so cards don't jump as they connect.
   const [order, setOrder] = useState<readonly ProviderKind[] | null>(null);
@@ -94,7 +97,7 @@ export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onConti
         <div className="max-w-onboarding mx-auto flex w-full flex-col gap-3">
           <ul className="onboarding-agent-grid">
             {sorted.map(({ provider, overview, state }) => (
-              <AgentCard key={provider} provider={provider} overview={overview} state={state} mac={mac} />
+              <AgentCard key={provider} provider={provider} overview={overview} state={state} mac={mac} windows={windows} />
             ))}
           </ul>
           <p className="text-muted-foreground/70 text-xs">{MORE_LATER}</p>
@@ -122,11 +125,13 @@ function AgentCard({
   overview,
   state,
   mac,
+  windows,
 }: {
   provider: ProviderKind;
   overview: ProviderOverview | undefined;
   state: AgentState;
   mac: boolean;
+  windows: boolean;
 }) {
   const label = PROVIDER_LABELS[provider];
   const progress = useConnectProgress(provider);
@@ -205,6 +210,10 @@ function AgentCard({
         ) : state === "signIn" ? (
           <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
             Sign in
+          </Button>
+        ) : state === "install" && windows ? (
+          <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
+            Install
           </Button>
         ) : state === "install" ? (
           <Button
