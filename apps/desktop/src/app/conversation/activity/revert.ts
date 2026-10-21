@@ -4,13 +4,13 @@ export type Merged = Extract<OrchestratorStepKind, { type: "merged" }>;
 
 /**
  * The request Revert sends as the user's: what to take back, where, and how it went in (a pull
- * request's revert is pushed; a merge made on this Mac is taken back here).
+ * request's revert is pushed, and so is one of a merge `pushed` since; a merge only on this Mac
+ * is taken back here).
  */
-export function revertRequest(merge: Merged): string | null {
+export function revertRequest(merge: Merged, pushed = false): string | null {
   if (!merge.mergeCommit) return null;
-  return merge.pr === undefined
-    ? `Revert merge ${merge.mergeCommit.slice(0, 7)} on ${merge.base} the way it went in`
-    : revertPullRequest(merge.mergeCommit, merge.pr, merge.base);
+  if (merge.pr !== undefined) return revertPullRequest(merge.mergeCommit, merge.pr, merge.base);
+  return `Revert merge ${merge.mergeCommit.slice(0, 7)} on ${merge.base}${pushed ? " and push it" : ""} the way it went in`;
 }
 
 /** Revert's request for a pull request merged on GitHub (the merge message's, the card's). */

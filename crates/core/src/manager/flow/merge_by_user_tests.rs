@@ -372,6 +372,59 @@ async fn a_merge_brings_main_up_to_date_and_says_it_isnt_pushed() {
     flow.stop().await;
 }
 
+/// A merge made on this Mac reads not pushed until its base's upstream has it: once the merged
+/// `main` is pushed, it reads pushed (#496).
+#[tokio::test]
+async fn a_merge_reads_pushed_once_its_base_is_pushed() {
+    let (flow, _log) = session("merge-pushed").await;
+    let origin = flow.repo.with_file_name("merge-pushed-origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&flow.repo, &["fetch", "-q", "origin"]);
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    flow.say("Yes, just merge it.").await;
+    flow.until("the merge", |board| merged(board) == 1).await;
+    let board = flow.settled().await;
+    assert!(merged_upstream(&board)[0].is_some(), "merged on this Mac");
+    let commit = board
+        .orchestrator_steps
+        .iter()
+        .find_map(|step| match &step.kind {
+            OrchestratorStepKind::Merged { merge_commit, .. } => merge_commit.clone(),
+            _ => None,
+        })
+        .unwrap();
+    let pushed = || async {
+        flow.manager
+            .merge_pushed(&flow.conversation, &commit)
+            .await
+            .unwrap()
+    };
+    assert!(!pushed().await, "not pushed yet");
+    git(&flow.repo, &["push", "-q", "origin", "main"]);
+    assert!(pushed().await, "pushed");
+    assert!(
+        !flow
+            .manager
+            .merge_pushed(&flow.conversation, "0123456")
+            .await
+            .unwrap(),
+        "not a merge of this session's"
+    );
+    flow.stop().await;
+}
+
 /// The click merges, once: it is recorded with where it came from, the thread merges on its
 /// [merge], and a second finish_session on the same click is refused. Nothing was ever put on a
 /// card, and the workspace stays with its branch at the merge.

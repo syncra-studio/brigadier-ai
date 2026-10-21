@@ -207,7 +207,8 @@ pub enum Request {
     /// The open tabs that are ready or merged (their tab and workspace row states).
     GetSettledTabs,
     /// What became of a session's merge on its base since it merged: when it was reverted,
-    /// and redone after that (the Changes card's "Undone on main · ‹time›").
+    /// and redone after that (the Changes card's "Undone on main · ‹time›"), and whether it is
+    /// pushed.
     GetMergeUndo {
         conversation_id: ConversationId,
         merge_commit: String,
@@ -1459,6 +1460,9 @@ pub enum Response {
     GetMergeUndo {
         /// None: never reverted.
         undo: Option<MergeUndo>,
+        /// The merge is on its base's upstream: pushed since, if it was made on this Mac.
+        #[serde(default)]
+        pushed: bool,
     },
     CreateProject {
         project: Box<Project>,

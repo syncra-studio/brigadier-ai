@@ -117,15 +117,15 @@ export function useTurnChanged(requestIds: readonly string[]): boolean {
  * Whether the merge was taken back on its base: git shows its revert, not redone since, however
  * it was made (through the thread, whose revert lands as a merge of its own, or by hand). Until
  * git has answered, the session reading Reverted with this as its latest merge. With what git
- * shows of that revert: its time, and the commit Redo reverts.
+ * shows of that revert: its time, and the commit Redo reverts. And whether the merge is pushed.
  */
-function useReverted(merge: Merged | null): { reverted: boolean; undo: MergeUndo | null } {
+function useReverted(merge: Merged | null): { reverted: boolean; undo: MergeUndo | null; pushed: boolean } {
   const conversationId = useViewConversation()?.id ?? "";
   const settled = useSettledTabs((s) => s.byTab[conversationId]?.state === "reverted");
   const latest = useBoard((s) => s.board?.orchestratorSteps.findLast((step) => step.kind.type === "merged")?.kind as Merged | undefined);
-  const undo = useMergeUndo(conversationId, merge?.mergeCommit);
+  const { undo, pushed } = useMergeUndo(conversationId, merge?.mergeCommit);
   const reverted = !!merge && (undo !== null ? undo.redoneBy === undefined : settled && latest?.mergeCommit === merge.mergeCommit);
-  return { reverted, undo: reverted ? undo : null };
+  return { reverted, undo: reverted ? undo : null, pushed };
 }
 
 /**
@@ -213,12 +213,12 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   );
   const diff = known ?? fetched?.stat ?? null;
   const merged = merge?.merge ?? null;
-  const { reverted, undo } = useReverted(merged);
+  const { reverted, undo, pushed } = useReverted(merged);
   const finding = useOpenFinding(merged);
   // Folded by the user, else folded once reverted.
   const [fold, setFold] = useState<{ reverted: boolean; open: boolean } | null>(null);
   const open = fold && fold.reverted === reverted ? fold.open : !reverted;
-  const revertText = merged ? revertRequest(merged) : null;
+  const revertText = merged ? revertRequest(merged, pushed) : null;
   const revert = useAskRequest(conversationId ?? "", revertText);
   const redoText = merged && reverted ? redoRequest(merged, undo) : null;
   const redo = useAskRequest(conversationId ?? "", redoText);
@@ -252,7 +252,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
       : files.length > 0
         ? `Edited ${named}`
         : merged
-          ? mergeWords(merged)
+          ? mergeWords(merged, pushed)
           : "";
   const tally = (state: FileReview) => Object.values(review).filter((each) => each === state).length;
   const reviewed = [tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`].filter(Boolean).join(", ");
@@ -264,7 +264,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           reviewed || null,
           merged
             ? files.length > 0
-              ? mergeWords(merged)
+              ? mergeWords(merged, pushed)
               : `${merged.commits === 1 ? "1 commit" : `${merged.commits} commits`} from ${merged.branch}`
             : environment
               ? [`On ${environment.branch}`, ahead ? `${ahead} ${ahead === 1 ? "commit" : "commits"} ahead` : null].filter(Boolean).join(" · ")

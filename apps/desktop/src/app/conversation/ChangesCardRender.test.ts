@@ -18,7 +18,7 @@ type Look = {
 };
 type Seen = {
   error?: string;
-  cases: Record<"merged-finding" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "thread-reverted" | "branch" | "merge-only" | "waiting" | "reviewed", Look>;
+  cases: Record<"merged-finding" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "thread-reverted" | "branch" | "merge-only" | "local" | "pushed" | "waiting" | "reviewed", Look>;
   measured: {
     confirmGap: number | null;
     revertingInset: number | null;
@@ -75,6 +75,9 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
   assert.deepEqual([cases.branch.state, cases.branch.status, cases.branch.buttons], ["branch", "On three-small-improvements · 2 commits ahead", ["Discard", "Merge into main", "Fold the files"]]);
   // A merge with nothing of its own counted: the merge's card.
   assert.deepEqual([cases["merge-only"].title, cases["merge-only"].status, cases["merge-only"].buttons], ["Merged into main", "2 commits from brigadier/due-dates", ["Revert", "View changes"]]);
+  // Made on this Mac: it says so until git shows its base's upstream has it (#496).
+  assert.equal(cases.local.title, "Merged into main on this Mac");
+  assert.equal(cases.pushed.title, "Merged into main");
   // Waiting for review: Undo All, Keep All, Review Changes. Reviewed: Discard and Merge again.
   assert.deepEqual([cases.waiting.title, cases.waiting.status, cases.waiting.buttons], ["6 Files", "3 to review", ["Undo All", "Keep All", "Review Changes", "Fold the files"]]);
   assert.deepEqual(
@@ -95,6 +98,7 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
     "Revert merge c1c1c1c on main the way it went in",
     "Merge three-small-improvements into main",
     "Redo merge e1e1e1e on main: revert its revert d0d0d0d the way it went in",
+    "Revert merge b2b2b2b on main and push it the way it went in",
   ]);
 });
 

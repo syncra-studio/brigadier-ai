@@ -1351,6 +1351,9 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
             merge_commit,
         } => Response::GetMergeUndo {
             undo: sessions.merge_undo(&conversation_id, &merge_commit).await?,
+            pushed: sessions
+                .merge_pushed(&conversation_id, &merge_commit)
+                .await?,
         },
         _ => unreachable!("only tab requests come here"),
     })
