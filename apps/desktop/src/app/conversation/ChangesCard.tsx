@@ -9,7 +9,7 @@ import { isFinal } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { ChangesFileRow } from "@/app/conversation/ChangesFileRow";
 import { PRIMARY, QUIET } from "@/app/conversation/changesPills";
-import { mergeStats } from "@/app/conversation/ComposerCapsule";
+import { mergeStats } from "@/app/conversation/mergeStats";
 import { Counts } from "@/app/conversation/Counts";
 import { MergeWarningRow } from "@/app/conversation/MergeWarningRow";
 import { RevertConfirmRow } from "@/app/conversation/RevertConfirmRow";

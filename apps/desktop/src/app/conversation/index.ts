@@ -1,9 +1,12 @@
 // The Conversation surface's own parts (the app.pen Conversation boards), one file each.
 // Other screens import these from here only.
 
+export * from "./Capsule";
+export * from "./CapsulePill";
 export * from "./CardDictate";
 export * from "./ChangesFileRow";
 export * from "./ChoiceCard";
+export * from "./CiPill";
 export * from "./ComposerCard";
 export * from "./ComposerContextRing";
 export * from "./ComposerFooter";
@@ -14,14 +17,21 @@ export * from "./DictateButton";
 export * from "./DictationBar";
 export * from "./DictationNote";
 export * from "./DictationWaveform";
+export * from "./DiffPill";
+export * from "./FoldedCountBadge";
 export * from "./FullAccessNotice";
 export * from "./ImplementPlanAction";
+export * from "./MergePill";
 export * from "./MergeWarningRow";
 export * from "./OvernightAction";
 export * from "./PhasePlanAction";
 export * from "./PlanAction";
 export * from "./QuestionAction";
 export * from "./ReplyButton";
+export * from "./RequestCapsule";
 export * from "./RevertConfirmRow";
+export * from "./RunCapsule";
 export * from "./SendControls";
+export * from "./StatusSlotToggle";
+export * from "./StepList";
 export * from "./UtilityBar";

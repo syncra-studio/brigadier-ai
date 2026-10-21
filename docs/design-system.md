@@ -151,9 +151,9 @@ table is the current one.
 | Glyphs & indicators | `WorkerGlyph` | `app/conversation/WorkerChip.tsx` | `WorkerGlyph` | in app |
 | Glyphs & indicators | `SidebarActivityMark/Working`, `/Unread`, `SidebarError`, `SessionStatusLabel` | `app/shell/SessionStatus.tsx` | `SidebarActivityMark`, `SidebarError`, `SessionStatusLabel` | in app |
 | Glyphs & indicators | `StateIcon/Running`, `StateIcon/Paused` | `app/conversation/Activities.tsx` | `StateIcon` (file-local) | in app |
-| Glyphs & indicators | `Donut` | `app/conversation/ComposerCapsule.tsx` | `Donut` (file-local) | in app |
+| Glyphs & indicators | `Donut` | `components/conversation/elements/donut.tsx` | `Donut` | |
 | Glyphs & indicators | `StepGlyph/Done`, `Failed`, `Stopped`, `Pending` | `components/conversation/elements/step-glyph.tsx` | `StepGlyph` | |
-| Glyphs & indicators | `CiGlyph/Passed` | `app/conversation/ComposerStatusSlot.tsx` | `CiGlyph` (file-local) | in app |
+| Glyphs & indicators | `CiGlyph/Passed` | `components/conversation/elements/ci-glyph.tsx` | `CiGlyph` | |
 | Glyphs & indicators | `MockupTabIcon` | `app/conversation/MockupTabIcon.tsx` | `MockupTabIcon` | in app |
 | Glyphs & indicators | `FaviconGlyph/Globe`, `Favicon`, `Loading`, `Loading with favicon` | `app/conversation/BrowserTabIcon.tsx` | `FaviconGlyph`, `BrowserTabIcon` | in app |
 | Glyphs & indicators | `SiteIcon/Globe`, `SiteIcon/Favicon` | `app/side-panel/NewTabTools.tsx` | `SiteIcon` (file-local) | in app |
@@ -277,6 +277,16 @@ table is the current one.
 | Settings (settings.pen) | `#653 AboutSection › inline: version value` | `app/settings/VersionValue.tsx` | `VersionValue` | |
 | Settings (settings.pen) | `#654 HibernateRow` | `app/settings/HibernateRow.tsx` | `HibernateRow` | |
 | Settings (settings.pen) | `#675 Picture (sidebar closed preview)` | `app/settings/SidebarClosedPicture.tsx` | `SidebarClosedPicture` | |
+| Conversation (app.pen) | `#302 Pill (ComposerCapsule)` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
+| Conversation (app.pen) | `#303 StepList` | `app/conversation/StepList.tsx` | `StepList` | |
+| Conversation (app.pen) | `#305 RunCapsule` | `app/conversation/RunCapsule.tsx` | `RunCapsule` | |
+| Conversation (app.pen) | `#306 Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
+| Conversation (app.pen) | `#307 RequestCapsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
+| Conversation (app.pen) | `#308 DiffPill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
+| Conversation (app.pen) | `#310 Toggle (ComposerStatusSlot)` | `app/conversation/StatusSlotToggle.tsx` | `StatusSlotToggle` | |
+| Conversation (app.pen) | `#311 CiPill` | `app/conversation/CiPill.tsx` | `CiPill` | |
+| Conversation (app.pen) | `#312 MergePill` | `app/conversation/MergePill.tsx` | `MergePill` | |
+| Conversation (app.pen) | `#314 ComposerStatusSlot › inline: folded count badge` | `app/conversation/FoldedCountBadge.tsx` | `FoldedCountBadge` | |
 
 ## Icons
 
