@@ -81,10 +81,10 @@ that draw nothing may name the file.
 | Folder | foundations.pen board | What it holds |
 |---|---|---|
 | `icons/` | Icons | every icon, one folder per section (see Icons below) |
-| `controls/` | Primitives · Controls | button, icon button, badge, input, checkbox, switch, segmented, tabs, toggle, toggle group, key chip |
+| `controls/` | Primitives · Controls | button, icon button, badge, input, checkbox, switch, segmented, tabs, toggle, toggle group, key chip, source count badge |
 | `overlays/` | Primitives · Menus, popovers & dialogs | dialog, confirm dialog, popover, dropdown and context menus, tooltip, toast |
 | `layout/` | ScrollFade (Menus board), Skeleton (Controls board) | sidebar, sidebar layout, collapsible, scroll fade, skeleton |
-| `shared/` | Shared app parts | settings card and search, state dot, usage bar, banner, empty state, titlebar button, copy button, model selector, progress line, labeled divider |
+| `shared/` | Shared app parts | settings card and search, state dot, usage bar, banner, empty state, titlebar button, copy button, model selector, progress line, labeled divider, terminal button, site icon |
 | `conversation/` | (app.pen Conversation boards) | the conversation kit: thread, message rail, markdown, code blocks, composer parts, transcript; `kit.ts` is the one door to the chat library |
 | `views/<view>/` | (on their surface's boards) | views built on a drawing library, each its own folder so it loads on demand: `terminal` (xterm), `diff` (@pierre/diffs), `brain-graph` (sigma), `page-editor` (lexical) |
 
@@ -156,15 +156,15 @@ table is the current one.
 | Glyphs & indicators | `CiGlyph/Passed` | `components/conversation/elements/ci-glyph.tsx` | `CiGlyph` | |
 | Glyphs & indicators | `MockupTabIcon` | `app/conversation/MockupTabIcon.tsx` | `MockupTabIcon` | in app |
 | Glyphs & indicators | `FaviconGlyph/Globe`, `Favicon`, `Loading`, `Loading with favicon` | `app/conversation/BrowserTabIcon.tsx` | `FaviconGlyph`, `BrowserTabIcon` | in app |
-| Glyphs & indicators | `SiteIcon/Globe`, `SiteIcon/Favicon` | `app/side-panel/NewTabTools.tsx` | `SiteIcon` (file-local) | in app |
+| Glyphs & indicators | `SiteIcon/Globe`, `SiteIcon/Favicon` | `components/shared/site-icon.tsx` | `SiteIcon` | its look is the New tab's `new-tab-site-icon` class (`app/side-panel/NewTabTools.css`) |
 | Glyphs & indicators | `Counts` | `app/conversation/Counts.tsx` | `Counts` (`dim`, `quiet`) | in app |
-| Glyphs & indicators | `SourceCountBadge` | `app/side-panel/WorkspacePane.tsx` | — (inline `data-slot="source-count"` span) | in app |
+| Glyphs & indicators | `SourceCountBadge` | `components/controls/source-count-badge.tsx` | `SourceCountBadge` (`count`) | |
 | Glyphs & indicators | `Share` | `app/shell/BarStatus.tsx` | `Share` (file-local) | in app |
 | Shared app parts | `TitlebarNav` | `app/shell/AppSidebar.tsx` | `TitlebarNav` | in app |
 | Shared app parts | `RowAction`, `RowActionsSlot` | `app/shell/sidebar/nav.tsx`, `app/shell/AppSidebar.tsx` | `rowAction` (class string), `RowActionsSlot` (file-local) | in app |
 | Shared app parts | `ConversationRow` | `app/shell/AppSidebar.tsx` | `ConversationRow` (file-local, on `navRow`) | in app |
 | Shared app parts | `SidebarToggle/Open` | `app/shell/SidebarToggle.tsx` | `SidebarToggle` | in app |
-| Shared app parts | `TerminalButton` | `app/side-panel/SidePanel.tsx` | `TerminalButton` | in app |
+| Shared app parts | `TerminalButton` | `components/shared/terminal-button.tsx` | `TerminalButton` | |
 | Shared app parts | `NavHeader`, `NavSection` | `app/shell/sidebar/nav.tsx` | `NavHeader`, `NavSection` | in app |
 | Shared app parts | `CopyButton` | `components/shared/copy-button.tsx` | `CopyButton` | |
 | Shared app parts | `ModelSelector` | `components/shared/model-selector.tsx` | `ModelSelector` | |
@@ -189,6 +189,7 @@ table is the current one.
 | Side panel (app.pen) | `#481 EntryView` | `app/side-panel/EntryView.tsx` | `EntryView` | |
 | Side panel (app.pen) | `#484 Brief` | `app/side-panel/WorkerBrief.tsx` | `WorkerBrief` | |
 | Side panel (app.pen) | `#486 Answer (worker report)` | `app/side-panel/WorkerAnswer.tsx` | `WorkerAnswer` | |
+| Side panel (app.pen) | `#490 WorkspacePane › view icon tab row` | `app/side-panel/PaneViewTabs.tsx` | `PaneViewTabs` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |

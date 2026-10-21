@@ -1,26 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { TooltipIconButton } from "@/components/controls";
-import { BarItem } from "@/app/shell/BarItem";
 import { useWorkspacePane } from "@/app/side-panel/WorkspacePane";
 import { useRightSidebar } from "@/app/side-panel/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
-import { Dock } from "@/components/icons";
 import { tokenPx } from "@/lib/tokens";
 import { takePaneClose } from "@/state/closedPanes";
-import { HOME_PLACE, placeOf, terminalWorksHere, toggleTerminal, undoTabClose, useTerminalPlaces } from "@/state/terminalPlaces";
+import { HOME_PLACE, undoTabClose } from "@/state/terminalPlaces";
 import { useApp } from "@/state/store";
 import { clearWorkerPanelAsk, useWorkerPanelAsk } from "@/state/workerPanel";
 import { columnsFit } from "@/state/workspacePane";
 
-export function shortcutLabel(keys: string, mac: boolean): string {
-  return mac
-    ? keys
-    : keys
-        .replace("⌃", "Ctrl+")
-        .replace("⌥", "Alt+")
-        .replace("⇧", "Shift+")
-        .replace("⌘", "Ctrl+");
-}
+export { shortcutLabel } from "@/app/side-panel/shortcutLabel";
 
 /**
  * Shared right-sidebar selection and shortcuts; there is no legacy side-panel slot. `workers`
@@ -90,25 +79,6 @@ function columnWidth(slot: string): number {
 function bothColumnsFit(): boolean {
   const left = document.querySelector('[data-slot="sidebar-panel"]')?.getBoundingClientRect().width ?? 0;
   return columnsFit(window.innerWidth, left, tokenPx("--spacing-sidebar-thread-min"), columnWidth("right-sidebar"), columnWidth("workspace-pane"));
-}
-
-export function TerminalButton() {
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const works = useApp(terminalWorksHere);
-  const place = useApp((s) => placeOf(s.selection));
-  const open = useTerminalPlaces((s) => s.places[place]?.open ?? false);
-  return (
-    <BarItem show={works}>
-      <TooltipIconButton look="toolbar"
-        tooltip="Terminal"
-        shortcut={shortcutLabel("⌘J", mac)}
-        aria-pressed={open}
-        onClick={() => toggleTerminal()}
-      >
-        <Dock />
-      </TooltipIconButton>
-    </BarItem>
-  );
 }
 
 const MOTION_MS = 500;

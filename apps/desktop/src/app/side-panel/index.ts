@@ -4,6 +4,7 @@
 export * from "./AgentRow";
 export * from "./EntryView";
 export * from "./FileGlyph";
+export * from "./PaneViewTabs";
 export * from "./TabPage";
 export * from "./WorkerAnswer";
 export * from "./WorkerBrief";

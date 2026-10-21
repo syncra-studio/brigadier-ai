@@ -11,6 +11,7 @@ export * from "./segmented";
 export * from "./send-button";
 export * from "./settings-select";
 export * from "./slot";
+export * from "./source-count-badge";
 export * from "./switch";
 export * from "./tabs";
 export * from "./toggle-group";

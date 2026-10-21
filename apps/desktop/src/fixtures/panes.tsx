@@ -15,9 +15,9 @@ import { revealApp } from "@/lib/splash";
 import { WorkspacePane, WorkspacePaneContext, WorkspacePaneToggle } from "@/app/side-panel/WorkspacePane";
 import { RightSidebar, RightSidebarContext } from "@/app/side-panel/RightSidebar";
 import {
-  TerminalButton,
   useSidePanel,
 } from "@/app/side-panel/SidePanel";
+import { TerminalButton } from "@/components/shared";
 import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { newSessionTab, useSessionTabs, useSessionTabsOf, selectTab, closeTab } from "@/state/sessionTabs";
 import { TerminalPane } from "@/app/side-panel/TerminalTab";

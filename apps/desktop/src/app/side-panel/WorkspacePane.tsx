@@ -1,14 +1,13 @@
 import { createContext, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { TooltipIconButton } from "@/components/controls";
+import { PaneViewTabs } from "@/app/side-panel/PaneViewTabs";
 import { FilesTab } from "@/app/side-panel/FilesTab";
 import { ProjectDraftPane } from "@/app/side-panel/ProjectDraftPane";
 import { SearchPanel } from "@/app/side-panel/SearchPanel";
 import { SourcePanel } from "@/app/side-panel/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { SidebarGlyph } from "@/app/shell/SidebarToggle";
-import { FilesGlyph, SearchGlyph, SourceControlGlyph } from "@/components/icons";
-import { TitlebarTips } from "@/components/shared";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/layout";
 import { cn } from "@/lib/utils";
 import { browserFocus } from "@/ipc/client";
@@ -18,13 +17,6 @@ import { useBoard, useCheckoutChanges } from "@/state/board";
 import { useApp } from "@/state/store";
 import { onWorkspaceChanged, prefetchWorkspace, readSource, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
 
-
-/** The right sidebar's views, in its icon row's order. */
-const VIEWS = [
-  { id: "files", title: "Files", shortcut: "show-files", Icon: FilesGlyph },
-  { id: "search", title: "Search", shortcut: "show-search", Icon: SearchGlyph },
-  { id: "source", title: "Source", shortcut: "show-source", Icon: SourceControlGlyph },
-] as const satisfies readonly { id: WorkspacePaneTab; title: string; shortcut: string; Icon: unknown }[];
 
 export function useWorkspacePane(conversationId: string | null, projectId: string | null, enabled: boolean) {
   const id = conversationId ?? `draft:${projectId ?? "none"}`;
@@ -195,35 +187,7 @@ export function WorkspacePane() {
       style={{ "--right-sidebar-width": pane.width === null ? "var(--spacing-sidebar)" : `${pane.width}px` } as CSSProperties}>
       <SidebarReveal side="right" width="workspace-pane-width" open={open} hidden={!open} resizing={pane.resizing}>
         <div className="workspace-pane-width flex h-full min-h-0 flex-col">
-          <div role="tablist" aria-label="Right sidebar" className="h-page-toolbar bg-background flex shrink-0 items-center justify-center gap-1 px-2">
-            <TitlebarTips>
-              {VIEWS.map(({ id, title, shortcut, Icon }, index) => (
-                <TooltipIconButton look="toolbar" key={id} role="tab" id={`workspace-pane-${id}`} aria-controls="workspace-pane-content"
-                  aria-selected={pane.active === id} tabIndex={pane.active === id ? 0 : -1}
-                  className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground relative"
-                  tooltip={title} shortcut={shortcutKeys(shortcut, mac)}
-                  onClick={() => pane.select(id)}
-                  onKeyDown={(event) => {
-                    const next = event.key === "ArrowRight" ? (index + 1) % VIEWS.length
-                      : event.key === "ArrowLeft" ? (index + VIEWS.length - 1) % VIEWS.length
-                        : event.key === "Home" ? 0 : event.key === "End" ? VIEWS.length - 1 : null;
-                    if (next === null) return;
-                    event.preventDefault();
-                    const view = VIEWS[next]!;
-                    pane.select(view.id);
-                    document.getElementById(`workspace-pane-${view.id}`)?.focus();
-                  }}>
-                  <Icon />
-                  {id === "source" && pane.changed > 0 && (
-                    <span aria-hidden data-slot="source-count"
-                      className="bg-link text-background absolute -end-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-2xs leading-none tabular-nums">
-                      {pane.changed > 99 ? "99+" : pane.changed}
-                    </span>
-                  )}
-                </TooltipIconButton>
-              ))}
-            </TitlebarTips>
-          </div>
+          <PaneViewTabs active={pane.active} changed={pane.changed} mac={mac} onSelect={pane.select} />
           <div id="workspace-pane-content" role="tabpanel" aria-labelledby={`workspace-pane-${pane.active}`} data-pane={pane.active}
             className="bg-background text-sidebar-foreground rounded-ee-page flex min-h-0 flex-1 flex-col overflow-clip">
             {/* Keyed by whose files they are: one draft's list or message never shows for another. */}
