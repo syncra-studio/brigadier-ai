@@ -1433,7 +1433,7 @@ impl Drop for Scratch {
             dir: std::mem::take(&mut self.dir),
             folders,
         };
-        left.remove();
+        left.remove(1);
         let _ = LEFT.try_with(|all| all.0.try_borrow_mut().map(|mut all| all.push(left)));
     }
 }
@@ -1445,9 +1445,16 @@ struct Left {
 }
 
 impl Left {
-    fn remove(&self) {
+    /// Removes them, trying the session's folder up to `tries` times.
+    fn remove(&self, tries: u32) {
         for folder in &self.folders {
             let _ = crate::ledger::remove_test_data_folder(folder);
+        }
+        for _ in 1..tries {
+            if std::fs::remove_dir_all(&self.dir).is_ok() || !self.dir.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
@@ -1458,8 +1465,11 @@ struct Leftovers(std::cell::RefCell<Vec<Left>>);
 
 impl Drop for Leftovers {
     fn drop(&mut self) {
+        // The test's runtime is gone, but its store's threads may still be closing the
+        // database, and Windows removes no file still open: there it takes a few tries.
+        let tries = if cfg!(windows) { 100 } else { 1 };
         for left in self.0.get_mut().drain(..) {
-            left.remove();
+            left.remove(tries);
         }
     }
 }
@@ -2050,230 +2060,246 @@ impl Flow {
     }
 }
 
-#[cfg(test)]
+// Windows runs the browser tool's flows only so far: the others use Unix shells, processes
+// and permissions.
+#[cfg(unix)]
 mod accounts_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod answer_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod app_state_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod auto_merge_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod background_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod bad_tool_call_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod base_merge_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod brain_first_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod branch_prefix_tests;
-#[cfg(test)]
 mod browser_switch_tests;
 mod browser_tool_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod card_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod chat_attachments_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod chat_images_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod chat_thread_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod checks_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod claim_evidence_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod clean_up_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod commit_on_pass_tests;
 #[cfg(all(test, target_os = "macos"))]
+#[cfg(unix)]
 mod computer_host_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod constraints_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod decision_index_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod deliverable_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod ending_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod engine_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod evidence_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod fusion_tests;
+#[cfg(unix)]
 mod grilling_tests;
+#[cfg(unix)]
 mod open_in_app_tests;
+#[cfg(unix)]
 mod personal_memory_tests;
+#[cfg(unix)]
 mod terminal_run_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
+#[cfg(unix)]
 mod fault_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod findings_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod fresh_base_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod gate_fixes_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod git_writing_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod held_merge_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod honesty_tests;
 #[cfg(all(test, unix))]
+#[cfg(unix)]
 mod integrated_checks_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod interrupted_turn_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
+#[cfg(unix)]
 mod kept_output_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod lean_work_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod litter_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod local_commit_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod mcp_servers_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod memory_claims_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod mention_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod merge_by_user_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod merge_queue_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod mockup_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod near_limit_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod overnight_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod owed_tests;
+#[cfg(unix)]
 mod own_run_streams_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod page_tools_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_ask_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_boundary_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_chain_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_delivery_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_kit;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_provenance_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_reply_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_restart_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_revision_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_session_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_view_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod peer_wait_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod phase_acceptance_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod plan_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod pr_card_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod preview_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod quiet_wake_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod quota_resume_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod reads_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod rebirth_words_tests;
+#[cfg(unix)]
 mod request_changes_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod rerun_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod restart_waits_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod resume_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod review_hold_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod review_on_pass_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod review_picks_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod review_switch_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod review_tiers_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod source_branch_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
+#[cfg(unix)]
 mod same_session_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod search_tests;
+#[cfg(unix)]
 mod settings_toggles_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod spare_worktree_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod status_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod stop_hook_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod subfolder_rules_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
+#[cfg(unix)]
 mod successor_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod suggestion_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod tab_chat_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod takeover_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod thread_items_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
-#[cfg(test)]
+#[cfg(unix)]
 mod project_sessions_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod session_states_tests;
 #[cfg(all(test, debug_assertions))]
+#[cfg(unix)]
 mod thread_overflow_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod thread_scratch_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod thread_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod thread_works_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod transcript_thread_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod trim_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod trust_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod unreported_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod usage_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod user_setup_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod warm_session_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod worker_turns_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod workspace_tests;
-#[cfg(test)]
+#[cfg(unix)]
 mod worktree_copies_tests;
 
+#[cfg(unix)]
 mod watchdog_tests;

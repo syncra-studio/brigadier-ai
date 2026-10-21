@@ -152,8 +152,8 @@ impl Runtime {
     }
 
     /// [`Runtime::start`] with scripted CLIs (Claude's, then Codex's, and those of extra
-    /// accounts) in place of the real ones. Only the Unix-only flow tests use it.
-    #[cfg(all(test, unix))]
+    /// accounts) in place of the real ones. Only the flow tests use it.
+    #[cfg(test)]
     pub(crate) async fn start_faked(
         core: Arc<Core>,
         platform: Arc<dyn Platform>,

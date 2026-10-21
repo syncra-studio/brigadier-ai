@@ -45,7 +45,7 @@ pub(crate) fn review_hold(id: &ConversationId) -> Option<tokio::time::Instant> {
     if !REVIEW_WAITS.lock().unwrap().contains(id) {
         return None;
     }
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     if !BACKGROUNDED.lock().unwrap().contains(id) {
         return Some(tokio::time::Instant::now() + Duration::from_secs(600));
     }
@@ -59,7 +59,7 @@ static REVIEW_WAITS: std::sync::LazyLock<std::sync::Mutex<HashSet<ConversationId
     std::sync::LazyLock::new(Default::default);
 
 /// Session `id`'s `run_check` calls wait for their review as in the app ([`review_hold`]).
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(super) fn wait_for_reviews(id: &ConversationId) {
     REVIEW_WAITS.lock().unwrap().insert(id.clone());
 }
@@ -216,14 +216,14 @@ pub(crate) struct BackgroundRuns {
     numbering: tokio::sync::Mutex<()>,
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 static FOREGROUND_GATES: std::sync::LazyLock<
     std::sync::Mutex<HashMap<ConversationId, std::sync::Arc<tokio::sync::Notify>>>,
 > = std::sync::LazyLock::new(Default::default);
 
 /// The sessions whose commands go to the background past [`FOREGROUND`] in tests
 /// ([`let_background`]); every other session's are held in their calls to their end.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 static BACKGROUNDED: std::sync::LazyLock<std::sync::Mutex<HashSet<ConversationId>>> =
     std::sync::LazyLock::new(Default::default);
 
@@ -236,7 +236,7 @@ pub(super) fn hold_foreground(id: &ConversationId, gate: std::sync::Arc<tokio::s
 /// In tests a command answers in its own call, however loaded the machine, unless its test
 /// lets session `id`'s go to the background past [`FOREGROUND`], as they do in the app: a
 /// quick command on a loaded machine can take longer than that.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(super) fn let_background(id: &ConversationId) {
     BACKGROUNDED.lock().unwrap().insert(id.clone());
 }
@@ -317,14 +317,14 @@ impl SessionManager {
             run: None,
         };
         let handle = handoff.handle.as_mut().expect("held until handed off");
-        #[cfg(all(test, unix))]
+        #[cfg(test)]
         let gate = FOREGROUND_GATES.lock().unwrap().remove(id).or_else(|| {
             (!BACKGROUNDED.lock().unwrap().contains(id))
                 .then(|| std::sync::Arc::new(tokio::sync::Notify::new()))
         });
         let background_due = async {
             tokio::time::sleep(FOREGROUND).await;
-            #[cfg(all(test, unix))]
+            #[cfg(test)]
             if let Some(gate) = gate {
                 gate.notified().await;
             }

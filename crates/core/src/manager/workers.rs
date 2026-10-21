@@ -3886,8 +3886,8 @@ impl SessionManager {
     }
 
     /// Shortens how long a worker's question waits before its safe default may stand in (for
-    /// the flow tests, which run on unix only).
-    #[cfg(all(test, unix))]
+    /// the flow tests).
+    #[cfg(test)]
     pub(crate) fn set_question_timeout(&self, timeout: Duration) {
         self.question_timeout_ms.store(
             timeout.as_millis() as u64,

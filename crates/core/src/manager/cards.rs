@@ -50,8 +50,8 @@ impl Waiters {
         rx
     }
 
-    /// How many calls wait for card `id`: for the flow tests, which run on unix only.
-    #[cfg(all(test, unix))]
+    /// How many calls wait for card `id`, for the flow tests.
+    #[cfg(test)]
     pub(crate) fn waiting_on(&self, id: &CardId) -> usize {
         self.cards
             .lock()

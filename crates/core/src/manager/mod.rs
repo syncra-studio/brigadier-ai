@@ -52,7 +52,7 @@ mod fallback;
 pub mod fault;
 mod files;
 mod find_repos;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod flow;
 mod fork;
 mod fresh_base;
