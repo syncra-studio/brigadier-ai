@@ -1108,6 +1108,21 @@ impl Repo {
         .map_err(|_| Error::Parse("invalid commit count".into()))
     }
 
+    /// Count commits reachable from `to` but from none of `from`.
+    pub fn count_commits_beyond(&self, from: &[&Oid], to: &Oid) -> Result<u32> {
+        valid_oid(to)?;
+        let mut args = vec!["rev-list".to_owned(), "--count".to_owned(), to.0.clone()];
+        for oid in from {
+            valid_oid(oid)?;
+            args.push(format!("^{}", oid.0));
+        }
+        args.push("--".into());
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        parse::line(&self.cmd(&args, true)?)?
+            .parse()
+            .map_err(|_| Error::Parse("invalid commit count".into()))
+    }
+
     /// How many commits a merge that made `merge_commit` put on the base, for a branch that
     /// went from `from` to `head`: a merge commit or a fast-forward brings the branch's own; a
     /// rebase merge puts a copy of each on the base (`git cherry` finds them), a squash merge

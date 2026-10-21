@@ -764,7 +764,9 @@ impl SessionManager {
         )
     }
 
-    /// `tab`'s branch tip, and how many of its commits `base` lacks.
+    /// `tab`'s branch tip, and how many of its commits `base` lacks. A commit its upstream has
+    /// is not the session's: a new branch starts from the base as its remote has it, which may
+    /// be ahead of the local base (#495).
     async fn tab_tip(&self, tab: &Conversation, base: &str) -> Option<(String, u32)> {
         let Some(Setup::Session {
             repo,
@@ -785,8 +787,12 @@ impl SessionManager {
             ) else {
                 return Ok(None);
             };
+            let upstream = repo.upstream_tip(&base).map_err(super::git_error)?;
             let since = repo
-                .count_commits(&base_tip, &tip)
+                .count_commits_beyond(
+                    &[&base_tip].into_iter().chain(&upstream).collect::<Vec<_>>(),
+                    &tip,
+                )
                 .map_err(super::git_error)?;
             Ok(Some((tip.0, since)))
         })
