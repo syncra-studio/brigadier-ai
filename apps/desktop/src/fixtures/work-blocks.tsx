@@ -49,7 +49,7 @@ import type {
   ThinkingSegment,
   UserRequest,
 } from "@/ipc/generated";
-import { answerHtml } from "@/app/conversation/RequestBlock";
+import { answerHtml } from "@/app/conversation/AnswerActions";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import { fixtureClick } from "@/fixtures/input";
 import { loadConversation, openConversation } from "@/state/actions";

@@ -350,6 +350,18 @@ table is the current one.
 | Conversation (app.pen) | `#971 UsageRemaining` | `app/conversation/UsageRemaining.tsx` | `UsageRemaining` | |
 | Conversation (app.pen) | `#330 StatusCard › Row` | `app/conversation/StatusCardRow.tsx` | `StatusCardRow` | |
 | Conversation (app.pen) | `#331 StatusCard › LimitBar` | `app/conversation/LimitBar.tsx` | `LimitBar` | |
+| Conversation (app.pen) | `#160 UpdateText and 4 parts` | `app/conversation/UpdateText.tsx` | `UpdateText` | parts: `ReplyText`, `ReportText` (+ `AnswerDetails`), `DetailsFold`, `PhaseOutcome`, each in its own file |
+| Conversation (app.pen) | `#168 joined answer` | `app/conversation/JoinedAnswer.tsx` | `JoinedAnswer` | |
+| Conversation (app.pen) | `#164 SteerBubble` | `app/conversation/SteerBubble.tsx` | `SteerBubble` | |
+| Conversation (app.pen) | `#165 BlockError` | `app/conversation/BlockError.tsx` | `BlockError` | |
+| Conversation (app.pen) | `#166 usage-limit divider` | `app/conversation/UsageLimitDivider.tsx` | `UsageLimitDivider` | |
+| Conversation (app.pen) | `#170 ModelChanged` | `app/conversation/ModelChanged.tsx` | `ModelChanged` | |
+| Conversation (app.pen) | `#174 ContinuedFrom` | `app/conversation/ContinuedFrom.tsx` | `ContinuedFrom` | |
+| Conversation (app.pen) | `#171 AnswerActions and 2 parts` | `app/conversation/AnswerActions.tsx` | `AnswerActions` | parts: `JoinedAnswerActions`, `ReadAloud`, each in its own file |
+| Conversation (app.pen) | `#187 WorkHeader (RequestBlock)` | `app/conversation/WorkHeader.tsx` | `WorkHeader` | |
+| Conversation (app.pen) | `#189 CompactionBlock` | `app/conversation/CompactionBlock.tsx` | `CompactionBlock` | |
+| Conversation (app.pen) | `#190 ActivityItems` | `app/conversation/ActivityItems.tsx` | `ActivityItems` | |
+| Conversation (app.pen) | `#370 TurnEnd` | `app/conversation/TurnEnd.tsx` | `TurnEnd` | |
 
 ## Icons
 
