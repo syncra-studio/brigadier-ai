@@ -11,7 +11,6 @@ import {
   repeatComment,
   reportBody,
   reportTitle,
-  reportUrl,
 } from "@/lib/feedbackUrl";
 
 const details = { version: "0.1.0", system: "macOS 27.0 (arm64)", agents: ["Claude Code 2.1.4", "Codex 0.161.0"] };
@@ -114,37 +113,6 @@ test("an idea's issue body follows the proposal form; an empty field reads as Gi
     "### The problem\n\nChats get lost in the list.\n\n### What you do today\n\n_No response_\n\n### What should happen instead\n\nA pin on a chat.",
   ), body);
   assert.ok(!body.includes("Version"));
-});
-
-test("each report opens its own form filled in, by the forms' field ids", () => {
-  const bugUrl = new URL(reportUrl(bug, details));
-  assert.equal(bugUrl.origin + bugUrl.pathname, "https://github.com/syncra-studio/brigadier-ai/issues/new");
-  assert.deepEqual(Object.fromEntries(bugUrl.searchParams), {
-    template: "bug_report.yml",
-    title: "[Bug]: Stop leaves the tab spinning",
-    version: "0.1.0",
-    environment: "macOS 27.0 (arm64), Claude Code 2.1.4, Codex 0.161.0",
-    area: "Sessions, workers, landing or review",
-    steps: "Not given; see What happened.",
-    expected: "It stops.",
-    actual: "The tab keeps spinning after Stop.",
-    ai: "Written up by Brigadier from the reporter’s own words.",
-  });
-  assert.deepEqual(Object.fromEntries(new URL(reportUrl(idea, details)).searchParams), {
-    template: "proposal.yml",
-    title: "[Proposal]: Pin a chat",
-    problem: "Chats get lost in the list.",
-    wanted: "A pin on a chat.",
-  });
-});
-
-test("a report too long for a link is cut, its longest field first", () => {
-  const long = { ...bug, actual: "é".repeat(5000), steps: "1. Open it".repeat(50) };
-  const url = reportUrl(long, details);
-  assert.ok(url.length <= MAX_URL, `${url.length}`);
-  const params = new URL(url).searchParams;
-  assert.ok(params.get("actual")!.endsWith("…"));
-  assert.equal(params.get("expected"), "It stops.");
 });
 
 test("a repeat's comment carries its note and the versions it was seen on", () => {

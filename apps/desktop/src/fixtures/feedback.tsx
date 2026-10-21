@@ -2,12 +2,13 @@
  * Send feedback over a faked app: the sidebar's foot and the dialog, its daemon faked (a writer
  * that makes a bug, a repeat of #12 and an idea; a filer that files them as @stephen-golban).
  * ?drive=1 opens it from the foot's Help menu, writes a note, sends it, closes it while it
- * works and opens it again to what was filed, follows a link, then sends signed out, with every
+ * works and opens it again to what was filed, follows a link, then sends signed out (it signs
+ * in to GitHub with a one-time code, then files; a refused sign-in; no GitHub CLI), with every
  * filing failing (and Try again), and with no writer (one form opens), and opens a draft; it
  * writes what it saw to #feedback-result (FeedbackRender.test.ts reads it). ?look=1 sets the
  * open dialog's parts beside the app's shared ones and writes their looks to #feedback-look.
- * ?state=empty|filled|signedout|working|done|browser|failed shows the design's state, for
- * screenshots.
+ * ?state=empty|filled|signin|signin-waiting|signin-nogh|working|done|failed shows the design's
+ * state, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -60,10 +61,20 @@ const reports = [
 ];
 const opened: string[] = [];
 const asked: { method: string; text?: string; items?: FeedbackFiling[] }[] = [];
-/** The faked daemon: whether a writer runs, `gh` is signed in, and every filing fails. */
-const daemon = { writer: true, signedIn: true, failing: false, hold: null as Promise<void> | null };
+/**
+ * The faked daemon: whether a writer runs, `gh` is signed in (and installed), every filing
+ * fails, and the GitHub sign-in's answer, once given (`true`: GitHub said yes).
+ */
+const daemon = {
+  writer: true,
+  signedIn: true,
+  gh: true,
+  failing: false,
+  hold: null as Promise<void> | null,
+  approve: null as ((yes: boolean) => void) | null,
+};
 const state = params.get("state");
-if (state === "signedout" || state === "browser") daemon.signedIn = false;
+const DEVICE = "https://github.com/login/device";
 mockIPC(async (command, payload) => {
   // A round trip's wait, as over the app's IPC.
   if (command === "system_name") return new Promise((resolve) => setTimeout(() => resolve("macOS 27.0 Tahoe (aarch64)"), 50));
@@ -75,6 +86,16 @@ mockIPC(async (command, payload) => {
   if (request) asked.push(request);
   if (request?.method === "feedbackAccount") {
     return { method: request.method, signedIn: daemon.signedIn, login: daemon.signedIn ? "stephen-golban" : null };
+  }
+  if (request?.method === "startGitHubSignIn") {
+    const signIn = !daemon.gh ? { state: "noGh" } : daemon.signedIn ? { state: "signedIn" } : { state: "code", code: "WDJB-MJHT", url: DEVICE };
+    return { method: request.method, signIn };
+  }
+  if (request?.method === "waitGitHubSignIn") {
+    const yes = await new Promise<boolean>((resolve) => (daemon.approve = resolve));
+    if (!yes) throw { code: "invalid", message: "Signing in to GitHub didn’t finish. Try again." };
+    daemon.signedIn = true;
+    return { method: request.method };
   }
   if (request?.method === "writeUpFeedback") {
     await daemon.hold;
@@ -138,16 +159,10 @@ if (!params.has("drive")) {
   openFeedback(state === "empty" ? null : { kind: "bug", text: NOTE });
   if (state === "working") useFeedbackUi.setState({ sending: { phase: "working", step: { step: "writing" } } });
   if (state === "done") useFeedbackUi.setState({ sending: { phase: "done", results: RESULTS } });
-  if (state === "browser") {
-    useFeedbackUi.setState({
-      sending: {
-        phase: "done",
-        results: RESULTS.map((result) =>
-          result.outcome === "added" ? { ...result, outcome: "known" as const } : { kind: result.kind, title: result.title, outcome: "opened" as const },
-        ),
-      },
-    });
-  }
+  const code = { step: "code" as const, code: "WDJB-MJHT", url: DEVICE };
+  if (state === "signin") useFeedbackUi.setState({ sending: { phase: "signIn", signIn: { ...code, opened: false }, results: null } });
+  if (state === "signin-waiting") useFeedbackUi.setState({ sending: { phase: "signIn", signIn: { ...code, opened: true }, results: null } });
+  if (state === "signin-nogh") useFeedbackUi.setState({ sending: { phase: "signIn", signIn: { step: "noGh" }, results: null } });
   if (state === "failed") useFeedbackUi.setState({ sending: { phase: "failed", error: COULDNT_REACH, results: null } });
 }
 
@@ -272,17 +287,63 @@ function Fixture() {
       await wait(300);
       seen.stillOpen = useFeedbackUi.getState().open;
 
-      // Signed out: each new report's form opens; the repeat shows the issue it repeats.
+      // Signed out: Send signs in to GitHub first, under the note, then files on its own.
+      const signInStep = () => {
+        const step = dialog()?.querySelector('[aria-label="Sign in to GitHub"]');
+        return step ? [...step.children].map(text) : null;
+      };
       daemon.signedIn = false;
       opened.length = 0;
+      asked.length = 0;
       openFeedback();
       await wait(300);
       seen.signedOutAccount = text(dialog()?.querySelector("textarea")?.nextElementSibling);
       await write("The tab keeps spinning after Stop, and the usage bar lags. Also, let me pin a chat.");
       button("Send", dialog() ?? document)?.click();
+      await wait(300);
+      seen.signIn = [signInStep(), dialog()?.querySelector("textarea")?.readOnly, footer(), button("Send", dialog() ?? document)?.disabled];
+      button("Open GitHub", dialog() ?? document)?.click();
+      await wait(100);
+      seen.signInWaiting = [signInStep(), [...opened]];
+      daemon.approve?.(true);
       await wait(400);
-      seen.signedOut = [text(dialog()?.querySelector("h2")), text(dialog()?.querySelector("p")), sent(), opened.map((url) => new URL(url).searchParams.get("template"))];
+      seen.signedInSent = [
+        asked.filter((request) => request.method !== "feedbackAccount").map((request) => request.method),
+        text(dialog()?.querySelector("h2")),
+        sent(),
+      ];
       closeFeedback();
+
+      // GitHub refuses the sign-in: nothing is filed; Try again signs in anew.
+      daemon.signedIn = false;
+      openFeedback();
+      await wait(300);
+      await write("The tab keeps spinning after Stop.");
+      button("Send", dialog() ?? document)?.click();
+      await wait(300);
+      daemon.approve?.(false);
+      await wait(200);
+      seen.signInRefused = [text(dialog()?.querySelector('[role="alert"]')), footer()];
+      asked.length = 0;
+      button("Try again", dialog() ?? document)?.click();
+      await wait(300);
+      seen.signInAgain = [asked.map((request) => request.method), signInStep()?.[0]];
+      // Closing it stops the sign-in.
+      closeFeedback();
+      await wait(100);
+      seen.closedSignIn = asked.at(-1)?.method;
+      daemon.approve?.(false);
+
+      // No GitHub CLI: the step says so, with the command to install it; Send becomes Try again.
+      daemon.gh = false;
+      openFeedback();
+      await wait(300);
+      await write("The tab keeps spinning after Stop.");
+      button("Send", dialog() ?? document)?.click();
+      await wait(300);
+      seen.noGh = [signInStep(), footer(), button("Try again", dialog() ?? document)?.disabled];
+      closeFeedback();
+      daemon.gh = true;
       daemon.signedIn = true;
 
       // Every filing fails: the note stays, Send becomes Try again, which files only those again.
@@ -309,7 +370,7 @@ function Fixture() {
       button("Send", dialog() ?? document)?.click();
       await wait(400);
       seen.fallback = opened.map((url) => Object.fromEntries(new URL(url).searchParams));
-      seen.fallbackRows = [text(dialog()?.querySelector("p")), sent()];
+      seen.fallbackRows = [text(dialog()?.querySelector("h2")), text(dialog()?.querySelector("p")), sent()];
       closeFeedback();
       // A draft from elsewhere opens filled in.
       await wait(300);

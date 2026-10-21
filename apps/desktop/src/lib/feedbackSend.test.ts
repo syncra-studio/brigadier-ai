@@ -4,7 +4,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import type { RequestOf } from "@/ipc/client";
 import type { FeedbackFiled, FeedbackReport, FeedbackWriteUp } from "@/ipc/generated";
-import { type FeedbackStep, fileWriteUp, retry, send, writeUp as writeUpNote } from "@/lib/feedbackSend";
+import { type FeedbackStep, fileWriteUp, NOT_SIGNED_IN, retry, send, writeUp as writeUpNote } from "@/lib/feedbackSend";
 
 const details = { version: "0.1.0", system: "macOS 27.0", agents: [] };
 const sendFeedback = (text: string, kind?: "bug" | "idea") => send(details, text, kind);
@@ -93,16 +93,18 @@ test("signed in, each report is filed as the user and a repeat goes to its issue
   assert.deepEqual(opened, [], "nothing opens in the browser");
 });
 
-test("signed out, each report opens its form and a repeat shows the issue it repeats", async () => {
+test("signed out, nothing is filed and nothing opens: each report waits for a sign-in", async () => {
   writeUp = { reports: [bug, repeat], searched: true };
   signedIn = false;
   const results = await sendFeedback("The tab spins.");
-  assert.equal(results[0]!.outcome, "opened");
-  const known = results[1]!;
-  assert.equal(known.outcome, "known");
-  if (known.outcome === "known") assert.equal(known.number, 12);
-  assert.equal(opened.length, 1, "only the new report's form opens");
-  assert.equal(new URL(opened[0]!).searchParams.get("template"), "bug_report.yml");
+  assert.deepEqual(
+    results.map((result) => [result.outcome, result.outcome === "failed" ? result.reason : null]),
+    [
+      ["failed", NOT_SIGNED_IN],
+      ["failed", NOT_SIGNED_IN],
+    ],
+  );
+  assert.deepEqual(opened, [], "no form opens");
 });
 
 test("with no writer, the note opens in one form of the kind given, nothing else filled in", async () => {

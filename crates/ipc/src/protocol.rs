@@ -19,9 +19,9 @@ use brigadier_core::{
     ConflictFile, ConnectView, ConventionsExport, Conversation, ConversationActivity,
     ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
     FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
-    ForkPlace, GitState, Mention, MergeUndo, Message, MessageMatches, MessagePage, MessageQueue,
-    OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges, ProbeBurst, Project,
-    ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
+    ForkPlace, GitHubSignIn, GitState, Mention, MergeUndo, Message, MessageMatches, MessagePage,
+    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges, ProbeBurst,
+    Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
     QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
     ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
     RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
@@ -891,6 +891,14 @@ pub enum Request {
     },
     /// Send feedback: who it posts as on GitHub.
     FeedbackAccount,
+    /// Send feedback, signed out: starts signing `gh` in to GitHub (in place of one at work)
+    /// and answers with its one-time code.
+    StartGitHubSignIn,
+    /// Send feedback: waits for the GitHub sign-in at work to end; fails, in plain words, when
+    /// it didn't sign in.
+    WaitGitHubSignIn,
+    /// Send feedback: stops the GitHub sign-in at work, if any.
+    CancelGitHubSignIn,
     /// The user's answer to the thread's feedback offer (`offer_feedback`): opened on GitHub
     /// (`sent`) or dismissed.
     AnswerFeedbackOffer {
@@ -1750,11 +1758,16 @@ pub enum Response {
         results: Vec<FeedbackFiled>,
     },
     FeedbackAccount {
-        /// Whether `gh` is signed in; when it isn't, each report opens in the browser.
+        /// Whether `gh` is signed in; when it isn't, Send signs it in first.
         signed_in: bool,
         /// The GitHub login, when `gh` could say it.
         login: Option<String>,
     },
+    StartGitHubSignIn {
+        sign_in: GitHubSignIn,
+    },
+    WaitGitHubSignIn,
+    CancelGitHubSignIn,
     AnswerFeedbackOffer,
     /// What became of the Cancel, for the user.
     CancelMerge {

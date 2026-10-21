@@ -1395,6 +1395,8 @@ fn answered_beside(request: &Request) -> bool {
             | Request::WriteUpFeedback { .. }
             | Request::FileFeedback { .. }
             | Request::FeedbackAccount
+            | Request::StartGitHubSignIn
+            | Request::WaitGitHubSignIn
     )
 }
 
@@ -2163,6 +2165,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 login: account.flatten(),
             }
         }
+        Request::StartGitHubSignIn => Response::StartGitHubSignIn {
+            sign_in: heap(|| sessions.start_github_sign_in()).await?,
+        },
+        Request::WaitGitHubSignIn => {
+            heap(|| sessions.wait_github_sign_in()).await?;
+            Response::WaitGitHubSignIn
+        }
+        Request::CancelGitHubSignIn => {
+            sessions.cancel_github_sign_in();
+            Response::CancelGitHubSignIn
+        }
         Request::AnswerFeedbackOffer {
             conversation_id,
             offer_id,
@@ -2910,6 +2923,8 @@ mod tests {
             },
             Request::FileFeedback { items: Vec::new() },
             Request::FeedbackAccount,
+            Request::StartGitHubSignIn,
+            Request::WaitGitHubSignIn,
         ] {
             assert!(answered_beside(&request), "{request:?} is answered beside");
         }

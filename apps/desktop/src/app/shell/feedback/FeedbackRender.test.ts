@@ -59,16 +59,33 @@ test("send feedback files what the user wrote and lists it with its links", { ti
     "https://github.com/syncra-studio/brigadier-ai/issues/601",
   ]);
   assert.equal(seen.stillOpen, false);
-  assert.equal(seen.signedOutAccount, "You’re not signed in to GitHub, so each report opens in your browser, filled in.");
-  assert.deepEqual(seen.signedOut, [
-    "Ready to post",
-    "3 reports opened in your browser. Post each one there.",
-    [
-      "Stop leaves the tab spinningOpened in your browser",
-      "Usage bar lags after a session endsAlready reported: #12",
-      "Pin a chatOpened in your browser",
-    ],
-    ["bug_report.yml", "proposal.yml"],
+  // Signed out: Send signs in to GitHub under the note (no forms open), then files on its own.
+  assert.equal(seen.signedOutAccount, "Posts on GitHub once you sign in, with your app and macOS version.");
+  assert.deepEqual(seen.signIn, [
+    ["Sign in to GitHub so Brigadier can post your reports", "WDJB-MJHTCopy codeOpen GitHub"],
+    true,
+    ["Write it on GitHub yourself", "Send"],
+    true,
+  ]);
+  assert.deepEqual(seen.signInWaiting, [
+    ["Sign in to GitHub so Brigadier can post your reports", "WDJB-MJHTCopy codeOpen GitHub", "Waiting for GitHub…"],
+    ["https://github.com/login/device"],
+  ]);
+  assert.deepEqual(seen.signedInSent, [
+    ["startGitHubSignIn", "waitGitHubSignIn", "writeUpFeedback", "fileFeedback"],
+    "Thanks, it’s sent",
+    ["Stop leaves the tab spinning#601", "Usage bar lags after a session endsAdded to #12", "Pin a chat#603"],
+  ]);
+  assert.deepEqual(seen.signInRefused, [
+    "Signing in to GitHub didn’t finish. Try again. Your note is still here.",
+    ["Write it on GitHub yourself", "Try again"],
+  ]);
+  assert.deepEqual(seen.signInAgain, [["startGitHubSignIn", "waitGitHubSignIn"], "Sign in to GitHub so Brigadier can post your reports"]);
+  assert.equal(seen.closedSignIn, "cancelGitHubSignIn");
+  assert.deepEqual(seen.noGh, [
+    ["GitHub CLI isn’t installed. Install it, then try again.", "brew install ghCopy command"],
+    ["Write it on GitHub yourself", "Try again"],
+    false,
   ]);
   assert.deepEqual(seen.failed, [
     "The tab keeps spinning after Stop.",
@@ -89,7 +106,8 @@ test("send feedback files what the user wrote and lists it with its links", { ti
       environment: "macOS 27.0 Tahoe (aarch64), Claude Code 2.1.4",
     },
   ]);
-  assert.deepEqual(seen.fallbackRows, ["Opened in your browser. Post it there.", ["The tab keeps spinningOpened in your browser"]]);
+  // Only opened, not posted: it says so, with no row.
+  assert.deepEqual(seen.fallbackRows, ["Ready to post", "Opened in your browser. Post it there.", []]);
   assert.equal(seen.draft, "Let me pin a chat");
 });
 

@@ -178,6 +178,7 @@ export type { FreeUpProjectsReport } from "./FreeUpProjectsReport";
 export type { GateLink } from "./GateLink";
 export type { GateOwner } from "./GateOwner";
 export type { GateRole } from "./GateRole";
+export type { GitHubSignIn } from "./GitHubSignIn";
 export type { GitState } from "./GitState";
 export type { GitStyle } from "./GitStyle";
 export type { Heat } from "./Heat";

@@ -2,9 +2,17 @@ import { useEffect } from "react";
 import { create } from "zustand";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { request, systemName } from "@/ipc/client";
+import { openUrl, request, systemName } from "@/ipc/client";
 import type { FeedbackWriteUp } from "@/ipc/generated";
-import { type FeedbackResult, type FeedbackStep, fileWriteUp, retry, send, writeUp } from "@/lib/feedbackSend";
+import {
+  type FeedbackResult,
+  type FeedbackStep,
+  fileWriteUp,
+  NOT_SIGNED_IN,
+  retry,
+  send,
+  writeUp,
+} from "@/lib/feedbackSend";
 import type { FeedbackDetails, FeedbackKind } from "@/lib/feedbackUrl";
 import { useApp } from "@/state/store";
 
@@ -12,8 +20,9 @@ import { useApp } from "@/state/store";
  * Send feedback (the sidebar's foot, Help › Send Feedback…, the thread's feedback card): the
  * user only writes; Brigadier splits it into one report per bug or idea in the shape of its
  * repository's issue forms, looks for an issue it repeats, and files each as the user with
- * their `gh` (a repeat as a comment there). Without a `gh` sign-in each report's form opens in
- * the browser, filled in. With no writer to run, the note opens in one form, as it used to.
+ * their `gh` (a repeat as a comment there). Without a `gh` sign-in, Send signs it in first, in
+ * place: its one-time code and Open GitHub, then it files on its own once GitHub says yes. With
+ * no writer to run, the note opens in one form, as it used to.
  * `openFeedback` (with a draft, from elsewhere) and `sendFeedback` are what other places use.
  */
 
@@ -24,12 +33,23 @@ import { useApp } from "@/state/store";
 export type FeedbackDraft = { kind: FeedbackKind; text: string; onSent?: (results: FeedbackResult[]) => void };
 
 /**
- * Where a send is: still being written (nothing sent), at work on a step, done (each report's
- * result, some maybe failed), or failed before anything was filed (`results` when the reports
- * were written and all failed, so Try again files them again without writing them up anew).
+ * Signing in to GitHub before a send: starting, its one-time code to enter on `url` (`opened`
+ * once Open GitHub was pressed, so it shows it waits), or no GitHub CLI to sign in with.
+ */
+export type FeedbackSignIn =
+  | { step: "starting" }
+  | { step: "code"; code: string; url: string; opened: boolean }
+  | { step: "noGh" };
+
+/**
+ * Where a send is: still being written (nothing sent), signing in to GitHub first, at work on
+ * a step, done (each report's result, some maybe failed), or failed before anything was filed
+ * (`results` when the reports were written and all failed, so Try again files them again
+ * without writing them up anew). A sign-in keeps the `results` it would file again.
  */
 export type FeedbackSending =
   | { phase: "write" }
+  | { phase: "signIn"; signIn: FeedbackSignIn; results: FeedbackResult[] | null }
   | { phase: "working"; step: FeedbackStep }
   | { phase: "done"; results: FeedbackResult[] }
   | { phase: "failed"; error: string; results: FeedbackResult[] | null };
@@ -63,11 +83,19 @@ export function openFeedback(draft: FeedbackDraft | null = null): void {
   void loadAccount();
 }
 
-/** Closes it; a send at work carries on, and shows when it opens again. */
+/** The dialog's send now; one closed on (or before) is left to end on its own, unseen. */
+let dialogSend = 0;
+
+/** Closes it; a send at work carries on, and shows when it opens again. A sign-in stops. */
 export function closeFeedback(): void {
   const { sending } = useFeedbackUi.getState();
-  if (sending.phase === "working") useFeedbackUi.setState({ open: false });
-  else useFeedbackUi.setState({ open: false, draft: null, text: "", sending: { phase: "write" } });
+  if (sending.phase === "working") {
+    useFeedbackUi.setState({ open: false });
+    return;
+  }
+  if (sending.phase === "signIn") cancelSignIn();
+  dialogSend += 1;
+  useFeedbackUi.setState({ open: false, draft: null, text: "", sending: { phase: "write" } });
 }
 
 /** The note as typed; once it changes, a failed send's reports are written up from it anew. */
@@ -97,24 +125,87 @@ export function useFeedbackAccount(): FeedbackAccount | null {
   return account;
 }
 
+/** Why a sign-in to GitHub didn't sign in, in the daemon's plain words. */
+class SignInError extends Error {}
+
+/** Stops the GitHub sign-in at work (its dialog closed, its card dismissed). */
+export function cancelSignIn(): void {
+  void request({ method: "cancelGitHubSignIn" }).catch((cause: unknown) => console.warn("feedback: stopping the sign-in failed", cause));
+}
+
+/**
+ * Signs `gh` in to GitHub, showing each step with `show`: its code until GitHub says yes.
+ * False when there is no GitHub CLI (the step says so; Try again starts over); a sign-in that
+ * didn't sign in throws a `SignInError`.
+ */
+async function signIn(show: (step: FeedbackSignIn) => void): Promise<boolean> {
+  show({ step: "starting" });
+  try {
+    const { signIn: started } = await request({ method: "startGitHubSignIn" });
+    if (started.state === "noGh") {
+      show({ step: "noGh" });
+      return false;
+    }
+    if (started.state === "code") {
+      show({ step: "code", code: started.code, url: started.url, opened: false });
+      await request({ method: "waitGitHubSignIn" });
+    }
+  } catch (cause) {
+    throw new SignInError(cause instanceof Error && cause.message ? cause.message : "Signing in to GitHub didn’t finish. Try again.");
+  }
+  useFeedbackUi.setState({ account: { signedIn: true, login: null } });
+  void loadAccount();
+  return true;
+}
+
+/** Open GitHub: the sign-in's page, and from then on it shows it waits. */
+function openSignIn(sending: FeedbackSending, set: (next: FeedbackSending) => void): void {
+  if (sending.phase !== "signIn" || sending.signIn.step !== "code") return;
+  void openUrl(sending.signIn.url);
+  set({ ...sending, signIn: { ...sending.signIn, opened: true } });
+}
+
+/** The dialog's Open GitHub. */
+export function openDialogSignIn(): void {
+  openSignIn(useFeedbackUi.getState().sending, (next) => useFeedbackUi.setState({ sending: next }));
+}
+
+/** Whether a send has to sign in first: known to be signed out, or still at a sign-in step. */
+function signInFirst(sending: FeedbackSending): boolean {
+  return useFeedbackUi.getState().account?.signedIn === false || sending.phase === "signIn";
+}
+
+/** A send's results, the account marked signed out when filing found it so (Try again signs in). */
+function filed(results: FeedbackResult[]): FeedbackResult[] {
+  if (results.some((result) => result.outcome === "failed" && result.reason === NOT_SIGNED_IN)) {
+    useFeedbackUi.setState({ account: { signedIn: false, login: null } });
+  }
+  return results;
+}
+
 /** Sends the dialog's note (or files again what failed), keeping where it is in the store. */
 export function sendFromDialog(): void {
   const { text, draft, sending } = useFeedbackUi.getState();
-  const failed = sending.phase === "done" || sending.phase === "failed" ? sending.results : null;
-  const set = (next: FeedbackSending) => useFeedbackUi.setState({ sending: next });
-  set({ phase: "working", step: failed ? { step: "filing", count: failed.length } : { step: "writing" } });
-  const sent = failed
-    ? retryFeedback(failed)
-    : sendFeedback(text, draft?.kind, (step) => set({ phase: "working", step }));
-  sent.then(
+  const failed = sending.phase === "done" || sending.phase === "failed" || sending.phase === "signIn" ? sending.results : null;
+  const mine = ++dialogSend;
+  const set = (next: FeedbackSending) => {
+    if (mine === dialogSend) useFeedbackUi.setState({ sending: next });
+  };
+  const run = async (): Promise<FeedbackResult[] | null> => {
+    if (signInFirst(sending) && !(await signIn((step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
+    set({ phase: "working", step: failed ? { step: "filing", count: failed.length } : { step: "writing" } });
+    return filed(await (failed ? retryFeedback(failed) : sendFeedback(text, draft?.kind, (step) => set({ phase: "working", step }))));
+  };
+  run().then(
     (results) => {
+      if (!results) return;
       set(outcomeOf(results));
       // A Try again that filed some counts too; the caller tells a first send from a later one.
-      if (results.some((result) => result.outcome !== "failed")) draft?.onSent?.(results);
+      if (mine === dialogSend && results.some((result) => result.outcome !== "failed")) draft?.onSent?.(results);
     },
     (cause: unknown) => {
       console.warn("feedback: sending failed", cause);
-      set({ phase: "failed", error: COULDNT_REACH, results: failed });
+      set({ phase: "failed", error: cause instanceof SignInError ? cause.message : COULDNT_REACH, results: failed });
     },
   );
 }
@@ -140,26 +231,44 @@ export function draftOffer(id: string, text: string): void {
 }
 
 /**
- * Sends what the offer `id` shows (or files again what failed); `onSent` once the first was
- * filed, not again when a Try again files the rest.
+ * Sends what the offer `id` shows (or files again what failed), signing in to GitHub first
+ * when it has to; `onSent` once the first was filed, not again when a Try again files the rest.
  */
 export function sendOffer(id: string, text: string, kind: FeedbackKind, onSent: () => void): void {
   const offer = useFeedbackOffers.getState()[id];
+  const sending = offer?.sending ?? { phase: "write" };
   const written = offer?.written ?? null;
-  const filedBefore = offer?.sending.phase === "done";
-  const failed = offer?.sending.phase === "done" || offer?.sending.phase === "failed" ? offer.sending.results : null;
-  setOffer(id, { sending: { phase: "working", step: { step: "filing", count: written?.reports.length || 1 } } });
-  (failed ? retryFeedback(failed) : fileFeedback(text, kind, written)).then(
+  const filedBefore = sending.phase === "done";
+  const failed = sending.phase === "done" || sending.phase === "failed" || sending.phase === "signIn" ? sending.results : null;
+  const set = (next: FeedbackSending) => setOffer(id, { sending: next });
+  const run = async (): Promise<FeedbackResult[] | null> => {
+    if (signInFirst(sending) && !(await signIn((step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
+    set({ phase: "working", step: { step: "filing", count: failed?.length || written?.reports.length || 1 } });
+    return filed(await (failed ? retryFeedback(failed) : fileFeedback(text, kind, written)));
+  };
+  run().then(
     (results) => {
+      if (!results) return;
       const next = outcomeOf(results);
-      setOffer(id, { sending: next });
+      set(next);
       if (next.phase === "done" && !filedBefore) onSent();
     },
     (cause: unknown) => {
       console.warn("feedback: sending the thread's reports failed", cause);
-      setOffer(id, { sending: { phase: "failed", error: COULDNT_REACH, results: failed } });
+      set({ phase: "failed", error: cause instanceof SignInError ? cause.message : COULDNT_REACH, results: failed });
     },
   );
+}
+
+/** The offer `id`'s Open GitHub. */
+export function openOfferSignIn(id: string): void {
+  const offer = useFeedbackOffers.getState()[id];
+  if (offer) openSignIn(offer.sending, (next) => setOffer(id, { sending: next }));
+}
+
+/** The offer `id` was dismissed: a sign-in it started stops. */
+export function dismissOffer(id: string): void {
+  if (useFeedbackOffers.getState()[id]?.sending.phase === "signIn") cancelSignIn();
 }
 
 /** The offer `id` was sent from the dialog (its Edit): the card shows what was filed. */

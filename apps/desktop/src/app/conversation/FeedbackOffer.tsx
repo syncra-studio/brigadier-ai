@@ -12,6 +12,7 @@ import {
   unsentLine,
   useSystemWord,
 } from "@/app/shell/feedback/FeedbackResults";
+import { GitHubSignIn } from "@/app/shell/feedback/GitHubSignIn";
 import { OPENS } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { Check, ChevronRightAlt, FeedbackGlyph } from "@/components/icons";
@@ -24,9 +25,11 @@ import { useBoard } from "@/state/board";
 import {
   type FeedbackAccount,
   type FeedbackSending,
+  dismissOffer,
   draftOffer,
   offerSent,
   openFeedback,
+  openOfferSignIn,
   sendOffer,
   useFeedbackAccount,
   useFeedbackOffers,
@@ -39,9 +42,10 @@ const QUIET = "text-muted-foreground";
  * The thread's offer of reports to Brigadier's developers (its `offer_feedback`, when the user
  * seemed annoyed with Brigadier or asked to report something), written up from the
  * conversation as Send feedback writes a note up: one report per bug or idea, each opening to
- * what will be posted, a repeat marked "Already reported". Send files them (as the user, else
- * in the browser), Edit opens Send feedback with the note filled in, Dismiss puts it away.
- * Nothing leaves the app before a click; once sent it lists what was filed.
+ * what will be posted, a repeat marked "Already reported". Send files them as the user (signed
+ * out, it signs in to GitHub first, under the reports), Edit opens Send feedback with the note
+ * filled in, Dismiss puts it away. Nothing leaves the app before a click; once sent it lists
+ * what was filed.
  */
 export function FeedbackCard({
   reports,
@@ -52,6 +56,7 @@ export function FeedbackCard({
   onSend,
   onEdit,
   onDismiss,
+  onOpenSignIn,
 }: {
   /** As written up; `null` while it is being written. */
   reports: readonly FeedbackReport[] | null;
@@ -63,6 +68,8 @@ export function FeedbackCard({
   onSend: () => void;
   onEdit: () => void;
   onDismiss: () => void;
+  /** The sign-in step's Open GitHub. */
+  onOpenSignIn: () => void;
 }) {
   if (sent || sending.phase === "done") {
     const results = sending.phase === "done" ? sending.results : null;
@@ -105,7 +112,7 @@ export function FeedbackCard({
     .join(" · ");
   if (sending.phase === "working" || !reports) {
     const step = sending.phase === "working" ? sending.step : { step: "writing" as const };
-    const { description, done, total } = stepProgress(step, account);
+    const { description, done, total } = stepProgress(step);
     return (
       <OfferCard
         label="Sending to Brigadier’s developers"
@@ -119,6 +126,8 @@ export function FeedbackCard({
     );
   }
   const failed = sending.phase === "failed";
+  const signingIn = sending.phase === "signIn" ? sending.signIn : null;
+  const noGh = signingIn?.step === "noGh";
   return (
     <OfferCard
       label="Send these to Brigadier’s developers?"
@@ -128,12 +137,14 @@ export function FeedbackCard({
       line={line}
       actions={
         <>
-          <Button size="sm" onClick={onSend}>
-            {failed ? "Try again" : "Send"}
+          <Button size="sm" disabled={signingIn !== null && !noGh} onClick={onSend}>
+            {failed || noGh ? "Try again" : "Send"}
           </Button>
-          <Button variant="ghost" size="sm" className={QUIET} onClick={onEdit}>
-            Edit
-          </Button>
+          {!signingIn && (
+            <Button variant="ghost" size="sm" className={QUIET} onClick={onEdit}>
+              Edit
+            </Button>
+          )}
           <Button variant="ghost" size="sm" className={QUIET} onClick={onDismiss}>
             Dismiss
           </Button>
@@ -145,14 +156,15 @@ export function FeedbackCard({
           <ReportRow key={`${index}-${report.title}`} report={report} />
         ))}
       </ul>
+      {signingIn && <GitHubSignIn signIn={signingIn} onOpen={onOpenSignIn} />}
       {(failed || error) && <OfferError>{failed ? `${sending.error} Try again in a moment.` : error}</OfferError>}
     </OfferCard>
   );
 }
 
-/** Who the reports go out as, after the card's line. */
-function postsAs({ signedIn, login }: FeedbackAccount): string {
-  if (!signedIn) return "opens in your browser";
+/** Who the reports go out as, after the card's line; nothing while signed out. */
+function postsAs({ signedIn, login }: FeedbackAccount): string | null {
+  if (!signedIn) return null;
   return login ? `posts as @${login}` : "posts as you on GitHub";
 }
 
@@ -261,7 +273,11 @@ export function FeedbackOffer({ id, kind, title, body }: { id: string; kind: Fee
           },
         })
       }
-      onDismiss={() => void action.run(() => answerWith(false))}
+      onDismiss={() => {
+        dismissOffer(id);
+        void action.run(() => answerWith(false));
+      }}
+      onOpenSignIn={() => openOfferSignIn(id)}
     />
   );
 }

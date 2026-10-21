@@ -41,9 +41,9 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Freeing up projects deletes each one's conversations in turn and waits for its Brain's scan
 /// under way (two minutes at most per project).
 const FREE_UP_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-/// Send feedback's write-up (two writer turns and GitHub reads) and its filing (one `gh` call or
-/// two per report) take minutes at worst; a timeout would only lose the answer, as the daemon
-/// carries on.
+/// Send feedback's write-up (two writer turns and GitHub reads), its filing (one `gh` call or
+/// two per report) and its GitHub sign-in (up to 15 minutes) take minutes at worst; a timeout
+/// would only lose the answer, as the daemon carries on.
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// How long to wait for a freshly launched daemon to accept connections.
 const LAUNCH_WAIT: Duration = Duration::from_secs(10);
@@ -162,7 +162,9 @@ impl Bridge {
             Request::Archive { .. } | Request::Restore { .. } | Request::Delete { .. } => {
                 LIFECYCLE_TIMEOUT
             }
-            Request::WriteUpFeedback { .. } | Request::FileFeedback { .. } => FEEDBACK_TIMEOUT,
+            Request::WriteUpFeedback { .. }
+            | Request::FileFeedback { .. }
+            | Request::WaitGitHubSignIn => FEEDBACK_TIMEOUT,
             _ => REQUEST_TIMEOUT,
         };
         let (reply, response) = oneshot::channel();

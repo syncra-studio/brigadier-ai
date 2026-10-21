@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::feedback::{FEEDBACK_REPO, FeedbackFiled, FeedbackFiling};
+use crate::feedback::{FEEDBACK_REPO, FeedbackFiled, FeedbackFiling, GitHubSignIn};
 use crate::manager::ci::Gh;
 use crate::work::FeedbackKind;
 
@@ -23,6 +23,15 @@ echo "$*" >> "$D/calls"
 n=$(wc -l < "$D/calls" | tr -d ' ')
 case "$1 $2" in
   "auth status") exit "$(cat "$D/auth.exit" 2>/dev/null || echo 0)" ;;
+  "auth login")
+    echo "BROWSER=$BROWSER" > "$D/login-env"
+    echo "! One-time code (WDJB-MJHT) copied to clipboard" >&2
+    echo "Open this URL to continue in your web browser: https://github.com/login/device" >&2
+    while :; do
+      [ -f "$D/approve" ] && { echo 0 > "$D/auth.exit"; echo "✓ Logged in as octocat" >&2; exit 0; }
+      [ -f "$D/deny" ] && { echo "authorization failed" >&2; exit 1; }
+      sleep 0.05
+    done ;;
   "api user") cat "$D/login" ;;
   "issue list") cat "$D/issues.json" ;;
   "issue view") cat "$D/view-$3.json" ;;
@@ -421,4 +430,127 @@ async fn the_account_is_who_gh_is_signed_in_as() {
     assert_eq!(flow.manager.feedback_account().await, Some(None));
     stubs.signed_out();
     assert_eq!(flow.manager.feedback_account().await, None);
+}
+
+fn sign_in_code() -> GitHubSignIn {
+    GitHubSignIn::Code {
+        code: "WDJB-MJHT".into(),
+        url: "https://github.com/login/device".into(),
+    }
+}
+
+/// Signed out, Send signs `gh` in first: `gh auth login` in the web flow, its one-time code read
+/// from what it prints (no browser of its own: the app opens the page), then waited on until
+/// GitHub says yes; filing goes ahead as the user after.
+#[tokio::test]
+async fn signed_out_gh_is_signed_in_with_its_one_time_code_then_files() {
+    let seen = Seen::default();
+    let flow = Flow::start(
+        "feedback-sign-in",
+        Options::default(),
+        writer(&seen, "", ""),
+    )
+    .await;
+    let stubs = Stubs::new(&flow);
+    stubs.signed_out();
+    assert_eq!(
+        flow.manager.start_github_sign_in().await.unwrap(),
+        sign_in_code()
+    );
+    assert!(
+        stubs
+            .lines("calls")
+            .contains(&"auth login --hostname github.com --web --git-protocol https".to_owned())
+    );
+    assert_eq!(read(&stubs.dir.join("login-env")).trim(), "BROWSER=true");
+    let waited = tokio::spawn({
+        let manager = flow.manager.clone();
+        async move { manager.wait_github_sign_in().await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!waited.is_finished(), "it waits for GitHub");
+    stubs.file("approve", "");
+    waited.await.unwrap().unwrap();
+    let items = [new_issue(FeedbackKind::Bug, "[Bug]: Spins", "body")];
+    let results = flow.manager.file_feedback(&items).await.unwrap();
+    assert!(
+        matches!(results[0], FeedbackFiled::Filed { .. }),
+        "{results:?}"
+    );
+    // Signed in now: nothing more to sign in.
+    assert_eq!(
+        flow.manager.start_github_sign_in().await.unwrap(),
+        GitHubSignIn::SignedIn
+    );
+    flow.stop().await;
+}
+
+/// A sign-in GitHub refused, one never finished in time, and one stopped each end in plain
+/// words for the app's Try again; without `gh` there is nothing to sign in with.
+#[tokio::test]
+async fn a_sign_in_that_fails_times_out_or_is_stopped_says_so() {
+    let seen = Seen::default();
+    let flow = Flow::start(
+        "feedback-sign-in-fails",
+        Options::default(),
+        writer(&seen, "", ""),
+    )
+    .await;
+    let stubs = Stubs::new(&flow);
+    stubs.signed_out();
+
+    assert_eq!(
+        flow.manager.start_github_sign_in().await.unwrap(),
+        sign_in_code()
+    );
+    stubs.file("deny", "");
+    let err = flow.manager.wait_github_sign_in().await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Signing in to GitHub didn’t finish. Try again."
+    );
+    std::fs::remove_file(stubs.dir.join("deny")).unwrap();
+
+    let short = std::time::Duration::from_millis(300);
+    assert_eq!(
+        flow.manager
+            .start_github_sign_in_within(short)
+            .await
+            .unwrap(),
+        sign_in_code()
+    );
+    let err = flow.manager.wait_github_sign_in().await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Signing in to GitHub took too long. Try again."
+    );
+
+    flow.manager.start_github_sign_in().await.unwrap();
+    let waited = tokio::spawn({
+        let manager = flow.manager.clone();
+        async move { manager.wait_github_sign_in().await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    flow.manager.cancel_github_sign_in();
+    let err = waited.await.unwrap().unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Signing in to GitHub was stopped. Try again."
+    );
+    assert!(
+        stubs
+            .lines("calls")
+            .iter()
+            .all(|call| !call.contains("issue create"))
+    );
+
+    *flow.manager.gh_override.lock().unwrap() = Some(Gh {
+        program: stubs.dir.join("no-gh-here"),
+        vars: vec![("PATH".into(), "/usr/bin:/bin".into())],
+    });
+    assert_eq!(
+        flow.manager.start_github_sign_in().await.unwrap(),
+        GitHubSignIn::NoGh
+    );
+    flow.stop().await;
 }

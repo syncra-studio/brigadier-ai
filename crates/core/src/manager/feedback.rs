@@ -2,7 +2,8 @@
 //! (the commit message writer's, [`SessionManager::write_text`]), checked against Brigadier's
 //! existing issues (open and closed, a second writer turn reading the likely ones), then filed
 //! as the user with their `gh`: a new issue, or a comment on the issue it repeats. Signed out,
-//! the app opens each report's form in the browser instead. No bot and no token of Brigadier's.
+//! it signs `gh` in first (`gh auth login` in the web flow: the app shows its one-time code).
+//! No bot and no token of Brigadier's.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -12,8 +13,9 @@ use std::time::Duration;
 use super::SessionManager;
 use super::ci::{Gh, RunError};
 use crate::feedback::{
-    FEEDBACK_REPO, FeedbackFiled, FeedbackFiling, FeedbackWriteUp, JUDGE_PROMPT, KnownIssue,
-    judge_turn, mark_duplicates, reports_of, write_prompt, write_turn,
+    FEEDBACK_REPO, FeedbackFiled, FeedbackFiling, FeedbackWriteUp, GitHubSignIn, JUDGE_PROMPT,
+    KnownIssue, device_code, device_page, judge_turn, mark_duplicates, reports_of, write_prompt,
+    write_turn,
 };
 use crate::work::FeedbackKind;
 use crate::{Error, Result};
@@ -25,6 +27,24 @@ const READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// The public API's page size, and the most pages read without `gh`.
 const PAGE: usize = 100;
 const MAX_PAGES: usize = 10;
+/// How long a GitHub sign-in may take to show its one-time code.
+const CODE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the user has to enter it: GitHub's codes last 15 minutes.
+const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// GitHub's page for entering the code, when `gh` didn't print one.
+const DEVICE_PAGE: &str = "https://github.com/login/device";
+
+/// A GitHub sign-in at work: how it ended (once it has), and what stops it (its `gh` too).
+pub(crate) struct GhSignIn {
+    ended: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
+    task: tokio::task::AbortHandle,
+}
+
+impl Drop for GhSignIn {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
 
 impl SessionManager {
     /// The user's `gh` for feedback. A debug build takes a stand-in from
@@ -133,6 +153,152 @@ impl SessionManager {
             results.push(file_one(&gh, item).await);
         }
         Some(results)
+    }
+
+    /// Starts signing the user's `gh` in to github.com (`gh auth login --web`), in place of any
+    /// sign-in already at work: answers with its one-time code and page, once it has printed
+    /// them; signed in already, or with no `gh`, it says so. `wait_github_sign_in` follows it.
+    pub async fn start_github_sign_in(&self) -> Result<GitHubSignIn> {
+        self.start_github_sign_in_within(SIGN_IN_TIMEOUT).await
+    }
+
+    pub(crate) async fn start_github_sign_in_within(
+        &self,
+        timeout: Duration,
+    ) -> Result<GitHubSignIn> {
+        use tokio::io::AsyncBufReadExt;
+
+        self.cancel_github_sign_in();
+        let Some(gh) = self.feedback_gh() else {
+            return Ok(GitHubSignIn::NoGh);
+        };
+        if self.signed_in_gh().await.is_some() {
+            return Ok(GitHubSignIn::SignedIn);
+        }
+        let spawned = tokio::process::Command::new(&gh.program)
+            .args([
+                "auth",
+                "login",
+                "--hostname",
+                "github.com",
+                "--web",
+                "--git-protocol",
+                "https",
+            ])
+            .env_clear()
+            .envs(gh.vars.iter().map(|(key, value)| (key, value)))
+            // The app opens the page itself (Open GitHub), after the code is shown.
+            .env("BROWSER", "true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(GitHubSignIn::NoGh);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "gh auth login didn't start");
+                return Err(Error::Invalid(
+                    "GitHub’s sign-in didn’t start. Try again.".into(),
+                ));
+            }
+        };
+        let mut lines = tokio::io::BufReader::new(child.stderr.take().expect("piped")).lines();
+        let mut page = None;
+        let mut last = String::new();
+        let code = tokio::time::timeout(CODE_TIMEOUT, async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                page = page.take().or_else(|| device_page(&line));
+                if let Some(code) = device_code(&line) {
+                    return Some(code);
+                }
+                if !line.trim().is_empty() {
+                    last = line.trim().to_owned();
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(code) = code else {
+            tracing::warn!(%last, "gh auth login showed no code");
+            return Err(Error::Invalid(if last.is_empty() {
+                "GitHub’s sign-in didn’t start. Try again.".into()
+            } else {
+                format!("GitHub’s sign-in didn’t start: {last}")
+            }));
+        };
+        let (done, ended) = tokio::sync::watch::channel(None);
+        let task = tokio::spawn(async move {
+            // Read on, so it never blocks on a full pipe; its page line may come after the code.
+            let drain = async { while let Ok(Some(_)) = lines.next_line().await {} };
+            let outcome =
+                match tokio::time::timeout(timeout, async { tokio::join!(drain, child.wait()).1 })
+                    .await
+                {
+                    Err(_) => Err("Signing in to GitHub took too long. Try again.".to_owned()),
+                    Ok(Ok(status)) if status.success() => {
+                        let signed_in = gh
+                            .output(&["auth", "status", "--hostname", "github.com"])
+                            .await
+                            .is_ok_and(|out| out.success());
+                        if signed_in {
+                            Ok(())
+                        } else {
+                            Err("GitHub didn’t sign you in. Try again.".to_owned())
+                        }
+                    }
+                    Ok(_) => Err("Signing in to GitHub didn’t finish. Try again.".to_owned()),
+                };
+            match &outcome {
+                Ok(()) => tracing::info!("gh is signed in to GitHub"),
+                Err(why) => tracing::info!(%why, "the GitHub sign-in ended without signing in"),
+            }
+            let _ = done.send(Some(outcome));
+        });
+        *self.feedback_sign_in.lock().unwrap() = Some(GhSignIn {
+            ended,
+            task: task.abort_handle(),
+        });
+        Ok(GitHubSignIn::Code {
+            code,
+            url: page.unwrap_or_else(|| DEVICE_PAGE.to_owned()),
+        })
+    }
+
+    /// Waits for the GitHub sign-in at work to end: signed in, or why not, in plain words.
+    pub async fn wait_github_sign_in(&self) -> Result<()> {
+        let ended = self
+            .feedback_sign_in
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|sign_in| sign_in.ended.clone());
+        let Some(mut ended) = ended else {
+            return Err(Error::Invalid(
+                "Signing in to GitHub was stopped. Try again.".into(),
+            ));
+        };
+        loop {
+            let outcome = ended.borrow_and_update().clone();
+            if let Some(outcome) = outcome {
+                return outcome.map_err(Error::Invalid);
+            }
+            if ended.changed().await.is_err() {
+                return Err(Error::Invalid(
+                    "Signing in to GitHub was stopped. Try again.".into(),
+                ));
+            }
+        }
+    }
+
+    /// Stops the GitHub sign-in at work, if any (its dialog or card was closed).
+    pub fn cancel_github_sign_in(&self) {
+        self.feedback_sign_in.lock().unwrap().take();
     }
 
     /// Brigadier's issues, open and closed: through `gh` when it is signed in, else the public

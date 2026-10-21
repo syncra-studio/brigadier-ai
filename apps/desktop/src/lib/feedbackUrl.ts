@@ -1,7 +1,7 @@
 /**
  * What Send feedback files or opens in Brigadier's repository, in the shape of its own issue
- * forms (state/feedback.ts sends it): each report's issue body, its form filled in for the
- * browser, a repeat's comment, and the one prefilled form used when no writer could run.
+ * forms (state/feedback.ts sends it): each report's issue body, a repeat's comment, and the
+ * one prefilled form used when no writer could run.
  */
 
 import type { FeedbackReport } from "@/ipc/generated";
@@ -137,33 +137,6 @@ export function repeatComment(report: FeedbackReport, details: FeedbackDetails):
     note,
     ...(seenOn ? [`Seen on: ${seenOn}`] : []),
   ].join("\n\n");
-}
-
-/**
- * A report's form in the browser, filled in, one Create away. Fields too long for a link are
- * cut, the longest first, until the link fits `MAX_URL`.
- */
-export function reportUrl(report: FeedbackReport, details: FeedbackDetails): string {
-  const fields = Object.fromEntries(reportFields(report, details).map(({ id, value }) => [id, value.trim()]));
-  const link = () => {
-    const params = new URLSearchParams();
-    params.set("template", report.kind === "bug" ? "bug_report.yml" : "proposal.yml");
-    params.set("title", reportTitle(report));
-    for (const [id, value] of Object.entries(fields)) if (value) params.set(id, value);
-    return `${FEEDBACK_REPO}/issues/new?${params.toString()}`;
-  };
-  let url = link();
-  while (url.length > MAX_URL) {
-    const [id, value] = Object.entries(fields).reduce((longest, entry) => (entry[1].length > longest[1].length ? entry : longest));
-    if (!value) break;
-    const characters = Array.from(value);
-    // As many characters as the overflow takes at the field's own encoded width, one more for "…".
-    const width = new URLSearchParams({ value }).toString().length / characters.length;
-    const keep = Math.max(0, characters.length - Math.ceil((url.length - MAX_URL) / width) - 1);
-    fields[id] = keep > 0 ? `${characters.slice(0, keep).join("").trimEnd()}…` : "";
-    url = link();
-  }
-  return url;
 }
 
 /** A report as the thread's card shows it opened: its fields in a line each, as they'll be posted. */

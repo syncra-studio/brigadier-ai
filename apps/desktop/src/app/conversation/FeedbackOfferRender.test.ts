@@ -82,3 +82,27 @@ test("a feedback offer that sent only some files the rest on Try again", { timeo
   assert.deepEqual(seen.filed, [3, 1]);
   assert.equal(seen.answers, 1);
 });
+
+// Signed out, the card signs in to GitHub under its reports (no forms open): its one-time code,
+// Open GitHub, then it waits; Send is off, Edit hidden, Dismiss stays; once GitHub says yes it
+// files on its own.
+test("a feedback offer sent signed out signs in to GitHub, then files", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "feedback-offer.html?drive=1&done=1&signedout=1", "feedback-offer-result", 15000)) as Record<string, unknown>;
+  assert.deepEqual(seen.head, ["Send these to Brigadier’s developers?", "3 reports written from this chat"]);
+  assert.deepEqual(seen.signIn, [
+    ["Sign in to GitHub so Brigadier can post your reports", "WDJB-MJHTCopy codeOpen GitHub"],
+    ["Send", "Dismiss"],
+    true,
+    3,
+  ]);
+  assert.deepEqual(seen.waiting, [
+    ["Sign in to GitHub so Brigadier can post your reports", "WDJB-MJHTCopy codeOpen GitHub", "Waiting for GitHub…"],
+    ["https://github.com/login/device"],
+  ]);
+  assert.deepEqual(seen.sent, [
+    "Sent. Thank you",
+    "You can follow them on GitHub.",
+    ["Usage popover doesn't refresh when a session ends#482", `Stop doesn't stop a running workerAdded to #${417}`, "Pin a chat to the top of the sidebar#484"],
+  ]);
+  assert.deepEqual(seen.asked, ["startGitHubSignIn", "waitGitHubSignIn", "fileFeedback"]);
+});

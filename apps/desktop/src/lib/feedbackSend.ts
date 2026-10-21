@@ -1,9 +1,9 @@
 /**
  * Send feedback's engine (state/feedback.ts is how the app calls it): the note is written up as
  * reports by the daemon's writer, then filed as the user with their `gh`, one by one (a repeat
- * as a comment on its issue). Signed out, each report's form opens in the browser instead,
- * filled in. With no writer to run, the note opens in one form, as it used to. The thread's
- * card writes the note up first, to show the reports, and files them on Send.
+ * as a comment on its issue). Signed out, nothing is filed: the app signs `gh` in first
+ * (state/feedback.ts). With no writer to run, the note opens in one form, as it used to. The
+ * thread's card writes the note up first, to show the reports, and files them on Send.
  */
 import { openUrl, request } from "@/ipc/client";
 import type { FeedbackFiled, FeedbackFiling, FeedbackReport, FeedbackWriteUp } from "@/ipc/generated";
@@ -15,7 +15,6 @@ import {
   repeatComment,
   reportBody,
   reportTitle,
-  reportUrl,
 } from "@/lib/feedbackUrl";
 
 /** What became of one report. */
@@ -24,9 +23,7 @@ export type FeedbackResult = { kind: FeedbackKind; title: string } & (
   | { outcome: "filed"; number: number; url: string }
   /** Added to the issue it repeats, as a comment. */
   | { outcome: "added"; number: number; url: string }
-  /** Signed out: it repeats an issue, so nothing opened; the issue is where to look. */
-  | { outcome: "known"; number: number; url: string }
-  /** Its form opened in the browser, filled in. */
+  /** No writer could run: the note's form opened in the browser, filled in. */
   | { outcome: "opened" }
   /** Not filed; `retryFeedback` sends it again. */
   | { outcome: "failed"; reason: string; report: FeedbackReport; searched: boolean }
@@ -90,7 +87,10 @@ export async function retry(details: FeedbackDetails, results: readonly Feedback
   return results.map((result) => (result.outcome === "failed" ? (byReport.get(result.report) ?? result) : result));
 }
 
-/** Files `reports` with the user's `gh`, else opens each in the browser. */
+/** Why a report wasn't filed when `gh` turned out signed out: Try again signs it in first. */
+export const NOT_SIGNED_IN = "you’re not signed in to GitHub";
+
+/** Files `reports` with the user's `gh`; signed out, none is (each fails as `NOT_SIGNED_IN`). */
 async function file(reports: FeedbackReport[], searched: boolean, details: FeedbackDetails): Promise<FeedbackResult[]> {
   const items: FeedbackFiling[] = reports.map((report) =>
     report.duplicate
@@ -99,18 +99,7 @@ async function file(reports: FeedbackReport[], searched: boolean, details: Feedb
   );
   const { signedIn, results } = await request({ method: "fileFeedback", items });
   if (!signedIn) {
-    const shown: FeedbackResult[] = [];
-    for (const report of reports) {
-      const head = { kind: report.kind, title: report.title };
-      if (report.duplicate) {
-        const { number, url } = report.duplicate;
-        shown.push({ ...head, outcome: "known", number, url });
-      } else {
-        await openUrl(reportUrl(report, details));
-        shown.push({ ...head, outcome: "opened" });
-      }
-    }
-    return shown;
+    return reports.map((report) => ({ kind: report.kind, title: report.title, outcome: "failed", reason: NOT_SIGNED_IN, report, searched }));
   }
   return reports.map((report, index) => resultOf(report, searched, results[index]));
 }

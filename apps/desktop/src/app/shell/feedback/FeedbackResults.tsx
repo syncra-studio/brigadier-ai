@@ -5,7 +5,7 @@ import { ArrowUpRight, Bug, Lightbulb } from "@/components/icons";
 import { openUrl } from "@/ipc/client";
 import type { FeedbackKind } from "@/lib/feedbackUrl";
 import { cn } from "@/lib/utils";
-import { type FeedbackAccount, type FeedbackResult, type FeedbackStep, feedbackDetails } from "@/state/feedback";
+import { type FeedbackResult, type FeedbackStep, feedbackDetails } from "@/state/feedback";
 
 /** A report's kind as its icon: a bug, or an idea's bulb. */
 export function KindIcon({ kind }: { kind: FeedbackKind }) {
@@ -15,13 +15,16 @@ export function KindIcon({ kind }: { kind: FeedbackKind }) {
 
 /**
  * What Send feedback filed, one row per report in a soft box: its kind, its title, and where it
- * went (its new issue, the issue it was added to, the browser, or the issue it repeats). Shown by
- * the dialog and the thread's feedback card once sent.
+ * went (its new issue, or the issue it was added to), or that it wasn't sent. Shown by the
+ * dialog and the thread's feedback card once sent. A note only opened in the browser (no writer
+ * could run) has no row: the line above says so.
  */
 export function FeedbackResults({ results }: { results: readonly FeedbackResult[] }) {
+  const shown = results.filter((result) => result.outcome !== "opened");
+  if (shown.length === 0) return null;
   return (
     <ul aria-label="Sent" className="bg-foreground/5 rounded-settings flex flex-col">
-      {results.map((result, index) => (
+      {shown.map((result, index) => (
         <li
           key={`${index}-${result.title}`}
           className={cn("flex min-w-0 items-center gap-2.5 px-3 py-2", index > 0 && "border-divider border-t")}
@@ -41,10 +44,8 @@ function Where({ result }: { result: FeedbackResult }) {
       return <IssueLink label={`#${result.number}`} url={result.url} />;
     case "added":
       return <IssueLink label={`Added to #${result.number}`} url={result.url} />;
-    case "known":
-      return <IssueLink label={`Already reported: #${result.number}`} url={result.url} />;
     case "opened":
-      return <span className="text-muted-foreground text-label shrink-0">Opened in your browser</span>;
+      return null;
     case "failed":
       return <span className="text-destructive text-label shrink-0">Not sent</span>;
   }
@@ -60,9 +61,9 @@ function IssueLink({ label, url }: { label: string; url: string }) {
   );
 }
 
-/** Whether a done send went to the browser (signed out, or no writer): nothing was posted. */
+/** Whether a done send only opened the note in the browser (no writer could run): nothing was posted. */
 export function sentToBrowser(results: readonly FeedbackResult[]): boolean {
-  return results.every((result) => result.outcome === "opened" || result.outcome === "known");
+  return results.every((result) => result.outcome === "opened");
 }
 
 /** A done send's title: thanks once posted; ready to post when it only went to the browser. */
@@ -83,23 +84,11 @@ export function unsentLine(unsent: number): string {
 }
 
 /** What a step says, and how far along its bar is (writing up, then filing, of three). */
-export function stepProgress(
-  step: FeedbackStep,
-  account: FeedbackAccount | null,
-): { description: string; done: number; total: number } {
+export function stepProgress(step: FeedbackStep): { description: string; done: number; total: number } {
   if (step.step === "writing") {
     return { description: "Splitting your note and checking GitHub for ones already reported", done: 1, total: 3 };
   }
-  const one = step.count === 1;
-  const description =
-    account?.signedIn === false
-      ? one
-        ? "Opening it in your browser"
-        : "Opening each one in your browser"
-      : one
-        ? "Filing it on GitHub"
-        : `Filing ${step.count} reports on GitHub`;
-  return { description, done: 2, total: 3 };
+  return { description: step.count === 1 ? "Filing it on GitHub" : `Filing ${step.count} reports on GitHub`, done: 2, total: 3 };
 }
 
 /** The system's name in a word ("macOS"), as "with your app and macOS version" says it. */

@@ -149,6 +149,42 @@ pub enum FeedbackFiled {
     Failed { reason: String },
 }
 
+/// Where signing in to GitHub for Send feedback starts: already signed in, no GitHub CLI to sign
+/// in with, or waiting for the user to enter `code` at `url`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum GitHubSignIn {
+    SignedIn,
+    NoGh,
+    Code { code: String, url: String },
+}
+
+/// The one-time code in a line `gh auth login --web` printed ("! One-time code (ABCD-1234)
+/// copied to clipboard", older: "! First copy your one-time code: ABCD-1234").
+pub(crate) fn device_code(line: &str) -> Option<String> {
+    if !line.to_lowercase().contains("code") {
+        return None;
+    }
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .find(|word| {
+            let bytes = word.as_bytes();
+            bytes.len() == 9
+                && bytes[4] == b'-'
+                && word
+                    .chars()
+                    .filter(|c| *c != '-')
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        })
+        .map(str::to_owned)
+}
+
+/// The page a line `gh auth login --web` printed sends the user to.
+pub(crate) fn device_page(line: &str) -> Option<String> {
+    line.split_whitespace()
+        .find(|word| word.starts_with("https://"))
+        .map(|word| word.trim_end_matches(['.', ',']).to_owned())
+}
+
 /// An issue of the repository as listed: enough to name it to the writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KnownIssue {
@@ -730,6 +766,38 @@ mod tests {
         );
         assert_eq!(
             KnownIssue::kind_of("The diff has no colour", ["area: x"]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_one_time_code_and_its_page_are_read_from_ghs_lines() {
+        assert_eq!(
+            device_code("! One-time code (7E28-DD0E) copied to clipboard").as_deref(),
+            Some("7E28-DD0E")
+        );
+        assert_eq!(
+            device_code("! First copy your one-time code: ABCD-1234").as_deref(),
+            Some("ABCD-1234")
+        );
+        assert_eq!(
+            device_code("Press Enter to open github.com in your browser..."),
+            None
+        );
+        assert_eq!(
+            device_code("code: ab12-cd34"),
+            None,
+            "GitHub's codes are upper case"
+        );
+        assert_eq!(
+            device_page(
+                "Open this URL to continue in your web browser: https://github.com/login/device"
+            )
+            .as_deref(),
+            Some("https://github.com/login/device")
+        );
+        assert_eq!(
+            device_page("! One-time code (7E28-DD0E) copied to clipboard"),
             None
         );
     }

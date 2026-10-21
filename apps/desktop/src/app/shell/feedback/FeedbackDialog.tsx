@@ -1,4 +1,5 @@
 import { FeedbackResults, sentLine, sentTitle, stepProgress, unsentLine, useSystemWord } from "@/app/shell/feedback/FeedbackResults";
+import { GitHubSignIn } from "@/app/shell/feedback/GitHubSignIn";
 import { Button, ErrorLine } from "@/components/controls";
 import { ArrowUpRight, X } from "@/components/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
@@ -9,6 +10,7 @@ import { cn } from "@/lib/utils";
 import {
   closeFeedback,
   type FeedbackAccount,
+  openDialogSignIn,
   sendFromDialog,
   setFeedbackText,
   useFeedbackUi,
@@ -20,8 +22,9 @@ const ASK = "What’s wrong, or what would you like? Several things at once is f
  * Send feedback (Help › Send Feedback…, the sidebar's help menu, the search palette, or the
  * thread's card's Edit), with the app's dialog parts: the user only writes and sends. Brigadier
  * writes it up as one report per bug or idea and files each on GitHub as them (state/feedback.ts),
- * then lists what it filed, each with its link. "Write it on GitHub yourself" opens the blank
- * new-issue page instead. The X closes it; a send at work carries on and shows when it reopens.
+ * then lists what it filed, each with its link. Not signed in to GitHub, Send first shows the
+ * sign-in step under the note, and files by itself once GitHub says yes. "Write it on GitHub
+ * yourself" opens the blank new-issue page instead. The X closes it; a send at work carries on and shows when it reopens.
  */
 export function FeedbackDialog() {
   const open = useFeedbackUi((s) => s.open);
@@ -40,6 +43,9 @@ function Feedback() {
   const done = sending.phase === "done" ? sending.results : null;
   const unsent = done?.filter((result) => result.outcome === "failed").length ?? 0;
   const working = sending.phase === "working";
+  const signingIn = sending.phase === "signIn" ? sending.signIn : null;
+  // Signing in, Send waits for GitHub; without the GitHub CLI it is Try again.
+  const waiting = working || (signingIn !== null && signingIn.step !== "noGh");
   const error = sending.phase === "failed" ? `${sending.error} Your note is still here.` : null;
 
   return (
@@ -69,7 +75,7 @@ function Feedback() {
           <textarea
             value={text}
             onChange={(event) => setFeedbackText(event.target.value)}
-            readOnly={working}
+            readOnly={working || signingIn !== null}
             spellCheck
             autoFocus
             placeholder={ASK}
@@ -77,14 +83,16 @@ function Feedback() {
             className={cn(
               "placeholder:text-muted-foreground bg-muted/60 focus-visible:bg-background rounded-control h-37 resize-none border border-transparent px-3.5 py-3 text-sm leading-normal transition-colors outline-none",
               working && "text-foreground/80",
+              signingIn && "text-muted-foreground",
             )}
           />
         )}
+        {signingIn && <GitHubSignIn signIn={signingIn} onOpen={openDialogSignIn} />}
         {sending.phase === "working" && (
           <ProgressLine
             icon={false}
             title="Writing up your reports…"
-            {...stepProgress(sending.step, account)}
+            {...stepProgress(sending.step)}
             className="text-muted-foreground pt-1"
           />
         )}
@@ -109,8 +117,8 @@ function Feedback() {
             </Button>
           </DialogClose>
         ) : (
-          <Button size="sm" disabled={working || !text.trim()} onClick={sendFromDialog}>
-            {working ? "Sending…" : sending.phase === "failed" || unsent ? "Try again" : "Send"}
+          <Button size="sm" disabled={waiting || !text.trim()} onClick={sendFromDialog}>
+            {working ? "Sending…" : sending.phase === "failed" || unsent || signingIn?.step === "noGh" ? "Try again" : "Send"}
           </Button>
         )}
       </div>
@@ -118,8 +126,8 @@ function Feedback() {
   );
 }
 
-/** Who it posts as, and what goes with it; or that each report opens in the browser. */
+/** Who it posts as, and what goes with it; signed out, that Send signs in to GitHub first. */
 function accountLine({ signedIn, login }: FeedbackAccount, system: string): string {
-  if (!signedIn) return "You’re not signed in to GitHub, so each report opens in your browser, filled in.";
+  if (!signedIn) return `Posts on GitHub once you sign in, with your app and ${system} version.`;
   return `Posts as ${login ? `@${login}` : "you"} on GitHub, with your app and ${system} version.`;
 }

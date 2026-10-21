@@ -235,6 +235,8 @@ pub struct SessionManager {
     /// When each ready session's pull request was last looked up at a connect
     /// (`refresh_pull_request_soon`).
     pr_looked_up: Mutex<HashMap<ConversationId, std::time::Instant>>,
+    /// Send feedback's GitHub sign-in at work, if any.
+    feedback_sign_in: Mutex<Option<feedback::GhSignIn>>,
     /// A stand-in `gh` for tests.
     #[cfg(test)]
     pub(crate) gh_override: Mutex<Option<ci::Gh>>,
@@ -428,6 +430,7 @@ impl SessionManager {
             gh_override: Mutex::default(),
             #[cfg(test)]
             curl_override: Mutex::default(),
+            feedback_sign_in: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),

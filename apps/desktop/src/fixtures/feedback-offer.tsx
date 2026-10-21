@@ -7,8 +7,10 @@
  * opens a report, opens Edit, sends the second (failing once, then Try again), dismisses the
  * first and writes what it saw to #feedback-offer-result (FeedbackOfferRender.test.ts reads
  * it). With ?partial=1 too it sends the second with its last report failing, then files
- * that one on Try again. ?state=drafted|open|working|done|failed shows the second card in the design's state,
- * for screenshots.
+ * that one on Try again. With ?signedout=1 instead it sends the second signed out: the card
+ * signs in to GitHub under its reports (a one-time code, Open GitHub, waiting), then files.
+ * ?state=drafted|open|working|signin|signin-waiting|signin-nogh|done|failed shows the second
+ * card in the design's state, for screenshots.
  */
 import { createRoot } from "react-dom/client";
 
@@ -25,6 +27,8 @@ await import("@/fixtures/flow");
 // The flow fixture's daemon answers requests; the app's own commands are answered here.
 const opened: string[] = [];
 const wrote: string[] = [];
+/** Every request's method, in order. */
+const askedMethods: string[] = [];
 /** How many reports each filing sent. */
 const filed: number[] = [];
 const REPO = "https://github.com/syncra-studio/brigadier-ai/issues";
@@ -63,10 +67,20 @@ const reports = [
     today: "it moves down the list as other chats get newer.",
   }),
 ];
-/** The faked daemon: writes held until released, and every filing failing (or only the last). */
-const daemon = { hold: null as Promise<void> | null, failing: false, failingLast: false };
+/**
+ * The faked daemon: writes held until released, every filing failing (or only the last), `gh`
+ * signed in, and the GitHub sign-in's answer once given.
+ */
+const daemon = {
+  hold: null as Promise<void> | null,
+  failing: false,
+  failingLast: false,
+  signedIn: !params.has("signedout"),
+  approve: null as ((yes: boolean) => void) | null,
+};
 let release = () => {};
 const state = params.get("state");
+const DEVICE = "https://github.com/login/device";
 if (params.has("drive") || state === "working") daemon.hold = new Promise((resolve) => (release = resolve));
 const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args: unknown, options?: unknown) => Promise<unknown> } })["__TAURI_INTERNALS__"];
 const invoke = internals.invoke.bind(internals);
@@ -77,8 +91,18 @@ internals.invoke = async (command, args, options) => {
     return null;
   }
   const request = (args as { request?: { method: string; text?: string; items?: FeedbackFiling[] } }).request;
+  if (command === "ipc_request" && request) askedMethods.push(request.method);
   if (command === "ipc_request" && request?.method === "feedbackAccount") {
-    return { method: request.method, signedIn: true, login: "stephen-golban" };
+    return { method: request.method, signedIn: daemon.signedIn, login: daemon.signedIn ? "stephen-golban" : null };
+  }
+  if (command === "ipc_request" && request?.method === "startGitHubSignIn") {
+    return { method: request.method, signIn: daemon.signedIn ? { state: "signedIn" } : { state: "code", code: "WDJB-MJHT", url: DEVICE } };
+  }
+  if (command === "ipc_request" && request?.method === "waitGitHubSignIn") {
+    const yes = await new Promise<boolean>((resolve) => (daemon.approve = resolve));
+    if (!yes) throw { code: "invalid", message: "Signing in to GitHub didn’t finish. Try again." };
+    daemon.signedIn = true;
+    return { method: request.method };
   }
   if (command === "ipc_request" && request?.method === "writeUpFeedback") {
     wrote.push(request.text ?? "");
@@ -90,8 +114,8 @@ internals.invoke = async (command, args, options) => {
     filed.push((request.items ?? []).length);
     return {
       method: request.method,
-      signedIn: true,
-      results: (request.items ?? []).map((item, index) =>
+      signedIn: daemon.signedIn,
+      results: !daemon.signedIn ? [] : (request.items ?? []).map((item, index) =>
         daemon.failing || (daemon.failingLast && index === (request.items ?? []).length - 1)
           ? { outcome: "failed", reason: "HTTP 502: Bad gateway" }
           : item.commentOn === null
@@ -163,6 +187,10 @@ if (state && state !== "working") {
       { kind: "bug" as const, title: reports[1]!.title, outcome: "added" as const, number: 417, url: `${REPO}/417` },
       { kind: "idea" as const, title: reports[2]!.title, outcome: "filed" as const, number: 483, url: `${REPO}/483` },
     ];
+    const code = { step: "code" as const, code: "WDJB-MJHT", url: DEVICE };
+    if (state === "signin") useFeedbackOffers.setState({ second: { written, sending: { phase: "signIn", signIn: { ...code, opened: false }, results: null } } });
+    if (state === "signin-waiting") useFeedbackOffers.setState({ second: { written, sending: { phase: "signIn", signIn: { ...code, opened: true }, results: null } } });
+    if (state === "signin-nogh") useFeedbackOffers.setState({ second: { written, sending: { phase: "signIn", signIn: { step: "noGh" }, results: null } } });
     if (state === "done") useFeedbackOffers.setState({ second: { written, sending: { phase: "done", results } } });
     if (state === "failed") useFeedbackOffers.setState({ second: { written, sending: { phase: "failed", error: COULDNT_REACH, results: null } } });
   })();
@@ -192,6 +220,25 @@ async function drive() {
     seen.sent = [...head(second()), rows(second(), "Sent"), actions()];
     seen.filed = filed;
     seen.answers = calls.filter((call) => call.method === "answerFeedbackOffer").length;
+    return seen;
+  }
+  if (params.has("signedout")) {
+    const signInStep = () => {
+      const step = second()?.querySelector('[aria-label="Sign in to GitHub"]');
+      return step ? [...step.children].map(text) : null;
+    };
+    seen.head = head(second());
+    button(second(), "Send")?.click();
+    await wait(300);
+    const cardActions = actions().filter((name) => !["Copy code", "Open GitHub"].includes(name));
+    seen.signIn = [signInStep(), cardActions, button(second(), "Send")?.disabled, rows(second(), "Reports").length];
+    button(second(), "Open GitHub")?.click();
+    await wait(100);
+    seen.waiting = [signInStep(), [...opened]];
+    daemon.approve?.(true);
+    await wait(400);
+    seen.sent = [...head(second()), rows(second(), "Sent")];
+    seen.asked = askedMethods.filter((method) => /GitHubSignIn|fileFeedback/.test(method));
     return seen;
   }
   if (!params.has("done")) return seen;

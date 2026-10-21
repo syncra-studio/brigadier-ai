@@ -29,6 +29,7 @@ import type { FolderCheck } from "./FolderCheck";
 import type { FolderListing } from "./FolderListing";
 import type { FolderTrustReport } from "./FolderTrustReport";
 import type { FreeUpProjectsReport } from "./FreeUpProjectsReport";
+import type { GitHubSignIn } from "./GitHubSignIn";
 import type { GitState } from "./GitState";
 import type { KeepAwakeStatus } from "./KeepAwakeStatus";
 import type { LifecycleOutcome } from "./LifecycleOutcome";
@@ -147,13 +148,13 @@ signedIn: boolean,
  */
 results: Array<FeedbackFiled>, } | { "method": "feedbackAccount", 
 /**
- * Whether `gh` is signed in; when it isn't, each report opens in the browser.
+ * Whether `gh` is signed in; when it isn't, Send signs it in first.
  */
 signedIn: boolean, 
 /**
  * The GitHub login, when `gh` could say it.
  */
-login: string | null, } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
+login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn, } | { "method": "waitGitHubSignIn" } | { "method": "cancelGitHubSignIn" } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */
