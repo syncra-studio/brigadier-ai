@@ -2261,6 +2261,8 @@ mod status_tests;
 #[cfg(unix)]
 mod stop_hook_tests;
 #[cfg(unix)]
+mod stopped_run_tests;
+#[cfg(unix)]
 mod subfolder_rules_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]

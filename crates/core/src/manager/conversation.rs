@@ -2418,6 +2418,8 @@ impl SessionManager {
         // it started may still come, and works its request again then, as a late event does.
         self.stop_ci_watches(&id).await;
         self.stop_merge_for_stop(&id).await;
+        // With no turn to interrupt, the thread shows stopped now.
+        self.idle_without_turn(&conv).await;
         self.settle_requests(&id).await;
         interrupted
     }
@@ -2965,6 +2967,23 @@ impl SessionManager {
             .collect()
     }
 
+    /// No turn runs, none starts and none is being handed over: a run state still at Running
+    /// or Starting, as a limited turn handed to a stand-in with nothing left to say leaves it,
+    /// reads Idle (#507). Under the state's lock, so no turn starts in between.
+    async fn idle_without_turn(&self, conv: &Arc<ConvLive>) {
+        let state = conv.state.lock().await;
+        if state.busy || state.closing || state.hand_over.is_some() {
+            return;
+        }
+        let Ok(board) = self.core.board(&conv.id).await else {
+            return;
+        };
+        if matches!(board.run, RunState::Running | RunState::Starting) {
+            self.set_run(&conv.id, RunState::Idle, None).await;
+        }
+        drop(state);
+    }
+
     /// Starts the next turn if none runs and there is something to say.
     pub(crate) fn kick(&self, conv: &Arc<ConvLive>) {
         let manager = self.arc();
@@ -3064,7 +3083,8 @@ impl SessionManager {
             }
             if users.is_empty() && envelopes.is_empty() {
                 drop(state);
-                // Nothing left to say: the requests settle.
+                // Nothing left to say: the thread is idle and the requests settle.
+                self.idle_without_turn(&conv).await;
                 self.settle_requests(&conv.id).await;
                 if session && !sent_queued && self.send_queued(&conv).await {
                     sent_queued = true;
