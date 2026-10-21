@@ -52,6 +52,10 @@ appears in the Start menu, with a desktop shortcut, and keeps its data in
 `%LOCALAPPDATA%\Brigadier\Data`. If the WebView2 runtime is missing (Windows 11 and an updated
 Windows 10 already have it), the installer adds it.
 
+When Brigadier installs Claude Code for you on Windows, it also adds Claude Code's folder
+(`%USERPROFILE%\.local\bin`) to your user Path, which Claude Code's own installer leaves to you,
+so `claude` works in any new terminal. Codex's installer adds its own folder.
+
 ## Updates
 
 Brigadier checks for new versions by itself, but it asks before it updates. When a newer

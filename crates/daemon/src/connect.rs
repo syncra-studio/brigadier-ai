@@ -14,7 +14,9 @@
 //! home:
 //! - Claude Code's installer asks nothing; its `claude install` prints plain text when piped.
 //!   It leaves the shell profiles alone, so `~/.local/bin` may not be on the login PATH
-//!   ([`CliEnv::installer_folder`] finds it there).
+//!   ([`CliEnv::installer_folder`] finds it there). On Windows its `install.ps1` leaves the
+//!   user's Path alone as well, so once it has installed, Connect adds `%USERPROFILE%\.local\bin`
+//!   to the user's Path (`user_path.rs`); Codex's installer adds its own folder.
 //! - Codex's asks "Start Codex now?" (and whether to remove a conflicting npm or Homebrew
 //!   install) on `/dev/tty`, and in a terminal waits for the answer forever.
 //!   `CODEX_NON_INTERACTIVE=1` skips both questions (the answer is no), as having no
@@ -35,7 +37,11 @@
 //!   with curl's error on stderr (7: can't connect).
 
 use std::collections::{HashMap, VecDeque};
+#[cfg(windows)]
+use std::ffi::OsStr;
 use std::future::Future;
+#[cfg(windows)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -57,6 +63,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::server::Daemon;
+#[cfg(windows)]
+use crate::user_path;
 
 /// An installer that runs longer than this is stopped (a download on a slow line takes a few
 /// minutes; one that hangs never ends).
@@ -471,6 +479,9 @@ async fn publish(daemon: &Daemon) {
     }
 }
 
+#[cfg(windows)]
+type AddToPath = Arc<dyn Fn(&Path) -> std::io::Result<user_path::Added> + Send + Sync>;
+
 type Status =
     Arc<dyn Fn(ProviderKind) -> Pin<Box<dyn Future<Output = ProviderStatus> + Send>> + Send + Sync>;
 
@@ -494,12 +505,17 @@ struct Ops {
     /// Opens the vendor's sign-in page in the browser.
     #[cfg(any(unix, windows))]
     open_link: Arc<dyn Fn(&str) + Send + Sync>,
+    /// Adds a folder to the user's Path ([`user_path::add`]).
+    #[cfg(windows)]
+    add_to_path: AddToPath,
 }
 
 impl Ops {
     fn of(daemon: &Daemon) -> Self {
         let runtime = daemon.runtime.clone();
         let env = runtime.cli_env().clone();
+        #[cfg(windows)]
+        let path_env = env.clone();
         Self {
             platform: runtime.platform().clone(),
             env: runtime.cli_env().clone(),
@@ -516,6 +532,10 @@ impl Ops {
             linger: LINGER,
             #[cfg(any(unix, windows))]
             open_link: Arc::new(open_in_browser),
+            #[cfg(windows)]
+            add_to_path: Arc::new(move |folder| {
+                user_path::add(folder, |name| path_env.var(name).map(OsStr::to_os_string))
+            }),
         }
     }
 }
@@ -722,6 +742,12 @@ async fn connect(
                 format!("{label} was installed, but Brigadier can't find it. Try again."),
             );
         }
+        #[cfg(windows)]
+        if provider == ProviderKind::Claude
+            && let Some(binary) = &status.path
+        {
+            put_on_user_path(ops, provider, Path::new(binary)).await;
+        }
     }
     if status.logged_in {
         return Some(Ended::connected(status));
@@ -738,6 +764,36 @@ enum Installed {
     Done,
     Cancelled,
     Failed(String),
+}
+
+/// Claude Code's Windows installer leaves its folder off the user's Path, so `claude` would be
+/// "not recognized" in a terminal: when the agent just installed is in its installer's folder,
+/// that folder is added ([`user_path`]). A failure is only logged; the agent is installed.
+#[cfg(windows)]
+async fn put_on_user_path(ops: &Ops, provider: ProviderKind, binary: &Path) {
+    let Some(folder) = ops.env.installer_folder(provider) else {
+        return;
+    };
+    if !binary.starts_with(&folder) {
+        return;
+    }
+    let shown = folder.display().to_string();
+    let add = ops.add_to_path.clone();
+    let added = tokio::task::spawn_blocking(move || add(&folder))
+        .await
+        .map_err(std::io::Error::other)
+        .flatten();
+    match added {
+        Ok(user_path::Added::Already) => {
+            tracing::info!(%provider, folder = %shown, "the agent's folder is on the user's Path already");
+        }
+        Ok(user_path::Added::Appended | user_path::Added::Created) => {
+            tracing::info!(%provider, folder = %shown, "added the agent's folder to the user's Path");
+        }
+        Err(error) => {
+            tracing::warn!(%provider, folder = %shown, %error, "the agent's folder couldn't be added to the user's Path");
+        }
+    }
 }
 
 /// The spawn spec of the vendor's installer: its line in a shell that fails with the

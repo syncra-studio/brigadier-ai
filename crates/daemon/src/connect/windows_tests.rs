@@ -158,7 +158,21 @@ fn ops(home: &Home, provider: ProviderKind) -> Ops {
         unwatched_poll: Duration::from_millis(500),
         linger: Duration::from_millis(100),
         open_link: Arc::new(move |link| std::fs::write(opened.join("opened"), link).unwrap()),
+        add_to_path: path_written_to(home.0.join("path-added")),
     }
+}
+
+/// Never the real user's Path: each folder Connect adds is written down in `file` (user_path.rs's
+/// own tests use a scratch registry key).
+fn path_written_to(file: PathBuf) -> AddToPath {
+    Arc::new(move |folder| {
+        let mut added = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file)?;
+        std::io::Write::write_all(&mut added, format!("{}\n", folder.display()).as_bytes())?;
+        Ok(user_path::Added::Appended)
+    })
 }
 
 fn no_codes() -> Codes {
@@ -240,10 +254,18 @@ async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
         assert_eq!(home.text("opened"), LINK);
         assert_eq!(home.text("tries").lines().count(), 1);
         assert_eq!(home.text("stdin-closed").trim(), "yes");
+        // Claude Code's folder goes on the user's Path; Codex's installer adds its own.
+        let added = match provider {
+            ProviderKind::Claude => format!("{}\n", home.bin(provider).display()),
+            ProviderKind::Codex => String::new(),
+        };
+        assert_eq!(home.text("path-added"), added);
         stopped(&home, &ops).await;
         std::fs::remove_file(home.0.join("login-started")).unwrap();
         assert!(run(&ops, provider).await.1.is_empty());
         assert!(!home.0.join("login-started").exists());
+        // Only an install adds it.
+        assert_eq!(home.text("path-added"), added);
     }
 }
 
@@ -296,6 +318,8 @@ async fn an_install_error_or_missing_binary_never_starts_sign_in() {
             })
         );
         assert!(!home.0.join("login-started").exists());
+        // A failed install puts nothing on Path.
+        assert_eq!(home.text("path-added"), "");
         stopped(&home, &ops).await;
     }
 }
@@ -340,6 +364,8 @@ async fn sign_in_failure_retry_and_connected_before_exit() {
         assert_eq!(outcome, Some(ConnectProgress::Connected));
         assert_eq!(seen, [ConnectProgress::SigningIn]);
         assert_eq!(home.text("tries").lines().count(), 0);
+        // Installed already, not by Connect: Path is left alone.
+        assert_eq!(home.text("path-added"), "");
         stopped(&home, &ops).await;
     }
 }
@@ -495,6 +521,7 @@ async fn live_install_up_to_the_sign_in_link() {
         unwatched_poll: UNWATCHED_POLL,
         linger: LINGER,
         open_link: Arc::new(move |link| std::fs::write(&opened, link).unwrap()),
+        add_to_path: path_written_to(home.join("brigadier-path-added")),
     };
     assert!(
         (ops.status)(provider).await.path.is_none(),

@@ -214,6 +214,12 @@ stays small; keep new ones lazy too.
   cargo run -p brigadier-providers --features codegen --bin gen-codex -- "$(command -v codex)"
   ```
 
+On Windows, once Connect has installed Claude Code, it adds `%USERPROFILE%\.local\bin` to the
+user's Path (`HKCU\Environment`), keeping the value's type and text, and announces the change
+(`crates/daemon/src/user_path.rs`): Claude Code's `install.ps1` doesn't. The machine's Path is
+never written. Its tests use a scratch `HKCU\Software\BrigadierTest-<random>` key, and
+Connect's tests write the folder to a file instead.
+
 To try Connect's sign-in in a test run whose `HOME` is a scratch folder, start the default
 browser first. Codex (0.163.0) ignores `BROWSER` on macOS and opens its sign-in page itself, with
 the sign-in's environment: a browser that isn't running yet then starts with the scratch `HOME`
