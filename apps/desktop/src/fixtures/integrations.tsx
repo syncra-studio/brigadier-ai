@@ -676,6 +676,8 @@ const input = (label: string, value: string) => {
 const tileNames = () => all('[data-slot="integration-tile"] button:first-child').map((node) => node.getAttribute("aria-label"));
 const switches = () => all('[role="switch"]').map((node) => ({ label: node.getAttribute("aria-label"), checked: node.getAttribute("aria-checked"), disabled: node.hasAttribute("disabled") }));
 /** The Sign-in section: its status row and each agent's row. */
+const latestSignIn = () => `sign-in-${signIns}`;
+
 function readSignIn() {
   const status = document.querySelector('[data-slot="sign-in-status"]');
   if (!status) return null;
@@ -766,14 +768,15 @@ const radio = (title: string) => {
   node.click();
 };
 
+const readWhereState = () => ({ ...readState(), where: readWhere() });
+const switchesNow = () => structuredClone(current.switches);
+
 /** Every Where it's used state, then its actions: the picker, an exception's X, the radios, the project view's switches and search. */
 async function driveWhere(openState: (state: string) => Promise<void>) {
   const seen: Record<string, unknown> = {};
-  const read = () => ({ ...readState(), where: readWhere() });
-  const settings = () => structuredClone(current.switches);
   for (const state of Object.keys(WHERE_STATES)) {
     await openState(state);
-    seen[state] = read();
+    seen[state] = readWhereState();
   }
   // The chip and the X name what they do on hover.
   await openState("where-skills");
@@ -788,37 +791,37 @@ async function driveWhere(openState: (state: string) => Promise<void>) {
   input("Find a project", ""); await pause();
   const picked = all<HTMLButtonElement>('[role="dialog"] button').find((button) => text(button).startsWith("brigadier-ai"))!;
   picked.click(); await pause();
-  seen.picked = { ...read(), settings: settings() };
+  seen.picked = { ...readWhereState(), settings: switchesNow() };
   click("Remove steady-app's exception"); await pause();
-  seen.removed = { ...read(), settings: settings() };
+  seen.removed = { ...readWhereState(), settings: switchesNow() };
   // A project's own item: used in every project, then kept in its project again; on, then off there.
   await openState("where-postgres");
   radio("Every project"); await pause();
-  seen.postgresEverywhere = { ...read(), settings: settings() };
+  seen.postgresEverywhere = { ...readWhereState(), settings: switchesNow() };
   radio("Only in brigadier-ai"); await pause();
-  seen.postgresOnly = { ...read(), settings: settings() };
+  seen.postgresOnly = { ...readWhereState(), settings: switchesNow() };
   click("postgres"); await pause();
-  seen.postgresOff = { ...read(), settings: settings() };
+  seen.postgresOff = { ...readWhereState(), settings: switchesNow() };
   radio("Every project"); await pause();
-  seen.postgresOffEverywhere = { ...read(), settings: settings() };
+  seen.postgresOffEverywhere = { ...readWhereState(), settings: switchesNow() };
   radio("Only in brigadier-ai"); await pause();
-  seen.postgresOffOnly = { ...read(), settings: settings() };
+  seen.postgresOffOnly = { ...readWhereState(), settings: switchesNow() };
   await openState("where-steady-api");
   radio("Only in steady-app"); await pause();
-  seen.steadyOnly = { ...read(), settings: settings() };
+  seen.steadyOnly = { ...readWhereState(), settings: switchesNow() };
   // The project view: a switch adds or removes brigadier-ai's exception; its own item's is its on or off there.
   await openState("where-brigadier");
   click("playwright"); await pause();
   click("steady-api"); await pause();
-  seen.viewSwitched = { ...read(), settings: settings() };
+  seen.viewSwitched = { ...readWhereState(), settings: switchesNow() };
   click("postgres"); await pause();
-  seen.viewOwn = settings();
+  seen.viewOwn = switchesNow();
   // Settings search finds servers by name with where they live, and the project.
   await openState("where-servers");
   input("Search settings", "steady"); await pause();
   seen.search = all('[data-sidebar="sidebar"] button').map(text).filter((line) => line.startsWith("steady"));
   click("steady-appPlugins · project view"); await pause();
-  seen.searchOpened = read();
+  seen.searchOpened = readWhereState();
   input("Search settings", ""); await pause();
   seen.edits = edits;
   seen.writes = writes;
@@ -942,35 +945,33 @@ async function driveSignIn(openState: (state: string) => Promise<void>) {
   await poll();
   seen.restoredDone = readState();
   seen.calls = [...calls];
-  const signIn = () => readSignIn();
-  const latest = () => `sign-in-${signIns}`;
   // A restored attempt keeps waiting after the catalog drops its id, until its end is read.
   statuses.delete("sign-in-restored");
   await openState("notion-needed");
   await openState("notion-restored");
   current = snapshotFor("notion-needed");
   emit(); await pause();
-  seen.droppedWaiting = signIn();
+  seen.droppedWaiting = readSignIn();
   statuses.set("sign-in-restored", { type: "failed", reason: "Timed out after 5 minutes. Nothing was saved." });
   await poll();
-  seen.droppedFailed = signIn();
+  seen.droppedFailed = readSignIn();
   // A dropped connection keeps the attempt waiting; an attempt the daemon no longer knows has ended.
   await openState("notion-needed");
   click("Sign in in Brigadier"); await pause();
   flaky = 1;
   await poll();
-  seen.flakyWaiting = signIn();
-  gone.add(latest());
+  seen.flakyWaiting = readSignIn();
+  gone.add(latestSignIn());
   await poll();
-  seen.interrupted = signIn();
+  seen.interrupted = readSignIn();
   click("Try again"); await pause();
-  gone.add(latest());
+  gone.add(latestSignIn());
   click("Cancel"); await pause();
-  seen.cancelledGone = { ...signIn(), alert: text(document.querySelector('[role="alert"]')) };
+  seen.cancelledGone = { ...readSignIn(), alert: text(document.querySelector('[role="alert"]')) };
   click("Sign in in Brigadier"); await pause();
-  gone.add(latest());
+  gone.add(latestSignIn());
   click("Open the page again"); await pause();
-  seen.reopenGone = signIn();
+  seen.reopenGone = readSignIn();
   // Switched off, a signed-in server doesn't say every worker can use it.
   await openState("linear-reusing");
   click("linear"); await pause();
@@ -982,18 +983,18 @@ async function driveSignIn(openState: (state: string) => Promise<void>) {
   };
   await openState("linear-partial");
   click("Sign in in Brigadier"); await pause();
-  statuses.set(latest(), { type: "failed", reason: "The server didn't accept the sign-in." });
+  statuses.set(latestSignIn(), { type: "failed", reason: "The server didn't accept the sign-in." });
   await poll();
-  seen.partialFailed = signIn();
+  seen.partialFailed = readSignIn();
   codexSignedIn(); await pause();
-  seen.recoveredAfter = signIn();
+  seen.recoveredAfter = readSignIn();
   await openState("linear-reusing");
   await openState("linear-partial");
   click("Sign in in Brigadier"); await pause();
   codexSignedIn(); await pause();
-  statuses.set(latest(), { type: "failed", reason: "The server didn't accept the sign-in." });
+  statuses.set(latestSignIn(), { type: "failed", reason: "The server didn't accept the sign-in." });
   await poll();
-  seen.recoveredBefore = signIn();
+  seen.recoveredBefore = readSignIn();
   seen.reviewCalls = calls.slice((seen.calls as string[]).length);
   return seen;
 }

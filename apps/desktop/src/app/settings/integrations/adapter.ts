@@ -105,7 +105,7 @@ export function scopeOf(item: IntegrationServer | IntegrationSkill, snapshot: In
   const everywhere = (kind === "server" ? switches.serversEverywhere : switches.skillsEverywhere) ?? [];
   const stays = !!origin && !ids.some((id) => everywhere.includes(id));
   const exceptions = stays ? [] : (catalog.projects ?? []).filter((project) => {
-    const entry = switches.projectSwitches?.find((item) => item.projectId === project.id);
+    const entry = switches.projectSwitches?.find((switched) => switched.projectId === project.id);
     if (!entry) return false;
     const list = kind === "server" ? on ? entry.serversOff : entry.serversOn : on ? entry.skillsOff : entry.skillsOn;
     return ids.some((id) => list.includes(id));
