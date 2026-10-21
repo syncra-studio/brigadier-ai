@@ -11,10 +11,15 @@ export type IntegrationSource =
   | "CursorUser"
   | "CursorProject";
 
+/** How one agent's workers are signed in to a remote server (`SignInState`). */
 export type IntegrationSignIn =
   | { kind: "native" }
   | { kind: "reusable"; from: IntegrationAgent }
-  | { kind: "required" };
+  | { kind: "brigadier"; sinceMs?: number }
+  | { kind: "needed" }
+  | { kind: "unknown" }
+  | { kind: "notAllowed"; from: IntegrationAgent }
+  | { kind: "unsupported" };
 
 export type IntegrationServer = {
   id: string;
@@ -25,6 +30,8 @@ export type IntegrationServer = {
   env: string[];
   headers: string[];
   signIn: Partial<Record<IntegrationAgent, IntegrationSignIn>>;
+  /** The sign-in in Brigadier waiting for the user's browser, by its id. */
+  pendingSignIn?: string;
   nativeAgents: IntegrationAgent[];
   canSwitchOff: boolean;
   error?: string;

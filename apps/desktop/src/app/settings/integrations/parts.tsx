@@ -54,14 +54,18 @@ export function InfoRow({ title, value, mono = true, titleMono = false, error = 
     {show ? <Button variant="soft" size="sm" onClick={onShow}>Show {show}</Button> : mono && <CopyButton text={value} size="xs" />}
   </div>;
 }
-export function WorkerRow({ agent, line, status, tone = "secondary", always = false, dim = false }: {
-  agent: IntegrationAgent; line: string; status: string; tone?: "secondary" | "success" | "warning"; always?: boolean; dim?: boolean;
+export function WorkerRow({ agent, title, line, status, tone = "secondary", always = false, dim = false, trailing }: {
+  agent: IntegrationAgent; title?: string; line: string; status?: string; tone?: "secondary" | "success" | "warning"; always?: boolean; dim?: boolean; trailing?: ReactNode;
 }) {
-  return <div className="flex items-center gap-3 px-4 py-3">
+  return <div data-slot="worker-row" className="flex items-center gap-3 px-4 py-3">
     <span className={cn("bg-foreground/5 rounded-control flex size-7 shrink-0 items-center justify-center", dim && "opacity-50")}><ProviderGlyph provider={agent} className="text-foreground/85 size-3.5" /></span>
-    <div className="flex min-w-0 flex-1 flex-col gap-0.75"><span className="text-label font-medium">{agent === "claude" ? "Claude" : "Codex"} workers</span><span className="text-foreground/65 text-xs leading-integration">{line}</span></div>
-    {always ? <ClaudeAlways /> : <Badge variant={tone}>{status}</Badge>}
+    <div className="flex min-w-0 flex-1 flex-col gap-0.75"><span className="text-label font-medium">{title ?? `${agent === "claude" ? "Claude" : "Codex"} workers`}</span><span className="text-foreground/65 text-xs leading-integration">{line}</span></div>
+    {always ? <ClaudeAlways /> : trailing ?? (status && <Badge variant={tone}>{status}</Badge>)}
   </div>;
+}
+/** A command to copy, in a mono chip (`codex mcp login linear`). */
+export function CommandChip({ command }: { command: string }) {
+  return <span className="bg-code-surface border-divider flex min-w-0 shrink-0 items-center gap-1.5 rounded-md border py-0.5 pr-0.5 pl-2 text-xs"><code className="text-foreground truncate">{command}</code><CopyButton text={command} size="xs" /></span>;
 }
 export function IntegrationNote({ children }: { children: ReactNode }) {
   return <div className="bg-foreground/5 text-foreground/65 rounded-control flex items-start gap-2 px-3 py-2.5 text-xs leading-integration"><Info className="size-3.5 shrink-0" /><div>{children}</div></div>;

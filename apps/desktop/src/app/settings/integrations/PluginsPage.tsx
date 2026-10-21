@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useIntegrations, type IntegrationAdapter, type IntegrationSnapshot } from "./adapter";
 import { AgentMarks, ClaudeAlways, SkillMark } from "./parts";
 import { ServerMark, ServerPage, serverCommand } from "./ServerPage";
+import { needsSignIn } from "./SignInSection";
 import { SkillPage } from "./SkillPage";
 import type { IntegrationServer, IntegrationSkill } from "./types";
 
@@ -38,7 +39,7 @@ export function PluginsPage() {
 }
 
 type Tab = "servers" | "skills";
-type Selection = { tab: Tab; id: string } | null;
+type Selection = { tab: Tab; id: string; signIn?: boolean } | null;
 export function PluginsView({ snapshot, adapter, error, initialTab = "servers", initialId }: {
   snapshot: IntegrationSnapshot; adapter: IntegrationAdapter | null; error?: string | null; initialTab?: Tab; initialId?: string;
 }) {
@@ -66,7 +67,7 @@ export function PluginsView({ snapshot, adapter, error, initialTab = "servers", 
   const skill = selected?.tab === "skills" ? catalog.skills.find((item) => item.id === selected.id) : undefined;
   const back = () => setSelected(null);
   let page;
-  if (server) page = <ServerPage server={server} enabled={!switches.mcpServersOff.includes(server.id)} busy={action.busy || !adapter} onEnabled={(value) => toggleServer(server.id, value)} onBack={back} onShowPath={show} />;
+  if (server) page = <ServerPage server={server} enabled={!switches.mcpServersOff.includes(server.id)} busy={action.busy || !adapter} adapter={adapter} focusSignIn={selected?.signIn} run={action.run} onEnabled={(value) => toggleServer(server.id, value)} onBack={back} onShowPath={show} />;
   else if (skill) page = <SkillPage skill={skill} skills={catalog.skills} enabled={!switches.skillsOff.includes(skill.id)} busy={action.busy || !adapter} onEnabled={(value) => toggleSkill(skill.id, value)} onBack={back} onShowPath={show} />;
   else {
     const items = tab === "servers" ? catalog.servers : catalog.skills;
@@ -100,7 +101,7 @@ export function PluginsView({ snapshot, adapter, error, initialTab = "servers", 
             {members.length ? <div className="grid grid-cols-1 gap-x-2 gap-y-0.5 @lg:grid-cols-2">{members.map((item) => {
               const isSkill = "description" in item;
               const off = (isSkill ? switches.skillsOff : switches.mcpServersOff).includes(item.id);
-              return <IntegrationTile key={item.id} item={item} off={off} highlighted={highlight === `${isSkill ? "skill" : "server"}:${item.id}`} busy={action.busy || !adapter} onOpen={() => setSelected({ tab, id: item.id })} onToggle={(value) => isSkill ? toggleSkill(item.id, value) : toggleServer(item.id, value)} />;
+              return <IntegrationTile key={item.id} item={item} off={off} highlighted={highlight === `${isSkill ? "skill" : "server"}:${item.id}`} busy={action.busy || !adapter} onOpen={() => setSelected({ tab, id: item.id, ...(!isSkill && needsSignIn(item) ? { signIn: true } : {}) })} onToggle={(value) => isSkill ? toggleSkill(item.id, value) : toggleServer(item.id, value)} />;
             })}</div> : <CatalogEmpty tab={tab} projects={catalog.trustedProjectCount ?? 0} />}
           </section>;
         })}
@@ -117,8 +118,8 @@ function IntegrationTile({ item, off, busy, highlighted, onOpen, onToggle }: {
   const skill = "description" in item;
   const always = skill && !item.canSwitchOff && item.nativeAgents.includes("claude");
   const error = !skill && item.error;
-  const missing = !skill && (["claude", "codex"] as const).find((agent) => item.signIn[agent]?.kind === "required");
-  const line = skill ? always && off ? "Off for Codex workers · Claude workers still have it" : item.description : error ? `Couldn't read it: ${error.charAt(0).toLowerCase()}${error.slice(1)}` : missing ? `Not signed in for ${missing === "codex" ? "Codex" : "Claude"} · ${missing === "codex" ? "Codex" : "Claude"} workers can't use it` : serverCommand(item);
+  const missing = !skill && needsSignIn(item);
+  const line = skill ? always && off ? "Off for Codex workers · Claude workers still have it" : item.description : error ? `Couldn't read it: ${error.charAt(0).toLowerCase()}${error.slice(1)}` : missing ? "Needs a sign-in · no worker can use it yet" : serverCommand(item);
   return <div data-slot="integration-tile" data-setting={`${skill ? "skill" : "server"}:${item.id}`} className={cn("hover:bg-foreground/5 flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5", highlighted && "bg-foreground/8")}>
     <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-label={`Open ${item.name}${item.project ? ` in ${item.project}` : ""}`}>
       <span className="shrink-0">{skill ? <SkillMark id={item.id} dim={off && !always} /> : <ServerMark server={item} dim={off} />}</span>

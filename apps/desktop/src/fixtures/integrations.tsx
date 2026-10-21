@@ -1,4 +1,4 @@
-/** All fifteen screen states on settings.pen's Plugins board. No sample data enters the app. */
+/** All fifteen screen states on settings.pen's Plugins board, and the Plugins · Signing in board's. No sample data enters the app. */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -6,11 +6,12 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { PluginsView } from "@/app/settings/integrations/PluginsPage";
 import { connectIntegrations, useIntegrations, type IntegrationAdapter, type IntegrationSnapshot } from "@/app/settings/integrations/adapter";
-import type { IntegrationServer, IntegrationSkill } from "@/app/settings/integrations/types";
+import type { IntegrationServer, IntegrationSignIn, IntegrationSkill } from "@/app/settings/integrations/types";
 import { revealSetting, useReveal } from "@/app/settings/reveal";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
 import { TooltipProvider } from "@/components/overlays";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
+import type { McpSignInStatus } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
@@ -56,7 +57,8 @@ const servers: IntegrationServer[] = [
         "kind": "native"
       },
       "codex": {
-        "kind": "required"
+        "kind": "reusable",
+        "from": "claude"
       }
     },
     "nativeAgents": [
@@ -434,7 +436,30 @@ const skills: IntegrationSkill[] = [
   }
 ];
 
+// The Signing in board's remote server that no agent is signed in to.
+const notion: IntegrationServer = {
+  id: "CodexUser:notion", name: "notion", sources: ["CodexUser"], transport: { kind: "http", url: "https://mcp.notion.com/mcp" }, env: [], headers: [],
+  signIn: { claude: { kind: "needed" }, codex: { kind: "needed" } }, nativeAgents: ["codex"], canSwitchOff: true,
+};
+const SIGNED_ON = Date.UTC(2026, 9, 21, 12);
+const native: IntegrationSignIn = { kind: "native" };
 const SERVER_STATES = ["servers", "search", "linear", "pencil", "unreadable", "empty-servers", "long-servers", "narrow-servers"];
+/** Each sign-in state: linear's or notion's agent states (the board's, then the ones it doesn't draw). */
+const SIGN_IN_STATES: Record<string, Partial<IntegrationServer>> = {
+  "sign-in-list": {},
+  "linear-reusing": { signIn: { claude: native, codex: { kind: "reusable", from: "claude" } } },
+  "notion-needed": {},
+  "notion-both": { sources: ["ClaudeUser", "CodexUser"], nativeAgents: ["claude", "codex"] },
+  "notion-brigadier": { signIn: { claude: { kind: "brigadier", sinceMs: SIGNED_ON }, codex: { kind: "brigadier", sinceMs: SIGNED_ON } } },
+  "notion-undated": { signIn: { claude: { kind: "brigadier" }, codex: { kind: "brigadier" } } },
+  "notion-restored": { pendingSignIn: "sign-in-restored" },
+  "linear-refused": { signIn: { claude: native, codex: { kind: "notAllowed", from: "claude" } } },
+  "linear-unknown": { signIn: { claude: native, codex: { kind: "unknown" } } },
+  "linear-unchecked": { signIn: { claude: { kind: "needed" }, codex: { kind: "unknown" } } },
+  "linear-native": { sources: ["ClaudeUser", "CodexUser"], nativeAgents: ["claude", "codex"], signIn: { claude: native, codex: native } },
+  "linear-partial": { signIn: { claude: native, codex: { kind: "needed" } } },
+  "linear-not-mac": { signIn: { claude: native, codex: { kind: "unsupported" } } },
+};
 const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "empty-skills", "narrow-skills"];
 
 function snapshotFor(state: string): IntegrationSnapshot {
@@ -442,6 +467,11 @@ function snapshotFor(state: string): IntegrationSnapshot {
     catalog: { servers: structuredClone(servers), skills: structuredClone(skills), trustedProjectCount: 3, untrustedProjects: ["scratch", "old-landing"] },
     switches: { mcpServersOff: [servers[4]!.id], skillsOff: [skills[4]!.id] },
   };
+  if (state in SIGN_IN_STATES) {
+    snapshot.catalog.servers.splice(3, 0, structuredClone(notion));
+    const target = snapshot.catalog.servers.find((server) => server.name === (state.startsWith("linear") ? "linear" : "notion"))!;
+    Object.assign(target, structuredClone(SIGN_IN_STATES[state]));
+  }
   if (state === "empty-servers") snapshot.catalog.servers = [];
   if (state === "empty-skills") snapshot.catalog.skills = [];
   if (state.startsWith("empty")) snapshot.catalog.untrustedProjects = [];
@@ -466,8 +496,8 @@ function snapshotFor(state: string): IntegrationSnapshot {
 }
 function viewFor(state: string) {
   const tab = SKILL_STATES.includes(state) ? "skills" as const : "servers" as const;
-  const name = state === "claude-skill" ? "higgsfield-websites" : state === "unreadable" ? "figma-dev" : state;
-  const item = (tab === "skills" ? skills : servers).find((entry) => entry.name === name);
+  const name = state === "claude-skill" ? "higgsfield-websites" : state === "unreadable" ? "figma-dev" : state in SIGN_IN_STATES ? state.split("-")[0] : state;
+  const item = (tab === "skills" ? skills : snapshotFor(state).catalog.servers).find((entry) => entry.name === name);
   return { initialTab: tab, ...(item ? { initialId: item.id } : {}) };
 }
 
@@ -482,6 +512,10 @@ let current = snapshotFor(initialState);
 const listeners = new Set<() => void>();
 const writes: { kind: string; id: string; enabled: boolean }[] = [];
 const shown: string[] = [];
+// The sign-in IPC the page sent, and how each sign-in the fake daemon started is going.
+const calls: string[] = [];
+const statuses = new Map<string, McpSignInStatus>();
+let signIns = 0;
 const emit = () => listeners.forEach((listener) => listener());
 const adapter: IntegrationAdapter = {
   read: async () => current,
@@ -497,10 +531,23 @@ const adapter: IntegrationAdapter = {
     emit();
   },
   showPath: async (path) => { shown.push(path); },
+  signIn: async (id) => {
+    const signInId = `sign-in-${++signIns}`;
+    calls.push(`signInMcpServer ${id}`);
+    statuses.set(signInId, { type: "pending" });
+    return signInId;
+  },
+  signInStatus: async (signInId) => statuses.get(signInId) ?? { type: "pending" },
+  cancelSignIn: async (signInId) => { calls.push(`cancelMcpSignIn ${signInId}`); statuses.set(signInId, { type: "cancelled" }); },
+  reopenSignIn: async (signInId) => { calls.push(`reopenMcpSignIn ${signInId}`); },
+  signOut: async (id) => { calls.push(`signOutMcpServer ${id}`); },
+  askSignInAgain: async (id) => { calls.push(`askMcpSignInAgain ${id}`); },
 };
 connectIntegrations(adapter);
 
 const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 60));
+// The sign-in status polls each second, in the page's virtual time.
+const poll = () => new Promise<void>((resolve) => setTimeout(resolve, 1100));
 const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => [...root.querySelectorAll<T>(selector)];
 const text = (node: Element | null) => node?.textContent?.trim() ?? "";
 const main = () => document.querySelector("main")!;
@@ -517,6 +564,23 @@ const input = (label: string, value: string) => {
 };
 const tileNames = () => all('[data-slot="integration-tile"] button:first-child').map((node) => node.getAttribute("aria-label"));
 const switches = () => all('[role="switch"]').map((node) => ({ label: node.getAttribute("aria-label"), checked: node.getAttribute("aria-checked"), disabled: node.hasAttribute("disabled") }));
+/** The Sign-in section: its status row and each agent's row. */
+function readSignIn() {
+  const status = document.querySelector('[data-slot="sign-in-status"]');
+  if (!status) return null;
+  const [tile, words] = [...status.children];
+  return {
+    title: text(words!.children[0]!),
+    line: text(words!.children[1]!),
+    tile: ["bg-success/15", "bg-warning/15", "bg-destructive/10", "bg-foreground/5"].find((name) => tile!.classList.contains(name)),
+    spinner: !!tile!.querySelector(".animate-spin"),
+    actions: all("button", status).map(text),
+    rows: all('[data-slot="worker-row"]', main()).map((row) => {
+      const [, labels, end] = [...row.children];
+      return { title: text(labels!.children[0]!), line: text(labels!.children[1]!), end: text(end?.querySelector("code") ?? end ?? null) };
+    }),
+  };
+}
 function readState() {
   const tile = document.querySelector('[data-slot="integration-tile"]');
   const style = tile ? getComputedStyle(tile) : null;
@@ -525,9 +589,13 @@ function readState() {
     sections: all("main h2").map(text),
     text: text(main()),
     tiles: tileNames(),
+    // Tiles whose mark is the orange Key of a server that needs a sign-in.
+    keyTiles: all('[data-slot="integration-tile"]').filter((item) => item.querySelector(".bg-warning\\/15")).map((item) => item.getAttribute("data-setting")),
     switches: switches(),
     tile: style ? { padding: style.padding.split(" ").map(parseFloat), radius: parseFloat(style.borderRadius), gap: parseFloat(style.gap) } : null,
     overflow: main().scrollWidth > main().clientWidth,
+    description: text(document.querySelector("main h1")?.nextElementSibling ?? null),
+    signIn: readSignIn(),
   };
 }
 
@@ -535,11 +603,13 @@ async function drive(change: (state: string) => void) {
   const seen: Record<string, unknown> = {};
   const openState = async (state: string) => {
     useReveal.setState({ label: null });
+    useApp.setState((app) => ({ info: { ...app.info, platform: state === "linear-not-mac" ? "linux" : "macos" } as typeof app.info }));
     current = snapshotFor(state);
     emit();
     change(state);
     await pause();
   };
+  if (params.get("drive") === "sign-in") return driveSignIn(openState);
   const skillMode = params.get("drive") === "skills";
   for (const state of skillMode ? SKILL_STATES : SERVER_STATES) {
     await openState(state);
@@ -578,15 +648,73 @@ async function drive(change: (state: string) => void) {
     current = { ...current, catalog: { ...current.catalog, servers: current.catalog.servers.map((server) => server.name === "linear" ? { ...server, nativeAgents: ["claude", "codex"], signIn: { claude: { kind: "native" }, codex: { kind: "reusable", from: "claude" } } } : server) } };
     emit(); await pause();
     seen.reusable = readState();
-    current = { ...current, catalog: { ...current.catalog, servers: current.catalog.servers.map((server) => server.name === "linear" ? { ...server, name: "linear team", signIn: { claude: { kind: "required" }, codex: { kind: "required" } } } : server) } };
+    current = { ...current, catalog: { ...current.catalog, servers: current.catalog.servers.map((server) => server.name === "linear" ? { ...server, name: "linear team", signIn: { claude: { kind: "needed" }, codex: { kind: "needed" } } } : server) } };
     emit(); await pause();
     seen.unsigned = readState();
+    // Set up only in Claude Code: Codex has no entry its own login could find.
+    current = { ...current, catalog: { ...current.catalog, servers: current.catalog.servers.map((server) => server.name === "linear team" ? { ...server, nativeAgents: ["claude"] } : server) } };
+    emit(); await pause();
+    seen.claudeOnly = readState();
   }
   await openState(skillMode ? "skills" : "servers");
   current = { ...current, catalog: { ...current.catalog, ...(skillMode ? { skills: current.catalog.skills.slice(1) } : { servers: current.catalog.servers.slice(1) }) } };
   emit(); await pause();
   seen.refreshed = tileNames();
   seen.writes = writes;
+  return seen;
+}
+
+/** Every sign-in state, then the actions: the tile, signing in, failing, cancelling, checking and signing out. */
+async function driveSignIn(openState: (state: string) => Promise<void>) {
+  const seen: Record<string, unknown> = {};
+  const scrolled: boolean[] = [];
+  const scroll = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function (this: Element, ...args: Parameters<Element["scrollIntoView"]>) {
+    scrolled.push(!!this.querySelector('[data-slot="sign-in-status"]'));
+    scroll.apply(this, args);
+  };
+  for (const state of Object.keys(SIGN_IN_STATES)) {
+    await openState(state);
+    seen[state] = readState();
+  }
+  await openState("sign-in-list");
+  click("Open linear"); await pause();
+  seen.linearScrolled = [...scrolled];
+  click("Plugins"); await pause();
+  click("Open notion"); await pause();
+  seen.notionOpened = readState();
+  seen.notionScrolled = [...scrolled];
+  click("Sign in in Brigadier"); await pause();
+  seen.signing = readState();
+  click("Open the page again"); await pause();
+  statuses.set("sign-in-1", { type: "failed", reason: "The server didn't accept the sign-in." });
+  await poll();
+  seen.failed = readState();
+  click("Try again"); await pause();
+  statuses.set("sign-in-2", { type: "failed", reason: "Timed out after 5 minutes. Nothing was saved." });
+  await poll();
+  seen.timedOut = readState();
+  click("Try again"); await pause();
+  click("Cancel"); await pause();
+  seen.cancelledNeeded = readState();
+  await openState("linear-refused");
+  click("Ask macOS again"); await pause();
+  click("Sign in in Brigadier"); await pause();
+  seen.signingRefused = readState();
+  click("Cancel"); await pause();
+  seen.cancelledRefused = readState();
+  await openState("linear-unknown");
+  click("Check now"); await pause();
+  await openState("notion-brigadier");
+  click("Sign out"); await pause();
+  // Settings reopened while a sign-in waits: Waiting comes back, then the daemon reports it done.
+  await openState("notion-restored");
+  seen.restored = readState();
+  current = snapshotFor("notion-brigadier");
+  statuses.set("sign-in-restored", { type: "signedIn" });
+  await poll();
+  seen.restoredDone = readState();
+  seen.calls = calls;
   return seen;
 }
 

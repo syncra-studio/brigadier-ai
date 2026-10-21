@@ -53,18 +53,21 @@ function sourceFile(kind: IntegrationSource, project: string | null): string {
 
 const agentOf = (provider: ProviderKind): IntegrationAgent => provider;
 
-/** How an agent's workers are signed in; Brigadier's own shows as native until its design exists. */
-function signIn(state: SignInState): IntegrationSignIn {
+/** How an agent's workers are signed in, as the page shows it. */
+export function signIn(state: SignInState): IntegrationSignIn {
   switch (state.type) {
-    case "native":
-    case "inBrigadier": return { kind: "native" };
+    case "native": return { kind: "native" };
     case "reusableFrom": return { kind: "reusable", from: agentOf(state.agent) };
-    case "needed":
-    case "unknown":
-    case "notAllowed":
-    case "unsupported": return { kind: "required" };
+    case "inBrigadier": return state.sinceMs === null ? { kind: "brigadier" } : { kind: "brigadier", sinceMs: state.sinceMs };
+    case "needed": return { kind: "needed" };
+    case "unknown": return { kind: "unknown" };
+    case "notAllowed": return { kind: "notAllowed", from: agentOf(state.agent) };
+    case "unsupported": return { kind: "unsupported" };
   }
 }
+
+/** A copy's own sign-in first, then one reused or made in Brigadier. */
+const SIGN_IN_ORDER: IntegrationSignIn["kind"][] = ["native", "reusable", "brigadier"];
 
 /** Copies of one server: the same name and project, and a transport with the same values (`copyKey` hashes them). */
 function sameServer(a: McpServerView, b: McpServerView): boolean {
@@ -94,10 +97,11 @@ function server(members: McpServerView[], projects: Project[]): IntegrationServe
   const states: Partial<Record<IntegrationAgent, IntegrationSignIn>> = {};
   for (const agent of ["claude", "codex"] as const) {
     const all = members.flatMap((member) => (member.signIn ? [signIn(member.signIn[agent])] : []));
-    const best = all.find((state) => state.kind === "native") ?? all.find((state) => state.kind === "reusable") ?? all[0];
+    const best = SIGN_IN_ORDER.map((kind) => all.find((state) => state.kind === kind)).find(Boolean) ?? all[0];
     if (best) states[agent] = best;
   }
   const transport = first.transport;
+  const pending = members.find((member) => member.pendingSignIn)?.pendingSignIn;
   return {
     id: first.id,
     name: first.name,
@@ -107,6 +111,7 @@ function server(members: McpServerView[], projects: Project[]): IntegrationServe
     env: transport.type === "stdio" ? transport.env : [],
     headers: transport.type === "http" ? transport.headers : [],
     signIn: states,
+    ...(pending ? { pendingSignIn: pending } : {}),
     nativeAgents: agents,
     canSwitchOff: true,
     sourceFiles: members.map((member) => ({ source: source(member.source), path: sourceFile(source(member.source), member.project) })),
@@ -173,10 +178,17 @@ export function mergeViews(user: IntegrationsView, perProject: IntegrationsView[
   return merged;
 }
 
-/** The page's snapshot of the daemon's `view`, and the daemon ids behind each server row. */
+/** The daemon's server and project a sign-in request names. */
+export type SignInTarget = { serverId: string; projectId: string | null };
+
+/** The page's snapshot of the daemon's `view`, the daemon ids behind each server row and what a sign-in to it names. */
 export function snapshotOf(view: IntegrationsView, projects: Project[], untrusted: string[], trustedCount: number) {
   const groups = groupServers(view.servers);
   const members = new Map(groups.map((group) => [group[0]!.id, group.map((member) => member.id)]));
+  const targets = new Map<string, SignInTarget>(groups.map(([first]) => [first!.id, {
+    serverId: first!.id,
+    projectId: first!.project ? projects.find((project) => project.repos[0]?.path === first!.project)?.id ?? null : null,
+  }]));
   const snapshot: IntegrationSnapshot = {
     catalog: {
       servers: [...groups.map((group) => server(group, projects)), ...view.problems.map((item) => problem(item, projects))],
@@ -189,7 +201,7 @@ export function snapshotOf(view: IntegrationsView, projects: Project[], untruste
       skillsOff: view.skills.filter((item) => item.off).map((item) => item.id),
     },
   };
-  return { snapshot, members };
+  return { snapshot, members, targets };
 }
 
 /** Each path shown, by its display form, for Show in Finder. */
@@ -211,7 +223,9 @@ function toggle(list: string[], ids: string[], enabled: boolean): string[] {
 /** The Plugins page's connection to the daemon. */
 export function liveIntegrations(): IntegrationAdapter {
   let members = new Map<string, string[]>();
+  let targets = new Map<string, SignInTarget>();
   let paths = new Map<string, string>();
+  const target = (id: string): SignInTarget => targets.get(id) ?? { serverId: id, projectId: null };
   return {
     read: async () => {
       const projects = Object.values(useApp.getState().projects).filter((project) => project.repos.length > 0);
@@ -223,6 +237,7 @@ export function liveIntegrations(): IntegrationAdapter {
       const view = mergeViews(user.integrations, perProject.map((answer) => answer.integrations));
       const result = snapshotOf(view, projects, projects.filter((project) => !trusted(project)).map((project) => project.name), trustedProjects.length);
       members = result.members;
+      targets = result.targets;
       paths = pathsOf(view);
       return result.snapshot;
     },
@@ -244,6 +259,12 @@ export function liveIntegrations(): IntegrationAdapter {
       await editSettings((settings) => ({ ...settings, skillsOff: toggle(settings.skillsOff, [id], enabled) }));
     },
     showPath: (path) => revealPath(paths.get(path) ?? path.replace(/^~(?=\/)/, homeOf(paths))),
+    signIn: async (id) => (await request({ method: "signInMcpServer", ...target(id) })).id,
+    signInStatus: async (signInId) => (await request({ method: "getMcpSignIn", id: signInId })).status,
+    cancelSignIn: async (signInId) => { await request({ method: "cancelMcpSignIn", id: signInId }); },
+    reopenSignIn: async (signInId) => { await request({ method: "reopenMcpSignIn", id: signInId }); },
+    signOut: async (id) => { await request({ method: "signOutMcpServer", ...target(id) }); },
+    askSignInAgain: async (id) => { await request({ method: "askMcpSignInAgain", ...target(id) }); },
   };
 }
 

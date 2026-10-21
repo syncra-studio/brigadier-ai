@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { mergeViews, snapshotOf } from "@/app/settings/integrations/live";
+import { mergeViews, signIn, snapshotOf } from "@/app/settings/integrations/live";
 import type { IntegrationsView, McpServerView, Project, SignInState, SkillView } from "@/ipc/generated";
 
 const railway = (source: string, id: string, off: boolean, nativeTo: McpServerView["nativeTo"]): McpServerView => ({
@@ -35,7 +35,7 @@ test("live catalog: one row per server found in several configs, its switch cove
   const app = project("brigadier-ai", "/Users/me/Development/brigadier-ai", true);
   const db: McpServerView = { ...railway("Claude Code (project)", "claude:project:/Users/me/Development/brigadier-ai:db", false, ["claude"]), name: "db", project: "/Users/me/Development/brigadier-ai" };
   const view = mergeViews(user, [{ ...user, servers: [...user.servers, db] }]);
-  const { snapshot, members } = snapshotOf(view, [app, project("scratch", "/Users/me/scratch", false)], ["scratch"], 1);
+  const { snapshot, members, targets } = snapshotOf(view, [app, project("scratch", "/Users/me/scratch", false)], ["scratch"], 1);
 
   const [rail, lin, dbRow, figma] = snapshot.catalog.servers;
   assert.equal(snapshot.catalog.servers.length, 4);
@@ -43,12 +43,12 @@ test("live catalog: one row per server found in several configs, its switch cove
   assert.deepEqual(rail!.nativeAgents, ["claude", "codex"]);
   assert.deepEqual(members.get(rail!.id), ["claude:user:railway", "codex:user:railway"]);
   assert.deepEqual(snapshot.switches.mcpServersOff, ["claude:user:railway"]);
-  assert.deepEqual(lin!.signIn, { claude: { kind: "native" }, codex: { kind: "required" } });
-  const signIns = (claude: SignInState, codex: SignInState) =>
-    snapshotOf(mergeViews({ ...user, servers: [{ ...linear, signIn: { claude, codex } }], problems: [] }, []), [], [], 1).snapshot.catalog.servers[0]!.signIn;
-  assert.deepEqual(signIns({ type: "inBrigadier", sinceMs: 1 }, { type: "reusableFrom", agent: "claude" }), { claude: { kind: "native" }, codex: { kind: "reusable", from: "claude" } });
-  assert.deepEqual(signIns({ type: "needed" }, { type: "unknown" }), { claude: { kind: "required" }, codex: { kind: "required" } });
-  assert.deepEqual(signIns({ type: "notAllowed", agent: "claude" }, { type: "unsupported" }), { claude: { kind: "required" }, codex: { kind: "required" } });
+  assert.deepEqual(lin!.signIn, { claude: { kind: "native" }, codex: { kind: "unknown" } });
+  assert.equal(lin!.pendingSignIn, undefined);
+  assert.equal(rail!.pendingSignIn, undefined);
+  // A sign-in names the daemon's first copy of a server, and its project for a project's own.
+  assert.deepEqual(targets.get(rail!.id), { serverId: "claude:user:railway", projectId: null });
+  assert.deepEqual(targets.get(dbRow!.id), { serverId: "claude:project:/Users/me/Development/brigadier-ai:db", projectId: "brigadier-ai" });
   // Two copies with one name and command but other environment values are two servers.
   const otherKey = { ...railway("Codex (user)", "codex:user:railway", false, ["codex"]), copyKey: "other-railway-key" };
   const split = snapshotOf(mergeViews({ ...user, servers: [user.servers[0]!, otherKey], problems: [] }, []), [], [], 1).snapshot.catalog.servers;
@@ -66,4 +66,34 @@ test("live catalog: one row per server found in several configs, its switch cove
   ]);
   assert.deepEqual(snapshot.switches.skillsOff, ["agents:user:grill-me"]);
   assert.deepEqual(snapshot.catalog.untrustedProjects, ["scratch"]);
+});
+
+/** Two copies of linear with these agent states. */
+const copies = (first: [SignInState, SignInState], second: [SignInState, SignInState], pending: string | null = null) => snapshotOf({
+  servers: [
+    { ...linear, signIn: { claude: first[0], codex: first[1] } },
+    { ...linear, id: "codex:user:linear", source: "Codex (user)", nativeTo: ["codex"], signIn: { claude: second[0], codex: second[1] }, pendingSignIn: pending },
+  ],
+  skills: [],
+  problems: [],
+}, [], [], 0).snapshot.catalog.servers;
+
+test("live catalog: each agent's sign-in state, the best one across copies and a sign-in in progress", () => {
+  assert.deepEqual(signIn({ type: "native" }), { kind: "native" });
+  assert.deepEqual(signIn({ type: "reusableFrom", agent: "claude" }), { kind: "reusable", from: "claude" });
+  assert.deepEqual(signIn({ type: "inBrigadier", sinceMs: 1792584000000 }), { kind: "brigadier", sinceMs: 1792584000000 });
+  assert.deepEqual(signIn({ type: "inBrigadier", sinceMs: null }), { kind: "brigadier" });
+  assert.deepEqual(signIn({ type: "needed" }), { kind: "needed" });
+  assert.deepEqual(signIn({ type: "unknown" }), { kind: "unknown" });
+  assert.deepEqual(signIn({ type: "notAllowed", agent: "codex" }), { kind: "notAllowed", from: "codex" });
+  assert.deepEqual(signIn({ type: "unsupported" }), { kind: "unsupported" });
+
+  // A copy's own sign-in wins, then a reused one, then Brigadier's; otherwise the first copy's state.
+  const [best] = copies([{ type: "needed" }, { type: "inBrigadier", sinceMs: null }], [{ type: "reusableFrom", agent: "codex" }, { type: "native" }]);
+  assert.deepEqual(best!.signIn, { claude: { kind: "reusable", from: "codex" }, codex: { kind: "native" } });
+  const [neither] = copies([{ type: "unknown" }, { type: "needed" }], [{ type: "needed" }, { type: "notAllowed", agent: "claude" }], "sign-in-7");
+  assert.deepEqual(neither!.signIn, { claude: { kind: "unknown" }, codex: { kind: "needed" } });
+  assert.equal(neither!.pendingSignIn, "sign-in-7");
+  // A local server has no sign-in.
+  assert.deepEqual(snapshotOf({ servers: [railway("Claude Code (user)", "claude:user:railway", false, ["claude"])], skills: [], problems: [] }, [], [], 0).snapshot.catalog.servers[0]!.signIn, {});
 });

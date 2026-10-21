@@ -24,11 +24,11 @@ test("plugins: drawn server states, switch, details, search and config refresh",
   assert.equal(catalog.switches.find((item) => item.label === "playwright")?.checked, "false");
   assert.deepEqual(catalog.tile, { padding: [10, 12], radius: 12, gap: 12 });
   assert.match(catalog.text, /Couldn't read it: unknown type “websocket”/);
-  assert.match(catalog.text, /Not signed in for Codex/);
+  assert.ok(!catalog.text.includes("Needs a sign-in"), "linear reuses Claude Code's sign-in");
   assert.match(catalog.text, /scratch and old-landing aren't trusted/);
-  assert.deepEqual(seen.linear!.sections, ["What it is", "Found in", "Workers"]);
-  assert.match(seen.linear!.text, /Each agent keeps its own\. Signed in for Claude Code; not signed in for Codex\./);
-  assert.match(seen.linear!.text, /codex mcp login linear/);
+  assert.deepEqual(seen.linear!.sections, ["Sign-in", "What it is", "Found in"]);
+  assert.match(seen.linear!.text, /Every worker can use itSigned in through Claude Code\. Brigadier reuses that sign-in for Codex workers/);
+  assert.ok(!seen.linear!.text.includes("mcp login"));
   assert.match(seen.pencil!.text, /Claude Code, Codex and Claude Desktop/);
   assert.match(seen.pencil!.text, /pencil mcp --stdio/);
   assert.deepEqual(seen.unreadable!.sections, ["Couldn't read it", "What it read", "Found in", "Workers"]);
@@ -47,12 +47,14 @@ test("plugins: drawn server states, switch, details, search and config refresh",
   assert.deepEqual(seen.filtered, ["Open railway"]);
   assert.match(String(seen.searchResults), /railwayPlugins › MCP serversuse-railwayPlugins › Skills/);
   assert.equal(seen.revealed, true);
-  assert.match(seen.reusable!.text, /Codex can use the sign-in from Claude Code/);
+  assert.match(seen.reusable!.text, /Uses the sign-in from Claude Code\. No extra sign-in needed\./);
   assert.ok(!seen.reusable!.text.includes("mcp login"));
-  assert.ok(!seen.reusable!.text.includes("set up in Codex and signed in there"));
-  assert.match(seen.unsigned!.text, /Not signed in for Codex, so Codex workers can't use it/);
+  assert.match(seen.unsigned!.text, /Needs a sign-in/);
+  assert.match(seen.unsigned!.text, /then pick linear team:\/mcp/);
   assert.match(seen.unsigned!.text, /codex mcp login 'linear team'/);
-  assert.ok(!seen.unsigned!.text.includes("signed in for Claude Code only"));
+  // Set up only in Claude Code, so Codex's own login couldn't find it: no command for Codex.
+  assert.match(seen.claudeOnly!.text, /then pick linear team:\/mcp/);
+  assert.ok(!seen.claudeOnly!.text.includes("codex mcp login"));
   assert.equal((seen.refreshed as unknown as string[]).length, 6);
   assert.ok(!(seen.refreshed as unknown as string[]).includes("Open figma-dev"));
 });
