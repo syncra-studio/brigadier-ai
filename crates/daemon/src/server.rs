@@ -25,6 +25,7 @@ use brigadier_ipc::protocol::{
     Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
+use brigadier_providers::ProviderKind;
 use brigadier_providers::login_mark::LoginMark;
 use brigadier_store::{Store, StoredEvent};
 use tokio::sync::broadcast::error::RecvError;
@@ -114,7 +115,13 @@ impl Daemon {
         pages: Arc<Pages>,
         site_icons: Arc<SiteIcons>,
     ) -> Self {
-        let terminals = Arc::new(Terminals::with_platform(runtime.platform().clone()));
+        let agent_folders = ProviderKind::ALL
+            .into_iter()
+            .filter_map(|provider| runtime.cli_env().installer_folder(provider))
+            .collect();
+        let terminals = Arc::new(
+            Terminals::with_platform(runtime.platform().clone()).with_agent_folders(agent_folders),
+        );
         Self {
             info,
             core,

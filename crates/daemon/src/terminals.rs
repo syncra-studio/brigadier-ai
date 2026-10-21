@@ -8,7 +8,9 @@
 //! when it ends, and can end it and wait until its process is gone ([`TerminalHost`]).
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -49,6 +51,12 @@ pub struct Terminals {
     next: AtomicU64,
     /// Ends a worker terminal's process tree.
     platform: Option<Arc<dyn Platform>>,
+    /// Where the agents' own installers put them ([`CliEnv::installer_folder`]): on Windows
+    /// a shell's PATH ends with those that exist, as Claude Code's installer doesn't add its
+    /// folder to the user's Path, so `claude` there is the one Brigadier finds.
+    ///
+    /// [`CliEnv::installer_folder`]: brigadier_providers::CliEnv::installer_folder
+    agent_folders: Vec<PathBuf>,
 }
 
 struct Terminal {
@@ -149,6 +157,7 @@ impl Terminals {
             feed,
             next: AtomicU64::new(1),
             platform: None,
+            agent_folders: Vec::new(),
         }
     }
 
@@ -157,6 +166,14 @@ impl Terminals {
         Self {
             platform: Some(platform),
             ..Self::new()
+        }
+    }
+
+    /// Shells on Windows also find the agents in `folders`, their installers' own.
+    pub fn with_agent_folders(self, folders: Vec<PathBuf>) -> Self {
+        Self {
+            agent_folders: folders,
+            ..self
         }
     }
 
@@ -222,6 +239,12 @@ impl Terminals {
             if key.to_string_lossy().starts_with("BRIGADIER_") {
                 command.env_remove(key);
             }
+        }
+        // The builder's PATH is the system's and the user's from the registry, read now.
+        if cfg!(windows)
+            && let Some(path) = with_folders(command.get_env("PATH"), &self.agent_folders)
+        {
+            command.env("PATH", path);
         }
         let terminal = self.spawn(conversation, session, shell, cwd, command, size, None)?;
         // A new shell's first output already streams to the connection that subscribed
@@ -726,6 +749,38 @@ fn reap(terminal: &Terminal) -> Option<u32> {
 }
 
 /// The user's shell: `$SHELL` on macOS and Linux, PowerShell on Windows.
+/// `path` with each of `folders` that exists and isn't on it yet added at its end, in order;
+/// `None` when none is added. `path` itself is kept as it is, first. Folders compare as
+/// Windows does, in any case and with or without a trailing separator.
+fn with_folders(path: Option<&OsStr>, folders: &[PathBuf]) -> Option<OsString> {
+    let key = |dir: &Path| {
+        dir.to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase()
+    };
+    let mut seen: Vec<String> = path
+        .map(|path| std::env::split_paths(path).map(|dir| key(&dir)).collect())
+        .unwrap_or_default();
+    let mut added = Vec::new();
+    for folder in folders {
+        if folder.is_dir() && !seen.contains(&key(folder)) {
+            seen.push(key(folder));
+            added.push(folder);
+        }
+    }
+    if added.is_empty() {
+        return None;
+    }
+    let added = std::env::join_paths(added).ok()?;
+    let Some(path) = path.filter(|path| !path.is_empty()) else {
+        return Some(added);
+    };
+    let mut joined = path.to_owned();
+    joined.push(if cfg!(windows) { ";" } else { ":" });
+    joined.push(added);
+    Some(joined)
+}
+
 fn default_shell() -> String {
     if cfg!(windows) {
         return "powershell.exe".into();
@@ -781,7 +836,6 @@ impl Utf8Stream {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     use std::path::{Path, PathBuf};
 
     use super::Terminals;
@@ -792,10 +846,8 @@ mod tests {
     };
 
     /// A folder in the temp directory, removed when dropped however the test ends.
-    #[cfg(unix)]
     struct Temp(PathBuf);
 
-    #[cfg(unix)]
     impl std::ops::Deref for Temp {
         type Target = Path;
 
@@ -804,7 +856,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     impl Drop for Temp {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
@@ -839,7 +890,6 @@ mod tests {
     }
 
     /// Polls `check` for up to ten seconds.
-    #[cfg(unix)]
     fn eventually(mut check: impl FnMut() -> bool) -> bool {
         for _ in 0..200 {
             if check() {
@@ -848,6 +898,107 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         false
+    }
+
+    /// An agent's folder joins PATH at its end when it exists and isn't there yet; what PATH
+    /// holds stays as it is, first.
+    #[test]
+    fn agent_folders_that_exist_join_the_end_of_path() {
+        use std::ffi::OsString;
+
+        use super::with_folders;
+
+        let home = Temp(
+            std::env::temp_dir().join(format!("brig-agent-folders-{} a b", std::process::id())),
+        );
+        let (claude, codex, gone) = (
+            home.join("claude bin"),
+            home.join("codex"),
+            home.join("gone"),
+        );
+        std::fs::create_dir_all(&claude).unwrap();
+        std::fs::create_dir_all(&codex).unwrap();
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let path = OsString::from(format!("{}{sep}{sep}/usr/bin", codex.display()));
+        let joined = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap();
+
+        assert_eq!(
+            with_folders(Some(&path), &[claude.clone(), codex.clone(), gone.clone()]),
+            Some(OsString::from(format!(
+                "{}{sep}{}",
+                path.to_string_lossy(),
+                joined(&[&claude]).to_string_lossy()
+            ))),
+        );
+        assert_eq!(
+            with_folders(Some(&path), &[codex.clone(), gone.clone()]),
+            None
+        );
+        assert_eq!(with_folders(Some(&path), &[]), None);
+        assert_eq!(
+            with_folders(None, &[claude.clone(), codex.clone(), claude.clone()]),
+            Some(joined(&[&claude, &codex]))
+        );
+        assert_eq!(
+            with_folders(Some(&OsString::new()), std::slice::from_ref(&codex)),
+            Some(joined(&[&codex]))
+        );
+    }
+
+    /// Windows finds a folder on PATH in any case, with or without a trailing backslash.
+    #[cfg(windows)]
+    #[test]
+    fn an_agent_folder_already_on_path_in_another_case_is_not_added_again() {
+        use std::ffi::OsString;
+
+        use super::with_folders;
+
+        let home =
+            Temp(std::env::temp_dir().join(format!("brig-agent-case-{}", std::process::id())));
+        let bin = home.join(r".local\bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let upper = bin.display().to_string().to_uppercase();
+        let path = OsString::from(format!(r"C:\Windows\System32;{upper}\"));
+        assert_eq!(with_folders(Some(&path), &[bin]), None);
+    }
+
+    /// On Windows a Brigadier shell runs an agent from its installer's folder even when the
+    /// user's Path lacks it, as Claude Code's installer leaves it.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_shell_finds_a_program_in_an_agent_folder() {
+        use brigadier_core::manager::TerminalHost;
+
+        let home =
+            Temp(std::env::temp_dir().join(format!("brig-agent-shell-{} a b", std::process::id())));
+        let bin = home.join(r".local\bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(
+            bin.join("brigadier-agent-probe.cmd"),
+            "@echo agent folder on PATH\r\n",
+        )
+        .unwrap();
+        let terminals = Terminals::new().with_agent_folders(vec![bin]);
+        let cwd = std::env::temp_dir().display().to_string();
+        let shell = terminals
+            .open_session("agent-folders", Some("tab"), cwd, 120, 30)
+            .unwrap();
+        // ConPTY asks where the cursor is and waits for the answer, as a terminal gives it.
+        assert!(eventually(|| terminals
+            .output("agent-folders", &shell.id)
+            .is_some_and(|text| text.contains("\u{1b}[6n"))));
+        terminals.write(&shell.id, "\u{1b}[1;1R").unwrap();
+        terminals
+            .write(&shell.id, "brigadier-agent-probe\r")
+            .unwrap();
+        let found = eventually(|| {
+            terminals
+                .output("agent-folders", &shell.id)
+                .is_some_and(|text| text.contains("agent folder on PATH"))
+        });
+        let output = terminals.output("agent-folders", &shell.id);
+        terminals.close_all();
+        assert!(found, "{output:?}");
     }
 
     /// An idle shell reads idle, a command in front of it reads busy, and only the
