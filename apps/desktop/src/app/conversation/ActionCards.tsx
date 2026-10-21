@@ -10,7 +10,6 @@ import { useShallow } from "zustand/react/shallow";
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
 import { ImplementPlanAction } from "@/app/conversation/ImplementPlanAction";
-import { OvernightAction } from "@/app/conversation/OvernightAction";
 import { PlanAction } from "@/app/conversation/PlanAction";
 import { QuestionAction } from "@/app/conversation/QuestionAction";
 import { ReplyButton } from "@/app/conversation/ReplyButton";
@@ -151,15 +150,6 @@ export function PendingActionCard({
             onDismiss={onDismiss}
             footer={footer}
             stagger={follows}
-          />
-        );
-      case "overnight":
-        return (
-          <OvernightAction
-            key={action.id}
-            id={action.id}
-            onDismiss={onDismiss}
-            footer={footer}
           />
         );
     }

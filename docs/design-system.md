@@ -317,7 +317,6 @@ table is the current one.
 | Conversation (app.pen) | `#283 ImplementPlanAction` | `app/conversation/ImplementPlanAction.tsx` | `ImplementPlanAction` | |
 | Conversation (app.pen) | `#284 PlanAction` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
 | Conversation (app.pen) | `#285 PhasePlanAction` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
-| Conversation (app.pen) | `#286 OvernightAction` | `app/conversation/OvernightAction.tsx` | `OvernightAction` | |
 | Conversation (app.pen) | `#289 ConversationComposer › inline: composer card` | `app/conversation/ComposerCard.tsx` | `ComposerCard` | |
 | Conversation (app.pen) | `#290 ComposerInput` | `app/conversation/ComposerInput.tsx` | `ComposerInput` | |
 | Conversation (app.pen) | `#292 ComposerContextRing` | `app/conversation/ComposerContextRing.tsx` | `ComposerContextRing` | |
