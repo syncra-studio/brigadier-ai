@@ -1756,11 +1756,24 @@ pub enum ConnectProgress {
     /// The vendor's sign-in page is open in the browser; it is checked every few seconds.
     SigningIn,
     Connected,
-    /// `error` is one plain sentence for the user; Connect again retries.
+    /// `error` is one plain sentence for the user; Connect again retries. `reason`, when set,
+    /// is why Connect couldn't do it at all, which the card says how to get past.
     Failed {
         step: ConnectStep,
         error: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        reason: Option<ConnectFailure>,
     },
+}
+
+/// Why Connect couldn't do a step at all, so the user does it themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectFailure {
+    /// On macOS or Linux, neither curl nor wget is installed to download the vendor's
+    /// installer: the card links the agent's install guide.
+    NoDownloader,
 }
 
 /// One agent's Connect.

@@ -101,6 +101,7 @@ export type { ComputerSession } from "./ComputerSession";
 export type { ComputerSetup } from "./ComputerSetup";
 export type { ComputerUseStatus } from "./ComputerUseStatus";
 export type { ConflictFile } from "./ConflictFile";
+export type { ConnectFailure } from "./ConnectFailure";
 export type { ConnectProgress } from "./ConnectProgress";
 export type { ConnectStep } from "./ConnectStep";
 export type { ConnectView } from "./ConnectView";

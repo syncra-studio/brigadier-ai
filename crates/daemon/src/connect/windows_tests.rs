@@ -228,7 +228,7 @@ async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
         let home = Home::new();
         let ops = ops(&home, provider);
         assert!((ops.status)(provider).await.path.is_none());
-        let spec = installer_spec(&ops, provider);
+        let spec = installer_spec(&ops, provider).unwrap();
         assert_eq!(spec.program, Path::new("powershell.exe"));
         assert_eq!(spec.cwd.as_ref(), Some(&home.0));
         assert!(spec.args.iter().any(|arg| arg == "-NonInteractive"));
@@ -284,6 +284,7 @@ async fn failed_downloads_fail_instead_of_piping_nothing_and_retry_works() {
                     "Brigadier couldn't download {}. Check your internet connection, then try again.",
                     provider.label()
                 ),
+                reason: None,
             })
         );
         assert_eq!(seen, [ConnectProgress::Installing]);
@@ -314,7 +315,8 @@ async fn an_install_error_or_missing_binary_never_starts_sign_in() {
             run(&ops, ProviderKind::Claude).await.0,
             Some(ConnectProgress::Failed {
                 step: ConnectStep::Install,
-                error: error.into()
+                error: error.into(),
+                reason: None,
             })
         );
         assert!(!home.0.join("login-started").exists());
@@ -337,6 +339,7 @@ async fn an_installer_that_hangs_times_out() {
             error:
                 "Installing Codex took too long. Check your internet connection, then try again."
                     .into(),
+            reason: None,
         })
     );
     stopped(&home, &ops).await;
@@ -357,6 +360,7 @@ async fn sign_in_failure_retry_and_connected_before_exit() {
                     "Signing in to {} didn't finish. Try again.",
                     provider.label()
                 ),
+                reason: None,
             })
         );
         home.mode("login", "stay");
@@ -383,6 +387,7 @@ async fn a_sign_in_that_hangs_times_out_or_can_be_cancelled() {
         Some(ConnectProgress::Failed {
             step: ConnectStep::SignIn,
             error: "Signing in to Codex took too long. Try again.".into(),
+            reason: None,
         })
     );
     stopped(&home, &ops).await;
