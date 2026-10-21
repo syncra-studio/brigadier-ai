@@ -211,6 +211,9 @@ table is the current one.
 | Conversation (app.pen) | `#285 PhasePlanAction` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
 | Conversation (app.pen) | `#286 OvernightAction` | `app/conversation/OvernightAction.tsx` | `OvernightAction` | |
 | Settings (settings.pen) | `#684 SettingsPage › back link` | `app/settings/BackLink.tsx` | `BackLink` | |
+| Conversation (app.pen) | `#364 ChangesCard › FileRow` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
+| Conversation (app.pen) | `#366 ChangesCard › inline: merge warning row` | `app/conversation/MergeWarningRow.tsx` | `MergeWarningRow` | |
+| Conversation (app.pen) | `#367 ChangesCard › inline: revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
 
 ## Icons
 
