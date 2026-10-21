@@ -2,7 +2,8 @@
  * A mockup of the Workers strip's rows (no daemon), in the app's window from `flow.tsx`: a Pencil
  * design worker, one on a Linear tool and one running tests. Open with `?slot=1&approvals=0`;
  * `after=1` shows the planned rows: an integration's live line names its action, and a worker's
- * progress note shows under it. Without it, the rows as the app words them today.
+ * progress note shows under it, in the strip and the context card. Without it, the rows as the app
+ * words them today.
  */
 // oxlint-disable-next-line import/no-unassigned-import -- It renders the app window this page fills.
 import "@/fixtures/flow";
