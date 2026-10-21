@@ -34,13 +34,15 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
             let seen = seen.clone();
             async move {
                 if turn.input.contains("Add notes.") {
-                    // Big enough for an other-vendor review (BUILD-PLAN B2).
+                    // Big enough to ask the other vendor for a review.
                     commit_in_workspace(
                         &turn,
                         "notes.txt",
                         &format!("notes \n{}", super::thread_tests::reviewed_notes()),
                         "Add notes\n\nBrigadier-Author: thread",
                     );
+                    turn.call("request_review", json!({"wait_seconds": 0}))
+                        .await;
                     return Reply::text("Added NOTES.md.");
                 }
                 if turn.input.contains("[review of your commits · Codex found 3") {
@@ -306,10 +308,12 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                         &format!("notes \n{}", super::thread_tests::reviewed_notes()),
                         "Add notes\n\nBrigadier-Author: thread",
                     );
+                    turn.call("request_review", json!({"wait_seconds": 0}))
+                        .await;
                     return Reply::text("Added NOTES.md.");
                 }
                 seen.lock().unwrap().push(turn.input.clone());
-                // The first review's findings; the re-check of the high one's fix comes after.
+                // The review's findings.
                 if turn.input.contains("[review of your commits · Codex found 3")
                     && workspace_seen.lock().unwrap().is_none()
                 {
@@ -448,15 +452,6 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
     assert!(body.starts_with("Fix the notes"), "{body}");
     assert!(body.contains("Brigadier-Author: thread"), "{body}");
     assert!(body.contains("Brigadier-Fixes: R1.1, R1.2"), "{body}");
-    // R1.1 was marked high, so its fix commit gets the one targeted re-check.
-    let fix = super::git(&workspace, &["rev-parse", "HEAD"]);
-    flow.until("the high finding's re-check", move |board| {
-        board
-            .reviews
-            .values()
-            .any(|review| review.number == 2 && review.tip == fix)
-    })
-    .await;
     // The board's reviews are a map: take the first review's, R1.
     let review = board
         .reviews
@@ -477,13 +472,15 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                     checked.starts_with("`true` passed after the fix [evidence: out-"),
                     "{checked}"
                 );
-                // The one named in `high` is marked high, so its fix gets its re-check.
+                // The one named in `high` is marked high.
                 assert_eq!(item.high, item.id == "R1.1", "{}", item.id);
             }
             ("R1.3", FindingStatus::New) => {}
             (id, status) => panic!("{id}: {status:?}"),
         }
     }
-    flow.settled().await;
+    // The high finding's fix gets no re-check by itself.
+    let board = flow.settled().await;
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
     flow.stop().await;
 }

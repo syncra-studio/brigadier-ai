@@ -255,6 +255,11 @@ impl Thread {
                     )
                     .await;
             }
+            if outcome == StepOutcome::Done {
+                // A phase settles done on the thread's own run_checks pass at the tip.
+                let checks = turn.call("run_checks", json!({})).await;
+                assert!(!checks.is_error, "{}", checks.text);
+            }
             let settled = turn
                 .call(
                     "settle_step",

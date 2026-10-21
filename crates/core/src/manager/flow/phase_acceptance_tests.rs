@@ -6,7 +6,7 @@
 //! nothing for the third, which no suite covers. The thread's first settle cites a check it ran
 //! before the work landed: refused, the criterion isn't bound to the tip. Its own check at the
 //! tip then settles it. The settlement and the morning report carry each criterion's evidence,
-//! and the review's state: settled with reviews on, "No review was run" with them off.
+//! and the review's state: none asked for with reviews on, "No review was run" with them off.
 
 use std::sync::{Arc, Mutex};
 
@@ -114,6 +114,8 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
                 if turn.input.contains("[report task-1") {
                     let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
                     assert!(!landed.is_error, "{}", landed.text);
+                    let checks = turn.call("run_checks", json!({})).await;
+                    assert!(!checks.is_error, "{}", checks.text);
                     let early = log.lock().unwrap().early.clone().unwrap();
                     let settle = |line: String| {
                         let turn = &turn;
@@ -235,7 +237,8 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
     }
     let review = settled.review.clone().unwrap();
     if reviews {
-        assert!(review.starts_with("Review settled:"), "{review}");
+        // Nothing reviews the phase by itself.
+        assert_eq!(review, "No review was asked for.");
     } else {
         assert_eq!(review, "No review was run: reviews are off.");
     }

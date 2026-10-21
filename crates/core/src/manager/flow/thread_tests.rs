@@ -623,12 +623,9 @@ async fn the_threads_plan_review_runs_in_the_background() {
     flow.stop().await;
 }
 
-/// Notes big enough to cross the review line (BUILD-PLAN B2): the thread's change that gets
-/// an other-vendor review.
+/// Notes of 150 lines: a change big enough to ask the other vendor to review.
 pub(super) fn reviewed_notes() -> String {
-    (1..=crate::manager::unreviewed::REVIEW_LINE.lines)
-        .map(|n| format!("note {n}\n"))
-        .collect()
+    (1..=150).map(|n| format!("note {n}\n")).collect()
 }
 
 /// Commits a file in the thread's workspace, as the thread's own tiny edit would.
@@ -656,214 +653,8 @@ async fn code_reviews(flow: &Flow, count: usize) -> Vec<crate::work::ReviewRun> 
     reviews
 }
 
-/// A commit the thread makes in a turn gets one review by the other vendor, whose findings
-/// reach the thread; a restart neither reviews it again nor misses it.
-#[tokio::test]
-async fn a_thread_commit_is_reviewed_once() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let commits: Arc<Mutex<Vec<String>>> = Arc::default();
-    let made = commits.clone();
-    let mut flow = Flow::start(
-        "thread-commit",
-        Options {
-            reviews: Some(script(|turn| async move {
-                assert!(turn.input.contains("git diff"), "{}", turn.input);
-                Reply::text("- [P2] NOTES.md has no title — NOTES.md:1\n  Add one.")
-            })),
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (log, made) = (log.clone(), made.clone());
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains("Add notes.") {
-                    let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
-                    let tip =
-                        commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
-                    made.lock().unwrap().extend([start, tip]);
-                    return Reply::text("Added NOTES.md.");
-                }
-                Reply::text("Noted.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let reviews = code_reviews(&flow, 1).await;
-    assert_eq!(reviews.len(), 1, "{reviews:#?}");
-    let review = &reviews[0];
-    let (start, tip) = {
-        let commits = commits.lock().unwrap();
-        (commits[0].clone(), commits[1].clone())
-    };
-    assert_eq!(review.kind, crate::work::ReviewKind::Code);
-    assert!(review.task_id.is_none());
-    assert_eq!(
-        (review.base.as_str(), review.tip.as_str()),
-        (start.as_str(), tip.as_str())
-    );
-    assert_eq!(review.author, ProviderKind::Claude);
-    assert_eq!(review.reviewer, ProviderKind::Codex);
-    flow.until("the findings to reach the thread", |_| {
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|input| input.contains("[review of your commits · Codex found 1"))
-    })
-    .await;
-    flow.settled().await;
-    // After a restart, more turns find nothing new.
-    flow.restart().await;
-    flow.say("Anything else?").await;
-    flow.settled().await;
-    let board = flow.board().await;
-    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
-    let branch = git(
-        &session_worktree(&flow),
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-    );
-    assert_eq!(board.thread_tips.get(&branch), Some(&tip));
-    flow.stop().await;
-}
-
-/// A turn commits on the session branch and then lands a worker on top, within the same turn:
-/// the thread's commit is reviewed from where the turn found the branch, and the landing on
-/// its own, on top of it; nothing is reviewed twice.
-#[tokio::test]
-async fn a_thread_commit_before_a_landing_in_the_same_turn_is_reviewed_on_its_own() {
-    let commits: Arc<Mutex<Vec<String>>> = Arc::default();
-    let made = commits.clone();
-    let flow = Flow::start(
-        "thread-commit-land",
-        Options::default(),
-        script(move |turn| {
-            let made = made.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    if turn.input.contains("[report task-1") {
-                        let start = git(&turn.add_dirs[0], &["rev-parse", "HEAD"]);
-                        let tip = commit_in_workspace(
-                            &turn,
-                            "notes.txt",
-                            &reviewed_notes(),
-                            "Add notes\n\nBrigadier-Author: thread",
-                        );
-                        made.lock().unwrap().extend([start, tip]);
-                        // The branch moved under the worker: it is rebased and lands at once.
-                        let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
-                        assert!(!landed.is_error, "{}", landed.text);
-                        assert!(landed.text.starts_with("Landed "), "{}", landed.text);
-                        return Reply::text("Added the greeting and notes.");
-                    }
-                    if turn.input.contains("Add a greeting") {
-                        let reply = turn
-                            .call(
-                                "delegate_task",
-                                json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
-                                       "spec": "Create hello.txt.", "provider": "codex"}),
-                            )
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
-                    }
-                    return Reply::text("Noted.");
-                }
-                turn.write("hello.txt", "hello\n");
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "Added hello.txt.", "changes": ["hello.txt"]}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("Reported.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add a greeting.").await;
-    flow.settled().await;
-    let reviews = code_reviews(&flow, 2).await;
-    let (start, thread_tip) = {
-        let commits = commits.lock().unwrap();
-        (commits[0].clone(), commits[1].clone())
-    };
-    let board = flow.board().await;
-    let lead = Flow::task(&board, 1);
-    let landed = lead.landed.clone().expect("the worker landed");
-    let ranges: Vec<(Option<&crate::work::TaskId>, &str, &str)> = reviews
-        .iter()
-        .map(|review| {
-            (
-                review.task_id.as_ref(),
-                review.base.as_str(),
-                review.tip.as_str(),
-            )
-        })
-        .collect();
-    assert_eq!(reviews.len(), 2, "{ranges:#?}");
-    assert!(
-        ranges.contains(&(None, start.as_str(), thread_tip.as_str())),
-        "the thread's commit, from where the turn found the branch: {ranges:#?}"
-    );
-    assert!(
-        ranges.contains(&(Some(&lead.id), thread_tip.as_str(), landed.as_str())),
-        "the landing, on top of the thread's commit: {ranges:#?}"
-    );
-    let branch = lead.workspace.as_ref().unwrap().target.clone().unwrap();
-    assert_eq!(board.thread_tips.get(&branch), Some(&landed));
-    // THREAD-PLAN.md Q13: the thread's own commit is its self-edit; the landing is not.
-    let edits = |metrics: crate::model::ThreadMetrics| {
-        let edits = metrics.edits.expect("the thread's edits are counted");
-        (edits.commits, edits.added, edits.removed, edits.kept)
-    };
-    let metrics = flow
-        .manager
-        .thread_metrics(&flow.conversation)
-        .await
-        .unwrap();
-    assert_eq!(
-        edits(metrics),
-        (
-            1,
-            i64::from(crate::manager::unreviewed::REVIEW_LINE.lines),
-            0,
-            false
-        )
-    );
-    // Once the branch is merged and removed, the last count stands.
-    git(
-        &flow.repo,
-        &[
-            "worktree",
-            "remove",
-            "--force",
-            &session_worktree(&flow).display().to_string(),
-        ],
-    );
-    git(&flow.repo, &["branch", "-D", &branch]);
-    let metrics = flow
-        .manager
-        .thread_metrics(&flow.conversation)
-        .await
-        .unwrap();
-    assert_eq!(
-        edits(metrics),
-        (
-            1,
-            i64::from(crate::manager::unreviewed::REVIEW_LINE.lines),
-            0,
-            true
-        )
-    );
-    flow.stop().await;
-}
-
-/// The thread commits and merges in the same turn, as the user asked: the review of its commit
-/// has started (for the thread, with no task) before the merge, so it counts with the merged
+/// The thread commits, asks for its review and merges in the same turn, as the user asked: the
+/// review of its commit has started (for the thread, with no task) before the merge, so it counts with the merged
 /// work, and the merge's answer says it still runs. No card opens.
 #[tokio::test]
 async fn a_merge_counts_the_review_of_the_threads_own_commit() {
@@ -889,6 +680,8 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
                     &reviewed_notes(),
                     "Add notes\n\nBrigadier-Author: thread",
                 );
+                turn.call("request_review", json!({"wait_seconds": 0}))
+                    .await;
                 turn.call("run_checks", json!({})).await;
                 let reply = turn
                     .call("finish_session", json!({"user_words": "merge"}))
@@ -1444,7 +1237,7 @@ async fn a_step_left_running_under_a_stopped_reply_reads_stopped_after_a_restart
 }
 
 /// A preview the thread started holds nothing up: its answer is done while the preview runs.
-/// A review of its own change does (BUILD-PLAN B2): the request keeps working until the
+/// A review it asked for of its own change does (BUILD-PLAN B2): the request keeps working until the
 /// findings came and the thread took them in, in the same request.
 #[tokio::test]
 async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_working() {
@@ -1484,6 +1277,8 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
                 }
                 if turn.input.contains("Add notes.") {
                     commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
+                    turn.call("request_review", json!({"wait_seconds": 0}))
+                        .await;
                     return Reply::text("Added NOTES.md.");
                 }
                 if turn.input.contains("[review of your commits") {
@@ -1516,7 +1311,7 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
     );
     assert!(board.tasks.is_empty(), "no worker: {:?}", board.tasks);
 
-    // A change over the review line: its request works while the review runs.
+    // A change it asked a review for: its request works while the review runs.
     flow.say("Add notes.").await;
     let board = flow
         .until("the review running, the thread idle", |board| {

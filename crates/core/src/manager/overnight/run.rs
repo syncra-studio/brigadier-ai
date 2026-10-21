@@ -500,34 +500,26 @@ impl SessionManager {
             ));
         }
         let tip = self.run_tip(&run).await?;
-        // A phase settled done should rest on the session's full checks passing at the run's
-        // tip (SESSION-FIXES-PLAN.md §11) and evidence for each criterion there. What's missing
+        // A phase settled done should rest on the thread's run_checks passing at the run's tip
+        // (SESSION-FIXES-PLAN.md §11) and evidence for each criterion there. What's missing
         // doesn't refuse the settle (#251): the thread hears it and the morning report marks it.
+        // Nothing starts the checks here.
         let mut unevidenced = Vec::new();
         if args.outcome == StepOutcome::Done
-            && let (Some(workspace), Some(Setup::Session { repo, .. })) =
-                (run.workspace.as_ref(), self.core.conversation(id)?.setup)
+            && let Some(workspace) = run.workspace.as_ref()
         {
-            use super::super::integrated_checks::ChecksGate;
-            match self
-                .checks_gate(
-                    id,
-                    std::path::Path::new(&repo),
-                    &workspace.branch,
-                    super::super::integrated_checks::MERGE_WAIT,
-                )
-                .await?
+            let board = self.core.board(id).await?;
+            if super::super::integrated_checks::tip_checked_by_thread(
+                &board,
+                &workspace.branch,
+                &tip,
+            ) != super::super::integrated_checks::TipChecked::Passed
             {
-                ChecksGate::Passed(checked) if checked.0 == tip => {}
-                ChecksGate::Passed(_) => {
-                    return Err(Error::Invalid(format!(
-                        "`{}` moved while the phase was settled; settle it again.",
-                        workspace.branch
-                    )));
-                }
-                ChecksGate::Waiting(why) | ChecksGate::Failed(why) => {
-                    unevidenced.push(format!("the session's full checks {why}"));
-                }
+                unevidenced.push(format!(
+                    "the session's full checks: no run_checks passed on `{}` at {}, so call run_checks first",
+                    workspace.branch,
+                    &tip[..tip.len().min(10)]
+                ));
             }
         }
         // Done only with evidence for every criterion at this tip and, with reviews on, its

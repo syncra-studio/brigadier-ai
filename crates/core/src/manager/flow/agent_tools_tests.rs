@@ -705,3 +705,111 @@ async fn an_open_thread_hears_once_of_the_merge_rule() {
     assert!(added.thread.contains(crate::manager::prompts::MERGE_RULE));
     assert!(added.worker.is_empty());
 }
+
+/// The end of the automatic pipeline's rollout: an open thread hears once that Brigadier no
+/// longer reviews or checks anything by itself, and what to call instead; its workers hear
+/// nothing.
+#[tokio::test]
+async fn an_open_thread_hears_once_that_brigadier_reviews_and_checks_nothing_by_itself() {
+    let (added, _) = an_open_thread_hears_once(
+        "no-auto-pipeline-revision",
+        crate::manager::prompts::NO_AUTO_PIPELINE_REVISION,
+    )
+    .await;
+    assert!(
+        added
+            .thread
+            .contains("Brigadier no longer reviews or checks anything by itself")
+    );
+    assert!(
+        added
+            .thread
+            .contains("Call request_review for a large or risky change")
+    );
+    assert!(
+        added
+            .thread
+            .contains("run_checks before every merge into main")
+    );
+    assert!(added.worker.is_empty());
+}
+
+/// Brigadier starts no review, no full checks and no fix by itself: not for a turn in which the
+/// thread commits 240 lines of code over 6 files, nor for a worker's landing. Only the agents
+/// start them (request_review, run_checks, delegate_task).
+#[tokio::test]
+async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
+    let flow = Flow::start(
+        "no-auto-pipeline",
+        Options::default(),
+        script(|turn| async move {
+            if !turn.is_orchestrator() {
+                turn.write("feature.rs", "pub fn feature() {}\n");
+                turn.git(&["add", "feature.rs"]);
+                turn.git(&["commit", "-qm", "Add the feature"]);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Added feature.rs.", "changes": ["feature.rs"]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reported.");
+            }
+            if turn.input.contains("[report task-1 ") {
+                let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
+                assert!(reply.text.starts_with("Landed "), "{}", reply.text);
+                return Reply::text("Built the modules and the feature.");
+            }
+            if turn.input.starts_with("Build the modules") {
+                let workspace = &turn.add_dirs[0];
+                for module in ["a", "b", "c", "d", "e", "f"] {
+                    let text: String = (1..=40)
+                        .map(|n| format!("pub fn {module}_{n}() {{}}\n"))
+                        .collect();
+                    std::fs::write(workspace.join(format!("{module}.rs")), text).unwrap();
+                }
+                git(workspace, &["add", "-A"]);
+                git(
+                    workspace,
+                    &[
+                        "commit",
+                        "-qm",
+                        "Add six modules\n\nBrigadier-Author: thread",
+                    ],
+                );
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "low", "title": "Add the feature", "kind": "implement",
+                               "spec": "Add feature.rs with an empty `feature` function."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            Reply::text("Noted.")
+        }),
+    )
+    .await;
+    flow.say("Build the modules and the feature.").await;
+    flow.until("the landing", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Landed)
+    })
+    .await;
+    flow.settled().await;
+    // Time for anything automatic to start.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let board = flow.board().await;
+    assert!(board.reviews.is_empty(), "{:#?}", board.reviews);
+    assert!(
+        board.integrated_checks.is_empty(),
+        "{:#?}",
+        board.integrated_checks
+    );
+    assert_eq!(board.tasks.len(), 1, "{:#?}", board.tasks);
+    flow.stop().await;
+}

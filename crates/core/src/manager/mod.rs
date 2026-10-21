@@ -203,10 +203,6 @@ pub struct SessionManager {
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
     change_records: request_changes::ChangeRecords,
-    /// Where each session's thread's newest `run_check` stands: a review of its own changes
-    /// starts only on files a check passed on, never while one runs or on files one failed
-    /// on ([`unreviewed::ThreadCheck`], BUILD-PLAN C10).
-    thread_checks: std::sync::Mutex<HashMap<ConversationId, unreviewed::ThreadCheck>>,
     /// The context window each model last reported, by provider and the model asked for: a
     /// Claude session learns its own only when its first turn ends, and its overflow guard needs
     /// it before then (BUILD-PLAN D2.3, D2.3b).
@@ -415,7 +411,6 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             change_records: request_changes::ChangeRecords::default(),
-            thread_checks: std::sync::Mutex::new(HashMap::new()),
             known_windows: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),

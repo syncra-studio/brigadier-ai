@@ -143,7 +143,7 @@ function summary(event: DomainEvent): string {
     case "unreviewedChanged":
       return event.range === null
         ? "nothing unreviewed"
-        : `unreviewed ${event.range.base.slice(0, 10)}..${event.range.tip.slice(0, 10)}${event.range.risky === null ? "" : " (risky)"}`;
+        : `unreviewed ${event.range.base.slice(0, 10)}..${event.range.tip.slice(0, 10)}`;
     case "outputStored":
       return `${event.output.alias} ${event.output.source} ${event.output.bytes} B`;
     case "checkRan":

@@ -256,13 +256,10 @@ again. This is the only file you may change.";
 const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits on the \
 session's branch: the lead's task once its report is in, or a verifier you started for big or \
 risky work (its commits hold the lead's). Call it after reading the report. Brigadier commits \
-what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, no further \
-checks. Each landing gets one background review by the other vendor, unless the same commits \
-were reviewed already; its findings arrive later as a [review …] message. If the branch moved meanwhile, the commits are rebased onto it and \
-land at once. Each landing also makes the session's full checks due: they run once, in the \
-background, on the branch as it is then, for every landing close together; a failure comes as \
-a [checks failed …] message for you to judge; they don't hold a merge. Conflicts come back to you: delegate a merge \
-task.";
+what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, no review \
+and no checks start (request_review and run_checks are yours to call). If the branch moved \
+meanwhile, the commits are rebased onto it and land at once. Conflicts come back to you: \
+delegate a merge task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
 base branch on the user's word, as you judge it: [merge] (their click; leave consent out), a \
@@ -2360,15 +2357,9 @@ mod tests {
             };
             assert_eq!(args.timeout_secs, Some(120));
             assert!(args.rerun);
-            // The thread marks its change risky (BUILD-PLAN B2); a worker has no such argument.
+            // run_check has no risky mark: Brigadier starts no review by itself.
             let risky = serde_json::json!({"command": "true", "risky": "a migration"});
-            let Ok(ToolCall::Orchestrator(OrchestratorCall::RunCheck(args))) =
-                parse_call(&thread, "run_check", risky.as_object().cloned())
-            else {
-                panic!("run_check parses with risky for {run:?}");
-            };
-            assert_eq!(args.risky.as_deref(), Some("a migration"));
-            assert!(parse_call(&worker(false), "run_check", risky.as_object().cloned()).is_err());
+            assert!(parse_call(&thread, "run_check", risky.as_object().cloned()).is_err());
         }
         for checks in [false, true] {
             assert!(

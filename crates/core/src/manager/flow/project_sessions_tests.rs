@@ -1336,8 +1336,8 @@ async fn an_offered_session_starts_only_on_the_users_click() {
     flow.stop().await;
 }
 
-/// A tab whose request settled while its full checks still run reads working from the
-/// checking phase, with no quota wait, then ready once they pass (#346: the Working read right
+/// A tab whose request settled while the full checks it asked for still run reads working from
+/// the checking phase, with no quota wait, then ready once they pass (#346: the Working read right
 /// after `settled_in` was these checks, not a stray wait).
 #[tokio::test]
 async fn a_settled_tab_reads_working_while_its_full_checks_run_without_a_quota_wait() {
@@ -1366,6 +1366,10 @@ while [ -f "$common/hold-checks" ]; do sleep 0.05; done
 
     flow.say_to(&a, "Write alpha.").await;
     flow.settled_in(&a).await;
+    // The thread's run_checks, which holds its call a while and then goes on in the
+    // background.
+    let (manager, id) = (flow.manager.clone(), a.clone());
+    tokio::spawn(async move { manager.run_checks_tool(&id, false).await });
     super::eventually_async("the full checks to run", || async {
         let board = flow.core.board(&a).await.unwrap();
         board.integrated_checks.values().any(|check| {

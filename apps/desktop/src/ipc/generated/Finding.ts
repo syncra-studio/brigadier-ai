@@ -19,6 +19,6 @@ severity: string | null, title: string,
  */
 location: string | null, status: FindingStatus, 
 /**
- * The thread marked it high severity: its fix gets one targeted re-check.
+ * The thread marked it high severity.
  */
 high: boolean, };

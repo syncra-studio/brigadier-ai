@@ -638,11 +638,6 @@ const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
 
-/// Tests: landings to let through, then the pause's reached and release signals.
-#[cfg(test)]
-pub(super) type ReviewPause =
-    std::sync::Mutex<Option<(usize, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>;
-
 /// A conversation's live state.
 pub(crate) struct ConvLive {
     pub(super) private_logs: bool,
@@ -676,12 +671,6 @@ pub(crate) struct ConvLive {
     /// What the thread was last told of the held merge (its consent's `asked_in`, and
     /// "due" or "waiting"), so each is said once.
     pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
-    /// Landings whose review isn't stored yet: the landed task is final before its review
-    /// starts, so a held merge waits for these as for a running review.
-    pub(super) reviews_due: std::sync::atomic::AtomicUsize,
-    /// Reviews that ended and whose findings aren't queued for the thread yet: the session's
-    /// full checks wait for these as for a running review (BUILD-PLAN C3).
-    pub(super) reviews_telling: std::sync::atomic::AtomicUsize,
     /// The thread was told the user closed the session's workspace, and that the next change
     /// makes a fresh one in the same folder: that fresh one is no news to it (#39).
     pub(super) workspace_closed: std::sync::atomic::AtomicBool,
@@ -715,10 +704,6 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) merge_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
-    /// Tests: how many landings' reviews start first, then what the next one's start waits
-    /// for.
-    #[cfg(test)]
-    pub(super) review_pause: ReviewPause,
     /// Tests: what a limited turn's end waits for before its hand-over is chosen.
     #[cfg(test)]
     pub(super) hand_over_pause:
@@ -755,11 +740,9 @@ impl ConvLive {
             pr_watch: std::sync::atomic::AtomicBool::new(false),
             pr_merge_due: std::sync::atomic::AtomicBool::new(false),
             merge_told: std::sync::Mutex::new(None),
-            reviews_due: std::sync::atomic::AtomicUsize::new(0),
             workspace_closed: std::sync::atomic::AtomicBool::new(false),
             user_rebase: std::sync::Mutex::new(None),
             user_rebase_looked: std::sync::atomic::AtomicBool::new(false),
-            reviews_telling: std::sync::atomic::AtomicUsize::new(0),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
@@ -770,8 +753,6 @@ impl ConvLive {
             items: std::sync::Mutex::default(),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            review_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -1341,7 +1322,6 @@ impl ConvLive {
                 .as_ref()
                 .map(Background::requests)
                 .unwrap_or_default(),
-            reviews_due: self.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
         }
     }
 }
@@ -1367,8 +1347,6 @@ pub(super) struct RequestActivity {
     /// The requests the CLI's background jobs run for, and how many of each still run (none:
     /// the turn of one's end is still to come).
     pub background: HashMap<String, u32>,
-    /// A landing's review isn't stored yet.
-    pub reviews_due: bool,
 }
 
 /// What the thread hears with the user's message while a merge is held on their earlier
@@ -5387,12 +5365,11 @@ impl SessionManager {
             self.end_stopped_calls(conv).await;
         }
         if conv.kind == ConversationKind::Session {
-            // What the thread committed in this turn gets its review, before a next turn can
-            // take its commits for the user's.
+            // What the thread committed in this turn is recorded as its own, before a next turn
+            // can take its commits for the user's; nothing starts from it.
             self.scan_thread_commits(&conv.id, true).await;
-            // Its changes so far are measured again: a range over the line or marked risky
-            // gets its review now, if `run_check` didn't start it (BUILD-PLAN B2, C2).
-            crate::heap(|| self.unreviewed_at_turn_end(&conv.id)).await;
+            // On a local checkout, its uncommitted changes as they stand.
+            crate::heap(|| self.record_local_changes(&conv.id)).await;
             // The ref check, for the thread: its own commits are recorded, what it broke of
             // others' is put back (PLAN bug 6). Beside the turn's ending, which it doesn't hold
             // up: what it finds starts a turn of its own.

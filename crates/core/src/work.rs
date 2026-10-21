@@ -1757,7 +1757,7 @@ pub struct Finding {
     pub location: Option<String>,
     #[serde(default)]
     pub status: FindingStatus,
-    /// The thread marked it high severity: its fix gets one targeted re-check.
+    /// The thread marked it high severity.
     #[serde(default)]
     pub high: bool,
 }
@@ -1944,8 +1944,7 @@ pub enum BackgroundRunState {
 }
 
 /// The thread's own changes for a request that no review covered yet, taken together
-/// (BUILD-PLAN B2): one review of all of them starts once they cross the size line, or once
-/// the thread marks them risky, and the range starts again after what it covered.
+/// (BUILD-PLAN B2): a `request_review` covers them, and the range starts again after it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UnreviewedRange {
@@ -1964,14 +1963,6 @@ pub struct UnreviewedRange {
     /// On a local checkout, the snapshot of its files when the request started.
     #[serde(default)]
     pub start: Option<String>,
-    /// Why the thread marked them risky (`run_check`'s `risky`), when it did.
-    #[serde(default)]
-    pub risky: Option<String>,
-    /// In a worktree, `tip` is a snapshot of changes the thread hadn't committed yet when
-    /// `run_check` started their review: the commit that follows with the same files needs no
-    /// review of its own.
-    #[serde(default)]
-    pub snapshot: bool,
 }
 
 /// The base's upstream at a session's merge (#224): the merge isn't pushed to it.

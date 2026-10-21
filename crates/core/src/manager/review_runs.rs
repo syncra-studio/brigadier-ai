@@ -13,11 +13,9 @@
 //! run through the adapter, read-only, with only the tools that read a change. Their tokens go
 //! to the routing store under the task `review:<id>`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-use tokio_util::sync::CancellationToken;
 
 use brigadier_git::{Oid, WorktreeSpec};
 use brigadier_providers::{
@@ -94,52 +92,6 @@ struct NewReview {
     recheck: Option<String>,
 }
 
-/// What of a landing a worker's own review read that it didn't see the end of
-/// (`SessionManager::pass_own_review`).
-enum Passed {
-    /// All of it: it is the landing's review.
-    Whole,
-    /// Up to this commit: what came after is reviewed alone.
-    Upto(Oid),
-    No,
-}
-
-/// How much of a landing its worker's own review covers.
-enum Covers {
-    /// All of it: no review of its own.
-    All,
-    /// Up to this commit, reviewed clean: what came after is reviewed alone.
-    Upto(Oid),
-    Nothing,
-}
-
-/// The review findings the thread's own commits fix (`SessionManager::thread_fixes`).
-pub(crate) struct ThreadFix {
-    pub fixed: Vec<Finding>,
-    /// All of them are findings of the work since the session's last merge: a held merge's
-    /// consent covers the fix.
-    pub since_merge: bool,
-}
-
-/// A review whose end isn't told yet, counted on its conversation until dropped.
-struct Telling(std::sync::Arc<super::conversation::ConvLive>);
-
-impl Telling {
-    fn new(conv: std::sync::Arc<super::conversation::ConvLive>) -> Self {
-        conv.reviews_telling
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Self(conv)
-    }
-}
-
-impl Drop for Telling {
-    fn drop(&mut self) {
-        self.0
-            .reviews_telling
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 /// The cleanup-ledger owner of a review's checkout and processes; also the task its tokens
 /// are counted under.
 fn review_owner(id: &str) -> String {
@@ -189,15 +141,6 @@ fn review_of<'a>(
 /// The landed tip whose batch `review` belongs to: the landing it is part of, else its own tip.
 pub(crate) fn batch_tip(review: &ReviewRun) -> &str {
     review.landing.as_deref().unwrap_or(&review.tip)
-}
-
-/// Whether the thread still owes `review`'s findings a decision: none recorded, or one kept
-/// open for a fix to come.
-fn findings_unsettled(review: &ReviewRun) -> bool {
-    review
-        .items
-        .iter()
-        .any(|item| matches!(item.status, FindingStatus::New | FindingStatus::Open { .. }))
 }
 
 fn short(commit: &str) -> &str {
@@ -472,11 +415,6 @@ impl<'a> ReplyWait<'a> {
         }
     }
 
-    /// Whether the review's end has yet to stand aside for the calls that wait on it.
-    fn standing(&self) -> bool {
-        self.manager.reply_claims().waiting.contains_key(&self.key)
-    }
-
     /// Gives the claim back; whether it was still there: false when the review's end already
     /// stood aside for this call, whose reply then says it. Another call's claim on the same
     /// review stays.
@@ -617,418 +555,6 @@ fn listed(items: &[Finding]) -> String {
 }
 
 impl SessionManager {
-    /// The review of what a landing put on its target, `from..tip`, by the vendor other than
-    /// the phase's author. None when that range has one already.
-    pub(crate) async fn review_landing(&self, task: &Task, from: Oid, tip: Oid) {
-        let repo = match self.task_repo(task) {
-            Ok(repo) => repo,
-            Err(err) => {
-                tracing::warn!(task = %task.id, error = %err, "a landing could not be reviewed");
-                return;
-            }
-        };
-        let landed = tip.0.clone();
-        // Its worker's own review that hadn't reached it when it reported belongs to this
-        // landing: the thread gets its findings, and only the commits after it are reviewed.
-        let from = match self.pass_own_review(task, &repo, &from, &tip).await {
-            Passed::Whole => return,
-            Passed::Upto(reviewed) => reviewed,
-            Passed::No => from,
-        };
-        // Its worker's own review is the change's one review (SESSION-FIXES-PLAN.md Q6.1).
-        let from = match self.own_review_covers(task, &repo, &from, &tip).await {
-            Covers::All => {
-                self.settle_review_batch(&task.conversation_id, &landed)
-                    .await;
-                return;
-            }
-            Covers::Upto(reviewed) => reviewed,
-            Covers::Nothing => from,
-        };
-        let author = self.phase_author(task).await;
-        let started = self
-            .start_review(NewReview {
-                conversation_id: task.conversation_id.clone(),
-                request_id: task.request_id.clone(),
-                task_id: Some(task.id.clone()),
-                kind: ReviewKind::Code,
-                base: from,
-                tip,
-                author: Author {
-                    provider: author.route.choice.provider,
-                    model: author.route.choice.model.clone(),
-                },
-                notify: ReviewFor::Orchestrator,
-                repo,
-                plan: None,
-                recheck: None,
-            })
-            .await;
-        match started {
-            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
-                self.tell_review(&review, None).await;
-                self.settle_review_batch(&task.conversation_id, &review.tip)
-                    .await;
-            }
-            // The range was reviewed before it landed, for its worker, who weighed the
-            // findings: none come back to the thread now.
-            Ok(Some((review, false))) if review.state != ReviewState::Running => {
-                self.settle_review_batch(&task.conversation_id, &review.tip)
-                    .await;
-            }
-            // Reviews are off: no findings will come back for a fix.
-            Ok(None) => {
-                self.settle_review_batch(&task.conversation_id, &landed)
-                    .await;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(task = %task.id, error = %err, "a landing could not be reviewed");
-                self.settle_review_batch(&task.conversation_id, &landed)
-                    .await;
-            }
-        }
-    }
-
-    /// The review of `task`'s own committed work, from `from`, that hadn't reached its worker
-    /// when it reported (still running, or its outcome went to the thread), made part of the
-    /// landing at `tip`: its findings are the thread's. `Whole` when it read all of the
-    /// landing, `Upto` the commit it read up to, after which the rest gets a review of its
-    /// own; `No` when there is none, or its commits were rewritten.
-    async fn pass_own_review(&self, task: &Task, repo: &Path, from: &Oid, tip: &Oid) -> Passed {
-        let own = ReviewFor::Worker {
-            task_id: task.id.clone(),
-        };
-        let held = self.reviews.lock().await;
-        let Ok(board) = self.core.board(&task.conversation_id).await else {
-            return Passed::No;
-        };
-        let Some(mut review) = board
-            .reviews
-            .values()
-            .filter(|review| {
-                review.kind == ReviewKind::Code
-                    && review.task_id.as_ref() == Some(&task.id)
-                    && review.base == from.0
-                    && review.landing.is_none()
-                    && match &review.state {
-                        ReviewState::Running => review.notify == own,
-                        ReviewState::Failed { .. } => false,
-                        // Passed to the thread when it ended after the worker's report.
-                        _ => review.notify == ReviewFor::Orchestrator,
-                    }
-            })
-            .max_by_key(|review| review.number)
-            .cloned()
-        else {
-            return Passed::No;
-        };
-        let reviewed = Oid(review.tip.clone());
-        if reviewed != *tip {
-            let (git, repo, at, landed) = (
-                self.git.clone(),
-                repo.to_owned(),
-                reviewed.clone(),
-                tip.clone(),
-            );
-            let after = blocking(move || {
-                git.open(&repo)
-                    .map_err(git_error)?
-                    .ancestor(&at, &landed)
-                    .map_err(git_error)
-            })
-            .await;
-            if !matches!(after, Ok(true)) {
-                return Passed::No;
-            }
-            review.landing = Some(tip.0.clone());
-        }
-        review.notify = ReviewFor::Orchestrator;
-        if let Err(err) = self.store_review(&review).await {
-            tracing::warn!(review = %review.id, error = %err, "a worker's own review could not pass to its landing");
-            return Passed::No;
-        }
-        drop(held);
-        // One that read all of the landing and ended already, with nothing left to decide, has
-        // nothing to come back for. One that read part of it waits for the review of the rest,
-        // which settles the batch when it ends.
-        if reviewed == *tip && review.state != ReviewState::Running && !findings_unsettled(&review)
-        {
-            self.settle_review_batch(&task.conversation_id, &tip.0)
-                .await;
-        }
-        if reviewed == *tip {
-            Passed::Whole
-        } else {
-            Passed::Upto(reviewed)
-        }
-    }
-
-    /// How much of `task`'s landing, `from..tip`, its worker's own review (request_review)
-    /// covers: the newest that ended with a verdict, from the same start. Its range landed as
-    /// it was reviewed, or with commits after it: after findings those are the worker's fixes,
-    /// which get no review of their own; after a clean review they are work nobody read yet,
-    /// reviewed alone. A review that couldn't run, still runs, or whose commits were rewritten
-    /// covers nothing.
-    async fn own_review_covers(&self, task: &Task, repo: &Path, from: &Oid, tip: &Oid) -> Covers {
-        let Ok(board) = self.core.board(&task.conversation_id).await else {
-            return Covers::Nothing;
-        };
-        let own = ReviewFor::Worker {
-            task_id: task.id.clone(),
-        };
-        let Some(review) = board
-            .reviews
-            .values()
-            .filter(|review| {
-                review.kind == ReviewKind::Code
-                    && review.notify == own
-                    && review.base == from.0
-                    && matches!(
-                        review.state,
-                        ReviewState::Clean | ReviewState::Findings { .. }
-                    )
-            })
-            .max_by_key(|review| review.number)
-        else {
-            return Covers::Nothing;
-        };
-        let reviewed = Oid(review.tip.clone());
-        if reviewed == *tip {
-            return Covers::All;
-        }
-        let (git, repo, at, landed) = (
-            self.git.clone(),
-            repo.to_owned(),
-            reviewed.clone(),
-            tip.clone(),
-        );
-        let after = blocking(move || {
-            git.open(&repo)
-                .map_err(git_error)?
-                .ancestor(&at, &landed)
-                .map_err(git_error)
-        })
-        .await;
-        match (after, &review.state) {
-            (Ok(true), ReviewState::Findings { .. }) => Covers::All,
-            (Ok(true), _) => Covers::Upto(reviewed),
-            _ => Covers::Nothing,
-        }
-    }
-
-    /// The review findings the thread's commits `base..tip` fix, when each of them names some
-    /// with the [`FIXES_TRAILER`] and all it names are findings of the session's work: then
-    /// they get no review of their own, only the re-check of those it recorded high. A held
-    /// merge's consent covers them when those findings are all of the work since its last
-    /// merge (`since_merge`). `None` otherwise.
-    pub(crate) async fn thread_fixes(
-        &self,
-        conversation_id: &ConversationId,
-        repo: &Path,
-        base: &Oid,
-        tip: &Oid,
-    ) -> Option<ThreadFix> {
-        let (git, repo, from, to) = (self.git.clone(), repo.to_owned(), base.clone(), tip.clone());
-        let named = blocking(move || {
-            git.open(&repo)
-                .map_err(git_error)?
-                .trailer_values(&from, &to, FIXES_TRAILER)
-                .map_err(git_error)
-        })
-        .await
-        .ok()?;
-        let mut ids: Vec<String> = Vec::new();
-        for commit in &named {
-            let before = ids.len();
-            ids.extend(
-                commit
-                    .iter()
-                    .flat_map(|value| value.split([',', ';', ' ']))
-                    .map(|id| id.trim().to_ascii_uppercase())
-                    .filter(|id| !id.is_empty()),
-            );
-            if ids.len() == before {
-                return None;
-            }
-        }
-        if ids.is_empty() {
-            return None;
-        }
-        let board = self.core.board(conversation_id).await.ok()?;
-        // Named findings are looked up across the whole conversation: a review that ran when
-        // the user merged reports after the merge, and its fix is still only a fix. Whether a
-        // held merge's consent covers the fix is the merge batch's question, asked apart.
-        let findings: Vec<&Finding> = board
-            .reviews
-            .values()
-            .filter(|review| {
-                review.kind == ReviewKind::Code && review.notify == ReviewFor::Orchestrator
-            })
-            .flat_map(|review| &review.items)
-            .collect();
-        let batch: HashSet<&str> = super::landing::reviews_since_merge(&board)
-            .into_iter()
-            .flat_map(|review| &review.items)
-            .map(|item| item.id.as_str())
-            .collect();
-        let mut fixed: Vec<Finding> = Vec::new();
-        let mut since_merge = true;
-        for id in ids {
-            let found = findings.iter().find(|item| item.id == id)?;
-            since_merge &= batch.contains(id.as_str());
-            if !fixed.iter().any(|item| item.id == id) {
-                fixed.push((*found).clone());
-            }
-        }
-        Some(ThreadFix { fixed, since_merge })
-    }
-
-    /// The one targeted re-check of the thread's commits `base..tip` that fix `fixed`: of those
-    /// it recorded high and didn't dismiss, none when there are none (SESSION-FIXES-PLAN.md
-    /// Q6.1, as for a fix task's landing).
-    pub(crate) async fn recheck_thread_fix(
-        &self,
-        conversation_id: &ConversationId,
-        base: Oid,
-        tip: Oid,
-        repo: PathBuf,
-        fixed: &[Finding],
-    ) {
-        let high: Vec<Finding> = fixed
-            .iter()
-            .filter(|item| item.high && !matches!(item.status, FindingStatus::Dismissed { .. }))
-            .cloned()
-            .collect();
-        if high.is_empty() {
-            return;
-        }
-        let author = self.thread_author(conversation_id).await;
-        let started = self
-            .start_review(NewReview {
-                conversation_id: conversation_id.clone(),
-                request_id: self.request_for(conversation_id, None).await,
-                task_id: None,
-                kind: ReviewKind::Code,
-                base,
-                tip,
-                author,
-                notify: ReviewFor::Orchestrator,
-                repo,
-                plan: None,
-                recheck: Some(listed(&high)),
-            })
-            .await;
-        match started {
-            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
-                self.tell_review(&review, None).await;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(conversation = %conversation_id, error = %err, "the thread's fix could not be re-checked");
-            }
-        }
-    }
-
-    /// The one targeted re-check of `fix`'s landing, `from..tip`, when the thread marked a
-    /// finding of the review of `subject`'s landing high: whether those findings are fixed,
-    /// and what the fix broke. None otherwise (SESSION-FIXES-PLAN.md Q6.1).
-    pub(crate) async fn recheck_fix(&self, fix: &Task, subject: &Task, from: Oid, tip: Oid) {
-        let Ok(board) = self.core.board(&fix.conversation_id).await else {
-            return;
-        };
-        let high: Vec<Finding> = board
-            .reviews
-            .values()
-            .filter(|review| {
-                review.kind == ReviewKind::Code
-                    && subject.landed.as_deref() == Some(batch_tip(review))
-            })
-            .flat_map(|review| &review.items)
-            .filter(|item| item.high && !matches!(item.status, FindingStatus::Dismissed { .. }))
-            .cloned()
-            .collect();
-        if high.is_empty() {
-            return;
-        }
-        let repo = match self.task_repo(fix) {
-            Ok(repo) => repo,
-            Err(err) => {
-                tracing::warn!(task = %fix.id, error = %err, "a fix could not be re-checked");
-                return;
-            }
-        };
-        let author = self.phase_author(fix).await;
-        let started = self
-            .start_review(NewReview {
-                conversation_id: fix.conversation_id.clone(),
-                request_id: fix.request_id.clone(),
-                task_id: Some(fix.id.clone()),
-                kind: ReviewKind::Code,
-                base: from,
-                tip,
-                author: Author {
-                    provider: author.route.choice.provider,
-                    model: author.route.choice.model.clone(),
-                },
-                notify: ReviewFor::Orchestrator,
-                repo,
-                plan: None,
-                recheck: Some(listed(&high)),
-            })
-            .await;
-        match started {
-            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
-                self.tell_review(&review, None).await;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(task = %fix.id, error = %err, "a fix could not be re-checked");
-            }
-        }
-    }
-
-    /// The review of changes the thread made itself for `request`, `base..tip`, by the vendor
-    /// other than the thread's. None when that range has one already.
-    pub(crate) async fn review_thread_commits(
-        &self,
-        conversation_id: &ConversationId,
-        base: Oid,
-        tip: Oid,
-        repo: PathBuf,
-        request: Option<String>,
-    ) {
-        let author = self.thread_author(conversation_id).await;
-        let request = match request {
-            Some(request) => Some(request),
-            None => self.request_for(conversation_id, None).await,
-        };
-        let started = self
-            .start_review(NewReview {
-                conversation_id: conversation_id.clone(),
-                request_id: request,
-                task_id: None,
-                kind: ReviewKind::Code,
-                base,
-                tip,
-                author,
-                notify: ReviewFor::Orchestrator,
-                repo,
-                plan: None,
-                recheck: None,
-            })
-            .await;
-        match started {
-            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
-                self.tell_review(&review, None).await;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(conversation = %conversation_id, error = %err, "the thread's commits could not be reviewed");
-            }
-        }
-    }
-
     /// `request_review`: the other vendor's review of the thread's candidate commit, small
     /// changes too. What reviews already cover is reused: the range starts where a chain of
     /// earlier reviews from the merge base ends, and after findings it re-checks their fix
@@ -1039,8 +565,7 @@ impl SessionManager {
         id: &ConversationId,
         args: crate::tools::RequestReview,
     ) -> Result<String> {
-        // What the thread committed joins its unreviewed range first, so the range this review
-        // covers isn't reviewed again by itself.
+        // What the thread committed joins its unreviewed range first, so this review covers it.
         self.scan_thread_commits(id, true).await;
         let (checkout, base) = self.own_checkout(id).await?;
         let (git, path, wanted) = (self.git.clone(), checkout.clone(), args.commit.clone());
@@ -1180,72 +705,6 @@ impl SessionManager {
         ))
     }
 
-    /// `run_check`'s wait for `review`, a review of the thread's own change it waits on, until
-    /// `until` while the thread's turn runs and the call isn't `cancel`led (#193). Ended by
-    /// then: what its message would have said (none when nothing), which then stays
-    /// undelivered. None when it still runs, its message to come, or the call was cancelled,
-    /// its message delivered.
-    pub(crate) async fn review_in_reply(
-        &self,
-        id: &ConversationId,
-        review: &ReviewRun,
-        (until, cancel): (tokio::time::Instant, &CancellationToken),
-    ) -> Option<Option<String>> {
-        // Claimed under the lock its end is stored under, so it ends either before the claim
-        // (none taken) or after it, standing aside for this call.
-        let claim = {
-            let _held = self.reviews.lock().await;
-            let running = self.core.board(id).await.ok().is_some_and(|board| {
-                board
-                    .reviews
-                    .get(&review.id)
-                    .is_some_and(|now| now.state == ReviewState::Running)
-            });
-            (running && tokio::time::Instant::now() < until).then(|| {
-                ReplyWait::new(self, (id.clone(), review.base.clone(), review.tip.clone()))
-            })
-        }?;
-        loop {
-            if !claim.standing() {
-                claim.said();
-                break;
-            }
-            if tokio::time::Instant::now() >= until
-                || cancel.is_cancelled()
-                || !self.thread_turn_running(id).await
-            {
-                if claim.release() {
-                    return None;
-                }
-                // It ended just now, its end already standing aside: said here all the same.
-                break;
-            }
-            tokio::select! {
-                () = tokio::time::sleep(Duration::from_millis(100)) => {}
-                () = cancel.cancelled() => {}
-            }
-        }
-        let ended = self
-            .core
-            .board(id)
-            .await
-            .ok()?
-            .reviews
-            .get(&review.id)?
-            .clone();
-        if ended.state == ReviewState::Running {
-            return None;
-        }
-        let text = self.review_text(&ended).await;
-        if cancel.is_cancelled() {
-            // The call ends with no reply to carry it: the thread hears it as a message after
-            // all, its claim gone.
-            self.tell_review_now(&ended, text.as_deref(), None).await;
-            return None;
-        }
-        Some(self.orchestrator_word(&ended, text.as_deref()).await)
-    }
-
     /// Review `review`'s end stood aside for a request_review call that was cancelled before
     /// it said it: the thread hears it as a message after all (#332).
     async fn tell_unsaid_review(&self, id: &ConversationId, review: &str) {
@@ -1279,53 +738,6 @@ impl SessionManager {
             _ => format!(
                 "[review of your commits · {reviewer} found nothing in {range}] The review of your candidate found nothing."
             ),
-        }
-    }
-
-    /// The plan review of a lead's outline, in the background: the orchestrator gives the
-    /// go-ahead meanwhile and hears the findings when they come.
-    pub(crate) async fn review_plan(&self, lead: &Task, outline: &str) {
-        let Some(base) = lead.workspace.as_ref().and_then(|w| w.base.clone()) else {
-            tracing::warn!(task = %lead.id, "an outline without a checkout gets no plan review");
-            return;
-        };
-        let repo = match self.task_repo(lead) {
-            Ok(repo) => repo,
-            Err(err) => {
-                tracing::warn!(task = %lead.id, error = %err, "an outline could not be reviewed");
-                return;
-            }
-        };
-        let mut brief = lead.spec.clone();
-        for message in &lead.messages {
-            brief.push_str(&format!("\n---\n{message}"));
-        }
-        let started = self
-            .start_review(NewReview {
-                conversation_id: lead.conversation_id.clone(),
-                request_id: lead.request_id.clone(),
-                task_id: Some(lead.id.clone()),
-                kind: ReviewKind::Plan,
-                base: Oid(base.clone()),
-                tip: Oid(base),
-                author: Author {
-                    provider: lead.route.choice.provider,
-                    model: lead.route.choice.model.clone(),
-                },
-                notify: ReviewFor::Orchestrator,
-                repo,
-                plan: Some((brief, outline.to_owned())),
-                recheck: None,
-            })
-            .await;
-        match started {
-            Ok(Some((review, true))) if matches!(review.state, ReviewState::Failed { .. }) => {
-                self.tell_review(&review, None).await;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(task = %lead.id, error = %err, "an outline could not be reviewed");
-            }
         }
     }
 
@@ -1426,17 +838,6 @@ impl SessionManager {
         }
         if self.held_by_plan_mode(&task).await {
             return Err(Error::Invalid(super::phases::PLAN_MODE_HOLD.into()));
-        }
-        // A resumed lead still has its old instructions to ask for one (SESSION-FIXES-PLAN.md
-        // Q6.1): its fix's landing has the high findings re-checked instead.
-        if task.role == Some(WorkerRole::Fix)
-            && let Some(subject) = &task.subject
-            && self
-                .task_by_id(conversation_id, subject)
-                .await
-                .is_ok_and(|subject| subject.landed.is_some())
-        {
-            return Err(Error::Invalid(super::review_hold::NO_FIX_REVIEW.into()));
         }
         if !matches!(task.state, TaskState::Starting | TaskState::Running) {
             return Err(Error::Invalid(format!(
@@ -2018,13 +1419,7 @@ impl SessionManager {
 
     /// Records how `review` ended and tells whoever asked.
     async fn finish_review(&self, review: ReviewRun, outcome: std::result::Result<Review, String>) {
-        let id = review.conversation_id.clone();
-        // From before its end is stored until its findings are queued for the thread, the
-        // session's full checks wait as for a running review (BUILD-PLAN C3).
-        let telling = self.conv(&id).ok().map(Telling::new);
         crate::heap(|| self.end_review(review, outcome)).await;
-        drop(telling);
-        self.wake_checks(&id);
     }
 
     async fn end_review(&self, review: ReviewRun, outcome: std::result::Result<Review, String>) {
@@ -2078,7 +1473,7 @@ impl SessionManager {
                 ended.answer_waits = now.answer_waits;
             }
             // A worker that reported before its review ended never reads the findings: the
-            // thread gets them, as it gets a landing review's.
+            // thread gets them.
             if let ReviewFor::Worker { task_id } = &ended.notify
                 && ended.kind == ReviewKind::Code
                 && !self.still_works(&ended.conversation_id, task_id).await
@@ -2101,7 +1496,7 @@ impl SessionManager {
                 .await;
         }
         self.tell_review(&ended, text.as_deref()).await;
-        // Nothing comes back from a landing's review that found nothing or couldn't run.
+        // Nothing comes back from a review that found nothing or couldn't run.
         if ended.kind == ReviewKind::Code
             && matches!(ended.state, ReviewState::Clean | ReviewState::Failed { .. })
         {
@@ -2167,11 +1562,11 @@ impl SessionManager {
         // audit M6, issue #33), left uncommitted unless the user asks.
         let local = self.local_checkout(&review.conversation_id).is_some();
         let fix_rule = if local {
-            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it; it gets no review of its own. run_check's `fixes` (their ids) records them fixed when its check passes."
+            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it. run_check's `fixes` (their ids) records them fixed when its check passes."
                 .to_owned()
         } else {
             format!(
-                "Commit a fix of yours, with nothing else in it, with run_check's `commit` and `fixes` (their ids; `high` names those that lose data or break a build or a security boundary, whose fix then gets one re-check): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check; such a commit gets no review of its own."
+                "Commit a fix of yours, with nothing else in it, with run_check's `commit` and `fixes` (their ids; `high` names those that lose data or break a build or a security boundary): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check."
             )
         };
         let text = match (review.kind, &review.state, text) {
@@ -2180,7 +1575,7 @@ impl SessionManager {
                 if review.task_id.is_none() =>
             {
                 format!(
-                    "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the one background review of the {} you made yourself. Fix what you agree with ({}), or tell the user why not. {fix_rule} There are no review rounds.\n{}",
+                    "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nThis is the review of the {} you made yourself. Fix what you agree with ({}), or tell the user why not. {fix_rule} There are no review rounds.\n{}",
                     clipped(text),
                     if local { "changes" } else { "commits" },
                     if local {
@@ -2447,9 +1842,7 @@ impl SessionManager {
             .collect())
     }
 
-    /// Marks the findings `high` of high severity, before `run_check` commits their fix: the
-    /// scan of the thread's new commits may read the fix commit before the check's call ends,
-    /// and decides its re-check from the mark then.
+    /// Marks the findings `high` of high severity, before `run_check` commits their fix.
     pub(crate) async fn mark_high(
         &self,
         conversation_id: &ConversationId,
@@ -2506,7 +1899,6 @@ impl SessionManager {
                     "`{command}` passed after the fix [evidence: {alias}]"
                 )),
                 why: None,
-                // Marked high, its fix gets one targeted re-check (SESSION-FIXES-PLAN.md Q6.1).
                 high: high.contains(id).then_some(true),
             })
             .collect();
@@ -3059,7 +2451,7 @@ mod tests {
             checked: Some("a:3 at the tip guards it now".into()),
         };
         board.reviews.insert(first.id.clone(), first);
-        let merged = super::super::landing::merged_findings(&board, false);
+        let merged = super::super::landing::merged_findings(&board);
         assert_eq!(
             merged,
             " Open review findings, as you recorded them (not fixed): R1.1 One; R1.2 Two (needs the user's call). Tell the user, as a list."
@@ -3091,7 +2483,7 @@ mod tests {
         second.state = ReviewState::Findings { count: 2 };
         second.items = items_of(2, "- [P2] Four — a:4\n- [P2] Five — a:5", None);
         board.reviews.insert(second.id.clone(), second);
-        let merged = super::super::landing::merged_findings(&board, false);
+        let merged = super::super::landing::merged_findings(&board);
         assert_eq!(
             merged,
             " Findings you haven't recorded: R2.1, R2.2. Record them with record_findings, and tell the user which stay open."
@@ -3107,7 +2499,7 @@ mod tests {
             why: "by design".into(),
         };
         assert_eq!(
-            super::super::landing::merged_findings(&board, false),
+            super::super::landing::merged_findings(&board),
             " Recorded fixed but never checked in the merged code (unverified): R2.1 Four. Tell the user plainly that these are unverified, never that the review is clean; or check each in the merged code and record it again with `checked`."
         );
         // Checked in the merged code: nothing open.
@@ -3118,7 +2510,7 @@ mod tests {
             checked: Some("ran its test at the tip: passes".into()),
         };
         assert_eq!(
-            super::super::landing::merged_findings(&board, false),
+            super::super::landing::merged_findings(&board),
             " Its review's findings are all fixed or dismissed, as you recorded them."
         );
         // A review stored before findings were items is never reported clean.
@@ -3127,12 +2519,12 @@ mod tests {
         legacy.state = ReviewState::Findings { count: 2 };
         board.reviews.insert(legacy.id.clone(), legacy.clone());
         assert_eq!(
-            super::super::landing::merged_findings(&board, false),
+            super::super::landing::merged_findings(&board),
             " Its review's findings are all fixed or dismissed, as you recorded them. A review from before findings were recorded found 2 things, never recorded: tell the user they may still be open."
         );
         board.reviews.retain(|id, _| id == "legacy");
         assert_eq!(
-            super::super::landing::merged_findings(&board, false),
+            super::super::landing::merged_findings(&board),
             " A review from before findings were recorded found 2 things, never recorded: tell the user they may still be open."
         );
     }

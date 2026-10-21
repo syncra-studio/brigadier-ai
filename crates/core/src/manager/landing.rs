@@ -13,11 +13,9 @@
 //!    only if the target is still where it was (the git engine checks it right before
 //!    mutating). Anything unsafe leaves the task "ready to land" with nothing changed.
 //!
-//! Every landing then gets one read-only review by the other vendor in the background
-//! ([`super::review_runs`]); nothing waits for it. It also makes the session's full checks due
-//! at the new tip: they run once for the landings close together, in the background, on the
-//! integrated branch ([`super::integrated_checks`], SESSION-FIXES-PLAN.md §11), and a failure
-//! goes back to the worker that broke it. A merge of the session needs them passed at its tip.
+//! A landing starts no review and no checks by itself: the agents ask for them
+//! (`request_review`, [`super::review_runs`]; `run_checks`, [`super::integrated_checks`]). A
+//! merge into main needs the thread's run_checks passed at its exact commit.
 //!
 //! Finishing a new-worktree session merges the session branch into its base the same way, on
 //! the user's word as the thread judges it: their message, card answer or click.
@@ -857,9 +855,7 @@ impl SessionManager {
             )
         })
         .await;
-        // Counted before the task is final, until its review is stored: a held merge waits.
-        let review_due = self.conv(&task.conversation_id).ok().map(ReviewDue::new);
-        // The thread's own commits below the landing get their review; the landing has its own.
+        // The thread's own commits below the landing are recorded as its own first.
         if let Ok(repo) = self.task_repo(task) {
             crate::heap(|| {
                 self.thread_branch_landed(&task.conversation_id, &repo, target, from, new_tip)
@@ -869,24 +865,12 @@ impl SessionManager {
         let tasks = crate::heap(|| self.landed_with(task)).await;
         // The session's own landing on a held merge's branch is covered by its consent.
         crate::heap(|| self.move_held_merge(&task.conversation_id, target, from, new_tip)).await;
-        // A fix of landed work's review findings gets no review of its own, only the
-        // targeted re-check of a finding the thread marked high (SESSION-FIXES-PLAN.md Q6.1).
-        let fixed = match (&task.role, &task.subject) {
-            (Some(crate::work::WorkerRole::Fix), Some(subject)) => {
-                crate::heap(|| self.task_by_id(&task.conversation_id, subject))
-                    .await
-                    .ok()
-                    .filter(|subject| subject.landed.is_some())
-            }
-            _ => None,
-        };
-        // The landed workers stay resumable for their review's findings, kept before the
-        // review starts so that its end always finds them, and for the session's full checks
-        // (§11): a fix's landing for those alone, so a fix that breaks them again is sent back
+        // The landed workers stay resumable until a passing run of the session's full checks
+        // covers their landing (§11), so a failure, or findings the thread records, can go back
         // to the same session.
         let mut held = std::collections::HashSet::new();
         for landed in &tasks {
-            if crate::heap(|| self.hold_for_review(landed, target, fixed.is_some())).await {
+            if crate::heap(|| self.hold_for_review(landed, target)).await {
                 held.insert(landed.id.clone());
             }
         }
@@ -935,14 +919,6 @@ impl SessionManager {
         for landed in &tasks {
             crate::heap(|| self.set_phase_stage(landed, PhaseStage::Done)).await;
         }
-        // The session's full checks are due at the new tip: once, in the background, for
-        // every landing close to it (SESSION-FIXES-PLAN.md §11).
-        if let Ok(repo) = self.task_repo(task) {
-            let request =
-                crate::heap(|| self.request_for(&task.conversation_id, Some(&task.id))).await;
-            crate::heap(|| self.checks_due(&task.conversation_id, &repo, target, new_tip, request))
-                .await;
-        }
         // The task branches are fully on the target now; they were Brigadier's, so they go
         // too. A merge's conflicting task whose work was rebuilt without its litter landed
         // as that rebuild: a branch at a rewritten commit counts as merged once its
@@ -986,43 +962,12 @@ impl SessionManager {
                 }
             }
         }
-        // Its one review, by the other vendor, starts now and runs on its own: only after the
-        // landing is recorded and its worktrees are gone, since a review that ends at once
-        // (one already done on the range, or a reviewer that can't start) settles the held
-        // batch, which needs both.
-        let manager = self.arc();
-        let (task, from, tip) = (task.clone(), from.clone(), new_tip.clone());
-        // Then a held merge looks again (SESSION-FIXES-PLAN.md Q3): before, no review of this
-        // landing was running yet, and it would have come due without one.
+        // A held merge looks again now the writer is final, and a request that waited for the
+        // landing may be over. Nothing is reviewed or checked by itself.
+        let (manager, id) = (self.arc(), task.conversation_id.clone());
         self.spawn(async move {
-            #[cfg(test)]
-            if let Some(conv) = review_due.as_ref().map(|due| due.0.clone()) {
-                let pause = {
-                    let mut pause = conv.review_pause.lock().unwrap();
-                    match pause.as_mut() {
-                        Some((0, ..)) => {
-                            pause.take().map(|(_, reached, release)| (reached, release))
-                        }
-                        Some((skip, ..)) => {
-                            *skip -= 1;
-                            None
-                        }
-                        None => None,
-                    }
-                };
-                if let Some((reached, release)) = pause {
-                    reached.notify_one();
-                    release.notified().await;
-                }
-            }
-            match fixed {
-                Some(subject) => manager.recheck_fix(&task, &subject, from, tip).await,
-                None => manager.review_landing(&task, from, tip).await,
-            }
-            drop(review_due);
-            manager.check_held_merge(&task.conversation_id).await;
-            // A request that waited for this review to be stored may be over now.
-            manager.settle_requests(&task.conversation_id).await;
+            manager.check_held_merge(&id).await;
+            manager.settle_requests(&id).await;
         });
     }
 
@@ -1277,9 +1222,12 @@ impl SessionManager {
         if verified_commit == workspace.base_commit {
             return Err(Error::Invalid("Nothing new is verified to merge.".into()));
         }
-        // Verified means its full checks passed there too (SESSION-FIXES-PLAN.md §11).
-        if super::integrated_checks::tip_checked(&board, &workspace.branch, &verified_commit)
-            != super::integrated_checks::TipChecked::Passed
+        // Verified means the thread's run_checks passed there too (SESSION-FIXES-PLAN.md §11).
+        if super::integrated_checks::tip_checked_by_thread(
+            &board,
+            &workspace.branch,
+            &verified_commit,
+        ) != super::integrated_checks::TipChecked::Passed
         {
             return Err(Error::Invalid(
                 "The run's full checks haven't passed at its verified tip; nothing merged.".into(),
@@ -1329,7 +1277,7 @@ impl SessionManager {
         let Some(Setup::Session { repo, .. }) = self.core.conversation(&id)?.setup else {
             return Err(Error::Invalid("This run has no repository.".into()));
         };
-        // What the thread committed itself on the run branch gets its review before it merges.
+        // What the thread committed itself on the run branch is recorded as its own first.
         self.scan_thread_branch(
             &id,
             Path::new(&repo),
@@ -1462,7 +1410,7 @@ impl SessionManager {
             Err(err) => return Err(err),
         };
         let auto = consent.asked_in.starts_with(AUTO_GO_AHEAD);
-        // What the thread committed itself gets its review before the branch is merged.
+        // What the thread committed itself is recorded as its own before the branch merges.
         self.scan_thread_commits(id, self.thread_turn_running(id).await)
             .await;
         let tasks = self.core.tasks(id).await?;
@@ -1706,10 +1654,7 @@ impl SessionManager {
                 if !open.is_empty() {
                     self.settle_requests(id).await;
                 }
-                merged_findings(
-                    &board,
-                    conv.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
-                )
+                merged_findings(&board)
             }
             Err(_) => String::new(),
         };
@@ -2816,25 +2761,6 @@ fn advance_tip(tip: &str, moves: &mut HashMap<String, String>) -> String {
     tip
 }
 
-/// A landing's review not stored yet, counted on its conversation until dropped.
-struct ReviewDue(std::sync::Arc<super::conversation::ConvLive>);
-
-impl ReviewDue {
-    fn new(conv: std::sync::Arc<super::conversation::ConvLive>) -> Self {
-        conv.reviews_due
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Self(conv)
-    }
-}
-
-impl Drop for ReviewDue {
-    fn drop(&mut self) {
-        self.0
-            .reviews_due
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 /// [`Gate`] of `held` with every write task final.
 pub(super) fn held_gate(held: &PendingMerge, tasks: &[Task]) -> Gate {
     let ended = tasks.iter().find(|task| {
@@ -2943,20 +2869,17 @@ fn not_consented(why: String) -> Error {
 /// What the code reviews of the work merged now say, for the thread to tell the user: those it
 /// hears, started since the session's previous merge. It counts only what the thread recorded
 /// (`record_findings`), never a sum of reviews, and lists the open findings in its words.
-///
-/// `review_due`: a landing's review isn't stored yet, so it counts as running.
-pub(super) fn merged_findings(board: &crate::board::Board, review_due: bool) -> String {
+pub(super) fn merged_findings(board: &crate::board::Board) -> String {
     use crate::work::{FindingStatus, ReviewState};
     let reviews = reviews_since_merge(board);
-    if reviews.is_empty() && !review_due {
+    if reviews.is_empty() {
         return String::new();
     }
     // A review still running doesn't hold the merge (#242): it is said, with what the others
     // found.
-    let running = if review_due
-        || reviews
-            .iter()
-            .any(|review| review.state == ReviewState::Running)
+    let running = if reviews
+        .iter()
+        .any(|review| review.state == ReviewState::Running)
     {
         " Its review still runs, so this work isn't reviewed yet: tell the user. Its findings come as a [review …] message; record them and tell the user then."
     } else {
@@ -3399,7 +3322,7 @@ mod tests {
             "review-2".into(),
             review(2, ReviewState::Running, Vec::new()),
         );
-        let text = merged_findings(&board, false);
+        let text = merged_findings(&board);
         assert!(
             text.contains("Its review still runs, so this work isn't reviewed yet"),
             "{text}"
@@ -3413,24 +3336,18 @@ mod tests {
         assert!(text.contains("(unverified): R1.3"), "{text}");
         // Only the running review: it says so, never that the review is clean.
         board.reviews.remove("review-1");
-        let text = merged_findings(&board, false);
+        let text = merged_findings(&board);
         assert!(
             text.contains("still runs") && !text.contains("clean"),
             "{text}"
         );
-        // A landing's review not stored yet runs too, though only a clean one is in.
         board.reviews.remove("review-2");
         board
             .reviews
             .insert("review-3".into(), review(3, ReviewState::Clean, Vec::new()));
-        assert_eq!(merged_findings(&board, false), " Its review is clean.");
-        let text = merged_findings(&board, true);
-        assert!(
-            text.contains("still runs") && !text.contains("clean"),
-            "{text}"
-        );
+        assert_eq!(merged_findings(&board), " Its review is clean.");
         board.reviews.clear();
-        assert!(merged_findings(&board, true).contains("still runs"));
+        assert_eq!(merged_findings(&board), "");
     }
 
     #[test]

@@ -1917,12 +1917,6 @@ impl Flow {
         super::background_runs::let_background(&self.conversation);
     }
 
-    /// Has the thread's `run_check` wait for a running review of its change in its call, as
-    /// in the app: by default a test hears of it in a message.
-    pub fn wait_for_reviews(&self) {
-        super::background_runs::wait_for_reviews(&self.conversation);
-    }
-
     /// Waits until `done` holds for the conversation's board.
     pub async fn until(&self, what: &str, done: impl Fn(&Board) -> bool) -> Board {
         self.until_in(&self.conversation, what, done).await
@@ -2285,8 +2279,6 @@ mod restart_waits_tests;
 mod resume_tests;
 #[cfg(unix)]
 mod review_hold_tests;
-#[cfg(unix)]
-mod review_on_pass_tests;
 #[cfg(unix)]
 mod review_picks_tests;
 #[cfg(unix)]
