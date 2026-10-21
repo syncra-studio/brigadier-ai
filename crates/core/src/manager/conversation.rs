@@ -3493,6 +3493,7 @@ impl SessionManager {
                 current.git_writing = writing;
                 current.browser = browser;
                 current.auto_merge = auto_merge;
+                current.integrations = self.thread_integrations(&conv.id).await;
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
@@ -3639,7 +3640,13 @@ impl SessionManager {
                 ConversationKind::Chat => ToolSet::Chat,
             },
             skill_plugins: Vec::new(),
-            switched_off: Default::default(),
+            // What the user switched off of its agent's own setup (`integrations`).
+            switched_off: match conv.kind {
+                ConversationKind::Session => {
+                    self.thread_switched_off(&conv.id, choice.provider, &dir).await
+                }
+                ConversationKind::Chat => Default::default(),
+            },
             // The workspace is the thread's to work in, never its own to clean up: it is not
             // recorded under the thread's owner. A tab chat's checkout is read the same way.
             add_dirs: launch
@@ -6576,6 +6583,7 @@ impl SessionManager {
                 current.git_writing = prompts::git_writing(&self.core.settings());
                 current.browser = self.core.settings().browser_enabled;
                 current.auto_merge = self.auto_merge_in(&conv.id);
+                current.integrations = self.thread_integrations(&conv.id).await;
                 current.due = due;
                 if let Some(cli) = conv.live_cli().await {
                     current.provider = cli.provider;

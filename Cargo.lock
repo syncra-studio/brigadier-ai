@@ -479,6 +479,7 @@ dependencies = [
  "brigadier-git",
  "brigadier-index",
  "brigadier-providers",
+ "brigadier-registry",
  "brigadier-review",
  "brigadier-router",
  "brigadier-sandbox",

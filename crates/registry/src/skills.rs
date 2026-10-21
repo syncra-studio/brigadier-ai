@@ -16,6 +16,9 @@ pub struct Skill {
     pub dir: PathBuf,
     /// Every root it is found in, in [`SkillRoot`]'s order.
     pub roots: Vec<SkillRoot>,
+    /// Each folder it is found at, as found (a link into a root is not resolved): Codex knows
+    /// a skill by the path it found it at.
+    pub entries: Vec<PathBuf>,
 }
 
 impl Skill {
@@ -99,6 +102,7 @@ fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
             if !known.roots.contains(&root) {
                 known.roots.push(root.clone());
             }
+            known.entries.push(entry.path());
             continue;
         }
         let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else {
@@ -111,6 +115,7 @@ fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
             description: description.unwrap_or_default(),
             dir,
             roots: vec![root.clone()],
+            entries: vec![entry.path()],
         });
     }
 }

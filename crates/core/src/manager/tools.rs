@@ -238,6 +238,7 @@ impl SessionManager {
                 } else {
                     Vec::new()
                 };
+                let integrations = self.resolve_integrations(id, &args.integrations).await?;
                 let mut attachments =
                     crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
                 for image in mockup_images {
@@ -264,6 +265,7 @@ impl SessionManager {
                                 areas: areas.clone(),
                                 floor,
                                 needs: needs.clone(),
+                                integrations: integrations.clone(),
                             },
                         )
                     })
@@ -340,6 +342,7 @@ impl SessionManager {
                             mockup,
                             live_look: args.live_look,
                             request,
+                            integrations,
                             ..Default::default()
                         },
                     )

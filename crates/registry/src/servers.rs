@@ -348,7 +348,7 @@ fn toml_servers(
 }
 
 fn server(name: &str, source: Source, project: Option<&Path>, transport: Transport) -> Server {
-    let needs_sign_in = matches!(&transport, Transport::Http { headers, .. }
+    let signs_in = matches!(&transport, Transport::Http { headers, .. }
         if !headers.iter().any(|(header, _)| header.eq_ignore_ascii_case("authorization")));
     Server {
         id: server_id(source, project, name),
@@ -356,7 +356,7 @@ fn server(name: &str, source: Source, project: Option<&Path>, transport: Transpo
         source,
         project: project.map(Path::to_owned),
         transport,
-        needs_sign_in,
+        signs_in,
     }
 }
 

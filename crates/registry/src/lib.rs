@@ -222,9 +222,22 @@ pub struct Server {
     pub project: Option<PathBuf>,
     pub transport: Transport,
     /// A remote server with no credentials of its own in the config: it signs in with OAuth,
-    /// which each agent does by itself (Codex: `codex mcp login`), so another agent given it
-    /// needs its own sign-in first (docs/research/phase7-probes.md (f)).
-    pub needs_sign_in: bool,
+    /// which each agent does by itself (Codex: `codex mcp login`), so another agent's sign-in
+    /// doesn't serve it as such (docs/research/phase7-probes.md (f)): [`Catalog::sign_in`].
+    pub signs_in: bool,
+}
+
+/// How a session's agent is signed in to a server that [`Server::signs_in`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignIn {
+    /// The agent has the server by itself, and its own sign-in serves it.
+    Native,
+    /// The sign-in another agent stored can serve it (read, and written back when renewed).
+    ReusableFrom(Agent),
+    /// No agent's stored sign-in can: one sign-in in Brigadier serves it to every agent.
+    InBrigadier,
+    /// Not known: nothing reads the agents' stored sign-ins yet.
+    Unknown,
 }
 
 /// A session, as far as what it finds by itself goes.
@@ -324,6 +337,17 @@ impl Catalog {
                 Some(project.as_path()) == session.project && session.in_checkout
             }
             _ => false,
+        })
+    }
+
+    /// How `session`'s agent is signed in to `server`; `None` for one that doesn't sign in.
+    pub fn sign_in(&self, server: &Server, session: &Session<'_>) -> Option<SignIn> {
+        server.signs_in.then(|| {
+            if self.server_native(server, session) {
+                SignIn::Native
+            } else {
+                SignIn::Unknown
+            }
         })
     }
 

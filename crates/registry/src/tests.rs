@@ -154,7 +154,7 @@ fn claude_user_and_local_scopes_expand_variables() {
     assert_eq!(args, ["-y", "railway-mcp", "acme"]);
     assert_eq!(env, [("MODE", "prod"), ("TOKEN", "rw-secret")]);
     assert_eq!((cwd, base), (None, None));
-    assert!(!railway.needs_sign_in);
+    assert!(!railway.signs_in);
 
     let remote = catalog.server("claude:user:remote").unwrap();
     assert_eq!(
@@ -164,8 +164,19 @@ fn claude_user_and_local_scopes_expand_variables() {
             vec![("Authorization", "Bearer k-1")]
         )
     );
-    assert!(!remote.needs_sign_in);
-    assert!(catalog.server("claude:user:oauth").unwrap().needs_sign_in);
+    assert!(!remote.signs_in);
+    let oauth = catalog.server("claude:user:oauth").unwrap();
+    assert!(oauth.signs_in);
+    let session = |agent| Session {
+        agent,
+        cwd: Path::new("/elsewhere"),
+        project: None,
+        in_checkout: false,
+    };
+    // Claude has it, and signs in by itself; how Codex could is not known yet.
+    assert_eq!(catalog.sign_in(oauth, &session(Agent::Claude)), Some(SignIn::Native));
+    assert_eq!(catalog.sign_in(oauth, &session(Agent::Codex)), Some(SignIn::Unknown));
+    assert_eq!(catalog.sign_in(remote, &session(Agent::Codex)), None);
 
     let local = catalog.find("local").expect("one server is named local");
     assert_eq!(local.source, Source::ClaudeLocal);
@@ -275,7 +286,7 @@ fn project_mcp_json_and_cursor_configs() {
     assert_eq!(http(web).1, [("X-Key", "ck")]);
     // A header that isn't Authorization may be an API key: still, no Authorization means the
     // server may want a sign-in.
-    assert!(web.needs_sign_in);
+    assert!(web.signs_in);
 }
 
 #[test]
@@ -346,7 +357,7 @@ trust_level = "untrusted"
             ]
         )
     );
-    assert!(!api.needs_sign_in);
+    assert!(!api.signs_in);
     assert_eq!(
         catalog.codex_skill_config,
         [serde_json::json!({"path": "/some/SKILL.md", "enabled": false})]
