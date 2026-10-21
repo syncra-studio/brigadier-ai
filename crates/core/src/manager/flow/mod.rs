@@ -1381,9 +1381,9 @@ pub(crate) struct Scratch {
 }
 
 impl Scratch {
-    /// A fresh folder named for `name`.
+    /// A fresh folder named for `name`, outside any session's temp folder (issue #493).
     pub fn new(name: &str) -> Self {
-        Self::within(&std::env::temp_dir(), name)
+        Self::within(&crate::manager::protection::unprotected_temp_dir(), name)
     }
 
     /// A fresh folder named for `name` under `/tmp`, whatever the temp directory is, for paths
