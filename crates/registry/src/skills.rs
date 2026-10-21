@@ -36,6 +36,9 @@ pub enum SkillRoot {
     ClaudeUser,
     /// `$CODEX_HOME/skills` (Codex), its `.system` folder left out.
     CodexUser,
+    /// `~/.claude/skills/synced/<org>_<account>`: the skills Claude Code syncs from a Claude
+    /// account (it shows them as `synced-skill:<name>`).
+    ClaudeSynced(String),
     /// A project's `.claude/skills` (Claude Code).
     ClaudeProject(PathBuf),
     /// A project's `.agents/skills` (Codex, in a checkout of the project).
@@ -46,7 +49,7 @@ impl SkillRoot {
     /// Whether `session`'s agent finds the skills in this root by itself.
     pub fn native(&self, session: &Session<'_>) -> bool {
         match (self, session.agent) {
-            (Self::ClaudeUser, Agent::Claude)
+            (Self::ClaudeUser | Self::ClaudeSynced(_), Agent::Claude)
             | (Self::AgentsUser | Self::CodexUser, Agent::Codex) => true,
             (Self::ClaudeProject(project), Agent::Claude) => {
                 Some(project.as_path()) == session.project
@@ -63,6 +66,7 @@ impl SkillRoot {
             Self::AgentsUser => "agents:user".into(),
             Self::ClaudeUser => "claude:user".into(),
             Self::CodexUser => "codex:user".into(),
+            Self::ClaudeSynced(account) => format!("claude:synced:{account}"),
             Self::ClaudeProject(project) => format!("claude:project:{}", project.display()),
             Self::AgentsProject(project) => format!("agents:project:{}", project.display()),
         }
@@ -82,6 +86,17 @@ pub(crate) fn add_user(skills: &mut Vec<Skill>, roots: &Roots) {
         &roots.codex_home.join("skills"),
         SkillRoot::CodexUser,
     );
+    let synced = roots.claude_dir.join("skills").join("synced");
+    if let Ok(accounts) = std::fs::read_dir(&synced) {
+        let mut accounts: Vec<_> = accounts.flatten().collect();
+        accounts.sort_by_key(|entry| entry.file_name());
+        for account in accounts {
+            let name = account.file_name().to_string_lossy().into_owned();
+            if !name.starts_with('.') {
+                scan(skills, &account.path(), SkillRoot::ClaudeSynced(name));
+            }
+        }
+    }
 }
 
 /// A project's skills.
@@ -124,15 +139,58 @@ fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
             continue;
         };
         let (name, description) = frontmatter(&text);
+        let name = name.unwrap_or_else(|| folder_name.clone());
+        // A copy (not a link) of a skill already found, file for file: the same skill.
+        if let Some(known) = skills
+            .iter_mut()
+            .find(|skill| skill.name == name && same_contents(&skill.dir, &dir))
+        {
+            if !known.roots.contains(&root) {
+                known.roots.push(root.clone());
+            }
+            known.entries.push((root.clone(), entry.path()));
+            continue;
+        }
         skills.push(Skill {
             id: format!("{}:{folder_name}", root.prefix()),
-            name: name.unwrap_or_else(|| folder_name.clone()),
+            name,
             description: description.unwrap_or_default(),
             dir,
             roots: vec![root.clone()],
             entries: vec![(root.clone(), entry.path())],
         });
     }
+}
+
+/// Whether two folders hold the same files with the same bytes (hidden ones included).
+fn same_contents(a: &Path, b: &Path) -> bool {
+    fn files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            if std::fs::metadata(&path)?.is_dir() {
+                files(root, &path, out)?;
+            } else if let Ok(relative) = path.strip_prefix(root) {
+                out.push(relative.to_owned());
+            }
+        }
+        Ok(())
+    }
+    let list = |root: &Path| {
+        let mut out = Vec::new();
+        files(root, root, &mut out).ok()?;
+        out.sort();
+        Some(out)
+    };
+    let (Some(left), Some(right)) = (list(a), list(b)) else {
+        return false;
+    };
+    left == right
+        && left.iter().all(|file| {
+            matches!(
+                (std::fs::read(a.join(file)), std::fs::read(b.join(file))),
+                (Ok(x), Ok(y)) if x == y
+            )
+        })
 }
 
 /// `name` and `description` from a `SKILL.md`'s YAML frontmatter.

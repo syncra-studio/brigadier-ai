@@ -849,6 +849,87 @@ fn skills_dedupe_by_real_folder_and_keep_same_names_apart() {
 }
 
 #[test]
+fn copied_skills_merge_and_synced_skills_are_claudes() {
+    let home = fixture("copies");
+    let codex_home = home.join(".codex");
+    // The same skill copied (not linked) into three roots, with a file beside SKILL.md.
+    for root in [
+        home.join(".agents/skills"),
+        home.join(".claude/skills"),
+        codex_home.join("skills"),
+    ] {
+        skill(
+            &root.join("use-railway"),
+            "use-railway",
+            "Deploy to Railway.",
+        );
+        write(&root.join("use-railway/scripts/run.sh"), "echo hi\n");
+    }
+    // Same name, a file that differs: two skills.
+    skill(
+        &home.join(".agents/skills/impeccable"),
+        "impeccable",
+        "One.",
+    );
+    skill(
+        &home.join(".claude/skills/impeccable"),
+        "impeccable",
+        "One.",
+    );
+    write(&home.join(".claude/skills/impeccable/extra.md"), "more\n");
+    // Claude's synced skills, the same in two accounts.
+    for account in ["org_a", "org_b"] {
+        skill(
+            &home.join(format!(".claude/skills/synced/{account}/docx")),
+            "docx",
+            "Word files.",
+        );
+    }
+    write(
+        &home.join(".claude/skills/synced/org_a/manifest.json"),
+        "{}",
+    );
+
+    let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
+    let catalog = Catalog::read(&roots, None);
+    let mut ids: Vec<&str> = catalog.skills.iter().map(|s| s.id.as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        [
+            "agents:user:impeccable",
+            "agents:user:use-railway",
+            "claude:synced:org_a:docx",
+            "claude:user:impeccable",
+        ]
+    );
+    let railway = catalog.skill("agents:user:use-railway").unwrap();
+    assert_eq!(
+        railway.roots,
+        [
+            SkillRoot::AgentsUser,
+            SkillRoot::ClaudeUser,
+            SkillRoot::CodexUser
+        ]
+    );
+    assert_eq!(railway.entries.len(), 3);
+    let docx = catalog.skill("claude:synced:org_a:docx").unwrap();
+    assert_eq!(docx.entries.len(), 2);
+    let claude = Session {
+        agent: Agent::Claude,
+        cwd: &home,
+        project: None,
+        in_checkout: false,
+    };
+    let codex = Session {
+        agent: Agent::Codex,
+        ..claude
+    };
+    assert!(catalog.skill_native(docx, &claude));
+    assert!(!catalog.skill_native(docx, &codex));
+}
+
+#[test]
 fn frontmatter_with_crlf_quotes_and_multiline() {
     let home = fixture("frontmatter");
     write(
