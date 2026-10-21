@@ -1244,9 +1244,44 @@ pub(crate) fn web_page_only(url: &str) -> Result<(), IpcError> {
 
 /// Makes the tab `id`'s webview showing `url` at `bounds`; its page events arrive on
 /// `events`. `agent`: the tab was opened from something an agent gave (its history says so). For a tab that has one, it goes to `url` (see `browser_navigate`).
+#[cfg(not(target_os = "windows"))]
 #[tauri::command]
 pub fn browser_open(
     app: tauri::AppHandle,
+    id: String,
+    url: String,
+    bounds: BrowserBounds,
+    agent: Option<bool>,
+    events: Channel<BrowserEvent>,
+) -> Result<(), IpcError> {
+    open_page(&app, id, url, bounds, agent, events)
+}
+
+/// [`browser_open`] on Windows, where a webview made in a synchronous command deadlocks: the
+/// command runs in the app webview's request handler, and WebView2 never answers the new
+/// webview's creation inside one (Tauri's own warning). The page is made on the main thread
+/// outside it, and the command waits for that.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn browser_open(
+    app: tauri::AppHandle,
+    id: String,
+    url: String,
+    bounds: BrowserBounds,
+    agent: Option<bool>,
+    events: Channel<BrowserEvent>,
+) -> Result<(), IpcError> {
+    let (sent, made) = tokio::sync::oneshot::channel();
+    let main = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = sent.send(open_page(&main, id, url, bounds, agent, events));
+    })
+    .map_err(|err| failed(err.to_string()))?;
+    made.await.map_err(|_| failed("the window is gone"))?
+}
+
+fn open_page(
+    app: &tauri::AppHandle,
     id: String,
     url: String,
     bounds: BrowserBounds,
@@ -1258,7 +1293,7 @@ pub fn browser_open(
     if !embedded::waiting(&id) {
         web_page_only(&url)?;
     }
-    embedded::open(&app, id, url, bounds, agent.unwrap_or(false), events)
+    embedded::open(app, id, url, bounds, agent.unwrap_or(false), events)
 }
 
 /// Shows `url` in the tab `id`'s webview, at `bounds`.
