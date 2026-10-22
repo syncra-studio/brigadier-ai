@@ -1130,3 +1130,58 @@ async fn session_folders_stay_while_their_session_exists_and_are_counted_once() 
     assert!(dir.record().join("ledger.md").is_file());
     flow.stop().await;
 }
+
+/// A thread's CLI session files (`lineage:`) are kept while the thread exists, archived
+/// included, and offered once it is gone (S8).
+#[tokio::test]
+async fn cli_session_files_stay_while_their_thread_exists() {
+    let (flow, _, _) = session("disk-lineage").await;
+    let id = flow.conversation.clone();
+    let sessions = flow.manager.runtime.platform().paths().sessions_dir.clone();
+    let ledger = flow.manager.runtime.ledger();
+    let kept = sessions.join("lineage-kept");
+    let gone = sessions.join("lineage-gone");
+    for (dir, owner) in [
+        (&kept, crate::ledger::lineage_owner(&id.0)),
+        (&gone, crate::ledger::lineage_owner("01a1-gone-session")),
+    ] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("session.jsonl"), "{}").unwrap();
+        ledger
+            .record(
+                &owner,
+                Artifact::ScratchDir {
+                    path: dir.to_string_lossy().into_owned(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    flow.manager.archive(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    let (items, _) = scan(&flow, context()).await;
+    let row = named(&items, "a session that is gone");
+    assert!(
+        matches!(&row.action, Action::Dispose { owners } if owners.len() == 1 && owners[0].0 == "lineage:01a1-gone-session"),
+        "{:?}",
+        row.action
+    );
+    let cleaned = flow
+        .manager
+        .clean_storage(row.action.clone(), context())
+        .await
+        .unwrap();
+    assert!(cleaned.failures.is_empty(), "{cleaned:?}");
+    assert!(!gone.exists());
+    // A removal of the archived thread's, however asked for, is refused.
+    let forged = Action::Dispose {
+        owners: vec![(crate::ledger::lineage_owner(&id.0), 2)],
+    };
+    let refused = flow.manager.clean_storage(forged, context()).await.unwrap();
+    assert_eq!(refused.failures.len(), 1, "{refused:?}");
+    assert!(
+        kept.join("session.jsonl").is_file(),
+        "the archived thread's stay"
+    );
+    flow.stop().await;
+}

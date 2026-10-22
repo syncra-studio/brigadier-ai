@@ -277,3 +277,72 @@ fn a_unix_socket_binds_under_the_session_tmpdir() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// The CLI's files are the record (S8): Archive keeps the thread's CLI session file and
+/// `record/lineage.json`, Restore resumes that same CLI session, and Delete removes both.
+#[tokio::test]
+async fn archive_keeps_the_cli_session_and_restore_resumes_it() {
+    use crate::manager::session_dir::read_lineage;
+    use brigadier_providers::model::Origin;
+    let flow = Flow::start(
+        "session-dir-lineage",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        script(|_| async { Reply::text("Done.") }),
+    )
+    .await;
+    flow.say("Work.").await;
+    flow.settled().await;
+    let id = flow.conversation.clone();
+    let dir = flow.manager.session_dir(&id);
+    let lineage = read_lineage(&dir.record());
+    assert_eq!(lineage.len(), 1, "{lineage:?}");
+    let native = lineage[0].session_id.clone();
+    let file = std::path::PathBuf::from(lineage[0].file.clone().expect("the CLI's file"));
+    assert!(file.exists(), "{}", file.display());
+
+    flow.manager.archive(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    super::eventually_async("the archive's cleanup to finish", || async {
+        !flow.core.conversation(&id).unwrap().cleanup_pending
+    })
+    .await;
+    assert!(file.exists(), "Archive keeps the CLI's session file");
+    assert_eq!(read_lineage(&dir.record()), lineage, "and the lineage");
+
+    flow.manager.restore(id.clone()).await.unwrap();
+    flow.say("Carry on.").await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    let (_, spec) = specs.last().expect("the restored thread's CLI");
+    assert_eq!(
+        spec.origin,
+        Origin::Resume {
+            native_id: native.clone()
+        }
+    );
+    assert_eq!(
+        read_lineage(&dir.record()).len(),
+        1,
+        "a resumed session is listed once"
+    );
+
+    flow.manager.delete(id.clone()).await.unwrap();
+    super::eventually("the session to go", || flow.core.conversation(&id).is_err()).await;
+    flow.manager.cleanup_finished(&id).await;
+    assert!(!file.exists(), "Delete removes the CLI's session file");
+    assert!(!dir.root().exists(), "and the folder with its lineage");
+    assert!(
+        flow.manager
+            .runtime
+            .ledger()
+            .artifacts(&crate::ledger::lineage_owner(&id.0))
+            .is_empty()
+    );
+    flow.stop().await;
+}

@@ -1279,8 +1279,10 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 .await;
                 say_to(&flow, &chat, "Clean this chat.").await;
                 let owner = format!("chat:{chat}");
+                // Its CLI session files are its record, held apart (S8).
+                let lineage = crate::ledger::lineage_owner(&chat.0);
                 let ledger = flow.manager.runtime.ledger();
-                let artifacts = ledger.artifacts(&owner);
+                let artifacts = ledger.artifacts(&lineage);
                 let native: Vec<_> = artifacts
                     .iter()
                     .filter(|artifact| {
@@ -1334,6 +1336,20 @@ async fn archiving_or_deleting_a_chat_cleans_each_accounts_own_artifacts() {
                 flow.manager.cleanup_finished(&chat).await;
                 assert!(ledger.artifacts(&owner).is_empty(), "cleanup acknowledged");
                 let removals = flow.behavior.removals.lock().unwrap().clone();
+                if !delete {
+                    // Archive keeps the CLI's session files, in every home.
+                    let held = ledger.artifacts(&lineage);
+                    assert!(native.iter().all(|artifact| held.contains(artifact)));
+                    assert!(
+                        removals
+                            .iter()
+                            .all(|(_, _, batch)| native.iter().all(|a| !batch.contains(a))),
+                        "{removals:?}"
+                    );
+                    flow.stop().await;
+                    continue;
+                }
+                assert!(ledger.artifacts(&lineage).is_empty(), "Delete removes them");
                 for artifact in &native {
                     let home = match artifact {
                         brigadier_providers::Artifact::ClaudeSession { home, .. }
@@ -1395,7 +1411,7 @@ async fn a_restart_finishes_account_cleanup_in_the_recorded_homes() {
         flow.add_accounts(&[(provider, "acct-b")], true).await;
         let chat = chat_on(&flow, provider, None).await;
         say_to(&flow, &chat, "Before the restart.").await;
-        let owner = format!("chat:{chat}");
+        let owner = crate::ledger::lineage_owner(&chat.0);
         let native: Vec<_> = flow
             .manager
             .runtime
@@ -1930,7 +1946,7 @@ fn native_artifacts(flow: &Flow, chat: &ConversationId) -> Vec<brigadier_provide
     flow.manager
         .runtime
         .ledger()
-        .artifacts(&format!("chat:{chat}"))
+        .artifacts(&crate::ledger::lineage_owner(&chat.0))
         .into_iter()
         .filter(|artifact| {
             matches!(
@@ -1960,7 +1976,8 @@ async fn an_archive_cleans_up_after_a_start_that_outlasted_it() {
         !flow.core.conversation(&chat).unwrap().cleanup_pending
     })
     .await;
-    assert_eq!(native_artifacts(&flow, &chat), vec![]);
+    // The late start resumed the chat's session: its files stay with the archive (S8).
+    assert_eq!(native_artifacts(&flow, &chat).len(), 1);
     assert!(
         flow.manager
             .runtime
@@ -1985,9 +2002,9 @@ async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
     release.notify_one();
     flow.manager.drained(&chat).await;
     assert_eq!(
-        native_artifacts(&flow, &chat),
-        vec![],
-        "the late session went"
+        native_artifacts(&flow, &chat).len(),
+        1,
+        "the late start resumed the chat's session, which the archive keeps (S8)"
     );
     super::eventually_async("the archive's mark to clear", || async {
         !flow.core.conversation(&chat).unwrap().cleanup_pending
@@ -2001,11 +2018,12 @@ async fn a_start_cut_off_by_an_archive_ends_even_after_a_restore() {
             .contains(&("After.".to_owned(), RequestState::Done))
     })
     .await;
-    // "Again." is in the transcript the new session starts from, never a turn of its own.
+    // The restored chat resumes its session; "Again." never was a turn of its own.
     let turns = seen(&log);
     assert_eq!(turns.len(), 2, "{turns:#?}");
     let after = &turns[1];
     assert!(after.input.ends_with("After."), "{turns:#?}");
+    assert_eq!(after.native_id, turns[0].native_id, "Restore resumes it");
     assert_eq!(
         native_artifacts(&flow, &chat),
         vec![brigadier_providers::Artifact::ClaudeSession {

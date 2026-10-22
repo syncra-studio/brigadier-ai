@@ -23,7 +23,11 @@ import type { TurnStatus } from "./TurnStatus";
  * Streaming text arrives as `*Delta` events keyed by `itemId`; the matching final event
  * (`message`, `reasoning`) carries the complete text and replaces whatever the deltas built.
  */
-export type ProviderEvent = { "type": "sessionStarted", nativeId: string, model: string | null, cwd: string | null, cliVersion: string | null, } | { "type": "turnStarted", turnId: string | null, } | { "type": "messageDelta", itemId: string, text: string, 
+export type ProviderEvent = { "type": "sessionStarted", nativeId: string, model: string | null, cwd: string | null, cliVersion: string | null, 
+/**
+ * The CLI's own session file (Claude's JSONL, Codex's rollout), when it keeps one.
+ */
+file?: string, } | { "type": "turnStarted", turnId: string | null, } | { "type": "messageDelta", itemId: string, text: string, 
 /**
  * What the reply is, when its CLI says so as it starts (Codex does; Claude doesn't).
  */

@@ -782,6 +782,7 @@ impl Parser {
                         model: str_of(value, "model").map(str::to_owned),
                         cwd: str_of(value, "cwd").map(str::to_owned),
                         cli_version: str_of(value, "claude_code_version").map(str::to_owned),
+                        file: None,
                     }));
                 }
             }

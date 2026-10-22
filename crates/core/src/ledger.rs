@@ -30,6 +30,8 @@ const PAGE: u32 = 1_000;
 /// The owner of a tab's chat ([`crate::model::TabChat`]) starts so. Its records are kept in a
 /// stream of their own, which goes once everything it recorded is gone: nothing of it stays.
 pub const TAB_CHAT_OWNER: &str = "tabchat:";
+/// A session's or Chat's CLI session files ([`lineage_owner`]).
+pub const LINEAGE_OWNER: &str = "lineage:";
 /// Where tab chats' owners keep their records: this, then the owner.
 const TAB_CHAT_STREAMS: &str = "cleanup:tabchat:";
 
@@ -613,13 +615,16 @@ impl CleanupLedger {
         if threads.is_empty() && private.is_empty() {
             return;
         }
-        // A conversation resumed meanwhile has a CLI process again: its thread stays open.
+        // A conversation resumed meanwhile has a CLI process again: its thread stays open. A
+        // thread's files are held under its lineage, its process under the thread's owner.
         let open = |thread_id: &str| {
-            self.state().artifacts.values().any(|artifacts| {
-                artifacts.iter().any(is_process)
-                    && artifacts.iter().any(|artifact| {
-                        matches!(artifact, Artifact::CodexThread { thread_id: held, .. } if held == thread_id)
-                    })
+            let state = self.state();
+            state.artifacts.iter().any(|(owner, artifacts)| {
+                artifacts.iter().any(|artifact| {
+                    matches!(artifact, Artifact::CodexThread { thread_id: held, .. } if held == thread_id)
+                }) && std::iter::once(owner.clone())
+                    .chain(lineage_holders(owner))
+                    .any(|owner| state.artifacts.get(&owner).is_some_and(|held| held.iter().any(is_process)))
             })
         };
         if !threads.is_empty()
@@ -1331,6 +1336,43 @@ fn test_data_folder(dir: &Path) -> bool {
     in_temp && named
 }
 
+/// The owner of a session's or Chat's CLI session files: they are its record (S8), kept
+/// through Archive and removed only by Delete.
+pub fn lineage_owner(id: &str) -> String {
+    format!("{LINEAGE_OWNER}{id}")
+}
+
+/// The lineage owner of a session's (`orch:`) or Chat's (`chat:`) owner.
+pub fn lineage_of(owner: &str) -> Option<String> {
+    owner
+        .strip_prefix("orch:")
+        .or_else(|| owner.strip_prefix("chat:"))
+        .map(lineage_owner)
+}
+
+/// The owners whose CLI session files lineage owner `owner` holds.
+fn lineage_holders(owner: &str) -> Vec<String> {
+    owner
+        .strip_prefix(LINEAGE_OWNER)
+        .map(|id| vec![format!("orch:{id}"), format!("chat:{id}")])
+        .unwrap_or_default()
+}
+
+/// Where a thread's CLI session files are recorded instead of the thread's own owner: a
+/// session's (`orch:`) and a Chat's (`chat:`) transcripts and what goes with them. Tab chats
+/// and workers keep theirs.
+fn lineage_owner_for(owner: &str, artifact: &Artifact) -> Option<String> {
+    let lineage = lineage_of(owner)?;
+    matches!(
+        artifact,
+        Artifact::ClaudeSession { .. }
+            | Artifact::ClaudeProjectDir { .. }
+            | Artifact::CodexThread { .. }
+            | Artifact::CodexGeneratedImages { .. }
+    )
+    .then_some(lineage)
+}
+
 struct OwnerLedger {
     ledger: Arc<CleanupLedger>,
     owner: String,
@@ -1346,8 +1388,9 @@ impl brigadier_providers::Ledger for OwnerLedger {
         artifact: Artifact,
     ) -> brigadier_providers::BoxFuture<'_, brigadier_providers::Result<()>> {
         Box::pin(async move {
+            let owner = lineage_owner_for(&self.owner, &artifact);
             self.ledger
-                .record(&self.owner, artifact)
+                .record(owner.as_deref().unwrap_or(&self.owner), artifact)
                 .await
                 .map_err(|err: Error| brigadier_providers::Error::Ledger(err.to_string()))
         })

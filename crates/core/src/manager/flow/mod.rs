@@ -741,6 +741,8 @@ impl Provider for FakeCli {
                     model: spec.model.clone(),
                     cwd: Some(spec.cwd.display().to_string()),
                     cli_version: Some("1.0.0".into()),
+                    file: (self.behavior.cleanup && saved)
+                        .then(|| fake_files(&self.home, &native_id)[0].display().to_string()),
                 })
                 .await;
             let (steer_tx, steers) = mpsc::unbounded_channel();

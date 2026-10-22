@@ -1270,12 +1270,19 @@ impl Provider for Claude {
                     .and_then(Value::as_str)
                     .map(str::to_owned)
             });
+            let file = self.history_dir().map(|config| {
+                files::project_dir(&config, &cwd)
+                    .join(format!("{native_id}.jsonl"))
+                    .display()
+                    .to_string()
+            });
             session
                 .emit(ProviderEvent::SessionStarted {
                     native_id,
                     model,
                     cwd: Some(cwd.display().to_string()),
                     cli_version,
+                    file,
                 })
                 .await;
             Ok(Started { session, events })

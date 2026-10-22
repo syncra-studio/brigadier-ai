@@ -781,6 +781,10 @@ pub enum ProviderEvent {
         model: Option<String>,
         cwd: Option<String>,
         cli_version: Option<String>,
+        /// The CLI's own session file (Claude's JSONL, Codex's rollout), when it keeps one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        file: Option<String>,
     },
     TurnStarted {
         turn_id: Option<String>,

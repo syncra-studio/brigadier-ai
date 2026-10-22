@@ -1058,8 +1058,7 @@ impl SessionManager {
                     ?leftovers);
             }
         }
-        // Its CLI session files are gone: the next CLI session starts from the transcript.
-        self.forget_native_session(id).await;
+        // Its CLI session files stay (S8): Restore resumes the same CLI session.
         self.expire_stale_cards(id).await;
         self.set_run(id, crate::work::RunState::Idle, None).await;
         if session_worktree_goes {
@@ -1188,7 +1187,8 @@ impl SessionManager {
         }
     }
 
-    /// Brings an archived conversation back; its next turn starts from the transcript.
+    /// Brings an archived conversation back; its next turn resumes its CLI session, kept
+    /// through the archive (S8), or starts from the transcript when that can't resume.
     pub async fn restore(&self, id: ConversationId) -> Result<Conversation> {
         // What the archive stopped and removed is gone first.
         self.cleanup_finished(&id).await;
@@ -1213,9 +1213,6 @@ impl SessionManager {
                 "“{}” already works in this checkout. Archive it before restoring this session.",
                 holder.title
             )));
-        }
-        if let Ok(conv) = self.conv(&id) {
-            conv.mark_reseed().await;
         }
         let restored = self
             .core
@@ -1460,7 +1457,13 @@ impl SessionManager {
         self.forget_brain_conversation(&id, conversation.project_id.clone())
             .await;
         self.forget_routing(&id, &tasks).await;
-        // Its folder goes, its records with it (S7): Archive keeps them.
+        // Its CLI session files go, then its folder with its records (S7, S8): Archive keeps
+        // both.
+        let lineage = crate::ledger::lineage_owner(&id.0);
+        let leftovers = self.runtime.ledger().dispose(&lineage).await;
+        if !leftovers.is_clean() {
+            crate::logging::private_trace!(private_logs, warn, "some of its CLI session files will be retried at the next launch"; conversation = %id, ?leftovers);
+        }
         self.remove_session_dir(&id).await;
         let store = self.core.store().clone();
         // Its own blobs go now, not a day later; then the usual collection of older leftovers.

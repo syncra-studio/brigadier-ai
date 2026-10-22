@@ -900,6 +900,7 @@ impl Provider for Codex {
                     model: Some(model),
                     cwd: Some(thread.cwd.to_string()),
                     cli_version: Some(thread.cli_version.clone()),
+                    file: thread.path.clone(),
                 })
                 .await;
             list_mcp_servers(&session.rpc, &session.shared);

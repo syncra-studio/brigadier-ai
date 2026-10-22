@@ -179,6 +179,7 @@ impl Parser {
                         model: thread.model,
                         cwd: Some(thread.cwd.to_string()),
                         cli_version: Some(thread.cli_version),
+                        file: thread.path,
                     }));
                 }
             }

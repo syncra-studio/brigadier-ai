@@ -3413,7 +3413,10 @@ impl SessionManager {
             let native_id = started.session.native_id();
             started.session.close().await;
             self.grants.revoke(&grant_values);
-            self.release_session_files(&owner, &native_id).await;
+            // A resumed session's files are the thread's record (S8): only a new one's go.
+            if !resumed {
+                self.release_session_files(&owner, &native_id).await;
+            }
             return Err(super::closing::closing_error());
         }
         if reseed_needed {
@@ -3495,21 +3498,27 @@ impl SessionManager {
     /// Removes the files of `owner`'s CLI session `native_id` (one that started after its
     /// cleanup passed), leaving the rest of what it has.
     pub(super) async fn release_session_files(&self, owner: &str, native_id: &str) {
-        let made: Vec<Artifact> = self
-            .runtime
-            .ledger()
-            .artifacts(owner)
-            .into_iter()
-            .filter(|artifact| match artifact {
-                Artifact::ClaudeSession { session_id, .. } => session_id == native_id,
-                Artifact::CodexThread { thread_id, .. } => thread_id == native_id,
-                _ => false,
-            })
-            .collect();
-        let leftovers = self.runtime.ledger().release(owner, made).await;
-        if !leftovers.is_clean() {
-            crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "some leftovers of a cut-off start will be retried at the next launch"; owner,
-                ?leftovers);
+        // A thread's session files are held under its lineage (S8).
+        for owner in std::iter::once(owner.to_owned()).chain(crate::ledger::lineage_of(owner)) {
+            let made: Vec<Artifact> = self
+                .runtime
+                .ledger()
+                .artifacts(&owner)
+                .into_iter()
+                .filter(|artifact| match artifact {
+                    Artifact::ClaudeSession { session_id, .. } => session_id == native_id,
+                    Artifact::CodexThread { thread_id, .. } => thread_id == native_id,
+                    _ => false,
+                })
+                .collect();
+            if made.is_empty() {
+                continue;
+            }
+            let leftovers = self.runtime.ledger().release(&owner, made).await;
+            if !leftovers.is_clean() {
+                crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "some leftovers of a cut-off start will be retried at the next launch"; owner,
+                    ?leftovers);
+            }
         }
     }
 
@@ -4712,8 +4721,22 @@ impl SessionManager {
                     .note_quota_snapshot(&cli.account, quota.clone())
                     .await;
             }
-            ProviderEvent::SessionStarted { cli_version, .. } => {
+            ProviderEvent::SessionStarted {
+                native_id,
+                cli_version,
+                file,
+                ..
+            } => {
                 cli.meter.session_started(cli_version.as_deref());
+                if !conv.private_logs {
+                    let entry = super::session_dir::LineageEntry {
+                        provider: cli.provider,
+                        session_id: native_id.clone(),
+                        file: file.clone(),
+                        started_at: now_ms(),
+                    };
+                    self.note_lineage(&conv.id, entry).await;
+                }
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());

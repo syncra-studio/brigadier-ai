@@ -4,7 +4,7 @@
 //!
 //! | Part | Holds | Archive | Delete |
 //! |---|---|---|---|
-//! | `record/` | `workspace.json`: the environment and base chosen on the rail | keeps | removes |
+//! | `record/` | `workspace.json`: the environment and base chosen on the rail; `lineage.json`: its CLI sessions and their files | keeps | removes |
 //! | `work/` | a New worktree session's worktree; a Chat's working folder | removes once merged | removes |
 //! | `tmp/` | its CLI's `TMPDIR` | removes | removes |
 //! | `dev/` | its previews' scratch and the thread's own files | removes | removes |
@@ -20,8 +20,8 @@
 
 use std::path::{Path, PathBuf};
 
-use brigadier_providers::Artifact;
-use serde::Serialize;
+use brigadier_providers::{Artifact, ProviderKind};
+use serde::{Deserialize, Serialize};
 
 use super::{SessionManager, blocking};
 use crate::model::{Conversation, ConversationId, Environment, Setup};
@@ -108,7 +108,52 @@ impl WorkspaceRecord {
     }
 }
 
+/// One CLI session of a thread, as `record/lineage.json` lists them, oldest first: the CLI's
+/// own files are the thread's record (S8), and this says which they are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LineageEntry {
+    pub provider: ProviderKind,
+    pub session_id: String,
+    /// The CLI's session file (Claude's JSONL, Codex's rollout), when it said where.
+    pub file: Option<String>,
+    pub started_at: i64,
+}
+
+/// `record/lineage.json`'s sessions; none when it is missing or unreadable.
+pub(crate) fn read_lineage(record: &Path) -> Vec<LineageEntry> {
+    std::fs::read(record.join("lineage.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
 impl SessionManager {
+    /// Adds a CLI session start to conversation `id`'s `record/lineage.json`. A session already
+    /// listed (resumed, or started twice by its CLI) is listed once, with the file it named
+    /// first unless it named none.
+    pub(crate) async fn note_lineage(&self, id: &ConversationId, entry: LineageEntry) {
+        let record = self.session_dir(id).record();
+        let written = blocking(move || {
+            let mut lineage = read_lineage(&record);
+            match lineage.iter_mut().find(|known| {
+                known.provider == entry.provider && known.session_id == entry.session_id
+            }) {
+                Some(known) if known.file.is_some() || entry.file.is_none() => return Ok(()),
+                Some(known) => known.file = entry.file,
+                None => lineage.push(entry),
+            }
+            std::fs::create_dir_all(&record).map_err(|err| Error::Invalid(err.to_string()))?;
+            let text = serde_json::to_string_pretty(&lineage)
+                .map_err(|err| Error::Invalid(err.to_string()))?;
+            write_atomic(&record.join("lineage.json"), text.as_bytes())
+        })
+        .await;
+        if let Err(err) = written {
+            tracing::warn!(conversation = %id, error = %err, "could not note the CLI session in lineage.json");
+        }
+    }
+
     /// Conversation `id`'s folder (not created).
     pub(crate) fn session_dir(&self, id: &ConversationId) -> SessionDir {
         SessionDir(

@@ -722,6 +722,7 @@ mod tests {
             model: None,
             cwd: None,
             cli_version: None,
+            file: None,
         }
     }
 

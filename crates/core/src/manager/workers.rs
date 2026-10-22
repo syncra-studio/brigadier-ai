@@ -5879,12 +5879,14 @@ mod tests {
                 model: None,
                 cwd: None,
                 cli_version: None,
+                file: None,
             }),
             event(ProviderEvent::SessionStarted {
                 native_id: "latest".into(),
                 model: None,
                 cwd: None,
                 cli_version: None,
+                file: None,
             }),
         ];
         events.extend((0..2_500).map(|_| {

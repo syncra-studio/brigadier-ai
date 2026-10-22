@@ -518,7 +518,7 @@ impl SessionManager {
                         // folders do.
                         Some((
                             "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
-                            | "checks" | "preview" | "preview-data" | "session-folder",
+                            | "checks" | "preview" | "preview-data" | "session-folder" | "lineage",
                             id,
                         )) => records.conversation(id).is_some(),
                         Some(("task", id)) => records.task(id).is_some(),
@@ -942,7 +942,7 @@ impl SessionManager {
                 let conversation_gone = match owner.split_once(':') {
                     Some((
                         "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
-                        | "checks" | "preview" | "preview-data" | "session-folder",
+                        | "checks" | "preview" | "preview-data" | "session-folder" | "lineage",
                         id,
                     )) => !catalog.conversations.iter().any(|c| c.id.0 == id),
                     _ => false,
@@ -1904,7 +1904,7 @@ impl Scanner<'_> {
             let (what, many) = match owner.split_once(':') {
                 Some((
                     "orch" | "session" | "workers" | "thread-temp" | "background" | "checks"
-                    | "preview" | "preview-data" | "session-folder",
+                    | "preview" | "preview-data" | "session-folder" | "lineage",
                     _,
                 )) => ("a session", "sessions"),
                 Some(("chat", _)) => ("a Chat", "Chats"),
