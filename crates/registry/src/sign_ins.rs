@@ -56,12 +56,17 @@ impl SignInStores for Unread {
     }
 }
 
-/// The agent whose own config `source` is.
+/// The agent whose own config `source` is. A plugin's server is none's: its agent keys its
+/// sign-in under the plugin's name for it, which [`claude_key`] and [`codex_keys`] don't make.
 pub fn owner_agent(source: Source) -> Option<Agent> {
     match source {
         Source::ClaudeUser | Source::ClaudeLocal | Source::ClaudeProject => Some(Agent::Claude),
         Source::CodexUser | Source::CodexProject => Some(Agent::Codex),
-        Source::Desktop | Source::CursorUser | Source::CursorProject => None,
+        Source::Desktop
+        | Source::CursorUser
+        | Source::CursorProject
+        | Source::ClaudePlugin
+        | Source::CodexPlugin => None,
     }
 }
 

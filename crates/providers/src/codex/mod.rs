@@ -463,6 +463,26 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
             toml_value(&Value::Array(entries))
         ));
     }
+    // A plugin's server, by its plugin's key: an `mcp_servers` entry of its name would be a
+    // server without a command (checked on 0.163.0). A dotted key splits at each `.`.
+    for (plugin, server) in session
+        .filter(|_| user_setup)
+        .map(|session| session.switched_off.plugin_servers.as_slice())
+        .unwrap_or_default()
+    {
+        if plugin.contains('.') || server.contains('.') {
+            tracing::warn!(
+                plugin,
+                server,
+                "a switched-off plugin server's name has a dot; left on"
+            );
+            continue;
+        }
+        args.push("-c".into());
+        args.push(format!(
+            "plugins.{plugin}.mcp_servers.{server}.enabled=false"
+        ));
+    }
     args.push("-c".into());
     args.push("notify=[]".into());
     // Commands run in a plain (non-login) shell. A login shell, and the login environment
@@ -3432,7 +3452,13 @@ mod tests {
         session.switched_off.skill_files = vec![PathBuf::from("/h/.agents/skills/x/SKILL.md")];
         session.switched_off.codex_skill_config =
             vec![json!({"path": "/h/own/SKILL.md", "enabled": false})];
+        session.switched_off.plugin_servers = vec![("docs@market".into(), "server".into())];
         let args = app_server_args(Some(&session));
+        let plugin = args
+            .iter()
+            .position(|arg| arg == "plugins.docs@market.mcp_servers.server.enabled=false")
+            .expect("the plugin's server switched off");
+        assert_eq!(args[plugin - 1], "-c");
         let at = args
             .iter()
             .position(|arg| arg.starts_with("skills.config="))
@@ -3448,7 +3474,7 @@ mod tests {
         assert!(
             !app_server_args(Some(&sealed))
                 .iter()
-                .any(|arg| arg.starts_with("skills.config="))
+                .any(|arg| arg.starts_with("skills.config=") || arg.starts_with("plugins."))
         );
     }
 

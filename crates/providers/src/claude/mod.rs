@@ -681,6 +681,14 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
         .iter()
         .map(|name| format!("mcp__{name}"))
         .collect();
+    // A plugin's skill: `skillOverrides` doesn't reach plugin skills (2.1.306), a deny rule
+    // keeps Claude from running it.
+    deny.extend(
+        spec.switched_off
+            .plugin_skills
+            .iter()
+            .map(|name| format!("Skill({name})")),
+    );
     let sandbox = match &spec.access {
         Access::Workspace { extra_roots } => json!({
             "enabled": true,
@@ -3939,8 +3947,10 @@ for line in sys.stdin:
         let off = SessionSpec {
             tools: ToolSet::Lean,
             switched_off: SwitchedOff {
-                servers: vec!["railway".into()],
+                servers: vec!["railway".into(), "plugin_docs_server".into()],
                 skill_names: vec!["review".into()],
+                plugin_skills: vec!["docs:write".into()],
+                plugin_servers: vec![("ignored@by-claude".into(), "x".into())],
                 skill_files: vec![PathBuf::from("/ignored/by/claude/SKILL.md")],
                 codex_skill_config: Vec::new(),
             },
@@ -3949,6 +3959,8 @@ for line in sys.stdin:
         let settings = settings_of(&off, &dir);
         let deny = settings["permissions"]["deny"].as_array().expect("deny");
         assert!(deny.contains(&json!("mcp__railway")), "{deny:?}");
+        assert!(deny.contains(&json!("mcp__plugin_docs_server")), "{deny:?}");
+        assert!(deny.contains(&json!("Skill(docs:write)")), "{deny:?}");
         assert_eq!(settings["skillOverrides"], json!({"review": "off"}));
         // Nothing switched off, nothing added.
         let plain = settings_of(&spec(&dir, &[]), &dir);

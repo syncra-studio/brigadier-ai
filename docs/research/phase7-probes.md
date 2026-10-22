@@ -193,6 +193,35 @@ trailing slash dropped (path and query kept), plus its headers other than `Autho
 - Tests use an in-memory Keychain and a fake OAuth server on localhost; none reads the user's
   Keychain or credential files.
 
+## (k) Plugins' skills and servers (claude 2.1.306, codex-cli 0.163.0)
+
+Probed in scratch `CLAUDE_CONFIG_DIR`s and `CODEX_HOME`s, reading Claude's `init` event of
+`-p --output-format stream-json` (its `skills`, `plugins`, `mcp_servers` and `tools`) and Codex's
+app-server `skills/list` and `mcpServerStatus/list`.
+
+- Claude Code: `installed_plugins.json` records a `project` or `local` install with a
+  `projectPath`, its `installPath` in the user's cache. A plugin loads wherever the merged
+  `enabledPlugins` (user, then the folder's `.claude/settings.json`, then
+  `settings.local.json`) switch it on, the install's scope aside; one none names loads unless
+  its manifest says `defaultEnabled: false`. It reads `skills/` and the manifest's `skills`
+  entries one level deep (an entry holding `SKILL.md` is one skill), and the plugin's root
+  `SKILL.md` only when it has neither. Skills show as `<plugin>:<name>`, servers as
+  `plugin:<plugin>:<name>` with tools `mcp__plugin_<plugin>_<name>__…`; `${CLAUDE_PLUGIN_ROOT}`
+  is the plugin's folder. A plugin folder in a skills folder loads as `<name>@skills-dir`.
+- Switching one off in Claude: `skillOverrides` doesn't reach a plugin's skills (they apply only
+  under conditions user settings can't meet) and a `Skill(<plugin>:<name>)` deny rule leaves the
+  skill listed, but it keeps Claude from running it; `permissions.deny` `mcp__plugin_<p>_<s>`
+  takes the server's tools away.
+- Codex: a cached plugin loads only with a `[plugins."<plugin>@<marketplace>"]` table whose
+  `enabled` isn't false (bb counts an unlisted one as on; Codex doesn't). The version folder is
+  `local`, else the highest by semver, compared as text when either isn't semver
+  (`core-plugin-common/src/installed.rs`); without a manifest there, nothing loads. The manifest's
+  `skills` (each `./…`) replace `skills/`, each read to any depth. Skills show as
+  `<plugin>:<name>` (the manifest's name); servers keep their own names and start in the
+  plugin's folder for `cwd: "."`. `skills.config` by path switches a plugin's skill off;
+  `-c plugins.<id>.mcp_servers.<name>.enabled=false` its server (an `mcp_servers.<name>` entry
+  instead makes a server without a command, which fails the config).
+
 ## What Brigadier does with them
 
 - Codex app-server sessions keep a server's env and header values in the thread's config, sent
@@ -207,4 +236,6 @@ trailing slash dropped (path and query kept), plus its headers other than `Autho
 - Claude gets every value in its environment under a per-server alias, named as `${ALIAS}` in its
   `--mcp-config` (g).
 - Switching off: Claude by `permissions.deny` `mcp__<name>` (a) and `skillOverrides` `off` (b);
-  Codex by `mcp_servers.<name>.enabled=false` (c) and `skills.config` (d).
+  Codex by `mcp_servers.<name>.enabled=false` (c) and `skills.config` (d). A plugin's (k): Claude
+  by deny rules `mcp__plugin_<plugin>_<name>` and `Skill(<plugin>:<name>)`, Codex by
+  `plugins.<id>.mcp_servers.<name>.enabled=false` and `skills.config`.

@@ -92,7 +92,7 @@ test("plugins where it's used: every screen and component state on the board, an
       { title: "steady-app", description: "~/Code/steady-app · its own config, only in this project", aside: "1 server" },
     ],
     lines: [line.figma, line.linear, line.nodeRepl, line.pencil, line.playwright, line.railway, line.api, line.postgres, line.db],
-    tabs: ["MCP servers9", "Skills19"],
+    tabs: ["MCP servers9", "Skills20"],
     select: { setting: "project:all", value: "All projects", washed: false },
     note: "",
   });
@@ -128,7 +128,7 @@ test("plugins where it's used: every screen and component state on the board, an
     chips: { [`server:${API}`]: ["From steady-app", "Off here"] },
     groups: projectGroups("brigadier-ai", 1, 1, 4, 3),
     lines: [line.postgres, off(line.api), line.linear, line.nodeRepl, line.pencil, line.railway, line.figma, PLAYWRIGHT_UNUSED, ["steady-db", "Only in steady-app · from its own .mcp.json", "steady-app only"]],
-    tabs: ["MCP servers5", "Skills19"],
+    tabs: ["MCP servers5", "Skills20"],
     select: { setting: "project:brigadier-ai", value: "brigadier-ai", washed: true },
     note: VIEW_NOTE("brigadier-ai"),
   });
@@ -137,7 +137,7 @@ test("plugins where it's used: every screen and component state on the board, an
     chips: { [`server:${PENCIL}`]: ["Off here"] },
     groups: projectGroups("steady-app", 2, 1, 3, 3),
     lines: [line.api, line.db, off(line.pencil), line.linear, line.nodeRepl, line.railway, line.figma, PLAYWRIGHT_UNUSED, ["postgres", "Only in brigadier-ai · from its own .mcp.json", "brigadier-ai only"]],
-    tabs: ["MCP servers5", "Skills17"],
+    tabs: ["MCP servers5", "Skills18"],
     select: { setting: "project:steady-app", value: "steady-app", washed: true },
     note: VIEW_NOTE("steady-app"),
   });
@@ -146,7 +146,7 @@ test("plugins where it's used: every screen and component state on the board, an
   assert.deepEqual(skillsView.groups.map((group) => [group.title, group.description, group.aside]), [
     ["From brigadier-ai's own config", "Its .claude/skills and .agents/skills", "2 skills"],
     ["Changed for brigadier-ai", "Its exceptions to your defaults", "1 skill"],
-    ["Your defaults it uses", "On in every project, and not changed here", "16 skills"],
+    ["Your defaults it uses", "On in every project, and not changed here", "17 skills"],
   ]);
   assert.deepEqual(skillsView.chips, { [`skill:${GRILLING}`]: ["On here"] });
   assert.deepEqual(skillsView.lines.slice(0, 3).map((row) => [row[0], row[2]]), [["delegator", "true"], ["release-notes", "true"], ["grilling", "true"]]);

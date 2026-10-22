@@ -17,8 +17,9 @@ test("skills: drawn states, separate project switches, folders and Claude always
   assert.equal(seen.error, undefined);
   const catalog = seen.skills!;
   assert.equal(catalog.title, "Plugins");
-  assert.equal(catalog.tiles.length, 19);
-  assert.equal(catalog.switches.length, 19);
+  assert.equal(catalog.tiles.length, 20);
+  assert.equal(catalog.switches.length, 20);
+  assert.ok(catalog.tiles.includes("Open spreadsheets:chart"));
   assert.deepEqual(catalog.sections, ["Yours", "brigadier-ai"]);
   assert.ok(catalog.tiles.includes("Open delegator"));
   assert.ok(catalog.tiles.includes("Open delegator in ~/Code/brigadier-ai"));
@@ -32,9 +33,12 @@ test("skills: drawn states, separate project switches, folders and Claude always
   assert.match(seen["claude-skill"]!.text, /Claude: always on/);
   assert.match(seen["claude-skill"]!.text, /Off: Brigadier doesn't give it to Codex workers/);
   assert.deepEqual(seen["claude-skill"]!.switches, [{ label: "higgsfield-websites: Codex workers", checked: "false", disabled: false }]);
+  assert.equal(seen["plugin-skill"]!.title, "spreadsheets:chart");
+  assert.match(seen["plugin-skill"]!.text, /From the spreadsheets@openai-primary-runtime plugin · Codex reads this folder/);
+  assert.match(seen["plugin-skill"]!.text, /Claude doesn't read ~\/.codex\/plugins\/cache\/openai-primary-runtime\/spreadsheets\/26.1017.22135\/skills, so Brigadier gives it to them/);
   assert.match(seen["empty-skills"]!.text, /No skills found/);
   assert.equal(seen["empty-skills"]!.tiles.length, 0);
-  for (const state of ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "empty-skills", "narrow-skills"]) {
+  for (const state of ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "plugin-skill", "empty-skills", "narrow-skills"]) {
     assert.equal(seen[state]!.overflow, false, state);
   }
   assert.equal(seen.duplicateSwitch, true);
@@ -43,6 +47,6 @@ test("skills: drawn states, separate project switches, folders and Claude always
   assert.deepEqual(seen.filtered, ["Open use-railway"]);
   assert.match(seen.claudeOn!.text, /Claude: always on/);
   assert.match(seen.claudeOn!.text, /Given by Brigadier/);
-  assert.equal((seen.refreshed as unknown as string[]).length, 18);
+  assert.equal((seen.refreshed as unknown as string[]).length, 19);
   assert.ok(!(seen.refreshed as unknown as string[]).includes("Open dataviz"));
 });

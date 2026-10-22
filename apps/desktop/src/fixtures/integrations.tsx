@@ -1,4 +1,4 @@
-/** All fifteen screen states on settings.pen's Plugins board, and the Plugins · Signing in board's. No sample data enters the app. */
+/** All fifteen screen states on settings.pen's Plugins board, and the Plugins · Signing in board's, and a plugin's skill. No sample data enters the app. */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -434,6 +434,25 @@ const skills: IntegrationSkill[] = [
     ],
     "canSwitchOff": true,
     "project": "~/Code/brigadier-ai"
+  },
+  {
+    "id": "codex:plugin:spreadsheets@openai-primary-runtime:skills/chart",
+    "name": "spreadsheets:chart",
+    "description": "Build charts from a spreadsheet's data",
+    "locations": [
+      "~/.codex/plugins/cache/openai-primary-runtime/spreadsheets/26.1017.22135/skills/chart"
+    ],
+    "locationDetails": [
+      {
+        "path": "~/.codex/plugins/cache/openai-primary-runtime/spreadsheets/26.1017.22135/skills/chart",
+        "plugin": "spreadsheets@openai-primary-runtime",
+        "agents": ["codex"]
+      }
+    ],
+    "nativeAgents": [
+      "codex"
+    ],
+    "canSwitchOff": true
   }
 ];
 
@@ -461,7 +480,7 @@ const SIGN_IN_STATES: Record<string, Partial<IntegrationServer>> = {
   "linear-partial": { signIn: { claude: native, codex: { kind: "needed" } } },
   "linear-not-mac": { signIn: { claude: native, codex: { kind: "unsupported" } } },
 };
-const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "empty-skills", "narrow-skills"];
+const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "plugin-skill", "empty-skills", "narrow-skills"];
 
 // The Plugins · Where it's used board: the user's projects, steady-app's own two servers and the exceptions it draws.
 const PROJECTS: IntegrationProject[] = [
@@ -507,7 +526,7 @@ function whereSnapshot(state: string): IntegrationSnapshot {
   const api = structuredClone(steadyApi);
   // A working folder that isn't the project's root.
   if (state === "where-runs-from" && api.transport.kind === "stdio") api.transport.cwd = "~/Code/steady-app/tools/steady-api-mcp";
-  const userSkills = structuredClone(skills.slice(0, 17));
+  const userSkills = structuredClone(skills.filter((skill) => !skill.project));
   const grilling = userSkills.find((skill) => skill.name === "grilling")!;
   if (state === "where-grilling") {
     Object.assign(grilling, {
@@ -516,7 +535,7 @@ function whereSnapshot(state: string): IntegrationSnapshot {
       locationDetails: [{ path: "~/.agents/skills/grilling", agents: ["codex"] }, { path: "~/.claude/skills/grilling", linkedTo: "~/.agents/skills/grilling", agents: ["claude"] }],
     });
   }
-  const projectSkills = structuredClone(skills.slice(17)).map((skill) => ({ ...skill, ...own(PROJECTS[0]!) }));
+  const projectSkills = structuredClone(skills.filter((skill) => skill.project)).map((skill) => ({ ...skill, ...own(PROJECTS[0]!) }));
   const snapshot: IntegrationSnapshot = {
     catalog: {
       servers: [...users, api, postgres, structuredClone(steadyDb)],
@@ -589,7 +608,7 @@ function viewFor(state: string) {
   const where = WHERE_STATES[state];
   if (where) return { initialTab: where.tab ?? "servers" as const, ...(where.name ? { initialId: ID(where.name) } : {}), ...(where.project ? { initialProject: where.project } : {}) };
   const tab = SKILL_STATES.includes(state) ? "skills" as const : "servers" as const;
-  const name = state === "claude-skill" ? "higgsfield-websites" : state === "unreadable" ? "figma-dev" : state in SIGN_IN_STATES ? state.split("-")[0] : state;
+  const name = state === "claude-skill" ? "higgsfield-websites" : state === "plugin-skill" ? "spreadsheets:chart" : state === "unreadable" ? "figma-dev" : state in SIGN_IN_STATES ? state.split("-")[0] : state;
   const item = (tab === "skills" ? skills : snapshotFor(state).catalog.servers).find((entry) => entry.name === name);
   return { initialTab: tab, ...(item ? { initialId: item.id } : {}) };
 }

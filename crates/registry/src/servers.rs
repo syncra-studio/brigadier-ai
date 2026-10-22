@@ -7,7 +7,8 @@ use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Vis
 use serde_json::{Map, Value};
 
 use crate::{
-    CodexStore, OAuthClient, Problem, Roots, Secret, Server, Source, Transport, server_id,
+    Agent, CodexStore, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport,
+    plugins, server_id,
 };
 
 /// How a source writes variables in its values.
@@ -31,6 +32,8 @@ struct Origin<'a> {
     variables: Variables,
     /// The config file.
     file: &'a Path,
+    /// A Claude plugin's folder, which `${CLAUDE_PLUGIN_ROOT}` names.
+    plugin_root: Option<&'a Path>,
     /// `mcpServers` with its keys in written order.
     written: Option<&'a Written>,
 }
@@ -55,6 +58,7 @@ pub(crate) fn user(
                     base: None,
                     variables: Variables::Claude,
                     file: &roots.claude_json,
+                    plugin_root: None,
                     written: written.get("mcpServers"),
                 },
                 roots,
@@ -79,6 +83,7 @@ pub(crate) fn user(
                     base: Some(path),
                     variables: Variables::Claude,
                     file: &roots.claude_json,
+                    plugin_root: None,
                     written: written
                         .get("projects")
                         .and_then(|projects| projects.get(&path.to_string_lossy()))
@@ -112,6 +117,7 @@ pub(crate) fn user(
                 base: None,
                 variables: Variables::None,
                 file,
+                plugin_root: None,
                 written: written.get("mcpServers"),
             },
             roots,
@@ -130,6 +136,7 @@ pub(crate) fn user(
                 base: None,
                 variables: Variables::Cursor,
                 file: &file,
+                plugin_root: None,
                 written: written.get("mcpServers"),
             },
             roots,
@@ -155,6 +162,7 @@ pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>
                 base: Some(project),
                 variables: Variables::Claude,
                 file: &file,
+                plugin_root: None,
                 written: written.get("mcpServers"),
             },
             roots,
@@ -175,6 +183,7 @@ pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>
                 base: Some(project),
                 variables: Variables::Cursor,
                 file: &file,
+                plugin_root: None,
                 written: written.get("mcpServers"),
             },
             roots,
@@ -273,7 +282,7 @@ fn json_servers(
     roots: &Roots,
     problems: &mut Vec<Problem>,
 ) -> Vec<Server> {
-    let expand = |text: &str| expand(text, origin.variables, roots, origin.project);
+    let expand = |text: &str| expand(text, origin, roots);
     let mut problem = |name: &str, read: Option<String>, error: String| {
         problems.push(entry_problem(
             name,
@@ -354,7 +363,7 @@ fn json_servers(
             problem(name, None, "It has no command or url".into());
             continue;
         };
-        let mut server = server(name, origin.source, origin.project, transport);
+        let mut server = server(name, origin.source, origin.project, origin.file, transport);
         server.oauth = config
             .get("oauth")
             .and_then(|oauth| oauth.get("clientId"))
@@ -472,7 +481,13 @@ fn toml_servers(
             ));
             continue;
         };
-        let mut server = server(name, source, layer.map(|(project, _)| project), transport);
+        let mut server = server(
+            name,
+            source,
+            layer.map(|(project, _)| project),
+            file,
+            transport,
+        );
         server.oauth = config
             .get("oauth")
             .and_then(toml::Value::as_table)
@@ -488,7 +503,13 @@ fn toml_servers(
     servers
 }
 
-fn server(name: &str, source: Source, project: Option<&Path>, transport: Transport) -> Server {
+fn server(
+    name: &str,
+    source: Source,
+    project: Option<&Path>,
+    file: &Path,
+    transport: Transport,
+) -> Server {
     let signs_in = matches!(&transport, Transport::Http { headers, .. }
         if !headers.iter().any(|(header, _)| header.eq_ignore_ascii_case("authorization")));
     Server {
@@ -498,8 +519,81 @@ fn server(name: &str, source: Source, project: Option<&Path>, transport: Transpo
         project: project.map(Path::to_owned),
         transport,
         signs_in,
+        plugin: None,
+        file: file.to_owned(),
         oauth: None,
     }
+}
+
+/// The MCP servers of `plugin`, as its agent reads them: Claude's with its variables and
+/// `${CLAUDE_PLUGIN_ROOT}`, Codex's in its own keys, less those its `config.toml` switches off.
+/// A relative command or folder is in the plugin's.
+pub(crate) fn plugin(
+    roots: &Roots,
+    plugin: &Plugin,
+    codex: Option<&toml::Table>,
+    problems: &mut Vec<Problem>,
+) -> Vec<Server> {
+    let Some((file, own)) = plugin.server_file() else {
+        return Vec::new();
+    };
+    let (source, start) = match plugin.agent {
+        Agent::Claude => (Source::ClaudePlugin, problems.len()),
+        Agent::Codex => (Source::CodexPlugin, problems.len()),
+    };
+    let mut servers = match (own, plugin.agent) {
+        (None, _) => {
+            problems.push(file_problem(&file, source, None, None));
+            Vec::new()
+        }
+        (Some(Value::Object(own)), Agent::Claude) => json_servers(
+            &own,
+            &Origin {
+                source,
+                project: None,
+                base: Some(&plugin.root),
+                variables: Variables::Claude,
+                file: &file,
+                plugin_root: Some(&plugin.root),
+                written: None,
+            },
+            roots,
+            problems,
+        ),
+        (Some(own @ Value::Object(_)), Agent::Codex) => {
+            match serde_json::from_value::<toml::Table>(serde_json::json!({ "mcp_servers": own })) {
+                Ok(config) => {
+                    let off = plugins::codex_servers_off(codex, &plugin.id);
+                    let mut servers = toml_servers(
+                        &config,
+                        source,
+                        Some((&plugin.root, &plugin.root)),
+                        &file,
+                        roots,
+                        problems,
+                    );
+                    servers.retain(|server| !off.contains(&server.name));
+                    servers
+                }
+                Err(_) => {
+                    problems.push(file_problem(&file, source, None, None));
+                    Vec::new()
+                }
+            }
+        }
+        (Some(_), _) => Vec::new(),
+    };
+    for server in &mut servers {
+        server.id = format!("{}:{}", plugin.prefix(), server.name);
+        server.project.clone_from(&plugin.project);
+        server.plugin = Some(plugin.clone());
+        server.file.clone_from(&file);
+    }
+    for problem in &mut problems[start..] {
+        problem.id = format!("{}:{}", plugin.prefix(), problem.name);
+        problem.project.clone_from(&plugin.project);
+    }
+    servers
 }
 
 /// A JSON object's string values.
@@ -531,7 +625,8 @@ fn absolute(path: &str, base: Option<&Path>) -> PathBuf {
 
 /// `text` with the source's variables expanded from the CLIs' environment. An unset variable
 /// without a default expands to nothing.
-fn expand(text: &str, variables: Variables, roots: &Roots, project: Option<&Path>) -> String {
+fn expand(text: &str, origin: &Origin<'_>, roots: &Roots) -> String {
+    let (variables, project) = (origin.variables, origin.project);
     if matches!(variables, Variables::None) || !text.contains("${") {
         return text.to_owned();
     }
@@ -545,7 +640,10 @@ fn expand(text: &str, variables: Variables, roots: &Roots, project: Option<&Path
             return out;
         };
         let inner = &after[..end];
-        let var = |name: &str| roots.vars.get(name).cloned();
+        let var = |name: &str| match origin.plugin_root {
+            Some(root) if name == "CLAUDE_PLUGIN_ROOT" => Some(root.display().to_string()),
+            _ => roots.vars.get(name).cloned(),
+        };
         let value = match variables {
             Variables::Claude => match inner.split_once(":-") {
                 Some((name, default)) => var(name)
