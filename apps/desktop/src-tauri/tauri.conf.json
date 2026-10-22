@@ -41,7 +41,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/brigadierd"],
+    "externalBin": ["binaries/brigadierd", "binaries/brigadier"],
     "macOS": {
       "minimumSystemVersion": "14.0",
       "hardenedRuntime": true

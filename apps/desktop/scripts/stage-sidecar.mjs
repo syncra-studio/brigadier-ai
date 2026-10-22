@@ -1,5 +1,6 @@
-// Builds brigadierd and stages it where Tauri's `externalBin` expects it:
-// src-tauri/binaries/brigadierd-<target-triple>[.exe].
+// Builds brigadierd and the `brigadier` command and stages them where Tauri's `externalBin`
+// expects them: src-tauri/binaries/<name>-<target-triple>[.exe]. Both land next to the app's own
+// program (brigadier-app), and that folder is first on every session's PATH.
 //
 // Runs automatically from beforeDevCommand / beforeBuildCommand. The target comes from
 // TAURI_ENV_TARGET_TRIPLE (set by the Tauri CLI), then `--target <triple>`, then the host.
@@ -26,7 +27,8 @@ const repoRoot = resolve(here, "../../..");
 const binariesDir = resolve(here, "../src-tauri/binaries");
 // Where cargo puts its output: CARGO_TARGET_DIR (relative to the repo, where cargo runs) or target/.
 const targetDir = resolve(repoRoot, process.env.CARGO_TARGET_DIR || "target");
-const name = "brigadierd";
+// The daemon, and the command sessions call.
+const names = ["brigadierd", "brigadier"];
 
 const args = process.argv.slice(2);
 const flag = (key) => {
@@ -50,22 +52,24 @@ const target = process.env.TAURI_ENV_TARGET_TRIPLE || flag("--target") || host;
 const release = process.env.TAURI_ENV_DEBUG !== "true" && !args.includes("--debug");
 const profile = release ? "release" : "debug";
 
-/** Builds the daemon for `triple` and returns the path of the produced binary. */
+/** Builds the daemon and the command for `triple` and returns the paths of the produced binaries. */
 function build(triple) {
-  // The app's package is selected too (only brigadierd is built), so the shared crates get the
-  // features they get in the app's build. A `tauri build --bundles app -- -p brigadier-desktop -p
-  // brigadier-daemon` then reuses them instead of compiling the workspace a second time.
-  const cargoArgs = ["build", "--locked", "-p", "brigadier-daemon", "-p", "brigadier-desktop", "--bin", name];
+  // The app's package is selected too (only brigadierd and brigadier are built), so the shared
+  // crates get the features they get in the app's build. A `tauri build --bundles app -- -p
+  // brigadier-desktop -p brigadier-daemon` then reuses them instead of compiling the workspace a
+  // second time.
+  const cargoArgs = ["build", "--locked", "-p", "brigadier-daemon", "-p", "brigadier-desktop", "-p", "brigadier-cli"];
+  for (const name of names) cargoArgs.push("--bin", name);
   if (release) cargoArgs.push("--release");
   // Building for the host without --target shares its build cache with other cargo commands.
   const crossTarget = triple !== host;
   if (crossTarget) cargoArgs.push("--target", triple);
   run("cargo", cargoArgs);
   const exe = triple.includes("windows") ? ".exe" : "";
-  return join(targetDir, crossTarget ? triple : "", profile, `${name}${exe}`);
+  return names.map((name) => join(targetDir, crossTarget ? triple : "", profile, `${name}${exe}`));
 }
 
-function stage(source, triple) {
+function stage(source, name, triple) {
   const exe = triple.includes("windows") ? ".exe" : "";
   const destination = join(binariesDir, `${name}-${triple}${exe}`);
   copyFileSync(source, destination);
@@ -77,13 +81,17 @@ function stage(source, triple) {
 mkdirSync(binariesDir, { recursive: true });
 
 if (target === "universal-apple-darwin") {
-  const arm = stage(build("aarch64-apple-darwin"), "aarch64-apple-darwin");
-  const intel = stage(build("x86_64-apple-darwin"), "x86_64-apple-darwin");
-  const universal = join(binariesDir, `${name}-universal-apple-darwin`);
-  execFileSync("lipo", ["-create", "-output", universal, arm, intel], { stdio: "inherit" });
-  console.log(`staged ${universal}`);
+  const arm = build("aarch64-apple-darwin");
+  const intel = build("x86_64-apple-darwin");
+  names.forEach((name, at) => {
+    const armBinary = stage(arm[at], name, "aarch64-apple-darwin");
+    const intelBinary = stage(intel[at], name, "x86_64-apple-darwin");
+    const universal = join(binariesDir, `${name}-universal-apple-darwin`);
+    execFileSync("lipo", ["-create", "-output", universal, armBinary, intelBinary], { stdio: "inherit" });
+    console.log(`staged ${universal}`);
+  });
 } else {
-  stage(build(target), target);
+  build(target).forEach((binary, at) => stage(binary, names[at], target));
 }
 
 const helperName = "Brigadier Computer Use";
