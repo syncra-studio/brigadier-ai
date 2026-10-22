@@ -643,7 +643,9 @@ impl SessionManager {
             OrchestratorCall::OfferSession(args) => {
                 crate::heap(|| self.offer_session(id, args)).await
             }
-            OrchestratorCall::SetHeadline(args) => self.set_headline(id, args).await,
+            OrchestratorCall::SetHeadline(args) => {
+                crate::heap(|| self.set_headline(id, args)).await
+            }
             OrchestratorCall::SettleStep(args) => crate::heap(|| self.settle_step(id, args)).await,
             OrchestratorCall::EndRun(args) => crate::heap(|| self.end_run_now(id, args)).await,
             OrchestratorCall::ProposeOvernight(args) => {
