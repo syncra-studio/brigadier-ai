@@ -141,7 +141,7 @@ impl SessionManager {
     }
 
     /// Opens the user's card for a request of `cli`, unless that CLI session has ended: a
-    /// request settled late (Brigadier's reviewer, [`super::escalation`]) may find it closed
+    /// request answered late (the user away from its card) may find it closed
     /// (taken over, retired), and its answer would have nowhere to go. A card opened as it ended
     /// is expired at once; one opened before it is expired by whoever closed it, if they do.
     /// `None` when no card waits.
