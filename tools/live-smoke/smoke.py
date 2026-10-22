@@ -545,8 +545,8 @@ class Smoke:
         sc = "4 stop during a wait"
         late = code("R")
         _, rid = self.send("C1", f"Run these in your shell, one command per call. 1. `brigadier start --agent codex --model "
-                                 f"{self.models['codex']} --effort low --title \"Smoke late\" \"Run `sleep 40` in your "
-                                 f"shell, then reply with the code {late}.\"`. 2. `brigadier wait --timeout 300`, and tell "
+                                 f"{self.models['codex']} --effort low --title \"Smoke late\" \"Run the command sleep 40 in "
+                                 f"your shell, then reply with the code {late}.\"`. 2. `brigadier wait --timeout 300`, and tell "
                                  f"me what it printed.")
         waiting = until(lambda: next((st for st in tool_steps(self.view("C1")) if st.get("requestId") == rid
                                       and st["status"] == "inProgress" and self.runs("C1", st, "brigadier wait")), None), 150)
