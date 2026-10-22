@@ -19,7 +19,8 @@
 //! asks: what its allow rules don't cover is denied.
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Claude setup: their
-//! settings, the project's and their local ones (`--setting-sources user,project,local`), so
+//! settings, and in a folder the user trusts the project's and their local ones too
+//! (`--setting-sources user,project,local`; `user` elsewhere), so
 //! their hooks, plugins, skills, allow rules, `CLAUDE.md` and MCP servers apply; skills come as
 //! descriptions until used and MCP tools behind Claude's tool search. Claude reads a project's
 //! setup from its working folder only, and these sessions work from a folder of Brigadier's (a
@@ -318,10 +319,18 @@ impl Claude {
     ) -> Vec<String> {
         // A thread or a worker loads the user's settings, the project's and their local ones,
         // with their MCP servers beside Brigadier's; `--settings` wins over all of them. Every
-        // other session loads only the project's, and only Brigadier's servers.
+        // other session loads only the project's, and only Brigadier's servers. The project's
+        // and local settings (their hooks among them) load only for a folder the user trusts
+        // ([`SessionSpec::project`]): a thread works in the checkout itself (S2), where Claude
+        // reads them whether or not they are linked.
         let user_setup = spec.tools.user_setup();
         let mut args: Vec<String> = if user_setup {
-            vec!["--setting-sources".into(), "user,project,local".into()]
+            let sources = if spec.project.is_some() {
+                "user,project,local"
+            } else {
+                "user"
+            };
+            vec!["--setting-sources".into(), sources.into()]
         } else {
             ["--strict-mcp-config", "--setting-sources", "project"]
                 .map(str::to_owned)
@@ -3061,12 +3070,25 @@ for line in sys.stdin:
         for tools in [ToolSet::Thread, ToolSet::Lean] {
             let session = SessionSpec {
                 tools,
+                project: Some(cwd.path().to_owned()),
                 ..spec(cwd.path(), &[])
             };
             let args = Claude::session_args(&session, cwd.path(), "n", false, None).unwrap();
             assert_eq!(
                 flag(&args, "--setting-sources").as_deref(),
                 Some("user,project,local"),
+                "{tools:?}"
+            );
+            // A folder the user doesn't trust: its own settings and hooks stay out, though the
+            // thread works in it.
+            let untrusted = SessionSpec {
+                project: None,
+                ..session.clone()
+            };
+            let args = Claude::session_args(&untrusted, cwd.path(), "n", false, None).unwrap();
+            assert_eq!(
+                flag(&args, "--setting-sources").as_deref(),
+                Some("user"),
                 "{tools:?}"
             );
             assert!(
