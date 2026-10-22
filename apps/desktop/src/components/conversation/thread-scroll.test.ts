@@ -1076,6 +1076,23 @@ test("a clamp heard only after the content grew back (no input of the user's) ke
   assert.equal(scroller.following, false);
 });
 
+test("growth heard first by the view's own scroll, before its resize, is still followed", () => {
+  const fake = new Fake();
+  conversation(fake, 6);
+  const scroller = open(fake, key(), true);
+  const answer = fake.rows.at(-1)!;
+  answer.height += 23;
+  scroller.resized();
+  assert.equal(fake.scrollTop, fake.max);
+  // The next line of the answer is laid out before the frame runs: its scroll event (the move
+  // above) comes first, its resize after.
+  answer.height += 34;
+  scroller.scrolled();
+  scroller.resized();
+  assert.equal(scroller.following, true);
+  assert.equal(fake.scrollTop, fake.max);
+});
+
 test("a jump the code makes for the user (a message revealed) stays; a scroll with no input of theirs goes back while following", () => {
   const fake = new Fake();
   conversation(fake, 10);

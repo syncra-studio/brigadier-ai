@@ -181,6 +181,7 @@ export class ThreadScroller {
   /** The view's size as last handled, and whether the view was at its bottom then. */
   private size = { width: 0, height: 0 };
   private atBottom = true;
+  /** The content's height as `resized` last heard it. */
   private contentHeight = 0;
   private paddingPx = 0;
   private anchor: Anchor | null = null;
@@ -337,7 +338,10 @@ export class ThreadScroller {
     if (this.jumped && Math.abs(viewport.scrollTop - this.expected) >= 1) this.scrolled();
     const wasAtBottom = this.atBottom;
     this.updateRoom();
+    // Kept only here: a frame runs its scroll events before its resize observers, so a scroll of
+    // the view's own heard after the content grew would take in the growth this should follow.
     const contentChanged = layout.content() !== this.contentHeight;
+    this.contentHeight = layout.content();
     const viewChanged =
       viewport.clientWidth !== this.size.width ||
       viewport.clientHeight !== this.size.height ||
@@ -760,7 +764,6 @@ export class ThreadScroller {
     if (viewport.clientWidth === this.size.width && viewport.clientHeight === this.size.height) {
       this.atBottom = this.lastDistance <= FOLLOW_PX;
     }
-    this.contentHeight = layout.content();
     const rows = layout.rows();
     const viewRect = viewport.getBoundingClientRect();
     const viewTop = viewRect.top;
