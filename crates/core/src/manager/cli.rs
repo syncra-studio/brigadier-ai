@@ -236,6 +236,29 @@ fn event_item(event: &ProviderEvent, at_ms: i64) -> Option<Item> {
     })
 }
 
+/// The items of a run of CLI events: a tool call or command once, as its latest event has it
+/// (a call is stored when it starts and again when it ends).
+fn items(entries: &[crate::model::RawEntry]) -> Vec<Item> {
+    let item_id = |event: &ProviderEvent| match event {
+        ProviderEvent::ToolCall { item_id, .. } | ProviderEvent::Command { item_id, .. } => {
+            Some(item_id.clone())
+        }
+        _ => None,
+    };
+    let mut latest: HashMap<String, usize> = HashMap::new();
+    for (at, entry) in entries.iter().enumerate() {
+        if let Some(id) = item_id(&entry.event) {
+            latest.insert(id, at);
+        }
+    }
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(at, entry)| item_id(&entry.event).is_none_or(|id| latest.get(&id) == Some(at)))
+        .filter_map(|(_, entry)| event_item(&entry.event, entry.at_ms))
+        .collect()
+}
+
 fn message_item(message: &crate::model::Message) -> Item {
     Item {
         kind: ItemKind::Message,
@@ -627,9 +650,8 @@ impl SessionManager {
                         .map(|page| page.entries)
                         .unwrap_or_default();
                     items.extend(
-                        steps
-                            .iter()
-                            .filter_map(|entry| event_item(&entry.event, entry.at_ms))
+                        self::items(&steps)
+                            .into_iter()
                             .filter(|item| item.kind != ItemKind::Message),
                     );
                     items.sort_by_key(|item| item.at_ms);
@@ -654,10 +676,7 @@ impl SessionManager {
         let entries = &page.entries;
         Ok(match view {
             ReadView::Items => {
-                let items: Vec<Item> = entries
-                    .iter()
-                    .filter_map(|entry| event_item(&entry.event, entry.at_ms))
-                    .collect();
+                let items = items(entries);
                 let n = last.unwrap_or(LOOK_BACK) as usize;
                 let skip = items.len().saturating_sub(n);
                 (items[skip..].to_vec(), skip > 0 || page.has_more)
@@ -685,12 +704,73 @@ impl SessionManager {
                     .iter()
                     .rposition(|entry| matches!(entry.event, ProviderEvent::TurnStarted { .. }))
                     .unwrap_or(0);
-                let items = entries[from..]
-                    .iter()
-                    .filter_map(|entry| event_item(&entry.event, entry.at_ms))
-                    .collect();
-                (items, from > 0 || page.has_more)
+                (items(&entries[from..]), from > 0 || page.has_more)
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brigadier_providers::model::ItemStatus as Status;
+
+    fn entry(at_ms: i64, event: ProviderEvent) -> crate::model::RawEntry {
+        crate::model::RawEntry {
+            stream_seq: at_ms,
+            at_ms,
+            event,
+        }
+    }
+
+    fn tool(status: Status, output: Option<&str>) -> ProviderEvent {
+        ProviderEvent::ToolCall {
+            item_id: "t1".into(),
+            name: "Read".into(),
+            input: Some("{}".into()),
+            status,
+            output: output.map(Into::into),
+            kept: None,
+        }
+    }
+
+    /// A call is stored when it starts and again when it ends: it reads once, as it ended.
+    #[test]
+    fn a_tool_call_reads_once_as_its_latest_event() {
+        let read = items(&[
+            entry(1, tool(Status::InProgress, None)),
+            entry(
+                2,
+                ProviderEvent::MessageDelta {
+                    item_id: "m".into(),
+                    text: "par".into(),
+                    phase: None,
+                },
+            ),
+            entry(3, tool(Status::Completed, Some("done"))),
+            entry(
+                4,
+                ProviderEvent::Message {
+                    item_id: "m".into(),
+                    role: brigadier_providers::model::Role::Assistant,
+                    text: "All read.".into(),
+                },
+            ),
+        ]);
+        assert_eq!(read.len(), 2, "{read:?}");
+        assert_eq!(read[0].kind, ItemKind::Tool);
+        assert_eq!(read[0].status, Some(cli::ItemStatus::Done));
+        assert_eq!(read[0].output.as_deref(), Some("done"));
+        assert_eq!(read[0].at_ms, 3);
+        assert_eq!(read[1].text, "All read.");
+    }
+
+    #[test]
+    fn long_output_keeps_its_end() {
+        let text = format!("{}é tail", "x".repeat(OUTPUT_TAIL));
+        let cut = tail(&text, OUTPUT_TAIL);
+        assert!(cut.starts_with('…') && cut.ends_with("é tail"));
+        assert!(cut.len() <= OUTPUT_TAIL + '…'.len_utf8());
+        assert_eq!(short("0199f0aa-0000-7000-8000-00000000c0de"), "0000c0de");
     }
 }
