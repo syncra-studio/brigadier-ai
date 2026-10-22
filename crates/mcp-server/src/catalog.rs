@@ -444,9 +444,9 @@ the app or in how you or its workers behave; never their own project's code), or
 report something to Brigadier's developers (\"report this\", \"file that as a bug\"), offer \
 them a report drafted from this conversation: a card under your answer. Its Send files it on \
 GitHub as the user, one issue per bug or idea, a repeat added to the issue it repeats; they may \
-edit it first or dismiss it. Nothing is sent without their click. title: one line naming the \
-problem. body: what happened and what they expected, steps if known, a few plain lines in their \
-words; never invent steps; no secrets, paths or project code. asked: true when the user asked \
+edit it first or dismiss it. Nothing is sent without their click, and the card, not your \
+answer, says whether it was. title: one line naming the problem. body: what happened and what \
+they expected, steps if known, a few plain lines in their words; never invent steps; no secrets, paths or project code. asked: true when the user asked \
 for it. One offer per incident: unless asked, refused while an earlier one is unanswered or \
 after they dismissed one.";
 
@@ -1944,6 +1944,13 @@ mod tests {
                 .and_then(|meta| meta.0.get("anthropic/searchHint"));
             assert!(
                 hint.is_some_and(|hint| hint.as_str().unwrap().contains("annoyed")),
+                "{run:?}"
+            );
+            // The user may send it after the answer is written: the card says whether (#475).
+            assert!(
+                tool.description
+                    .as_deref()
+                    .is_some_and(|text| text.contains("the card, not your answer, says whether")),
                 "{run:?}"
             );
             let arguments = serde_json::json!({

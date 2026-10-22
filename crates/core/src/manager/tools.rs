@@ -1392,7 +1392,7 @@ impl SessionManager {
             },
         )
         .await;
-        Ok("The user sees the report as a card under your answer, to send or dismiss. Don't mention it again; carry on with your answer.".into())
+        Ok("The user sees the report as a card under your answer, to send or dismiss. Don't mention it again, nor say whether it is sent: they may send it after your answer, and the card shows it. Carry on with your answer.".into())
     }
 
     /// `offer_session`: a card in the thread with one "Start as session" button for work

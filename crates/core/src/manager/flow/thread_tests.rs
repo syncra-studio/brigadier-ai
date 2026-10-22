@@ -2255,6 +2255,13 @@ async fn the_thread_offers_feedback_once_per_incident() {
         1,
         "{first:?}"
     );
+    // The answer is written before the user may send it: the card, not the answer, says (#475).
+    assert!(
+        first
+            .iter()
+            .any(|reply| !reply.0 && reply.1.contains("nor say whether it is sent")),
+        "{first:?}"
+    );
     assert!(
         first
             .iter()
