@@ -410,7 +410,7 @@ async function driveLayout(): Promise<Record<string, unknown>> {
   await wait(800);
   await settle();
   const tab = one('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]')!;
-  const spinner = tab.querySelector<HTMLElement>('[data-slot="status-spinner"]');
+  const spinner = tab.parentElement!.querySelector<HTMLElement>('[data-slot="status-spinner"]');
   const title = tab.querySelector(".session-tab-title")?.textContent ?? "";
   seen.sessionStatus = { words: tab.textContent?.replace(title, "").trim(), tip: tab.title, spinner: !!spinner, width: spinner?.parentElement?.getBoundingClientRect().width ?? 0 };
   seen.projectHeader = one('[data-slot="sidebar-panel"] li > div > button[aria-expanded]')?.textContent?.trim();

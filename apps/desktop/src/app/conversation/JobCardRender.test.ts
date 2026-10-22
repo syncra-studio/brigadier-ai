@@ -30,10 +30,8 @@ test("the Job card says what is happening right now, from the board's events, an
 
   // Idle: no Job card, the context card only (J4).
   assert.deepEqual(seen["idle"]!.cards, ["context"]);
-  // The thread at work with nothing more to say: Working, with its timer, naming no worker.
-  assert.deepEqual(card("working"), { tone: "running", headline: "Working", detail: [], buttons: [] });
-  assert.equal(seen["working"]!.timer, true);
-  assert.equal(seen["working"]!.spinning, true);
+  // The thread at work with nothing more to say: no Job card, the tab's spinner says it.
+  assert.deepEqual(seen["working"]!.cards, ["context"]);
 
   // Checks (run_checks): running with the command at work, failed with what failed, passed on the commit.
   assert.deepEqual(card("checksRunning"), { tone: "running", headline: "Running checks · 3 of 5", detail: ["Now: desktop tests"], buttons: [] });

@@ -180,10 +180,14 @@ async function closeAndReopen() {
   seen.chatTab = chatTab?.querySelector(".session-tab-title")?.textContent?.trim();
   // Beside the title, only the sidebar row's marks: no words.
   seen.chatTabStatus = chatTab?.textContent?.replace(seen.chatTab as string, "").trim();
-  const tabStatus = chatTab?.querySelector('[data-slot="status-spinner"]')?.parentElement;
+  // The spinner holds the ⋯'s place, which shows only on hover, focus or with its menu open.
+  const chatTabSlot = chatTab?.parentElement;
+  const tabStatus = chatTabSlot?.querySelector('[data-slot="status-spinner"]')?.parentElement;
   seen.chatTabTip = chatTab?.getAttribute("title");
-  seen.chatTabMark = chatTab?.querySelector('[data-slot="status-spinner"]') ? "spinner" : null;
-  seen.chatTabStatusShare = tabStatus && chatTab ? Math.round((tabStatus.getBoundingClientRect().width / chatTab.clientWidth) * 100) : null;
+  seen.chatTabMark = chatTabSlot?.querySelector('[data-slot="status-spinner"]') ? "spinner" : null;
+  const chatTabActions = [...(chatTabSlot?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Chat actions");
+  seen.chatTabActions = chatTabActions ? getComputedStyle(chatTabActions).visibility : null;
+  seen.chatTabStatusShare = tabStatus && chatTabSlot ? Math.round((tabStatus.getBoundingClientRect().width / chatTabSlot.clientWidth) * 100) : null;
   // An idle session's tab closes quietly: nothing still runs to reopen.
   useToasts.setState({ toasts: [] });
   rowButton("Old fix")!.click();
@@ -233,11 +237,12 @@ function Fixture() {
           await until(() => document.querySelector('[data-tab-id="chat"] .session-tab-title')?.textContent === conversation.title);
           const tab = document.querySelector<HTMLElement>('[data-tab-id="chat"] [role="tab"]')!;
           // The tab's marks are the sidebar row's own: its spinner or unread dot, its error glyph.
-          const mark = tab.querySelector<HTMLElement>('[data-slot="status-spinner"], [data-slot="status-unread"]')?.parentElement;
+          const slot = tab.parentElement!;
+          const mark = slot.querySelector<HTMLElement>('[data-slot="status-spinner"], [data-slot="status-unread"]')?.parentElement;
           states.push({ ...info, title: conversation.title, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
             state: row.dataset.status, words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: row.title,
             rowMark: row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : null,
-            mark: tab.querySelector('[data-slot="status-spinner"]') ? "spinner" : tab.querySelector('[data-slot="status-unread"]') ? "unread" : null,
+            mark: slot.querySelector('[data-slot="status-spinner"]') ? "spinner" : slot.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             dot: tab.querySelector('[data-slot="status-dot"]') !== null,
             tabError: tab.querySelector('[data-slot="status-error"]') !== null,
             width: mark?.getBoundingClientRect().width ?? 0, titleFlex: getComputedStyle(tab.querySelector('.session-tab-title')!).flexGrow,

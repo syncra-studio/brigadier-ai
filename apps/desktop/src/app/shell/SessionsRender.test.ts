@@ -84,6 +84,7 @@ test("closing a working session's tab stops nothing and says so in a note; it st
   assert.equal(seen.chatTabStatus, "", "the tab shows no state word");
   assert.equal(seen.chatTabTip, "Lone worker · Working", "the tab's tooltip names the state");
   assert.equal(seen.chatTabMark, "spinner");
+  assert.equal(seen.chatTabActions, "hidden", "the spinner holds the ⋯'s place until a hover");
   assert.ok((seen.chatTabStatusShare as number) <= 12, "only a mark takes space beside the title");
   assert.deepEqual(seen.notes, ["Still running. Reopen it from the sidebar."], "closing it leaves a small note");
   assert.equal(seen.dialog, false, "no dialog");

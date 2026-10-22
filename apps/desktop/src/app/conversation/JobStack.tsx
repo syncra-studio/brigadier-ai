@@ -42,7 +42,8 @@ function useWaits(conversationId: string): Wait[] {
 
 /**
  * The session's Job card: what is happening right now (J1), gone when nothing runs and nothing
- * waits on the user (J4). An overnight run, in every state of the run, or a plan of several steps
+ * waits on the user (J4), and while the session only works with nothing more to say: the bare
+ * Working is the tab's and the sidebar's spinner. An overnight run, in every state of the run, or a plan of several steps
  * adds its phase bar under the same live words and buttons. Then what the session waits for at a
  * set time: cards of their own, under the context card or in its place while it is hidden.
  */
@@ -68,7 +69,7 @@ export function JobStack({ conversationId }: { conversationId: string }) {
           onEdit={() => revealOvernight(run.run.id)}
         />
       ) : (
-        (live || plan) && <JobCard conversationId={conversationId} live={live} plan={plan} nowMs={nowMs} onOpen={open} />
+        ((live && !live.plain) || plan) && <JobCard conversationId={conversationId} live={live} plan={plan} nowMs={nowMs} onOpen={open} />
       )}
       {waits.map((wait) => (
         <WaitCard key={wait.key} title={wait.title} reason={wait.reason} atMs={wait.atMs} nowMs={nowMs} />
