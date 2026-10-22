@@ -40,7 +40,8 @@
 //! A worker's sub-agents run only on the models its task may use ([`SessionSpec::allowed_models`]):
 //! `availableModels` in its settings lists their exact ids, and when Claude's prefix matching
 //! would let another model in too, or the project's or the user's own settings could widen
-//! the list, the worker runs without its Agent tool ([`sub_agents`]).
+//! the list, the worker runs without its Agent tool ([`sub_agents`]). A thread's sub-agents
+//! run on any model but Fable ([`THREAD_MODELS`]).
 
 pub(crate) mod files;
 pub mod parse;
@@ -87,11 +88,18 @@ RemoteTrigger,PushNotification,DesignSync,ReportFindings,EnterWorktree,ExitWorkt
 SendMessage,TaskStop,Monitor,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode";
 /// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
-/// A thread's built-in tools ([`ToolSet::Thread`]): no sub-agents (`Agent`/`Task`) and nothing
-/// that runs on in the background (`Monitor`, scheduling); its workers are Brigadier's. Tool
-/// search stays (BUILD-PLAN C2): Brigadier marks its everyday tools to load from the start, and
-/// the rest wait behind the search until the thread needs one.
-const THREAD_TOOLS: &str = "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch";
+/// A thread's built-in tools ([`ToolSet::Thread`]): Claude Code's own sub-agents (`Agent`, which
+/// its init event lists as `Task`) and background-task control (`Monitor`, `TaskStop`) are on, as
+/// in a plain CLI (STRIP-DOWN-PLAN S3). Tool search stays (BUILD-PLAN C2): Brigadier marks its
+/// everyday tools to load from the start, and the rest wait behind the search until the thread
+/// needs one.
+const THREAD_TOOLS: &str =
+    "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop";
+/// The models a thread and its sub-agents may run on (`availableModels`), by family: the
+/// default model rules, never Fable (STRIP-DOWN-PLAN S3). A sub-agent that asks for Fable steps
+/// down to an allowed model (checked on 2.1.308). The user's own `availableModels` join these,
+/// as in a plain CLI.
+const THREAD_MODELS: &[&str] = &["opus", "sonnet", "haiku"];
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// A Brain job's built-in tools ([`ToolSet::Reader`]).
@@ -534,7 +542,11 @@ enum SubAgents {
 /// `cwd` that loads the user's settings from `user_config` too, when given.
 fn sub_agents(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> SubAgents {
     let Some(allowed) = &spec.allowed_models else {
-        return SubAgents::Any;
+        return if spec.tools == ToolSet::Thread {
+            SubAgents::Only(THREAD_MODELS.iter().map(|&id| id.to_owned()).collect())
+        } else {
+            SubAgents::Any
+        };
     };
     // The project linked into `cwd` is read where it is: its links may not be there yet.
     let linked = spec.project.as_deref().filter(|_| spec.tools.user_setup());
@@ -2876,10 +2888,7 @@ for line in sys.stdin:
                     .find(|pair| pair[0] == flag)
                     .map(|pair| pair[1].clone())
             };
-            assert_eq!(
-                after("--tools").as_deref(),
-                Some("Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch")
-            );
+            assert_eq!(after("--tools").as_deref(), Some(THREAD_TOOLS));
             assert_eq!(after("--permission-mode").as_deref(), Some(mode));
             assert_eq!(
                 args.windows(2)
@@ -3708,6 +3717,51 @@ for line in sys.stdin:
                 "{tools:?}"
             );
         }
+    }
+
+    /// A thread has Claude Code's own sub-agents and background-task control, and they run on
+    /// any model but Fable, whatever the user's or the project's settings list (STRIP-DOWN-PLAN
+    /// S3).
+    #[test]
+    fn a_thread_has_its_own_sub_agents_and_task_control_but_no_fable() {
+        let cwd = Temp::new();
+        let config = cwd.path().parent().unwrap().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("settings.json"),
+            r#"{"availableModels": ["claude-fable-5-1"]}"#,
+        )
+        .unwrap();
+        let thread = SessionSpec {
+            tools: ToolSet::Thread,
+            allowed_models: None,
+            ..spec(cwd.path(), &[])
+        };
+        let args = Claude::session_args(&thread, cwd.path(), "n", false, Some(&config)).unwrap();
+        let flag = |name: &str| {
+            args.iter()
+                .position(|arg| arg == name)
+                .map(|at| args[at + 1].clone())
+        };
+        assert_eq!(
+            flag("--tools").as_deref(),
+            Some(
+                "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop"
+            )
+        );
+        assert_eq!(flag("--disallowedTools"), None, "{args:?}");
+        let settings: Value = serde_json::from_str(&flag("--settings").unwrap()).unwrap();
+        assert_eq!(
+            settings["availableModels"],
+            json!(["opus", "sonnet", "haiku"])
+        );
+        // Only a thread: other sessions without a model limit set none.
+        let raw = SessionSpec {
+            tools: ToolSet::Default,
+            allowed_models: None,
+            ..spec(cwd.path(), &[])
+        };
+        assert_eq!(sub_agents(&raw, cwd.path(), None), SubAgents::Any);
     }
 
     /// The user's own settings can widen the models a worker's sub-agents may use (Claude joins

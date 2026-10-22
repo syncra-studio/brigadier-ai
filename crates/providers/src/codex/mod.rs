@@ -125,15 +125,9 @@ const CHAT_FEATURES: &[&str] = &[
 /// Built-ins switched off for a Brain job ([`ToolSet::Reader`]), which only reads.
 const READER_FEATURES: &[&str] = &["image_generation"];
 
-/// Built-ins switched off for a thread ([`ToolSet::Thread`]), which keeps Codex's usual tools
-/// (its shell, patches, images, web search) but hands work only to Brigadier's workers: no
-/// sub-agents, goals or sleep tool, as Claude's thread has no `Agent` or `Monitor`.
-const THREAD_FEATURES: &[&str] = &["multi_agent", "multi_agent_v2", "goals", "sleep_tool"];
-
-/// Per-process overrides for the same sessions (and a thread). The sub-agent tools (`collaboration.*`) come
+/// Per-process overrides for the same sessions. The sub-agent tools (`collaboration.*`) come
 /// with the model, whatever the feature flags say; only `agents.enabled` removes them. The
-/// user's personal skills catalog stays out of their context, but for a thread's, which runs
-/// with the user's setup.
+/// user's personal skills catalog stays out of their context.
 const RESTRICTED_OVERRIDES: &[&str] = &[NO_SUB_AGENTS, NO_SKILLS_CATALOG];
 
 /// Leaves the user's skills catalog out of the session's instructions.
@@ -415,9 +409,10 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     let tools = session.map(|session| session.tools).unwrap_or_default();
     // The built-ins switched off, and whether the restricted overrides come with them.
     let (role_features, restricted): (&[&str], bool) = match tools {
-        ToolSet::Default | ToolSet::Lean => (&[], false),
+        // A thread keeps Codex's own sub-agents, goals and sleep tool, as in a plain CLI
+        // (STRIP-DOWN-PLAN S3).
+        ToolSet::Default | ToolSet::Lean | ToolSet::Thread => (&[], false),
         ToolSet::Reader => (READER_FEATURES, false),
-        ToolSet::Thread => (THREAD_FEATURES, true),
         ToolSet::None | ToolSet::Web | ToolSet::Review => (RESTRICTED_FEATURES, true),
         ToolSet::Chat | ToolSet::TabChat => (CHAT_FEATURES, true),
     };
@@ -429,9 +424,6 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     }
     if restricted {
         for value in RESTRICTED_OVERRIDES {
-            if user_setup && *value == NO_SKILLS_CATALOG {
-                continue;
-            }
             args.push("-c".into());
             args.push((*value).into());
         }
@@ -3179,7 +3171,7 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_keeps_its_tools_but_not_sub_agents_and_writes_its_workspace() {
+    fn a_thread_keeps_codexs_own_tools_and_sub_agents_and_writes_its_workspace() {
         let mut thread = spec(ToolSet::Thread, None);
         let args = app_server_args(Some(&thread));
         let disabled: Vec<&str> = args
@@ -3187,13 +3179,19 @@ mod tests {
             .filter(|pair| pair[0] == "--disable")
             .map(|pair| pair[1].as_str())
             .collect();
-        for feature in ["multi_agent", "multi_agent_v2"] {
-            assert!(disabled.contains(&feature), "{args:?}");
-        }
-        for feature in ["shell_tool", "unified_exec", "view_image"] {
-            assert!(!disabled.contains(&feature), "{args:?}");
-        }
-        assert!(without_sub_agents(&args));
+        // Only what is off for every session: sub-agents, goals, the sleep tool and the shell
+        // are Codex's own, as in a plain CLI (STRIP-DOWN-PLAN S3).
+        assert_eq!(disabled, DISABLED_FEATURES, "{args:?}");
+        assert!(!without_sub_agents(&args), "{args:?}");
+        let overrides: Vec<&str> = args
+            .windows(2)
+            .filter(|pair| pair[0] == "-c")
+            .map(|pair| pair[1].as_str())
+            .collect();
+        assert!(
+            !overrides.iter().any(|value| value.starts_with("agents.")),
+            "{args:?}"
+        );
         thread.add_dirs = vec![PathBuf::from("/work/session")];
         // Full access: no sandbox at all.
         assert!(matches!(
