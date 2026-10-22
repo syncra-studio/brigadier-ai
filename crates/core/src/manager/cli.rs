@@ -43,13 +43,13 @@ pub struct CliCaller {
 }
 
 /// What an id names.
-enum Target {
+pub(super) enum Target {
     Session(Box<Conversation>),
     Worker(Box<Task>),
 }
 
 /// The shown id: the last 8 characters.
-fn short(id: &str) -> String {
+pub(super) fn short(id: &str) -> String {
     id[id.len().saturating_sub(8)..].to_owned()
 }
 
@@ -114,7 +114,7 @@ fn worker_state(state: TaskState) -> WorkerState {
     }
 }
 
-fn worker_row(task: &Task, diffs: &HashMap<TaskId, Changes>) -> WorkerRow {
+pub(super) fn worker_row(task: &Task, diffs: &HashMap<TaskId, Changes>) -> WorkerRow {
     WorkerRow {
         id: short(&task.id.0),
         number: task.number,
@@ -276,7 +276,7 @@ fn message_item(message: &crate::model::Message) -> Item {
     }
 }
 
-fn failed(err: impl std::fmt::Display) -> CliReply {
+pub(super) fn failed(err: impl std::fmt::Display) -> CliReply {
     CliReply::error(ErrorCode::Failed, err.to_string())
 }
 
@@ -353,6 +353,12 @@ impl SessionManager {
             CliRequest::Workers => self.cli_workers(caller).await.map(|o| CliReply::ok(&o)),
             CliRequest::Show { id } => self.cli_show(caller, &id).await,
             CliRequest::Read { id, last, screen } => self.cli_read(caller, &id, last, screen).await,
+            CliRequest::Start(start) => self.cli_start(caller, *start).await,
+            CliRequest::Send { id, text, answer } => self.cli_send(caller, &id, text, answer).await,
+            CliRequest::Wait { ids, timeout_secs } => {
+                self.cli_wait(caller, &ids, timeout_secs).await
+            }
+            CliRequest::Close { id } => self.cli_close(caller, &id).await,
         };
         reply.unwrap_or_else(failed)
     }
@@ -462,13 +468,19 @@ impl SessionManager {
             .tasks(&caller.conversation_id)
             .await?
             .iter()
+            // A closed worker is gone from its session.
+            .filter(|task| !task.plain.as_ref().is_some_and(|plain| plain.closed))
             .map(|task| worker_row(task, &diffs))
             .collect();
         Ok(WorkersOutput { session, workers })
     }
 
     /// The session or worker of the caller's project that `id` names.
-    async fn cli_target(&self, caller: &CliCaller, id: &str) -> Result<Target, CliReply> {
+    pub(super) async fn cli_target(
+        &self,
+        caller: &CliCaller,
+        id: &str,
+    ) -> Result<Target, CliReply> {
         let not_found = || {
             CliReply::error(
                 ErrorCode::NotFound,

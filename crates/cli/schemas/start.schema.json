@@ -1,14 +1,31 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier start --json (planned)",
+  "title": "brigadier start --json",
   "type": "object",
   "required": [
-    "worker"
+    "worker",
+    "permission",
+    "base"
   ],
   "additionalProperties": false,
   "properties": {
     "worker": {
       "$ref": "#/$defs/worker"
+    },
+    "permission": {
+      "enum": [
+        "ask",
+        "accept-edits",
+        "full-access"
+      ],
+      "description": "The permission mode it runs in."
+    },
+    "base": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The branch its worktree started from and merges back into; null with --local."
     }
   },
   "$defs": {

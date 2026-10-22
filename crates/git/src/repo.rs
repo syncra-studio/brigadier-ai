@@ -1305,6 +1305,11 @@ impl Repo {
         Ok(paths.into_iter().collect())
     }
 
+    /// The branch checked out here; `None` on a detached `HEAD`.
+    pub fn current_branch(&self) -> Result<Option<String>> {
+        self.symbolic_head()
+    }
+
     pub(crate) fn symbolic_head(&self) -> Result<Option<String>> {
         let args = ["symbolic-ref", "-q", "HEAD"];
         let out = self.run(&args, true)?;

@@ -83,6 +83,10 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
         "workers" => present(output, json, render::workers),
         "show" => present(output, json, render::show),
         "read" => present(output, json, render::read),
+        "start" => present(output, json, render::start),
+        "send" => present(output, json, render::send),
+        "wait" => present(output, json, render::wait),
+        "close" => present(output, json, render::close),
         other => Err(format!("no output for {other}")),
     };
     match rendered {

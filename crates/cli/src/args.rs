@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::commands::{self, Arg, Command};
-use crate::protocol::CliRequest;
+use crate::protocol::{Agent, Answer, CliRequest, Permission, StartRequest};
 
 /// What the command line asks for.
 #[derive(Debug)]
@@ -44,6 +44,23 @@ impl Parsed {
 
     fn switch(&self, name: &str) -> bool {
         self.flags.contains_key(name)
+    }
+
+    /// Every value of a repeatable flag, in order.
+    fn all(&self, name: &str) -> Vec<String> {
+        self.flags.get(name).cloned().unwrap_or_default()
+    }
+
+    /// A positional's words, joined by spaces; empty when none was given.
+    fn text(&self, name: &str) -> String {
+        self.positionals
+            .get(name)
+            .map(|words| words.join(" "))
+            .unwrap_or_default()
+    }
+
+    fn words(&self, name: &str) -> Vec<String> {
+        self.positionals.get(name).cloned().unwrap_or_default()
     }
 }
 
@@ -244,6 +261,81 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 screen,
             }
         }
+        "start" => {
+            if args.switch("local") && args.switch("worktree") {
+                return Err(error("--local and --worktree don't go together".into()));
+            }
+            if args.switch("local") && args.flag("base").is_some() {
+                return Err(error(
+                    "--base is for a worktree; --local works on this session's branch".into(),
+                ));
+            }
+            let skills = args.all("skill");
+            if !skills.is_empty() && !args.switch("lean") {
+                return Err(error(
+                    "--skill goes with --lean; a worker without it has your skills".into(),
+                ));
+            }
+            let prompt = args.text("prompt");
+            if prompt.trim().is_empty() {
+                return Err(error("missing <prompt>".into()));
+            }
+            let given = |name: &str| {
+                args.flag(name)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            };
+            CliRequest::Start(Box::new(StartRequest {
+                title: given("title"),
+                agent: args.flag("agent").map(|agent| match agent {
+                    "codex" => Agent::Codex,
+                    _ => Agent::Claude,
+                }),
+                model: given("model"),
+                effort: given("effort"),
+                local: args.switch("local"),
+                base: given("base"),
+                permission: args.flag("permission").map(|mode| match mode {
+                    "ask" => Permission::Ask,
+                    "full-access" => Permission::FullAccess,
+                    _ => Permission::AcceptEdits,
+                }),
+                lean: args.switch("lean"),
+                skills,
+                prompt,
+            }))
+        }
+        "send" => {
+            let text = args.text("text");
+            let answer = match (args.switch("allow"), args.switch("deny")) {
+                (true, true) => {
+                    return Err(error("--allow and --deny don't go together".into()));
+                }
+                (true, false) => Some(Answer::Allow),
+                (false, true) => Some(Answer::Deny),
+                (false, false) => None,
+            };
+            match (answer, text.trim().is_empty()) {
+                (Some(_), false) => {
+                    return Err(error(
+                        "--allow and --deny answer a permission prompt and take no message".into(),
+                    ));
+                }
+                (None, true) => return Err(error("missing <text>".into())),
+                _ => {}
+            }
+            CliRequest::Send {
+                id: id(),
+                text: answer.is_none().then_some(text),
+                answer,
+            }
+        }
+        "wait" => CliRequest::Wait {
+            ids: args.words("id"),
+            timeout_secs: number("timeout")?,
+        },
+        "close" => CliRequest::Close { id: id() },
         other => return Err(error(format!("{other} has no request yet"))),
     }))
 }
@@ -318,16 +410,89 @@ mod tests {
     }
 
     #[test]
+    fn the_worker_commands_parse_into_their_requests() {
+        assert_eq!(
+            run(&[
+                "start", "--agent", "codex", "--model", "m", "--lean", "--skill", "a", "--skill",
+                "b", "write", "a", "file",
+            ])
+            .0,
+            CliRequest::Start(Box::new(StartRequest {
+                title: None,
+                agent: Some(Agent::Codex),
+                model: Some("m".into()),
+                effort: None,
+                local: false,
+                base: None,
+                permission: None,
+                lean: true,
+                skills: vec!["a".into(), "b".into()],
+                prompt: "write a file".into(),
+            }))
+        );
+        let CliRequest::Start(start) = run(&[
+            "start",
+            "--local",
+            "--permission",
+            "full-access",
+            "--title",
+            "T",
+            "go",
+        ])
+        .0
+        else {
+            panic!("not a start");
+        };
+        assert!(start.local);
+        assert_eq!(start.permission, Some(Permission::FullAccess));
+        assert_eq!(start.title.as_deref(), Some("T"));
+        assert_eq!(
+            run(&["send", "ab12", "keep", "going"]).0,
+            CliRequest::Send {
+                id: "ab12".into(),
+                text: Some("keep going".into()),
+                answer: None
+            }
+        );
+        assert_eq!(
+            run(&["send", "ab12", "--allow"]).0,
+            CliRequest::Send {
+                id: "ab12".into(),
+                text: None,
+                answer: Some(Answer::Allow)
+            }
+        );
+        assert_eq!(
+            run(&["wait", "ab12", "cd34", "--timeout", "60"]).0,
+            CliRequest::Wait {
+                ids: vec!["ab12".into(), "cd34".into()],
+                timeout_secs: Some(60)
+            }
+        );
+        assert_eq!(
+            run(&["wait"]).0,
+            CliRequest::Wait {
+                ids: Vec::new(),
+                timeout_secs: None
+            }
+        );
+        assert_eq!(
+            run(&["close", "ab12"]).0,
+            CliRequest::Close { id: "ab12".into() }
+        );
+        assert!(fails(&["start", "--local", "--worktree", "go"]).contains("don't go together"));
+        assert!(fails(&["start", "--local", "--base", "main", "go"]).contains("--base is for"));
+        assert!(fails(&["start", "--skill", "a", "go"]).contains("goes with --lean"));
+        assert!(fails(&["start", "--lean"]).contains("missing <prompt>"));
+        assert!(fails(&["send", "ab12"]).contains("missing <text>"));
+        assert!(fails(&["send", "ab12", "--allow", "--deny"]).contains("don't go together"));
+        assert!(fails(&["send", "ab12", "--deny", "no"]).contains("take no message"));
+    }
+
+    #[test]
     fn commands_not_built_yet_parse_but_send_nothing() {
         for words in [
-            &[
-                "start", "--agent", "codex", "--model", "m", "write", "a", "file",
-            ][..],
-            &["send", "ab12", "keep", "going"],
-            &["wait", "ab12", "cd34", "--timeout", "60"],
-            &["wait"],
-            &["close", "ab12"],
-            &["preview", "start", "pnpm", "dev", "--name", "web"],
+            &["preview", "start", "pnpm", "dev", "--name", "web"][..],
             &["browser", "open", "https://example.com"],
             &["ask", "--option", "Yes", "--option", "No", "Ship it?"],
             &["app", "state"],

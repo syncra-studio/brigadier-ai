@@ -157,12 +157,27 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "start",
         summary: "Start a worker of this session.",
-        details: "The worker is a plain CLI session in this session's project. It shows only \
-                  inside this session, never in the sidebar. Prints its id.",
+        details: "The worker is a plain CLI session in this session's project, on its own \
+                  branch in a new worktree by default. It shows only inside this session, \
+                  never in the sidebar. Prints its id; `brigadier wait` hears when its turn \
+                  ends.",
         args: &[
-            flag("title", "TEXT", "A short name for it."),
-            choice("agent", "AGENT", &["claude", "codex"], "Which CLI runs it."),
-            flag("model", "MODEL", "The model id; see `brigadier models`."),
+            flag(
+                "title",
+                "TEXT",
+                "A short name for it; from the prompt by default.",
+            ),
+            choice(
+                "agent",
+                "AGENT",
+                &["claude", "codex"],
+                "Which CLI runs it; this session's by default.",
+            ),
+            flag(
+                "model",
+                "MODEL",
+                "The model id; the CLI's own default by default.",
+            ),
             flag("effort", "EFFORT", "The reasoning effort."),
             switch(
                 "worktree",
@@ -179,43 +194,60 @@ pub const COMMANDS: &[Command] = &[
                 "permission",
                 "MODE",
                 &["ask", "accept-edits", "full-access"],
-                "The CLI's own permission mode.",
+                "The CLI's own permission mode; this session's by default.",
             ),
+            switch(
+                "lean",
+                "A research worker: the goal and the repository, with none of your MCP \
+                 servers, no skills and no memory writes. Your instruction files still load.",
+            ),
+            Arg::Flag {
+                long: "skill",
+                value: Some("NAME"),
+                help: "With --lean: a skill it keeps.",
+                choices: &[],
+                repeat: true,
+            },
             rest("prompt", "Its task.", true),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/start.schema.json"),
     },
     Command {
         name: "send",
-        summary: "Send one of this session's workers a message.",
-        details: "Queued into its turn if it is working, else it starts a turn.",
+        summary: "Send one of this session's workers a message, or answer its permission prompt.",
+        details: "A message is queued into its turn if it is working, else it starts a turn. \
+                  --allow or --deny answers the permission prompt its CLI shows (a \
+                  `needs-input` event of `brigadier wait`).",
         args: &[
             positional("id", "The worker."),
-            rest("text", "The message.", true),
+            switch("allow", "Allow what its permission prompt asks."),
+            switch("deny", "Deny what its permission prompt asks."),
+            rest("text", "The message.", false),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/send.schema.json"),
     },
     Command {
         name: "wait",
         summary: "Wait for an event from this session's workers.",
         details: "Returns at the first: a turn ended (with its last message), needs input, \
-                  gone, usage limit, fresh context. Without ids, any of them. Run long waits \
-                  in the background.",
+                  gone, usage limit, fresh context. Without ids, any of them. Each event is \
+                  returned once. Run long waits in the background.",
         args: &[
             rest("id", "The workers to wait for.", false),
             flag("timeout", "SECONDS", "Give up after this long."),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/wait.schema.json"),
     },
     Command {
         name: "close",
         summary: "Close one of this session's workers.",
-        details: "Stops its CLI and removes it from this session.",
+        details: "Stops its CLI and removes it from `brigadier workers`. Unfinished changes \
+                  are kept as a commit on its branch.",
         args: &[positional("id", "The worker.")],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/close.schema.json"),
     },
     Command {

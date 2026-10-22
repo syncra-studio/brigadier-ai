@@ -1343,6 +1343,11 @@ pub struct SessionSpec {
     /// tool list (and the cached prefix it starts) stays the same; `--disallowedTools` would
     /// change it (BUILD-PLAN B5, a thread's note fork). Codex ignores this.
     pub deny_tools: Option<String>,
+    /// A lean research worker (`brigadier start --lean`, G23): none of the user's MCP servers
+    /// and no memory writes, from the CLI's own flags and settings, never by editing the user's
+    /// files. Its skills are cut through [`Self::switched_off`]; its instruction files still
+    /// load.
+    pub lean_worker: bool,
 }
 
 /// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for

@@ -983,8 +983,37 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rerun: Option<brigadier_router::Rerun>,
+    /// A plain CLI worker its session started with `brigadier start` (STRIP-DOWN-PLAN S13):
+    /// how it was asked to run. Brigadier starts, messages, waits on and closes it, and
+    /// nothing more: no brief, no report, no hand-off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub plain: Option<PlainWorker>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+/// How a `brigadier start` worker runs ([`Task::plain`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlainWorker {
+    /// Its CLI's permission mode: its session's unless `--permission` said (Q8).
+    pub permission: crate::model::PermissionLevel,
+    /// It works in its session's checkout (`--local`), not a worktree of its own.
+    #[serde(default)]
+    pub local: bool,
+    /// The branch its worktree starts from and merges back into (G21); none with `--local`.
+    #[serde(default)]
+    pub base: Option<String>,
+    /// A research worker with just the goal and the repository (`--lean`, G23).
+    #[serde(default)]
+    pub lean: bool,
+    /// With `lean`, the only skills it keeps (`--skill`).
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// `brigadier close` ended it: `brigadier workers` lists it no more.
+    #[serde(default)]
+    pub closed: bool,
 }
 
 /// A worker's use of the project's Brain, shown on its row and in the Inspector

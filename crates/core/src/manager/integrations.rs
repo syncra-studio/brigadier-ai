@@ -579,11 +579,36 @@ pub(crate) fn switched_off(
     session: &Session<'_>,
     switches: &Switches<'_>,
 ) -> SwitchedOff {
+    switched_off_by(catalog, session, &|id| switches.server_off(id), &|skill| {
+        switches.skill_off(&skill.id)
+    })
+}
+
+/// What of its agent's own setup a lean worker (`brigadier start --lean`, G23) goes without:
+/// every MCP server, and every skill but those `keep` names.
+pub(crate) fn lean_switched_off(
+    catalog: &Catalog,
+    session: &Session<'_>,
+    keep: &[String],
+) -> SwitchedOff {
+    switched_off_by(catalog, session, &|_| true, &|skill| {
+        !keep
+            .iter()
+            .any(|name| *name == skill.name || *name == skill.id)
+    })
+}
+
+fn switched_off_by(
+    catalog: &Catalog,
+    session: &Session<'_>,
+    server_off: &dyn Fn(&str) -> bool,
+    skill_off: &dyn Fn(&brigadier_registry::Skill) -> bool,
+) -> SwitchedOff {
     let mut off = SwitchedOff::default();
     for server in &catalog.servers {
         // A user's server under Brigadier's own name isn't one Brigadier gives: switching it
         // off must not take Brigadier's own away.
-        if !switches.server_off(&server.id)
+        if !server_off(&server.id)
             || RESERVED.contains(&server.name.as_str())
             || !catalog.server_native(server, session)
         {
@@ -605,7 +630,7 @@ pub(crate) fn switched_off(
         }
     }
     for skill in &catalog.skills {
-        if !switches.skill_off(&skill.id) || !catalog.skill_native(skill, session) {
+        if !skill_off(skill) || !catalog.skill_native(skill, session) {
             continue;
         }
         match session.agent {
@@ -1488,6 +1513,31 @@ impl SessionManager {
         .unwrap_or_default()
     }
 
+    /// What a lean worker in `cwd` goes without ([`lean_switched_off`]): its agent's every MCP
+    /// server and every skill but those `keep` names.
+    pub(crate) async fn lean_worker_switched_off(
+        &self,
+        conversation: &ConversationId,
+        provider: ProviderKind,
+        cwd: &Path,
+        keep: &[String],
+    ) -> SwitchedOff {
+        let (registry, repo) = (self.registry(), self.trusted_repo(conversation));
+        let (cwd, keep) = (cwd.to_owned(), keep.to_vec());
+        super::blocking(move || {
+            let catalog = registry.catalog(repo.as_deref());
+            let session = Session {
+                agent: agent(provider),
+                cwd: &cwd,
+                project: repo.as_deref(),
+                in_checkout: true,
+            };
+            Ok(lean_switched_off(&catalog, &session, &keep))
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     /// The thread's list of servers a worker gets only when named ([`thread_section`]).
     pub(crate) async fn thread_integrations(&self, conversation: &ConversationId) -> String {
         let (registry, settings, repo) = (
@@ -2034,6 +2084,16 @@ mod tests {
         );
         assert!(off.servers.is_empty());
         assert_eq!(off.skill_files, [codex.join("skills/chart/SKILL.md")]);
+        // A lean worker (G23) goes without them all with nothing switched off, but the skills
+        // it keeps.
+        let lean = lean_switched_off(&catalog, &session(Agent::Claude), &[]);
+        assert_eq!(lean.plugin_skills, ["docs:write"]);
+        assert_eq!(lean.servers, ["plugin_docs_server"]);
+        let lean = lean_switched_off(&catalog, &session(Agent::Claude), &["write".to_owned()]);
+        assert!(lean.plugin_skills.is_empty(), "{lean:?}");
+        assert_eq!(lean.servers, ["plugin_docs_server"]);
+        let lean = lean_switched_off(&catalog, &session(Agent::Codex), &[]);
+        assert_eq!(lean.skill_files, [codex.join("skills/chart/SKILL.md")]);
 
         let auth = McpAuth::new(Arc::new(Memory::default()), Arc::new(|_: &str| false));
         let stores = auth.prober(&roots, catalog.codex_store, true);

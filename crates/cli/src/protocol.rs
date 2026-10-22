@@ -47,14 +47,83 @@ pub enum CliRequest {
         last: Option<u32>,
         screen: bool,
     },
+    /// A new worker of the calling session.
+    Start(Box<StartRequest>),
+    /// A message to one of the caller's workers, or the answer to its open permission prompt.
+    Send {
+        id: String,
+        /// The message; absent when `answer` is given.
+        text: Option<String>,
+        answer: Option<Answer>,
+    },
+    /// The next events of the caller's workers (all of them when `ids` is empty).
+    Wait {
+        ids: Vec<String>,
+        /// Absent: until an event comes.
+        timeout_secs: Option<u32>,
+    },
+    /// Closes one of the caller's workers.
+    Close { id: String },
+}
+
+/// `brigadier start`'s arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartRequest {
+    /// Absent: from the prompt.
+    pub title: Option<String>,
+    /// Absent: the calling session's agent.
+    pub agent: Option<Agent>,
+    /// Absent: the CLI's own default.
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// Works in the calling session's checkout rather than a worktree of its own.
+    pub local: bool,
+    /// Absent: the calling session's current branch.
+    pub base: Option<String>,
+    /// Absent: the calling session's level.
+    pub permission: Option<Permission>,
+    /// A research worker with just the goal and the repository (G23).
+    pub lean: bool,
+    /// With `lean`, the only skills it keeps.
+    pub skills: Vec<String>,
+    pub prompt: String,
+}
+
+/// A CLI's own permission mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Permission {
+    Ask,
+    AcceptEdits,
+    FullAccess,
+}
+
+impl Permission {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::AcceptEdits => "accept-edits",
+            Self::FullAccess => "full-access",
+        }
+    }
+}
+
+/// The answer to a worker's open permission prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Answer {
+    Allow,
+    Deny,
 }
 
 /// The daemon's answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CliReply {
-    /// The request's output: [`SessionsOutput`], [`WorkersOutput`], [`ShowOutput`] or
-    /// [`ReadOutput`], by request.
+    /// The request's output: [`SessionsOutput`], [`WorkersOutput`], [`ShowOutput`],
+    /// [`ReadOutput`], [`StartOutput`], [`SendOutput`], [`WaitOutput`] or [`CloseOutput`], by
+    /// request.
     Ok {
         output: serde_json::Value,
     },
@@ -434,4 +503,101 @@ pub enum ItemStatus {
     Running,
     Done,
     Failed,
+}
+
+/// `brigadier start`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartOutput {
+    pub worker: WorkerRow,
+    /// The permission mode it runs in.
+    pub permission: Permission,
+    /// The branch its worktree started from and merges back into; absent with `--local`.
+    pub base: Option<String>,
+}
+
+/// `brigadier send`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendOutput {
+    pub id: String,
+    /// Queued into a running turn rather than starting one.
+    pub queued: bool,
+    /// The answer given to its open permission prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered: Option<Answer>,
+}
+
+/// `brigadier wait`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitOutput {
+    /// Oldest first.
+    pub events: Vec<WaitEvent>,
+    pub timed_out: bool,
+}
+
+/// One event of a worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitEvent {
+    pub id: String,
+    pub event: EventKind,
+    /// A turn's last message; a usage limit's or a gone worker's reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// A turn's end: completed, interrupted or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TurnEnd>,
+    /// What a permission prompt asks to do: the command, or the tool and its target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asks: Option<String>,
+    /// When a usage limit resets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at_ms: Option<i64>,
+    pub at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EventKind {
+    /// Its turn ended, with its last message.
+    TurnEnded,
+    /// Its CLI asks permission: `brigadier send <id> --allow|--deny` answers.
+    NeedsInput,
+    /// Its CLI ended, or it was closed.
+    Gone,
+    /// Its model hit a usage limit.
+    UsageLimit,
+    /// Its CLI compacted its context.
+    FreshContext,
+}
+
+impl EventKind {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::TurnEnded => "turn-ended",
+            Self::NeedsInput => "needs-input",
+            Self::Gone => "gone",
+            Self::UsageLimit => "usage-limit",
+            Self::FreshContext => "fresh-context",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TurnEnd {
+    Completed,
+    Interrupted,
+    Failed,
+}
+
+/// `brigadier close`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseOutput {
+    pub id: String,
+    /// False when it had already ended.
+    pub closed: bool,
 }

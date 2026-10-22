@@ -81,6 +81,7 @@ mod peer_answers;
 mod peer_wait;
 mod peers;
 mod phases;
+mod plain_workers;
 mod preview;
 mod preview_ready;
 mod project_removal;
@@ -183,6 +184,8 @@ pub struct SessionManager {
     mcp_auth: Arc<mcp_auth::McpAuth>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
+    /// What plain workers' CLIs did that their sessions' `brigadier wait` hasn't taken yet.
+    worker_events: plain_workers::WorkerEvents,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
@@ -417,6 +420,7 @@ impl SessionManager {
             },
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
+            worker_events: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
             local_checkouts: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),

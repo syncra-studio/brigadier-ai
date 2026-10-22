@@ -1,7 +1,8 @@
 //! The text output of each command (`--json` prints the reply's output as is).
 
 use crate::protocol::{
-    Changes, Item, ItemKind, ReadOutput, SessionsOutput, ShowOutput, WorkerRow, WorkersOutput,
+    Answer, Changes, CloseOutput, Item, ItemKind, ReadOutput, SendOutput, SessionsOutput,
+    ShowOutput, StartOutput, WaitOutput, WorkerRow, WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
@@ -231,4 +232,79 @@ pub fn read(output: &ReadOutput) -> String {
         out.push_str(&item(entry));
     }
     out
+}
+
+pub fn start(output: &StartOutput) -> String {
+    let worker = &output.worker;
+    let place = match (&worker.branch, &output.base) {
+        (Some(branch), Some(base)) => format!("on {branch} from {base}"),
+        (Some(branch), None) => format!("on {branch}"),
+        (None, _) => "in this session's checkout".into(),
+    };
+    format!(
+        "{}\nStarted worker {} ({}, {}), {place}, permission {}.\n`brigadier wait {}` hears \
+         when its turn ends.\n",
+        worker.id,
+        worker.number,
+        worker.agent.word(),
+        worker.model.as_deref().unwrap_or("default model"),
+        output.permission.word(),
+        worker.id,
+    )
+}
+
+pub fn send(output: &SendOutput) -> String {
+    match output.answered {
+        Some(Answer::Allow) => format!("Allowed what {} asked.\n", output.id),
+        Some(Answer::Deny) => format!("Denied what {} asked.\n", output.id),
+        None if output.queued => format!("Queued into {}'s turn.\n", output.id),
+        None => format!("Sent; {} works on it.\n", output.id),
+    }
+}
+
+pub fn wait(output: &WaitOutput) -> String {
+    if output.events.is_empty() {
+        return if output.timed_out {
+            "Nothing yet (timed out).\n".into()
+        } else {
+            "Nothing to wait for.\n".into()
+        };
+    }
+    let mut out = String::new();
+    for (at, event) in output.events.iter().enumerate() {
+        if at > 0 {
+            out.push('\n');
+        }
+        let mut head = format!("{} {}", event.id, event.event.word());
+        if let Some(status) = event.status {
+            let word = match status {
+                crate::protocol::TurnEnd::Completed => "completed",
+                crate::protocol::TurnEnd::Interrupted => "interrupted",
+                crate::protocol::TurnEnd::Failed => "failed",
+            };
+            head.push_str(&format!(" ({word})"));
+        }
+        out.push_str(&head);
+        out.push('\n');
+        if let Some(asks) = &event.asks {
+            out.push_str(&format!(
+                "asks: {}\n`brigadier send {} --allow` or `--deny` answers.\n",
+                asks.trim_end(),
+                event.id
+            ));
+        }
+        if let Some(message) = &event.message {
+            out.push_str(message.trim_end());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+pub fn close(output: &CloseOutput) -> String {
+    if output.closed {
+        format!("Closed {}.\n", output.id)
+    } else {
+        format!("{} had already ended.\n", output.id)
+    }
 }

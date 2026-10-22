@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier wait --json (planned)",
+  "title": "brigadier wait --json",
   "type": "object",
   "required": [
     "events",
@@ -34,9 +34,21 @@
               "fresh-context"
             ]
           },
+          "status": {
+            "enum": [
+              "completed",
+              "interrupted",
+              "failed"
+            ],
+            "description": "A turn's end."
+          },
           "message": {
             "type": "string",
-            "description": "A turn's last message."
+            "description": "A turn's last message; a usage limit's or a gone worker's reason."
+          },
+          "asks": {
+            "type": "string",
+            "description": "What a permission prompt asks to do."
           },
           "resetsAtMs": {
             "type": "integer"

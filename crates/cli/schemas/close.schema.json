@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier close --json (planned)",
+  "title": "brigadier close --json",
   "type": "object",
   "required": [
     "id",
@@ -12,7 +12,8 @@
       "type": "string"
     },
     "closed": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "False when it had already ended."
     }
   }
 }

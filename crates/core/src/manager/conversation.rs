@@ -3354,6 +3354,7 @@ impl SessionManager {
             output_hook,
             stop_hook: None,
             deny_tools: None,
+            lean_worker: false,
         };
         let mut resumed = resume.is_some();
         let tools_key = crate::routing::meter::tools_key(&spec);

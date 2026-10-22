@@ -336,6 +336,11 @@ impl Claude {
                 .map(str::to_owned)
                 .to_vec()
         };
+        // A lean worker (G23) loads only the servers Brigadier gives it, none of the user's,
+        // with the user's settings and instruction files still read.
+        if user_setup && spec.lean_worker {
+            args.push("--strict-mcp-config".into());
+        }
         args.push("--mcp-config".into());
         args.push(mcp_config(&spec.mcp_servers).to_string());
         // Decided once, for both the tools and the settings.
@@ -2485,6 +2490,7 @@ for line in sys.stdin:
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
+            lean_worker: false,
         }
     }
 
@@ -3188,6 +3194,65 @@ for line in sys.stdin:
                 args.contains(&"--strict-mcp-config".to_owned()),
                 "{tools:?}"
             );
+        }
+    }
+
+    /// A lean worker (`brigadier start --lean`, G23) keeps the user's settings and instruction
+    /// files but loads only the servers Brigadier gives it (`--strict-mcp-config`), writes no
+    /// memories, and has the skills it goes without turned off by name (plugin skills by a
+    /// deny rule); a skill `--skill` kept is simply not among them.
+    #[test]
+    fn a_lean_worker_loads_none_of_the_users_servers_and_only_its_kept_skills() {
+        let cwd = Temp::new();
+        let worker = SessionSpec {
+            project: Some(cwd.path().to_owned()),
+            ..spec(cwd.path(), &[])
+        };
+        let flag = |args: &[String], name: &str| {
+            args.iter()
+                .position(|arg| arg == name)
+                .map(|at| args[at + 1].clone())
+        };
+        let args = Claude::session_args(&worker, cwd.path(), "n", false, None).unwrap();
+        assert!(!args.contains(&"--strict-mcp-config".to_owned()));
+        let lean = SessionSpec {
+            lean_worker: true,
+            switched_off: skills_off(&["review"], &["docs:write"]),
+            ..worker.clone()
+        };
+        let args = Claude::session_args(&lean, cwd.path(), "n", false, None).unwrap();
+        assert!(args.contains(&"--strict-mcp-config".to_owned()), "{args:?}");
+        assert_eq!(
+            flag(&args, "--setting-sources").as_deref(),
+            Some("user,project,local"),
+            "the user's settings and the project's still load"
+        );
+        assert_eq!(
+            flag(&args, "--mcp-config").as_deref(),
+            Some(r#"{"mcpServers":{}}"#)
+        );
+        let settings = settings(&lean, &SubAgents::Any, false);
+        assert_eq!(settings["autoMemoryEnabled"], json!(false));
+        assert_eq!(settings["skillOverrides"], json!({"review": "off"}));
+        assert!(
+            settings["permissions"]["deny"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Skill(docs:write)"))
+        );
+        // With `--skill review` kept, only the plugin's skill goes.
+        let kept = SessionSpec {
+            switched_off: skills_off(&[], &["docs:write"]),
+            ..lean
+        };
+        assert!(settings_of(&kept).get("skillOverrides").is_none());
+    }
+
+    fn skills_off(names: &[&str], plugins: &[&str]) -> SwitchedOff {
+        SwitchedOff {
+            skill_names: names.iter().map(|name| (*name).to_owned()).collect(),
+            plugin_skills: plugins.iter().map(|name| (*name).to_owned()).collect(),
+            ..Default::default()
         }
     }
 

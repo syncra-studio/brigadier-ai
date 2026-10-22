@@ -1591,7 +1591,8 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
     let mut servers: Map<String, Value> = effective
         .pointer("/config/mcp_servers")
         .and_then(Value::as_object)
-        .filter(|_| !spec.tools.user_setup())
+        // A sealed session, or a lean worker (G23), goes without every server of the user's.
+        .filter(|_| !spec.tools.user_setup() || spec.lean_worker)
         .map(|servers| {
             servers
                 .keys()
@@ -2540,6 +2541,7 @@ mod tests {
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
+            lean_worker: false,
         }
     }
 
@@ -3147,6 +3149,39 @@ mod tests {
                    "http_headers": {"Authorization": "Bearer c"}})
         );
         assert_eq!(servers["railway"], json!({"enabled": false}));
+    }
+
+    /// A lean worker (`brigadier start --lean`, G23) goes without every server of the user's
+    /// config and writes no memories; the skills it goes without come switched off by file,
+    /// and those `--skill` kept are simply not among them.
+    #[test]
+    fn a_lean_worker_goes_without_the_users_servers_and_memories() {
+        let effective = json!({"config": {"mcp_servers": {"railway": {"command": "r"},
+                                                          "docs": {"url": "https://d"}}}});
+        let mut session = spec(ToolSet::Lean, None);
+        session.mcp_servers = vec![server("given", stdio("/bin/given", None), &[])];
+        let full = mcp_config(&effective, &session);
+        assert!(full.get("railway").is_none() && full.get("docs").is_none());
+        session.lean_worker = true;
+        let lean = mcp_config(&effective, &session);
+        assert_eq!(lean["railway"], json!({"enabled": false}));
+        assert_eq!(lean["docs"], json!({"enabled": false}));
+        assert_eq!(
+            lean["given"]["command"], "/bin/given",
+            "what Brigadier gives stays"
+        );
+        session.switched_off.skill_files = vec![PathBuf::from("/h/.agents/skills/x/SKILL.md")];
+        let args = app_server_args(Some(&session));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--disable" && pair[1] == "memories"),
+            "{args:?}"
+        );
+        assert!(
+            args.iter().any(|arg| arg
+                == r#"skills.config=[{"enabled" = false, "path" = "/h/.agents/skills/x/SKILL.md"}]"#),
+            "{args:?}"
+        );
     }
 
     /// Workers and threads see their skills' descriptions; a skill the user switched off is

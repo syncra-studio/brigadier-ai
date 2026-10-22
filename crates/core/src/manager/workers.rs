@@ -275,6 +275,9 @@ pub(crate) struct TaskLive {
     pub(crate) takeover: tokio::sync::Mutex<Option<super::takeover::LiveTakeover>>,
     /// Why its next CLI starts, when that isn't a plain start or resume (BUILD-PLAN B0).
     next_cause: std::sync::Mutex<Option<WriteCause>>,
+    /// A plain worker of `brigadier start` ([`Task::plain`]): its CLI's events are passed on to
+    /// its session's `brigadier wait`, and nothing of Brigadier's own runs it.
+    pub(crate) plain: bool,
 }
 
 impl TaskLive {
@@ -301,6 +304,11 @@ impl TaskLive {
     /// Takes the pending hand-off, if any.
     pub(crate) async fn take_cutoff(&self) -> Option<AttemptEnd> {
         self.state.lock().await.cutoff.take()
+    }
+
+    /// What its CLI last said.
+    pub(crate) async fn last_message(&self) -> Option<String> {
+        self.state.lock().await.last_message.clone()
     }
 
     /// Counts a transient provider error; answers how many came in a row.
@@ -616,6 +624,7 @@ impl TaskLive {
             turn_end: tokio::sync::Mutex::new(()),
             takeover: tokio::sync::Mutex::new(None),
             next_cause: std::sync::Mutex::new(None),
+            plain: false,
         }
     }
 
@@ -744,11 +753,14 @@ impl SessionManager {
         self.tasks_lock()
             .entry(task.id.clone())
             .or_insert_with(|| {
-                Arc::new(TaskLive::reported(
-                    task.id.clone(),
-                    task.conversation_id.clone(),
-                    task.report_version,
-                ))
+                Arc::new(TaskLive {
+                    plain: task.plain.is_some(),
+                    ..TaskLive::reported(
+                        task.id.clone(),
+                        task.conversation_id.clone(),
+                        task.report_version,
+                    )
+                })
             })
             .clone()
     }
@@ -1040,70 +1052,93 @@ impl SessionManager {
             ) => floor.max(QualityTier::Frontier),
             _ => floor,
         };
-        let (preview, trial_slot) = self
-            .preview(&super::routing::Ask {
-                category,
-                areas: &areas,
-                floor,
-                floor_binds: extra.rerun.is_some(),
-                needs: needs_of(kind, &attachments, &needs),
-                pin: pin.clone(),
-                hold_pin: false,
-                avoid,
-                distinct_from,
-                exclude: &[],
-                project_id: conversation.project_id.as_ref(),
-                // Checks of another task's work never go to a model on trial, nor does a rerun
-                // one tier up.
-                trial: if gate_link.is_some() || extra.rerun.is_some() {
-                    super::routing::Trial::Never
-                } else {
-                    super::routing::Trial::Take
-                },
-            })
-            .await;
         let now = now_ms();
-        let (route, wait) = match preview.decision {
-            brigadier_router::Decision::Run(routed) => (super::routing::route_from(routed), None),
-            // Nothing it may use is available. When a reset or the user's rules and rankings
-            // can change that, the task waits like one that ran into a limit, and starts on
-            // its own; otherwise the orchestrator hears why and can wait or ask.
-            brigadier_router::Decision::Wait(waiting) => {
-                let waits = waiting.resets_at_ms.is_some()
-                    || waiting.rule.is_some()
-                    || waiting.ranking.is_some();
-                // The model it waits for (the first a reset or a rule change would free).
-                let Some(first) = preview.candidates.first().filter(|_| waits) else {
-                    return Err(Error::Invalid(format!(
-                        "no model can take this task now: {}",
-                        waiting.reason
-                    )));
-                };
-                let route = Route {
-                    choice: ModelChoice {
-                        provider: first.provider,
-                        model: Some(first.model.clone()),
-                        effort: None,
-                        fast: None,
-                        account: None,
+        // A plain worker runs on the CLI, model and effort `brigadier start` named, the CLI's
+        // own default model when it named none: Brigadier routes nothing for it (G18).
+        let plain_choice = extra.plain.as_ref().and(pin.as_ref()).and_then(|pin| {
+            Some(ModelChoice {
+                provider: pin.provider?,
+                model: pin.model.clone(),
+                effort: pin.effort.clone(),
+                fast: None,
+                account: None,
+            })
+        });
+        let (route, wait, trial_slot) = if let Some(choice) = plain_choice {
+            let route = Route {
+                choice,
+                reason: "Started by its session with `brigadier start`.".into(),
+                explanation: None,
+            };
+            (route, None, false)
+        } else {
+            let (preview, trial_slot) = self
+                .preview(&super::routing::Ask {
+                    category,
+                    areas: &areas,
+                    floor,
+                    floor_binds: extra.rerun.is_some(),
+                    needs: needs_of(kind, &attachments, &needs),
+                    pin: pin.clone(),
+                    hold_pin: false,
+                    avoid,
+                    distinct_from,
+                    exclude: &[],
+                    project_id: conversation.project_id.as_ref(),
+                    // Checks of another task's work never go to a model on trial, nor does a rerun
+                    // one tier up.
+                    trial: if gate_link.is_some() || extra.rerun.is_some() {
+                        super::routing::Trial::Never
+                    } else {
+                        super::routing::Trial::Take
                     },
-                    reason: format!("Waits: {}", waiting.reason),
-                    explanation: None,
-                };
-                let wait = QuotaWait {
-                    reason: waiting.reason,
-                    resets_at_ms: waiting.resets_at_ms,
-                    rule: waiting.rule,
-                    ranking: waiting.ranking,
-                    since_ms: now,
-                    messages: Vec::new(),
-                    model: None,
-                    request: None,
-                    first_reset_ms: None,
-                    account: None,
-                };
-                (route, Some(wait))
-            }
+                })
+                .await;
+            let (route, wait) = match preview.decision {
+                brigadier_router::Decision::Run(routed) => {
+                    (super::routing::route_from(routed), None)
+                }
+                // Nothing it may use is available. When a reset or the user's rules and rankings
+                // can change that, the task waits like one that ran into a limit, and starts on
+                // its own; otherwise the orchestrator hears why and can wait or ask.
+                brigadier_router::Decision::Wait(waiting) => {
+                    let waits = waiting.resets_at_ms.is_some()
+                        || waiting.rule.is_some()
+                        || waiting.ranking.is_some();
+                    // The model it waits for (the first a reset or a rule change would free).
+                    let Some(first) = preview.candidates.first().filter(|_| waits) else {
+                        return Err(Error::Invalid(format!(
+                            "no model can take this task now: {}",
+                            waiting.reason
+                        )));
+                    };
+                    let route = Route {
+                        choice: ModelChoice {
+                            provider: first.provider,
+                            model: Some(first.model.clone()),
+                            effort: None,
+                            fast: None,
+                            account: None,
+                        },
+                        reason: format!("Waits: {}", waiting.reason),
+                        explanation: None,
+                    };
+                    let wait = QuotaWait {
+                        reason: waiting.reason,
+                        resets_at_ms: waiting.resets_at_ms,
+                        rule: waiting.rule,
+                        ranking: waiting.ranking,
+                        since_ms: now,
+                        messages: Vec::new(),
+                        model: None,
+                        request: None,
+                        first_reset_ms: None,
+                        account: None,
+                    };
+                    (route, Some(wait))
+                }
+            };
+            (route, wait, trial_slot)
         };
         let waits = wait.is_some();
         let mut route = route;
@@ -1126,6 +1161,9 @@ impl SessionManager {
             _ => None,
         };
         let request_id = match (&subject, plan_request, extra.request) {
+            // A plain worker belongs to its session, never to one of its requests: its turns
+            // hold none of them open.
+            _ if extra.plain.is_some() => None,
             (_, _, Some(request)) => Some(request),
             (Some(subject), _, None) => subject.request_id.clone(),
             (None, Some(request), None) => Some(request),
@@ -1158,7 +1196,10 @@ impl SessionManager {
             title: title.trim().to_owned(),
             kind,
             spec,
-            access: repo_access_for(kind, permission),
+            access: match &extra.plain {
+                Some(plain) => repo_access_for(kind, plain.permission),
+                None => repo_access_for(kind, permission),
+            },
             // A waiting task's first model is recorded when it starts.
             attempts: if waits {
                 Vec::new()
@@ -1218,6 +1259,7 @@ impl SessionManager {
             takeover: None,
             trial_slot: waits && trial_slot,
             rerun: extra.rerun,
+            plain: extra.plain.clone(),
             created_at_ms: now,
             updated_at_ms: now,
         };
@@ -1283,6 +1325,19 @@ impl SessionManager {
             .await?;
         let files = self.worker_files(&task, &workspace.scratch).await;
         drop(fence);
+        // A plain worker's first message is its prompt, as `brigadier start` gave it.
+        if task.plain.is_some() {
+            self.record_plain_workspace(&task).await;
+            return self
+                .launch_worker(
+                    live,
+                    &task,
+                    None,
+                    Origin::New,
+                    TurnInput::with_files(task.spec.clone(), files),
+                )
+                .await;
+        }
         // What the Brain knows about the task, then what the thread already read, go with its
         // first message (SESSION-FIXES-PLAN.md Q6.6, THREAD-PLAN.md Q8 lever 1).
         // A fresh verifier gets none of the build's context: its spec holds all it reads.
@@ -1440,8 +1495,14 @@ impl SessionManager {
             .unwrap_or_default();
         // A writer's new worktree with the repository's setup script has it run before the
         // worker starts (never a reader's, never in a folder the user doesn't trust).
+        // A plain worker in its session's checkout (`--local`) works in a folder that is not
+        // its own: nothing is set up, copied or swept there for it.
+        let plain = task.plain.as_ref();
+        let shared_checkout = plain.is_some_and(|plain| plain.local);
         let setup = match (&workspace.worktree, &origin) {
-            (Some(worktree), Origin::New) if task.kind.writes() && task.attempts.len() <= 1 => {
+            (Some(worktree), Origin::New)
+                if task.kind.writes() && task.attempts.len() <= 1 && !shared_checkout =>
+            {
                 self.repo_trust(&conversation_id) == Some(true) && {
                     let (git, worktree) = (self.git.clone(), worktree.clone());
                     blocking(move || Ok(has_setup(&git, &worktree)))
@@ -1453,7 +1514,7 @@ impl SessionManager {
         };
         // A successor taking the task over finds the worktree's secrets already in place.
         let mut secret_values = match (&workspace.worktree, &origin) {
-            (Some(worktree), Origin::New) if task.attempts.len() <= 1 => {
+            (Some(worktree), Origin::New) if task.attempts.len() <= 1 && !shared_checkout => {
                 secrets::copy_secrets(self, &owner, &workspace.repo, worktree, &secret_files)
                     .await?
             }
@@ -1469,8 +1530,9 @@ impl SessionManager {
         // one shared folder lets a second worker read the first one's prompt from the cache
         // (THREAD-PLAN.md Q8 lever 2). Codex cannot run with a read-only cwd: a read-only
         // Codex worker works from its scratch folder and reads the worktree by path.
+        // A plain worker starts in its worktree, as a CLI started there would.
         let home = match (&workspace.worktree, provider) {
-            (Some(_), ProviderKind::Claude) => {
+            (Some(_), ProviderKind::Claude) if plain.is_none() => {
                 let home = self.worker_home(&conversation_id).await?;
                 Some(home)
             }
@@ -1532,8 +1594,15 @@ impl SessionManager {
         self.prepare_owned_dir(&owner, &test_dir).await?;
         // Its rights in the worktree are those of a worker started there; its start folder
         // and the worktree (added) are writable together or not at all.
-        // A worker gets its session's level.
-        let access = self.permission(&task.conversation_id).access();
+        // A worker gets its session's level; a plain one the level it was started with (Q8),
+        // Ask in a folder the user doesn't trust.
+        let access = match plain {
+            Some(_) if self.repo_trust(&task.conversation_id) == Some(false) => {
+                PermissionLevel::Ask.access()
+            }
+            Some(plain) => plain.permission.access(),
+            None => self.permission(&task.conversation_id).access(),
+        };
         // Once its worktree has the checkout's env files.
         let setup = match (&workspace.worktree, setup) {
             (Some(worktree), true) => Some(
@@ -1571,12 +1640,16 @@ impl SessionManager {
             _ => String::new(),
         };
         // Computer use (a GUI job, and the live look, have its tools loaded from the start).
-        let computer = self
-            .computer_use_kit(
-                &task.id.to_string(),
-                task.kind == TaskKind::Operate || prompts::checks_live(task),
-            )
-            .await;
+        let computer = match plain {
+            Some(_) => None,
+            None => {
+                self.computer_use_kit(
+                    &task.id.to_string(),
+                    task.kind == TaskKind::Operate || prompts::checks_live(task),
+                )
+                .await
+            }
+        };
         // The one live look at the integrated tree, and a change matched to its mockup, are
         // checked live with the computer tools; other UI work with the project's scripted UI
         // checks (SESSION-FIXES-PLAN.md "Computer use", §11).
@@ -1622,6 +1695,8 @@ impl SessionManager {
         let prompt = prompts::worker_system(&native);
         // A new CLI session hears its task first; a resumed or forked one has it already.
         match (&origin, first) {
+            // A plain worker's first message is its prompt alone.
+            (Origin::New, Some(_)) if plain.is_some() => {}
             (Origin::New, Some(first)) => {
                 first.parts.insert(
                     0,
@@ -1645,8 +1720,13 @@ impl SessionManager {
         );
         // B7: the grant is a secret too.
         secret_values.push(worker_grant.clone());
-        let mut mcp_servers =
-            vec![self.brigadier_server(worker_grant.clone(), WORKER_TOOL_TIMEOUT_SECS, true)];
+        // A plain worker reaches Brigadier through `brigadier` only.
+        let mut mcp_servers = match plain {
+            Some(_) => Vec::new(),
+            None => {
+                vec![self.brigadier_server(worker_grant.clone(), WORKER_TOOL_TIMEOUT_SECS, true)]
+            }
+        };
         let mut skill_plugins = Vec::new();
         if let Some(kit) = computer {
             secret_values.push(kit.token);
@@ -1655,31 +1735,55 @@ impl SessionManager {
         }
         // The servers its task names that its agent lacks, the skills its agent doesn't find
         // by itself, and what the user switched off (`integrations`).
-        let shared = self
-            .worker_shared(
-                &conversation_id,
-                &task.integrations,
-                provider,
-                &cwd,
-                workspace.worktree.as_deref(),
-                &worker_grant,
-            )
-            .await;
+        let shared = match plain {
+            // A plain worker has its CLI's own setup, as a thread does; a lean one none of its
+            // servers and only the skills it kept (G23).
+            Some(plain) => super::integrations::Shared {
+                switched_off: match plain.lean {
+                    true => {
+                        self.lean_worker_switched_off(
+                            &conversation_id,
+                            provider,
+                            &cwd,
+                            &plain.skills,
+                        )
+                        .await
+                    }
+                    false => {
+                        self.thread_switched_off(&conversation_id, provider, &cwd)
+                            .await
+                    }
+                },
+                ..Default::default()
+            },
+            None => {
+                self.worker_shared(
+                    &conversation_id,
+                    &task.integrations,
+                    provider,
+                    &cwd,
+                    workspace.worktree.as_deref(),
+                    &worker_grant,
+                )
+                .await
+            }
+        };
         secret_values.extend(shared.secrets);
         mcp_servers.extend(shared.servers);
         skill_plugins.extend(shared.skills);
         // A Claude worker's turn ends only with its report, or rightly waiting (BUILD-PLAN E2).
-        let stop_hook = (task.route.choice.provider == ProviderKind::Claude).then(|| {
-            let grant = self.grants.issue(
-                grant_owner,
-                Role::StopHook {
-                    conversation_id: conversation_id.clone(),
-                    task_id: task.id.clone(),
-                },
-            );
-            secret_values.push(grant.clone());
-            self.stop_hook_command(grant)
-        });
+        let stop_hook = (task.route.choice.provider == ProviderKind::Claude && plain.is_none())
+            .then(|| {
+                let grant = self.grants.issue(
+                    grant_owner,
+                    Role::StopHook {
+                        conversation_id: conversation_id.clone(),
+                        task_id: task.id.clone(),
+                    },
+                );
+                secret_values.push(grant.clone());
+                self.stop_hook_command(grant)
+            });
         let mut env = worker_env(&workspace.scratch);
         env.extend(self.cli_env(&task.id.0, &worker_grant));
         let redactor = secrets::redactor(secret_values);
@@ -1714,7 +1818,7 @@ impl SessionManager {
             // Resumed for follow-ups, fixes and retries.
             ephemeral: false,
             access,
-            append_system_prompt: Some(prompt),
+            append_system_prompt: plain.is_none().then_some(prompt),
             mcp_servers,
             tools: ToolSet::Lean,
             skill_plugins,
@@ -1734,21 +1838,24 @@ impl SessionManager {
             low_priority: true,
             record_to: None,
             redactor: redactor.clone(),
-            owned_cwd: true,
+            owned_cwd: !shared_checkout,
             // The shared worker folder is never one worker's to sweep: ending what runs there
             // when one CLI goes would kill every other Claude worker of the session.
-            sweep_dir: Some(if home.is_some() {
+            sweep_dir: Some(if home.is_some() || shared_checkout {
                 workspace.scratch.clone()
             } else {
                 cwd.clone()
             }),
-            // Workers are handed off, never compacted by their CLI (BUILD-PLAN D2.3).
-            auto_compact: false,
-            allowed_models: Some(allowed_models.clone()),
+            // Workers are handed off, never compacted by their CLI (BUILD-PLAN D2.3); a plain
+            // one compacts as its CLI does.
+            auto_compact: plain.is_some(),
+            // A plain worker's sub-agents run on what its CLI allows (G18).
+            allowed_models: plain.is_none().then(|| allowed_models.clone()),
             omit_ai_coauthors,
             output_hook: None,
             stop_hook,
             deny_tools: None,
+            lean_worker: plain.is_some_and(|plain| plain.lean),
         };
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {
@@ -1993,7 +2100,7 @@ impl SessionManager {
             })
             .await?;
         let from = live.generation().await;
-        if self.worker_over_handoff(live, &task.id).await {
+        if !live.plain && self.worker_over_handoff(live, &task.id).await {
             // Boxed: unboxed it added its 18 KB to every future that can send a worker work.
             Box::pin(self.hand_over(live, &task, from, None, Some(text), Handover::Size)).await?;
         } else {
@@ -2094,6 +2201,11 @@ impl SessionManager {
             .worker(task)
             .join("tmp");
         self.prepare_owned_dir(owner, &scratch).await?;
+        if let Some(plain) = &task.plain {
+            return self
+                .plain_workspace(owner, task, plain, &conversation, repo, scratch)
+                .await;
+        }
         if task.access.repo == RepoAccess::None {
             return Ok(Workspace {
                 repo,
@@ -2865,6 +2977,11 @@ impl SessionManager {
         {
             let manager = self.arc();
             let live = live.clone();
+            if task.plain.is_some() {
+                let exit = exit.unwrap_or_else(|| "its CLI ended".to_owned());
+                self.spawn(async move { manager.plain_gone(&task, &exit).await });
+                return;
+            }
             match live.take_cutoff().await {
                 // Its model was cut off (a limit, a logout, an outage): another takes over.
                 Some(end) => self.spawn(async move { manager.hand_off(&live, end, from).await }),
@@ -2901,6 +3018,11 @@ impl SessionManager {
                     calls,
                 )
                 .await;
+            }
+            // A plain worker's CLI keeps its own context, as it would in a terminal.
+            ProviderEvent::ContextSize { .. } if live.plain => {}
+            ProviderEvent::CompactionStarted { .. } if live.plain => {
+                self.plain_fresh_context(live);
             }
             ProviderEvent::ContextSize {
                 used_tokens,
@@ -3059,6 +3181,12 @@ impl SessionManager {
         let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
             return;
         };
+        if task.plain.is_some() {
+            if !task.state.is_final() {
+                self.plain_turn_ended(live, &task, status).await;
+            }
+            return;
+        }
         if task.state == TaskState::Paused || task.state.is_final() {
             return;
         }
@@ -3244,6 +3372,7 @@ impl SessionManager {
             .open_cli_card(cli, &live.conversation_id, Some(live.id.clone()), request)
             .await
         {
+            Ok(Some(card)) if live.plain => self.plain_needs_input(live, &card, &what),
             Ok(Some(_)) => {}
             Ok(None) => return,
             Err(err) => {
@@ -4213,13 +4342,20 @@ impl SessionManager {
                 false,
             ));
         }
-        let hand_over = !state.busy
+        // A plain worker's message goes as written, to the session its CLI keeps.
+        let words = match live.plain {
+            true => text.clone(),
+            false => format!("Message from {from}:\n{text}"),
+        };
+        let hand_over = !live.plain
+            && !state.busy
             && state.cli.is_some()
             && match state.context {
                 Some(tokens) => self.worker_handoff_due(tokens, state.session_start, state.window),
                 None => false,
             };
-        let restart = !state.busy
+        let restart = !live.plain
+            && !state.busy
             && state.cli.is_some()
             && models
                 .as_ref()
@@ -4237,8 +4373,7 @@ impl SessionManager {
         }
         let Some(cli) = state.cli.clone() else {
             drop(state);
-            self.revive_worker(&live, task, format!("Message from {from}:\n{text}"))
-                .await?;
+            self.revive_worker(&live, task, words).await?;
             return Ok((
                 format!(
                     "task-{} is working on it; a new report will follow.",
@@ -4247,7 +4382,7 @@ impl SessionManager {
                 false,
             ));
         };
-        let input = TurnInput::text(format!("Message from {from}:\n{text}"));
+        let input = TurnInput::text(words);
         // A worker still in the turn that reported is sent back all the same: its next
         // report must be taken, and its end of turn must not finish the task. The task is
         // reopened before that turn can end (the end waits for this lock).
@@ -5100,6 +5235,8 @@ pub(crate) struct TaskExtra {
     /// The catalog ids of the MCP servers it gets besides its agent's own
     /// (`delegate_task`'s `integrations`).
     pub integrations: Vec<String>,
+    /// A plain worker of `brigadier start`, on the CLI the route names.
+    pub plain: Option<crate::work::PlainWorker>,
 }
 
 /// The router's category for a task: design work when it makes designs or images

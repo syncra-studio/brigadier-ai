@@ -223,6 +223,13 @@ pub async fn serve_cli(
                 () = daemon.closing.cancelled() => {
                     CliReply::error(ErrorCode::Unreachable, "Brigadier is quitting")
                 }
+                // `brigadier` sends nothing after its call: anything read means it hung up (a
+                // `brigadier wait` stopped), and its call ends unanswered, so a wait takes no
+                // event nobody reads.
+                _ = reader.read::<serde_json::Value>() => {
+                    tracing::debug!("a brigadier caller hung up before its answer");
+                    return;
+                }
             }
         }
         // A newer `brigadier` than this app, most likely.

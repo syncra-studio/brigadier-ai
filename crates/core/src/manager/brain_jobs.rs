@@ -558,6 +558,7 @@ impl SessionManager {
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
+            lean_worker: false,
         };
         let time = match job.kind {
             BrainJobKind::Skeleton => SKELETON_TIME,

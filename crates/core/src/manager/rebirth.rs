@@ -369,6 +369,7 @@ fn plain_fork_spec(
         output_hook: None,
         stop_hook: None,
         deny_tools: None,
+        lean_worker: false,
     }
 }
 

@@ -264,6 +264,62 @@ fn sample(request: &CliRequest) -> CliReply {
             ],
             has_more: true,
         }),
+        CliRequest::Start(start) => CliReply::ok(&StartOutput {
+            worker: WorkerRow {
+                state: WorkerState::Starting,
+                changes: None,
+                ..worker_row()
+            },
+            permission: start.permission.unwrap_or(Permission::AcceptEdits),
+            base: (!start.local).then(|| "brigadier/0000c0de/session".into()),
+        }),
+        CliRequest::Send { id, answer, .. } => CliReply::ok(&SendOutput {
+            id: id.clone(),
+            queued: answer.is_none(),
+            answered: *answer,
+        }),
+        CliRequest::Wait { timeout_secs, .. } if timeout_secs.is_some() => {
+            CliReply::ok(&WaitOutput {
+                events: Vec::new(),
+                timed_out: true,
+            })
+        }
+        CliRequest::Wait { .. } => CliReply::ok(&WaitOutput {
+            events: vec![
+                WaitEvent {
+                    id: "a1b2c3d4".into(),
+                    event: EventKind::TurnEnded,
+                    message: Some("Wrote the file.".into()),
+                    status: Some(TurnEnd::Completed),
+                    asks: None,
+                    resets_at_ms: None,
+                    at_ms: 3,
+                },
+                WaitEvent {
+                    id: "e5f6a7b8".into(),
+                    event: EventKind::NeedsInput,
+                    message: None,
+                    status: None,
+                    asks: Some("rm -rf build".into()),
+                    resets_at_ms: None,
+                    at_ms: 4,
+                },
+                WaitEvent {
+                    id: "e5f6a7b8".into(),
+                    event: EventKind::UsageLimit,
+                    message: Some("weekly limit".into()),
+                    status: None,
+                    asks: None,
+                    resets_at_ms: Some(5),
+                    at_ms: 5,
+                },
+            ],
+            timed_out: false,
+        }),
+        CliRequest::Close { id } => CliReply::ok(&CloseOutput {
+            id: id.clone(),
+            closed: true,
+        }),
     }
 }
 
@@ -327,7 +383,13 @@ fn help_lists_every_subcommand_and_every_schema_has_one() {
     let read = stdout(&brigadier(None, None, &["read", "--help"]));
     assert!(read.contains("Usage: brigadier read <id> [--last N] [--screen] [--json]"));
     let start = stdout(&brigadier(None, None, &["help", "start"]));
-    assert!(start.contains("Not available yet"), "{start}");
+    assert!(!start.contains("Not available yet"), "{start}");
+    assert!(
+        start.contains("--lean") && start.contains("--skill NAME"),
+        "{start}"
+    );
+    let models = stdout(&brigadier(None, None, &["help", "models"]));
+    assert!(models.contains("Not available yet"), "{models}");
 }
 
 #[test]
@@ -341,6 +403,13 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["read", "0000", "--json"],
         &["read", "0000", "--last", "2", "--json"],
         &["read", "0000", "--screen", "--json"],
+        &["start", "--json", "write", "a", "file"],
+        &["start", "--local", "--permission", "ask", "--json", "go"],
+        &["send", "a1b2", "keep", "going", "--json"],
+        &["send", "a1b2", "--allow", "--json"],
+        &["wait", "--json"],
+        &["wait", "a1b2", "--timeout", "1", "--json"],
+        &["close", "a1b2", "--json"],
     ];
     let daemon = stand_in_daemon(&dir.0, read_calls.len() + 1, sample);
     for words in read_calls {
@@ -359,9 +428,7 @@ fn every_subcommands_json_output_fits_its_schema() {
     for command in COMMANDS.iter().filter(|c| !c.available) {
         let mut words = vec![command.name];
         words.extend(match command.name {
-            "send" => &["a1b2", "hello"][..],
-            "close" => &["a1b2"],
-            "start" | "ask" => &["do it"],
+            "ask" => &["do it"][..],
             "preview" => &["log"],
             "browser" => &["read"],
             "app" => &["state"],
@@ -379,7 +446,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 3, sample);
+    let daemon = stand_in_daemon(&dir.0, 7, sample);
     let sessions = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["sessions"]));
     assert!(sessions.starts_with("brigadier-ai\nID"), "{sessions}");
     assert!(sessions.contains("Strip-down (this session)"), "{sessions}");
@@ -392,6 +459,28 @@ fn text_output_reads_well() {
         &["read", "0000", "--last", "2"],
     ));
     assert!(read.contains("$ cargo test\n  ok\n  (exit 0)"), "{read}");
+    let start = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["start", "go"]));
+    assert!(
+        start.starts_with("a1b2c3d4\nStarted worker 2 (codex, codex-model-1), on "),
+        "{start}"
+    );
+    let wait = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["wait"]));
+    assert!(
+        wait.starts_with("a1b2c3d4 turn-ended (completed)\nWrote the file.\n"),
+        "{wait}"
+    );
+    assert!(
+        wait.contains("e5f6a7b8 needs-input\nasks: rm -rf build\n"),
+        "{wait}"
+    );
+    let send = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &["send", "e5f6", "--deny"],
+    ));
+    assert_eq!(send, "Denied what e5f6 asked.\n");
+    let close = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["close", "a1b2"]));
+    assert_eq!(close, "Closed a1b2.\n");
     daemon.join().unwrap();
 }
 
