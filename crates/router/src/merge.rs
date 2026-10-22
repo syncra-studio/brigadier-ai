@@ -12,8 +12,7 @@
 //!   ±2 of the unrated 5);
 //! - **Unknown** otherwise: tier `unrated`, strength 5 everywhere.
 //!
-//! Expensive models (Fable, Mythos) are listed but `excluded` from the automatic ranking: they
-//! run only where the user picks one by hand; researched and unknown ones are on trial until they
+//! Researched and unknown models are on trial until they
 //! have [`TRIAL_OUTCOMES`] outcomes.
 
 use std::collections::BTreeMap;
@@ -127,11 +126,6 @@ fn merge_one(
         trial: None,
         research: None,
     };
-    if table::is_expensive(info) {
-        model.excluded = true;
-        model.strengths.clear();
-        return model;
-    }
     let resolved = info.resolved.as_deref();
     if let Some((entry, status)) = match_entry(registry, provider, &info.id, resolved) {
         apply_entry(&mut model, entry, status, &info.input_modalities);
@@ -331,11 +325,11 @@ fn count_for(
         .sum()
 }
 
-/// A CLI's effort levels within the bounds (`low`..`high`), in its order.
+/// The CLI's recognized effort levels, in its own order.
 fn bounded_efforts(efforts: &[String]) -> Vec<String> {
     efforts
         .iter()
-        .filter(|effort| matches!(effort.as_str(), "low" | "medium" | "high"))
+        .filter(|effort| table::rank(effort).is_some())
         .cloned()
         .collect()
 }

@@ -139,6 +139,14 @@ fn worker_row() -> WorkerRow {
 /// and absent across the rows.
 fn sample(request: &CliRequest) -> CliReply {
     match request {
+        CliRequest::Models => CliReply::ok(&brigadier_cli::models::ModelsOutput {
+            models: vec![],
+            accounts: vec![],
+            guidance: vec![],
+            rules: vec![brigadier_cli::models::Rule {
+                rule: "forbid: fable".into(),
+            }],
+        }),
         CliRequest::Sessions => CliReply::ok(&SessionsOutput {
             project: Some("brigadier-ai".into()),
             sessions: vec![
@@ -411,7 +419,7 @@ fn help_lists_every_subcommand_and_every_schema_has_one() {
         "{start}"
     );
     let models = stdout(&brigadier(None, None, &["help", "models"]));
-    assert!(models.contains("Not available yet"), "{models}");
+    assert!(!models.contains("Not available yet"), "{models}");
 }
 
 #[test]
@@ -477,7 +485,10 @@ fn every_subcommands_json_output_fits_its_schema() {
             "text.",
         ],
     ];
-    let daemon = stand_in_daemon(&dir.0, read_calls.len() + 1, sample);
+    let daemon = stand_in_daemon(&dir.0, read_calls.len() + 2, sample);
+    let output = brigadier(Some(&dir.0), Some(GRANT), &["models", "--json"]);
+    assert!(output.status.success());
+    assert_fits(schema_of("models"), &output, "models");
     for words in read_calls {
         let output = brigadier(Some(&dir.0), Some(GRANT), words);
         assert!(output.status.success(), "{words:?}: {output:?}");
@@ -504,7 +515,13 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 10, sample);
+    let daemon = stand_in_daemon(&dir.0, 11, sample);
+    let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
+    assert!(
+        models.contains("Your rules") && models.contains("forbid: fable"),
+        "{models}"
+    );
+    assert!(models.lines().count() <= 25);
     let sessions = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["sessions"]));
     assert!(sessions.starts_with("brigadier-ai\nID"), "{sessions}");
     assert!(sessions.contains("Strip-down (this session)"), "{sessions}");

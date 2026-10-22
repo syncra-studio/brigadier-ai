@@ -364,3 +364,104 @@ pub fn saved_images(
 pub fn ask(output: &AskOutput) -> String {
     format!("{}\n", output.answer.trim_end())
 }
+
+/// A compact advice view. `--json` carries every row when the terminal summary is abbreviated.
+pub fn models(output: &crate::models::ModelsOutput) -> String {
+    let mut lines = vec!["Models and usage (advice; only your rules restrict starts)".to_owned()];
+    for agent in [
+        crate::protocol::Agent::Claude,
+        crate::protocol::Agent::Codex,
+    ] {
+        let models: Vec<_> = output
+            .models
+            .iter()
+            .filter(|m| m.agent == agent)
+            .map(|m| {
+                format!(
+                    "{} [{}] age {}s",
+                    m.model,
+                    m.efforts.join("/"),
+                    m.age_s.map_or_else(|| "?".into(), |age| age.to_string())
+                )
+            })
+            .collect();
+        lines.push(format!(
+            "{}: {}",
+            agent.word(),
+            if models.is_empty() {
+                "not reported".into()
+            } else {
+                models.join(", ")
+            }
+        ));
+    }
+    for account in &output.accounts {
+        let usage: Vec<_> = account
+            .usage
+            .iter()
+            .map(|w| {
+                format!(
+                    "{} {}% reset {}{}{}",
+                    w.window,
+                    w.used_percent,
+                    w.resets_at_ms
+                        .map_or_else(|| "unknown".into(), |at| at.to_string()),
+                    if w.pooled { " pooled" } else { "" },
+                    w.runway_ms.map_or_else(String::new, |ms| format!(
+                        " runway {}m{}",
+                        ms / 60_000,
+                        if w.estimate_rough {
+                            " (estimate rough)"
+                        } else {
+                            ""
+                        }
+                    ))
+                )
+            })
+            .collect();
+        lines.push(format!(
+            "{} / {}{}{}: {} · {} · age {}s",
+            account.agent.word(),
+            if account.name.is_empty() {
+                &account.id
+            } else {
+                &account.name
+            },
+            if account.current { " (current)" } else { "" },
+            if account.you { " (you)" } else { "" },
+            account.fit,
+            if usage.is_empty() {
+                "usage unknown".into()
+            } else {
+                usage.join("; ")
+            },
+            account
+                .age_s
+                .map_or_else(|| "?".into(), |age| age.to_string())
+        ));
+    }
+    lines.push("Guidance:".into());
+    for g in &output.guidance {
+        lines.push(format!(
+            "{}: {} / {} / {} — {} ({})",
+            g.work,
+            g.agent.word(),
+            g.model,
+            g.effort.as_deref().unwrap_or("default"),
+            g.reason,
+            g.source
+        ));
+    }
+    lines.push("Your rules (~/.brigadier/models.md):".into());
+    for rule in &output.rules {
+        lines.push(format!("  {}", rule.rule));
+    }
+    if output.rules.is_empty() {
+        lines.push("  None.".into());
+    }
+    if lines.len() > 25 {
+        lines.truncate(24);
+        lines.push("More rows: brigadier models --json".into());
+    }
+    lines.join("\n") + "\n"
+}

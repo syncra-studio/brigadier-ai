@@ -258,8 +258,6 @@ fn category_effort(category: TaskCategory) -> Option<&'static str> {
 /// Why a model can't take the task, in the order they are checked.
 #[derive(Debug, Clone, PartialEq)]
 enum Block {
-    /// An expensive model (Fable, Mythos) the user didn't name by hand.
-    HandOnly(String),
     /// The registry keeps it for other categories (its `only`).
     Role(String),
     /// It (or its provider) just failed on this task.
@@ -286,8 +284,7 @@ enum Block {
 impl Block {
     fn why(&self) -> &str {
         match self {
-            Block::HandOnly(why)
-            | Block::Role(why)
+            Block::Role(why)
             | Block::Excluded(why)
             | Block::Rule(why)
             | Block::Needs(why)
@@ -382,7 +379,7 @@ pub fn moved_by_limit(query: &Query) -> Option<ProviderKind> {
     (unlimited.provider != routed.provider).then_some(unlimited.provider)
 }
 
-/// Every model that may take the task, by the same checks [`decide`] runs: no Fable, a login
+/// Every model that may take the task, by the same checks [`decide`] runs: a login
 /// and no confirmed limit, not just failed on it, the user's rules and rankings, its needs and
 /// quality floor, a binding pin, and for reviews the author's vendor or model. The model
 /// [`decide`] picks is always among them; empty when the task would wait. What the task's own
@@ -431,15 +428,10 @@ fn assessed<'q>(query: &'q Query) -> Assessed<'q> {
     let mut candidates = candidates(query);
     if let Some(ranking) = ranking {
         for candidate in &mut candidates {
-            // A vendor place never takes an expensive model: only its own place does.
             candidate.listed = ranking
                 .entries
                 .iter()
-                .position(|entry| {
-                    targets(&entry.target, &candidate.model, query.registry)
-                        && !(candidate.model.excluded
-                            && matches!(entry.target, OverrideTarget::Vendor { .. }))
-                })
+                .position(|entry| targets(&entry.target, &candidate.model, query.registry))
                 .map(|index| index as u32 + 1);
         }
     }
@@ -978,10 +970,7 @@ fn manual_pick(
             .filter(|i| targets(&entry.target, &candidates[*i].model, query.registry))
             .collect();
         let pick = match &entry.target {
-            OverrideTarget::Vendor { .. } => ranked
-                .iter()
-                .copied()
-                .find(|i| members.contains(i) && !candidates[*i].model.excluded),
+            OverrideTarget::Vendor { .. } => ranked.iter().copied().find(|i| members.contains(i)),
             OverrideTarget::Family { .. } => {
                 // Stable: the CLI's own order among the current models, then the older ones.
                 members.sort_by_key(|i| candidates[*i].model.legacy);
@@ -1023,7 +1012,6 @@ fn manual_pick(
                         .iter()
                         .copied()
                         .filter(|i| !candidates[*i].model.legacy)
-                        .filter(|i| !matches!(candidates[*i].block, Some(Block::HandOnly(_))))
                         .max_by(|a, b| {
                             (candidates[*a].score + candidates[*a].penalty)
                                 .total_cmp(&(candidates[*b].score + candidates[*b].penalty))
@@ -1133,7 +1121,6 @@ fn listing(
     let mut blocked: Vec<usize> = (0..candidates.len())
         .filter(|i| !candidates[*i].eligible())
         .filter(|i| !candidates[*i].model.legacy || candidates[*i].listed.is_some())
-        .filter(|i| !matches!(candidates[*i].block, Some(Block::HandOnly(_))))
         .collect();
     blocked.sort_by(|a, b| {
         let (a, b) = (&candidates[*a], &candidates[*b]);
@@ -1210,7 +1197,7 @@ fn heat_of(query: &Query, model: &MergedModel) -> Option<Heat> {
 }
 
 /// Every model routing may consider: the merged catalog (duplicate aliases of one curated
-/// model left out; expensive models are kept for a user who names one), plus the registry's
+/// model left out), plus the registry's
 /// models for a logged-in provider whose list isn't loaded yet.
 fn candidates<'q>(query: &'q Query) -> Vec<Candidate<'q>> {
     let mut models: Vec<(Cow<'q, MergedModel>, bool)> = Vec::new();
@@ -1300,13 +1287,8 @@ fn assess<'q>(
     candidate.trial =
         on_trial && query.trial_slot && allows_trials(query.category) && candidate.listed.is_none();
 
-    // An expensive model runs only where the user named it by hand, and then as ranked.
-    let named = model.excluded && named_by_hand(&model, query, rules, ranking);
-    let block = if model.excluded && !named {
-        Some(Block::HandOnly(
-            "an expensive model: Brigadier uses it only when you pick it".to_owned(),
-        ))
-    } else if let Some(only) = model
+    let named = named_by_hand(&model, query, rules, ranking);
+    let block = if let Some(only) = model
         .only
         .as_ref()
         .filter(|only| !only.contains_key(&query.category))
@@ -1704,12 +1686,6 @@ fn pinned(
     notes: &mut Vec<String>,
 ) -> Option<usize> {
     let wanted = pin.model.as_deref()?.trim();
-    if table::names_expensive(wanted) && !pin.by_user {
-        notes.push(format!(
-            "{wanted} was asked for, but Brigadier uses expensive models only when you pick one"
-        ));
-        return None;
-    }
     let found = find_named(query, candidates, pin.provider, wanted);
     match found {
         Some(index) if candidates[index].eligible() => Some(index),
@@ -1811,7 +1787,6 @@ fn provider_block(candidates: &[Candidate], provider: ProviderKind) -> String {
             Block::Limit { .. } | Block::Unavailable(_) => 3,
             Block::Author(_) | Block::Excluded(_) | Block::Rule(_) | Block::Pinned(_) => 2,
             Block::Floor(_) | Block::Needs(_) | Block::Role(_) => 1,
-            Block::HandOnly(_) => 0,
         })
         .map_or_else(
             || format!("{} has no models listed", name(provider)),
@@ -1820,7 +1795,7 @@ fn provider_block(candidates: &[Candidate], provider: ProviderKind) -> String {
 }
 
 /// The effort: the ranked place's, else the pin's (the thread names it for the job, or the
-/// user), else the registry's for this category, fitted to the model and never above `high`.
+/// user), else the registry's for this category, fitted to the model's reported efforts.
 /// Then the model family's floor for the category applies ([`effort_floor`], BUILD-PLAN
 /// D1.7): the router never runs a model below it, unless the user's own list (a manual
 /// ranking) set the effort. `ranked`: the ranked place's effort, and whether the user's list
@@ -2158,7 +2133,6 @@ fn alternatives(
     let mut blocked: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| !c.eligible() && !c.model.legacy)
-        .filter(|c| !matches!(c.block, Some(Block::HandOnly(_))))
         .collect();
     blocked.sort_by(|a, b| unpenalized(b).total_cmp(&unpenalized(a)));
     order.extend(runners.first());
@@ -3211,7 +3185,7 @@ mod tests {
     }
 
     /// Haiku 5.5 takes no other kind of work, whatever asks for it (a pin, a prefer rule, a
-    /// manual ranking), and Fable takes none at all.
+    /// manual ranking), and unrated models keep their trial status.
     #[test]
     fn haiku_5_5_is_never_chosen_or_allowed_outside_operating_apps() {
         let registry = Registry::bundled();
@@ -3313,117 +3287,29 @@ mod tests {
         }
     }
 
-    /// Fable and Mythos never run on a score, but do where the user names one by hand: a model
-    /// place in their order, a family rule or a pin they chose. A vendor place, or a pin the
-    /// orchestrator set, still doesn't pick one.
+    /// Model family names introduce no Brigadier restriction, even for a session's pin.
     #[test]
-    fn an_expensive_model_runs_only_when_you_pick_it() {
+    fn model_families_have_no_builtin_ban() {
         let registry = Registry::bundled();
         let mut models = catalog(&registry);
-        models.extend(crate::merge(
-            &registry,
-            &[(
-                ProviderKind::Claude,
-                &[info("claude-mythos-5", "Mythos 5", None)],
-            )],
-            &[],
-            &[],
-        ));
-        assert!(models.iter().filter(|m| m.excluded).count() == 2);
-        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
-            provider,
+        for model in &mut models {
+            model.tier = QualityTier::Frontier;
+            model.status = ModelStatus::Curated;
+            model.trial = None;
+        }
+        assert!(models.iter().all(|m| !m.excluded));
+        let providers = [ProviderState {
+            provider: ProviderKind::Claude,
             logged_in: true,
             quota: None,
-        });
-        let mut plain = query(&registry, &models, &both);
-        plain.category = TaskCategory::Implement;
-        plain.floor = default_floor(TaskCategory::Implement);
-        let expensive = |route: &Routed| table::names_expensive(&route.model);
-        assert!(!expensive(&routed(&plain)));
-        assert!(
-            preview(&plain)
-                .candidates
-                .iter()
-                .all(|c| !table::names_expensive(&c.model))
-        );
-
-        let ranking = |target: OverrideTarget| {
-            [Ranking {
-                id: "manual".into(),
-                category: TaskCategory::Implement,
-                areas: vec![],
-                project_id: None,
-                manual: true,
-                only: false,
-                updated_at_ms: 0,
-                entries: vec![crate::RankedEntry {
-                    target,
-                    effort: None,
-                }],
-            }]
-        };
-        let fable = ranking(OverrideTarget::Model {
-            provider: ProviderKind::Claude,
-            id: "claude-fable-5-1[1m]".into(),
-        });
-        let mut ranked = plain.clone();
-        ranked.rankings = &fable;
-        assert_eq!(routed(&ranked).model, "claude-fable-5-1[1m]");
-        let vendor = ranking(OverrideTarget::Vendor {
-            provider: ProviderKind::Claude,
-        });
-        ranked.rankings = &vendor;
-        assert!(!expensive(&routed(&ranked)));
-
-        let prefer = [rule(
-            OverrideEffect::Prefer,
-            OverrideTarget::Family {
-                provider: ProviderKind::Claude,
-                family: "mythos".into(),
-            },
-        )];
-        let mut preferred = plain.clone();
-        preferred.overrides = &prefer;
-        assert_eq!(routed(&preferred).model, "claude-mythos-5");
-
-        let mut pinned = plain.clone();
-        pinned.category = TaskCategory::GitText;
-        pinned.floor = default_floor(TaskCategory::GitText);
-        pinned.pin = Some(Pin {
-            model: Some("claude-mythos-5".into()),
+        }];
+        let mut q = query(&registry, &models, &providers);
+        q.pin = Some(Pin {
+            provider: Some(ProviderKind::Claude),
+            model: Some("claude-fable-5-1[1m]".into()),
             ..Pin::default()
         });
-        let route = routed(&pinned);
-        assert!(!expensive(&route));
-        assert!(
-            route.reason.contains("only when you pick one"),
-            "{}",
-            route.reason
-        );
-        pinned.pin.as_mut().unwrap().by_user = true;
-        assert_eq!(routed(&pinned).model, "claude-mythos-5");
-        // A family name picks it as it picks any model.
-        pinned.pin.as_mut().unwrap().model = Some("mythos".into());
-        assert_eq!(routed(&pinned).model, "claude-mythos-5");
-
-        // Named second, after a vendor place: the vendor place doesn't take it.
-        let mut fallback = ranking(OverrideTarget::Vendor {
-            provider: ProviderKind::Claude,
-        });
-        fallback[0].category = TaskCategory::GitText;
-        fallback[0].entries.push(crate::RankedEntry {
-            target: OverrideTarget::Model {
-                provider: ProviderKind::Claude,
-                id: "claude-mythos-5".into(),
-            },
-            effort: None,
-        });
-        let mut ranked = plain.clone();
-        ranked.category = TaskCategory::GitText;
-        ranked.floor = default_floor(TaskCategory::GitText);
-        ranked.rankings = &fallback;
-        let route = routed(&ranked);
-        assert!(!expensive(&route), "{}", route.model);
+        assert_eq!(routed(&q).model, "claude-fable-5-1[1m]");
     }
 
     /// Providers, rules, models that just failed and the author under review.
@@ -3435,7 +3321,7 @@ mod tests {
     );
 
     #[test]
-    fn eligible_is_what_decide_may_pick_and_never_fable() {
+    fn eligible_is_what_decide_may_pick() {
         let registry = Registry::bundled();
         let models = catalog(&registry);
         let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
@@ -3510,18 +3396,6 @@ mod tests {
                     .iter()
                     .map(|model| (model.provider, model.id.clone()))
                     .collect();
-                for model in &eligible {
-                    for name in [Some(&model.id), Some(&model.display_name)]
-                        .into_iter()
-                        .chain([model.resolved.as_ref()])
-                        .flatten()
-                    {
-                        assert!(
-                            !table::names_expensive(name),
-                            "{category:?}: {name} is Fable"
-                        );
-                    }
-                }
                 let preview = preview(&query);
                 // Exactly the models the preview found able to run.
                 let able: Vec<(ProviderKind, String)> = preview

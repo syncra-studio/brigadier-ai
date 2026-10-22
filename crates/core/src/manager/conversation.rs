@@ -3039,7 +3039,7 @@ impl SessionManager {
             sweep_dir: Some(dir.clone()),
             // An orchestrator is reborn, never compacted.
             auto_compact: conv.kind == ConversationKind::Chat,
-            allowed_models: None,
+            allowed_models: self.rules_models(choice.provider)?,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook,
             stop_hook: None,

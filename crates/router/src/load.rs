@@ -7,8 +7,7 @@
 //!   it has). Within a version, names this app doesn't know (a modality, a capability, a task
 //!   category or area) are dropped where they appear; everything else must parse.
 //! - **Bounds**, enforced here whatever the data says: entries for a CLI Brigadier doesn't drive
-//!   and entries naming an expensive model (Fable, Mythos) are dropped; efforts keep only `low`, `medium` and `high`
-//!   (a default above `high` becomes `high`, one below `low` becomes `low`); strengths are
+//!   are dropped; recognized effort names are preserved; strengths are
 //!   clamped to 0–10 and area modifiers to ±2; a context window outside
 //!   [`MIN_CONTEXT_WINDOW`]..=[`MAX_CONTEXT_WINDOW`] counts as unknown; a capability is kept only
 //!   if the CLI's adapter implements it (Claude: web search; Codex: web search and image
@@ -43,8 +42,10 @@ pub const MAX_STRENGTH: f64 = 10.0;
 /// Area modifiers move a category strength by at most this much either way.
 pub const MAX_AREA_MODIFIER: f64 = 2.0;
 
-/// The effort levels a registry may name, weakest first (never above `high`).
-const EFFORTS: [&str; 3] = ["low", "medium", "high"];
+/// Recognized effort names; restrictions belong to the user's model rules.
+const EFFORTS: [&str; 8] = [
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
 
 const BUNDLED: &str = include_str!("../../../registry/models.json");
 
@@ -292,13 +293,6 @@ fn bound(mut registry: Registry, adjustments: &mut Vec<String>) -> Result<Regist
             ));
             continue;
         };
-        if names_expensive(&model) {
-            adjustments.push(format!(
-                "{}: skipped, expensive models are never rated or routed to automatically",
-                model.key
-            ));
-            continue;
-        }
         kept.push(bound_model(model, provider, adjustments)?);
     }
     if kept.is_empty() {
@@ -326,20 +320,6 @@ fn bound(mut registry: Registry, adjustments: &mut Vec<String>) -> Result<Regist
     }
     registry.models = kept;
     Ok(registry)
-}
-
-fn names_expensive(model: &RegistryModel) -> bool {
-    table::names_expensive(&model.key)
-        || model
-            .matches
-            .ids
-            .iter()
-            .any(|id| table::names_expensive(id))
-        || model
-            .matches
-            .family
-            .as_deref()
-            .is_some_and(table::names_expensive)
 }
 
 fn bound_model(
@@ -473,18 +453,12 @@ fn dedup<T: PartialEq + Copy>(items: &mut Vec<T>) {
     });
 }
 
-/// An effort a registry names, fitted into `low`..`high`; `None` for a level it doesn't know.
+/// An effort a registry names; `None` for a level it does not know.
 pub(crate) fn clamp_effort(effort: &str) -> Option<&'static str> {
-    let rank = table::rank(effort)?;
-    let low = table::rank("low")?;
-    let high = table::rank("high")?;
-    Some(if rank <= low {
-        "low"
-    } else if rank >= high {
-        "high"
-    } else {
-        "medium"
-    })
+    EFFORTS
+        .iter()
+        .copied()
+        .find(|name| effort.eq_ignore_ascii_case(name))
 }
 
 fn is_date(text: &str) -> bool {

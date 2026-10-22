@@ -1,0 +1,60 @@
+//! The model advice view; none of its guidance is an enforcement list.
+use crate::protocol::Agent;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsOutput {
+    pub models: Vec<Model>,
+    pub accounts: Vec<Account>,
+    pub guidance: Vec<Guidance>,
+    pub rules: Vec<Rule>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Model {
+    pub agent: Agent,
+    pub model: String,
+    pub available: bool,
+    pub efforts: Vec<String>,
+    pub age_s: Option<i64>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Account {
+    pub id: String,
+    pub name: String,
+    pub agent: Agent,
+    pub current: bool,
+    pub you: bool,
+    pub logged_in: bool,
+    pub age_s: Option<i64>,
+    pub fit: String,
+    pub usage: Vec<Usage>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    pub window: String,
+    pub used_percent: f64,
+    pub resets_at_ms: Option<i64>,
+    pub model: Option<String>,
+    pub bucket: Option<String>,
+    pub pooled: bool,
+    pub runway_ms: Option<i64>,
+    pub estimate_rough: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Guidance {
+    pub work: String,
+    pub agent: Agent,
+    pub model: String,
+    pub effort: Option<String>,
+    pub reason: String,
+    pub source: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Rule {
+    pub rule: String,
+}

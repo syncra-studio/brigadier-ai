@@ -444,7 +444,7 @@ pub const COMMANDS: &[Command] = &[
         details: "What each CLI reports, usage and reset times per account, the shipped \
                   guidance and the user's own rules, in one view.",
         args: &[],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/models.schema.json"),
     },
 ];

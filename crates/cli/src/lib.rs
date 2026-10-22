@@ -13,6 +13,7 @@
 pub mod args;
 pub mod client;
 pub mod commands;
+pub mod models;
 pub mod protocol;
 pub mod render;
 pub mod schema;
@@ -101,6 +102,7 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
     };
     let rendered = match command.name {
         "sessions" => present(output, json, render::sessions),
+        "models" => present(output, json, render::models),
         "workers" => present(output, json, render::workers),
         "show" => present(output, json, render::show),
         "read" => present(output, json, render::read),

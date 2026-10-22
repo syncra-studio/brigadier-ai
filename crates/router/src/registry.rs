@@ -3,7 +3,7 @@
 //!
 //! The registry is data, not policy. It may set a model's tier, strengths, context window,
 //! efforts and modalities, within bounds enforced when it is read; it never beats the user's
-//! overrides or the hard rules (no expensive models, efforts at most `high`, only CLIs Brigadier
+//! overrides or adapter capabilities (only CLIs Brigadier
 //! drives, only capabilities their adapters implement).
 
 use std::collections::BTreeMap;
@@ -91,7 +91,7 @@ pub struct RegistryModel {
     /// apps on screen) meets that job's floor and is never chosen for anything else.
     #[serde(default)]
     pub only: Option<BTreeMap<TaskCategory, QualityTier>>,
-    /// Effort levels it accepts, lowest first. Clamped to `low`..`high` when read.
+    /// Recognized effort levels it accepts, lowest first.
     #[serde(default)]
     pub efforts: Vec<String>,
     #[serde(default)]
@@ -230,7 +230,7 @@ pub struct MergedModel {
     pub modalities: Modalities,
     /// An older model the CLI still lists beside a newer one.
     pub legacy: bool,
-    /// Expensive (Fable, Mythos): never routed to unless the user names it by hand.
+    /// Retained in the usage-view wire shape; model families are no longer excluded.
     pub excluded: bool,
     pub trial: Option<TrialState>,
     pub research: Option<ResearchNote>,

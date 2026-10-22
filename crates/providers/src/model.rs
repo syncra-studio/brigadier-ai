@@ -1376,7 +1376,7 @@ pub struct SessionSpec {
     /// cannot be, so its limit is raised as far as Codex allows (90% of the window).
     pub auto_compact: bool,
     /// The models the session may hand work to through the CLI's own sub-agents; `None`: no
-    /// limit (raw sessions, orchestrators, Chats). Claude allows exactly these, or runs without
+    /// limit. The user's model rules determine this for threads and workers. Claude allows these, or runs without
     /// its Agent tool when it can't; Codex runs without sub-agents.
     pub allowed_models: Option<AllowedModels>,
     /// The CLI leaves Co-authored-by trailers that name an AI out of the commits it writes
@@ -1400,16 +1400,13 @@ pub struct SessionSpec {
     pub lean_worker: bool,
 }
 
-/// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for
-/// its task, in its CLI's exact model ids.
+/// The models a session's native subagents may run on, derived only from the user's model
+/// rules file and the CLI's own catalog.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AllowedModels {
-    /// Exact model ids (`claude-opus-5-5`, never an alias such as `opus`), the session's own
-    /// model among them. Empty when its own model has no exact id: then no sub-agents at all.
+    /// Allowed CLI ids and their reported resolutions. Empty means no allowed subagents.
     pub ids: Vec<String>,
-    /// Every exact id of the CLI's models Brigadier knows of that the session may not use (its
-    /// list, Fable and hidden models included, and the registry's), a context variant kept
-    /// apart (`claude-opus-5-5[1m]`): what an allowed id must not also admit.
+    /// CLI ids forbidden by the user's file: what an allowed prefix must not also admit.
     pub outside: Vec<String>,
 }
 

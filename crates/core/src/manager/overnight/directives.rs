@@ -1,7 +1,7 @@
 //! Reading the restrictions Brigadier enforces from the user's words (PLAN.md §10.4).
 //!
 //! Only the deadline, which phases run and the worker cap are executable; quality settings
-//! (effort, Fable, hand-off size) are listed as ignored, and every other word is Rules. The
+//! (hand-off size) are listed as ignored, and every other word is Rules. The
 //! parser is deterministic, takes the current time and time zone as inputs, and reads only
 //! the user's own prose: code, block quotes and quoted text are skipped, so a deadline inside
 //! an example never becomes one.
@@ -548,18 +548,6 @@ fn word(tokens: &[Token], i: usize) -> &str {
     tokens.get(i).map_or("", |token| token.text.as_str())
 }
 
-/// Whether the word at `i` is ruled out by the words before it: "never Fable", "no Fable",
-/// "don't use Fable", "without Fable".
-fn negated(tokens: &[Token], i: usize) -> bool {
-    const NOT: &[&str] = &[
-        "never", "no", "not", "without", "don't", "don’t", "dont", "avoid", "except",
-    ];
-    let before = |back: usize| i.checked_sub(back).map_or("", |at| word(tokens, at));
-    NOT.contains(&before(1))
-        || (matches!(before(1), "use" | "using" | "pick" | "run" | "any")
-            && NOT.contains(&before(2)))
-}
-
 /// The restriction starting at token `i`, if one does.
 fn read_at(tokens: &[Token], i: usize, clock: &Clock) -> Option<Hit> {
     let hit = |kind, value, end: usize| {
@@ -636,33 +624,6 @@ fn read_at(tokens: &[Token], i: usize, clock: &Clock) -> Option<Hit> {
             let (count, end) = read_workers(tokens, i + 3)?;
             hit(DirectiveKind::MaxWorkers, Value::Max(count), end)
         }
-        "effort" => {
-            let at = if matches!(word(tokens, i + 1), "at" | "to") {
-                i + 2
-            } else {
-                i + 1
-            };
-            let level = word(tokens, at);
-            effort_level(level)?;
-            hit(
-                DirectiveKind::Ignored,
-                Value::Ignored(format!("effort {level}")),
-                at + 1,
-            )
-        }
-        level if effort_level(level).is_some() && word(tokens, i + 1) == "effort" => hit(
-            DirectiveKind::Ignored,
-            Value::Ignored(format!("effort {level}")),
-            i + 2,
-        ),
-        // "Never Fable" is a rule Brigadier already keeps: it stays in the Rules, not
-        // "Ignored".
-        "fable" if negated(tokens, i) => None,
-        "fable" => hit(
-            DirectiveKind::Ignored,
-            Value::Ignored("Fable".into()),
-            i + 1,
-        ),
         "ultracode" => hit(
             DirectiveKind::Ignored,
             Value::Ignored("ultracode".into()),
@@ -697,14 +658,6 @@ fn read_at(tokens: &[Token], i: usize, clock: &Clock) -> Option<Hit> {
             hit(DirectiveKind::MaxWorkers, Value::Max(count), end)
         }
     }
-}
-
-fn effort_level(level: &str) -> Option<()> {
-    matches!(
-        level,
-        "low" | "medium" | "high" | "xhigh" | "x-high" | "max" | "maximum" | "extra-high"
-    )
-    .then_some(())
 }
 
 fn read_handoff(tokens: &[Token], at: usize) -> Option<(String, usize)> {
@@ -1157,9 +1110,8 @@ mod tests {
             );
         }
         let parsed = parse("Use Fable for the hard parts.", &clock);
-        assert_eq!(
-            parsed.directives.ignored,
-            vec!["Ignored: Fable (Brigadier picks this itself)".to_owned()]
-        );
+        assert!(parsed.directives.ignored.is_empty());
+        let parsed = parse("Use max effort for the hard parts.", &clock);
+        assert!(parsed.directives.ignored.is_empty());
     }
 }

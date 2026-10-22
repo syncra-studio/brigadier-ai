@@ -1,7 +1,7 @@
 //! What each task category is called, which vendor its ties go to, and matching model names
 //! and effort levels.
 
-use brigadier_providers::{ModelInfo, ProviderKind};
+use brigadier_providers::ProviderKind;
 
 use crate::TaskCategory;
 
@@ -78,26 +78,13 @@ pub(crate) fn has_word(id: &str, word: &str) -> bool {
     words(id).any(|candidate| candidate.eq_ignore_ascii_case(word))
 }
 
-/// The expensive models' names: routing never picks one by itself, only when the user does.
+/// Family metadata used by the settings discovery view; it imposes no runtime restriction.
 const EXPENSIVE: [&str; 2] = ["fable", "mythos"];
 
 /// Whether a model name (as asked for, without a catalog entry) names an expensive model.
 pub(crate) fn names_expensive(name: &str) -> bool {
     EXPENSIVE.iter().any(|word| has_word(name, word))
 }
-
-/// Expensive models (Fable, Mythos) stay out of the automatic ranking, whatever the catalog
-/// says; they run only where the user picks one by hand.
-pub(crate) fn is_expensive(model: &ModelInfo) -> bool {
-    names_expensive(&model.id)
-        || names_expensive(&model.display_name)
-        || model.resolved.as_deref().is_some_and(names_expensive)
-}
-
-// ----- reasoning effort -------------------------------------------------------------------
-
-/// The highest effort Brigadier ever routes to.
-pub(crate) const MAX_EFFORT: &str = "high";
 
 /// Effort levels by strength; `None` for a level Brigadier doesn't know.
 pub(crate) fn rank(effort: &str) -> Option<u8> {
@@ -114,7 +101,7 @@ pub(crate) fn rank(effort: &str) -> Option<u8> {
     })
 }
 
-/// The effort to run at: `wanted`, capped at [`MAX_EFFORT`] and at the levels a model accepts
+/// The effort to run at: `wanted`, fitted to the levels a model accepts
 /// (the strongest accepted level not above it, else the weakest accepted one; `None`: no
 /// catalog to check against). `None` when nothing is wanted, the level is unknown, or the model
 /// has no effort control. Returns whether the level was lowered.
@@ -128,16 +115,9 @@ pub(crate) fn fit_effort_in(
     let Some(wanted_rank) = rank(wanted) else {
         return (None, false);
     };
-    let cap = rank(MAX_EFFORT).unwrap_or(u8::MAX);
-    let target = wanted_rank.min(cap);
+    let target = wanted_rank;
     let Some(efforts) = efforts else {
-        // No catalog: pass a standard level through, capped.
-        let effort = if wanted_rank > cap {
-            MAX_EFFORT.to_owned()
-        } else {
-            wanted.to_ascii_lowercase()
-        };
-        return (Some(effort), wanted_rank > cap);
+        return (Some(wanted.to_ascii_lowercase()), false);
     };
     if efforts.is_empty() {
         return (None, false);
@@ -146,7 +126,6 @@ pub(crate) fn fit_effort_in(
         efforts
             .iter()
             .filter_map(|effort| rank(effort).map(|rank| (rank, effort)))
-            .filter(|(rank, _)| *rank <= cap)
     };
     let chosen = accepted()
         .filter(|(rank, _)| *rank <= target)
@@ -155,5 +134,22 @@ pub(crate) fn fit_effort_in(
     match chosen {
         Some((rank, effort)) => (Some(effort.clone()), rank < wanted_rank),
         None => (None, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn effort_is_fitted_to_the_cli_without_a_brigadier_ceiling() {
+        let efforts = vec!["high".into(), "xhigh".into(), "max".into()];
+        assert_eq!(
+            fit_effort_in(Some(&efforts), Some("max")),
+            (Some("max".into()), false)
+        );
+        assert_eq!(
+            fit_effort_in(None, Some("ultra")),
+            (Some("ultra".into()), false)
+        );
     }
 }

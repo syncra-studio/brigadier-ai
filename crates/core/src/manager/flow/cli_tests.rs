@@ -44,6 +44,7 @@ async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         .env(GRANT_ENV)
         .expect("the CLI has its session's grant");
     let command = match &request {
+        CliRequest::Models => "models",
         CliRequest::Sessions => "sessions",
         CliRequest::Workers => "workers",
         CliRequest::Show { .. } => "show",
@@ -1257,5 +1258,127 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
     );
     assert_eq!(answers["worker app"]["error"]["code"], "refused");
     assert_eq!(answers["worker ask"]["error"]["code"], "refused");
+    flow.stop().await;
+}
+
+/// Default rules refuse and quote Fable; removing only that directive admits the exact request.
+#[tokio::test]
+async fn models_rules_are_the_only_gate_on_start() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("The requested model started.");
+            }
+            if turn.input.contains("Try the model.") {
+                let request = StartRequest {
+                    model: Some("claude-fable-5-1".into()),
+                    effort: Some("high".into()),
+                    local: true,
+                    ..start("Reply once.")
+                };
+                let at = std::time::Instant::now();
+                let models = brigadier(&turn, CliRequest::Models).await;
+                assert!(at.elapsed() < std::time::Duration::from_millis(200));
+                let settings_usage = turn.host.usage_view(None).await.unwrap();
+                for provider in settings_usage.providers {
+                    for account in provider.accounts {
+                        let row = models["accounts"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|row| {
+                                row["id"] == account.account.account.as_deref().unwrap_or("own")
+                                    && row["agent"]
+                                        == serde_json::to_value(provider.provider).unwrap()
+                            })
+                            .unwrap();
+                        if let Some(quota) = account.quota {
+                            for window in quota.windows {
+                                let listed = row["usage"]
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .find(|w| w["window"] == window.window.id)
+                                    .unwrap();
+                                assert_eq!(listed["usedPercent"], window.window.used_percent);
+                                assert_eq!(
+                                    listed["resetsAtMs"],
+                                    serde_json::to_value(window.window.resets_at_ms).unwrap()
+                                );
+                            }
+                        }
+                    }
+                }
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock().unwrap().insert("models".into(), models);
+                seen.lock().unwrap().insert("start".into(), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-model-rules", Options::default(), script).await;
+    flow.say("Try the model.").await;
+    flow.settled().await;
+    {
+        let seen = answers.lock().unwrap();
+        assert_eq!(seen["start"]["error"]["code"], "refused");
+        assert!(
+            seen["start"]["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("\"forbid: fable\"")
+        );
+        assert!(
+            seen["models"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["rule"] == "forbid: fable")
+        );
+    }
+    assert!(flow.board().await.tasks.is_empty());
+    let path = flow.manager.models_rules_path();
+    let rules = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("- forbid: fable\n", "");
+    std::fs::write(&path, rules).unwrap();
+    flow.say("Try the model.").await;
+    flow.until("the allowed worker ran", |b| {
+        b.tasks
+            .values()
+            .any(|t| t.state == crate::work::TaskState::Reported)
+    })
+    .await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    assert!(seen["start"].get("error").is_none(), "{seen:#?}");
+    assert_eq!(seen["start"]["worker"]["model"], "claude-fable-5-1");
+    let specs = flow.specs();
+    let worker = specs
+        .iter()
+        .find(|(_, spec)| spec.model.as_deref() == Some("claude-fable-5-1"))
+        .unwrap();
+    assert!(
+        worker.1.allowed_models.is_none(),
+        "an effort ceiling creates no model list"
+    );
+    std::fs::write(&path, "").unwrap();
+    assert!(
+        flow.manager
+            .rules_models(ProviderKind::Claude)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "",
+        "an empty file stays empty"
+    );
     flow.stop().await;
 }

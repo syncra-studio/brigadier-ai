@@ -122,7 +122,7 @@ pub(crate) struct WorkerSession {
     pub cwd: PathBuf,
     pub outputs: PathBuf,
     pub redactor: Option<Arc<brigadier_providers::redact::Redactor>>,
-    pub allowed_models: AllowedModels,
+    pub allowed_models: Option<AllowedModels>,
     /// The task's worktree, if it has one.
     pub worktree: Option<PathBuf>,
     /// The grant its Brigadier tools run under.
@@ -240,6 +240,12 @@ impl TaskLiveState {
     /// Whether the CLI session started with looser model limits than `now` (a rule took a
     /// model away since): it must start again before its next turn, or its sub-agents keep
     /// the old ones. Limits that only widened leave the session as it is.
+    fn model_rules_changed(&self, now: &Option<AllowedModels>) -> bool {
+        match now {
+            Some(now) => self.models_changed(now),
+            None => self.allowed_models.is_some(),
+        }
+    }
     fn models_changed(&self, now: &AllowedModels) -> bool {
         let Some(then) = &self.allowed_models else {
             return true;
@@ -1787,7 +1793,7 @@ impl SessionManager {
         let mut env = worker_env(&workspace.scratch);
         env.extend(self.cli_env(&task.id.0, &worker_grant));
         let redactor = secrets::redactor(secret_values);
-        let allowed_models = self.allowed_models(task).await;
+        let allowed_models = self.rules_models(task.route.choice.provider)?;
         // Its own branch is the only ref it moves; the branch its work lands on is the engine's.
         // Its branch and the session's, recorded for the ref check, beside its start.
         if let Some(worktree) = workspace.worktree.clone() {
@@ -1850,7 +1856,7 @@ impl SessionManager {
             // one compacts as its CLI does.
             auto_compact: plain.is_some(),
             // A plain worker's sub-agents run on what its CLI allows (G18).
-            allowed_models: plain.is_none().then(|| allowed_models.clone()),
+            allowed_models: allowed_models.clone(),
             omit_ai_coauthors,
             output_hook: None,
             stop_hook,
@@ -1982,7 +1988,7 @@ impl SessionManager {
             state.background_waiting = false;
             state.stall_reported_at_ms = None;
             state.orphaned_at_ms = None;
-            state.allowed_models = Some(allowed_models);
+            state.allowed_models = allowed_models;
             if !resumed {
                 state.context = None;
                 state.session_start = None;
@@ -4308,7 +4314,7 @@ impl SessionManager {
             !state.busy && state.cli.is_some()
         };
         let models = if idle && !task.state.is_final() {
-            Some(self.allowed_models(task).await)
+            Some(self.rules_models(task.route.choice.provider)?)
         } else {
             None
         };
@@ -4359,7 +4365,7 @@ impl SessionManager {
             && state.cli.is_some()
             && models
                 .as_ref()
-                .is_some_and(|models| state.models_changed(models));
+                .is_some_and(|models| state.model_rules_changed(models));
         if hand_over || restart {
             // Between turns, with a context past the hand-off size: the message starts a fresh
             // session rather than one more large turn (PLAN.md §7). After the models the task
@@ -4790,12 +4796,12 @@ impl SessionManager {
         let continued = TurnInput::text("Continue the task.");
         // The models the task may use changed while it was paused (a rule added meanwhile):
         // its CLI session starts again, resumed, so its sub-agents follow them.
-        let models = self.allowed_models(&task).await;
+        let models = self.rules_models(task.route.choice.provider)?;
         {
             let _handing = live.reroute.lock().await;
             let changed = {
                 let state = live.state.lock().await;
-                state.cli.is_some() && state.models_changed(&models)
+                state.cli.is_some() && state.model_rules_changed(&models)
             };
             if changed {
                 return self.restart_worker(&live, &task, continued).await;

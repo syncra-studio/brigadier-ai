@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier models --json (planned)",
+  "title": "brigadier models --json",
   "type": "object",
   "required": [
     "models",
@@ -17,7 +17,9 @@
         "required": [
           "agent",
           "model",
-          "available"
+          "available",
+          "efforts",
+          "ageS"
         ],
         "additionalProperties": false,
         "properties": {
@@ -38,6 +40,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "ageS": {
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         }
       }
@@ -49,7 +57,13 @@
         "required": [
           "id",
           "agent",
-          "current"
+          "current",
+          "usage",
+          "name",
+          "you",
+          "loggedIn",
+          "ageS",
+          "fit"
         ],
         "additionalProperties": false,
         "properties": {
@@ -71,7 +85,13 @@
               "type": "object",
               "required": [
                 "window",
-                "usedPercent"
+                "usedPercent",
+                "resetsAtMs",
+                "model",
+                "bucket",
+                "pooled",
+                "runwayMs",
+                "estimateRough"
               ],
               "additionalProperties": false,
               "properties": {
@@ -86,9 +106,51 @@
                     "integer",
                     "null"
                   ]
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "bucket": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pooled": {
+                  "type": "boolean"
+                },
+                "runwayMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "estimateRough": {
+                  "type": "boolean"
                 }
               }
             }
+          },
+          "name": {
+            "type": "string"
+          },
+          "you": {
+            "type": "boolean"
+          },
+          "loggedIn": {
+            "type": "boolean"
+          },
+          "ageS": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fit": {
+            "type": "string"
           }
         }
       }
@@ -101,7 +163,9 @@
           "work",
           "agent",
           "model",
-          "reason"
+          "effort",
+          "reason",
+          "source"
         ],
         "additionalProperties": false,
         "properties": {

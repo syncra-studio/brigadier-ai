@@ -38,6 +38,7 @@ mod closing;
 mod codex_children;
 mod cold;
 mod computer_host;
+mod models;
 mod open_in_app;
 mod terminal_run;
 pub use computer_host::ComputerNews;
@@ -899,26 +900,24 @@ impl SessionManager {
         }
     }
 
-    /// Whether a new conversation may start on `choice`, or one switch to it: its agent is on
-    /// and the model it names is available ([`crate::routing::availability::check_choice`]).
+    /// Only the user's model rules can refuse a chosen model or effort.
     fn check_choice(&self, choice: &ModelChoice) -> Result<()> {
-        let catalog = self
-            .runtime
-            .overview(choice.provider)
-            .and_then(|overview| overview.models)
-            .map(|catalog| catalog.models)
-            .unwrap_or_default();
-        crate::routing::availability::check_choice(&self.core.settings(), choice, &catalog)
-            .map_err(Error::Invalid)
+        if let Some(rule) = self.model_refusal(
+            choice.provider,
+            choice.model.as_deref(),
+            choice.effort.as_deref(),
+        )? {
+            return Err(Error::Invalid(rule));
+        }
+        Ok(())
     }
 
-    /// Changes a conversation's setup ([`Core::set_setup`]). Switching to a model the user
-    /// made unavailable isn't allowed; staying on one is.
+    /// Changes a conversation's setup ([`Core::set_setup`]), respecting the user's model rules.
     pub async fn set_setup(&self, id: ConversationId, setup: Setup) -> Result<Conversation> {
         let current = self.core.conversation(&id)?.setup;
         let same_model = current.as_ref().is_some_and(|current| {
             let (now, next) = (current.choice(), setup.choice());
-            now.provider == next.provider && now.model == next.model
+            now.provider == next.provider && now.model == next.model && now.effort == next.effort
         });
         if !same_model {
             self.check_choice(setup.choice())?;

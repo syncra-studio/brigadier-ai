@@ -37,6 +37,8 @@ pub struct CliCall {
 pub enum CliRequest {
     /// The project's sidebar sessions.
     Sessions,
+    /// Live models, account usage, guidance and the user's rules.
+    Models,
     /// The calling session's own workers.
     Workers,
     /// One session or worker in full.

@@ -339,6 +339,7 @@ impl SessionManager {
             );
         }
         let reply = match call.request {
+            CliRequest::Models => self.cli_models(caller).await.map(|o| CliReply::ok(&o)),
             CliRequest::Sessions => self.cli_sessions(caller).await.map(|o| CliReply::ok(&o)),
             CliRequest::Workers => self.cli_workers(caller).await.map(|o| CliReply::ok(&o)),
             CliRequest::Show { id } => self.cli_show(caller, &id).await,

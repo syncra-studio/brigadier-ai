@@ -40,7 +40,7 @@
 //! `availableModels` in its settings lists their exact ids, and when Claude's prefix matching
 //! would let another model in too, or the project's or the user's own settings could widen
 //! the list, the worker runs without its Agent tool ([`sub_agents`]). A thread's sub-agents
-//! run on any model but Fable ([`THREAD_MODELS`]).
+//! follow only the user's model rules, passed in the session specification.
 
 pub(crate) mod files;
 pub mod parse;
@@ -95,11 +95,6 @@ const SUB_AGENT_TOOLS: &str = "Agent,Task";
 /// needs one.
 const THREAD_TOOLS: &str =
     "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop";
-/// The models a thread and its sub-agents may run on (`availableModels`), by family: the
-/// default model rules, never Fable (STRIP-DOWN-PLAN S3). A sub-agent that asks for Fable steps
-/// down to an allowed model (checked on 2.1.308). The user's own `availableModels` join these,
-/// as in a plain CLI.
-const THREAD_MODELS: &[&str] = &["opus", "sonnet", "haiku"];
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// A Brain job's built-in tools ([`ToolSet::Reader`]).
@@ -540,11 +535,7 @@ enum SubAgents {
 /// `cwd` that loads the user's settings from `user_config` too, when given.
 fn sub_agents(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> SubAgents {
     let Some(allowed) = &spec.allowed_models else {
-        return if spec.tools == ToolSet::Thread {
-            SubAgents::Only(THREAD_MODELS.iter().map(|&id| id.to_owned()).collect())
-        } else {
-            SubAgents::Any
-        };
+        return SubAgents::Any;
     };
     // The project linked into `cwd` is read where it is: its links may not be there yet.
     let linked = spec.project.as_deref().filter(|_| spec.tools.user_setup());
@@ -3267,10 +3258,9 @@ for line in sys.stdin:
     }
 
     /// A thread has Claude Code's own sub-agents and background-task control, and they run on
-    /// any model but Fable, whatever the user's or the project's settings list (STRIP-DOWN-PLAN
-    /// S3).
+    /// any model when no user rule restricts it (STRIP-DOWN-PLAN S13b).
     #[test]
-    fn a_thread_has_its_own_sub_agents_and_task_control_but_no_fable() {
+    fn a_thread_without_user_rules_sets_no_model_restriction() {
         let cwd = Temp::new();
         let config = cwd.path().parent().unwrap().join("config");
         std::fs::create_dir_all(&config).unwrap();
@@ -3298,10 +3288,7 @@ for line in sys.stdin:
         );
         assert_eq!(flag("--disallowedTools"), None, "{args:?}");
         let settings: Value = serde_json::from_str(&flag("--settings").unwrap()).unwrap();
-        assert_eq!(
-            settings["availableModels"],
-            json!(["opus", "sonnet", "haiku"])
-        );
+        assert!(settings.get("availableModels").is_none());
         // Only a thread: other sessions without a model limit set none.
         let raw = SessionSpec {
             tools: ToolSet::Default,
@@ -3309,6 +3296,22 @@ for line in sys.stdin:
             ..spec(cwd.path(), &[])
         };
         assert_eq!(sub_agents(&raw, cwd.path(), None), SubAgents::Any);
+    }
+
+    #[test]
+    fn a_thread_uses_the_model_ids_supplied_by_the_users_rules() {
+        let cwd = Temp::new();
+        let thread = SessionSpec {
+            tools: ToolSet::Thread,
+            allowed_models: Some(allowed(&["claude-opus-5-5"], &["claude-fable-5-1"])),
+            ..spec(cwd.path(), &[])
+        };
+        let models = sub_agents(&thread, cwd.path(), None);
+        assert_eq!(models, SubAgents::Only(vec!["claude-opus-5-5".into()]));
+        assert_eq!(
+            settings(&thread, &models, false)["availableModels"],
+            json!(["claude-opus-5-5"])
+        );
     }
 
     /// The user's own settings can widen the models a worker's sub-agents may use (Claude joins

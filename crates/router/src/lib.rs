@@ -8,7 +8,7 @@
 //! (0–10: how well suited it is, weighing quality against cost), area modifiers (±2), efforts,
 //! context window and modalities. The app ships a copy ([`Registry::bundled`]) and the daemon
 //! downloads newer revisions ([`Registry::parse`], [`Registry::is_newer_than`]). Every copy
-//! passes the same bounds (see [`load`]'s docs): no expensive models, efforts only up to `high`,
+//! passes the same bounds (see [`load`]'s docs): recognized effort names,
 //! only CLIs Brigadier drives, only capabilities their adapters implement.
 //!
 //! # Merge
@@ -16,15 +16,12 @@
 //! [`merge()`] joins each CLI's live list with the registry: a model is **curated** (its own
 //! entry), **inherited** (a newer member of a family entry, `gpt-6.1-sol` from `sol`),
 //! **researched** (placed by a research note, within ±2 of unrated) or **unknown** (tier
-//! unrated, strength 5). Expensive models (Fable, Mythos) are listed but excluded: they run only
-//! where the user names one by hand (a model or family place in a manual ranking, a `prefer` or
-//! `only` rule, a pin the user chose), never on a score.
+//! unrated, strength 5). Model family names impose no runtime restriction.
 //!
 //! # Eligibility
 //!
 //! A model may take a task when all of these hold ([`decide`]):
-//! - it isn't an expensive model (Fable, Mythos) unless the user named it by hand, and its
-//!   provider is logged in;
+//! - its provider is logged in;
 //! - the registry doesn't keep it for other categories (an entry's `only`: Haiku 5.5 takes only
 //!   operating apps on screen, where it counts as strong);
 //! - **no confirmed limit**: a provider limit (usage window, spend control, credits), a window
@@ -39,19 +36,19 @@
 //!   different model of the same vendor reviews, and the reason says so.
 //!
 //! [`eligible`] lists every model these checks let take the task: the models the task's worker
-//! may hand work to through its CLI's own sub-agents.
+//! may take through the legacy task router. Subagents follow the user's model rules file.
 //!
 //! # Score
 //!
-//! `strength(category) + mean area modifier + learned adjustment − quota penalty − load penalty
-//! + trial bonus`, less small penalties for a legacy model (−1) and an inherited one not yet
+//! `strength(category) + mean area modifier + learned adjustment − quota penalty − load penalty + trial bonus`,
+//! less small penalties for a legacy model (−1) and an inherited one not yet
 //! proven here (−0.25). The learned adjustment ([`learn()`]) is a Beta-shrunk success rate
 //! against the registry prior, capped at ±2.5. The quota penalty ([`forecast`]) is 0 below a
 //! projected 70% and rises smoothly to 6 at a projected 100%; each running worker on the
 //! provider costs 0.25 (at most 1.5). A `prefer` rule wins whenever its target is eligible, over
 //! a pin too. Effort is the registry's default for the category (else low for scouting and
 //! checks, medium for research, implementation and orchestration, high for reviews and merges),
-//! fitted to what the model accepts and never above `high`.
+//! fitted to what the model accepts.
 //!
 //! # Trials
 //!
@@ -85,7 +82,7 @@
 //! is tried top-down instead of scoring: a model place takes that model, a family place its
 //! newest model that can run (the CLI lists newest first), a vendor place its best-scored one.
 //! In order of strength:
-//! 1. The hard rules (no expensive model the user didn't name, efforts at most `high`, a login,
+//! 1. The availability checks (a login,
 //!    no confirmed limit, not the model that just failed, the task's needs, a binding pin's vendor, cross-vendor review).
 //! 2. `never` and `only` rules.
 //! 3. The floor: a ranked model skips the category's default floor (the Routing page warns);
@@ -149,8 +146,7 @@ mod ratings;
 mod registry;
 pub use ratings::{RatingPatch, validate_patches};
 
-/// Whether a model id or name names an expensive model (Fable, Mythos): routing never picks one
-/// by itself, only where the user names it.
+/// Family metadata for the settings discovery view; never a runtime refusal.
 pub fn names_expensive(name: &str) -> bool {
     table::names_expensive(name)
 }
@@ -275,8 +271,7 @@ pub struct Pin {
     /// alone also picks its provider.
     pub model: Option<String>,
     pub effort: Option<String>,
-    /// The user picked this model by hand (their commit-message model, say): an expensive
-    /// model it names may run. Never kept: a stored pin is the orchestrator's.
+    /// The user picked this model by hand. Never kept: a stored pin is the orchestrator's.
     #[serde(skip)]
     #[ts(skip)]
     pub by_user: bool,

@@ -249,6 +249,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
     }
     Ok(Some(match command.name {
         "sessions" => CliRequest::Sessions,
+        "models" => CliRequest::Models,
         "workers" => CliRequest::Workers,
         "show" => CliRequest::Show { id: id() },
         "read" => {
@@ -706,12 +707,12 @@ mod tests {
     }
 
     #[test]
-    fn commands_not_built_yet_parse_but_send_nothing() {
+    fn models_parses_and_reaches_the_daemon() {
         let Invocation::Run { command, args, .. } = parse(["models", "--json"]).unwrap() else {
             panic!("models did not parse");
         };
-        assert!(!command.available);
-        assert_eq!(request(command, &args).unwrap(), None);
+        assert!(command.available);
+        assert_eq!(request(command, &args).unwrap(), Some(CliRequest::Models));
     }
 
     fn tool(words: &[&str]) -> (Tool, String, Value) {

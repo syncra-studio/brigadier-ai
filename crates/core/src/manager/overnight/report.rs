@@ -1516,9 +1516,8 @@ fn usage_line(usage: &Usage) -> String {
     }
 }
 
-/// What Brigadier ignored in the user's words, as the current reading of them has it: a rule
-/// Brigadier keeps anyway ("never Fable") isn't listed, even in a run recorded before it read
-/// it so.
+/// What Brigadier ignored in the user's words, as the current reading of them has it.
+/// Historical records do not introduce a new model restriction.
 fn ignored(run: &OvernightRun) -> Vec<String> {
     let current = parse(&run.words, &Clock::system()).directives.ignored;
     let words = run.words.to_lowercase();

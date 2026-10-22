@@ -177,6 +177,11 @@ impl SessionManager {
             Some(cli::Agent::Codex) => ProviderKind::Codex,
             None => orchestrator.provider,
         };
+        if let Some(rule) =
+            self.model_refusal(provider, start.model.as_deref(), start.effort.as_deref())?
+        {
+            return Ok(refused(rule));
+        }
         // Q8: the session's own level unless `--permission` says.
         let permission = match start.permission {
             Some(permission) => permission_level(permission),

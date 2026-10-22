@@ -1,6 +1,5 @@
-//! The user's routing rules ("never use X for frontend"). Rules always win over scores and
-//! balancing, and hold during fallback too; only the hard rules (no expensive model the user didn't name, efforts at most
-//! `high`, the sandbox) are above them.
+//! The legacy task router's user preferences, retained until its last consumer leaves.
+//! Explicit worker starts use only the user's model rules file.
 
 use brigadier_providers::ProviderKind;
 use serde::{Deserialize, Serialize};

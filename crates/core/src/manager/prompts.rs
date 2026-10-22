@@ -710,7 +710,7 @@ Your first message is your task: what it is, where you work, what you may change
 
 Rules:
 - Push, publish, deploy or open pull requests when your task asks for it. git and gh on the sign-in the user set up are fine. Never spend money, handle credentials yourself (a token, a password, the keychain directly), or delete anything outside your own work: list such steps under needs user instead.
-- If you start subagents, never use a Fable model, and never raise reasoning effort above high.
+- Before choosing models for subagents, consult `brigadier models` for the user's rules and guidance.
 - Files meant for the thread or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
 - The thread reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that stored output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{WORKER_WRITING}{WORKER_VOICE}{instructions}"#
     )
@@ -1583,7 +1583,7 @@ mod tests {
         assert!(lead.contains(
             "one question at a time, with the options you see and the one you recommend"
         ));
-        assert!(lead.contains("never use a Fable model"));
+        assert!(lead.contains("brigadier models"));
         assert!(lead.contains("query_brain"));
         // Codex's sandbox may keep it from committing: Brigadier commits for it.
         let codex = worker(&task("codex", Some("lead")));
