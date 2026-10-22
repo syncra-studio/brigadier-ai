@@ -23,6 +23,7 @@ const FILES = [
   "app/conversation/SessionOffer.tsx",
   "app/inspector/providers/ProvidersTab.tsx",
   "app/inspector/providers/StartSessionForm.tsx",
+  "app/inspector/providers/SessionHeader.tsx",
 ];
 
 /** The JSX text and the sentence-like strings of `source`, its comments left out. */
@@ -49,4 +50,10 @@ test("the sidebar, the tab strip and the session's menus never say workspace", (
     const said = readable(readFileSync(new URL(`../${file}`, import.meta.url), "utf8")).filter((text) => WORD.test(text));
     assert.deepEqual(said, [], file);
   }
+});
+
+test("a raw session's header names its folder, not a workspace", () => {
+  // `readable` leaves out a one-word string, which is all this label was.
+  const source = readFileSync(new URL("./inspector/providers/SessionHeader.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /\?\s*"workspace"\s*:/);
 });
