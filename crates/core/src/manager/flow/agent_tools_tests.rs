@@ -1299,5 +1299,8 @@ fn a_resumed_worker_hears_once_when_to_ask_for_its_review() {
         "{note}"
     );
     assert!(revision_note(WORKER_REVIEW_REVISION, true).is_none());
-    assert_eq!(revision_note(WORKER_REVIEW_REVISION - 1, false), None);
+    assert_eq!(
+        revision_note(WORKER_REVIEW_REVISION - 1, false),
+        revision_note(WORKER_REVIEW_REVISION, false)
+    );
 }

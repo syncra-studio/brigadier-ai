@@ -1295,6 +1295,7 @@ impl SessionManager {
             mcp_servers: Vec::new(),
             tools: ToolSet::Review,
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
             env: Vec::new(),

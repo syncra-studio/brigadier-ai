@@ -863,6 +863,52 @@ pub enum LinkTarget {
     System,
 }
 
+/// One project's exceptions to the user's switches, by catalog id: what it turns on for
+/// itself that is off by default, and what it turns off that is on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSwitches {
+    pub project_id: ProjectId,
+    #[serde(default)]
+    pub servers_on: Vec<String>,
+    #[serde(default)]
+    pub servers_off: Vec<String>,
+    #[serde(default)]
+    pub skills_on: Vec<String>,
+    #[serde(default)]
+    pub skills_off: Vec<String>,
+}
+
+impl Settings {
+    /// Whether the server `id` is off for sessions in `project`: off by default and not turned
+    /// on there, or turned off there.
+    pub fn server_off(&self, id: &str, project: Option<&ProjectId>) -> bool {
+        let switches = self.switches(project);
+        if self.mcp_servers_off.iter().any(|off| off == id) {
+            !switches.is_some_and(|s| s.servers_on.iter().any(|on| on == id))
+        } else {
+            switches.is_some_and(|s| s.servers_off.iter().any(|off| off == id))
+        }
+    }
+
+    /// Whether the skill `id` is off for sessions in `project`, as [`Self::server_off`].
+    pub fn skill_off(&self, id: &str, project: Option<&ProjectId>) -> bool {
+        let switches = self.switches(project);
+        if self.skills_off.iter().any(|off| off == id) {
+            !switches.is_some_and(|s| s.skills_on.iter().any(|on| on == id))
+        } else {
+            switches.is_some_and(|s| s.skills_off.iter().any(|off| off == id))
+        }
+    }
+
+    fn switches(&self, project: Option<&ProjectId>) -> Option<&ProjectSwitches> {
+        let project = project?;
+        self.project_switches
+            .iter()
+            .find(|switches| &switches.project_id == project)
+    }
+}
+
 /// User settings persisted by the core.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -1012,6 +1058,24 @@ pub struct Settings {
     pub browser_downloads_dir: String,
     /// The built-in browser asks where to save each download.
     pub browser_ask_downloads: bool,
+    /// MCP servers switched off for Brigadier, by catalog id (`claude:user:railway`): no thread
+    /// or worker gets them, their agent's own included. A change takes effect at each
+    /// session's next start or resume.
+    pub mcp_servers_off: Vec<String>,
+    /// Skills switched off for Brigadier, by catalog id (`agents:user:<folder>`), as for
+    /// [`Self::mcp_servers_off`].
+    pub skills_off: Vec<String>,
+    /// A project's exceptions to [`Self::mcp_servers_off`] and [`Self::skills_off`], one entry
+    /// per project that has any. The project's threads and workers go by them.
+    pub project_switches: Vec<ProjectSwitches>,
+    /// Servers from a project's own config that the user uses in every project, by catalog id:
+    /// workers of every other project get them too, by the switches above, while a project's
+    /// own item otherwise stays in its project. Read only while that project's folder is
+    /// trusted.
+    pub servers_everywhere: Vec<String>,
+    /// Skills from a project's own config used in every project, as
+    /// [`Self::servers_everywhere`]. Apart from it: a project's server and skill can share an id.
+    pub skills_everywhere: Vec<String>,
     /// The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
     /// before it existed read as 0, so their conversions run.
     #[serde(default)]
@@ -1199,6 +1263,11 @@ impl Default for Settings {
             browser_full_url: false,
             browser_downloads_dir: String::new(),
             browser_ask_downloads: false,
+            mcp_servers_off: Vec::new(),
+            skills_off: Vec::new(),
+            project_switches: Vec::new(),
+            servers_everywhere: Vec::new(),
+            skills_everywhere: Vec::new(),
             settings_version: SETTINGS_VERSION,
         }
     }

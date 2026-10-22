@@ -1,3 +1,654 @@
-//! MCP, plugin and skill registry with config importers and watchers.
+//! The MCP servers and skills on this machine, from every agent's own configuration (PLAN.md §6
+//! Phase 7), so a worker of one agent can be given what another agent has.
 //!
-//! This crate is introduced by a later phase of the build plan (docs/PLAN.md §6).
+//! Brigadier only reads these configs, never edits them:
+//!
+//! - Claude Code: `~/.claude.json` (`mcpServers`, and `projects[<path>].mcpServers`, the local
+//!   scope), a project's `.mcp.json`, `~/.claude/skills` and a project's `.claude/skills`
+//!   (`CLAUDE_CONFIG_DIR` moves the first and the user's skills).
+//! - Codex: `$CODEX_HOME/config.toml` `mcp_servers`, a project's `.codex/config.toml` layers,
+//!   `$CODEX_HOME/skills`, `~/.agents/skills` and a project's `.agents/skills`.
+//! - Claude Desktop's `claude_desktop_config.json` and Cursor's `~/.cursor/mcp.json` and a
+//!   project's `.cursor/mcp.json`.
+//!
+//! A [`Catalog`] holds the user's entries and, asked for a project, that project's. Each server
+//! has a stable, source-qualified id (`claude:user:railway`, `codex:project:<path>:x`,
+//! `desktop:pencil`). Which agents have an entry natively depends on the session (its agent, its
+//! working folder and the project whose setup it loads): [`Catalog::server_native`],
+//! [`Catalog::skill_native`]. Values of a server's environment and headers are [`Secret`]s: only
+//! their names leave Brigadier's process, never their values.
+//!
+//! A remote server with no credentials in its config signs in with OAuth, which each CLI keeps in
+//! a store of its own: [`Catalog::sign_in`] says which stored sign-in can serve a session, from
+//! what a [`SignInStores`] reads ([`sign_ins`]).
+//!
+//! [`Registry`] keeps the user's part current with a file watcher; a project's part is read when
+//! asked for. Variables (`${VAR}` in Claude's configs, `${env:VAR}` in Cursor's) expand from
+//! [`Roots::vars`], the environment the CLIs themselves run with.
+
+mod servers;
+mod sign_ins;
+mod skills;
+mod watch;
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
+
+pub use sign_ins::{
+    Owner, Probe, SignInStores, Unread, claude_key, claude_lock_name, codex_keys, identity,
+    owner_agent, sha256_hex,
+};
+pub use skills::{Skill, SkillRoot};
+
+/// The agents that can be given what another has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Agent {
+    Claude,
+    Codex,
+}
+
+/// A value from a config (an env value, a header) that must not leave Brigadier: its `Debug`
+/// shows nothing of it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret(***)")
+    }
+}
+
+/// Where each config lives, and the environment its variables expand from.
+#[derive(Debug, Clone)]
+pub struct Roots {
+    pub home: PathBuf,
+    /// Claude Code's configuration folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
+    pub claude_dir: PathBuf,
+    /// Claude Code's `.claude.json`: in `CLAUDE_CONFIG_DIR` when that is set, else in the home.
+    pub claude_json: PathBuf,
+    /// `CODEX_HOME`, else `~/.codex`.
+    pub codex_home: PathBuf,
+    /// Claude Desktop's `claude_desktop_config.json`, where this platform keeps it.
+    pub desktop_config: Option<PathBuf>,
+    /// `~/.cursor`.
+    pub cursor_dir: PathBuf,
+    /// `~/.agents/skills`.
+    pub agents_skills: PathBuf,
+    /// The environment the CLIs run with (the user's login shell's), which `${VAR}` reads.
+    pub vars: BTreeMap<String, String>,
+}
+
+impl Roots {
+    /// The roots for the environment `vars`; `None` without a home folder.
+    pub fn from_vars(vars: impl IntoIterator<Item = (String, String)>) -> Option<Self> {
+        let vars: BTreeMap<String, String> = vars.into_iter().collect();
+        let var = |name: &str| {
+            vars.get(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
+        let home = if cfg!(windows) {
+            var("USERPROFILE").or_else(|| var("HOME"))
+        } else {
+            var("HOME")
+        }?;
+        let claude_config = var("CLAUDE_CONFIG_DIR");
+        let claude_dir = claude_config
+            .clone()
+            .unwrap_or_else(|| home.join(".claude"));
+        let claude_json =
+            claude_config.map_or_else(|| home.join(".claude.json"), |dir| dir.join(".claude.json"));
+        let desktop_config = if cfg!(target_os = "macos") {
+            Some(home.join("Library/Application Support/Claude"))
+        } else if cfg!(windows) {
+            var("APPDATA").map(|dir| dir.join("Claude"))
+        } else {
+            Some(
+                var("XDG_CONFIG_HOME")
+                    .unwrap_or_else(|| home.join(".config"))
+                    .join("Claude"),
+            )
+        }
+        .map(|dir| dir.join("claude_desktop_config.json"));
+        Some(Self {
+            claude_dir,
+            claude_json,
+            codex_home: var("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
+            desktop_config,
+            cursor_dir: home.join(".cursor"),
+            agents_skills: home.join(".agents").join("skills"),
+            home,
+            vars,
+        })
+    }
+}
+
+/// Where a server is configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Source {
+    /// `~/.claude.json` `mcpServers`.
+    ClaudeUser,
+    /// `~/.claude.json` `projects[<path>].mcpServers`: Claude's local scope, for sessions
+    /// started in exactly that folder.
+    ClaudeLocal,
+    /// A project's `.mcp.json`.
+    ClaudeProject,
+    /// `$CODEX_HOME/config.toml`.
+    CodexUser,
+    /// A project's `.codex/config.toml`.
+    CodexProject,
+    /// Claude Desktop's config.
+    Desktop,
+    /// `~/.cursor/mcp.json`.
+    CursorUser,
+    /// A project's `.cursor/mcp.json`.
+    CursorProject,
+}
+
+impl Source {
+    /// How a person names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ClaudeUser => "Claude Code (user)",
+            Self::ClaudeLocal => "Claude Code (local)",
+            Self::ClaudeProject => "Claude Code (project)",
+            Self::CodexUser => "Codex (user)",
+            Self::CodexProject => "Codex (project)",
+            Self::Desktop => "Claude Desktop",
+            Self::CursorUser => "Cursor (user)",
+            Self::CursorProject => "Cursor (project)",
+        }
+    }
+
+    /// The id's start, before the project and name.
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::ClaudeUser => "claude:user",
+            Self::ClaudeLocal => "claude:local",
+            Self::ClaudeProject => "claude:project",
+            Self::CodexUser => "codex:user",
+            Self::CodexProject => "codex:project",
+            Self::Desktop => "desktop",
+            Self::CursorUser => "cursor:user",
+            Self::CursorProject => "cursor:project",
+        }
+    }
+}
+
+/// How a server is reached.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Transport {
+    /// A process the CLI starts, speaking over its stdio.
+    Stdio {
+        /// Absolute when the config named a path relative to [`Self::Stdio::base`].
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, Secret)>,
+        /// The working folder the config names (absolute).
+        cwd: Option<PathBuf>,
+        /// The folder its relative paths resolve from in its source (a project's root for a
+        /// project's config); `None`: wherever the session runs.
+        base: Option<PathBuf>,
+    },
+    /// Streamable HTTP.
+    Http {
+        url: String,
+        headers: Vec<(String, Secret)>,
+    },
+}
+
+impl Transport {
+    /// The folder the server runs in: the one its config names, else its base.
+    pub fn working_dir(&self) -> Option<&Path> {
+        match self {
+            Self::Stdio { cwd, base, .. } => cwd.as_deref().or(base.as_deref()),
+            Self::Http { .. } => None,
+        }
+    }
+}
+
+/// One MCP server, as one source configures it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Server {
+    /// Stable and source-qualified: `claude:user:railway`, `codex:project:<path>:x`.
+    pub id: String,
+    /// The name its source gives it, which its tools are called by.
+    pub name: String,
+    pub source: Source,
+    /// The project whose config holds it (the path a local-scope entry is keyed on).
+    pub project: Option<PathBuf>,
+    pub transport: Transport,
+    /// A remote server with no credentials of its own in the config: it signs in with OAuth,
+    /// which each agent does by itself (Codex: `codex mcp login`), so another agent's sign-in
+    /// doesn't serve it as such (docs/research/phase7-probes.md (f)): [`Catalog::sign_in`].
+    pub signs_in: bool,
+    /// The OAuth client its config names (Codex's `[mcp_servers.<name>.oauth]`, Claude's
+    /// `oauth.clientId`), which renewing its sign-in needs: no CLI stores a configured secret
+    /// with the token.
+    pub oauth: Option<OAuthClient>,
+}
+
+/// A pre-registered OAuth client of a server's config.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OAuthClient {
+    pub client_id: Option<String>,
+    pub client_secret: Option<Secret>,
+}
+
+/// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CodexStore {
+    /// The Keychain, else `$CODEX_HOME/.credentials.json` (its default).
+    #[default]
+    Auto,
+    File,
+    Keyring,
+    /// A value Brigadier doesn't know: its sign-ins aren't read.
+    Other,
+}
+
+/// A server, or a whole config file, that couldn't be read: no session gets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    /// The server's id, or for a file that couldn't be parsed, its source and path.
+    pub id: String,
+    /// The server's name, or the file's.
+    pub name: String,
+    pub source: Source,
+    pub project: Option<PathBuf>,
+    /// The config file.
+    pub file: PathBuf,
+    /// Its 1-based line in [`Self::file`], when known.
+    pub line: Option<usize>,
+    /// What was read of it (an address or command), if anything.
+    pub read: Option<String>,
+    /// Why, never quoting the config's text (it may hold a secret).
+    pub error: String,
+}
+
+/// How a session's agent is signed in to a server that [`Server::signs_in`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignIn {
+    /// The agent has the server by itself, and its own sign-in serves it.
+    Native,
+    /// The sign-in another agent stored can serve it (read, and written back when renewed).
+    ReusableFrom(Agent),
+    /// Brigadier's own sign-in serves it, to every agent.
+    InBrigadier,
+    /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
+    Needed,
+    /// Not known: a store couldn't be read without asking the user, or it failed.
+    Unknown,
+    /// The agent's stored sign-in can't be reused: the system wasn't allowed to let Brigadier
+    /// read it.
+    NotAllowed(Agent),
+    /// Sign-ins to it can't be checked or kept on this system.
+    Unsupported,
+}
+
+/// A session, as far as what it finds by itself goes.
+#[derive(Debug, Clone, Copy)]
+pub struct Session<'a> {
+    pub agent: Agent,
+    /// Its working folder.
+    pub cwd: &'a Path,
+    /// The project whose setup it loads (a trusted one): Claude's `.mcp.json` and `.claude`
+    /// are linked into its folder, and a Codex session gets the project's Codex servers.
+    pub project: Option<&'a Path>,
+    /// It works in a checkout of [`Self::project`] (its worktree), where Codex finds the
+    /// project's `.agents/skills` by itself.
+    pub in_checkout: bool,
+}
+
+/// Why a name given for a server can't be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FindError {
+    Unknown,
+    /// Several different servers have the name: their ids.
+    Ambiguous(Vec<String>),
+}
+
+/// The servers and skills of the user and, when asked for one, of a project.
+#[derive(Debug, Clone, Default)]
+pub struct Catalog {
+    pub servers: Vec<Server>,
+    /// The servers and config files that couldn't be read.
+    pub problems: Vec<Problem>,
+    pub skills: Vec<Skill>,
+    /// The user's own Codex `skills.config` entries (as JSON), which a session that switches
+    /// skills off must keep: Codex's `skills.config` override replaces the whole list.
+    pub codex_skill_config: Vec<serde_json::Value>,
+    /// The projects the user trusts in Codex, whose `.codex` layers Codex loads.
+    pub codex_trusted: Vec<PathBuf>,
+    /// Where Codex keeps its MCP sign-ins.
+    pub codex_store: CodexStore,
+}
+
+impl Catalog {
+    /// The user's entries and, for `project`, the project's.
+    pub fn read(roots: &Roots, project: Option<&Path>) -> Self {
+        let mut catalog = Self::user(roots);
+        if let Some(project) = project {
+            catalog.add_project(roots, project);
+        }
+        catalog
+    }
+
+    fn user(roots: &Roots) -> Self {
+        let mut problems = Vec::new();
+        let codex = servers::codex_config(roots, &mut problems);
+        let mut catalog = Self {
+            servers: servers::user(roots, codex.as_ref(), &mut problems),
+            problems,
+            skills: Vec::new(),
+            codex_skill_config: codex
+                .as_ref()
+                .map(servers::codex_skill_config)
+                .unwrap_or_default(),
+            codex_trusted: codex
+                .as_ref()
+                .map(servers::codex_trusted)
+                .unwrap_or_default(),
+            codex_store: codex.as_ref().map(servers::codex_store).unwrap_or_default(),
+        };
+        skills::add_user(&mut catalog.skills, roots);
+        catalog
+    }
+
+    fn add_project(&mut self, roots: &Roots, project: &Path) {
+        self.servers
+            .extend(servers::project(roots, project, &mut self.problems));
+        skills::add_project(&mut self.skills, project);
+    }
+
+    /// Whether `session`'s agent has `server` by itself: it loads it, and no entry of the same
+    /// name that it loads too overrides it (Claude: local over project over user; Codex: a
+    /// project's layer over the user's config).
+    pub fn server_native(&self, server: &Server, session: &Session<'_>) -> bool {
+        self.loads(server, session)
+            && !self.servers.iter().any(|other| {
+                other.name == server.name
+                    && precedence(other.source) > precedence(server.source)
+                    && self.loads(other, session)
+            })
+    }
+
+    /// Whether `session`'s agent loads `server`'s entry, overridden or not.
+    fn loads(&self, server: &Server, session: &Session<'_>) -> bool {
+        let project = server.project.as_deref();
+        match (server.source, session.agent) {
+            (Source::ClaudeUser, Agent::Claude) | (Source::CodexUser, Agent::Codex) => true,
+            // Claude keys its local scope on the exact folder a session starts in.
+            (Source::ClaudeLocal, Agent::Claude) => project == Some(session.cwd),
+            (Source::ClaudeProject, Agent::Claude) => project == session.project,
+            // Codex loads a project's layers only where the user trusts it in Codex.
+            (Source::CodexProject, Agent::Codex) => {
+                project == session.project
+                    && project
+                        .is_some_and(|project| self.codex_trusted.iter().any(|p| p == project))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `session`'s agent finds `skill` by itself.
+    pub fn skill_native(&self, skill: &Skill, session: &Session<'_>) -> bool {
+        skill.roots.iter().any(|root| root.native(session))
+    }
+
+    /// How `session`'s agent is signed in to `server`, from what `stores` read; `None` for one
+    /// that doesn't sign in.
+    pub fn sign_in(
+        &self,
+        server: &Server,
+        session: &Session<'_>,
+        stores: &dyn SignInStores,
+    ) -> Option<SignIn> {
+        self.sign_in_from(server, session, stores)
+            .map(|(sign_in, _)| sign_in)
+    }
+
+    /// As [`Self::sign_in`], with the entry whose agent's stored sign-in serves it for
+    /// [`SignIn::ReusableFrom`]: the agent's own sign-in when it has the server and isn't known
+    /// to lack one, else the first usable one of an entry with its [`identity`] (Claude's and
+    /// Codex's keys are an entry's), else Brigadier's own.
+    pub fn sign_in_from<'a>(
+        &'a self,
+        server: &'a Server,
+        session: &Session<'_>,
+        stores: &dyn SignInStores,
+    ) -> Option<(SignIn, Option<&'a Server>)> {
+        if !server.signs_in {
+            return None;
+        }
+        let native = self.server_native(server, session);
+        if native && stores.probe(session.agent.into(), server) != Probe::Absent {
+            return Some((SignIn::Native, None));
+        }
+        let (mut refused, mut unknown, mut unsupported) = (None, false, false);
+        let mut note = |probe| match probe {
+            Probe::Unknown => unknown = true,
+            Probe::Unsupported => unsupported = true,
+            Probe::Usable | Probe::Absent | Probe::Refused => {}
+        };
+        for entry in sign_ins::same_server(&self.servers, server) {
+            let Some(agent) = owner_agent(entry.source) else {
+                continue;
+            };
+            if native && entry.id == server.id && agent == session.agent {
+                continue;
+            }
+            match stores.probe(agent.into(), entry) {
+                Probe::Usable => return Some((SignIn::ReusableFrom(agent), Some(entry))),
+                Probe::Refused => refused = refused.or(Some(agent)),
+                probe => note(probe),
+            }
+        }
+        match stores.probe(Owner::Brigadier, server) {
+            Probe::Usable => return Some((SignIn::InBrigadier, None)),
+            probe => note(probe),
+        }
+        // What stands in the way of a reuse, the one the user can act on first.
+        Some((
+            match (refused, unknown, unsupported) {
+                (Some(agent), _, _) => SignIn::NotAllowed(agent),
+                (None, true, _) => SignIn::Unknown,
+                (None, false, true) => SignIn::Unsupported,
+                (None, false, false) => SignIn::Needed,
+            },
+            None,
+        ))
+    }
+
+    pub fn server(&self, id: &str) -> Option<&Server> {
+        self.servers.iter().find(|server| server.id == id)
+    }
+
+    pub fn skill(&self, id: &str) -> Option<&Skill> {
+        self.skills.iter().find(|skill| skill.id == id)
+    }
+
+    /// The server `entry` names: an id, or a name only one server has (servers that are the
+    /// same under several sources, such as one server set up in both Claude apps, count once).
+    pub fn find(&self, entry: &str) -> Result<&Server, FindError> {
+        self.find_among(entry, |_| true)
+    }
+
+    /// As [`Self::find`], a name counting only the servers `keep` keeps (an id names any).
+    pub fn find_among(
+        &self,
+        entry: &str,
+        keep: impl Fn(&Server) -> bool,
+    ) -> Result<&Server, FindError> {
+        if let Some(server) = self.server(entry) {
+            return Ok(server);
+        }
+        let named: Vec<&Server> = self
+            .servers
+            .iter()
+            .filter(|server| server.name == entry && keep(server))
+            .collect();
+        let Some(first) = named.first() else {
+            return Err(FindError::Unknown);
+        };
+        if named
+            .iter()
+            .all(|server| server.transport == first.transport)
+        {
+            Ok(first)
+        } else {
+            Err(FindError::Ambiguous(
+                named.iter().map(|server| server.id.clone()).collect(),
+            ))
+        }
+    }
+}
+
+/// Which of an agent's own entries of one name wins: the higher.
+fn precedence(source: Source) -> u8 {
+    match source {
+        Source::ClaudeLocal => 3,
+        Source::ClaudeProject | Source::CodexProject => 2,
+        Source::ClaudeUser | Source::CodexUser => 1,
+        Source::Desktop | Source::CursorUser | Source::CursorProject => 0,
+    }
+}
+
+/// A server's id: its source, its project for a project's, and its name.
+fn server_id(source: Source, project: Option<&Path>, name: &str) -> String {
+    match project {
+        Some(project) => format!("{}:{}:{name}", source.prefix(), project.display()),
+        None => format!("{}:{name}", source.prefix()),
+    }
+}
+
+/// The user's catalog, kept current by a watcher, and a project's read when asked.
+pub struct Registry {
+    roots: Roots,
+    user: RwLock<Arc<Catalog>>,
+    watcher: Mutex<Option<watch::Watcher>>,
+}
+
+impl Registry {
+    /// Reads the user's configs once; [`Self::watch`] keeps them current.
+    pub fn new(roots: Roots) -> Arc<Self> {
+        let user = Catalog::user(&roots);
+        Arc::new(Self {
+            roots,
+            user: RwLock::new(Arc::new(user)),
+            watcher: Mutex::new(None),
+        })
+    }
+
+    pub fn roots(&self) -> &Roots {
+        &self.roots
+    }
+
+    /// The user's entries and, for `project`, the project's (read now).
+    pub fn catalog(&self, project: Option<&Path>) -> Catalog {
+        let mut catalog = Catalog::clone(&self.user.read().unwrap_or_else(|p| p.into_inner()));
+        if let Some(project) = project {
+            catalog.add_project(&self.roots, project);
+        }
+        catalog
+    }
+
+    /// Adds to `catalog` the servers and skills of `project`'s own config whose ids
+    /// `keep_server` and `keep_skill` take, as found there: items of another project the user
+    /// uses in every project. Its unreadable entries are left out.
+    pub fn adopt(
+        &self,
+        catalog: &mut Catalog,
+        project: &Path,
+        keep_server: impl Fn(&str) -> bool,
+        keep_skill: impl Fn(&str) -> bool,
+    ) {
+        let servers = servers::project(&self.roots, project, &mut Vec::new());
+        for server in servers {
+            if keep_server(&server.id) && catalog.server(&server.id).is_none() {
+                catalog.servers.push(server);
+            }
+        }
+        let mut skills = Vec::new();
+        skills::add_project(&mut skills, project);
+        for skill in skills {
+            if keep_skill(&skill.id) && !catalog.skills.iter().any(|known| known.id == skill.id) {
+                skills::merge(&mut catalog.skills, skill);
+            }
+        }
+    }
+
+    /// Reads the user's configs again.
+    pub fn refresh(&self) {
+        let user = Arc::new(Catalog::user(&self.roots));
+        *self.user.write().unwrap_or_else(|p| p.into_inner()) = user;
+        if let Some(watcher) = self
+            .watcher
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_mut()
+        {
+            // A folder made since (a first skill root) may have filled before it was watched.
+            if watcher.rewatch(&self.watched()) {
+                let user = Arc::new(Catalog::user(&self.roots));
+                *self.user.write().unwrap_or_else(|p| p.into_inner()) = user;
+            }
+        }
+    }
+
+    /// Keeps the user's catalog current: a change to any config or skill (a skill's
+    /// `SKILL.md` through a symlink too) reads them again, half a second after the last one.
+    /// Idle, it costs nothing. Ends with the registry.
+    pub fn watch(self: &Arc<Self>) -> std::io::Result<()> {
+        let registry = Arc::downgrade(self);
+        let watcher = watch::Watcher::start(
+            &self.watched(),
+            Box::new(move || {
+                if let Some(registry) = registry.upgrade() {
+                    registry.refresh();
+                }
+            }),
+        )?;
+        *self.watcher.lock().unwrap_or_else(|p| p.into_inner()) = Some(watcher);
+        Ok(())
+    }
+
+    /// What the watcher looks at.
+    fn watched(&self) -> watch::Watched {
+        let roots = &self.roots;
+        let user = self.user.read().unwrap_or_else(|p| p.into_inner());
+        let mut files = vec![
+            roots.claude_json.clone(),
+            roots.codex_home.join("config.toml"),
+            roots.cursor_dir.join("mcp.json"),
+        ];
+        files.extend(roots.desktop_config.clone());
+        let mut trees = vec![
+            roots.claude_dir.join("skills"),
+            roots.agents_skills.clone(),
+            roots.codex_home.join("skills"),
+        ];
+        // A skill reached through a symlink: its own folder, wherever it is.
+        for skill in &user.skills {
+            if !trees.iter().any(|tree| skill.dir.starts_with(tree)) {
+                trees.push(skill.dir.clone());
+            }
+        }
+        watch::Watched { files, trees }
+    }
+}
+
+#[cfg(test)]
+mod tests;

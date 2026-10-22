@@ -62,12 +62,14 @@ mod git_actions;
 mod inbox_store;
 mod instructions;
 mod integrated_checks;
+pub mod integrations;
 mod kept;
 #[cfg(all(test, unix))]
 mod kept_live_tests;
 mod landing;
 mod lifecycle;
 mod machine;
+mod mcp_auth;
 mod memory_guard;
 mod merge_consent;
 mod merge_record;
@@ -160,6 +162,7 @@ pub(crate) use conversation::interrupted_by_quit;
 pub use instructions::{COMMAND_PATHS_MAX, command_paths, lexical};
 pub(crate) use integrated_checks::integrated_check_number;
 pub(crate) use landing::held_merge;
+pub use mcp_auth::McpSignInStatus;
 pub use side_chat::BrowserPage;
 pub use takeover::{HostedTerminal, TerminalHost, TerminalSnapshot, WorkerTerminal};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
@@ -185,6 +188,8 @@ pub struct SessionManager {
     git: Git,
     data_dir: PathBuf,
     grants: Grants,
+    /// Sign-ins to remote MCP servers shared between the agents, and their proxy.
+    mcp_auth: Arc<mcp_auth::McpAuth>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
@@ -321,6 +326,9 @@ pub struct SessionManager {
     rules_given: std::sync::Mutex<
         std::collections::HashMap<ConversationId, (String, std::collections::HashSet<String>)>,
     >,
+    /// The MCP servers and skills of every agent's own configuration ([`integrations`]),
+    /// read from the CLIs' environment. Tests read an empty home unless they set one.
+    registry: std::sync::RwLock<Arc<brigadier_registry::Registry>>,
 }
 
 impl SessionManager {
@@ -394,6 +402,29 @@ impl SessionManager {
                 .fake(brigadier_sandbox::MachineLoad::default());
         }
         let app = Arc::new(app_call::AppHub::default());
+        let registry = {
+            #[cfg(not(test))]
+            let vars: Vec<(String, String)> = env
+                .vars()
+                .into_iter()
+                .filter_map(|(name, value)| {
+                    Some((name.into_string().ok()?, value.into_string().ok()?))
+                })
+                .collect();
+            #[cfg(test)]
+            let vars = vec![(
+                "HOME".to_owned(),
+                data_dir.join("integrations-home").display().to_string(),
+            )];
+            let registry = tokio::task::spawn_blocking(move || integrations::registry(vars))
+                .await
+                .map_err(|err| Error::Invalid(format!("reading the integrations: {err}")))?;
+            #[cfg(not(test))]
+            if let Err(err) = registry.watch() {
+                tracing::warn!(error = %err, "the integrations' configs aren't watched");
+            }
+            registry
+        };
         let manager = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             core,
@@ -402,7 +433,22 @@ impl SessionManager {
             config,
             git,
             data_dir,
+            registry: std::sync::RwLock::new(registry),
             grants: Grants::default(),
+            mcp_auth: {
+                let me = me.clone();
+                Arc::new(mcp_auth::McpAuth::new(
+                    // Tests never touch the user's Keychain.
+                    #[cfg(not(test))]
+                    mcp_auth::system_keychain(),
+                    #[cfg(test)]
+                    Arc::new(mcp_auth::Memory::default()),
+                    Arc::new(move |grant: &str| {
+                        me.upgrade()
+                            .is_some_and(|manager| manager.grants.resolve(grant).is_some())
+                    }),
+                ))
+            },
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),

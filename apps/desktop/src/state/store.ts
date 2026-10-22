@@ -27,6 +27,7 @@ export type SettingsPageId =
   | "general"
   | "configuration"
   | "memory"
+  | "plugins"
   | "providers"
   | "routing"
   | "git"
@@ -242,6 +243,11 @@ export const useApp = create<AppState>()(() => ({
     browserFullUrl: false,
     browserDownloadsDir: "",
     browserAskDownloads: false,
+    mcpServersOff: [],
+    skillsOff: [],
+    projectSwitches: [],
+    serversEverywhere: [],
+    skillsEverywhere: [],
     settingsVersion: 1,
   },
   threads: {},

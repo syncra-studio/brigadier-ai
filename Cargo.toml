@@ -42,6 +42,7 @@ brigadier-mcp-server = { path = "crates/mcp-server" }
 brigadier-brain = { path = "crates/brain" }
 brigadier-index = { path = "crates/index" }
 brigadier-browser-data = { path = "crates/browser-data" }
+brigadier-registry = { path = "crates/registry" }
 
 anyhow = "1.0.104"
 base64 = "0.23.1"

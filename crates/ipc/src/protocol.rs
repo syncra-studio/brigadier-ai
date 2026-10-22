@@ -1229,6 +1229,46 @@ pub enum Request {
     /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
     /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
     GetAccounts,
+    /// Settings → MCP servers and Skills: every server and skill the agents' configs on this
+    /// machine name, with a project's own when `projectId` is given. Switching one off goes
+    /// through [`Request::UpdateSettings`] (`mcpServersOff`, `skillsOff`).
+    GetIntegrations {
+        project_id: Option<ProjectId>,
+    },
+    /// Signs in to the remote MCP server `serverId` (an id of [`Request::GetIntegrations`]'s
+    /// catalog, of `projectId`'s when given; a project the user doesn't trust is refused) once
+    /// in Brigadier, in the user's browser. Answers at once with the sign-in's id; how it went
+    /// comes from [`Request::GetMcpSignIn`]. The sign-in then serves every agent's workers.
+    SignInMcpServer {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
+    /// How sign-in `id` ([`Request::SignInMcpServer`]) went. Never carries a token.
+    GetMcpSignIn {
+        id: String,
+    },
+    /// Stops sign-in `id` while it waits for the browser: its callback listener closes,
+    /// nothing is saved, and [`Request::GetMcpSignIn`] reports it cancelled.
+    CancelMcpSignIn {
+        id: String,
+    },
+    /// Opens sign-in `id`'s page in the user's browser again, while it waits.
+    ReopenMcpSignIn {
+        id: String,
+    },
+    /// Deletes Brigadier's own sign-in to the server `serverId` (of `projectId`'s catalog when
+    /// given), if it has one. Claude Code's and Codex's own stores are never touched.
+    SignOutMcpServer {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
+    /// Forgets that macOS refused to let Brigadier read another agent's sign-in for the
+    /// server `serverId` and reads it once more, so macOS asks again. The new state arrives
+    /// with the next [`Request::GetIntegrations`].
+    AskMcpSignInAgain {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
     /// Adds an extra account of `provider` (a CLI home of its own) and opens the terminal
     /// that signs it in: the CLI's own sign-in, run with that home. Its output streams like
     /// [`Request::OpenTerminal`]'s; the account is checked again when it ends.
@@ -1938,6 +1978,19 @@ pub enum Response {
     GetAccounts {
         accounts: AccountsView,
     },
+    GetIntegrations {
+        integrations: brigadier_core::manager::integrations::IntegrationsView,
+    },
+    SignInMcpServer {
+        id: String,
+    },
+    GetMcpSignIn {
+        status: brigadier_core::manager::McpSignInStatus,
+    },
+    CancelMcpSignIn,
+    ReopenMcpSignIn,
+    SignOutMcpServer,
+    AskMcpSignInAgain,
     AddAccount {
         account: AccountEntry,
         terminal: TerminalInfo,

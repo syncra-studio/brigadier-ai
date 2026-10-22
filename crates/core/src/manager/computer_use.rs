@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use brigadier_providers::McpServer;
+use brigadier_providers::{McpServer, McpTransport};
 
 use super::SessionManager;
 
@@ -96,8 +96,11 @@ impl SessionManager {
         Some(ComputerUseKit {
             server: McpServer {
                 name: SERVER_NAME.into(),
-                command: placed.app.join("Contents/MacOS").join(HELPER_BIN),
-                args: vec!["mcp".into()],
+                transport: McpTransport::Stdio {
+                    command: placed.app.join("Contents/MacOS").join(HELPER_BIN),
+                    args: vec!["mcp".into()],
+                    cwd: None,
+                },
                 env: vec![
                     (
                         "BRIGADIER_CU_HOME".into(),
