@@ -1126,6 +1126,34 @@ fn ends_with_color(bytes: &[u8]) -> bool {
     rest[..rest.len() - digits].ends_with(b"\x1b[")
 }
 
+/// Whether a path can start right after `before`: at a byte that can't continue a name, after
+/// a terminal color code, right after a one-letter command-line option that starts a word
+/// (`-I/x`, `-L/x`, `-S/x`), as a C build's log gives compilers and CMake their folders, or
+/// right after a build step's kind (`<CreateBuildDirectory-/x>`), as SwiftPM's build data names
+/// its steps.
+fn starts_path(before: &[u8]) -> bool {
+    let free =
+        |prev: Option<&u8>| prev.is_none_or(|prev| !(name_byte(*prev) || b"/\\".contains(prev)));
+    free(before.last())
+        || ends_with_color(before)
+        || (matches!(before, [.., b'-', letter] if letter.is_ascii_alphabetic())
+            && free(before.len().checked_sub(3).map(|index| &before[index])))
+        || ends_with_step_kind(before)
+}
+
+/// Whether `before` ends with `<` and a build step's kind (`<CreateBuildDirectory-`).
+fn ends_with_step_kind(before: &[u8]) -> bool {
+    let Some(rest) = before.strip_suffix(b"-") else {
+        return false;
+    };
+    let letters = rest
+        .iter()
+        .rev()
+        .take_while(|byte| byte.is_ascii_alphabetic())
+        .count();
+    letters > 0 && rest[..rest.len() - letters].ends_with(b"<")
+}
+
 /// How sure a mention of the checkout's path is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fit {
@@ -1162,11 +1190,7 @@ fn path_matches<'a>(
             }
             _ => Some(false),
         }?;
-        let before = &bytes[..at];
-        let starts = before
-            .last()
-            .is_none_or(|prev| !(name_byte(*prev) || b"/\\".contains(prev)))
-            || ends_with_color(before);
+        let starts = starts_path(&bytes[..at]);
         Some((
             at,
             if ends && starts {
@@ -1355,6 +1379,37 @@ mod tests {
             "config: \x1b[4m/data/worktrees/task-1/a.ts\x1b[24m"
         );
         assert!(rewritten(&p, Format::Plain, "\x1b[4mm/Users/me/app").is_err());
+        // Right after a one-letter option, as compilers and CMake are given folders in a C
+        // build's log (whisper-rs-sys prints all of it to its build-script output).
+        assert_eq!(
+            rewritten(
+                &p,
+                Format::Plain,
+                "cmake -S/Users/me/app/out/src -B/Users/me/app/out/build\nc++ -DX=600 -I/Users/me/app/out/src/. -o x.o\n"
+            )
+            .unwrap()
+            .unwrap(),
+            "cmake -S/data/worktrees/task-1/out/src -B/data/worktrees/task-1/out/build\nc++ -DX=600 -I/data/worktrees/task-1/out/src/. -o x.o\n"
+        );
+        // An option that doesn't start a word is part of a longer name.
+        assert!(rewritten(&p, Format::Plain, "x/-I/Users/me/app/y").is_err());
+        assert!(rewritten(&p, Format::Plain, "a-I/Users/me/app/y").is_err());
+        assert!(rewritten(&p, Format::Plain, "--I/Users/me/app/y").is_err());
+        // After a build step's kind, as SwiftPM's build data (a Swift package a build script
+        // builds) names its steps.
+        assert_eq!(
+            rewritten(
+                &p,
+                Format::Json,
+                r#"{"inputs":["<CreateBuildDirectory-/Users/me/app/out/PCH>","/Users/me/app/out/a.o"]}"#
+            )
+            .unwrap()
+            .unwrap(),
+            r#"{"inputs":["<CreateBuildDirectory-/data/worktrees/task-1/out/PCH>","/data/worktrees/task-1/out/a.o"]}"#
+        );
+        assert!(rewritten(&p, Format::Json, r#""<x/Create-/Users/me/app/y>""#).is_err());
+        assert!(rewritten(&p, Format::Json, r#""a-/Users/me/app/y""#).is_err());
+        assert!(rewritten(&p, Format::Json, r#""<-/Users/me/app/y""#).is_err());
     }
 
     #[test]
@@ -2053,6 +2108,62 @@ mod tests {
                 "{0}/target/debug/deps/app-1a2b: {0}/src/main.rs\n",
                 worktree.display()
             )
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn c_and_swift_build_data_from_build_scripts_is_rewritten() {
+        let Some(fx) = Fixture::new("target/\n") else {
+            return;
+        };
+        let source = fx.root().to_string_lossy().into_owned();
+        let out = format!("{source}/target/debug/build/whisper-rs-sys-1a2b/out");
+        fx.write("target/debug/.cargo-lock", b"");
+        // What whisper-rs-sys's build script prints: CMake's whole verbose build, then Cargo's
+        // instructions.
+        let output = |root: &str| {
+            format!(
+                "/opt/homebrew/bin/cmake -S{root}/whisper.cpp -B{root}/build --check-build-system CMakeFiles/Makefile.cmake 0\n\
+                 cd {root}/build/ggml/src && /usr/bin/c++ -D_XOPEN_SOURCE=600 -I{root}/whisper.cpp/ggml/src/. -I{root}/whisper.cpp/ggml/src/../include -o ggml.c.o -c {root}/whisper.cpp/ggml/src/ggml.c\n\
+                 cargo:rustc-link-search={root}/lib\n"
+            )
+        };
+        fx.write(
+            "target/debug/build/whisper-rs-sys-1a2b/output",
+            output(&out).as_bytes(),
+        );
+        fx.write(
+            "target/debug/build/whisper-rs-sys-1a2b/out/build/flags.make",
+            format!("C_INCLUDES = -I{out}/whisper.cpp/include\n").as_bytes(),
+        );
+        // And what a Swift package built by a build script keeps (the computer-use helper's).
+        let steps = |root: &str| {
+            format!(r#"{{"inputs":["<CreateBuildDirectory-{root}/swift-build/PCH>"]}}"#)
+        };
+        fx.write(
+            "target/debug/build/whisper-rs-sys-1a2b/out/swift-build/manifest.json",
+            steps(&out).as_bytes(),
+        );
+        let warmed = fx.warm();
+        assert_eq!(warmed.copied, ["target"], "{warmed:?}");
+        let worktree = fs::canonicalize(&fx.worktree).unwrap();
+        let moved = format!(
+            "{}/target/debug/build/whisper-rs-sys-1a2b/out",
+            worktree.display()
+        );
+        let copy = fx.worktree.join("target/debug/build/whisper-rs-sys-1a2b");
+        assert_eq!(
+            fs::read_to_string(copy.join("output")).unwrap(),
+            output(&moved)
+        );
+        assert_eq!(
+            fs::read_to_string(copy.join("out/build/flags.make")).unwrap(),
+            format!("C_INCLUDES = -I{moved}/whisper.cpp/include\n")
+        );
+        assert_eq!(
+            fs::read_to_string(copy.join("out/swift-build/manifest.json")).unwrap(),
+            steps(&moved)
         );
     }
 
