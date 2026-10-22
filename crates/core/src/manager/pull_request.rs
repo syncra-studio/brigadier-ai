@@ -452,7 +452,6 @@ impl SessionManager {
         {
             requests.push(request.to_owned());
         }
-        let (named, onto_base) = (branch.clone(), base.clone());
         let auto = self.auto_merge_in(id);
         let record = self.merge_record(id, &worktree, &branch, &head, auto).await;
         // A checkout moved to the merge has the base's other work too: that is merged as well.
@@ -477,24 +476,7 @@ impl SessionManager {
             },
         )
         .await;
-        self.tell_merged(id, &onto_base, &onto.0).await;
-        let previews = self.stop_merged_previews(id).await;
-        if !previews.is_empty()
-            && let Ok(conv) = self.conv(id)
-        {
-            conv.hold_fact(format!("[preview] PR #{} merged.{previews}", pr.number))
-                .await;
-        }
-        // GitHub may keep the pull request's branch: a push of the moved branch to it is no
-        // fast-forward then. A fact for the thread to judge.
-        if moved && let Ok(conv) = self.conv(id) {
-            let short = &onto.0[..onto.0.len().min(12)];
-            conv.hold_fact(format!(
-                "[pull request] PR #{} was merged on GitHub; your branch `{named}` now starts from `{onto_base}` at {short}. If GitHub kept the branch, its copy there still holds the commits before the merge: a push of new work to it needs `--force-with-lease`, or use a new branch.",
-                pr.number,
-            ))
-            .await;
-        }
+        self.stop_merged_previews(id).await;
     }
 }
 

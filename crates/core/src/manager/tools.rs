@@ -374,22 +374,17 @@ impl SessionManager {
                         "Created task-{} ({:?}), but no model it may use can take it now: {}. It \
                          starts on its own when one can (after a reset, or when the user changes \
                          their routing); its report arrives later as a message. The user sees \
-                         it waiting. If you have nothing to say now, reply with exactly {}.",
-                        task.number,
-                        task.kind,
-                        wait.reason,
-                        prompts::QUIET
+                         it waiting.",
+                        task.number, task.kind, wait.reason
                     ));
                 }
                 Ok(format!(
                     "Started task-{} ({:?}) on {}: {}. Its report arrives later as a message; don't wait for it. \
-                     The user sees the worker live. If you have nothing to say now, reply with \
-                     exactly {}.",
+                     The user sees the worker live.",
                     task.number,
                     task.kind,
                     route_label(&task),
-                    task.route.reason,
-                    prompts::QUIET
+                    task.route.reason
                 ))
             }
             OrchestratorCall::MessageWorker(mut args) => {
@@ -481,13 +476,12 @@ impl SessionManager {
                 })
                 .await?;
                 Ok(format!(
-                    "Asked the user {} on one card. Reply with exactly {} now. The answers arrive as an [answer] message in this request; carry on with anything that doesn't depend on them.",
+                    "Asked the user {} on one card. The answers arrive as an [answer] message in this request; carry on with anything that doesn't depend on them.",
                     if asked == 1 {
                         "1 question".to_owned()
                     } else {
                         format!("{asked} questions")
-                    },
-                    prompts::QUIET
+                    }
                 ))
             }
             OrchestratorCall::ReadReport(args) => {

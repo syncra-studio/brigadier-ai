@@ -84,8 +84,12 @@ async fn a_proposed_plan_is_a_document_and_yes_builds_it_with_plan_mode_off() {
                     )
                     .await;
                 assert!(!proposed.is_error, "{}", proposed.text);
-                assert!(proposed.text.contains("[quiet]"), "{}", proposed.text);
-                Reply::text("[quiet]")
+                assert!(
+                    proposed.text.contains("Do nothing more for it now"),
+                    "{}",
+                    proposed.text
+                );
+                Reply::text("")
             }
         }),
     )
@@ -166,7 +170,7 @@ async fn not_now_puts_a_plan_off_and_the_thread_says_so() {
                     )
                     .await;
                 assert!(!proposed.is_error, "{}", proposed.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -246,7 +250,7 @@ async fn changes_send_a_plan_back_and_the_next_proposal_replaces_it() {
                     .call("propose_plan", json!({ "title": title, "body": BODY }))
                     .await;
                 assert!(!proposed.is_error, "{}", proposed.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -310,7 +314,7 @@ fn outline_script(worker_inputs: Arc<Mutex<Vec<String>>>) -> Script {
                         "{}",
                         reply.text
                     );
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
@@ -318,7 +322,7 @@ fn outline_script(worker_inputs: Arc<Mutex<Vec<String>>>) -> Script {
                     return Reply::text("Added one.txt.");
                 }
                 if turn.input.contains("[decision]") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -328,7 +332,7 @@ fn outline_script(worker_inputs: Arc<Mutex<Vec<String>>>) -> Script {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             worker_inputs.lock().unwrap().push(turn.input.clone());
             if turn.earlier == 0 {
@@ -464,7 +468,7 @@ async fn in_plan_mode_the_users_yes_to_the_plan_starts_the_lead_that_outlined_it
                         )
                         .await;
                     assert!(!proposed.is_error, "{}", proposed.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
@@ -473,7 +477,7 @@ async fn in_plan_mode_the_users_yes_to_the_plan_starts_the_lead_that_outlined_it
                 }
                 if turn.input.contains("[decision]") {
                     assert!(turn.input.contains("task-1 the go-ahead"), "{}", turn.input);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -483,7 +487,7 @@ async fn in_plan_mode_the_users_yes_to_the_plan_starts_the_lead_that_outlined_it
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.earlier == 0 {
                 let reply = turn
@@ -559,7 +563,7 @@ async fn not_now_on_a_plan_with_a_waiting_lead_lets_its_request_end() {
                         )
                         .await;
                     assert!(!proposed.is_error, "{}", proposed.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[decision]") {
                     return Reply::text("Okay, the plan waits until you want it.");
@@ -572,7 +576,7 @@ async fn not_now_on_a_plan_with_a_waiting_lead_lets_its_request_end() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let reply = turn
                 .call("submit_outline", json!({"outline": "1. Create one.txt"}))
@@ -649,7 +653,7 @@ async fn a_revised_plan_carries_its_leads_outline_and_reaches_the_lead() {
                             .call("propose_plan", json!({ "title": title, "body": body }))
                             .await;
                         assert!(!proposed.is_error, "{}", proposed.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-1") {
                         let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
@@ -657,7 +661,7 @@ async fn a_revised_plan_carries_its_leads_outline_and_reaches_the_lead() {
                         return Reply::text("Added both files.");
                     }
                     if turn.input.contains("[decision]") {
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     let reply = turn
                         .call(
@@ -667,7 +671,7 @@ async fn a_revised_plan_carries_its_leads_outline_and_reaches_the_lead() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 log.lock().unwrap().push(turn.input.clone());
                 if turn.earlier == 0 {

@@ -131,7 +131,7 @@ async fn held(name: &str) -> Held {
                             );
                         }
                     }
-                    return Reply::text(super::super::prompts::QUIET);
+                    return Reply::text("");
                 }
                 if turn.input.starts_with("Add two notes") {
                     for title in ["Write note A", "Write note B"] {
@@ -152,7 +152,7 @@ async fn held(name: &str) -> Held {
                         )
                         .await;
                     log(&format!("finish_session: {}", reply.text));
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reports: Vec<&str> = ["1", "2"]
                     .into_iter()
@@ -165,7 +165,7 @@ async fn held(name: &str) -> Held {
                     assert!(!reply.is_error, "{}", reply.text);
                 }
                 if !reports.is_empty() && !turn.input.contains("[merge") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[merge due]") {
                     turn.call("run_checks", json!({})).await;
@@ -476,7 +476,7 @@ async fn a_merge_now_while_a_worker_writes_merges_what_landed_and_names_it() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;

@@ -44,7 +44,7 @@ async fn limited_on_report(name: &str) -> Flow {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.provider == ProviderKind::Claude && turn.input.contains("[report task-1") {
                 return Reply::limited();

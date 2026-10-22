@@ -86,9 +86,4 @@ changes?: RequestChanges,
 /**
  * Where the user's review left each file it changed, once it settled.
  */
-review?: { [key in string]: FileReview }, 
-/**
- * The guess at the user's next message its conversation's last turn for it ended with (a
- * hidden `[next: …]` line), for the empty composer once it is over. Never sent by itself.
- */
-suggestion?: string, };
+review?: { [key in string]: FileReview }, };

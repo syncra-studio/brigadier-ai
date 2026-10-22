@@ -76,13 +76,13 @@ fn waiting_thread(answered: Arc<Mutex<Vec<String>>>) -> Script {
                     .call("request_review", json!({"wait_seconds": 0}))
                     .await;
                 assert!(asked.text.contains("still reviews"), "{}", asked.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.input.contains("found nothing") {
                 answered.lock().unwrap().push(turn.input.clone());
                 return Reply::text("Built the feature; the review found nothing.");
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         }
     })
 }
@@ -166,13 +166,13 @@ async fn findings_the_thread_had_not_taken_before_a_restart_still_reach_it() {
                         .call("request_review", json!({"wait_seconds": 0}))
                         .await;
                     assert!(asked.text.contains("still reviews"), "{}", asked.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("found 1") {
                     heard.lock().unwrap().push(turn.input.clone());
                     return Reply::text("Built the feature; the one finding is not a bug.");
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -240,7 +240,7 @@ async fn a_message_the_thread_had_not_taken_before_a_restart_still_reaches_it() 
                         .call("request_review", json!({"wait_seconds": 0}))
                         .await;
                     assert!(asked.text.contains("still reviews"), "{}", asked.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("The build server is back.")
                     || turn.input.contains("The cache is warm.")
@@ -248,7 +248,7 @@ async fn a_message_the_thread_had_not_taken_before_a_restart_still_reaches_it() 
                     seen.lock().unwrap().push(turn.input.clone());
                     return Reply::text("Built the feature.");
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -584,7 +584,7 @@ async fn review_candidate_reviews_a_small_change_reuses_coverage_and_rechecks_on
                 }
                 seen.lock().unwrap().inputs.push(turn.input.clone());
                 if !turn.input.starts_with("Build the feature") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let one = commit(&turn, "a.txt", &lines("a", 10), "Ten lines");
                 let first = turn.call("request_review", json!({})).await;
@@ -656,7 +656,7 @@ async fn review_candidate_says_when_no_reviewer_can_take_it_or_reviews_are_off()
                 if !turn.is_orchestrator()
                     || !(turn.input.contains("Change one.") || turn.input.contains("Change two."))
                 {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 commit(&turn, "a.txt", &lines(&turn.input, 3), "Three lines");
                 let reply = turn.call("request_review", json!({})).await;
@@ -713,7 +713,7 @@ async fn a_review_candidate_call_cancelled_as_its_review_ends_still_tells_the_fi
                 }
                 seen.lock().unwrap().inputs.push(turn.input.clone());
                 if !turn.input.starts_with("Build the feature") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 commit(&turn, "a.txt", &lines("a", 10), "Ten lines");
                 let claims = || {
@@ -737,7 +737,7 @@ async fn a_review_candidate_call_cancelled_as_its_review_ends_still_tells_the_fi
                 };
                 tokio::select! {
                     biased;
-                    () = stood_aside => Reply::text("[quiet]"),
+                    () = stood_aside => Reply::text(""),
                     reply = turn.call("request_review", json!({})) => {
                         seen.lock().unwrap().replies.push(reply.text);
                         Reply::text("Reviewed.")

@@ -248,7 +248,7 @@ async fn a_claude_chat_gets_an_image_from_a_codex_worker() {
                     return Reply::text("Here it is: [sunset.png](outputs/sunset.png)");
                 }
                 if !turn.input.contains("Draw me a sunset.") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -259,7 +259,7 @@ async fn a_claude_chat_gets_an_image_from_a_codex_worker() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )

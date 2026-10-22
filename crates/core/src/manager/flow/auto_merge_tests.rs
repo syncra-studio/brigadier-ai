@@ -274,8 +274,8 @@ async fn squash_merged(name: &str, single_branch: bool) {
 
 /// The thread leaves its pushed work ready and the user squash-merges the pull request on
 /// GitHub while the tab is idle (merging on its own off): the user's next message records the
-/// merge on the ready request before its turn, which starts from the new base and hears that
-/// GitHub may have kept the old branch.
+/// merge on the ready request before its turn, which starts from the new base; no note about it
+/// rides on the message.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_before_the_next_turn() {
@@ -378,11 +378,7 @@ async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_befor
     };
     assert_eq!(said("started at: "), squash);
     let input = said("input: ");
-    assert!(
-        input.contains("[pull request] PR #7 was merged on GitHub"),
-        "{input}"
-    );
-    assert!(input.contains("`--force-with-lease`"), "{input}");
+    assert!(!input.contains("[pull request]"), "{input}");
     let merged: Vec<_> = board
         .orchestrator_steps
         .iter()
@@ -394,12 +390,12 @@ async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_befor
         })
         .collect();
     assert_eq!(merged, [(Some(7), false, vec![ready])]);
-    // The sibling tab hears of it as of a local merge.
+    // The sibling tab hears nothing of it: it reads git itself when it needs to.
     flow.say_to(&sibling, "Hello.").await;
     flow.settled_in(&sibling).await;
     let told = format!("merged into `main` at {}", &squash[..12]);
     assert!(
-        log.lock()
+        !log.lock()
             .unwrap()
             .iter()
             .any(|line| line.starts_with("other: ") && line.contains(&told)),

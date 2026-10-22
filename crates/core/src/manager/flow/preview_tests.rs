@@ -98,7 +98,7 @@ fn thread(replies: Replies) -> Script {
             } else if input.contains("Show me the log.") {
                 ("preview_log", json!({}))
             } else {
-                return Reply::text("[quiet]");
+                return Reply::text("");
             };
             let reply = turn.call(tool, args).await;
             replies
@@ -405,7 +405,7 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     );
     assert!(
         ended.contains("Tell the user in this turn what failed")
-            && ended.contains("if you already told them, reply [quiet]"),
+            && ended.contains("unless you already told them."),
         "{ended}"
     );
     flow.say("And now?").await;
@@ -1851,7 +1851,7 @@ async fn a_workers_preview_carries_its_task_and_ends_with_its_folder() {
                     } else if turn.input.contains("Land task-1.") {
                         call("land_phase", json!({"task": "task-1"})).await;
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let number = turn.task_number().unwrap();
                 if number == 1 {
@@ -2002,7 +2002,7 @@ async fn a_start_racing_its_tasks_end_is_refused() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 wait.notified().await;
                 let reply = turn
@@ -2074,7 +2074,7 @@ async fn a_stopped_tasks_preview_stops_before_its_work_is_kept() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.earlier == 0 {
                 let reply = turn
@@ -2155,7 +2155,7 @@ async fn the_thread_hears_a_workers_preview_ended_without_restarting_it() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.earlier == 0 {
                     let reply = turn
@@ -2220,7 +2220,7 @@ async fn an_untrusted_folder_stops_an_idle_workers_preview() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.earlier == 0 {
                 let reply = turn

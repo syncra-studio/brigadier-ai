@@ -4,7 +4,6 @@
 //! match them.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -38,19 +37,12 @@ async fn notes_reach_the_mockups_worker_and_the_real_work_gets_its_screenshots()
     // The marked screenshot the user sends with their notes.
     let marked: Arc<Mutex<String>> = Arc::default();
     let reports = Arc::new(Mutex::new(0));
-    let reminded = Arc::new(AtomicBool::new(false));
     let script: Script = {
-        let (marked, reports, reminded) = (marked.clone(), reports.clone(), reminded.clone());
+        let (marked, reports) = (marked.clone(), reports.clone());
         Arc::new(move |turn: Turn| {
-            let (marked, reports, reminded) = (marked.clone(), reports.clone(), reminded.clone());
+            let (marked, reports) = (marked.clone(), reports.clone());
             Box::pin(async move {
                 if turn.is_orchestrator() {
-                    if turn
-                        .input
-                        .contains("reported work still waits for your decision")
-                    {
-                        reminded.store(true, Ordering::SeqCst);
-                    }
                     if turn.earlier == 0 {
                         let reply = turn
                             .call(
@@ -68,7 +60,7 @@ async fn notes_reach_the_mockups_worker_and_the_real_work_gets_its_screenshots()
                             "{}",
                             early.text
                         );
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("Notes on the mockup") {
                         let id = marked.lock().unwrap().clone();
@@ -80,7 +72,7 @@ async fn notes_reach_the_mockups_worker_and_the_real_work_gets_its_screenshots()
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-1") {
                         let second = {
@@ -91,7 +83,7 @@ async fn notes_reach_the_mockups_worker_and_the_real_work_gets_its_screenshots()
                         if second {
                             let reply = turn.call("delegate_task", real_work("task-1")).await;
                             assert!(!reply.is_error, "{}", reply.text);
-                            return Reply::text("[quiet]");
+                            return Reply::text("");
                         }
                         return Reply::text("Here is the mockup.");
                     }
@@ -151,12 +143,6 @@ async fn notes_reach_the_mockups_worker_and_the_real_work_gets_its_screenshots()
     flow.say("Add a compact density toggle to the sidebar.")
         .await;
     flow.settled().await;
-    // The mockup waits for the thread's decision, so it is reminded once its answer is out.
-    // Notes sent during that turn would go into it, which a scripted turn never reads (#10).
-    super::eventually("the reminder of the undecided mockup", || {
-        reminded.load(Ordering::SeqCst)
-    })
-    .await;
     flow.idle().await;
 
     let attachment = flow

@@ -15,15 +15,14 @@ use std::time::Duration;
 use brigadier_providers::{ErrorKind, NoticeLevel, ProviderEvent};
 
 use super::SessionManager;
-use super::conversation::Envelope;
 use super::decisions::waiting_run;
 use super::workers::TaskLive;
 use crate::board::Board;
 use crate::model::{ConversationId, Lifecycle};
 use crate::now_ms;
 use crate::work::{
-    ApprovalSubject, AttemptEnd, CardId, CardState, InjectionKind, PlanState, QuestionKind, Task,
-    TaskId, TaskState, WaitingSource,
+    ApprovalSubject, AttemptEnd, CardId, CardState, PlanState, QuestionKind, Task, TaskId,
+    TaskState, WaitingSource,
 };
 
 /// The silence before a report, in seconds; every other threshold follows from it.
@@ -413,23 +412,13 @@ impl SessionManager {
                 if !live.report_stall(due, now).await {
                     return;
                 }
-                let text = format!(
-                    "task-{}: silent {} min, last command {}",
-                    task.number,
-                    (now - seen.last_event_ms) / 60_000,
-                    seen.last_command.as_deref().unwrap_or("none")
+                // Logged only: the thread reads its workers when it wants to (G1).
+                tracing::info!(
+                    task = %task.id,
+                    silent_min = (now - seen.last_event_ms) / 60_000,
+                    last_command = seen.last_command.as_deref().unwrap_or("none"),
+                    "a worker is silent"
                 );
-                self.deliver_for(
-                    &task.conversation_id,
-                    Envelope {
-                        kind: InjectionKind::Reminder,
-                        label: format!("silent task-{}", task.number),
-                        task_id: Some(task.id.clone()),
-                        text,
-                    },
-                    task.request_id.clone(),
-                )
-                .await;
             }
             StallVerdict::ReplaceExited => {
                 let _handing = live.reroute.lock().await;

@@ -1,7 +1,7 @@
 //! Deliverables survive their task (BUILD-PLAN A1): a scout's output linked by its scratch
 //! path, in its report, in what it wrote after the report and in the thread's answer, still
 //! opens Brigadier's stored copy once the task ended and its scratch folder went, and the
-//! addendum says the folder is gone. Rule R: a session from before the change hears it once.
+//! addendum says the folder is gone.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -9,8 +9,6 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::prompts::{DELIVERABLES_REVISION, QUIET, revision_note};
-use crate::model::DomainEvent;
 use crate::model::MessageRole;
 
 fn script<F, Fut>(f: F) -> Script
@@ -67,13 +65,13 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text(QUIET);
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-1") && !turn.input.contains("· addendum]") {
                         let link = link_in(&turn.input);
                         return Reply::text(format!("The list is in [rounding.md]({link})."));
                     }
-                    return Reply::text(QUIET);
+                    return Reply::text("");
                 }
                 let outputs = outputs_folder(&turn);
                 *briefed.lock().unwrap() = Some(format!("{}\n{}", turn.prompt, turn.input));
@@ -221,7 +219,7 @@ async fn the_threads_corrected_copy_of_an_ended_tasks_output_is_kept_in_its_plac
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text(QUIET);
+                        return Reply::text("");
                     }
                     if let Some(private) = turn.input.lines().find_map(|line| line.strip_prefix("Keep ")) {
                         let reply = turn
@@ -239,7 +237,7 @@ async fn the_threads_corrected_copy_of_an_ended_tasks_output_is_kept_in_its_plac
                         *reply_log.lock().unwrap() = Some(format!("{}{}", reply.is_error, reply.text));
                         return Reply::text("Fixed the line number: [rounding.md](outputs/rounding.md).");
                     }
-                    return Reply::text(QUIET);
+                    return Reply::text("");
                 }
                 let outputs = outputs_folder(&turn);
                 std::fs::create_dir_all(&outputs).unwrap();
@@ -324,75 +322,5 @@ async fn the_threads_corrected_copy_of_an_ended_tasks_output_is_kept_in_its_plac
     );
     let board = flow.core.board(&flow.conversation).await.unwrap();
     assert_eq!(Flow::task(&board, 1).outputs, *outputs);
-    flow.stop().await;
-}
-
-/// Rule R: a session told the instructions before this change hears revision 30 once, at its
-/// next message, and its workers hear theirs. (Links are resolved when opened, so the test
-/// above covers messages written before the change too.)
-#[tokio::test]
-async fn a_session_from_before_hears_the_deliverables_note_once() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let heard = inputs.clone();
-    let mut flow = Flow::start(
-        "deliverables-revision",
-        Options::default(),
-        script(move |turn| {
-            let heard = heard.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    heard.lock().unwrap().push(turn.input.clone());
-                }
-                Reply::text("Fine.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Look around.").await;
-    flow.settled().await;
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(DELIVERABLES_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Where is the list?").await;
-    flow.settled().await;
-    flow.say("Thanks.").await;
-    flow.settled().await;
-    let note = revision_note(DELIVERABLES_REVISION - 1, false).unwrap();
-    assert!(
-        note.contains("never give the user a scratch path"),
-        "{note}"
-    );
-    assert!(
-        note.contains("\"To check: …\" is only for what nobody here can check or fix"),
-        "{note}"
-    );
-    let worker_note = revision_note(DELIVERABLES_REVISION - 1, true).unwrap();
-    assert!(worker_note.contains("never link its path"), "{worker_note}");
-    let inputs = inputs.lock().unwrap().clone();
-    let told: usize = inputs
-        .iter()
-        .map(|input| input.matches(&note).count())
-        .sum();
-    assert_eq!(told, 1, "{inputs:?}");
     flow.stop().await;
 }

@@ -174,7 +174,7 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
                                 )
                                 .await;
                             assert!(!reply.is_error, "{}", reply.text);
-                            return Reply::text("[quiet]");
+                            return Reply::text("");
                         }
                         return Reply::text("Added the greeting.");
                     }

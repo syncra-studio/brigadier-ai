@@ -56,7 +56,7 @@ async fn lead_and_land(turn: &Turn) -> Reply {
         return Reply::text("Added the greeting.");
     }
     if turn.input.contains("[review ") {
-        return Reply::text("[quiet]");
+        return Reply::text("");
     }
     let reply = turn
         .call(
@@ -66,7 +66,7 @@ async fn lead_and_land(turn: &Turn) -> Reply {
         )
         .await;
     assert!(!reply.is_error, "{}", reply.text);
-    Reply::text("[quiet]")
+    Reply::text("")
 }
 
 /// Reviews off: the thread and the lead are told so, the lead's request_review and the thread's
@@ -162,7 +162,7 @@ async fn switching_reviews_off_releases_a_worker_waiting_for_its_review() {
                     if reports_in(&turn.input).first() == Some(&1) {
                         let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     return lead_and_land(&turn).await;
                 }
@@ -179,10 +179,7 @@ async fn switching_reviews_off_releases_a_worker_waiting_for_its_review() {
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("Reported.");
                 }
-                if turn
-                    .input
-                    .contains("[settings] The user turned reviews off")
-                {
+                if turn.input.contains("Nothing waits on your review now") {
                     let reply = turn
                         .call(
                             "submit_report",
@@ -223,20 +220,11 @@ async fn switching_reviews_off_releases_a_worker_waiting_for_its_review() {
         .await;
     assert_eq!(board.reviews.len(), 1, "the landing starts no review");
     let inputs = heard.lock().unwrap().clone();
-    let note = inputs
-        .iter()
-        .find(|input| input.contains("[settings] The user turned reviews off"))
-        .expect("the lead heard the switch");
-    assert!(note.contains("nothing waits on one"), "{note}");
-    assert!(
-        !note.contains("no findings"),
-        "a review still running may yet send its findings: {note}"
-    );
     assert!(
         inputs
             .iter()
-            .any(|input| input.contains(&crate::manager::prompts::reviews_note(false))),
-        "the thread heard it in a note: {inputs:#?}"
+            .any(|input| input.contains("Nothing waits on your review now")),
+        "the lead heard it may go on: {inputs:#?}"
     );
     // The review that was running finishes all the same, and nothing waited on it.
     release.notify_one();

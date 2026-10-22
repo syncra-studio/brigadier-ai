@@ -243,9 +243,8 @@ fn backgrounded_text(id: &str) -> String {
         "[{id} still runs after {secs} s, so it goes on in the background: its result comes to \
          you as a message in this request, which works until then. Don't wait for it or run it \
          again. Tell the user in one line what runs, with no guess at how long it has left, then \
-         carry on or reply {quiet}.]",
+         carry on.]",
         secs = FOREGROUND.as_secs(),
-        quiet = super::prompts::QUIET,
     )
 }
 

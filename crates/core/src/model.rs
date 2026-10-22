@@ -798,22 +798,6 @@ pub enum GitStyle {
     Custom,
 }
 
-/// Whether `after` has commits or pull requests written otherwise than `before` (what the
-/// agents are told may have changed).
-pub fn git_writing_changed(before: &Settings, after: &Settings) -> bool {
-    (
-        before.commit_style,
-        &before.commit_instructions,
-        before.pr_style,
-        &before.pr_instructions,
-    ) != (
-        after.commit_style,
-        &after.commit_instructions,
-        after.pr_style,
-        &after.pr_instructions,
-    )
-}
-
 /// The branch prefix unless the user sets another.
 pub const DEFAULT_BRANCH_PREFIX: &str = "brigadier/";
 

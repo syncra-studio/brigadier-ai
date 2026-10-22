@@ -137,7 +137,7 @@ async fn claims_carry_their_evidence(reviews: bool) {
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-1") {
                         let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
@@ -189,7 +189,7 @@ async fn claims_carry_their_evidence(reviews: bool) {
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     return Reply::text("Noted.");
                 }
@@ -507,7 +507,7 @@ async fn a_report_after_a_restart_goes_on_from_the_version_before() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Noted.");
             }

@@ -1,7 +1,6 @@
 //! Load only what applies (BUILD-PLAN D1.6): a Claude thread starts with the root's rules whole
 //! and a subfolder's listed; its output hook gives it a subfolder's rules once per CLI session,
-//! with the first file it touches there. Rule R: a session told the instructions before this
-//! change hears the note once, and its next session starts lean.
+//! with the first file it touches there.
 
 use std::sync::{Arc, Mutex};
 
@@ -9,8 +8,6 @@ use brigadier_providers::ProviderKind;
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::manager::HOOK_GRANT_ENV;
-use crate::manager::prompts::{SUBFOLDER_RULES_REVISION, revision_note};
-use crate::model::DomainEvent;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -151,78 +148,6 @@ async fn a_codex_threads_subfolder_rules_come_with_the_first_file_touched_there(
     // The folder a command lists brings them too, once.
     let folder = workspace.join("apps/web").display().to_string();
     assert_eq!(flow.manager.hook_rules(&grant, &folder).await, Some(None));
-    flow.stop().await;
-}
-
-/// Rule R: a session told up to revision 40 (its instructions held every subfolder's rules)
-/// hears the note once; its next CLI session starts with the listing, and gets the rules
-/// with the first file it touches there.
-#[tokio::test]
-async fn an_open_session_hears_of_listed_rules_once_and_then_starts_lean() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let seen = inputs.clone();
-    let mut flow = Flow::start(
-        "subfolder-rules-rule-r",
-        monorepo(),
-        script(move |turn| {
-            let seen = seen.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    seen.lock().unwrap().push(turn.input.clone());
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Hello.").await;
-    flow.settled().await;
-    let workspace = workspace(&flow);
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(SUBFOLDER_RULES_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Fix the page.").await;
-    flow.settled().await;
-    flow.say("Thanks.").await;
-    flow.settled().await;
-    let note = revision_note(SUBFOLDER_RULES_REVISION - 1, false).unwrap();
-    assert!(note.contains("a subfolder's rules"), "{note}");
-    let told: usize = inputs
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|input| input.matches(&note).count())
-        .sum();
-    assert_eq!(told, 1, "{:?}", inputs.lock().unwrap());
-    let (prompt, hook) = newest_thread(&flow);
-    assert!(!prompt.contains(WEB_RULE), "{prompt}");
-    assert!(prompt.contains("apps/web/CLAUDE.md (files under apps/web/)"));
-    let page = workspace
-        .join("apps/web/src/page.tsx")
-        .display()
-        .to_string();
-    let rules = flow.manager.hook_rules(&hook, &page).await.flatten();
-    assert!(rules.is_some_and(|rules| rules.contains(WEB_RULE)));
     flow.stop().await;
 }
 

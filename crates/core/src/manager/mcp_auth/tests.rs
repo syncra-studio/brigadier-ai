@@ -1299,7 +1299,7 @@ mod in_brigadier {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 go.acquire().await.unwrap().forget();
                 let reply = turn

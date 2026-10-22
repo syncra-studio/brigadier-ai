@@ -33,7 +33,7 @@ fn delegating() -> Script {
                 return Reply::text("Working.");
             }
             if turn.earlier > 0 {
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             for args in [
                 json!({"effort": "medium", "title": "Settings mockup", "kind": "implement",
@@ -47,7 +47,7 @@ fn delegating() -> Script {
                 let reply = turn.call("delegate_task", args).await;
                 assert!(!reply.is_error, "{}", reply.text);
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         })
     })
 }

@@ -89,8 +89,8 @@ async fn a_round_of_questions_is_one_card_and_its_answers_continue_the_same_requ
                 let asked = turn.call("ask_user", round()).await;
                 assert!(!asked.is_error, "{}", asked.text);
                 assert!(asked.text.contains("3 questions"), "{}", asked.text);
-                assert!(asked.text.contains("[quiet]"), "{}", asked.text);
-                Reply::text("[quiet]")
+                assert!(asked.text.contains("The answers arrive as an [answer] message"), "{}", asked.text);
+                Reply::text("")
             }
         }),
     )
@@ -184,10 +184,10 @@ async fn a_round_of_questions_is_one_card_and_its_answers_continue_the_same_requ
     flow.stop().await;
 }
 
-/// A reply that asks the user something in text, with no card open, gets one note to ask it on
-/// a card instead; the request goes on working, and the thread's card is what waits.
+/// A reply that asks the user something in text ends its turn like any other (G9, #517): no
+/// note asks it again on a card, and the request is done, as an idle plain CLI is.
 #[tokio::test]
-async fn a_question_asked_in_text_is_asked_again_on_a_card() {
+async fn a_question_asked_in_text_ends_the_turn_with_no_note() {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
     let log = inputs.clone();
     let flow = Flow::start(
@@ -197,117 +197,16 @@ async fn a_question_asked_in_text_is_asked_again_on_a_card() {
             let log = log.clone();
             async move {
                 log.lock().unwrap().push(turn.input.clone());
-                let again = log
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|input| input.contains("high-contrast"));
-                if turn.input.contains("asked the user a question in text") && !again {
-                    let asked = turn
-                        .call(
-                            "ask_user",
-                            json!({ "questions": [{
-                                "question": "Which theme should be the default?",
-                                "options": [{ "label": "Dark" }, { "label": "Light" }],
-                                "recommended": 0
-                            }]}),
-                        )
-                        .await;
-                    assert!(!asked.is_error, "{}", asked.text);
-                    return Reply::text("[quiet]");
-                }
-                if turn.input.contains("[answer]") {
-                    return Reply::text("Dark it is.");
-                }
                 Reply::text("Which theme should be the default: dark or light?")
             }
         }),
     )
     .await;
     flow.say("Add a dark mode.").await;
-    let board = flow
-        .until("the card", |board| open_card(board, false).is_some())
-        .await;
-    let card = open_card(&board, false).unwrap();
-    assert_eq!(board.requests.len(), 1);
-    assert_eq!(
-        card.request_id.as_deref(),
-        Some(board.latest_request().unwrap().id.as_str())
-    );
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            card.id.clone(),
-            vec!["Dark".into()],
-            None,
-        )
-        .await
-        .unwrap();
-    flow.until("the answer's turn", |_| inputs.lock().unwrap().len() >= 3)
-        .await;
     let board = flow.settled().await;
-    assert_eq!(board.requests.len(), 1, "{:#?}", board.requests);
     assert_eq!(board.latest_request().unwrap().state, RequestState::Done);
-    let heard = inputs.lock().unwrap().clone();
-    assert_eq!(heard.len(), 3, "{heard:#?}");
-    assert!(
-        heard[1].contains("Ask it on a card instead"),
-        "{}",
-        heard[1]
-    );
-    assert!(heard[2].contains("The user answered: Dark"), "{}", heard[2]);
-
-    // Told once per request: a thread that asks in text again ends the request as before.
-    flow.say("Also add a high-contrast theme.").await;
-    flow.until("its turns", |_| inputs.lock().unwrap().len() >= 5)
-        .await;
-    let board = flow.settled().await;
-    let heard = inputs.lock().unwrap().clone();
-    assert_eq!(heard.len(), 5, "{heard:#?}");
-    let latest = board.latest_request().unwrap();
-    assert_eq!(latest.state, RequestState::Done, "{latest:#?}");
     assert!(open_card(&board, false).is_none());
-    flow.stop().await;
-}
-
-/// A card left open for an earlier request doesn't spare a later one: its text question still
-/// gets the note.
-#[tokio::test]
-async fn an_earlier_requests_open_card_doesnt_spare_a_later_text_question() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "card-guard-scope",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains("Plan the export.") {
-                    let asked = turn.call("ask_user", round()).await;
-                    assert!(!asked.is_error, "{}", asked.text);
-                    return Reply::text("[quiet]");
-                }
-                if turn.input.contains("asked the user a question in text") {
-                    return Reply::text("[quiet]");
-                }
-                Reply::text("Should the theme follow the system?")
-            }
-        }),
-    )
-    .await;
-    flow.say("Plan the export.").await;
-    flow.until("the card", |board| open_card(board, false).is_some())
-        .await;
-    flow.settled().await;
-    flow.say("Add a dark mode.").await;
-    flow.until("the note", |_| {
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|input| input.contains("asked the user a question in text"))
-    })
-    .await;
+    let heard = inputs.lock().unwrap().clone();
+    assert_eq!(heard.len(), 1, "{heard:#?}");
     flow.stop().await;
 }

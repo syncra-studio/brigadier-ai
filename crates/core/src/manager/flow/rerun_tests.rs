@@ -95,13 +95,13 @@ async fn a_scout_whose_check_fails_reruns_once_one_tier_up() {
                 if turn.is_orchestrator() {
                     if turn.input.starts_with("Find the parser") {
                         delegate_scout(&turn).await;
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     seen.lock().unwrap().push(turn.input.clone());
                     if turn.input.contains("[report task-2 ") {
                         return Reply::text("Nobody found the parser.");
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 report(
                     &turn,
@@ -191,7 +191,7 @@ async fn a_broken_citation_is_no_reason_to_rerun() {
                 if turn.is_orchestrator() {
                     if turn.input.starts_with("Find the parser") {
                         delegate_scout(&turn).await;
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     seen.lock().unwrap().push(turn.input.clone());
                     return Reply::text("It is in src/parse.rs.");
@@ -243,7 +243,7 @@ async fn the_thread_reruns_an_unsupported_answer_once() {
                 if turn.is_orchestrator() {
                     if turn.input.starts_with("Find the parser") {
                         delegate_scout(&turn).await;
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-1 ") {
                         // Two at once: one reruns it, the other hears it already did.
@@ -266,7 +266,7 @@ async fn the_thread_reruns_an_unsupported_answer_once() {
                         }
                         // A [met] report reruns nothing by itself.
                         assert!(!turn.input.contains("[rerun task-1]"), "{}", turn.input);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     return Reply::text("It is in src/parse.rs.");
                 }

@@ -1,7 +1,6 @@
 import { lazy, Suspense } from "react";
 
 import { ComposerStandIn } from "@/app/conversation/ComposerStandIn";
-import { useAuiState } from "@/components/conversation";
 import type { ComposerInputProps } from "@/components/conversation/ComposerEditor";
 import { whenRevealed } from "@/lib/splash";
 
@@ -15,21 +14,11 @@ const ComposerEditor = lazy(() =>
  * The text field: assistant-ui's Lexical input with mention/command chips (its own chunk, so
  * it doesn't hold up startup), a plain field on the same composer text until it loads.
  */
-export function ComposerInput({ guess, ...props }: ComposerInputProps & { guess: string | null }) {
+export function ComposerInput(props: ComposerInputProps) {
   const { placeholder, autoFocus } = props;
-  const empty = useAuiState((s) => s.composer.isEmpty);
   return (
     <div className="relative min-w-0">
       <ComposerField placeholder={placeholder} autoFocus={autoFocus} />
-      {/* The guess at the next message, where the placeholder would be. */}
-      {guess && empty && (
-        <p
-          data-slot="composer-suggestion"
-          className="text-muted-foreground/60 pointer-events-none absolute inset-x-0 top-0 px-2 py-2.5 text-base"
-        >
-          {guess}
-        </p>
-      )}
     </div>
   );
 }

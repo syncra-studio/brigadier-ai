@@ -99,7 +99,7 @@ async fn a_planted_learned_line_reaches_the_next_worker_report_once() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Noted.");
             }

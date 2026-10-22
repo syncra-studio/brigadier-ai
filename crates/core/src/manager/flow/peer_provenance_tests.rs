@@ -45,7 +45,7 @@ async fn a_peers_merge_it_gives_no_consent_and_the_merge_asks_the_receivers_user
                 )
                 .await;
                 call("finish_session", json!({})).await;
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.input.contains("[merge] The user clicked") {
                 call("finish_session", json!({})).await;

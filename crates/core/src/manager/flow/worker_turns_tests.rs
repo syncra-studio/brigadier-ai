@@ -40,7 +40,7 @@ fn reporting_twice() -> Script {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Noted.");
             }

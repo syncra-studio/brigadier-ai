@@ -64,7 +64,7 @@ async fn waiting_lead(name: &str, sent: &Sender<PathBuf>) -> Flow {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let reply = turn
                 .call("submit_outline", json!({"outline": "1. Create one.txt"}))

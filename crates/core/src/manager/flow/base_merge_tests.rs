@@ -181,7 +181,7 @@ async fn conflicting_session(worker: Worker, sides: Sides) -> Flow {
                             "effort": "high", "spec": "Keep both sides' intent and check the result."
                         })).await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     } else if turn.input.contains("Merge task-1 again") {
                         // A merge task is finished by its own worker.
                         let reply = turn.call("delegate_task", json!({
@@ -713,7 +713,7 @@ async fn a_conflicting_task_is_merged_by_a_merge_task_on_its_work() {
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("Merge task-1.")
                         && delegated
@@ -730,7 +730,7 @@ async fn a_conflicting_task_is_merged_by_a_merge_task_on_its_work() {
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     return Reply::text("Ready.");
                 }

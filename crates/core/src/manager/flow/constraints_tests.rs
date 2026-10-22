@@ -2,8 +2,7 @@
 //! kept with `remember` as constraints citing their messages, survive two size rebirths and
 //! reach a worker brief verbatim, with the briefing's constraints section measured; a
 //! constraint is superseded only by one that names it, a request's own ends with the request,
-//! and one the user's message doesn't hold is refused. Rule R: a session told the instructions
-//! before this change hears the note once.
+//! and one the user's message doesn't hold is refused.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,8 +11,6 @@ use serde_json::json;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::{RebirthRecord, RebirthTrigger};
 use crate::manager::constraints::{BRIEF_HEADING, REBIRTH_HEADING};
-use crate::manager::prompts::{CONSTRAINTS_REVISION, revision_note};
-use crate::model::DomainEvent;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -109,7 +106,7 @@ fn thread_script(seen: Arc<Mutex<Seen>>) -> Script {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             Reply::text("Noted.")
         }
@@ -300,7 +297,7 @@ async fn constraints_are_replaced_only_by_name_and_a_requests_own_ends_with_it()
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 Reply::text("Noted.")
             }
@@ -357,61 +354,4 @@ async fn constraints_are_replaced_only_by_name_and_a_requests_own_ends_with_it()
 
 fn ids_of(ids: &Arc<Mutex<Vec<String>>>) -> Arc<Mutex<Vec<String>>> {
     ids.clone()
-}
-
-/// Rule R: a session told the instructions before this change hears the note once, and then
-/// keeps the user's rule as a constraint.
-#[tokio::test]
-async fn an_open_session_hears_of_constraints_once_and_then_keeps_one() {
-    let seen: Arc<Mutex<Seen>> = Arc::default();
-    let mut flow = Flow::start(
-        "constraints-rule-r",
-        Options::default(),
-        thread_script(seen.clone()),
-    )
-    .await;
-    flow.say("Hello.").await;
-    flow.settled().await;
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(CONSTRAINTS_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say(RULE).await;
-    flow.settled().await;
-    flow.say("Thanks.").await;
-    flow.settled().await;
-    let note = revision_note(CONSTRAINTS_REVISION - 1, false).unwrap();
-    assert!(note.contains("kind constraint"), "{note}");
-    let active = flow.manager.active_constraints(&flow.conversation).await;
-    let seen = seen.lock().unwrap().clone();
-    let told: usize = seen
-        .thread
-        .iter()
-        .map(|input| input.matches(&note).count())
-        .sum();
-    assert_eq!(told, 1, "{:?}", seen.thread);
-    assert_eq!(seen.remembered.len(), 1);
-    assert!(!seen.remembered[0].0, "{:?}", seen.remembered);
-    assert_eq!(active.len(), 1);
-    assert_eq!(active[0].words, RULE_WORDS);
-    flow.stop().await;
 }

@@ -136,7 +136,7 @@ async fn ui_change_with_computer_use(name: &str, on: bool) -> (String, String, S
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 Reply::text("Noted.")
             }
@@ -204,7 +204,7 @@ test -f local/config.json || { echo "no local/config.json"; exit 1; }
                 assert!(!checks.is_error, "{}", checks.text);
                 return Reply::text("Built one.");
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;
@@ -256,7 +256,7 @@ async fn the_full_checks_never_run_a_command_the_thread_checked_one_change_with(
         Options::default(),
         script(move |turn| async move {
             if !turn.is_orchestrator() {
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.input.starts_with("Add one") {
                 thread_commit(&turn, "one.txt", "hello\n");
@@ -274,7 +274,7 @@ async fn the_full_checks_never_run_a_command_the_thread_checked_one_change_with(
                 assert!(!checks.is_error, "{}", checks.text);
                 return Reply::text("Added two.");
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;
@@ -318,7 +318,7 @@ async fn the_full_checks_results_are_kept() {
                 assert!(!checks.is_error, "{}", checks.text);
                 return Reply::text("Built one.");
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;
@@ -399,7 +399,7 @@ async fn a_restart_runs_no_full_checks_again_and_records_them_interrupted() {
     let mut flow = Flow::start(
         "integrated-restart-interrupts",
         options(),
-        script(|_turn| async { Reply::text("[quiet]") }),
+        script(|_turn| async { Reply::text("") }),
     )
     .await;
     record_check(&flow, 1, running(), false).await;
@@ -440,7 +440,7 @@ async fn an_unarchive_runs_no_full_checks_again() {
     let flow = Flow::start(
         "integrated-unarchive-interrupts",
         options(),
-        script(|_turn| async { Reply::text("[quiet]") }),
+        script(|_turn| async { Reply::text("") }),
     )
     .await;
     flow.manager
@@ -535,7 +535,7 @@ async fn the_core_tests_pass_in_the_full_checks_sandbox() {
                 assert!(!checks.is_error, "{}", checks.text);
                 return Reply::text("Checked.");
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;

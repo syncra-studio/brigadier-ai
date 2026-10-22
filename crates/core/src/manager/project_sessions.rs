@@ -1,7 +1,6 @@
 //! A project's sessions (Q73): each one task, on its own branch and worktree. Sessions of the
 //! same project see each other on a read-only board (title, state, repository, branch and
-//! changed files), hear of overlapping files and of a sibling's merge as plain facts, and a
-//! queued message may go to the sibling it belongs to. A new session starts from another one
+//! changed files), and a queued message may go to the sibling it belongs to. A new session starts from another one
 //! here (⌘⏎, "Open as a new session", "Start as session").
 
 use crate::model::{
@@ -175,10 +174,9 @@ impl SessionManager {
     }
 }
 
-/// What a session's work changed: its repository, branch and base, and the files changed
+/// What a session's work changed: its branch and base, and the files changed
 /// since it left the base (committed or not), relative to that repository.
 pub(super) struct TabWork {
-    pub repo: String,
     pub branch: String,
     pub base: String,
     pub files: std::collections::BTreeSet<String>,
@@ -469,7 +467,6 @@ impl SessionManager {
             // Rename sources too: a file one tab renames and another edits is both theirs.
             let (_, paths) = repo.diff_scope(&fork, &to).map_err(super::git_error)?;
             Ok(Some(TabWork {
-                repo: checkout,
                 branch,
                 base,
                 files: paths.into_iter().collect(),
@@ -478,121 +475,6 @@ impl SessionManager {
         .await
         .ok()
         .flatten()
-    }
-
-    /// After a request of `id` settled: tells it and each sibling session in the same
-    /// repository, once, the files they both changed that neither was told of yet. A plain fact
-    /// for each one's next turn, starting none; the threads judge what it means.
-    pub(super) async fn tell_overlaps(&self, id: &ConversationId) {
-        let Ok(me) = self.core.conversation(id) else {
-            return;
-        };
-        let Ok(siblings) = self.siblings(id) else {
-            return;
-        };
-        if siblings.is_empty() {
-            return;
-        }
-        let Some(mine) = self.tab_work(&me).await else {
-            return;
-        };
-        for sibling in siblings {
-            let Some(theirs) = self.tab_work(&sibling).await else {
-                continue;
-            };
-            // The same path in another repository is another file.
-            if theirs.repo != mine.repo {
-                continue;
-            }
-            let both: std::collections::BTreeSet<String> =
-                mine.files.intersection(&theirs.files).cloned().collect();
-            let pair = if me.id < sibling.id {
-                (me.id.clone(), sibling.id.clone())
-            } else {
-                (sibling.id.clone(), me.id.clone())
-            };
-            let new: Vec<String> = {
-                let mut told = self
-                    .session_overlaps
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
-                let told = told.entry(pair).or_default();
-                // An overlap that ended is forgotten, so the same file overlapping again is news.
-                told.retain(|file| both.contains(file));
-                let new = both.difference(told).cloned().collect();
-                told.extend(both);
-                new
-            };
-            if new.is_empty() {
-                continue;
-            }
-            let files = new
-                .iter()
-                .map(|file| format!("`{file}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let repo = self.repo_words(&me, &mine.repo);
-            for (to, other, branch) in [
-                (&me, &sibling, &theirs.branch),
-                (&sibling, &me, &mine.branch),
-            ] {
-                if let Ok(conv) = self.conv(&to.id) {
-                    conv.hold_fact(format!(
-                        "[project] Session \"{}\" (session {}{repo}, branch `{branch}`) also \
-                         changed {files}.",
-                        other.title, other.id
-                    ))
-                    .await;
-                }
-            }
-        }
-    }
-
-    /// `id`'s work merged into `base` at `tip`: each sibling session in the same repository
-    /// hears it, once (another repository's base is another branch).
-    pub(super) async fn tell_merged(&self, id: &ConversationId, base: &str, tip: &str) {
-        let (Ok(me), Ok(siblings)) = (self.core.conversation(id), self.siblings(id)) else {
-            return;
-        };
-        let Some(repo) = session_repo(&me) else {
-            return;
-        };
-        let words = self.repo_words(&me, &repo);
-        for sibling in siblings {
-            if session_repo(&sibling).as_deref() != Some(repo.as_str()) {
-                continue;
-            }
-            if let Ok(conv) = self.conv(&sibling.id) {
-                conv.hold_fact(format!(
-                    "[project] Session \"{}\" (session {}{words}) merged into `{base}` at {}.",
-                    me.title,
-                    me.id,
-                    &tip[..tip.len().min(12)]
-                ))
-                .await;
-            }
-        }
-    }
-
-    /// ", repository `name`" for a session of a project with several repositories, else
-    /// nothing: which checkout a fact is about.
-    fn repo_words(&self, session: &Conversation, repo: &str) -> String {
-        let Some(project) = session
-            .project_id
-            .as_ref()
-            .and_then(|id| self.core.project(id).ok())
-        else {
-            return String::new();
-        };
-        if project.repos.len() < 2 {
-            return String::new();
-        }
-        let name = project
-            .repos
-            .iter()
-            .find(|known| known.path == repo)
-            .map_or(repo, |known| known.name.as_str());
-        format!(", repository `{name}`")
     }
 }
 
@@ -638,14 +520,13 @@ impl SessionManager {
 
     /// Route "session": queued follow-up `item_id` of `id` goes to sibling `tab` as the user's
     /// message (queued there if it works), and this session keeps a notice with Undo. A
-    /// sibling that already merged is told as a fact, not refused.
+    /// sibling that already merged takes it too.
     pub(super) async fn move_follow_up(
         &self,
         id: &ConversationId,
         item_id: &str,
         tab: &Conversation,
     ) -> Result<String> {
-        let me = self.core.conversation(id)?;
         let index = self
             .core
             .board(id)
@@ -663,16 +544,6 @@ impl SessionManager {
             .filter(|mention| !matches!(mention, Mention::Task { .. }))
             .cloned()
             .collect();
-        if let Ok(conv) = self.conv(&tab.id) {
-            conv.hold_fact(format!(
-                "[project] The user wrote \"{}\" in session \"{}\" (session {}), whose \
-                 thread sent it on to you as theirs.",
-                super::brains::one_line(&item.text, 120),
-                me.title,
-                me.id
-            ))
-            .await;
-        }
         let sent = match crate::heap(|| {
             self.send_message(
                 tab.id.clone(),
@@ -829,20 +700,8 @@ impl SessionManager {
             )
         })
         .await?;
-        let took_back = match &moved.sent {
-            MovedAs::Queued { item_id } => self.core.take_queued(&moved.to, item_id).await.is_ok(),
-            MovedAs::Sent { .. } => false,
-        };
-        if !took_back && let Ok(conv) = self.conv(&moved.to) {
-            let me = self.core.conversation(id)?;
-            conv.hold_fact(format!(
-                "[project] The user took their message \"{}\" back to session \"{}\" (session \
-                 {}): it is that session's now.",
-                super::brains::one_line(&moved.text, 120),
-                me.title,
-                me.id
-            ))
-            .await;
+        if let MovedAs::Queued { item_id } = &moved.sent {
+            let _ = self.core.take_queued(&moved.to, item_id).await;
         }
         self.core.take_moved(id, item_id).await.map(|_| ())
     }

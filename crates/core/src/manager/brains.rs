@@ -896,11 +896,6 @@ impl SessionManager {
             }
             None => None,
         };
-        let before = if personal {
-            self.memory_lines(super::brain_jobs::MEMORY_BYTES).await
-        } else {
-            Vec::new()
-        };
         let (brain, index) = if personal {
             (self.personal_brain().await?, None)
         } else {
@@ -1035,9 +1030,6 @@ impl SessionManager {
             .map_err(brain_error)
         })
         .await?;
-        if personal {
-            self.told_own_preference(id, &before).await;
-        }
         // What its source shows now, so a wrong cite or quote is fixed at once.
         let source = if sources.is_empty() {
             match (personal || cited.is_some(), evidence.is_empty()) {

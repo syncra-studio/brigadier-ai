@@ -13,7 +13,6 @@ use tokio::sync::Notify;
 use super::peer_kit::{Peers, Sent, header_id, is_reply, message_id, only, send, wait, wait_as};
 use super::{Flow, Options, Reply};
 use crate::board::{Board, PeerRecord};
-use crate::manager::prompts::QUIET;
 use crate::model::{ConversationId, MessageRole, PeerState, PermissionLevel, ReplyHold};
 use crate::work::{OrchestratorStepKind, RequestState};
 
@@ -666,9 +665,7 @@ async fn each_message_steered_into_one_turn_gets_its_reply() {
                 );
                 // Its user's request still ends on the answer to the user (#365).
                 assert!(
-                    steer.contains(
-                        "don't tell them about it: end on your answer to them, or reply [quiet]"
-                    ),
+                    steer.contains("don't tell them about it: end on your answer to them."),
                     "{steer}"
                 );
                 let id = header_id(&steer).unwrap();
@@ -740,7 +737,7 @@ async fn no_reply_goes_while_the_receivers_worker_runs() {
             )
             .await;
         assert!(!reply.is_error, "{}", reply.text);
-        Reply::text(QUIET)
+        Reply::text("")
     });
     let gate = Arc::new(Notify::new());
     let held = gate.clone();

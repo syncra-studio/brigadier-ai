@@ -46,7 +46,7 @@ fn answer(manager: &crate::manager::SessionManager, id: &str, result: BrowserRes
 }
 
 fn quiet() -> Script {
-    script(|_| async { Reply::text("[quiet]") })
+    script(|_| async { Reply::text("") })
 }
 
 /// What the thread was told, once it was told `what`.
@@ -71,7 +71,7 @@ fn listening() -> (Script, Arc<Mutex<Vec<String>>>) {
             if turn.is_orchestrator() {
                 log.lock().unwrap().push(turn.input.clone());
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         }
     });
     (script, inputs)
@@ -159,7 +159,7 @@ async fn a_worker_opens_reads_and_pictures_a_page_in_its_sessions_browser() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.task_number().is_some() && turn.earlier == 0 {
                     for (name, args) in [
@@ -728,7 +728,7 @@ async fn a_worker_waits_for_the_user_s_answer_to_a_password() {
                         )
                         .await;
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.task_number().is_none() || turn.earlier > 0 {
                     return Reply::text("ok");
@@ -820,7 +820,7 @@ async fn a_typed_card_number_is_stored_nowhere() {
                     )
                     .await;
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.task_number().is_none() || turn.earlier > 0 {
                 return Reply::text("ok");

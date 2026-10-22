@@ -597,7 +597,7 @@ async fn request_changes_worktree_commits_and_late_worker_landing_round_trip() {
             turn.emit(ProviderEvent::Command { kept: None, item_id: "last-command".into(), command: "commit edits".into(), cwd: None, status: ItemStatus::Completed, exit_code: Some(0), output: Some("done".into()), duration_ms: None }).await;
             let reply = turn.call("delegate_task", serde_json::json!({"effort": "high", "title": "Add worker file", "kind": "implement", "spec": "Create worker.txt.", "provider": "codex"})).await;
             assert!(!reply.is_error, "{}", reply.text);
-            Reply::text("[quiet]")
+            Reply::text("")
         })).await;
         flow.say("Edit a and b and start a worker.").await;
         let board = flow
@@ -926,7 +926,7 @@ async fn request_changes_background_runs_keep_the_starting_item_and_return_the_f
                     Ok(("exit 0".into(), "é".repeat(160_000)))
                 }).await.unwrap();
                 turn.emit(ProviderEvent::ToolCall { kept: None, item_id: "background-call".into(), name: "mcp__brigadier__run".into(), input: None, status: ItemStatus::Completed, output: Some(reply) }).await;
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         })).await;
         flow.background_commands();
@@ -1603,7 +1603,7 @@ async fn request_changes_background_runs_keep_a_late_link_to_their_call() {
                     })
                     .await;
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -1762,7 +1762,7 @@ async fn the_uncommitted_changes_question_tells_the_threads_edits_from_the_users
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             Reply::text("Fine.")
         }),
@@ -1824,7 +1824,7 @@ async fn two_delegations_at_once_open_one_uncommitted_changes_question() {
                 let (one, two) = tokio::join!(delegate("Look here"), delegate("Look there"));
                 assert!(!one.is_error, "{}", one.text);
                 assert!(!two.is_error, "{}", two.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             Reply::text("Fine.")
         }),
@@ -1906,7 +1906,7 @@ async fn an_edit_just_before_the_delegation_is_the_threads_on_the_question() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             Reply::text("Fine.")
         }),

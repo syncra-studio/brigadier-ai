@@ -142,7 +142,7 @@ fn streaming(tool: &'static str, background: bool) -> Script {
                 .await;
             }
             Reply::text(if background {
-                "[quiet]"
+                ""
             } else {
                 "The command finished."
             })
@@ -458,7 +458,7 @@ async fn a_background_runs_file_seen_before_its_end_stays_its_change() {
             assert!(reply.text.contains("[run-1 still runs"), "{}", reply.text);
             turn.emit(call(ItemStatus::Completed, Some(reply.text)))
                 .await;
-            Reply::text("[quiet]")
+            Reply::text("")
         })
     });
     let flow = Flow::start(
@@ -713,7 +713,7 @@ async fn own_run_streams_tell_a_background_checks_own_reply() {
             assert!(reply.text.contains("[run-1 still runs"), "{}", reply.text);
             turn.emit(call(ItemStatus::Completed, Some(reply.text)))
                 .await;
-            Reply::text("[quiet]")
+            Reply::text("")
         })
     });
     let flow = Flow::start(

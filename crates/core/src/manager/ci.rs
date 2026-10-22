@@ -1306,8 +1306,7 @@ impl super::SessionManager {
         let id = id.clone();
         let timing = Timing::default();
         let reply = format!(
-            "Watching CI for {short} on `{branch}`: the user sees the runs live, and the result comes as a [ci {short} …] message. Reply {} meanwhile.{}",
-            super::prompts::QUIET,
+            "Watching CI for {short} on `{branch}`: the user sees the runs live, and the result comes as a [ci {short} …] message.{}",
             parted_note(&dir, &branch, &sha).await
         );
         let watching = tokio::spawn(async move {

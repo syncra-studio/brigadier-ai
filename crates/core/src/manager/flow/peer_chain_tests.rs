@@ -322,7 +322,7 @@ async fn a_turn_a_workers_report_wakes_keeps_the_chain_of_its_requests_newest_me
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let text = if turn.input.contains("Ask the API session") {
                 "Which column holds names?"

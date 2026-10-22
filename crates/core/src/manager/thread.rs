@@ -10,7 +10,8 @@
 //! The thread's access follows the session's permission level exactly as a worker's does.
 //! What its CLI was started with is remembered on it ([`ThreadLaunch`]): when the workspace or
 //! the level changes, the CLI is closed between turns and the next turn resumes the same
-//! native session with the new ones, told by a `[workspace]` or `[settings]` note.
+//! native session with the new ones. Nothing tells the thread: a resumed session keeps the
+//! instructions it started with, and the next fresh conversation starts on the new ones.
 //!
 //! Commits the thread makes itself get their one review like any landing (THREAD-PLAN.md Q4,
 //! Q12). They are the commits that appear on the workspace's branch during a thread turn and

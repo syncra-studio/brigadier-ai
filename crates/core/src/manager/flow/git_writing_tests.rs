@@ -290,9 +290,9 @@ async fn the_commit_style_reaches_the_writer() {
 }
 
 /// The thread starts with the user's styles in its instructions; switched while it runs, it
-/// hears the new ones once, before its next turn. Its lead's brief carries them too.
+/// hears nothing of it. Its lead's brief carries them too.
 #[tokio::test]
-async fn the_styles_reach_the_thread_and_its_workers_and_a_switch_reaches_a_running_thread() {
+async fn the_styles_reach_the_thread_and_its_workers_and_a_switch_tells_a_running_thread_nothing() {
     let inputs = Arc::new(Mutex::new(Vec::<String>::new()));
     let briefs = Arc::new(Mutex::new(Vec::<String>::new()));
     let (seen, told) = (inputs.clone(), briefs.clone());
@@ -315,7 +315,7 @@ async fn the_styles_reach_the_thread_and_its_workers_and_a_switch_reaches_a_runn
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.task_number().is_some() && turn.earlier == 0 {
                     told.lock().unwrap().push(turn.input.clone());
@@ -369,7 +369,7 @@ async fn the_styles_reach_the_thread_and_its_workers_and_a_switch_reaches_a_runn
         briefs[0]
     );
 
-    // Back to the repository's way: the running thread hears it once.
+    // Back to the repository's way: the running thread hears nothing of it.
     edit_settings(&flow, |settings| {
         settings.commit_style = GitStyle::Repository;
         settings.pr_style = GitStyle::Repository;
@@ -377,19 +377,10 @@ async fn the_styles_reach_the_thread_and_its_workers_and_a_switch_reaches_a_runn
     .await;
     flow.say("And now?").await;
     flow.settled().await;
-    flow.say("Once more.").await;
-    flow.settled().await;
     let inputs = inputs.lock().unwrap().clone();
-    let heard: Vec<_> = inputs
-        .iter()
-        .filter(|input| input.contains("[settings] The user changed how commit messages"))
-        .collect();
-    assert_eq!(heard.len(), 1, "{inputs:#?}");
-    assert!(heard[0].contains("And now?"), "{}", heard[0]);
     assert!(
-        heard[0].contains("follow this repository's conventions for both"),
-        "{}",
-        heard[0]
+        inputs.iter().all(|input| !input.contains("[settings]")),
+        "{inputs:#?}"
     );
     flow.stop().await;
 }
@@ -411,81 +402,6 @@ async fn default_styles_leave_the_instructions_as_they_were() {
         .clone()
         .unwrap_or_default();
     assert!(!prompt.contains("Git writing"), "{prompt}");
-    flow.stop().await;
-}
-
-/// A worker that builds hears a switch at once while it works, and only once.
-#[tokio::test]
-async fn a_working_worker_hears_a_switch_at_once() {
-    let steered = Arc::new(Mutex::new(Vec::<String>::new()));
-    let heard = steered.clone();
-    let flow = Flow::start(
-        "git-writing-worker",
-        Options::default(),
-        script(move |turn| {
-            let heard = heard.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    if turn.input.contains("Add a greeting.") {
-                        let reply = turn
-                            .call(
-                                "delegate_task",
-                                json!({"effort": "medium", "title": "Add a greeting",
-                                       "kind": "implement", "spec": "Create hello.txt.",
-                                       "provider": "claude"}),
-                            )
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                    }
-                    return Reply::text("[quiet]");
-                }
-                if turn.task_number().is_some() && turn.earlier == 0 {
-                    assert!(!turn.input.contains("Git writing"), "{}", turn.input);
-                    let note = turn.steered().await.expect("told of the switch");
-                    heard.lock().unwrap().push(note);
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "Nothing to change.", "changes": []}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add a greeting.").await;
-    flow.until("the lead to work", |board| {
-        board
-            .tasks
-            .values()
-            .any(|task| task.state == crate::work::TaskState::Running)
-    })
-    .await;
-    // Its turn has started: what it was told is its brief.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    edit_settings(&flow, |settings| {
-        settings.commit_style = GitStyle::Conventional;
-    })
-    .await;
-    flow.manager.git_writing_switched().await;
-    // A second call tells it nothing new.
-    flow.manager.git_writing_switched().await;
-    flow.settled().await;
-    let notes = steered.lock().unwrap().clone();
-    assert_eq!(notes.len(), 1, "{notes:#?}");
-    assert!(
-        notes[0].contains("[settings] The user changed how commit messages"),
-        "{}",
-        notes[0]
-    );
-    assert!(
-        notes[0].contains("Conventional Commits 1.0.0"),
-        "{}",
-        notes[0]
-    );
     flow.stop().await;
 }
 

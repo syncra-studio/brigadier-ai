@@ -149,19 +149,16 @@ impl SessionManager {
                     self.update_task(id, &first.id, |task| task.fusion = None)
                         .await?;
                     return Ok(Some(format!(
-                        "Started task-{} (Research). Its report arrives later as a message; don't wait for it. If you have nothing to say now, reply with exactly {}.",
-                        first.number,
-                        prompts::QUIET
+                        "Started task-{} (Research). Its report arrives later as a message; don't wait for it.",
+                        first.number
                     )));
                 }
                 Err(err) => return Err(err),
             }
         }
         Ok(Some(format!(
-            "Started task-{} (answer A) and task-{} (answer B): the same brief, researched independently. Their reports arrive later together, as answers A and B; don't wait for them. If you have nothing to say now, reply with exactly {}.",
-            started[0].number,
-            started[1].number,
-            prompts::QUIET
+            "Started task-{} (answer A) and task-{} (answer B): the same brief, researched independently. Their reports arrive later together, as answers A and B; don't wait for them.",
+            started[0].number, started[1].number
         )))
     }
 

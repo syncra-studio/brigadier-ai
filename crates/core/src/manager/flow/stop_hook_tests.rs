@@ -57,7 +57,7 @@ async fn delegate_once(turn: &Turn, title: &str) -> Reply {
             .await;
         assert!(!reply.is_error, "{}", reply.text);
     }
-    Reply::text("[quiet]")
+    Reply::text("")
 }
 
 #[tokio::test]
@@ -121,7 +121,7 @@ async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
                             .call("approve_outline", json!({"task": "task-1"}))
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.earlier == 0 {
                         let reply = turn
@@ -133,7 +133,7 @@ async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.earlier == 0 {
                     let alone = turn.stop_decision(false).await;
@@ -214,7 +214,7 @@ async fn a_verifier_waiting_for_its_own_review_ends_its_turn() {
                     if turn.input.contains("[report task-1") {
                         let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     return delegate_once(&turn, "Build it").await;
                 }
@@ -300,7 +300,7 @@ async fn only_an_operational_question_goes_on_with_its_safe_default() {
                         }
                     }
                     // Nobody answers a question here.
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[answer to your question]") {
                     log.lock()

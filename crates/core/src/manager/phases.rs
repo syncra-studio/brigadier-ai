@@ -10,7 +10,6 @@ use tokio::sync::oneshot;
 use super::SessionManager;
 use super::cards::CardAnswer;
 use super::conversation::Envelope;
-use super::prompts::QUIET;
 use super::workers::TaskExtra;
 use crate::model::{ConversationId, PermissionLevel};
 use crate::tools::{ApproveOutline, PlanPhases, StartVerifier};
@@ -72,7 +71,7 @@ impl SessionManager {
             .ok_or_else(|| Error::NotFound(format!("overnight run {run_id}")))?;
         if super::overnight::run::run_plan(&board, &run).is_some() {
             return Err(Error::Invalid(
-                "The overnight run already has its plan (in the [run] note); work through it. A plan can't change during the run.".into(),
+                "The overnight run already has its plan (in the message that started the run); work through it. A plan can't change during the run.".into(),
             ));
         }
         let request = super::overnight::run::run_request(&run);
@@ -259,7 +258,7 @@ impl SessionManager {
         };
         self.store_plan(&plan).await?;
         Ok(format!(
-            "The plan \"{}\" is on its card in the thread, with \u{201c}Implement this plan?\u{201d} for the user. Reply with exactly {QUIET} now and do nothing more for it: build nothing until their answer arrives as a message (yes, or the changes they want).",
+            "The plan \"{}\" is on its card in the thread, with \u{201c}Implement this plan?\u{201d} for the user. Do nothing more for it now: build nothing until their answer arrives as a message (yes, or the changes they want).",
             plan.title
         ))
     }
@@ -539,7 +538,7 @@ impl SessionManager {
         let task = self.task_by_id(conversation_id, task_id).await?;
         let next = if plan_mode {
             format!(
-                "Plan mode is on: the user decides. Put this outline before them as your plan with propose_plan (in the plan's shape, its Changes from the outline), then reply [quiet]. Their yes gives task-{} its go-ahead; build nothing before it.",
+                "Plan mode is on: the user decides. Put this outline before them as your plan with propose_plan (in the plan's shape, its Changes from the outline). Their yes gives task-{} its go-ahead; build nothing before it.",
                 task.number
             )
         } else {

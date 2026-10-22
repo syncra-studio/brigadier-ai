@@ -1454,11 +1454,10 @@ impl SessionManager {
                 .map(|t| format!("task-{}", t.number))
                 .collect();
             return Ok(format!(
-                "[merge held] Merging after {} worker{} finish ({}). Nothing is merged yet, and the user's consent holds: Brigadier tells you [merge due] once they have landed, or [merge stopped] if one fails. Tell the user in one line, then reply {} while they work.",
+                "[merge held] Merging after {} worker{} finish ({}). Nothing is merged yet, and the user's consent holds: Brigadier tells you [merge due] once they have landed, or [merge stopped] if one fails. Tell the user in one line.",
                 writing.len(),
                 if writing.len() == 1 { "" } else { "s" },
                 names.join(", "),
-                super::prompts::QUIET,
             ));
         }
         // Review findings and a review still running inform the merge; its result lists them
@@ -1702,7 +1701,6 @@ impl SessionManager {
             self.set_merge_refused(id, None).await;
         }
         self.merged_pending(id, &reviewed, &session_tip.0).await;
-        self.tell_merged(id, &base, &new_tip.0).await;
         *conv.merge_told.lock().unwrap() = None;
         drop(landing_lock);
         let previews = self.stop_merged_previews(id).await;

@@ -89,7 +89,7 @@ fn delegating(tasks: Vec<(&'static str, &'static str, Vec<&'static str>)>) -> Sc
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let reply = turn
                 .call("submit_report", json!({"summary": "Looked around."}))
@@ -289,7 +289,7 @@ async fn unknown_ambiguous_switched_off_and_reserved_names_are_refused() {
                 )
                 .await;
             assert!(!reply.is_error, "{}", reply.text);
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;

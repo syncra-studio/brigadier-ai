@@ -1,7 +1,6 @@
 //! On the user's own checkout the thread doesn't commit unless asked (UI audit M6): it leaves
 //! its change uncommitted and says so, and a commit the user asks for carries no Brigadier
-//! trailer; the store records that the thread wrote it. Rule R: a session from before the
-//! change hears it once.
+//! trailer; the store records that the thread wrote it.
 
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +8,6 @@ use serde_json::json;
 
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn, git};
-use crate::manager::prompts::{LOCAL_COMMIT_REVISION, revision_note};
 use crate::model::{
     ConversationKind, DomainEvent, EnvironmentRequest, ModelChoice, PermissionLevel, SetupRequest,
 };
@@ -116,10 +114,6 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
                         tokens_estimate: 25,
                         label: "instructions revision".into(),
                         task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(LOCAL_COMMIT_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
                     },
                 },
             },
@@ -130,11 +124,6 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
     let start = git(&flow.repo, &["rev-parse", "HEAD"]);
     flow.say("Fix the typo.").await;
     flow.settled().await;
-    let note = revision_note(LOCAL_COMMIT_REVISION - 1, false).unwrap();
-    assert!(
-        note.contains("don't commit your own changes unless the user asks"),
-        "{note}"
-    );
     // Nothing was committed on its own: the change waits in the user's checkout.
     assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), start);
     assert_eq!(git(&flow.repo, &["status", "--porcelain"]), "M README.md");
@@ -169,12 +158,6 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
         })
         .collect();
     assert_eq!(authored, vec![(start, tip)]);
-    let inputs = inputs.lock().unwrap().clone();
-    let told: usize = inputs
-        .iter()
-        .map(|input| input.matches(&note).count())
-        .sum();
-    assert_eq!(told, 1, "{inputs:?}");
     flow.stop().await;
 }
 

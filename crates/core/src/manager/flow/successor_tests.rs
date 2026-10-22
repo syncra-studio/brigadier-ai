@@ -115,7 +115,7 @@ fn scout(
                     }
                     let reply = turn.call("delegate_task", args).await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Noted.");
             }

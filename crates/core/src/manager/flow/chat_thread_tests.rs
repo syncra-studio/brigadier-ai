@@ -101,7 +101,7 @@ async fn a_chat_starts_a_research_worker_and_answers_from_its_report() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -191,7 +191,7 @@ async fn a_chat_answers_its_workers_question() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.input.contains("[report task-1") {
                 return Reply::text("Brass suits your Prusa MK4.");
@@ -204,7 +204,7 @@ async fn a_chat_answers_its_workers_question() {
                 )
                 .await;
             assert!(!reply.is_error, "{}", reply.text);
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;
@@ -254,7 +254,7 @@ async fn one_clarifying_card_then_research(chat: bool) {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let asked = turn
                     .call(
@@ -267,7 +267,7 @@ async fn one_clarifying_card_then_research(chat: bool) {
                     )
                     .await;
                 assert!(!asked.is_error, "{}", asked.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -355,7 +355,7 @@ async fn a_chats_file_comes_from_a_worker_and_opens_from_the_answer() {
                        "spec": "Write a CSV of PETG prices."}),
             )
             .await;
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;
@@ -417,7 +417,7 @@ async fn a_late_report_is_answered_at_the_end_of_the_chat() {
                            "spec": "Compare 3D printer nozzles for PETG."}),
                 )
                 .await;
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )

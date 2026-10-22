@@ -11,7 +11,6 @@ use serde_json::json;
 use super::thread_tests::{commit_in_workspace, on_main};
 use super::{Flow, Options, Reply, Script, Turn, click, git};
 use crate::manager::landing::pending_merge;
-use crate::manager::prompts::{MERGE_BY_USER_REVISION, revision_note};
 use crate::model::{CardId, DomainEvent, Environment, Lifecycle, Setup};
 use crate::now_ms;
 use crate::work::{
@@ -684,52 +683,6 @@ async fn an_upgrade_closes_open_merge_cards_and_keeps_a_held_merge() {
     flow.stop().await;
 }
 
-/// Rule R: a session told the instructions before this change hears the merge note once when
-/// it resumes, and a click merges.
-#[tokio::test]
-async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
-    let (mut flow, log) = session("merge-revision").await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(MERGE_BY_USER_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Ask about the merge.").await;
-    flow.settled().await;
-    let note = revision_note(MERGE_BY_USER_REVISION - 1, false).unwrap();
-    assert!(note.contains("there are no merge cards"), "{note}");
-    assert_eq!(logged(&log, &note).len(), 1);
-    flow.manager
-        .merge_session(&flow.conversation, click(), false)
-        .await
-        .unwrap();
-    flow.until("the merge", |board| merged(board) == 1).await;
-    flow.settled().await;
-    assert!(on_main(&flow, "NOTES.md"));
-    assert_eq!(logged(&log, &note).len(), 1);
-    flow.stop().await;
-}
-
 /// Plants what an earlier version left when it couldn't finish removing a merged session's
 /// worktree: the `session:` owner still disposing, and the session recording no worktree.
 async fn plant_failed_removal(flow: &Flow) -> PathBuf {
@@ -1186,7 +1139,7 @@ async fn close_workspace_waits_for_a_running_scout() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text(crate::manager::prompts::QUIET);
+                    return Reply::text("");
                 }
                 held.notified().await;
                 let reply = turn

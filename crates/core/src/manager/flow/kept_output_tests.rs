@@ -143,7 +143,7 @@ fn handing_over_with(firsts: &Arc<Mutex<Vec<Fresh>>>, saved: Option<std::path::P
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Noted.");
             }

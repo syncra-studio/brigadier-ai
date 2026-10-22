@@ -1,7 +1,6 @@
 //! The thread is the worker (BUILD-PLAN B1-B3): it does normal work itself, and starts workers
 //! only when they help, after one line saying so, or after asking with the user's "Start
-//! workers on its own" off. Rule R: a session from before the change hears it once and does a
-//! tiny edit and a three-file feature itself, with no worker and no merge card.
+//! workers on its own" off.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,14 +8,10 @@ use std::sync::{Arc, Mutex};
 use brigadier_providers::{ProviderEvent, Role};
 use serde_json::json;
 
-use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
-use crate::manager::prompts::{
-    FIRST_USE_REVISION, LAZY_TOOLS_REVISION, THREAD_WORKS_REVISION, revision_note,
-};
-use crate::model::{DomainEvent, MessageRole};
-use crate::work::{QuestionKind, RequestState, ReviewState, TaskState};
+use crate::model::MessageRole;
+use crate::work::{QuestionKind, RequestState, TaskState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -63,7 +58,7 @@ async fn parts_that_run_at_once(start_workers_on_own: bool) {
                     return Reply::text(if seen == 3 {
                         "The three exporters are written."
                     } else {
-                        "[quiet]"
+                        ""
                     });
                 }
                 let asked_first = turn.input.contains("Add CSV, JSON and XML exporters.")
@@ -80,7 +75,7 @@ async fn parts_that_run_at_once(start_workers_on_own: bool) {
                         )
                         .await;
                     assert!(!asked.is_error, "{}", asked.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if start_workers_on_own {
                     turn.emit(ProviderEvent::Message {
@@ -101,7 +96,7 @@ async fn parts_that_run_at_once(start_workers_on_own: bool) {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -173,25 +168,12 @@ async fn parts_that_run_at_once(start_workers_on_own: bool) {
         "{shown:#?} {:#?}",
         inputs.lock().unwrap()
     );
-    // How workers are handled isn't in the instructions: it comes once, with the first
-    // worker's message, before the thread acts on it (BUILD-PLAN C1).
-    assert!(!rule.contains("answer_worker"), "{rule}");
+    // How workers are handled is in the instructions the CLI starts with, never a note.
+    assert!(rule.contains("How you handle workers:"), "{rule}");
     let heard = inputs.lock().unwrap().clone();
-    let told: Vec<usize> = heard
-        .iter()
-        .enumerate()
-        .filter(|(_, input)| input.contains("[instructions] How you handle workers"))
-        .map(|(at, _)| at)
-        .collect();
-    let first_report = heard
-        .iter()
-        .position(|input| input.contains("[report task-"))
-        .expect("a report reached the thread");
-    assert_eq!(told, vec![first_report], "{heard:#?}");
-    let input = &heard[first_report];
     assert!(
-        input.find("How you handle workers").unwrap() < input.find("[report task-").unwrap(),
-        "{input}"
+        heard.iter().all(|input| !input.contains("[instructions]")),
+        "{heard:#?}"
     );
     flow.stop().await;
 }
@@ -212,349 +194,4 @@ async fn parts_that_run_at_once_start_workers_after_one_line() {
 #[tokio::test]
 async fn parts_that_run_at_once_are_asked_first_with_start_workers_off() {
     parts_that_run_at_once(false).await;
-}
-
-/// Rule R for B1-B3: a session told the instructions of revision 31 resumes after the change
-/// and hears revision 32 once. A tiny edit it makes itself gets no review; a three-file feature
-/// with no part worth running at once is done by the thread too, in one commit, with no worker:
-/// `run_check` says its review runs, and the answer comes after the review's word. Neither
-/// request offers a merge card.
-#[tokio::test]
-async fn a_session_from_before_hears_the_change_once_and_does_the_work_itself() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let checks: Arc<Mutex<Vec<String>>> = Arc::default();
-    let (heard, said) = (inputs.clone(), checks.clone());
-    let mut flow = Flow::start(
-        "works-rule-r",
-        Options::default(),
-        script(move |turn| {
-            let (heard, said) = (heard.clone(), said.clone());
-            async move {
-                if !turn.is_orchestrator() {
-                    return Reply::text("");
-                }
-                heard.lock().unwrap().push(turn.input.clone());
-                let check = |turn: Turn| async move {
-                    let reply = turn.call("run_check", json!({"command": "true"})).await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    reply.text
-                };
-                if turn.input.contains("Fix the typo in the README.") {
-                    commit_in_workspace(&turn, "README.md", "fixed\n", "Fix the README typo");
-                    let reply = check(turn).await;
-                    said.lock().unwrap().push(reply.clone());
-                    assert!(!reply.contains("[review running]"), "{reply}");
-                    return Reply::text("Fixed the typo in README.md.");
-                }
-                if turn.input.contains("Add a greeting module.") {
-                    let workspace = turn.add_dirs[0].clone();
-                    // 150 changed lines of code.
-                    let greetings: String = (1..=150)
-                        .map(|n| format!("pub fn greet_{n}() -> &'static str {{ \"hi\" }}\n"))
-                        .collect();
-                    for (file, text) in [
-                        ("greet.rs", greetings.as_str()),
-                        ("lib.rs", "pub mod greet;\n"),
-                        ("main.rs", "fn main() { greet::greet_1(); }\n"),
-                    ] {
-                        std::fs::write(workspace.join(file), text).unwrap();
-                    }
-                    super::git(&workspace, &["add", "-A"]);
-                    super::git(&workspace, &["commit", "-q", "-m", "Add a greeting module"]);
-                    check(turn.clone()).await;
-                    // Big enough to ask the other vendor for a review.
-                    let reply = turn
-                        .call("request_review", json!({"wait_seconds": 0}))
-                        .await
-                        .text;
-                    said.lock().unwrap().push(reply.clone());
-                    return Reply::text(if reply.contains("still reviews") {
-                        "[quiet]"
-                    } else {
-                        "Added the greeting module."
-                    });
-                }
-                if turn.input.contains("found nothing") {
-                    return Reply::text("Added the greeting module; the review found nothing.");
-                }
-                Reply::text("Fine.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Look around.").await;
-    flow.settled().await;
-    // It was told the instructions of the revision before.
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(THREAD_WORKS_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-
-    flow.say("Fix the typo in the README.").await;
-    let board = flow
-        .until("the typo's answer", |board| {
-            board.requests.len() == 2
-                && board
-                    .latest_request()
-                    .is_some_and(|request| request.state == RequestState::Done)
-        })
-        .await;
-    assert!(board.reviews.is_empty(), "{:#?}", board.reviews);
-
-    flow.say("Add a greeting module.").await;
-    flow.until("the feature's answer", |board| {
-        board.requests.len() == 3
-            && board
-                .latest_request()
-                .is_some_and(|request| request.state == RequestState::Done)
-    })
-    .await;
-    let board = flow.settled().await;
-    // The thread did both itself: no worker, no merge card.
-    assert!(board.tasks.is_empty(), "{:#?}", board.tasks);
-    assert!(
-        !board
-            .questions
-            .values()
-            .any(|question| matches!(question.kind, QuestionKind::Merge { .. })),
-        "{:#?}",
-        board.questions
-    );
-    // One review, of the feature's commit, asked for before its answer.
-    let reviews: Vec<_> = board.reviews.values().collect();
-    assert_eq!(reviews.len(), 1, "{reviews:#?}");
-    assert!(reviews[0].task_id.is_none());
-    assert_eq!(reviews[0].state, ReviewState::Clean);
-    let said = checks.lock().unwrap().clone();
-    assert!(said[1].contains("still reviews"), "{said:#?}");
-    // The note came once, at the first turn after the change, in plain words.
-    let heard = inputs.lock().unwrap().clone();
-    let note = revision_note(THREAD_WORKS_REVISION - 1, false).unwrap();
-    assert!(note.contains("From now on, do the work yourself"), "{note}");
-    let told: Vec<usize> = heard
-        .iter()
-        .enumerate()
-        .filter(|(_, input)| input.contains("From now on, do the work yourself"))
-        .map(|(at, _)| at)
-        .collect();
-    assert_eq!(told.len(), 1, "{heard:#?}");
-    assert!(
-        heard[told[0]].contains("Fix the typo in the README."),
-        "{heard:#?}"
-    );
-    let shown: Vec<String> = flow
-        .core
-        .all_messages(&flow.conversation)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|message| message.role == MessageRole::Assistant)
-        .map(|message| message.text)
-        .collect();
-    assert_eq!(
-        shown.last().map(String::as_str),
-        Some("Added the greeting module; the review found nothing."),
-        "{shown:#?}"
-    );
-    assert!(!shown.iter().any(|text| text == "[quiet]"), "{shown:#?}");
-    flow.stop().await;
-}
-
-/// Rule R for C1 (BUILD-PLAN C1): a session told the instructions of revision 32, which still
-/// hold the rules for workers, resumes after the change and hears revision 33's note once; its
-/// first worker report then brings no note of those rules, since it has them. A new session's
-/// first report brings them (`parts_that_run_at_once`).
-#[tokio::test]
-async fn a_session_from_before_the_first_use_rules_hears_no_rules_it_already_has() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let heard = inputs.clone();
-    let mut flow = Flow::start(
-        "works-first-use-r",
-        Options::default(),
-        script(move |turn| {
-            let heard = heard.clone();
-            async move {
-                if !turn.is_orchestrator() {
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "Looked.", "verification": "Read it."}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Reported.");
-                }
-                heard.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains("Ask a scout.") {
-                    let reply = turn
-                        .call(
-                            "delegate_task",
-                            json!({"effort": "low", "title": "Look around", "kind": "scout",
-                                   "spec": "Look around."}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
-                }
-                Reply::text("Fine.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Look around.").await;
-    flow.settled().await;
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(FIRST_USE_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Ask a scout.").await;
-    flow.until("the scout's report", |board| {
-        board.tasks.len() == 1
-            && board
-                .latest_request()
-                .is_some_and(|request| request.state == RequestState::Done)
-    })
-    .await;
-    flow.settled().await;
-    let heard = inputs.lock().unwrap().clone();
-    let revision = revision_note(FIRST_USE_REVISION - 1, false).unwrap();
-    assert_eq!(
-        heard
-            .iter()
-            .filter(|input| input.contains(&revision))
-            .count(),
-        1,
-        "{heard:#?}"
-    );
-    assert!(
-        heard.iter().any(|input| input.contains("[report task-")),
-        "{heard:#?}"
-    );
-    assert!(
-        !heard
-            .iter()
-            .any(|input| input.contains("[instructions] How you handle workers")),
-        "{heard:#?}"
-    );
-    flow.stop().await;
-}
-
-/// Rule R for C2 (BUILD-PLAN C2): a session told revision 33 resumes on the new tool set and
-/// hears once that rarer tools load through the tool search, then makes a tiny edit itself.
-#[tokio::test]
-async fn a_session_from_before_lazy_tools_hears_it_once_and_still_works_itself() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let heard = inputs.clone();
-    let mut flow = Flow::start(
-        "works-lazy-r",
-        Options::default(),
-        script(move |turn| {
-            let heard = heard.clone();
-            async move {
-                heard.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains("Fix the typo in the README.") {
-                    commit_in_workspace(&turn, "README.md", "fixed\n", "Fix the README typo");
-                    return Reply::text("Fixed the typo in README.md.");
-                }
-                Reply::text("Fine.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Look around.").await;
-    flow.settled().await;
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(LAZY_TOOLS_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Fix the typo in the README.").await;
-    flow.until("the typo's answer", |board| {
-        board.requests.len() == 2
-            && board
-                .requests
-                .values()
-                .all(|request| request.state == RequestState::Done)
-    })
-    .await;
-    let board = flow.settled().await;
-    assert!(board.tasks.is_empty(), "{:#?}", board.tasks);
-    let heard = inputs.lock().unwrap().clone();
-    let note = revision_note(LAZY_TOOLS_REVISION - 1, false).unwrap();
-    assert!(
-        note.contains("search for it by name with ToolSearch"),
-        "{note}"
-    );
-    assert_eq!(
-        heard.iter().filter(|input| input.contains(&note)).count(),
-        1,
-        "{heard:#?}"
-    );
-    // The resumed thread's instructions name the search too (its CLI starts on them).
-    let rules = flow
-        .thread_specs()
-        .last()
-        .unwrap()
-        .1
-        .append_system_prompt
-        .clone()
-        .unwrap();
-    assert!(rules.contains("loads through ToolSearch"), "{rules}");
-    flow.stop().await;
 }

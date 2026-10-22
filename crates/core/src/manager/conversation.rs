@@ -60,8 +60,8 @@ use crate::sessions::{
 use crate::tools::{Role, RunTools};
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
-    OrchestratorEntry, OrchestratorStepKind, QuestionKind, QueuedMessage, QuotaWait, RequestState,
-    RunState, Task, TaskId,
+    OrchestratorEntry, OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState,
+    Task, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -71,11 +71,6 @@ const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// How long a follow-up waits for the thread's judgment before it joins the working answer:
 /// a thread inside a long command can't judge it, and the user shouldn't watch it decide.
 pub(crate) const DECIDING_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 20 });
-
-/// How long an envelope that needs nothing now (a landing done, checks passed, a clean review,
-/// a status) waits for others while more of its request still runs, so they wake the thread
-/// once (BUILD-PLAN C3). Anything else ends the wait at once.
-pub(crate) const QUIET_WINDOW: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
 
 /// Characters of a CLI job's output its message to the thread carries (the end of it).
 const JOB_OUTPUT_TAIL: usize = 4000;
@@ -143,7 +138,7 @@ pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
         if error == INTERRUPTED_BY_QUIT || error == INTERRUPTED_BEFORE_START)
 }
 /// Sent with every turn while the session is in plan mode.
-const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. Reply [quiet] after it: the plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then. Merging, landing and finish_session are refused until then.";
+const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. The plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then. Merging, landing and finish_session are refused until then.";
 
 /// Where a sent message went.
 #[derive(Debug, Clone)]
@@ -173,21 +168,10 @@ pub(crate) struct Envelope {
 }
 
 impl Envelope {
-    /// An ordinary check pass only wakes a request that still defers its answer.
+    /// An ordinary check pass only wakes a request whose turn still runs.
     /// Passes that require more work use the ordinary decision label instead.
     fn optional_check_pass(&self) -> bool {
         self.kind == InjectionKind::Decision && self.label.starts_with("checks passed ")
-    }
-
-    /// Whether it needs nothing from the thread now, so it may wait a little for others to
-    /// wake it once with (BUILD-PLAN C3): a landing done, checks passed, a clean review of its
-    /// own changes, or a status due.
-    pub(crate) fn quiet(&self) -> bool {
-        self.optional_check_pass()
-            || (self.kind == InjectionKind::Decision && self.label.starts_with(OWED_PASS))
-            || (self.kind == InjectionKind::Report && self.label == CLEAN_REVIEW)
-            || (self.kind == InjectionKind::Decision && self.label.starts_with("landed task-"))
-            || (self.kind == InjectionKind::Reminder && self.label == "status")
     }
 
     /// The message of another session's it carries.
@@ -228,19 +212,6 @@ pub(super) struct HeldPeer {
     pub chain: TurnChain,
     /// The sending session, whose record says `seen` too.
     pub peer: ConversationId,
-}
-
-/// The rules left out of the thread's instructions that this turn's messages call for
-/// (BUILD-PLAN C1): a worker's message.
-fn first_use_due(envelopes: &[(Envelope, Option<String>)]) -> Vec<prompts::FirstUse> {
-    if envelopes
-        .iter()
-        .any(|(envelope, _)| envelope.task_id.is_some())
-    {
-        vec![prompts::FirstUse::Workers]
-    } else {
-        Vec::new()
-    }
 }
 
 /// The chain a turn's newest input belongs to, which a message it sends carries on
@@ -300,9 +271,6 @@ struct ConvState {
     /// What the thread read and searched in the running turn, recorded when it ends
     /// ([`super::reads`]).
     looked: Vec<ProviderEvent>,
-    /// What the CLI session was last told of the parts of its instructions that can change
-    /// (its role instructions and later notes); unknown until a turn reads it from the log.
-    told: Option<crate::work::Told>,
     /// A turn is starting or running.
     busy: bool,
     /// The turn was sent and its CLI hasn't begun it yet: the run shows as starting until it
@@ -344,9 +312,6 @@ struct ConvState {
     /// their workers next): a worker's stop then wakes no turn for them (#65). A turn of one
     /// takes it off.
     stopped_open: HashSet<String>,
-    /// Until when the inbox's quiet envelopes wait for more ([`QUIET_WINDOW`]): none while
-    /// nothing waits.
-    quiet_until: Option<tokio::time::Instant>,
     /// Cards the user answered whose answer is not in the inbox yet, each with its request:
     /// the same for an answer, which is recorded before it is delivered.
     answering: HashMap<CardId, Option<String>>,
@@ -372,9 +337,6 @@ struct ConvState {
     hand_over: Option<HandOver>,
     /// The request the running turn serves.
     request: Option<String>,
-    /// The request the last turn served: the guess at the next message its answer ended with,
-    /// kept once that turn ended, belongs to it.
-    guess_for: Option<String>,
     /// What the CLI still runs in the background for a request (a command run in the
     /// background): its end starts a turn of the CLI's own, and until that turn is over the
     /// request still works.
@@ -387,12 +349,6 @@ struct ConvState {
     unowned_turn: bool,
     /// How the last turn for a request ended, when it was stopped or failed.
     outcomes: HashMap<String, RequestState>,
-    /// Requests whose last turn ended on [`prompts::QUIET`], or said nothing: the thread left
-    /// its answer to what wakes it next (see `requests::owed_a_turn`).
-    deferred: HashSet<String>,
-    /// Requests a turn has answered (it ended with something said, not [quiet]). A later turn
-    /// for a late event that ends quietly leaves that answer standing: it doesn't defer them.
-    answered: HashSet<String>,
     /// The last error the running turn reported.
     turn_error: Option<String>,
     /// That error, not yet said anywhere: the running turn's request shows it when it fails,
@@ -441,23 +397,8 @@ struct ConvState {
     replying_for: HashMap<String, String>,
     /// Replies their CLI said are the turn's final answer, and when each started showing.
     answers: HashMap<String, i64>,
-    /// Messages of other sessions the thread was reminded to answer on their own (see
-    /// [`SessionManager::answer_owed`]): once each; whether the reminder is queued yet.
-    peers_reminded: HashMap<String, bool>,
-    /// Reported write tasks the orchestrator was reminded to decide on (see
-    /// [`SessionManager::remind_undecided`]): once each.
-    reminded: HashSet<TaskId>,
     /// The running turn's last reply.
     last_reply: Option<String>,
-    /// The guess at the next message its last reply ended with ([`prompts::NEXT_OPEN`]), kept
-    /// once the turn is over.
-    next_guess: Option<String>,
-    /// Requests whose last turn ended asking the user something in its reply: until the user
-    /// writes again, no reminder pushes the orchestrator past its question.
-    asked_user: HashSet<String>,
-    /// Requests whose thread was told once to ask its text question on a card instead (see
-    /// [`ASK_ON_A_CARD`]).
-    told_to_ask_on_card: HashSet<String>,
     /// The next CLI session starts fresh and must be given the transcript so far.
     reseed: bool,
     /// The running turn failed on a usage limit (which window, and its reset, when the CLI
@@ -543,16 +484,6 @@ impl ConvState {
             || !self.lingering.is_empty()
             || self.lingering_request.is_some()
     }
-}
-
-/// Where the thread's one reminder to answer a message of another session stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PeerReminder {
-    /// Not given yet: the caller gives it now.
-    Due,
-    /// Another settling is giving it: its request works again once it is queued.
-    Underway,
-    Given,
 }
 
 /// The background jobs of a conversation's CLI (see `ConvState::background`).
@@ -687,8 +618,6 @@ pub(crate) struct ConvLive {
     pub(super) held_moves: tokio::sync::Mutex<HashMap<String, String>>,
     /// The CI watches it runs (`watch_ci`), ended when it closes.
     pub(super) ci_watches: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
-    /// When each request last showed the user something, and was last told `[status due]`.
-    pub(super) status: std::sync::Mutex<super::status::StatusClock>,
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
     /// last found it in the log, kept up to date as sessions start and reset.
     native_ids: std::sync::Mutex<NativeIds>,
@@ -746,7 +675,6 @@ impl ConvLive {
             scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
-            status: std::sync::Mutex::default(),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             replies: std::sync::Mutex::default(),
             reply_wake: tokio::sync::Notify::new(),
@@ -818,27 +746,6 @@ impl ConvLive {
             return None;
         }
         state.cli.clone()
-    }
-
-    /// Where the thread's one reminder to answer another session's message `message_id` on
-    /// its own stands; one that was [`PeerReminder::Due`] is underway from now on.
-    pub(super) async fn remind_peer_once(&self, message_id: &str) -> PeerReminder {
-        let mut state = self.state.lock().await;
-        match state.peers_reminded.get(message_id) {
-            None => {
-                state.peers_reminded.insert(message_id.to_owned(), false);
-                PeerReminder::Due
-            }
-            Some(false) => PeerReminder::Underway,
-            Some(true) => PeerReminder::Given,
-        }
-    }
-
-    /// The reminder to answer `message_id` is queued.
-    pub(super) async fn peer_reminded(&self, message_id: &str) {
-        if let Some(queued) = self.state.lock().await.peers_reminded.get_mut(message_id) {
-            *queued = true;
-        }
     }
 
     pub(super) fn items(&self) -> std::sync::MutexGuard<'_, super::thread_items::ThreadItems> {
@@ -1140,10 +1047,6 @@ impl ConvLive {
     /// lets turns start again.
     pub(super) async fn carry(&self, message: Option<Message>, note: Option<String>) {
         let mut state = self.state.lock().await;
-        if let Some(message) = &message {
-            // Rework reuses the request id. Its old answer is moot after the old turn stops.
-            state.answered.remove(&message.id);
-        }
         state.pending.extend(message);
         state.notes.extend(note);
         state.held = false;
@@ -1217,13 +1120,6 @@ impl ConvLive {
         if !state.peer_notes.iter().any(|(id, _)| id == message_id) {
             state.peer_notes.push((message_id.to_owned(), note));
         }
-    }
-
-    /// Keeps a fact for the next turn, whatever starts it (a user message, a report, a peer),
-    /// starting none of its own: the project board's news.
-    pub(super) async fn hold_fact(&self, fact: String) {
-        let key = format!("fact:{}", uuid::Uuid::now_v7());
-        self.state.lock().await.peer_notes.push((key, fact));
     }
 
     /// Whether the inbox holds an envelope of `kind`, `label` and `task` for `request`.
@@ -1319,7 +1215,6 @@ impl ConvLive {
                 .chain(state.lingering_request.clone())
                 .collect(),
             outcomes: state.outcomes.clone(),
-            deferred: state.deferred.clone(),
             background: state
                 .background
                 .as_ref()
@@ -1345,8 +1240,6 @@ pub(super) struct RequestActivity {
     pub carried: HashSet<String>,
     /// How requests' last turns ended, when they were stopped or failed.
     pub outcomes: HashMap<String, RequestState>,
-    /// Requests whose last turn left the answer to what wakes the thread next.
-    pub deferred: HashSet<String>,
     /// The requests the CLI's background jobs run for, and how many of each still run (none:
     /// the turn of one's end is still to come).
     pub background: HashMap<String, u32>,
@@ -1452,8 +1345,6 @@ impl SessionManager {
                 let mut into = None;
                 if steered {
                     self.log_user_injection(&conv, &message).await;
-                    // The user wrote again: whatever was asked of them is answered or moot.
-                    state.asked_user.clear();
                     // The user's word starts a chain of its own (SESSION-MESSAGING-PLAN.md §5.5).
                     state.chain = Some(TurnChain::user(&message.id));
                     // The rest of the turn answers the new message: its own request.
@@ -1647,8 +1538,6 @@ impl SessionManager {
         }
         let into = if steered {
             self.log_user_injection(conv, &message).await;
-            // The user wrote again: whatever was asked of them is answered or moot.
-            state.asked_user.clear();
             state.in_turn.push(message.clone());
             // The user's word starts a chain of its own (SESSION-MESSAGING-PLAN.md §5.5).
             state.chain = Some(TurnChain::user(&message.id));
@@ -2418,29 +2307,6 @@ impl SessionManager {
         interrupted
     }
 
-    /// After a start, before any request settles: the requests whose thread left their answer
-    /// to checks or a review still wait for it, as they did before the stop.
-    pub(crate) async fn recover_deferred(&self, id: &ConversationId) {
-        let Ok(board) = self.core.board(id).await else {
-            return;
-        };
-        let deferred: Vec<String> = board
-            .requests
-            .values()
-            .filter(|request| {
-                request.deferred
-                    && matches!(request.state, RequestState::Working | RequestState::Waiting)
-            })
-            .map(|request| request.id.clone())
-            .collect();
-        if deferred.is_empty() {
-            return;
-        }
-        if let Ok(conv) = self.conv(id) {
-            conv.state.lock().await.deferred.extend(deferred);
-        }
-    }
-
     /// After a start: follow-ups still deciding when the daemon stopped wait in the queue for
     /// their own turn, as after a stopped or failed turn. Their judging (the thread's ask and
     /// its timer) didn't outlive the stop, so nothing else would ever settle them (#449).
@@ -2713,79 +2579,12 @@ impl SessionManager {
         envelope: Envelope,
         request: Option<String>,
     ) {
-        // A quiet envelope waits a little while more of its request runs (BUILD-PLAN C3). Its
-        // board read is polled from the heap: a landing reaches here deep in the thread's tool
-        // call, and its future in this frame overflowed a 1.25 MiB stack.
-        let wait = envelope.quiet()
-            && match &request {
-                Some(request) => {
-                    crate::heap(|| self.more_coming(id, request, envelope.task_id.as_ref())).await
-                }
-                None => false,
-            };
         let Some(conv) = self.queue_envelope(id, envelope, request).await else {
             return;
         };
-        if wait {
-            self.wait_quietly(&conv).await;
-        }
         // The request works again until the orchestrator has read it.
         self.settle_requests(id).await;
         self.kick(&conv);
-    }
-
-    /// Whether more of `request` still runs, besides `except`: a task of it that works, or
-    /// one whose envelope is being put together.
-    pub(super) async fn more_coming(
-        &self,
-        id: &ConversationId,
-        request: &str,
-        except: Option<&TaskId>,
-    ) -> bool {
-        let Ok(board) = self.core.board(id).await else {
-            return false;
-        };
-        let announcing: HashSet<TaskId> = match self.conv(id) {
-            Ok(conv) => conv
-                .state
-                .lock()
-                .await
-                .announcing
-                .iter()
-                .filter(|(_, of)| of.as_deref() == Some(request))
-                .map(|(task, _)| task.clone())
-                .collect(),
-            Err(_) => HashSet::new(),
-        };
-        !super::requests::still_running(&board, request, &announcing)
-            .0
-            .iter()
-            .all(|task| Some(&task.id) == except)
-    }
-
-    /// Starts the quiet window if none runs, and the turn that ends it.
-    pub(super) async fn wait_quietly(&self, conv: &Arc<ConvLive>) {
-        let mut state = conv.state.lock().await;
-        if state.quiet_until.is_some() {
-            return;
-        }
-        let window = self.quiet_window();
-        state.quiet_until = Some(tokio::time::Instant::now() + window);
-        drop(state);
-        let manager = self.arc();
-        let conv = conv.clone();
-        self.spawn(async move {
-            tokio::time::sleep(window).await;
-            manager.kick(&conv);
-        });
-    }
-
-    fn quiet_window(&self) -> Duration {
-        #[cfg(test)]
-        if let Some(window) = *self.quiet_window.lock().unwrap() {
-            return window;
-        }
-        QUIET_WINDOW
     }
 
     /// Puts an envelope in the inbox without starting a turn (see [`Self::deliver_for`]): the
@@ -2850,14 +2649,12 @@ impl SessionManager {
         {
             return None;
         }
-        // Recheck under the same lock as turn completion: a later turn may have answered
-        // since the checks runner chose the request that was deferred then. One whose turn
-        // still runs hasn't deferred yet: the pass waits in the inbox, and that turn's end
-        // keeps it for a [quiet] or drops it for an answer (#512).
+        // An ordinary pass wakes no turn: one whose turn still runs waits in the inbox, and
+        // that turn's answer drops it (#512).
         if envelope.optional_check_pass()
-            && request.as_ref().is_none_or(|request| {
-                !state.deferred.contains(request) && state.request.as_ref() != Some(request)
-            })
+            && request
+                .as_ref()
+                .is_none_or(|request| state.request.as_ref() != Some(request))
         {
             return None;
         }
@@ -3044,9 +2841,6 @@ impl SessionManager {
                 std::mem::take(&mut state.notes)
             };
             let envelopes = if users.is_empty() {
-                if waits_quietly(&mut state) {
-                    return;
-                }
                 take_one_request(&mut state.inbox)
             } else {
                 Vec::new()
@@ -3129,12 +2923,6 @@ impl SessionManager {
             if let Some(request) = &request {
                 state.outcomes.remove(request);
                 state.stopped_open.remove(request);
-                // This turn says anew whether the request waits on the user.
-                state.asked_user.remove(request);
-            }
-            if !users.is_empty() {
-                // The user wrote again: whatever was asked of them is answered or moot.
-                state.asked_user.clear();
             }
             state.in_turn = users.clone();
             state.in_turn_envelopes.clone_from(&envelopes);
@@ -3165,7 +2953,7 @@ impl SessionManager {
             if let Err(err) = self.effective_workspace(&conv.id).await {
                 crate::logging::private_trace!(conv.private_logs, warn, "could not make the session's worktree"; conversation = %conv.id, error = %err);
             }
-            // Its `[workspace]` note reaches this turn.
+            // A note the workspace left (a fresh branch) reaches this turn.
             user_notes.append(&mut conv.state.lock().await.notes);
         }
         let cli = match self.ensure_cli(&conv).await {
@@ -3284,19 +3072,6 @@ impl SessionManager {
                 input.prepend_text(&transcript);
             }
         }
-        // What changed in its instructions since the session last heard (the date, a setting,
-        // the overnight run): a resumed CLI keeps its first instructions, so the change goes
-        // with this turn, logged once the CLI took it.
-        let due = first_use_due(&envelopes);
-        let instruction_notes = self.instruction_notes(&conv, due).await;
-        if !instruction_notes.is_empty() {
-            let text = instruction_notes
-                .iter()
-                .map(|note| note.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            input.prepend_text(&text);
-        }
         for message in &unsent {
             self.log_user_injection(&conv, message).await;
         }
@@ -3346,8 +3121,6 @@ impl SessionManager {
         for message_id in seen {
             self.peer_seen(&conv.id, message_id).await;
         }
-        // After the messages it carries are seen: a CLI answers them as soon as it has them.
-        self.told_notes(&conv, instruction_notes).await;
         if let Some((_, record)) = reborn {
             crate::logging::private_trace!(conv.private_logs, info, "orchestrator reborn"; conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger);
             self.log_orchestrator(
@@ -3471,12 +3244,11 @@ impl SessionManager {
             .clone()
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
-        let start_workers = self.core.settings().start_workers_on_own;
         let mut launch = None;
         let mut auto_review = false;
         let mut output_hook = None;
         let mut run_tools = None;
-        let (mut choice, prompt, mcp, current) = match (&conversation.setup, conv.kind) {
+        let (mut choice, prompt, mcp) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
                 // Its workspace exists before its CLI starts.
@@ -3489,12 +3261,6 @@ impl SessionManager {
                 }
                 launch = Some(started_for);
                 let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
-                let run = self.run_setting(&conv.id).await;
-                // Read before the prompt is: a switch in between is told again in a note.
-                let reviewed = self.reviews_on();
-                let writing = prompts::git_writing(&self.core.settings());
-                let browser = self.core.settings().browser_enabled;
-                let auto_merge = self.auto_merge_in(&conv.id);
                 let prompt = self
                     .thread_prompt(
                         &conversation,
@@ -3503,20 +3269,6 @@ impl SessionManager {
                         choice.provider,
                     )
                     .await;
-                let mut current = prompts::Current::session(
-                    &conversation,
-                    self.repo_trust(&conv.id) != Some(false),
-                    run.as_ref()
-                        .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
-                    start_workers,
-                    preferences,
-                    workspace.as_ref().map(super::thread::ThreadWorkspace::told),
-                );
-                current.review_work = reviewed;
-                current.git_writing = writing;
-                current.browser = browser;
-                current.auto_merge = auto_merge;
-                current.integrations = self.thread_integrations(&conv.id).await;
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
@@ -3550,7 +3302,7 @@ impl SessionManager {
                     }
                     output_hook = Some(self.output_hook(hook_grant, choice.provider));
                 }
-                (choice, prompt, vec![server], current)
+                (choice, prompt, vec![server])
             }
             (Some(Setup::Chat { model }), ConversationKind::Chat)
                 if let (Some(tab), Some(session)) =
@@ -3578,12 +3330,7 @@ impl SessionManager {
                     }
                     None => Vec::new(),
                 };
-                (
-                    fallback.unwrap_or_else(|| model.clone()),
-                    prompt,
-                    servers,
-                    prompts::Current::tab_chat(),
-                )
+                (fallback.unwrap_or_else(|| model.clone()), prompt, servers)
             }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
                 let model = match &conversation.setup {
@@ -3603,7 +3350,6 @@ impl SessionManager {
                     fallback.unwrap_or(model),
                     prompts::chat(&memories),
                     vec![self.brigadier_server(grant, CHAT_TOOL_TIMEOUT_SECS, false)],
-                    prompts::Current::chat(memories),
                 )
             }
             (Some(Setup::Chat { .. }), ConversationKind::Session) => {
@@ -3621,21 +3367,11 @@ impl SessionManager {
         // often than through `run`, whose result then never reached the request.
         let grant_redactor = super::secrets::redactor(grant_values.clone());
         let fresh = std::mem::take(&mut conv.state.lock().await.fresh);
-        let mut resume = if fresh {
+        let resume = if fresh {
             None
         } else {
             self.last_native_id(&conv.id, choice.provider).await
         };
-        // A thread whose CLI started on the instructions from before the thread's keeps them
-        // when resumed, and no note can replace a whole role: it starts over from the
-        // transcript with the thread's.
-        if resume.is_some()
-            && conv.kind == ConversationKind::Session
-            && prompts::role_outdated(&self.told_from_log(&conv.id).await)
-        {
-            crate::logging::private_trace!(conv.private_logs, info, "the thread's CLI started on older instructions; starting over from the transcript"; conversation = %conv.id);
-            resume = None;
-        }
         let reseed_needed = !fresh && resume.is_none() && self.has_history(&conv.id).await;
         let mut spec = SessionSpec {
             cwd: dir.clone(),
@@ -3766,20 +3502,17 @@ impl SessionManager {
         if reseed_needed {
             conv.state.lock().await.reseed = true;
         }
-        if resumed {
-            // A resumed CLI keeps the instructions it started with: the next turn reads from
-            // the log what they and later notes said.
-            conv.state.lock().await.told = None;
-        } else {
-            // A new one has them as they are now.
-            let label = if conv.kind == ConversationKind::Session {
-                prompts::instructions_label(true)
-            } else {
-                prompts::ROLE_INSTRUCTIONS
-            };
-            let told = current.told();
-            conv.state.lock().await.told = Some(told.clone());
-            self.log_told(&conv.id, label, prompt.len(), told).await;
+        // A resumed CLI keeps the instructions it started with; a new one has them as they are
+        // now.
+        if !resumed {
+            self.log_injection(
+                &conv.id,
+                InjectionKind::Instructions,
+                prompts::ROLE_INSTRUCTIONS.into(),
+                None,
+                prompt.len(),
+            )
+            .await;
         }
         let Started { session, events } = started;
         // The conversation keeps the account it started on until a hard stop moves it
@@ -4056,7 +3789,7 @@ impl SessionManager {
             if run.predecessor.is_some() {
                 parts.push(format!("[overnight proposal {} revision {}] This continues an earlier run on its branch: its phases, and those already verified, come from that run, so don't call propose_overnight. Only the user's Start begins it; until then you may only read.", run.id, run.revision));
             } else {
-                parts.push(format!("[overnight proposal {} revision {}] This is preparation only. Read the user's brief and referenced plan with read-only scouts if necessary. Use propose_overnight to put its actual phases/criteria/Rules on this same proposal, keeping original phase numbers. Include every phase the user's words select (\"phases 1-3\"), also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. Do not invent scope or start implementation. For a bare goal keep phases empty (Phase 0 plans after Start). Only the user's Start begins the run. Reply with exactly [quiet] once the proposal is ready. The user's full agreement and latest corrections, verbatim:\n{}", run.id, run.revision, run.words));
+                parts.push(format!("[overnight proposal {} revision {}] This is preparation only. Read the user's brief and referenced plan with read-only scouts if necessary. Use propose_overnight to put its actual phases/criteria/Rules on this same proposal, keeping original phase numbers. Include every phase the user's words select (\"phases 1-3\"), also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. Do not invent scope or start implementation. For a bare goal keep phases empty (Phase 0 plans after Start). Only the user's Start begins the run. The user's full agreement and latest corrections, verbatim:\n{}", run.id, run.revision, run.words));
             }
         }
         // A tab's chat answers about its tab; a side chat about the conversation beside it,
@@ -4403,7 +4136,6 @@ impl SessionManager {
         watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut deltas: Vec<ProviderEvent> = Vec::new();
         let mut deadline: Option<tokio::time::Instant> = None;
-        let mut quiet = Quiet::default();
         loop {
             let flush_at = async {
                 match deadline {
@@ -4449,7 +4181,7 @@ impl SessionManager {
                     }
                     Some(mut event) => {
                         deadline = None;
-                        self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
+                        self.store_deltas(&conv, std::mem::take(&mut deltas)).await;
                         // A CLI that starts (again) tells its MCP servers anew.
                         if matches!(event, ProviderEvent::SessionStarted { .. }) {
                             self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::Ended).await;
@@ -4473,7 +4205,6 @@ impl SessionManager {
                             self.session_events(EventSource::Conversation(&conv.id), &cli, event)
                         {
                             exited |= matches!(event, ProviderEvent::Exited { .. });
-                            quiet.forget(&event);
                             crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
                         }
                         if exited {
@@ -4491,11 +4222,11 @@ impl SessionManager {
                 }
                 () = flush_at => {
                     deadline = None;
-                    self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
+                    self.store_deltas(&conv, std::mem::take(&mut deltas)).await;
                 }
             }
         }
-        self.store_deltas(&conv, quiet.pass(deltas)).await;
+        self.store_deltas(&conv, deltas).await;
         self.record_held_looked(&conv).await;
         self.grants.revoke_owner(&cli.owner);
         conv.items().cli_ended();
@@ -4786,24 +4517,17 @@ impl SessionManager {
                 role: ProviderRole::Assistant,
                 text,
             } => {
-                // Its guess at the next message is the composer's, never part of the reply.
-                let (text, guess) = without_next(text);
                 let (request, answer_at_ms) = {
                     let mut state = conv.state.lock().await;
-                    state.last_reply = Some(text.to_owned());
-                    state.next_guess = guess;
                     let request = state
                         .replying_for
                         .remove(item_id)
                         .or_else(|| state.request.clone());
                     (request, state.answers.remove(item_id))
                 };
-                let shown = without_quiet(text);
-                if let Some(text) = shown {
-                    if let Some(request) = &request {
-                        conv.status.lock().unwrap().shown(request, now_ms());
-                    }
-                    if let Err(err) = self
+                let text = text.trim_end();
+                if !text.trim_start().is_empty()
+                    && let Err(err) = self
                         .core
                         .append_assistant_message(
                             conv.id.clone(),
@@ -4814,9 +4538,8 @@ impl SessionManager {
                             answer_at_ms,
                         )
                         .await
-                    {
-                        crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
-                    }
+                {
+                    crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
                 }
             }
             ProviderEvent::ApprovalRequested { request }
@@ -5274,37 +4997,6 @@ impl SessionManager {
         }
         if let Some(status) = completed {
             crate::heap(|| self.turn_completed(conv, cli, status)).await;
-            // The guess its final answer ended with, once the turn is over.
-            let guess = conv.state.lock().await.next_guess.take();
-            if let Some(text) = guess.filter(|_| status == TurnStatus::Completed) {
-                self.keep_guess(conv, text).await;
-            }
-        }
-    }
-
-    /// Keeps a guess at the user's next message on the request the last turn served, for the
-    /// composer only: never logged, so no transcript, digest or rebirth ever reads it as said.
-    async fn keep_guess(&self, conv: &Arc<ConvLive>, text: String) {
-        // A guess that comes once another turn is under way, or for a request no longer the
-        // latest (a message came meanwhile), follows nothing on screen: dropped.
-        let request = {
-            let state = conv.state.lock().await;
-            (!state.busy && !state.awaiting_start)
-                .then(|| state.guess_for.clone())
-                .flatten()
-        };
-        let Some(request) = request else {
-            return;
-        };
-        // A turn that leaves work running (a worker that will report, a background command, a
-        // review of its work) isn't the request's last: the turn that ends it guesses.
-        if let Ok(board) = self.core.board(&conv.id).await
-            && super::requests::wakes_later(&board, &request)
-        {
-            return;
-        }
-        if let Err(err) = self.core.set_suggestion(&conv.id, &request, text).await {
-            tracing::debug!(conversation = %conv.id, error = %err, "could not keep a next-message guess");
         }
     }
 
@@ -5406,34 +5098,9 @@ impl SessionManager {
             // this CLI, past the swap threshold.
             self.consider_rebirth(conv, cli).await;
         }
-        // A card the thread opened for a request is what the user answers; a question in its
-        // text alongside one asks nothing more.
-        let carded: HashSet<String> = match conv.kind {
-            ConversationKind::Session => self
-                .core
-                .board(&conv.id)
-                .await
-                .map(|board| {
-                    board
-                        .questions
-                        .values()
-                        .filter(|question| {
-                            question.is_open()
-                                && matches!(
-                                    question.kind,
-                                    QuestionKind::Orchestrator | QuestionKind::Merge { .. }
-                                )
-                        })
-                        .filter_map(|question| question.request_id.clone())
-                        .collect()
-                })
-                .unwrap_or_default(),
-            _ => HashSet::new(),
-        };
         if self.finish_thread_stall(conv).await {
             return;
         }
-        let in_run = self.overnight.active.get(&conv.id).is_some();
         let reborn;
         let (limit_hit, ended, landed, carried, asked, served, end_commands, unshown) = {
             let mut state = conv.state.lock().await;
@@ -5472,7 +5139,6 @@ impl SessionManager {
                 _ => None,
             };
             let served = state.request.take();
-            state.guess_for.clone_from(&served);
             // Codex commands still running keep this request working until each ended and
             // the thread heard of it; once none runs, the request is free of them.
             if state.lingering.is_empty() {
@@ -5529,55 +5195,14 @@ impl SessionManager {
             {
                 state.outcomes.insert(request.clone(), ended);
             }
-            // A session's turn that ended on a question to the user in its text: the thread is
-            // told once to ask it on a card, and the request goes on. After that, nothing
-            // pushes the orchestrator past it before the user answers (see `asked_user`).
-            let reply = state.last_reply.take();
-            // A turn that ended on [quiet], or said nothing, left the request's answer to what
-            // wakes the thread next: a review of its work still running keeps it working. A
-            // request answered by an earlier turn keeps that answer: a quiet turn for a late
-            // report or addendum doesn't reopen it.
-            if let Some(request) = &served {
-                let quiet = reply.as_deref().is_none_or(|reply| {
-                    reply.trim_end().ends_with(prompts::QUIET) || without_quiet(reply).is_none()
-                });
-                if status == TurnStatus::Completed && quiet {
-                    if !state.answered.contains(request) {
-                        state.deferred.insert(request.clone());
-                    }
-                } else {
-                    state.deferred.remove(request);
-                    if status == TurnStatus::Completed {
-                        state.answered.insert(request.clone());
-                        // A pass arriving during this turn was queued against its previous
-                        // [quiet]. This answer settles it without another turn. One its
-                        // run_checks call owes the thread still comes (#513).
-                        state.inbox.retain(|(envelope, queued)| {
-                            queued.as_ref() != Some(request) || !envelope.optional_check_pass()
-                        });
-                    }
-                }
-            }
-            if conv.kind == ConversationKind::Session
-                && status == TurnStatus::Completed
+            // A completed turn answers its request: a check pass that arrived during it settles
+            // with this answer. One its run_checks call owes the thread still comes (#513).
+            if status == TurnStatus::Completed
                 && let Some(request) = &served
-                && reply.as_deref().is_some_and(asks_user)
             {
-                if carded.contains(request) || in_run || state.told_to_ask_on_card.contains(request)
-                {
-                    state.asked_user.insert(request.clone());
-                } else {
-                    state.told_to_ask_on_card.insert(request.clone());
-                    state.inbox.push((
-                        Envelope {
-                            kind: InjectionKind::Reminder,
-                            label: "ask on a card".into(),
-                            task_id: None,
-                            text: ASK_ON_A_CARD.to_owned(),
-                        },
-                        Some(request.clone()),
-                    ));
-                }
+                state.inbox.retain(|(envelope, queued)| {
+                    queued.as_ref() != Some(request) || !envelope.optional_check_pass()
+                });
             }
             (
                 limited,
@@ -5590,17 +5215,6 @@ impl SessionManager {
                 unshown,
             )
         };
-        // Whether it left its answer to what wakes the thread next outlives a restart.
-        if let Some(request) = &served {
-            let deferred = conv.state.lock().await.deferred.contains(request);
-            if let Err(err) = self
-                .core
-                .set_request_deferred(&conv.id, request, deferred)
-                .await
-            {
-                crate::logging::private_trace!(conv.private_logs, warn, "could not keep a request's deferred answer"; conversation = %conv.id, error = %err);
-            }
-        }
         if let Some(text) = unshown {
             self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, &text)
                 .await;
@@ -5700,11 +5314,6 @@ impl SessionManager {
         }
         self.set_run(&conv.id, RunState::Idle, None).await;
         self.settle_requests(&conv.id).await;
-        if status == TurnStatus::Completed
-            && let Some(request) = &served
-        {
-            self.remind_undecided(conv, request).await;
-        }
         if let Some(cli) = end_commands {
             // Not from inside the CLI's own event pump: closing the CLI waits for it. The next
             // turn waits for the close.
@@ -5718,51 +5327,6 @@ impl SessionManager {
             return;
         }
         self.kick(conv);
-    }
-
-    /// A request over while reported changes still wait for the orchestrator's decision: it
-    /// is asked once per task to accept, send back or stop them, so none stays open for good.
-    async fn remind_undecided(&self, conv: &Arc<ConvLive>, request: &str) {
-        let Ok(board) = self.core.board(&conv.id).await else {
-            return;
-        };
-        if board
-            .requests
-            .get(request)
-            .is_none_or(|of| of.state != RequestState::Done)
-            || super::requests::ended_run_request(&board, request)
-        {
-            return;
-        }
-        let undecided = self.undecided(&board, request).await;
-        let mut state = conv.state.lock().await;
-        // Its last turn asked the user something: nothing pushes it past that before they
-        // answer.
-        if state.asked_user.contains(request) {
-            return;
-        }
-        let new: Vec<TaskId> = undecided
-            .into_iter()
-            .map(|task| task.id)
-            .filter(|id| !state.reminded.contains(id))
-            .collect();
-        if new.is_empty() {
-            return;
-        }
-        state.reminded.extend(new);
-        state.inbox.push((
-            Envelope {
-                kind: InjectionKind::Reminder,
-                label: "undecided reports".into(),
-                task_id: None,
-                // The turn's notes list them (see `request_notes`).
-                text: format!(
-                    "[Your answer is out, but reported work still waits for your decision (listed below). Decide now; then reply {} unless what you told the user changes.]",
-                    prompts::QUIET
-                ),
-            },
-            Some(request.to_owned()),
-        ));
     }
 
     /// After an orchestrator's turn: past the prepare threshold its handoff note is started;
@@ -6606,148 +6170,6 @@ impl SessionManager {
         }
     }
 
-    /// The notes the conversation's CLI session needs before its next turn: what changed in
-    /// its instructions since it was last told (see [`prompts::notes`]).
-    /// `due`: the rules this turn's messages call for ([`prompts::FirstUse`]).
-    async fn instruction_notes(
-        &self,
-        conv: &Arc<ConvLive>,
-        due: Vec<prompts::FirstUse>,
-    ) -> Vec<prompts::Note> {
-        let current = match conv.kind {
-            ConversationKind::Session => {
-                let Ok(conversation) = self.core.conversation(&conv.id) else {
-                    return Vec::new();
-                };
-                let run = self.run_setting(&conv.id).await;
-                // The workspace its CLI was started for.
-                let workspace = conv.live_cli().await.and_then(|cli| {
-                    cli.launch
-                        .as_ref()
-                        .and_then(|launch| launch.workspace.as_ref())
-                        .map(super::thread::ThreadWorkspace::told)
-                });
-                let mut current = prompts::Current::session(
-                    &conversation,
-                    self.repo_trust(&conv.id) != Some(false),
-                    run.as_ref()
-                        .map(|(workspace, restrictions)| (workspace, restrictions.clone())),
-                    self.core.settings().start_workers_on_own,
-                    self.memory_lines(super::brain_jobs::MEMORY_BYTES).await,
-                    workspace,
-                );
-                current.review_work = self.reviews_on();
-                current.git_writing = prompts::git_writing(&self.core.settings());
-                current.browser = self.core.settings().browser_enabled;
-                current.auto_merge = self.auto_merge_in(&conv.id);
-                current.integrations = self.thread_integrations(&conv.id).await;
-                current.due = due;
-                if let Some(cli) = conv.live_cli().await {
-                    current.provider = cli.provider;
-                }
-                current
-            }
-            // A tab chat has no memories and no save_report.
-            ConversationKind::Chat
-                if self
-                    .core
-                    .conversation(&conv.id)
-                    .is_ok_and(|conversation| conversation.tab_chat.is_some()) =>
-            {
-                prompts::Current::tab_chat()
-            }
-            ConversationKind::Chat => {
-                prompts::Current::chat(self.memory_lines(super::brain_jobs::MEMORY_BYTES).await)
-            }
-        };
-        let known = conv.state.lock().await.told.clone();
-        let told = match known {
-            Some(told) => told,
-            None => {
-                let told = self.told_from_log(&conv.id).await;
-                conv.state.lock().await.told = Some(told.clone());
-                told
-            }
-        };
-        prompts::notes(&told, &current)
-    }
-
-    /// The CLI took a turn carrying `notes`: they are logged, and what they told is now the
-    /// session's. Never called for a turn that failed, so a restart sends them again.
-    async fn told_notes(&self, conv: &Arc<ConvLive>, notes: Vec<prompts::Note>) {
-        for note in notes {
-            if let Some(told) = conv.state.lock().await.told.as_mut() {
-                let mut now = note.told.clone();
-                prompts::fill_told(&mut now, told);
-                *told = now;
-            }
-            self.log_told(&conv.id, note.label, note.text.len(), note.told)
-                .await;
-        }
-    }
-
-    /// The conversation's own session saved a preference (`before`: the user's preferences
-    /// until then): it knows, so its next turn needs no note about it, unless they had
-    /// changed otherwise since it was last told. Kept in memory only: after a restart the
-    /// note goes once.
-    pub(crate) async fn told_own_preference(&self, id: &ConversationId, before: &[String]) {
-        let Ok(conv) = self.conv(id) else {
-            return;
-        };
-        let after = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
-        let mut state = conv.state.lock().await;
-        if let Some(told) = state.told.as_mut()
-            && told.preferences.as_deref()
-                == Some(prompts::preferences_fingerprint(before).as_str())
-        {
-            told.preferences = Some(prompts::preferences_fingerprint(&after));
-        }
-    }
-
-    /// What the conversation's current CLI session was last told, from the log: its role
-    /// instructions and the notes since.
-    async fn told_from_log(&self, id: &ConversationId) -> crate::work::Told {
-        let mut entries = Vec::new();
-        let mut before = None;
-        loop {
-            let Ok(page) = self
-                .core
-                .store()
-                .read_stream(
-                    streams::orchestrator(id),
-                    StreamPage {
-                        before,
-                        kinds: vec!["orchestrator.logged".into()],
-                        limit: 500,
-                    },
-                )
-                .await
-            else {
-                break;
-            };
-            let Some(last) = page.last() else {
-                break;
-            };
-            before = Some(last.stream_seq);
-            let mut reached = false;
-            for stored in &page {
-                if let Ok(DomainEvent::OrchestratorLogged {
-                    entry: OrchestratorEntry::Injection { injection },
-                    ..
-                }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
-                    && injection.kind == InjectionKind::Instructions
-                {
-                    reached |= injection.label.starts_with(prompts::ROLE_INSTRUCTIONS);
-                    entries.push((stored.at_ms, injection));
-                }
-            }
-            if reached {
-                break;
-            }
-        }
-        prompts::told_from_log(entries.iter().map(|(at, entry)| (*at, entry))).0
-    }
-
     /// Marks the conversation's CLI session as gone for good: the next one starts over.
     pub(crate) async fn forget_native_session(&self, id: &ConversationId) {
         self.log_provider(
@@ -6907,28 +6329,6 @@ impl SessionManager {
                 tokens_estimate: (bytes as u64).div_ceil(4),
                 label,
                 task_id,
-                told: None,
-            },
-        };
-        self.log_orchestrator(id, entry).await;
-    }
-
-    /// Logs instructions given to the conversation's CLI session, with what they told it.
-    async fn log_told(
-        &self,
-        id: &ConversationId,
-        label: &str,
-        bytes: usize,
-        told: crate::work::Told,
-    ) {
-        let entry = OrchestratorEntry::Injection {
-            injection: ContextInjection {
-                kind: InjectionKind::Instructions,
-                bytes: bytes as u64,
-                tokens_estimate: (bytes as u64).div_ceil(4),
-                label: label.to_owned(),
-                task_id: None,
-                told: Some(told),
             },
         };
         self.log_orchestrator(id, entry).await;
@@ -7052,240 +6452,6 @@ impl NativeIds {
             }
         }
     }
-}
-
-/// Holds back an orchestrator reply's streamed text while it may still be [`prompts::QUIET`],
-/// so the user never sees it appear. A Chat's too: it is a thread without a project (Q76).
-#[derive(Default)]
-struct Quiet {
-    /// Text streamed so far per reply still held back, and what its CLI said it is; released
-    /// replies are absent.
-    held: HashMap<String, (String, Option<TextPhase>)>,
-    /// Released replies, each with the end it still holds back: a last line that may be its
-    /// guess at the next message ([`prompts::NEXT_OPEN`]), which never shows.
-    released: HashMap<String, String>,
-}
-
-impl Quiet {
-    /// The deltas the user may see: a reply's text is released, whole, once it can no longer
-    /// be [`prompts::QUIET`], all but a last line that may still be its next-message line.
-    fn pass(&mut self, deltas: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
-        deltas
-            .into_iter()
-            .filter_map(|event| match event {
-                ProviderEvent::MessageDelta {
-                    item_id,
-                    text,
-                    phase,
-                } => {
-                    if let Some(pending) = self.released.get_mut(&item_id) {
-                        pending.push_str(&text);
-                        let text = shown_before_next(pending);
-                        return (!text.is_empty()).then_some(ProviderEvent::MessageDelta {
-                            item_id,
-                            text,
-                            phase,
-                        });
-                    }
-                    let (so_far, said) = self.held.entry(item_id.clone()).or_default();
-                    so_far.push_str(&text);
-                    *said = said.or(phase);
-                    // A reply that starts with it is quiet, sources and all: it shows only
-                    // once whole, if anything of it is left (`without_quiet`).
-                    let trimmed = so_far.trim();
-                    if prompts::QUIET.starts_with(trimmed) || trimmed.starts_with(prompts::QUIET) {
-                        return None;
-                    }
-                    let (mut pending, phase) = self.held.remove(&item_id).unwrap_or_default();
-                    let text = shown_before_next(&mut pending);
-                    self.released.insert(item_id.clone(), pending);
-                    (!text.is_empty()).then_some(ProviderEvent::MessageDelta {
-                        item_id,
-                        text,
-                        phase,
-                    })
-                }
-                event => Some(event),
-            })
-            .collect()
-    }
-
-    /// Forgets a reply once it is complete.
-    fn forget(&mut self, event: &ProviderEvent) {
-        if let ProviderEvent::Message { item_id, .. } = event {
-            self.held.remove(item_id);
-            self.released.remove(item_id);
-        }
-    }
-}
-
-/// Takes from streamed `pending` what may show now, leaving a last line that may still become
-/// its next-message line ([`prompts::NEXT_OPEN`]): the whole reply strips it (`without_next`).
-fn shown_before_next(pending: &mut String) -> String {
-    let start = pending.rfind('\n').map_or(0, |at| at + 1);
-    let line = pending[start..].trim_start().to_ascii_lowercase();
-    let may_be = !line.is_empty()
-        && (prompts::NEXT_OPEN.starts_with(line.as_str()) || line.starts_with(prompts::NEXT_OPEN));
-    let rest = if may_be {
-        pending.split_off(start)
-    } else {
-        String::new()
-    };
-    std::mem::replace(pending, rest)
-}
-
-/// The longest guess at the next message kept: one message, not a paragraph.
-const NEXT_MAX_CHARS: usize = 300;
-
-/// A reply without its last line when that is its guess at the user's next message
-/// (`[next: …]`, [`prompts::NEXT_OPEN`]), and the guess: none when empty or too long.
-fn without_next(text: &str) -> (&str, Option<String>) {
-    let body = text.trim_end();
-    let start = body.rfind('\n').map_or(0, |at| at + 1);
-    let line = body[start..].trim();
-    let opens = line
-        .get(..prompts::NEXT_OPEN.len())
-        .is_some_and(|open| open.eq_ignore_ascii_case(prompts::NEXT_OPEN));
-    if !opens {
-        return (text, None);
-    }
-    let guess = line[prompts::NEXT_OPEN.len()..]
-        .strip_suffix(']')
-        .map(|guess| {
-            guess
-                .trim()
-                .trim_matches(['"', '\u{201c}', '\u{201d}'])
-                .trim()
-        })
-        .filter(|guess| !guess.is_empty() && guess.chars().count() <= NEXT_MAX_CHARS)
-        .map(str::to_owned);
-    (body[..start].trim_end(), guess)
-}
-
-/// What the thread is told when its reply asked the user something in text, with no card open.
-const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it on a card instead, with ask_user (with options and the one you recommend); a merge needs no question: the user merges by asking in words. Then reply [quiet], and don't repeat the question in text.]";
-
-/// An orchestrator reply as the user sees it: without a trailing [`prompts::QUIET`], and
-/// nothing when that was all of it, or when [`prompts::QUIET`] came first and only the
-/// sources it read follow ("[quiet]\n\n### Sources …").
-fn without_quiet(text: &str) -> Option<&str> {
-    let mut text = text.trim_end();
-    if let Some(rest) = text.trim_start().strip_prefix(prompts::QUIET) {
-        text = rest.trim_start();
-        if text.starts_with("### Sources") {
-            return None;
-        }
-    }
-    let text = text.strip_suffix(prompts::QUIET).unwrap_or(text).trim_end();
-    (!text.trim_start().is_empty()).then_some(text)
-}
-
-/// Whether an orchestrator's reply ends by asking the user something: its last sentence (or
-/// the one right before a closing list of options) is a question. A question followed by more
-/// statements ("Why did it fail? A missing export.") asks nothing, and neither does a question
-/// mark in code, in a quotation or inside a word (a URL's query). A question asked with
-/// ask_user is a card, which the request waits on by itself; this reads the reply's text.
-fn asks_user(reply: &str) -> bool {
-    let Some(reply) = without_quiet(reply) else {
-        return false;
-    };
-    let option = |line: &str| {
-        let line = line.trim_start();
-        line.strip_prefix(['-', '*', '\u{2022}'])
-            .is_some_and(|rest| rest.starts_with(char::is_whitespace))
-            || line.split_once(['.', ')']).is_some_and(|(number, _)| {
-                !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
-            })
-    };
-    let prose = prose_of(reply);
-    let all: Vec<&str> = prose
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    // A closing list of options: the question is the sentence before it (a reply that is
-    // only a list ends on its last item).
-    let mut lines: Vec<&str> = prose.lines().collect();
-    while lines
-        .last()
-        .is_some_and(|line| line.trim().is_empty() || option(line))
-    {
-        lines.pop();
-    }
-    if lines.is_empty() {
-        return all.last().is_some_and(|line| ends_on_question(line));
-    }
-    let paragraph = lines
-        .rsplit(|line| line.trim().is_empty())
-        .next()
-        .unwrap_or_default()
-        .join("\n");
-    ends_on_question(paragraph.trim_end())
-}
-
-/// A reply's prose: without code blocks and quoted lines ("> …"), each code span read as a
-/// word.
-fn prose_of(reply: &str) -> String {
-    let mut prose = String::new();
-    let mut fenced = false;
-    for line in reply.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            fenced = !fenced;
-            continue;
-        }
-        if fenced || trimmed.starts_with('>') {
-            continue;
-        }
-        let mut spans = line.split('`');
-        prose.push_str(spans.next().unwrap_or_default());
-        // Odd pieces are code; an unclosed span runs to the line's end.
-        for (n, piece) in spans.enumerate() {
-            if n % 2 == 1 {
-                prose.push_str(piece);
-            } else {
-                prose.push_str("code");
-            }
-        }
-        prose.push('\n');
-    }
-    prose
-}
-
-/// Whether `text` ends on a question of its own: a `?` after its last word, past closing
-/// marks and a closing aside ("Land it? (It fails `npm test`.)"), outside quotation marks.
-fn ends_on_question(text: &str) -> bool {
-    const CLOSING: [char; 7] = [')', '"', '\'', '*', '_', '\u{201d}', '\u{2019}'];
-    let text = text.trim_end();
-    let bare = text.trim_end_matches(|c: char| CLOSING.contains(&c) || c.is_whitespace());
-    if let Some(before) = bare.strip_suffix('?') {
-        // Inside a quotation that closes after it: someone else's question.
-        let straight = before.matches('"').count();
-        let curly = before.matches('\u{201c}').count() > before.matches('\u{201d}').count();
-        return straight % 2 == 0 && !curly;
-    }
-    // A closing aside after the question.
-    if text.ends_with(')')
-        && let Some(open) = text.rfind('(')
-    {
-        return ends_on_question(&text[..open]);
-    }
-    false
-}
-
-/// Whether the inbox waits for its quiet window to end: only quiet envelopes wait, and the
-/// window still runs. Anything else, or the window's end, ends it.
-fn waits_quietly(state: &mut ConvState) -> bool {
-    let Some(until) = state.quiet_until else {
-        return false;
-    };
-    if tokio::time::Instant::now() < until
-        && !state.inbox.is_empty()
-        && state.inbox.iter().all(|(envelope, _)| envelope.quiet())
-    {
-        return true;
-    }
-    state.quiet_until = None;
-    false
 }
 
 /// Takes every envelope of one request from the inbox, in arrival order: the request of the
@@ -7590,116 +6756,6 @@ pub(crate) fn browser_tab_note(tab: &str, title: &str, url: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_quiet_reply_that_lists_its_sources_shows_nothing() {
-        assert_eq!(without_quiet("[quiet]"), None);
-        assert_eq!(without_quiet("  [quiet]\n"), None);
-        assert_eq!(
-            without_quiet("[quiet]\n\n### Sources\n1. [Box](https://example.com/box)"),
-            None
-        );
-        assert_eq!(
-            without_quiet("The answer [1].\n[quiet]"),
-            Some("The answer [1].")
-        );
-        assert_eq!(without_quiet("[quiet]\n\nThe answer."), Some("The answer."));
-        let mut quiet = Quiet::default();
-        let delta = |text: &str| ProviderEvent::MessageDelta {
-            item_id: "m1".into(),
-            text: text.into(),
-            phase: None,
-        };
-        for text in [
-            "[qui",
-            "et]\n\n",
-            "### Sources\n",
-            "1. [Box](https://example.com/box)",
-        ] {
-            assert!(quiet.pass(vec![delta(text)]).is_empty(), "{text}");
-        }
-    }
-
-    #[test]
-    fn a_reply_s_next_message_line_is_cut_off_and_kept_as_the_guess() {
-        assert_eq!(
-            without_next(
-                "Done: titles edit inline.\n\n[next: could u make it so I can delete one too?]\n"
-            ),
-            (
-                "Done: titles edit inline.",
-                Some("could u make it so I can delete one too?".to_owned())
-            )
-        );
-        // Its case, quotes and spaces don't matter.
-        assert_eq!(
-            without_next("Done.\n  [Next: \"Run it again.\"]  ")
-                .1
-                .as_deref(),
-            Some("Run it again.")
-        );
-        // An empty or unclosed line is no guess, and still hidden.
-        assert_eq!(without_next("Done.\n[next: ]"), ("Done.", None));
-        assert_eq!(without_next("Done.\n[next: Run it"), ("Done.", None));
-        assert_eq!(
-            without_next(&format!(
-                "Done.\n[next: {}]",
-                "a".repeat(NEXT_MAX_CHARS + 1)
-            )),
-            ("Done.", None)
-        );
-        // Only a last line: one inside the answer, or none, changes nothing.
-        for text in [
-            "Done.",
-            "Done.\n[next: Run it.]\nMore.",
-            "See [1].\n[note] kept",
-            "Done.\n- [next](https://example.com) step",
-        ] {
-            assert_eq!(without_next(text), (text, None), "{text}");
-        }
-    }
-
-    #[test]
-    fn a_streamed_next_message_line_never_shows() {
-        let delta = |text: &str| ProviderEvent::MessageDelta {
-            item_id: "m1".into(),
-            text: text.into(),
-            phase: None,
-        };
-        let shown = |events: Vec<ProviderEvent>| -> String {
-            events
-                .into_iter()
-                .map(|event| match event {
-                    ProviderEvent::MessageDelta { text, .. } => text,
-                    _ => String::new(),
-                })
-                .collect()
-        };
-        let mut quiet = Quiet::default();
-        let mut seen = String::new();
-        for text in [
-            "Done: ti",
-            "tles edit.\n",
-            "\n[ne",
-            "xt: Run ",
-            "it again.]",
-        ] {
-            seen.push_str(&shown(quiet.pass(vec![delta(text)])));
-        }
-        assert_eq!(seen, "Done: titles edit.\n\n");
-        // A line that turns out to be something else shows once it can't be one.
-        let mut quiet = Quiet::default();
-        let mut seen = String::new();
-        for text in [
-            "See below.\n[",
-            "1] The source.",
-            "\n[next",
-            " step]\nMore.",
-        ] {
-            seen.push_str(&shown(quiet.pass(vec![delta(text)])));
-        }
-        assert_eq!(seen, "See below.\n[1] The source.\n[next step]\nMore.");
-    }
-
     fn image_ref(id: &str, inline: bool, mime: &str) -> AttachmentRef {
         AttachmentRef {
             id: id.into(),
@@ -7890,42 +6946,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_reply_that_ends_on_a_question_asks_the_user() {
-        for reply in [
-            "There's a conflicting test.\n\nHow do you want to resolve it: keep isPrime(1) true, or change the convention?",
-            "Stuck on a conflict.\n\nHow do you want to resolve it:\n1. Keep isPrime(1) true, or\n2. Change the convention.\n\nWhich one, or something else?",
-            "Two ways on. Which do you prefer?\n\n- Keep it\n- Drop it",
-            "Should I land it anyway? (It fails `npm test`.)",
-            "Land it as it is?\n\n[quiet]",
-            "Do you want \"strict\" mode?\"",
-            "Two ways on:\n- keep it\n- drop it\n\nWhich one?",
-            "Which one do you want?\n1. Keep it\n2. Drop it",
-            "Should I land it (as it is?)",
-            "**Land it as it is?**",
-            "Should I run this?\n\n```sh\nnpm test\n```",
-        ] {
-            assert!(asks_user(reply), "{reply}");
-        }
-        for reply in [
-            "[quiet]",
-            "Landed as commit afd589834a on main.",
-            "Why did it fail? A missing export.\n\nI sent the worker back to fix it.",
-            "Why did verification fail? The worker omitted an export.",
-            "See https://example.com/docs?page=2 for the details.",
-            "The worker asked \"should this be public?\"",
-            "The worker asked \u{201c}should this be public?\u{201d}",
-            "It runs `git status --porcelain?`",
-            "Its test reads:\n\n```js\nexpect(isPrime(1)).toBe(false) // why?\n```",
-            "The worker wrote:\n> Should I keep the old flag?",
-            "Done.\n\n- tests pass\n- lint passes",
-            "",
-        ] {
-            assert!(!asks_user(reply), "{reply}");
-        }
-    }
-
-    /// BUILD-PLAN B0: why a thread's CLI starts, for where its cache writes come from.
     #[test]
     fn a_threads_start_is_told_by_why_its_last_cli_closed() {
         assert_eq!(start_cause(true, false, None, false), WriteCause::Rebirth);

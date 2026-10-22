@@ -193,7 +193,7 @@ impl SessionManager {
                 return Err(Error::Invalid("The proposal changed or started meanwhile. Do not replace it; use the current briefing.".into()));
             }
             if run.predecessor.is_some() {
-                return Err(Error::Invalid("This proposal continues an earlier run: its phases and what they reached stay as they are. Reply with exactly [quiet].".into()));
+                return Err(Error::Invalid("This proposal continues an earlier run: its phases and what they reached stay as they are.".into()));
             }
             run.name = plan.name.clone();
             run.goal = plan.goal.clone().unwrap_or_else(|| run.words.clone());
@@ -208,7 +208,7 @@ impl SessionManager {
             Ok(())
         }).await?;
         Ok(format!(
-            "Proposal {} revision {} is shown on the one plan card. Nothing starts until the user's Start. Reply with exactly [quiet].",
+            "Proposal {} revision {} is shown on the one plan card. Nothing starts until the user's Start.",
             run.id, run.revision
         ))
     }

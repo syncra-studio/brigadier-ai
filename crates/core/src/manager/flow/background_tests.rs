@@ -39,7 +39,7 @@ fn checking(calls: Vec<(&'static str, &'static str)>, inputs: Log, replies: Log)
                 assert!(!reply.is_error, "{tool}: {}", reply.text);
                 replies.lock().unwrap().push(reply.text);
             }
-            Reply::text(crate::manager::prompts::QUIET)
+            Reply::text("")
         }
     })
 }
@@ -191,7 +191,7 @@ async fn a_background_run_keeps_the_name_the_thread_gave_it() {
                     .await;
                 assert!(!reply.is_error, "{tool}: {}", reply.text);
             }
-            Reply::text(crate::manager::prompts::QUIET)
+            Reply::text("")
         }),
     )
     .await;
@@ -254,7 +254,7 @@ async fn a_check_waiting_for_the_same_check_goes_to_the_background_and_answers_f
                         })
                         .await;
                     }
-                    Reply::text(crate::manager::prompts::QUIET)
+                    Reply::text("")
                 }
             }
         }),
@@ -523,7 +523,7 @@ async fn the_users_stop_of_one_background_run_tells_the_thread() {
                     .call("run", json!({ "command": "sleep 60; echo late" }))
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                Reply::text(crate::manager::prompts::QUIET)
+                Reply::text("")
             }
         }),
     )
@@ -627,7 +627,7 @@ async fn the_users_stop_of_a_run_that_printed_says_what_it_printed() {
                 .unwrap();
                 let reply = turn.call("run", json!({ "command": command })).await;
                 assert!(!reply.is_error, "{}", reply.text);
-                Reply::text(crate::manager::prompts::QUIET)
+                Reply::text("")
             }
         }),
     )

@@ -129,7 +129,7 @@ async fn a_reply_after_a_newer_request_waits_and_is_filed_under_the_one_that_ask
                     )
                     .await;
                 assert!(!routed.is_error, "{}", routed.text);
-                return Reply::text(crate::manager::prompts::QUIET);
+                return Reply::text("");
             }
             if header_id(&turn.input).is_some() {
                 return Reply::text("Noted: names are in `name`.");
@@ -491,7 +491,7 @@ async fn a_request_stops_waiting_for_a_session_deleted_before_it_replied() {
             )
             .await;
         assert!(!asked.is_error, "{}", asked.text);
-        Reply::text("[quiet]")
+        Reply::text("")
     });
     let docs = flow.add_session("Docs", None, ProviderKind::Codex).await;
     let hold = Arc::new(Notify::new());

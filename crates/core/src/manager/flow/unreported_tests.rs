@@ -46,7 +46,7 @@ async fn new_files_a_report_leaves_out_and_unevidenced_lines_are_marked_not_refu
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 turn.write("src/cart.ts", "export const cart = [];\n");
                 turn.write("src/discounts.ts", "export const discount = 0.1;\n");

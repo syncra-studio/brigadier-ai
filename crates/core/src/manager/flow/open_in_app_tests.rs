@@ -10,7 +10,7 @@ use crate::tools::{AppToolCall, OpenDiffScope, OpenInApp, OpenInAppTarget, ToolR
 use crate::work::ReviewScope;
 
 fn quiet() -> Script {
-    Arc::new(|_| Box::pin(async { Reply::text("[quiet]") }))
+    Arc::new(|_| Box::pin(async { Reply::text("") }))
 }
 
 /// The app's window: it opens every target in front when asked to show it (the user is on

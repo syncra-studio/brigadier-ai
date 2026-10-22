@@ -17,7 +17,7 @@ use crate::tools::{AppToolCall, TerminalRun, ToolReply};
 use crate::work::CardState;
 
 fn quiet() -> Script {
-    Arc::new(|_| Box::pin(async { Reply::text("[quiet]") }))
+    Arc::new(|_| Box::pin(async { Reply::text("") }))
 }
 
 /// The daemon's terminals, faked: the user's idle tab shell, the user's busy one, and what was

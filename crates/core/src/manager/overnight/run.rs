@@ -224,8 +224,6 @@ impl SessionManager {
                         background_jobs: None,
                         changes: None,
                         review: Default::default(),
-                        suggestion: None,
-                        deferred: false,
                     },
                 }],
             )
@@ -248,17 +246,21 @@ impl SessionManager {
         else {
             return;
         };
-        let text = if run.phases.is_empty() {
-            format!(
-                "[overnight] The run \u{201c}{}\u{201d} has started. Its goal, Rules, deadline and restrictions are in the [run] note. The user gave a goal without a plan: plan it first with plan_phases (only what the goal asks for), then work through it.",
-                run.name
-            )
+        let next = if run.phases.is_empty() {
+            "The user gave a goal without a plan: plan it first with plan_phases (only what the goal asks for), then work through it."
         } else {
-            format!(
-                "[overnight] The run \u{201c}{}\u{201d} has started. Its plan, Rules, deadline and restrictions are in the [run] note. Work through the plan now.",
-                run.name
-            )
+            "Work through the plan now."
         };
+        let setting = self.run_texts(&run.conversation_id, true).await;
+        let brief = self
+            .run_setting(&run.conversation_id)
+            .await
+            .map(|(_, brief)| brief)
+            .unwrap_or_default();
+        let text = format!(
+            "[overnight] The run \u{201c}{}\u{201d} has started. {next}\n{setting}\n{brief}",
+            run.name
+        );
         self.tell_thread(&run, "run started", text).await;
     }
 
@@ -337,8 +339,28 @@ impl SessionManager {
         .await;
     }
 
+    /// Where accepted work lands and the permission level, for the thread's message about its
+    /// run: the run's while `during`, else the session's own again.
+    pub(crate) async fn run_texts(&self, conversation_id: &ConversationId, during: bool) -> String {
+        let Ok(conversation) = self.core.conversation(conversation_id) else {
+            return String::new();
+        };
+        let trusted = self.repo_trust(conversation_id) != Some(false);
+        let run = if during {
+            self.overnight
+                .active
+                .get(conversation_id)
+                .and_then(|active| active.workspace)
+        } else {
+            None
+        };
+        let (environment, permission) =
+            super::super::prompts::setting_texts(&conversation, trusted, run.as_ref());
+        format!("{environment}\nPermission level: {permission}")
+    }
+
     /// While an overnight run is active in the conversation: its worktree, and what the
-    /// `[run]` note tells the thread about it (the plan, the Rules, the restrictions).
+    /// thread is told about it when it starts (the plan, the Rules, the restrictions).
     pub(crate) async fn run_setting(
         &self,
         conversation_id: &ConversationId,
@@ -902,6 +924,8 @@ impl SessionManager {
         {
             let words = super::wind_down::ENDING
                 .replace("{reason}", "the user's stop after a phase is reached");
+            let after = self.run_texts(&now.conversation_id, false).await;
+            let words = format!("{words}\nOnce the run is over:\n{after}");
             self.tell_thread(&now, "run ending", words).await;
             self.wind_down_soon(&now);
         }

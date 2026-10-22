@@ -112,7 +112,6 @@ mod shell_changes;
 mod side_chat;
 mod sidecars;
 mod source_actions;
-mod status;
 mod takeover;
 mod test_counts;
 mod thread;
@@ -126,6 +125,7 @@ mod trust;
 mod undo;
 mod uninstall;
 mod unreviewed;
+pub(super) mod upgrade;
 mod usage;
 mod usage_view;
 mod user_rebase;
@@ -272,10 +272,6 @@ pub struct SessionManager {
     /// Requests the last restart cut off before they answered: a message they owe a reply
     /// to hears that, so its sender can ask again.
     cut_off: Mutex<HashSet<String>>,
-    /// The files each pair of a project's sessions were told they both changed (by session
-    /// ids, in order), so an overlap is told once.
-    session_overlaps:
-        Mutex<HashMap<(ConversationId, ConversationId), std::collections::BTreeSet<String>>>,
     /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
     /// moment the stop starts: the thread may no longer message, steer or approve them.
     user_stops: Mutex<HashSet<TaskId>>,
@@ -321,9 +317,6 @@ pub struct SessionManager {
     /// the target.
     #[cfg(test)]
     pub(crate) landing_rewritten: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
-    /// Tests: how long quiet envelopes wait for others, instead of `QUIET_WINDOW`.
-    #[cfg(test)]
-    pub(crate) quiet_window: std::sync::Mutex<Option<std::time::Duration>>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
     /// The subfolder rules each thread's CLI session was given by its output hook, by its
@@ -486,7 +479,6 @@ impl SessionManager {
             reruns_starting: tokio::sync::Mutex::new(()),
             peer_sends: tokio::sync::Mutex::new(()),
             cut_off: Mutex::new(HashSet::new()),
-            session_overlaps: Mutex::new(HashMap::new()),
             user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
@@ -515,8 +507,6 @@ impl SessionManager {
             peer_fault: std::sync::Mutex::new(None),
             #[cfg(test)]
             landing_rewritten: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            quiet_window: std::sync::Mutex::new(None),
             activity: Arc::default(),
             rules_given: std::sync::Mutex::default(),
         });
@@ -529,6 +519,8 @@ impl SessionManager {
         // The thread engine's first start deletes the earlier engine's conversations, before
         // anything of theirs could resume.
         crate::heap(|| manager.switch_engine()).await?;
+        // Sessions open at the strip-down's first start are archived, not carried over.
+        crate::heap(|| manager.archive_open_at_upgrade()).await;
         // Before any session's instructions are written, which carry the preference.
         crate::heap(|| manager.carry_short_replies()).await;
         crate::heap(|| manager.recover_active_runs()).await;
@@ -541,7 +533,6 @@ impl SessionManager {
         manager.start_computer_watchdog();
         manager.retry_waiting_on_provider_checks();
         manager.start_checkpoint_timer();
-        manager.start_status_timer();
         Ok(manager)
     }
 

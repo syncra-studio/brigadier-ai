@@ -735,10 +735,9 @@ impl SessionManager {
                      doesn't reach it: answer it on its own now with message_session (to \
                      {from}, reply_to {message_id}), carrying only what answers it, then carry \
                      on. The user sees that reply in your work, so don't tell them about it: \
-                     end on your answer to them, or reply {quiet} if you already gave it.]",
+                     end on your answer to them.]",
                     envelope.text,
                     from = record.peer,
-                    quiet = super::prompts::QUIET,
                 ),
                 ..envelope.clone()
             }

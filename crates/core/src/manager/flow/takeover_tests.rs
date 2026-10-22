@@ -117,7 +117,7 @@ async fn start_as(
                     if turn.input.contains("LAND NOW") {
                         let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
                         thread_log.lock().unwrap().push(reply.text.clone());
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("Add the notes.") && !delegated.swap(true, Ordering::SeqCst) {
                         let reply = turn
@@ -129,7 +129,7 @@ async fn start_as(
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 worker_log.lock().unwrap().push(turn.input.clone());
                 if worker_log.lock().unwrap().len() == 1 && kind == "implement" {
@@ -831,7 +831,7 @@ async fn a_takeover_expires_the_workers_pending_permission_card() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             turn.ask_approval("curl https://example.com", "curl").await;
             Reply::text("Asked.")
@@ -1043,7 +1043,7 @@ async fn a_terminal_opens_on_the_account_the_worker_ran_on() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 assert_eq!(turn.account.as_deref(), Some("claude-b"));
                 turn.report_context(1_000).await;

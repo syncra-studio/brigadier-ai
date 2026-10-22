@@ -1,4 +1,4 @@
-import { ComposerPrimitive, useAuiState, ComposerRail, ComposerRailItem, ComposerAttachments, type ComposerProps } from "@/components/conversation";
+import { ComposerPrimitive, ComposerRail, ComposerRailItem, ComposerAttachments, type ComposerProps } from "@/components/conversation";
 import {
   type FC,
   useContext,
@@ -15,7 +15,6 @@ import {
   PermissionPicker,
   useShownPermission,
 } from "@/app/shell/SetupPickers";
-import { SuggestionContext, useSuggestion } from "@/app/conversation/suggestion";
 import { type MentionMemory, Mentions } from "@/app/conversation/Mentions";
 import { SlashCommands } from "@/app/conversation/SlashCommands";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
@@ -62,9 +61,6 @@ import { folderTrust } from "@/state/trust";
  */
 export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder }) => {
   const target = useContext(ComposerTargetContext);
-  // The guess at the next message, in the empty field (Tab, → or Enter takes it).
-  const suggestion = useSuggestion(target?.conversation?.id ?? null);
-  const attached = useAuiState((s) => s.composer.attachments.length > 0);
   const [modelOpen, setModelOpen] = useState(false);
   const [permissionOpen, setPermissionOpen] = useState(false);
   const sessionPermission = useShownPermission(target?.conversation ?? null);
@@ -95,7 +91,6 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
   const setAsideIds = (ids: readonly string[]) => {
     if (conversation) setAsideCards(conversation.id, ids);
   };
-  const guess = !archived && !plan.on && !attached ? (suggestion?.text ?? null) : null;
   // A session draft's pill: Ask for approval in a folder the user doesn't trust.
   const draftUntrusted = !conversation && resolved.kind === "session" && resolved.repoPath !== null && folderTrust(resolved.project, resolved.repoPath) === false;
   const permissionLevel = conversation ? sessionPermission : resolved.kind === "session" ? (draftUntrusted ? "askForApproval" : resolved.permission) : null;
@@ -165,21 +160,16 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
           <SelectionPill />
           <ComposerCard ref={shell}>
             <ComposerAttachments />
-            <SuggestionContext.Provider value={guess}>
-              <ComposerInput
-                placeholder={
-                  archived
-                    ? "Restore this conversation to continue it."
-                    : plan.on
-                      ? PLAN_PLACEHOLDER
-                      : guess
-                        ? ""
-                        : (working ?? placeholder)
-                }
-                autoFocus={autoFocus}
-                guess={guess}
-              />
-            </SuggestionContext.Provider>
+            <ComposerInput
+              placeholder={
+                archived
+                  ? "Restore this conversation to continue it."
+                  : plan.on
+                    ? PLAN_PLACEHOLDER
+                    : (working ?? placeholder)
+              }
+              autoFocus={autoFocus}
+            />
             <ComposerFooter owner={dictationOwner}>
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
                 <PlusMenu />

@@ -140,10 +140,12 @@ impl SessionManager {
         if run.state == OvernightState::WindingDown
             && matches!(run.stop, Some(StopReason::Deadline | StopReason::Stopped))
         {
+            let after = self.run_texts(&run.conversation_id, false).await;
+            let words = ENDING.replace("{reason}", &stop_words(run.stop.as_ref()));
             self.tell_thread(
                 &run,
                 "run ending",
-                ENDING.replace("{reason}", &stop_words(run.stop.as_ref())),
+                format!("{words}\nOnce the run is over:\n{after}"),
             )
             .await;
         }

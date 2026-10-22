@@ -280,8 +280,6 @@ impl Core {
                         background_jobs: None,
                         changes: None,
                         review: Default::default(),
-                        suggestion: None,
-                        deferred: false,
                     },
                 },
             ));

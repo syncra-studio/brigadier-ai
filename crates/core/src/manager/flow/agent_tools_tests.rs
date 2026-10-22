@@ -4,11 +4,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use brigadier_providers::model::Origin;
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
-use crate::manager::prompts::{REVISIONS, Revision};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -16,74 +14,6 @@ where
     Fut: std::future::Future<Output = Reply> + Send + 'static,
 {
     Arc::new(move |turn| Box::pin(f(turn)))
-}
-
-/// An open thread whose CLI was told the revision before `number` resumes its same session on
-/// its next turn and hears that revision's note once. Returns the note's turn input.
-async fn an_open_thread_hears_once(name: &str, number: u32) -> (&'static Revision, String) {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let mut flow = Flow::start(
-        name,
-        Options::default(),
-        Arc::new(move |turn| {
-            log.lock().unwrap().push(turn.input.clone());
-            Box::pin(async { Reply::text("Done.") })
-        }),
-    )
-    .await;
-    flow.say("First.").await;
-    flow.settled().await;
-    let added = REVISIONS
-        .iter()
-        .find(|revision| revision.number == number)
-        .unwrap();
-    // What the build before logged: its instructions were one revision older.
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            crate::model::DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(number - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Second.").await;
-    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
-        .await;
-    flow.settled().await;
-    let specs = flow.thread_specs();
-    assert!(
-        matches!(specs.last().unwrap().1.origin, Origin::Resume { .. }),
-        "{specs:#?}"
-    );
-    let second = inputs.lock().unwrap()[1].clone();
-    assert!(
-        second.contains(&format!("[instructions] {}", added.thread)),
-        "{second}"
-    );
-    flow.say("Third.").await;
-    flow.until("the third turn", |_| inputs.lock().unwrap().len() >= 3)
-        .await;
-    flow.settled().await;
-    let third = inputs.lock().unwrap()[2].clone();
-    assert!(!third.contains("[instructions]"), "{third}");
-    flow.stop().await;
-    (added, second)
 }
 
 /// `set_headline` stores the session's headline, detail line and whether it tells of a failure,
@@ -146,18 +76,6 @@ async fn the_threads_headline_stays_until_the_users_next_message() {
     let board = flow.settled().await;
     assert_eq!(board.headline, None);
     flow.stop().await;
-}
-
-/// The headline's rollout: an open thread hears once that it has set_headline.
-#[tokio::test]
-async fn an_open_thread_hears_once_that_it_sets_the_headline() {
-    let (added, _) = an_open_thread_hears_once(
-        "headline-revision",
-        crate::manager::prompts::HEADLINE_REVISION,
-    )
-    .await;
-    assert!(added.thread.contains("set_headline"));
-    assert!(added.worker.is_empty());
 }
 
 /// The project's full checks: each run is logged in the repository's git folder, held while
@@ -315,7 +233,7 @@ async fn full_checks_past_the_calls_wait_tell_their_verdict_as_a_message() {
                     if turn.input.contains("Check it") {
                         let reply = turn.call("run_checks", json!({})).await;
                         log.lock().unwrap().push(reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                 }
                 Reply::text("Done.")
@@ -374,7 +292,7 @@ async fn a_background_pass_before_the_threads_quiet_still_comes_as_a_message() {
                         while !go.load(std::sync::atomic::Ordering::SeqCst) {
                             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                         }
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                 }
                 Reply::text("Done.")
@@ -433,7 +351,7 @@ async fn a_later_run_checks_at_a_running_commit_joins_it() {
                     if turn.input.contains("Check it") {
                         let reply = turn.call("run_checks", json!({})).await;
                         log.lock().unwrap().push(reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                 }
                 Reply::text("Done.")
@@ -828,7 +746,7 @@ async fn a_workers_run_checks_runs_its_changes_checks() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 turn.write("web/broken.txt", "x\n");
                 turn.git(&["add", "web/broken.txt"]);
@@ -881,44 +799,6 @@ async fn a_workers_run_checks_runs_its_changes_checks() {
     assert_ne!(runs[0].tip, runs[1].tip, "each at the worker's commit then");
     assert_eq!(full_runs(&flow.repo), 0, "never the full checks");
     flow.stop().await;
-}
-
-/// run_checks' rollout: an open thread hears once that rerun_checks is gone and when to call
-/// run_checks; a resumed worker hears when it checks its own change.
-#[tokio::test]
-async fn an_open_thread_hears_once_that_run_checks_replaces_rerun_checks() {
-    let (added, _) = an_open_thread_hears_once(
-        "run-checks-revision",
-        crate::manager::prompts::RUN_CHECKS_REVISION,
-    )
-    .await;
-    assert!(added.thread.contains("rerun_checks is gone"));
-    assert!(
-        added
-            .thread
-            .contains(crate::manager::prompts::RUN_CHECKS_RULE)
-    );
-    assert!(
-        added
-            .worker
-            .contains(crate::manager::prompts::WORKER_RUN_CHECKS_RULE)
-    );
-}
-
-/// request_review replaces review_candidate and review_code: an open thread hears of it once,
-/// and so do its workers (BUILD-PLAN rule R).
-#[tokio::test]
-async fn an_open_thread_hears_once_that_request_review_replaces_the_old_review_tools() {
-    let (added, _) = an_open_thread_hears_once(
-        "request-review-revision",
-        crate::manager::prompts::REQUEST_REVIEW_REVISION,
-    )
-    .await;
-    assert!(added.thread.contains("review_candidate is gone"));
-    assert!(added.worker.contains("review_code is gone"));
-    for text in [added.thread, added.worker] {
-        assert!(text.contains("request_review"), "{text}");
-    }
 }
 
 /// What the thread's finish_session calls answered: an error, and its text.
@@ -1167,52 +1047,6 @@ async fn an_old_automatic_pass_never_satisfies_the_merge_rule() {
     flow.stop().await;
 }
 
-/// The merge rule's rollout: an open thread hears once that a merge into main needs run_checks
-/// passed and that only the user can skip them; its workers hear nothing.
-#[tokio::test]
-async fn an_open_thread_hears_once_of_the_merge_rule() {
-    let (added, _) = an_open_thread_hears_once(
-        "merge-rule-revision",
-        crate::manager::prompts::MERGE_RULE_REVISION,
-    )
-    .await;
-    assert!(
-        added
-            .thread
-            .contains("finish_session refuses a merge into main")
-    );
-    assert!(added.thread.contains(crate::manager::prompts::MERGE_RULE));
-    assert!(added.worker.is_empty());
-}
-
-/// The end of the automatic pipeline's rollout: an open thread hears once that Brigadier no
-/// longer reviews or checks anything by itself, and what to call instead; its workers hear
-/// nothing.
-#[tokio::test]
-async fn an_open_thread_hears_once_that_brigadier_reviews_and_checks_nothing_by_itself() {
-    let (added, _) = an_open_thread_hears_once(
-        "no-auto-pipeline-revision",
-        crate::manager::prompts::NO_AUTO_PIPELINE_REVISION,
-    )
-    .await;
-    assert!(
-        added
-            .thread
-            .contains("Brigadier no longer reviews or checks anything by itself")
-    );
-    assert!(
-        added
-            .thread
-            .contains("Call request_review for a large or risky change")
-    );
-    assert!(
-        added
-            .thread
-            .contains("run_checks before every merge into main")
-    );
-    assert!(added.worker.is_empty());
-}
-
 /// Brigadier starts no review, no full checks and no fix by itself: not for a turn in which the
 /// thread commits 240 lines of code over 6 files, nor for a worker's landing. Only the agents
 /// start them (request_review, run_checks, delegate_task).
@@ -1265,7 +1099,7 @@ async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             Reply::text("Noted.")
         }),
@@ -1291,21 +1125,4 @@ async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
     );
     assert_eq!(board.tasks.len(), 1, "{:#?}", board.tasks);
     flow.stop().await;
-}
-
-/// Workers ask for their own review only when it is worth one: a resumed worker hears it once,
-/// the thread nothing new.
-#[test]
-fn a_resumed_worker_hears_once_when_to_ask_for_its_review() {
-    use crate::manager::prompts::{WORKER_REVIEW_REVISION, revision_note};
-    let note = revision_note(WORKER_REVIEW_REVISION - 1, true).unwrap();
-    assert!(
-        note.contains("request_review only when your task asks"),
-        "{note}"
-    );
-    assert!(revision_note(WORKER_REVIEW_REVISION, true).is_none());
-    assert_eq!(
-        revision_note(WORKER_REVIEW_REVISION - 1, false),
-        revision_note(WORKER_REVIEW_REVISION, false)
-    );
 }

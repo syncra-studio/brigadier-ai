@@ -790,8 +790,6 @@ impl Core {
                         background_jobs: None,
                         changes: None,
                         review: Default::default(),
-                        suggestion: None,
-                        deferred: false,
                     },
                 },
             ),
@@ -1909,73 +1907,6 @@ impl Core {
             return Ok(());
         }
         request.changes = Some(changes);
-        let event = DomainEvent::RequestUpdated { request };
-        let stored = self
-            .record(vec![(streams::conversation(id), event.clone())])
-            .await?;
-        if let Some(board) = boards.get_mut(id) {
-            board.apply(&event, stored[0]);
-        }
-        Ok(())
-    }
-
-    /// Keeps the guess at the user's next message on `request_id`, the request whose turn
-    /// it follows, while that is still the conversation's latest: once a newer one started, the
-    /// guess follows nothing the user sees.
-    pub(crate) async fn set_suggestion(
-        &self,
-        id: &ConversationId,
-        request_id: &str,
-        text: String,
-    ) -> Result<()> {
-        let mut boards = self.boards.lock().await;
-        if !boards.contains_key(id) {
-            boards.insert(id.clone(), self.load_board(id).await?);
-        }
-        let Some(mut request) = boards
-            .get(id)
-            .and_then(|board| board.latest_request())
-            .filter(|request| request.id == request_id)
-            .cloned()
-        else {
-            return Ok(());
-        };
-        if request.suggestion.as_deref() == Some(text.as_str()) {
-            return Ok(());
-        }
-        request.suggestion = Some(text);
-        let event = DomainEvent::RequestUpdated { request };
-        let stored = self
-            .record(vec![(streams::conversation(id), event.clone())])
-            .await?;
-        if let Some(board) = boards.get_mut(id) {
-            board.apply(&event, stored[0]);
-        }
-        Ok(())
-    }
-
-    /// Keeps whether a request's thread left its answer to what wakes it next
-    /// ([`UserRequest::deferred`]).
-    pub(crate) async fn set_request_deferred(
-        &self,
-        id: &ConversationId,
-        request_id: &str,
-        deferred: bool,
-    ) -> Result<()> {
-        let mut boards = self.boards.lock().await;
-        if !boards.contains_key(id) {
-            let board = self.load_board(id).await?;
-            boards.insert(id.clone(), board);
-        }
-        let Some(mut request) = boards
-            .get(id)
-            .and_then(|board| board.requests.get(request_id))
-            .filter(|request| request.deferred != deferred)
-            .cloned()
-        else {
-            return Ok(());
-        };
-        request.deferred = deferred;
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])

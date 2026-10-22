@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::peer_kit::{Peers, is_reply};
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::prompts::{QUIET, RESEARCH_REPORT_NOTE};
+use crate::manager::prompts::RESEARCH_REPORT_NOTE;
 use crate::model::MessageRole;
 use crate::work::RequestState;
 
@@ -92,7 +92,7 @@ async fn a_line_before_delegating_reaches_the_user_and_the_worker_starts() {
                 )
                 .await;
             assert!(!reply.is_error, "{}", reply.text);
-            Reply::text(QUIET)
+            Reply::text("")
         }),
     )
     .await;
@@ -136,7 +136,7 @@ async fn a_research_report_reaches_the_thread_with_the_no_bold_lines_rule() {
                 }
                 log.lock().unwrap().push(turn.input.clone());
                 if turn.input.contains("[report task-") {
-                    return Reply::text(QUIET);
+                    return Reply::text("");
                 }
                 for kind in ["research", "scout"] {
                     let reply = turn
@@ -148,7 +148,7 @@ async fn a_research_report_reaches_the_thread_with_the_no_bold_lines_rule() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                Reply::text(QUIET)
+                Reply::text("")
             }
         }),
     )
@@ -230,13 +230,13 @@ async fn a_request_over_on_a_line_said_mid_work_simply_ends() {
                 if turn.input.contains("[run-1 finished") {
                     turn.emit(said(LINE)).await;
                     turn.emit(calls("code_search")).await;
-                    return Reply::text(QUIET);
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call("run_check", json!({ "command": "sleep 3; echo ok" }))
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                Reply::text(QUIET)
+                Reply::text("")
             }
         }),
     )
@@ -272,12 +272,9 @@ async fn a_request_over_on_a_line_said_mid_work_simply_ends() {
     flow.stop().await;
 }
 
-const PEER_REMINDED: &str = "You haven't answered the message from session";
-
 /// The API session works on its user's request; the sender's message is steered in and the
-/// turn answers the user only. When reminded, the thread answers the message with `reminded`
-/// (or says nothing, when `None`). Returns the sender's replies as its turns read them.
-async fn mixed_reply(name: &str, reminded: Option<&'static str>) -> (Flow, Vec<String>) {
+/// turn answers the user only. Returns the sender's replies as its turns read them.
+async fn mixed_reply(name: &str) -> (Flow, Vec<String>) {
     let peers = Peers::new();
     let flow = Flow::start(name, Options::default(), peers.script()).await;
     let api = flow
@@ -290,16 +287,6 @@ async fn mixed_reply(name: &str, reminded: Option<&'static str>) -> (Flow, Vec<S
     peers.on(&api, move |turn| {
         let (at, asked) = (at.clone(), asked.clone());
         async move {
-            if turn.input.contains(PEER_REMINDED) {
-                let Some(text) = reminded else {
-                    return Reply::text(QUIET);
-                };
-                let (id, from) = asked.lock().unwrap().clone().unwrap();
-                assert!(turn.input.contains(&id), "{}", turn.input);
-                let (_, failed) = super::peer_kit::send(&turn, &from, text, Some(&id)).await;
-                assert!(!failed);
-                return Reply::text(QUIET);
-            }
             at.notify_one();
             let steer = turn.steered().await.expect("the message steered in");
             *asked.lock().unwrap() = Some((
@@ -328,22 +315,11 @@ async fn mixed_reply(name: &str, reminded: Option<&'static str>) -> (Flow, Vec<S
     (flow, replies)
 }
 
-/// A message steered into other work and left unanswered there: the thread is reminded to
-/// answer it on its own, and that answer is the reply, not the other work's.
-#[tokio::test]
-async fn a_message_steered_into_other_work_gets_only_its_own_answer() {
-    let (flow, replies) = mixed_reply("peer-mixed-reminded", Some("It's `name`.")).await;
-    assert_eq!(replies.len(), 1, "{replies:#?}");
-    assert!(replies[0].contains("It's `name`."), "{}", replies[0]);
-    assert!(!replies[0].contains("U990085"), "{}", replies[0]);
-    flow.stop().await;
-}
-
-/// Reminded and still silent: the sender hears that it went unanswered, never the other
-/// work's answer.
+/// Left unanswered amid other work: the sender hears that it went unanswered, never the other
+/// work's answer; nothing reminds the receiver.
 #[tokio::test]
 async fn a_message_left_unanswered_amid_other_work_says_so() {
-    let (flow, replies) = mixed_reply("peer-mixed-silent", None).await;
+    let (flow, replies) = mixed_reply("peer-mixed-silent").await;
     assert_eq!(replies.len(), 1, "{replies:#?}");
     assert!(
         replies[0].contains("\"API work\" didn't answer your message"),
@@ -626,7 +602,7 @@ async fn a_follow_up_left_unsorted_joins_the_request_its_turn_served() {
             async move {
                 log.lock().unwrap().push(turn.input.clone());
                 if log.lock().unwrap().len() > 1 {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
                     .await;

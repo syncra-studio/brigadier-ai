@@ -49,13 +49,13 @@ async fn clean_up_removes_merged_work_and_explains_how_to_discard_kept_unmerged_
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.input.contains("[report task-1") {
                 let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
                 assert!(!reply.is_error, "{}", reply.text);
             }
-            Reply::text("[quiet]")
+            Reply::text("")
         }),
     )
     .await;

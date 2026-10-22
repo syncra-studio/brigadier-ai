@@ -59,7 +59,7 @@ async fn a_sessions_worker_and_thread_list_nothing_for_the_user_and_the_request_
                         )
                         .await;
                     assert!(!delegated.is_error, "{}", delegated.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(

@@ -184,7 +184,7 @@ async fn a_writing_worker_runs_the_setup_script_and_a_reader_doesnt() {
                     return Reply::text("Reported.");
                 }
                 if !turn.is_orchestrator() || turn.input.contains("[report task-") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 for (kind, title) in [
                     ("implement", "Write the page"),
@@ -198,7 +198,7 @@ async fn a_writing_worker_runs_the_setup_script_and_a_reader_doesnt() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             })
         })
     };
@@ -303,7 +303,7 @@ async fn a_worker_stopped_during_its_setup_script_never_starts() {
                     return Reply::text("Started anyway.");
                 }
                 if !turn.is_orchestrator() || !turn.input.contains("Build the page") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -312,7 +312,7 @@ async fn a_worker_stopped_during_its_setup_script_never_starts() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             })
         })
     };

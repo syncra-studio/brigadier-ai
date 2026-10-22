@@ -52,7 +52,7 @@ fn grilling() -> Script {
                 )
                 .await;
             assert!(!asked.is_error, "{}", asked.text);
-            return Reply::text("[quiet]");
+            return Reply::text("");
         }
         if turn.input.contains("[answer]") && turn.input.contains("Yes, that's it") {
             return Reply::text(DONE);
@@ -68,7 +68,7 @@ fn grilling() -> Script {
                 )
                 .await;
             assert!(!asked.is_error, "{}", asked.text);
-            return Reply::text("[quiet]");
+            return Reply::text("");
         }
         let started = turn
             .call(
@@ -78,7 +78,7 @@ fn grilling() -> Script {
             )
             .await;
         assert!(!started.is_error, "{}", started.text);
-        Reply::text("[quiet]")
+        Reply::text("")
     })
 }
 

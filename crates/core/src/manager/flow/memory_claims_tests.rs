@@ -1,8 +1,7 @@
 //! Memory safeguards (BUILD-PLAN A11, Q38): what a worker reports under `learned` and what
 //! the thread keeps with `remember` on its own are claims, unverified, labelled as such in a
 //! later worker's brief, a `query_brain` answer and a rebirth briefing, never as settled
-//! decisions; only a cited user message makes a user decision. Rule R: a session from before
-//! the change hears it once.
+//! decisions; only a cited user message makes a user decision.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +11,6 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::manager::context_pack::BRAIN_HEADING;
-use crate::manager::prompts::{MEMORY_CLAIMS_REVISION, revision_note};
 use crate::model::{DomainEvent, MessageRole};
 
 fn script<F, Fut>(f: F) -> Script
@@ -67,7 +65,7 @@ async fn claims_reach_briefs_answers_and_rebirths_labelled_unverified() {
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-1") {
                         // The thread sees what the Brain keeps.
@@ -105,7 +103,7 @@ async fn claims_reach_briefs_answers_and_rebirths_labelled_unverified() {
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     return Reply::text("Noted.");
                 }
@@ -296,8 +294,7 @@ async fn claims_reach_briefs_answers_and_rebirths_labelled_unverified() {
     flow.stop().await;
 }
 
-/// Rule R: a session told the instructions before this change hears the note once; then a
-/// `remember` that cites the user's real message is a user decision, and one citing a
+/// A `remember` that cites the user's real message is a user decision, and one citing a
 /// message that isn't the user's, or words it doesn't hold, is refused, as is a preference
 /// with no message.
 #[tokio::test]
@@ -354,10 +351,6 @@ async fn remember_cites_the_users_message_or_is_refused() {
                         tokens_estimate: 25,
                         label: "instructions revision".into(),
                         task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(MEMORY_CLAIMS_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
                     },
                 },
             },
@@ -384,14 +377,7 @@ async fn remember_cites_the_users_message_or_is_refused() {
     flow.say("Thanks.").await;
     flow.settled().await;
 
-    let note = revision_note(MEMORY_CLAIMS_REVISION - 1, false).unwrap();
-    assert!(
-        note.contains("the Brain keeps only the user's decisions as settled"),
-        "{note}"
-    );
     let seen = seen.lock().unwrap().clone();
-    let told: usize = seen.iter().map(|input| input.matches(&note).count()).sum();
-    assert_eq!(told, 1, "{seen:?}");
     let replies: Vec<&String> = seen
         .iter()
         .filter(|line| line.starts_with("remember: "))

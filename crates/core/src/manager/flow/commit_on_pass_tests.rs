@@ -1,14 +1,14 @@
 //! The thread may commit in the same call as its last check (BUILD-PLAN C9, Q50): `run_check`'s
 //! `commit` commits everything it changed, with its trailer, only when the check passes. It is
 //! the thread's decision: nothing commits on its own, a failing check commits nothing, and on
-//! the user's own checkout it commits nothing. Rule R: a session from before hears it once.
+//! the user's own checkout it commits nothing.
 
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
-use crate::manager::prompts::{COMMIT_ON_PASS_REVISION, THREAD_TRAILER, revision_note};
+use crate::manager::prompts::THREAD_TRAILER;
 use crate::model::{
     ConversationKind, DomainEvent, EnvironmentRequest, ModelChoice, PermissionLevel, SetupRequest,
 };
@@ -54,7 +54,7 @@ fn checks(asks: &'static [(&'static str, &'static str, &'static str)], seen: Log
                 .await;
             let quiet = waits(&reply.text);
             seen.lock().unwrap().push(reply.text);
-            Reply::text(if quiet { "[quiet]" } else { "Checked." })
+            Reply::text(if quiet { "" } else { "Checked." })
         }
     })
 }
@@ -88,10 +88,6 @@ async fn told_before(flow: &Flow) {
                         tokens_estimate: 25,
                         label: "instructions revision".into(),
                         task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(COMMIT_ON_PASS_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
                     },
                 },
             },
@@ -100,8 +96,7 @@ async fn told_before(flow: &Flow) {
         .unwrap();
 }
 
-/// On the session's own worktree, a session from before hears the note once. Its failing
-/// check commits nothing and its passing one commits the change with its message and the
+/// On the session's own worktree, a failing check commits nothing and its passing one commits the change with its message and the
 /// trailer, leaving nothing uncommitted.
 #[tokio::test]
 async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() {
@@ -150,11 +145,6 @@ async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() 
         git(&workspace, &["show", "--format=", "--name-only", "HEAD"]),
         "NOTES.md"
     );
-    let note = revision_note(COMMIT_ON_PASS_REVISION - 1, false).unwrap();
-    assert!(note.contains("give your last run_check `commit"), "{note}");
-    let seen = seen.lock().unwrap().clone();
-    let told: usize = seen.iter().map(|said| said.matches(&note).count()).sum();
-    assert_eq!(told, 1, "{seen:#?}");
     flow.stop().await;
 }
 

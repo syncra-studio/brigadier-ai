@@ -37,9 +37,7 @@ use super::conversation::Envelope;
 use super::workers::{SessionTemp, session_temp_dir};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, DomainEvent};
-use crate::work::{
-    InjectionKind, IntegratedCheck, IntegratedCheckState, RequestState, Task, TaskId, TaskKind,
-};
+use crate::work::{InjectionKind, IntegratedCheck, IntegratedCheckState, Task, TaskId, TaskKind};
 use crate::{Error, Result, now_ms};
 
 /// How long `run_checks` holds the thread's call for the verdict before it goes on in the
@@ -213,14 +211,6 @@ pub(crate) fn named_in_issues(tests: &[String], issues: &[(u64, String)]) -> Vec
         .collect()
 }
 
-/// Whether a check of the session runs, or is due, for `request`: its answer waits for it.
-pub(crate) fn checking_for(board: &crate::board::Board, request: &str) -> bool {
-    board
-        .integrated_checks
-        .values()
-        .any(|check| !check.state.is_final() && check.requests.iter().any(|asked| asked == request))
-}
-
 /// The line a request's notes end with while its full checks run.
 pub(crate) fn checking_line(board: &crate::board::Board, request: &str) -> Option<String> {
     let check = board
@@ -231,7 +221,7 @@ pub(crate) fn checking_line(board: &crate::board::Board, request: &str) -> Optio
         })
         .min_by_key(|check| integrated_check_number(&check.id))?;
     Some(format!(
-        "[the session's full checks {} on `{}` at {}, in the background: {} comes as a message. Answer now, or reply {} to answer with their result.]",
+        "[the session's full checks {} on `{}` at {}, in the background: {} comes as a message.]",
         match check.state {
             IntegratedCheckState::Due => "are due",
             _ => "run",
@@ -243,8 +233,7 @@ pub(crate) fn checking_line(board: &crate::board::Board, request: &str) -> Optio
             "their result"
         } else {
             "a failure"
-        },
-        super::prompts::QUIET
+        }
     ))
 }
 
@@ -369,11 +358,10 @@ impl SessionManager {
                 self.set_owed(id, &check, true).await;
                 drop(waiting);
                 return Ok(format!(
-                    "The full checks still run on `{}` at {} ({check}), in the background: their result comes as a message [checks … at {}]. Carry on with what doesn't depend on them, or reply {}; don't call run_checks again for it.",
+                    "The full checks still run on `{}` at {} ({check}), in the background: their result comes as a message [checks … at {}]. Carry on with what doesn't depend on them; don't call run_checks again for it.",
                     now.branch,
                     short(&now.tip),
                     short(&now.tip),
-                    super::prompts::QUIET,
                 ));
             }
         }
@@ -440,7 +428,7 @@ impl SessionManager {
 
     /// What the thread is told of a `run_checks` run's end, in its call.
     async fn checks_verdict(&self, check: &IntegratedCheck) -> String {
-        match self.check_message(check, true, true).await {
+        match self.check_message(check).await {
             Some((text, _)) => text,
             None => format!("[checks at {}] They ended.", short(&check.tip)),
         }
@@ -943,91 +931,30 @@ impl SessionManager {
                     .is_some_and(|stored| stored.owed)
             })
         };
-        // Every independent request that deferred to this run gets its own outcome.
-        let mut requests: Vec<_> = self
-            .waiting_requests(check)
-            .await
-            .into_iter()
-            .map(Some)
-            .collect();
-        let waited = !requests.is_empty();
-        if requests.is_empty() {
-            requests.push(check.requests.last().cloned());
-        }
-        // Queue the whole batch before settling or starting a turn, so delivering the
-        // first result cannot settle the other requests before their messages are queued.
-        let mut queued = None;
-        let mut wait = false;
-        let count = requests.len();
-        for (index, request) in requests.into_iter().enumerate() {
-            // A live look is work for the thread once, on the newest waiting request.
-            let Some((text, optional_pass)) =
-                self.check_message(check, waited, index + 1 == count).await
-            else {
-                continue;
-            };
+        // Told on the newest request it checks; a pass only when a run_checks call or a live
+        // look waits for it.
+        if let Some((text, optional_pass)) = self.check_message(check).await {
             let envelope = Envelope {
                 kind: InjectionKind::Decision,
                 label: check_label(&check.id, optional_pass, owed),
                 task_id: check.tasks.last().cloned(),
                 text,
             };
-            let request = match request {
+            let request = match check.requests.last().cloned() {
                 Some(request) => Some(request),
                 None => self.request_for(id, envelope.task_id.as_ref()).await,
             };
-            // A pass waits a little while more of its request runs (BUILD-PLAN C3).
-            if let Some(request) = &request
-                && envelope.quiet()
-                && crate::heap(|| self.more_coming(id, request, envelope.task_id.as_ref())).await
-            {
-                wait = true;
-            }
             if let Some(conv) = self.queue_envelope(id, envelope, request).await {
-                queued = Some(conv);
+                self.settle_requests(id).await;
+                self.kick(&conv);
             }
-        }
-        if let Some(conv) = queued {
-            if wait {
-                self.wait_quietly(&conv).await;
-            }
-            self.settle_requests(id).await;
-            self.kick(&conv);
         }
         self.check_held_merge(id).await;
         self.settle_requests(id).await;
     }
 
-    /// All of `check`'s requests whose answers the thread left to it ([quiet]) and
-    /// that still work or wait.
-    async fn waiting_requests(&self, check: &IntegratedCheck) -> Vec<String> {
-        let Ok(board) = self.core.board(&check.conversation_id).await else {
-            return Vec::new();
-        };
-        let Ok(conv) = self.conv(&check.conversation_id) else {
-            return Vec::new();
-        };
-        let deferred = conv.request_activity().await.deferred;
-        check
-            .requests
-            .iter()
-            .filter(|request| {
-                deferred.contains(*request)
-                    && board.requests.get(*request).is_some_and(|request| {
-                        matches!(request.state, RequestState::Working | RequestState::Waiting)
-                    })
-            })
-            .cloned()
-            .collect()
-    }
-
     /// What the thread hears of a check's end; none for a pass no answer waits for.
-    async fn check_message(
-        &self,
-        check: &IntegratedCheck,
-        waited: bool,
-        include_live_look: bool,
-    ) -> Option<(String, bool)> {
+    async fn check_message(&self, check: &IntegratedCheck) -> Option<(String, bool)> {
         let board = self.core.board(&check.conversation_id).await.ok()?;
         let tasks: Vec<&Task> = check
             .tasks
@@ -1037,15 +964,14 @@ impl SessionManager {
         let at = short(&check.tip);
         match &check.state {
             IntegratedCheckState::Passed { commands } => {
-                // Told when the thread left a request's answer to it ([quiet]).
                 // Only computer use's tools can look at it live.
-                let look = if include_live_look && self.core.settings().computer_use {
+                let look = if self.core.settings().computer_use {
                     live_look_line(&tasks)
                 } else {
                     String::new()
                 };
                 // A run_checks run's pass is told even when no answer waits for it.
-                if !waited && look.is_empty() && check.asked.is_none() {
+                if look.is_empty() && check.asked.is_none() {
                     return None;
                 }
                 let covered = if tasks.is_empty() {
@@ -1324,7 +1250,7 @@ impl SessionManager {
             if queued {
                 continue;
             }
-            let Some((text, pass)) = self.check_message(&check, false, true).await else {
+            let Some((text, pass)) = self.check_message(&check).await else {
                 continue;
             };
             tracing::info!(conversation = %id, check = %check.id, "a check's verdict the thread was owed goes to it after the restart");
@@ -1631,19 +1557,17 @@ test result: FAILED. 1 passed; 3 failed";
         assert_eq!(tip_checked(&board, "work", "a1"), TipChecked::Passed);
         assert_eq!(tip_checked(&board, "work", "b2"), TipChecked::Pending);
         assert_eq!(tip_checked(&board, "other", "a1"), TipChecked::Never);
-        assert!(checking_for(&board, "r1"));
-        assert!(!checking_for(&board, "r2"));
         assert_eq!(
             checking_line(&board, "r1").as_deref(),
             Some(
-                "[the session's full checks are due on `work` at b2, in the background: a failure comes as a message. Answer now, or reply [quiet] to answer with their result.]"
+                "[the session's full checks are due on `work` at b2, in the background: a failure comes as a message.]"
             )
         );
         board.integrated_checks.get_mut("check-10").unwrap().owed = true;
         assert_eq!(
             checking_line(&board, "r1").as_deref(),
             Some(
-                "[the session's full checks are due on `work` at b2, in the background: their result comes as a message. Answer now, or reply [quiet] to answer with their result.]"
+                "[the session's full checks are due on `work` at b2, in the background: their result comes as a message.]"
             ),
             "a run_checks call that went on is owed its pass too"
         );

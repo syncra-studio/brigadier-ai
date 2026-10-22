@@ -98,7 +98,7 @@ fn waits_for_its_job(ends: bool, inputs: Arc<Mutex<Vec<String>>>) -> Script {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let first = inputs.lock().unwrap().is_empty();
             inputs.lock().unwrap().push(turn.input.clone());
@@ -246,7 +246,7 @@ fn orchestrator_waits_for_its_command(
                     })
                     .await;
             });
-            Reply::text("[quiet]")
+            Reply::text("")
         }
     })
 }
@@ -417,7 +417,7 @@ async fn a_scout_reports_under_memory_warning_and_the_answer_ends_the_request() 
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             // Its test data folder is there while it works.
             let brief = format!("{}\n{}", turn.prompt, turn.input);
@@ -482,7 +482,7 @@ async fn a_worker_hold_moving_from_heat_to_memory_says_so_and_warning_releases_i
                     "effort": "high", "title": "Read files", "kind": "scout", "spec": "Read the files."
                 })).await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let reply = turn.call("submit_report", json!({"summary": "Read the files."})).await;
             assert!(!reply.is_error, "{}", reply.text);
@@ -557,7 +557,7 @@ async fn claude_workers_sharing_a_folder_never_sweep_it() {
         script(|turn| async move {
             if turn.is_orchestrator() {
                 if turn.input.contains("[report task-") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 for title in ["Add a", "Add b"] {
                     let reply = turn
@@ -569,7 +569,7 @@ async fn claude_workers_sharing_a_folder_never_sweep_it() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let reply = turn
                 .call("submit_report", json!({"summary": "Nothing to change."}))
@@ -620,7 +620,7 @@ async fn a_real_store_is_cleared_on_the_first_start() {
             store: Some(store.into()),
             ..Options::default()
         },
-        script(|_| async { Reply::text("[quiet]") }),
+        script(|_| async { Reply::text("") }),
     )
     .await;
     let old = flow.core.catalog().conversations.len() - 1;
@@ -718,7 +718,7 @@ async fn reported_work_lands_with_its_own_commits_and_at_once_after_a_rebase() {
                         }
                     }
                     if !landed.is_empty() {
-                        return Reply::text(format!("[quiet] {}", landed.join(" | ")));
+                        return Reply::text("");
                     }
                     if turn.input.contains("[checks passed") {
                         return Reply::text("Both files are in.");
@@ -733,7 +733,7 @@ async fn reported_work_lands_with_its_own_commits_and_at_once_after_a_rebase() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let n = turn.task_number().unwrap();
                 let file = if n == 1 { "a.txt" } else { "b.txt" };
@@ -878,7 +878,7 @@ async fn a_small_request_is_reviewed_by_its_lead_and_lands_without_a_verifier() 
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             // The lead never commits: its sandbox can't.
             turn.write("hello.txt", "hello");
@@ -997,7 +997,7 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
                     Some(1) => {
                         let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     Some(n) => {
                         let reply = turn
@@ -1009,7 +1009,7 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
                     None => {}
                 }
                 if turn.input.contains("[review ") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -1019,7 +1019,7 @@ async fn a_verifier_the_orchestrator_started_triages_its_review_and_reports() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.prompt.contains("You verify this phase") {
                 let review = own_review(&turn).await;
@@ -1133,7 +1133,7 @@ async fn a_verifier_takes_over_its_leads_review_still_running() {
                             let reply =
                                 turn.call("start_verifier", json!({"task": "task-1"})).await;
                             assert!(!reply.is_error, "{}", reply.text);
-                            return Reply::text("[quiet]");
+                            return Reply::text("");
                         }
                         Some(n) => {
                             let reply = turn
@@ -1145,7 +1145,7 @@ async fn a_verifier_takes_over_its_leads_review_still_running() {
                         None => {}
                     }
                     if turn.input.contains("[review ") {
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     let reply = turn
                         .call(
@@ -1155,7 +1155,7 @@ async fn a_verifier_takes_over_its_leads_review_still_running() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.prompt.contains("You verify this phase") {
                     let asked = turn.call("request_review", json!({})).await;
@@ -1268,7 +1268,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     match reports_in(&turn.input).last().copied() {
                         // Phase one's lead: big work, so the orchestrator starts a verifier.
@@ -1280,7 +1280,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                             let told = turn.call("land_phase", json!({"task": "task-1"})).await;
                             assert!(!told.is_error, "{}", told.text);
                             assert!(told.text.starts_with("Nothing landed"), "{}", told.text);
-                            return Reply::text("[quiet]");
+                            return Reply::text("");
                         }
                         Some(n) => {
                             let reply = turn
@@ -1298,7 +1298,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                                     )
                                     .await;
                                 assert!(!reply.is_error, "{}", reply.text);
-                                return Reply::text("[quiet]");
+                                return Reply::text("");
                             }
                             return Reply::text(
                                 "Both phases are done.\n\nWaiting on you: nothing.",
@@ -1323,7 +1323,7 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.prompt.contains("You verify this phase") {
                     assert!(
@@ -1521,7 +1521,7 @@ async fn the_orchestrator_answers_a_workers_questions_and_logs_each_answer() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("Which language?") {
                     let reply = turn
@@ -1531,7 +1531,7 @@ async fn the_orchestrator_answers_a_workers_questions_and_logs_each_answer() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if !reports_in(&turn.input).is_empty() {
                     // Nothing waits on an answer any more.
@@ -1552,7 +1552,7 @@ async fn the_orchestrator_answers_a_workers_questions_and_logs_each_answer() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let brain = turn
                 .call("query_brain", json!({"query": "greeting conventions"}))
@@ -1662,7 +1662,7 @@ async fn archiving_a_session_ends_its_running_review() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             turn.write("hello.txt", "hello");
             let reply = turn
@@ -1750,7 +1750,7 @@ async fn a_workers_launch_cut_off_by_an_archive_leaves_nothing_behind() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -1805,7 +1805,7 @@ async fn a_reviews_news_leaves_a_workers_question_open() {
                         return Reply::text("It says Hello.");
                     }
                     if turn.input.contains("Which greeting?") {
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     let reply = turn
                         .call(
@@ -1815,7 +1815,7 @@ async fn a_reviews_news_leaves_a_workers_question_open() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let answer = turn
                     .call("ask_orchestrator", json!({"question": "Which greeting?"}))
@@ -1892,7 +1892,7 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if let Some(n) = reports_in(&turn.input).first() {
                         let reply = turn
@@ -1909,7 +1909,7 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 const NOTE: &str =
                     "Goal and where it stands: a.txt is committed.\nNext steps: write b.txt.";
@@ -2074,7 +2074,7 @@ async fn a_fresh_session_hears_which_checks_passed_and_what_changed_since() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 const NOTE: &str = "Goal and where it stands: a.txt is committed.\nChecks that \
                     passed: echo one.\nNext steps: write b.txt.";
@@ -2177,7 +2177,7 @@ async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
                         .call("approve_outline", json!({"task": "task-1"}))
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if let Some(n) = reports_in(&turn.input).last() {
                     let reply = turn
@@ -2194,7 +2194,7 @@ async fn an_outlined_request_of_one_phase_keeps_its_phase_and_pill() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             assert!(
                 !turn.prompt.contains("You verify this phase"),
@@ -2257,7 +2257,7 @@ async fn in_plan_mode_a_lead_outlines_and_builds_nothing() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
             for (tool, args) in [
@@ -2317,7 +2317,7 @@ async fn a_report_whose_work_cannot_be_committed_is_refused() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let hook = std::path::PathBuf::from(turn.git(&["rev-parse", "--git-common-dir"]))
                 .join("hooks/pre-commit");
@@ -2398,7 +2398,7 @@ async fn a_fix_continues_the_unlanded_work_it_fixes_and_lands_both() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -2408,7 +2408,7 @@ async fn a_fix_continues_the_unlanded_work_it_fixes_and_lands_both() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let (file, summary) = if turn.prompt.contains("Fix: add b.txt") {
                 assert!(
@@ -2481,7 +2481,7 @@ async fn in_plan_mode_a_phase_lead_outlines_and_builds_nothing() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             assert!(turn.prompt.contains("Plan mode is on: change nothing yet"));
             for (tool, args) in [
@@ -2529,12 +2529,12 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
                         .call("approve_outline", json!({"task": "task-1"}))
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if reports_in(&turn.input).last() == Some(&1) {
                     let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if let Some(n) = reports_in(&turn.input).last() {
                     let reply = turn
@@ -2552,7 +2552,7 @@ async fn a_phase_with_only_litter_ends_its_lead_with_its_verifier() {
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.prompt.contains("You verify this phase") {
                 let check = turn
@@ -2943,7 +2943,7 @@ async fn a_stopped_snapshot_workers_kept_work_survives_the_ref_check() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             // Still at work when it is stopped.
             std::future::pending::<()>().await;
@@ -3073,7 +3073,7 @@ async fn a_start_that_fails_while_its_task_is_stopped_leaves_the_stop_its_work()
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             std::future::pending::<()>().await;
             Reply::text("Never.")
@@ -3144,7 +3144,7 @@ async fn a_start_cut_short_by_a_quit_carries_on_at_the_next_launch() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             std::future::pending::<()>().await;
             Reply::text("Never.")
@@ -3191,7 +3191,7 @@ async fn a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrit
                 if turn.input.contains("[report task-1 ") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[landed task-") {
                     return Reply::text("The notes are in.");
@@ -3204,7 +3204,7 @@ async fn a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrit
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             turn.write("notes.txt", "notes\n");
             turn.git(&["add", "notes.txt"]);

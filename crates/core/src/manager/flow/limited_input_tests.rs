@@ -73,14 +73,14 @@ fn limited_on(marker: &'static str, resets_in_ms: Option<i64>, log: &Log) -> Scr
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.input.contains("Run it.") && !turn.input.contains("finished · ") {
                 let reply = turn
                     .call("run", json!({"command": "sleep 3; echo ran"}))
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             Reply::text("Done.")
         })
@@ -235,7 +235,7 @@ fn worker_limited_on_message(pin: Option<&'static str>, log: &WorkerLog) -> Scri
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("Scout it.") {
                     let mut args = json!({"effort": "high", "title": "Look around",
@@ -245,7 +245,7 @@ fn worker_limited_on_message(pin: Option<&'static str>, log: &WorkerLog) -> Scri
                     }
                     let reply = turn.call("delegate_task", args).await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Done.");
             }

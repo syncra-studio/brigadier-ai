@@ -121,7 +121,7 @@ async fn fixed_once(name: &str, refuse_resume: bool) -> (Flow, Arc<Mutex<Seen>>)
                     }
                     if turn.input.contains("Add notes.") {
                         delegate_notes(&turn).await;
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-1") {
                         let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
@@ -176,7 +176,7 @@ async fn fixed_once(name: &str, refuse_resume: bool) -> (Flow, Arc<Mutex<Seen>>)
                             "{}",
                             again.text
                         );
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     if turn.input.contains("[report task-2") {
                         let reply = turn.call("land_phase", json!({"task": "task-2"})).await;
@@ -314,7 +314,7 @@ async fn a_landing_is_kept_until_run_checks_passes_over_it() {
                 }
                 if turn.input.contains("Add notes.") {
                     delegate_notes(&turn).await;
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
@@ -388,7 +388,7 @@ async fn archiving_the_session_settles_an_open_batch() {
                 }
                 if turn.input.contains("Add notes.") {
                     delegate_notes(&turn).await;
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;

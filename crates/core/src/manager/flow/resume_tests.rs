@@ -31,7 +31,7 @@ async fn thread(turn: &Turn) -> Reply {
             .await;
         assert!(!reply.is_error, "{}", reply.text);
     }
-    Reply::text("[quiet]")
+    Reply::text("")
 }
 
 /// The worker sessions started, in order: (origin, model, worktree).

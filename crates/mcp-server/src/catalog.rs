@@ -103,7 +103,7 @@ what falls short.";
 
 const ASK_USER: &str = "Ask the user what only they can decide (a product choice, an unclear \
 requirement) on one card: 1 to 6 questions, each with 2 to 4 options and the one you recommend; \
-they can always type their own answer. Returns at once: reply with exactly [quiet]; the answers \
+they can always type their own answer. Returns at once; the answers \
 come as an [answer] message in this request. `task`: the task that waits for them, so other work \
 continues; `title`: a few words over the card for a round of a series (an interview's \"Round 2 · \
 Budget\").";
@@ -154,7 +154,7 @@ const PROPOSE_PLAN: &str = "Put your plan before the user, as a document on a ca
 then accept (\"Yes, implement this plan\") or send back with the changes they want. Use it when \
 plan mode is on, or when the user asks for a plan. Look first (read the code yourself, or a scout \
 for more), so the plan names the real files and symbols; ask_user before it only what only the user \
-can decide. Call it once, then reply [quiet]: the card is your answer. A yes comes back as a \
+can decide. Call it once: the card is your answer. A yes comes back as a \
 message: build it then. Changes come back too: propose the revised plan again.
 
 Write the body in markdown, in this shape:

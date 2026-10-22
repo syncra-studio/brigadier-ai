@@ -954,11 +954,6 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub native_session: Option<String>,
-    /// The instructions' revision its CLI session last heard (`prompts::revision`): a
-    /// resumed session hears the newer notes once.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(skip)]
-    pub told_revision: Option<u32>,
     /// The latest version a report of it was given for its Brain claims (BUILD-PLAN A11): a
     /// report after a restart goes on from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2977,16 +2972,6 @@ pub struct UserRequest {
         optional
     )]
     pub review: std::collections::BTreeMap<String, FileReview>,
-    /// The guess at the user's next message its conversation's last turn for it ended with (a
-    /// hidden `[next: …]` line), for the empty composer once it is over. Never sent by itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub suggestion: Option<String>,
-    /// Its thread's last turn for it left the answer to what wakes the thread next (checks or a
-    /// review still running): kept so it still waits for that after a restart.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(skip)]
-    pub deferred: bool,
 }
 
 /// A stretch of time a request worked.
@@ -3814,77 +3799,6 @@ pub struct ContextInjection {
     /// A short description (`report task-3`, the first words of a message).
     pub label: String,
     pub task_id: Option<TaskId>,
-    /// What this told the session of the parts of its instructions that can change while its
-    /// CLI session lives on (role instructions, or a note about one of them). Logged only once
-    /// the CLI took it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(skip)]
-    pub told: Option<Told>,
-}
-
-/// What an orchestrator or Chat session was told of the parts of its instructions that can
-/// change while its CLI session lives on: a resumed CLI keeps the instructions it started
-/// with. `None`: not told (or not known).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Told {
-    /// The version of the instructions' contract (whether Brigadier's notes replace them).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contract: Option<u32>,
-    /// Today's date, `YYYY-MM-DD` (UTC).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub today: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub short_replies: Option<bool>,
-    /// Settings' "Start workers on its own"; `None` counts as on, as every session's
-    /// instructions were before the setting.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start_workers: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission: Option<crate::model::PermissionLevel>,
-    /// Folder trust, which also controls the permission text's full-access suggestion.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder_trusted: Option<bool>,
-    /// The overnight run's fingerprint (its branch, sandbox and restrictions); empty: no run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
-    /// The user's preferences' fingerprint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preferences: Option<String>,
-    /// The thread's workspace: its folder and branch (`<path> @ <branch>`); empty: none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<String>,
-    /// The instructions' revision ([`crate::manager::prompts::REVISIONS`]) it last heard.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision: Option<u32>,
-    /// Whether the user's work is reviewed (Settings' "Review the work"); `None` counts as on,
-    /// as every session's instructions were before the switch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_work: Option<bool>,
-    /// The fingerprint of what the user's Git settings say about writing commit messages and
-    /// pull requests; empty, as `None` counts too, while they follow the repository.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git_writing: Option<String>,
-    /// Whether Brigadier's built-in browser is on (Settings › Browser); `None` counts as on,
-    /// as no instructions mentioned it before the switch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser: Option<bool>,
-    /// Whether the tab merges its work on its own (Settings › Git); `None` counts as off, as
-    /// no instructions said so before the switch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_merge: Option<bool>,
-    /// The fingerprint of the list of MCP servers a worker gets only when named
-    /// (`manager::integrations`); empty, as `None` counts too, while there are none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub integrations: Option<String>,
-    /// The rules sent in a note when they first apply (BUILD-PLAN C1) that this CLI session
-    /// has had: `workers`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_use: Option<Vec<String>>,
-    /// Whether its final answers end with the user's likely next message on a `[next: …]` line
-    /// (`prompts::NEXT_MESSAGE`); `None` counts as no.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_message: Option<bool>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

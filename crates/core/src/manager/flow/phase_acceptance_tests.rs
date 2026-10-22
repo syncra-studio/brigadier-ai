@@ -109,7 +109,7 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") {
                     let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
@@ -155,7 +155,7 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
                     }
                     return Reply::text("Good morning: the run is over; the report follows.");
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -356,7 +356,7 @@ async fn a_fresh_verifier_gets_only_the_request_constraints_criteria_and_commit(
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("Add a greeting file.") {
                     // The thread builds it itself, then verifies its own commit.
@@ -369,15 +369,15 @@ async fn a_fresh_verifier_gets_only_the_request_constraints_criteria_and_commit(
                     let reply = fresh(None).await;
                     assert!(!reply.is_error, "{}", reply.text);
                     log.lock().unwrap().reply = Some(reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") && !own {
                     let reply = fresh(Some("task-1")).await;
                     assert!(!reply.is_error, "{}", reply.text);
                     log.lock().unwrap().reply = Some(reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )

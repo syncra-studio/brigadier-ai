@@ -66,7 +66,7 @@ fn growing(provider: &'static str, growth: Growth, seen: &Arc<Mutex<Seen>>) -> S
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Noted.");
             }

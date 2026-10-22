@@ -287,24 +287,9 @@ pub(crate) struct TaskLive {
     /// Held while the task is opened in a terminal, handed back or its terminal ended; the
     /// terminal it is open in ([`super::takeover`]).
     pub(crate) takeover: tokio::sync::Mutex<Option<super::takeover::LiveTakeover>>,
-    /// What the worker was last told of the user's "Review the work" setting: its brief, or a
-    /// note since ([`REVIEWS_UNKNOWN`] counts as on, as every brief said before the switch).
-    reviews_told: std::sync::atomic::AtomicU8,
-    /// What the worker was last told of how the user has commits and pull requests written
-    /// ([`prompts::git_writing_fingerprint`]): its brief, or a note since. `None`: unknown,
-    /// which counts as following the repository, as every brief said before the setting.
-    git_writing_told: std::sync::Mutex<Option<String>>,
-    /// What the worker was last told of Brigadier's built-in browser: its brief, or a note
-    /// since. `None`: unknown, which counts as on, as no brief mentioned it before the setting.
-    browser_told: std::sync::Mutex<Option<bool>>,
     /// Why its next CLI starts, when that isn't a plain start or resume (BUILD-PLAN B0).
     next_cause: std::sync::Mutex<Option<WriteCause>>,
 }
-
-/// [`TaskLive::reviews_told`]'s values.
-const REVIEWS_UNKNOWN: u8 = 0;
-const REVIEWS_TOLD_OFF: u8 = 1;
-const REVIEWS_TOLD_ON: u8 = 2;
 
 impl TaskLive {
     /// Records why its next CLI starts (a hand-off, a reroute).
@@ -320,80 +305,6 @@ impl TaskLive {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
-    }
-
-    /// Records that the worker was told reviews are `on` (its brief, or a note).
-    pub(crate) fn told_reviews(&self, on: bool) {
-        let told = if on {
-            REVIEWS_TOLD_ON
-        } else {
-            REVIEWS_TOLD_OFF
-        };
-        self.reviews_told
-            .store(told, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    /// The note a worker that builds needs with its next message when what it was told of
-    /// reviews isn't `on` any more; it counts as told from then on.
-    pub(crate) fn reviews_note(&self, task: &Task, on: bool) -> Option<&'static str> {
-        if task.kind != TaskKind::Implement {
-            return None;
-        }
-        let told = if on {
-            REVIEWS_TOLD_ON
-        } else {
-            REVIEWS_TOLD_OFF
-        };
-        let before = self
-            .reviews_told
-            .swap(told, std::sync::atomic::Ordering::SeqCst);
-        let was_on = before != REVIEWS_TOLD_OFF;
-        (was_on != on).then(|| prompts::worker_reviews_note(on))
-    }
-
-    /// Records that the worker was told `writing` ([`prompts::git_writing`]) in its brief.
-    pub(crate) fn told_git_writing(&self, writing: Option<&str>) {
-        *self
-            .git_writing_told
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(prompts::git_writing_fingerprint(writing));
-    }
-
-    /// The note a worker that builds needs with its next message when what it was told of
-    /// git writing isn't `writing` any more; it counts as told from then on.
-    pub(crate) fn git_writing_note(&self, task: &Task, writing: Option<&str>) -> Option<String> {
-        if task.kind != TaskKind::Implement {
-            return None;
-        }
-        let now = prompts::git_writing_fingerprint(writing);
-        let before = self
-            .git_writing_told
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .replace(now.clone())
-            .unwrap_or_default();
-        (before != now).then(|| prompts::git_writing_note(writing))
-    }
-
-    /// Records that the worker was told the browser is `on` in its brief.
-    pub(crate) fn told_browser(&self, on: bool) {
-        *self
-            .browser_told
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(on);
-    }
-
-    /// The note a worker needs with its next message when what it was told of the browser
-    /// isn't `on` any more; it counts as told from then on.
-    pub(crate) fn browser_note(&self, on: bool) -> Option<String> {
-        let before = self
-            .browser_told
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .replace(on)
-            .unwrap_or(true);
-        (before != on).then(|| prompts::browser_note(on))
     }
 
     /// Records why the running model must hand the task on when its turn ends.
@@ -635,7 +546,7 @@ impl TaskLive {
 
     /// Takes the CLI session of a stalled worker off its task, if `due` still holds for it as
     /// it is now ([`super::watchdog::still_due`]); the caller holds `reroute`, and `settle`
-    /// so no report is recorded meanwhile. From now on the session's end is this hand-on, not
+    /// so no report is recorded meanwhile. After this the session's end is this hand-on, not
     /// a reason for another. `stall`: the same model continues in a fresh session, which
     /// counts as a stall of the current attempt; else another model takes over, and a pending
     /// cut-off (which wins) is returned with the session to end ([`Self::end_cli`]). `None`
@@ -721,9 +632,6 @@ impl TaskLive {
             learning: Arc::new(ReportLearning::after(report_version)),
             turn_end: tokio::sync::Mutex::new(()),
             takeover: tokio::sync::Mutex::new(None),
-            reviews_told: std::sync::atomic::AtomicU8::new(REVIEWS_UNKNOWN),
-            git_writing_told: std::sync::Mutex::new(None),
-            browser_told: std::sync::Mutex::new(None),
             next_cause: std::sync::Mutex::new(None),
         }
     }
@@ -1243,7 +1151,6 @@ impl SessionManager {
         {
             route.choice.account = subject.route.choice.account.clone();
         }
-        let told_revision = resumed.and_then(|subject| subject.told_revision);
         let number = self.core.next_task_number(conversation_id).await?;
         // A plan's reviewer belongs to the plan's request, even when a restart reopens an
         // older plan's review after newer requests.
@@ -1342,7 +1249,6 @@ impl SessionManager {
             messages: Vec::new(),
             rework_rounds: 0,
             native_session: None,
-            told_revision,
             report_version: None,
             deaths: Vec::new(),
             review_hold: None,
@@ -1841,31 +1747,9 @@ impl SessionManager {
                         task, &repo_note, &extra, reviewed,
                     )),
                 );
-                self.task_live(task).told_reviews(reviewed);
-                self.task_live(task).told_git_writing(writing.as_deref());
-                self.task_live(task).told_browser(browser);
             }
-            // A resumed or forked session keeps the instructions it started with: it hears
-            // what changed since, once (SESSION-FIXES-PLAN.md §6), and the user's settings
-            // where they differ from what it was told (unknown counts as their defaults).
-            (_, Some(first)) => {
-                let live = self.task_live(task);
-                let notes: Vec<String> = [
-                    prompts::revision_note(task.told_revision.unwrap_or(0), true),
-                    live.reviews_note(task, self.reviews_on())
-                        .map(str::to_owned),
-                    live.git_writing_note(task, writing.as_deref()),
-                    live.browser_note(browser),
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
-                if !notes.is_empty() {
-                    first
-                        .parts
-                        .insert(0, brigadier_providers::InputPart::Text(notes.join("\n\n")));
-                }
-            }
+            // A resumed or forked session keeps the instructions it started with.
+            (_, Some(_)) => {}
             (_, None) => {}
         }
 
@@ -2190,14 +2074,6 @@ impl SessionManager {
             .send(first)
             .await
             .map_err(|err| Error::Provider(err.to_string()))?;
-        // It started on the current instructions, or heard what changed in `first`.
-        if task.told_revision != Some(prompts::revision()) {
-            let _ = self
-                .update_task(&conversation_id, &task.id, |t| {
-                    t.told_revision = Some(prompts::revision());
-                })
-                .await;
-        }
         Ok(())
     }
 
@@ -4575,77 +4451,6 @@ impl SessionManager {
 
     /// [`Self::message_worker`] for news that answers nothing (a review's outcome): a question
     /// the worker is waiting on stays open for the orchestrator.
-    /// The user changed how commits and pull requests are written: a worker that builds hears
-    /// it at once while it works, one between turns with its next message, and the thread in a
-    /// note before its next turn.
-    pub async fn git_writing_switched(&self) {
-        let writing = prompts::git_writing(&self.core.settings());
-        let workers: Vec<_> = self.tasks_lock().values().cloned().collect();
-        for live in workers {
-            let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
-                continue;
-            };
-            if task.kind != TaskKind::Implement || task.state.is_final() || !live.busy().await {
-                continue;
-            }
-            let Some(note) = live.git_writing_note(&task, writing.as_deref()) else {
-                continue;
-            };
-            let rounds = task.rework_rounds;
-            match self
-                .tell_worker(&task.conversation_id, &task, note, "Brigadier")
-                .await
-            {
-                // A note is no rework round.
-                Ok(_) => {
-                    let _ = self
-                        .update_task(&task.conversation_id, &task.id, |t| {
-                            t.rework_rounds = t.rework_rounds.min(rounds);
-                        })
-                        .await;
-                }
-                Err(err) => {
-                    tracing::info!(task = %task.id, error = %err, "a worker took no note that git writing changed");
-                }
-            }
-        }
-    }
-
-    /// The user switched Brigadier's built-in browser: a worker at work hears it at once, one
-    /// between turns with its next message, and the thread in a note before its next turn.
-    pub async fn browser_switched(&self) {
-        let on = self.core.settings().browser_enabled;
-        let workers: Vec<_> = self.tasks_lock().values().cloned().collect();
-        for live in workers {
-            let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await else {
-                continue;
-            };
-            if task.state.is_final() || !live.busy().await {
-                continue;
-            }
-            let Some(note) = live.browser_note(on) else {
-                continue;
-            };
-            let rounds = task.rework_rounds;
-            match self
-                .tell_worker(&task.conversation_id, &task, note, "Brigadier")
-                .await
-            {
-                // A note is no rework round.
-                Ok(_) => {
-                    let _ = self
-                        .update_task(&task.conversation_id, &task.id, |t| {
-                            t.rework_rounds = t.rework_rounds.min(rounds);
-                        })
-                        .await;
-                }
-                Err(err) => {
-                    tracing::info!(task = %task.id, error = %err, "a worker took no note that the browser was switched");
-                }
-            }
-        }
-    }
-
     pub(crate) async fn tell_worker(
         &self,
         conversation_id: &ConversationId,
@@ -4763,24 +4568,6 @@ impl SessionManager {
                 false,
             ));
         }
-        // A worker told otherwise of reviews, git writing or the browser hears the user's
-        // settings with this message.
-        let text = match live.reviews_note(task, self.reviews_on()) {
-            Some(note) if text.is_empty() => note.to_owned(),
-            Some(note) => format!("{note}\n\n{text}"),
-            None => text,
-        };
-        let writing = prompts::git_writing(&self.core.settings());
-        let text = match live.git_writing_note(task, writing.as_deref()) {
-            Some(note) if text.is_empty() => note,
-            Some(note) => format!("{note}\n\n{text}"),
-            None => text,
-        };
-        let text = match live.browser_note(self.core.settings().browser_enabled) {
-            Some(note) if text.is_empty() => note,
-            Some(note) => format!("{note}\n\n{text}"),
-            None => text,
-        };
         let hand_over = !state.busy
             && state.cli.is_some()
             && match state.context {

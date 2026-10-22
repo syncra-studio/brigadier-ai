@@ -25,7 +25,7 @@ fn listening(heard: &Heard) -> Script {
     let heard = heard.clone();
     Arc::new(move |turn: Turn| {
         heard.lock().unwrap().push(turn.input.clone());
-        Box::pin(async { Reply::text("[quiet]") })
+        Box::pin(async { Reply::text("") })
     })
 }
 

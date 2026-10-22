@@ -1132,7 +1132,6 @@ impl SessionManager {
             )));
         }
         let brain = self.personal_brain().await?;
-        let before = self.memory_lines(MEMORY_BYTES).await;
         let node = NewNode {
             kind: NodeKind::Preference,
             key: Some(format!(
@@ -1156,7 +1155,6 @@ impl SessionManager {
             expires_at_ms: None,
         };
         let node_id = blocking(move || brain.record(node).map_err(brain_error)).await?;
-        self.told_own_preference(id, &before).await;
         let request_id = match self.conv(id) {
             Ok(conv) => conv.running_request().await,
             Err(_) => None,

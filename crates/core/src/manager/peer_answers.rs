@@ -5,21 +5,20 @@
 //! Each message another session sent asking for something (not a reply) is owed one reply,
 //! once its CLI took it. It is sent when every request that answers it is over: the request it
 //! opened, those it was steered into, and those steered into them. An interim turn end, a
-//! [quiet] turn, or a worker, review or card still going keeps its request working, so the
+//! turn, or a worker, review or card still going keeps its request working, so the
 //! reply carries the finished answer. A reply that already went (the thread's own, or this
 //! one) marks the message replied in the same write, so it is sent once, across restarts.
 //!
 //! The final answer is the reply only when it answers that message alone. A message steered
 //! into other work (or with the user's messages steered into its request) is answered by the
-//! thread on its own (message_session with reply_to); one it left unanswered gets a reminder
-//! once, then the sender hears it went unanswered, never the other work's answer.
+//! thread on its own (message_session with reply_to); for one it left unanswered the sender
+//! hears it went unanswered, never the other work's answer.
 
 use super::SessionManager;
-use super::conversation::{Envelope, PeerReminder};
 use crate::board::{Board, PeerRecord};
 use crate::model::{ConversationId, Message, MessageRole, PeerState};
 use crate::sessions::PeerSend;
-use crate::work::{InjectionKind, RequestState};
+use crate::work::RequestState;
 
 /// Whether `record` is a message another session sent this one asking for something, taken
 /// by its CLI, with no reply yet.
@@ -152,86 +151,12 @@ impl SessionManager {
                 },
             };
             // Steered into other work, or with the user's messages steered into it: the
-            // final answer is that work's too, so the thread answers on its own, reminded once.
-            let mixed = !answers_alone(&board, request);
-            if mixed && matches!(over, Over::Answer(_) | Over::Silent) {
-                if self.remind_unanswered_peer(id, record, root).await != PeerReminder::Given {
-                    continue;
-                }
-                // A settling that just reminded it may have its request working again.
-                if self.family_works(id, root).await {
-                    continue;
-                }
+            // final answer is that work's too, so only the thread's own reply answers it.
+            if !answers_alone(&board, request) && matches!(over, Over::Answer(_) | Over::Silent) {
                 over = Over::Unanswered;
             }
             self.send_answer(id, record, root, over).await;
         }
-    }
-
-    /// Whether a request of `root`'s family in session `id` still works or waits, as its board
-    /// has it now.
-    async fn family_works(&self, id: &ConversationId, root: &str) -> bool {
-        self.core.board(id).await.is_ok_and(|board| {
-            board.requests.values().any(|request| {
-                matches!(request.state, RequestState::Working | RequestState::Waiting)
-                    && root_of(&board, &request.id) == root
-            })
-        })
-    }
-
-    /// Asks session `id`'s thread, once, to answer `record` on its own, in its request
-    /// `root`, which works again until then. [`PeerReminder::Due`] when it was asked now.
-    async fn remind_unanswered_peer(
-        &self,
-        id: &ConversationId,
-        record: &PeerRecord,
-        root: &str,
-    ) -> PeerReminder {
-        let Ok(conv) = self.conv(id) else {
-            return PeerReminder::Given;
-        };
-        let reminder = conv.remind_peer_once(&record.message_id).await;
-        if reminder != PeerReminder::Due {
-            return reminder;
-        }
-        let title = self
-            .core
-            .conversation(&record.peer)
-            .map_or_else(|_| "another session".to_owned(), |sender| sender.title);
-        let text = self
-            .peer_message_text(id, &record.peer, &record.message_id)
-            .await;
-        let asked: String = text.chars().take(300).collect();
-        let more = if asked.len() < text.len() { "…" } else { "" };
-        let envelope = Envelope {
-            kind: InjectionKind::Reminder,
-            label: format!("unanswered peer {}", record.message_id),
-            task_id: None,
-            text: format!(
-                "[You haven't answered the message from session \"{title}\" (id {id}): \
-                 \"{asked}{more}\". It came amid other work, so your answer to the user doesn't \
-                 reach it. Answer it now with message_session (to {peer}, reply_to {id}), \
-                 carrying only what answers it, then reply {quiet}.]",
-                id = record.message_id,
-                peer = record.peer,
-                quiet = super::prompts::QUIET,
-            ),
-        };
-        // Underway until its request works again: a settling meanwhile neither reminds again
-        // nor gives up on it (one that took it as given before then saw nothing working and
-        // told the sender it went unanswered).
-        let queued = self
-            .queue_envelope(id, envelope, Some(root.to_owned()))
-            .await;
-        // The request works again until the orchestrator has read it.
-        self.settle_requests(id).await;
-        conv.peer_reminded(&record.message_id).await;
-        // Given now: a turn for it that already ended has its answer sent.
-        self.settle_requests(id).await;
-        if let Some(queued) = queued {
-            self.kick(&queued);
-        }
-        PeerReminder::Due
     }
 
     /// The requests of session `id` still working, as its board has them.

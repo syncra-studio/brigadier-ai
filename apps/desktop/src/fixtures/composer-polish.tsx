@@ -47,7 +47,6 @@ const messages: Message[] = [
 const request = {
   id: "r1", conversationId: id, preview: "Fix the failing test.", state: { type: "done" }, startedAtMs: start,
   endedAtMs: start + 30_000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false,
-  suggestion: null,
 } as unknown as UserRequest;
 
 /** The message queue: paused after an interrupt, with one message waiting, for the `paused` case. */

@@ -287,19 +287,9 @@ fn short(oid: &Oid) -> &str {
 }
 
 impl SessionManager {
-    /// Tells the thread of `conversation` what the ref check did: it starts a turn, so the
-    /// thread can tell the user.
-    async fn tell_guard(&self, conversation: &ConversationId, text: String) {
-        self.deliver(
-            conversation,
-            super::conversation::Envelope {
-                kind: crate::work::InjectionKind::Reminder,
-                label: "branches".into(),
-                task_id: None,
-                text,
-            },
-        )
-        .await;
+    /// Logs what the ref check did for `conversation`; it starts no turn (G1).
+    fn tell_guard(conversation: &ConversationId, text: &str) {
+        tracing::info!(conversation = %conversation, "{text}");
     }
 
     /// Records `branch` in the repository of `checkout` as `task`'s (`None`: the thread's), at
@@ -437,7 +427,7 @@ impl SessionManager {
                 }
             };
         for Told { conversation, text } in told {
-            self.tell_guard(&conversation, text).await;
+            Self::tell_guard(&conversation, &text);
         }
     }
 }

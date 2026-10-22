@@ -1202,7 +1202,7 @@ impl SessionManager {
                         label: format!("preview {}", preview.id),
                         task_id: None,
                         text: format!(
-                            "[preview ended: {status}] {} \"{}\" stopped on its own; it is not running now.{}\nTell the user in this turn what failed, with its key error line, and what you do about it; if you already told them, reply [quiet].",
+                            "[preview ended: {status}] {} \"{}\" stopped on its own; it is not running now.{}\nTell the user in this turn what failed, with its key error line, and what you do about it, unless you already told them.",
                             preview.id,
                             preview.name,
                             if last.is_empty() {
@@ -2918,7 +2918,7 @@ mod tests {
         let mut flow = Flow::start(
             "preview-paused-crash",
             Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+            Arc::new(|_| Box::pin(async { Reply::text("") })),
         )
         .await;
         let platform = flow.manager.runtime.platform().clone();
@@ -3001,7 +3001,7 @@ while True: time.sleep(0.03)
         let flow = Flow::start(
             "preview-repause-orphan",
             Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+            Arc::new(|_| Box::pin(async { Reply::text("") })),
         )
         .await;
         let platform = flow.manager.runtime.platform().clone();
@@ -3131,7 +3131,7 @@ while True:
         let flow = Flow::start(
             "preview-unreadable-member",
             Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+            Arc::new(|_| Box::pin(async { Reply::text("") })),
         )
         .await;
         let platform = flow.manager.runtime.platform().clone();
@@ -3198,7 +3198,7 @@ while True:
         let flow = Flow::start(
             "preview-reused-member",
             Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+            Arc::new(|_| Box::pin(async { Reply::text("") })),
         )
         .await;
         let platform = flow.manager.runtime.platform().clone();
@@ -3364,7 +3364,7 @@ while True:
         let flow = Flow::start(
             "preview-profile",
             Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+            Arc::new(|_| Box::pin(async { Reply::text("") })),
         )
         .await;
         let manager = &flow.manager;
@@ -3538,7 +3538,7 @@ while True:
         let flow = Flow::start(
             "data-claim",
             Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+            Arc::new(|_| Box::pin(async { Reply::text("") })),
         )
         .await;
         let ledger = flow.manager.runtime.ledger().clone();
@@ -3676,7 +3676,7 @@ while True:
         let flow = Flow::start(
             "stale-preview-data",
             Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("[quiet]") })),
+            Arc::new(|_| Box::pin(async { Reply::text("") })),
         )
         .await;
         let runtime = &flow.manager.runtime;

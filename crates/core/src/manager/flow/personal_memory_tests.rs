@@ -87,7 +87,7 @@ async fn a_memory_is_kept_edited_and_deleted_and_later_chats_use_it() {
     assert!(latest_chat_prompt(&flow).contains("Lives in Chisinau, Moldova"));
 
     // Edited in Settings: the same memory, its Chat's chip and where it came from kept, and
-    // the next Chat and the open one go by the new text.
+    // the next Chat goes by the new text.
     let edited = flow
         .manager
         .edit_memory(memory.id.clone(), "Lives in Iasi, Romania".into())
@@ -108,10 +108,11 @@ async fn a_memory_is_kept_edited_and_deleted_and_later_chats_use_it() {
     let prompt = latest_chat_prompt(&flow);
     assert!(prompt.contains("Lives in Iasi, Romania"), "{prompt}");
     assert!(!prompt.contains("Chisinau"), "{prompt}");
+    // The open one keeps what its CLI started with: nothing is pushed to it.
     flow.say_to(&second, "And for PLA?").await;
     answered(&flow, &second).await;
     let said = heard.lock().unwrap().last().cloned().unwrap();
-    assert!(said.contains("Lives in Iasi, Romania"), "{said}");
+    assert!(!said.contains("Lives in"), "{said}");
 
     // An edit can't hold a secret, nor be empty.
     for text in ["Card 4111 1111 1111 1111", "  "] {

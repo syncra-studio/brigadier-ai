@@ -117,8 +117,6 @@ impl SessionManager {
             if let Some(live) = &live {
                 live.recovering(true).await;
             }
-            // A request that left its answer to its checks or a review still waits for it.
-            self.recover_deferred(&conversation.id).await;
             // A follow-up the stop caught deciding waits for its own turn (#449).
             self.settle_unjudged_follow_ups(&conversation.id).await;
             // The thread's turn the restart cut off ran its calls no further, and its request

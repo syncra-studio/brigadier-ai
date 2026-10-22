@@ -121,7 +121,7 @@ fn fusing(heard: Arc<Mutex<Heard>>, codex_waits: Arc<AtomicBool>, codex: Codex) 
             }
             // A worker's stop note or a silence alert: nothing to add.
             if !turn.input.contains("Which nozzle") {
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             let reply = turn
                 .call(
@@ -132,7 +132,7 @@ fn fusing(heard: Arc<Mutex<Heard>>, codex_waits: Arc<AtomicBool>, codex: Codex) 
                 .await;
             assert!(!reply.is_error, "{}", reply.text);
             heard.lock().unwrap().replies.push(reply.text);
-            Reply::text("[quiet]")
+            Reply::text("")
         }
     })
 }
@@ -476,7 +476,7 @@ async fn a_fused_pair_keeps_the_files_and_quality_asked_for() {
                         return Reply::text(ANSWER);
                     }
                     if !turn.input.contains("Which nozzle") {
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     let id = given.lock().unwrap().clone();
                     let reply = turn
@@ -488,7 +488,7 @@ async fn a_fused_pair_keeps_the_files_and_quality_asked_for() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    Reply::text("[quiet]")
+                    Reply::text("")
                 }
             }
         }),
@@ -570,7 +570,7 @@ async fn a_fused_pair_s_files_of_one_name_each_open_from_the_answer() {
                         return Reply::text(format!("The tables: {}.", links.join(" and ")));
                     }
                     if !turn.input.contains("Which nozzle") {
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     let reply = turn
                         .call(
@@ -580,7 +580,7 @@ async fn a_fused_pair_s_files_of_one_name_each_open_from_the_answer() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    Reply::text("[quiet]")
+                    Reply::text("")
                 }
             }
         }),

@@ -2036,9 +2036,7 @@ impl SessionManager {
 
     /// The user switched "Review the work" to `on`. Off: a worker waiting for its own review's
     /// findings goes on at once; a review still running may finish and send them, but nothing
-    /// waits on it. Either way a worker that builds hears it at once while it works (its brief
-    /// said otherwise), one between turns with its next message, and the thread in a note
-    /// before its next turn.
+    /// waits on it.
     pub async fn reviews_switched(&self, on: bool) {
         let workers: Vec<_> = self.tasks_lock().values().cloned().collect();
         let mut tell = Vec::new();
@@ -2060,11 +2058,7 @@ impl SessionManager {
                 let waiting = task.blocked_reason.as_deref() == Some(WAITING_FOR_REVIEW);
                 if !on && waiting {
                     self.set_task_blocked(&task.id, None).await;
-                    tell.push((live, task, true));
-                } else if live.busy().await || (!on && self.review_pending(&task).await) {
-                    // At work, or between turns about to wait for its review: it was nudged
-                    // to report instead, and hears why.
-                    tell.push((live, task, false));
+                    tell.push(task);
                 }
             }
         }
@@ -2075,12 +2069,8 @@ impl SessionManager {
                 self.check_held_merge(&id).await;
             }
         }
-        for (live, task, released) in tell {
-            let text = match live.reviews_note(&task, on) {
-                Some(note) => note.to_owned(),
-                None if released => "Nothing waits on your review now: once your checks pass and your evidence is in, call submit_report.".to_owned(),
-                None => continue,
-            };
+        for task in tell {
+            let text = "Nothing waits on your review now: once your checks pass and your evidence is in, call submit_report.".to_owned();
             let now = self
                 .task_by_id(&task.conversation_id, &task.id)
                 .await

@@ -422,7 +422,7 @@ test("a working request shows a reply written after its work in place: only a do
   assert.equal(streaming.texts.at(-1)?.position, Number.POSITIVE_INFINITY);
   assert.equal(blockFinished(streaming.state), false);
   assert.equal(answerIndex(streaming.texts, blockFinished(streaming.state)), null);
-  // Its turn ended on [quiet] and the request works on: the line is no answer.
+  // Its turn ended and the request works on (a held merge): the line is no answer.
   const said = reply("said", 604, "Diff looks right.");
   const between = requestBlock([said], digest({ type: "working" }, null));
   assert.equal(answerIndex(between.texts, blockFinished(between.state)), null);

@@ -14,7 +14,6 @@ import {
   $getSelection,
   $isRangeSelection,
   $isTextNode,
-  COMMAND_PRIORITY_HIGH,
   COMMAND_PRIORITY_NORMAL,
   COPY_COMMAND,
   CUT_COMMAND,
@@ -22,12 +21,10 @@ import {
   HISTORY_MERGE_TAG,
   type LexicalNode,
   KEY_ARROW_DOWN_COMMAND,
-  KEY_ARROW_RIGHT_COMMAND,
   KEY_ARROW_UP_COMMAND,
   KEY_BACKSPACE_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
-  KEY_TAB_COMMAND,
   type LexicalEditor,
   PASTE_COMMAND,
   PASTE_TAG,
@@ -45,7 +42,6 @@ import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend"
 import { isTaskTab } from "@/state/tabStates";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { useImagesBlocked } from "@/app/conversation/imageInput";
-import { SuggestionContext } from "@/app/conversation/suggestion";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import {
   imageMarkerAt,
@@ -157,7 +153,6 @@ export default function ComposerEditor({
     >
       <FocusGuard />
       <ComposerKeys formatter={formatter} deleted={deleted} deletedPastes={deletedPastes} />
-      <SuggestionKeys />
       <PlanBackspace />
       <InlineSync kind="image" deleted={deleted} />
       <InlineSync kind="paste" deleted={deletedPastes} />
@@ -232,37 +227,6 @@ function $caretAtStart(): boolean {
     if (node.getPreviousSibling() !== null) return false;
   }
   return true;
-}
-
-/**
- * Tab, → or Enter in the empty field takes the guess at the next message it shows, unsent, as
- * a draft to edit; with a modifier each does what it does elsewhere. Above the field's own
- * Enter, which would send: an empty field has no open menu to take it first.
- */
-function SuggestionKeys() {
-  const [editor] = useLexicalComposerContext();
-  const aui = useAui();
-  const suggestion = useContext(SuggestionContext);
-  const shown = useRef(suggestion);
-  useEffect(() => {
-    shown.current = suggestion;
-  }, [suggestion]);
-  useEffect(() => {
-    const take = (event: KeyboardEvent | null) => {
-      const guess = shown.current;
-      if (!guess || !event || event.isComposing || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false;
-      if (!aui.composer().getState().isEmpty) return false;
-      event.preventDefault();
-      aui.composer().setText(guess);
-      return true;
-    };
-    return mergeRegister(
-      editor.registerCommand(KEY_TAB_COMMAND, take, COMMAND_PRIORITY_HIGH),
-      editor.registerCommand(KEY_ARROW_RIGHT_COMMAND, take, COMMAND_PRIORITY_HIGH),
-      editor.registerCommand(KEY_ENTER_COMMAND, take, COMMAND_PRIORITY_HIGH),
-    );
-  }, [editor, aui]);
-  return null;
 }
 
 /** A worker on its mention chip by its name; its `task-N` stays in the text it sends. */

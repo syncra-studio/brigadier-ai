@@ -126,7 +126,7 @@ async fn a_waiting_request_keeps_the_threads_scratch() {
                     )
                     .await;
                 assert!(!asked.is_error, "{}", asked.text);
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )

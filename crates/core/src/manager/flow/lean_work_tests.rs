@@ -1,12 +1,11 @@
-//! Lean work (revision 27): a worker never waits for its own review, the thread hears the
-//! revision once, and a worker reads the request and its addenda as the user wrote them.
+//! Lean work: a worker never waits for its own review, and a worker reads the request and its
+//! addenda as the user wrote them.
 
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::prompts::{LEAN_WORK_REVISION, revision_note};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -14,74 +13,6 @@ where
     Fut: std::future::Future<Output = Reply> + Send + 'static,
 {
     Arc::new(move |turn| Box::pin(f(turn)))
-}
-
-/// An open thread told the instructions before this revision hears its note once, in its
-/// resumed session, and not again.
-#[tokio::test]
-async fn an_open_thread_hears_the_lean_work_revision_once() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let mut flow = Flow::start(
-        "lean-revision",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("First.").await;
-    flow.settled().await;
-    assert!(!inputs.lock().unwrap()[0].contains("[instructions]"));
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            crate::model::DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 100,
-                        tokens_estimate: 25,
-                        label: "instructions revision".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            revision: Some(LEAN_WORK_REVISION - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Second.").await;
-    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
-        .await;
-    flow.settled().await;
-    let specs = flow.thread_specs();
-    assert!(
-        matches!(
-            specs.last().unwrap().1.origin,
-            brigadier_providers::model::Origin::Resume { .. }
-        ),
-        "{specs:#?}"
-    );
-    let second = inputs.lock().unwrap()[1].clone();
-    let note = revision_note(LEAN_WORK_REVISION - 1, false).unwrap();
-    assert!(second.contains(&note), "{second}");
-    assert_eq!(second.matches("[instructions]").count(), 1, "{second}");
-    flow.say("Third.").await;
-    flow.until("the third turn", |_| inputs.lock().unwrap().len() >= 3)
-        .await;
-    flow.settled().await;
-    assert!(!inputs.lock().unwrap()[2].contains("[instructions]"));
-    flow.stop().await;
 }
 
 /// include_request: the worker reads the user's message verbatim after the thread's short
@@ -110,7 +41,7 @@ async fn include_request_hands_the_worker_the_request_verbatim() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 log.lock().unwrap().get_or_insert(turn.input.clone());
                 let reply = turn
@@ -171,7 +102,7 @@ async fn include_request_keeps_a_peer_request_the_senders() {
             )
             .await;
         assert!(!reply.is_error, "{}", reply.text);
-        Reply::text("[quiet]")
+        Reply::text("")
     });
     flow.say("Ask the docs session to document the field.")
         .await;
@@ -231,7 +162,7 @@ async fn a_long_report_is_taken_whole_and_reaches_the_thread_shortened() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -319,7 +250,7 @@ async fn addendum_flow(name: &str, busy: bool) -> Vec<String> {
                         // Still in this turn when the report and what follows it arrive.
                         open.notified().await;
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call("submit_report", json!({"summary": "Surveyed the notes."}))

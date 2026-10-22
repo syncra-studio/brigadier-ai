@@ -727,7 +727,7 @@ async fn a_workers_task_carries_on_with_another_account_of_its_provider() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 workers.lock().unwrap().push(Seen {
                     provider: turn.provider,

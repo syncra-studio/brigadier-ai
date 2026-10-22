@@ -27,7 +27,7 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-const QUIET: &str = "[quiet]";
+const QUIET: &str = "";
 const MORNING: &str = "Good morning: the run is over; the report follows.";
 
 /// What phase 1's lead needs from the user.
@@ -168,7 +168,7 @@ impl Thread {
             for phase in &self.alongside {
                 self.delegate(turn, *phase).await;
             }
-            return Reply::text(QUIET);
+            return Reply::text("");
         }
         let mut ending = turn.input.contains("The overnight run is ending now");
         let led: Vec<(u32, u32)> = reports_in(&turn.input)
@@ -467,12 +467,15 @@ async fn a_thread_whose_session_starts_with_the_run_hears_its_plan_once() {
         .iter()
         .find(|(input, _)| input.contains("has started"))
         .expect("the run's first turn");
-    assert!(first.contains("[run] From now on"), "{first}");
+    assert!(
+        first.contains("Overnight run: the user started an overnight run"),
+        "{first}"
+    );
     assert!(first.contains("Create p1.txt."), "the plan: {first}");
     assert!(first.contains("p1.txt exists."), "its done when: {first}");
     let heard = turns
         .iter()
-        .filter(|(input, _)| input.contains("[run] From now on"))
+        .filter(|(input, _)| input.contains("Overnight run: the user started an overnight run"))
         .count();
     assert_eq!(heard, 1, "{turns:#?}");
     flow.stop().await;
@@ -901,7 +904,7 @@ async fn a_restart_mid_run_resumes_it_on_the_thread() {
                         .contains("Brigadier restarted during the overnight run")
                     {
                         // Its lead resumes itself: the thread waits for the report.
-                        return Reply::text(QUIET);
+                        return Reply::text("");
                     }
                     return inner.turn(&turn).await;
                 }

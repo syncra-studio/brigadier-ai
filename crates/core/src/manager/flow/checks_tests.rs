@@ -60,7 +60,7 @@ async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 // The worker's report: the same files, so the same result.
                 check(json!({ "command": "echo checked" })).await;
@@ -247,7 +247,7 @@ async fn a_prefix_that_changes_nothing_still_answers_from_the_cache() {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let check = |command: String| {
                     let turn = &turn;
@@ -340,7 +340,7 @@ async fn a_task_worktree_gets_a_stand_in_for_each_ignored_sidecar() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let sidecar = turn.cwd.join(format!(
                     "app/src-tauri/binaries/helper-{}{}",
@@ -422,7 +422,7 @@ async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_fol
                     // in a later turn: it is logged, and nothing runs again.
                     if !turn.input.contains("Bind a socket.") {
                         log.lock().unwrap().push(turn.input.clone());
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     for (tool, args) in [
                         ("run_check", json!({ "command": BIND })),

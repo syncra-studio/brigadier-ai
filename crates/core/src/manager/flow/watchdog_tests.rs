@@ -82,7 +82,7 @@ async fn watchdog_running_worker_command_is_never_due() {
                 if turn.is_orchestrator() {
                     let reply = turn.call("delegate_task", serde_json::json!({"effort":"high","title":"Long call","kind":"implement","spec":"Run the command."})).await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 turn.emit(event).await;
                 assert!(turn.stopped().await);
@@ -111,7 +111,7 @@ async fn watchdog_running_worker_command_is_never_due() {
 }
 
 #[tokio::test]
-async fn watchdog_silent_worker_sends_one_fact_to_thread_without_steering() {
+async fn watchdog_silent_worker_starts_no_thread_turn_and_no_steer() {
     let inputs = Arc::new(Mutex::new(Vec::new()));
     let seen = inputs.clone();
     let script: Script = Arc::new(move |turn| {
@@ -123,7 +123,7 @@ async fn watchdog_silent_worker_sends_one_fact_to_thread_without_steering() {
                     let reply = turn.call("delegate_task", serde_json::json!({"effort":"high","title":"Silent worker","kind":"implement","spec":"Wait for the test."})).await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             turn.emit(command("inProgress")).await;
             turn.emit(command("completed")).await;
@@ -147,25 +147,16 @@ async fn watchdog_silent_worker_sends_one_fact_to_thread_without_steering() {
     }
     let at = watch.last_event_ms + Timing::current().silent;
     tick_worker(&flow, &task, &live, at).await;
-    super::eventually("thread received silence fact", || {
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|s| s.contains("task-1: silent 3 min, last command sleep 999999 (ran 0 min)"))
-    })
-    .await;
     for minute in [5, 30, 120] {
         tick_worker(&flow, &task, &live, watch.last_event_ms + minute * 60_000).await;
     }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // The silence is logged, never pushed to the thread (G1): its only turn is the user's.
     assert_eq!(
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|s| s.contains("task-1: silent"))
-            .count(),
-        1
+        inputs.lock().unwrap().len(),
+        1,
+        "{:#?}",
+        inputs.lock().unwrap()
     );
     assert_eq!(
         live.watch(crate::now_ms()).await.generation,
@@ -273,7 +264,7 @@ async fn watchdog_dead_worker_cli_is_still_replaced() {
                     let reply = turn.call("delegate_task", serde_json::json!({"effort":"high","title":"Crash","kind":"implement","spec":"Wait for the test."})).await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             assert!(turn.stopped().await);
             Reply::default()

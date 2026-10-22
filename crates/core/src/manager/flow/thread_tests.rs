@@ -535,24 +535,14 @@ async fn a_new_workspace_or_level_resumes_the_thread_with_a_note() {
     assert!(specs[2].1.auto_review);
 
     let inputs = inputs.lock().unwrap().clone();
-    assert!(!inputs[0].0.contains("[workspace]"), "{}", inputs[0].0);
-    assert!(
-        inputs[1].0.contains(&format!(
-            "[workspace] From now on you work in {} (on branch `{branch}`)",
-            moved.display()
-        )),
-        "{}",
-        inputs[1].0
-    );
+    // Nothing is told mid-session (G1): the CLI starts with the new folder and access.
+    for (input, _) in &inputs {
+        assert!(
+            !input.contains("[workspace]") && !input.contains("[settings]"),
+            "{input}"
+        );
+    }
     assert_eq!(inputs[1].1, vec![moved]);
-    assert!(
-        inputs[2]
-            .0
-            .contains("[settings] The user changed the permission level."),
-        "{}",
-        inputs[2].0
-    );
-    assert!(!inputs[2].0.contains("[workspace]"), "{}", inputs[2].0);
     flow.stop().await;
 }
 
@@ -737,105 +727,6 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
     assert_eq!(
         reviews[0].state,
         crate::work::ReviewState::Findings { count: 1 }
-    );
-    flow.stop().await;
-}
-
-/// A thread whose CLI started on older instructions (the contract before this build's in its
-/// log, as a session created before the last change of the thread's rules has) isn't resumed,
-/// since it would keep its old rules: it starts over from the transcript with the current ones.
-#[tokio::test]
-async fn a_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
-    starts_over_on_older_instructions(ProviderKind::Claude).await;
-}
-
-#[tokio::test]
-async fn a_codex_thread_started_on_older_instructions_starts_over_instead_of_resuming() {
-    starts_over_on_older_instructions(ProviderKind::Codex).await;
-}
-
-async fn starts_over_on_older_instructions(thread: ProviderKind) {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let mut flow = Flow::start(
-        &format!("thread-old-role-{thread:?}"),
-        Options {
-            thread,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("First, remember the word teal.").await;
-    flow.settled().await;
-    // What the build before logged when that CLI started.
-    flow.core
-        .record(vec![(
-            crate::model::streams::orchestrator(&flow.conversation),
-            crate::model::DomainEvent::OrchestratorLogged {
-                conversation_id: flow.conversation.clone(),
-                entry: crate::work::OrchestratorEntry::Injection {
-                    injection: crate::work::ContextInjection {
-                        kind: crate::work::InjectionKind::Instructions,
-                        bytes: 11_371,
-                        tokens_estimate: 2_843,
-                        label: "role instructions, short replies".into(),
-                        task_id: None,
-                        told: Some(crate::work::Told {
-                            contract: Some(crate::manager::prompts::CONTRACT - 1),
-                            ..crate::work::Told::default()
-                        }),
-                    },
-                },
-            },
-        )])
-        .await
-        .unwrap();
-    flow.restart().await;
-    flow.say("Second.").await;
-    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
-        .await;
-    flow.settled().await;
-    let specs = flow.thread_specs();
-    assert_eq!(specs.last().unwrap().1.origin, Origin::New, "{specs:#?}");
-    let second = inputs.lock().unwrap()[1].clone();
-    assert!(second.contains("remember the word teal"), "{second}");
-    let rules = specs
-        .last()
-        .unwrap()
-        .1
-        .append_system_prompt
-        .clone()
-        .unwrap();
-    assert!(
-        rules.contains("delegate_task says how to brief them"),
-        "{rules}"
-    );
-    assert!(rules.contains("When the user invites questions"), "{rules}");
-    assert!(rules.contains("propose_plan), never in text"), "{rules}");
-    assert!(
-        specs.iter().all(|(provider, _)| *provider == thread),
-        "{specs:#?}"
-    );
-    // Its new start is logged on the thread's contract: the next restart resumes it.
-    flow.restart().await;
-    flow.say("Third.").await;
-    flow.until("the third turn", |_| inputs.lock().unwrap().len() >= 3)
-        .await;
-    flow.settled().await;
-    assert!(
-        matches!(
-            flow.thread_specs().last().unwrap().1.origin,
-            Origin::Resume { .. }
-        ),
-        "{:#?}",
-        flow.thread_specs()
     );
     flow.stop().await;
 }
@@ -1687,7 +1578,7 @@ async fn the_effort_the_lead_picks_is_the_workers() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 return Reply::text("Found it.");
             }
@@ -1739,7 +1630,7 @@ async fn messaging_and_stopping_a_worker_are_rows_with_their_text_and_reason() {
                     return Reply::text("");
                 }
                 if !turn.input.contains("Scout the uploads.") {
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 let reply = turn
                     .call(
@@ -1841,7 +1732,7 @@ async fn stop_all_stops_every_running_worker_and_tells_the_orchestrator_once() {
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -1951,7 +1842,7 @@ async fn stopping_a_worker_while_the_thread_is_idle_gets_the_request_an_answer()
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("The user stopped task-1") {
                     return Reply::text("Stopped the scout before it found anything.");
@@ -2034,7 +1925,7 @@ async fn the_composers_stop_of_an_idle_thread_starts_no_turn_on_its_workers_stop
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 Reply::text("Fine.")
             }
@@ -2847,10 +2738,7 @@ async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
     assert_eq!(specs[1].1.origin, Origin::Resume { native_id: native });
     assert_eq!(specs[1].1.access, Access::Full);
     let second = inputs.lock().unwrap()[1].clone();
-    assert!(
-        second.contains("[settings] The user changed the permission level."),
-        "{second}"
-    );
+    assert!(!second.contains("[settings]"), "{second}");
     assert_eq!(rebirth_count(&flow).await, 0, "no rebirth");
     flow.stop().await;
 }
@@ -3165,7 +3053,7 @@ async fn a_review_that_outlives_its_cli_opens_no_card() {
                 if turn.is_orchestrator() {
                     turn.ask_approval("npm publish", "x").await;
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -3227,7 +3115,7 @@ async fn brigadiers_reviewer_settles_a_codex_sessions_escalations_at_approve_for
                 };
                 if turn.is_orchestrator() {
                     if turn.input.contains("[task-1") {
-                        return Reply::text("[quiet]");
+                        return Reply::text("");
                     }
                     ask("thread", "git branch -D brigadier/other").await;
                     ask("thread", "curl https://example.com").await;
@@ -3239,7 +3127,7 @@ async fn brigadiers_reviewer_settles_a_codex_sessions_escalations_at_approve_for
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 ask("worker", "git worktree remove --force /elsewhere").await;
                 ask("worker", "curl https://example.com/worker").await;
@@ -3354,7 +3242,7 @@ async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
                         log.lock().unwrap().push((command.into(), decision));
                     }
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     )
@@ -3501,7 +3389,7 @@ async fn ci_push_review_allows_pushes_without_a_watch_and_after_failed_and_passe
                         log.lock().unwrap().push(("git push origin fix".into(), decision));
                     }
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     ).await;
@@ -3572,7 +3460,7 @@ async fn ci_push_review_allows_a_push_when_a_user_message_joins_the_ci_fix() {
                     let decision = turn.ask_approval("git push origin fix", "git").await;
                     log.lock().unwrap().push(decision);
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     ).await;
@@ -3652,7 +3540,7 @@ async fn ci_push_review_does_not_repeat_when_a_user_message_arrives_during_revie
                     let decision = turn.ask_approval("git push origin fix", "git").await;
                     log.lock().unwrap().push(decision);
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             }
         }),
     ).await;

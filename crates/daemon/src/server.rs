@@ -2510,18 +2510,11 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     .await?;
             heap(|| daemon.awake.apply()).await;
             if before.review_work != settings.review_work {
-                // Workers waiting for a review go on, and those at work hear it at once.
+                // Workers waiting for a review go on.
                 let (sessions, on) = (daemon.sessions.clone(), settings.review_work);
                 daemon
                     .supervisor
                     .spawn(async move { sessions.reviews_switched(on).await });
-            }
-            if brigadier_core::git_writing_changed(&before, &settings) {
-                // Workers at work hear it at once; threads before their next turn.
-                let sessions = daemon.sessions.clone();
-                daemon
-                    .supervisor
-                    .spawn(async move { sessions.git_writing_switched().await });
             }
             if before.computer_use != settings.computer_use {
                 // The helper stops, and running agents' calls are refused, until it is on again.
@@ -2529,13 +2522,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 daemon
                     .supervisor
                     .spawn(async move { sessions.computer_use_turned().await });
-            }
-            if before.browser_enabled != settings.browser_enabled {
-                // Workers at work hear it at once; threads before their next turn.
-                let sessions = daemon.sessions.clone();
-                daemon
-                    .supervisor
-                    .spawn(async move { sessions.browser_switched().await });
             }
             if before.agent_paths != settings.agent_paths {
                 // The chosen binaries run from now on: the agents, their accounts and their

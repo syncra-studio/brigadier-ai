@@ -123,7 +123,7 @@ async fn a_held_merge_is_due_while_the_review_runs_and_its_request_is_done_once(
                         )
                         .await;
                     assert!(reply.text.contains("[merge held]"), "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[report task-1") {
                     turn.emit(ProviderEvent::Message {
@@ -136,7 +136,7 @@ async fn a_held_merge_is_due_while_the_review_runs_and_its_request_is_done_once(
                     assert!(!reply.is_error, "{}", reply.text);
                     turn.call("request_review", json!({"wait_seconds": 0}))
                         .await;
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("[merge due]") {
                     turn.call("run_checks", json!({})).await;
@@ -253,7 +253,7 @@ async fn ci_result(flow: &Flow) -> Option<String> {
 /// result turn answers, then is done once, with that answer.
 #[tokio::test]
 async fn a_ci_watch_keeps_its_request_working_until_its_result_turn() {
-    let (flow, request) = watching("owed-ci", Reply::text("[quiet]")).await;
+    let (flow, request) = watching("owed-ci", Reply::text("")).await;
     assert_eq!(stays(&flow, &request).await, RequestState::Working);
     assert_eq!(times_done(&flow, &request).await, 0);
     // The watch ends as `watch_ci`'s does: its row's result, then the message.
@@ -282,7 +282,7 @@ async fn a_ci_watch_keeps_its_request_working_until_its_result_turn() {
 /// watch's task ends and its row reads "stopped", and nothing wakes the thread for it later.
 #[tokio::test]
 async fn stop_during_a_ci_watch_stops_the_request_and_ends_the_watch() {
-    let (flow, request) = watching("owed-ci-stop", Reply::text("[quiet]")).await;
+    let (flow, request) = watching("owed-ci-stop", Reply::text("")).await;
     assert_eq!(stays(&flow, &request).await, RequestState::Working);
     // The watch's own task, as `watch_ci` keeps it.
     let task = tokio::spawn(tokio::time::sleep(Duration::from_secs(600)));
@@ -349,12 +349,12 @@ async fn a_review_of_the_threads_commit_keeps_a_quiet_request_working_until_it_e
                 commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
                 turn.call("request_review", json!({"wait_seconds": 0}))
                     .await;
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             if turn.input.starts_with("[checks passed") {
                 // The test repo has no checks, so they pass at once: the thread still leaves
                 // its answer to the review (answering here would make the review a late event).
-                return Reply::text("[quiet]");
+                return Reply::text("");
             }
             Reply::text("Noted.")
         }),
@@ -418,11 +418,11 @@ async fn a_regenerated_quiet_turn_waits_for_its_review_despite_the_earlier_answe
                     commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
                     turn.call("request_review", json!({"wait_seconds": 0}))
                         .await;
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.starts_with("[checks passed") {
                     // As in the review test above: the answer is still left to the review.
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 Reply::text("Added and reviewed the notes.")
             }

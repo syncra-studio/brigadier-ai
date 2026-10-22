@@ -81,7 +81,7 @@ async fn delegate(turn: &Turn, kind: &str) -> Reply {
         )
         .await;
     assert!(!reply.is_error, "{}", reply.text);
-    Reply::text("[quiet]")
+    Reply::text("")
 }
 
 /// A worker's report that names what it read before the restart.
@@ -140,12 +140,12 @@ async fn a_worker_waiting_on_its_question_is_asked_again_and_resumes_after_a_kil
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("Do it.") {
                     return delegate(&turn, "scout").await;
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             },
             |turn, n| async move {
                 if n == 0 {
@@ -210,7 +210,7 @@ async fn a_lead_waiting_for_its_go_ahead_still_waits_after_a_kill() {
                     return delegate(&turn, "implement").await;
                 }
                 // Its outline, and anything else, waits for the user here.
-                Reply::text("[quiet]")
+                Reply::text("")
             },
             |turn, n| async move {
                 if n == 0 {
@@ -275,12 +275,12 @@ async fn a_verifier_waiting_for_its_review_resumes_after_a_kill() {
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 if turn.input.contains("Do it.") {
                     return delegate(&turn, "implement").await;
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             },
             |turn, earlier| async move {
                 if !turn.prompt.contains("You verify this phase") {
@@ -375,7 +375,7 @@ async fn a_paused_worker_stays_paused_after_a_kill_and_resumes_its_own_session()
                 if turn.input.contains("Do it.") {
                     return delegate(&turn, "scout").await;
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             },
             {
                 let started = started.clone();
@@ -427,7 +427,7 @@ async fn a_worker_waiting_for_quota_still_waits_after_a_kill() {
                 if turn.input.contains("Do it.") {
                     return delegate(&turn, "scout").await;
                 }
-                Reply::text("[quiet]")
+                Reply::text("")
             },
             // Every model is at its limit.
             |_, _| async move { Reply::limited() },
@@ -465,7 +465,7 @@ async fn reported_task(name: &str, heard: &Arc<Mutex<Vec<String>>>) -> Flow {
                     if turn.input.contains("Do it.") {
                         return delegate(&turn, "implement").await;
                     }
-                    return Reply::text("[quiet]");
+                    return Reply::text("");
                 }
                 turn.write("ticket.txt", "VT-88213\n");
                 turn.git(&["add", "ticket.txt"]);

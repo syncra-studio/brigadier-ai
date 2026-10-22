@@ -2256,7 +2256,6 @@ mod findings_tests;
 #[cfg(unix)]
 mod fresh_base_tests;
 #[cfg(unix)]
-mod gate_fixes_tests;
 #[cfg(unix)]
 mod git_writing_tests;
 #[cfg(unix)]
@@ -2297,6 +2296,8 @@ mod mockup_tests;
 #[cfg(unix)]
 mod near_limit_tests;
 #[cfg(unix)]
+mod no_push_tests;
+#[cfg(unix)]
 mod overnight_tests;
 #[cfg(unix)]
 mod owed_tests;
@@ -2321,7 +2322,6 @@ mod peer_reply_tests;
 #[cfg(unix)]
 mod peer_restart_tests;
 #[cfg(unix)]
-mod peer_revision_tests;
 #[cfg(unix)]
 mod peer_session_tests;
 #[cfg(unix)]
@@ -2336,8 +2336,6 @@ mod plan_tests;
 mod pr_card_tests;
 #[cfg(unix)]
 mod preview_tests;
-#[cfg(unix)]
-mod quiet_wake_tests;
 #[cfg(unix)]
 mod quota_resume_tests;
 #[cfg(unix)]
@@ -2369,11 +2367,7 @@ mod same_session_tests;
 #[cfg(unix)]
 mod search_tests;
 #[cfg(unix)]
-mod settings_toggles_tests;
-#[cfg(unix)]
 mod spare_worktree_tests;
-#[cfg(unix)]
-mod status_tests;
 #[cfg(unix)]
 mod stop_hook_tests;
 #[cfg(unix)]
@@ -2384,8 +2378,6 @@ mod subfolder_rules_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
 mod successor_tests;
-#[cfg(unix)]
-mod suggestion_tests;
 #[cfg(unix)]
 mod tab_chat_tests;
 #[cfg(unix)]
