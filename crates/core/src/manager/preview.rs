@@ -69,7 +69,7 @@ const START_TAIL: u32 = 20;
 /// Most bytes of a log's end a reply shows.
 const TAIL_BYTES_MAX: usize = 8 * 1024;
 /// The data-folder area of the previews' logs.
-const LOG_AREA: &str = "previews";
+pub(super) const LOG_AREA: &str = "previews";
 
 /// The cleanup-ledger owner of a conversation's previews.
 pub(crate) fn preview_owner(id: &ConversationId) -> String {

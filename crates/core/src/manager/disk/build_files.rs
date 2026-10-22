@@ -67,7 +67,6 @@ struct InUse {
 
 /// The work folders in the data directory that open sessions and their running workers use.
 fn in_use(records: &Records) -> Vec<InUse> {
-    let ours = records.data_dir.join("worktrees");
     let mut seen = HashSet::new();
     let mut found = Vec::new();
     for conversation in &records.conversations {
@@ -79,7 +78,7 @@ fn in_use(records: &Records) -> Vec<InUse> {
         }
         let mut add = |path: &str, label: String| {
             let path = PathBuf::from(path);
-            if path.starts_with(&ours) && seen.insert(path.clone()) {
+            if records.ours(&path) && seen.insert(path.clone()) {
                 found.push(InUse {
                     conversation: conversation.id.clone(),
                     path,

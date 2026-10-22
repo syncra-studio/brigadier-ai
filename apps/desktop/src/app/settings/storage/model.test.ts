@@ -5,6 +5,8 @@ import {
   checkedWords,
   conversationsLine,
   listProjects,
+  projectBytes,
+  sessionParts,
   size,
   startTicked,
   summaryLine,
@@ -26,10 +28,10 @@ const project = (name: string, mb: number, daysAgo: number, fields: Partial<Proj
   lastUsedMs: NOW - daysAgo * DAY,
   conversations: 3,
   archived: 0,
-  worktreesBytes: 0,
   brainBytes: mb * MB,
   blobsBytes: 0,
-  scratchBytes: 0,
+  sessionsBytes: 0,
+  sessions: [],
   ...fields,
 });
 
@@ -120,4 +122,27 @@ test("the summary names what can go; conversations say how many are archived", (
   assert.equal(summaryLine(report({})), "Brigadier is tidy.");
   assert.equal(conversationsLine(project("p", 1, 0, { conversations: 142, archived: 6 })), "142 chats and sessions, 6 of them archived");
   assert.equal(conversationsLine(project("p", 1, 0, { conversations: 1 })), "1 chat or session");
+});
+
+test("a project's session folders are its work folders, each one a row", () => {
+  const folder = (id: string, title: string, bytes: number) => ({
+    conversationId: id,
+    title,
+    kind: "session" as const,
+    archived: false,
+    path: `/Users/me/.brigadier/s/${id}`,
+    bytes,
+  });
+  const app = project("app", 1, 0, {
+    sessionsBytes: 5 * MB,
+    sessions: [folder("aaaa1111", "Fix login", 4 * MB), folder("bbbb2222", "", MB)],
+  });
+  assert.equal(projectBytes(app), 6 * MB);
+  assert.deepEqual(
+    sessionParts(app).map((part) => [part.key, part.label, part.bytes]),
+    [
+      ["aaaa1111", "Fix login", 4 * MB],
+      ["bbbb2222", "Untitled session", MB],
+    ],
+  );
 });

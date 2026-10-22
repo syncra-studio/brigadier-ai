@@ -161,7 +161,11 @@ async fn a_codex_chat_makes_an_image_shown_kept_and_removed_like_a_threads() {
     // No other session runs with a Chat's tools: one-shot jobs keep theirs.
     for (_, spec) in flow.specs() {
         if matches!(spec.tools, ToolSet::Chat | ToolSet::TabChat) {
-            assert!(spec.cwd.ends_with(&chat.0), "{spec:#?}");
+            assert_eq!(
+                spec.cwd,
+                flow.manager.session_dir(&chat).work(),
+                "{spec:#?}"
+            );
         }
     }
     images_go_with(&flow, &chat, &kept).await;

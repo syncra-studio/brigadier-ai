@@ -922,12 +922,16 @@ impl CleanupLedger {
                     }
                 }
                 Artifact::PreviewDataDir { path, identity } => {
-                    let data_dir = self.platform.paths().data_dir.clone();
+                    let paths = self.platform.paths();
+                    let (data_dir, sessions_dir) =
+                        (paths.data_dir.clone(), paths.sessions_dir.clone());
                     let dir = PathBuf::from(path);
                     let identity = *identity;
                     let held = owner.to_owned();
                     match tokio::task::spawn_blocking(move || match identity {
-                        Some(identity) => remove_preview_data(&data_dir, &dir, identity, &held),
+                        Some(identity) => {
+                            remove_preview_data(&data_dir, &sessions_dir, &dir, identity, &held)
+                        }
                         None => Ok(()),
                     })
                     .await
@@ -938,18 +942,24 @@ impl CleanupLedger {
                     }
                 }
                 Artifact::ScratchDir { path } => {
-                    let data_dir = self.platform.paths().data_dir.clone();
+                    let paths = self.platform.paths();
+                    let (data_dir, sessions_dir) =
+                        (paths.data_dir.clone(), paths.sessions_dir.clone());
                     let dir = PathBuf::from(path);
                     // Older previews used path-only session records. They cannot prove
                     // ownership and must not delete a replacement or block the worktree.
                     if owner.starts_with("session:")
                         && !dir.starts_with(&data_dir)
+                        && !inside(&sessions_dir, &dir)
                         && !test_data_folder(&dir)
                     {
                         removed.push(artifact);
                         continue;
                     }
-                    match tokio::task::spawn_blocking(move || remove_scratch(&data_dir, &dir)).await
+                    match tokio::task::spawn_blocking(move || {
+                        remove_scratch(&data_dir, &sessions_dir, &dir)
+                    })
+                    .await
                     {
                         Ok(Ok(())) => removed.push(artifact),
                         Ok(Err(err)) => leftovers.failures.push(format!("{path}: {err}")),
@@ -1147,11 +1157,21 @@ fn end_in_dir(
     }
 }
 
-/// Removes a folder Brigadier created: inside its data directory, a task's test data
-/// folder, or a recorded preview's short temp folder. Preview removal never follows links.
-fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
-    let inside = dir.starts_with(data_dir) && dir != data_dir;
-    if !inside {
+/// Whether `dir` lies strictly inside `root`, named without `..`.
+fn inside(root: &Path, dir: &Path) -> bool {
+    dir.starts_with(root)
+        && dir != root
+        && !dir
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+}
+
+/// Removes a folder Brigadier created: inside its data directory or its session folders'
+/// root, a task's test data folder, or a recorded preview's short temp folder. Preview removal
+/// never follows links.
+fn remove_scratch(data_dir: &Path, sessions_dir: &Path, dir: &Path) -> std::io::Result<()> {
+    let ours = (dir.starts_with(data_dir) && dir != data_dir) || inside(sessions_dir, dir);
+    if !ours {
         if preview_temp_folder(dir) {
             if !dir.try_exists()? {
                 return Ok(());
@@ -1172,16 +1192,27 @@ fn remove_scratch(data_dir: &Path, dir: &Path) -> std::io::Result<()> {
 }
 
 /// Separately owned preview data can have a caller-chosen name, but must remain strictly
-/// inside /tmp and outside both app data directories. The ledger is the ownership proof.
+/// inside /tmp or the session folders' root, and outside both app data directories. The ledger
+/// is the ownership proof.
 fn remove_preview_data(
     data_dir: &Path,
+    sessions_dir: &Path,
     dir: &Path,
     identity: (u64, u64),
     owner: &str,
 ) -> std::io::Result<()> {
-    let root = Path::new("/tmp").canonicalize()?;
+    let sessions = sessions_dir
+        .canonicalize()
+        .unwrap_or_else(|_| sessions_dir.to_owned());
+    let root = if inside(&sessions, dir) {
+        sessions
+    } else {
+        Path::new("/tmp").canonicalize()?
+    };
     if !dir.starts_with(&root) || dir == root {
-        return Err(std::io::Error::other("preview data is outside /tmp"));
+        return Err(std::io::Error::other(
+            "preview data is outside /tmp and the session folders",
+        ));
     }
     for own in [
         Some(data_dir.to_owned()),

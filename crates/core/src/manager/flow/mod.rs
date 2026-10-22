@@ -170,6 +170,12 @@ impl Turn {
         }
     }
 
+    /// The temporary folder (`TMPDIR`) of the session whose thread takes this turn.
+    pub fn session_tmp(&self) -> PathBuf {
+        let id = self.conversation().expect("a session's thread turn");
+        self.host.session_dir(&id).tmp()
+    }
+
     /// The Chat whose CLI takes this turn (`None` for a session's thread, a worker or a
     /// review).
     pub fn chat(&self) -> Option<ConversationId> {
@@ -2190,6 +2196,8 @@ mod thread_items_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(unix)]
 mod project_sessions_tests;
+#[cfg(unix)]
+mod session_dir_tests;
 #[cfg(unix)]
 mod session_states_tests;
 #[cfg(all(test, debug_assertions))]

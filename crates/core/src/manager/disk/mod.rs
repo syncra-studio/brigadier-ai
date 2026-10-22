@@ -38,7 +38,8 @@ use crate::model::{
 };
 use crate::overnight::OvernightRun;
 use crate::storage::{
-    CleanBadge, CleanCategory, CleanItem, KeptLine, ProjectUsage, SharedPart, SharedUsage,
+    CleanBadge, CleanCategory, CleanItem, KeptLine, ProjectUsage, SessionFolderUsage, SharedPart,
+    SharedUsage,
 };
 use crate::work::Task;
 use crate::{Error, Result};
@@ -156,6 +157,8 @@ pub struct Cleaned {
 /// The records a scan works from, taken once.
 struct Records {
     data_dir: PathBuf,
+    /// The root of the session folders ([`brigadier_sandbox::AppPaths::sessions_dir`]).
+    sessions_dir: PathBuf,
     projects: Vec<Project>,
     conversations: Vec<Conversation>,
     tasks: HashMap<ConversationId, Vec<Task>>,
@@ -175,6 +178,26 @@ struct Records {
 impl Records {
     fn conversation(&self, id: &str) -> Option<&Conversation> {
         self.conversations.iter().find(|c| c.id.0 == id)
+    }
+
+    /// Whether `path` is a work folder of Brigadier's: in the data directory's `worktrees`, or
+    /// in a session's folder.
+    fn ours(&self, path: &Path) -> bool {
+        worktree_folder(&self.data_dir, &self.sessions_dir, path)
+    }
+
+    /// The conversation whose session folder holds `path`.
+    fn folder_conversation(&self, path: &Path) -> Option<&Conversation> {
+        let canonical =
+            std::fs::canonicalize(&self.sessions_dir).unwrap_or_else(|_| self.sessions_dir.clone());
+        let rest = path
+            .strip_prefix(&self.sessions_dir)
+            .or_else(|_| path.strip_prefix(&canonical))
+            .ok()?;
+        let short = rest.components().next()?.as_os_str().to_str()?;
+        self.conversations
+            .iter()
+            .find(|c| c.tab_chat.is_none() && c.id.short() == short)
     }
 
     fn task(&self, id: &str) -> Option<(&Conversation, &Task)> {
@@ -439,6 +462,7 @@ impl SessionManager {
         }
         Ok(Records {
             data_dir: self.data_dir.clone(),
+            sessions_dir: self.runtime.platform().paths().sessions_dir.clone(),
             projects: catalog.projects,
             conversations: catalog.conversations,
             tasks,
@@ -494,7 +518,7 @@ impl SessionManager {
                         // folders do.
                         Some((
                             "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
-                            | "checks" | "preview" | "preview-data",
+                            | "checks" | "preview" | "preview-data" | "session-folder",
                             id,
                         )) => records.conversation(id).is_some(),
                         Some(("task", id)) => records.task(id).is_some(),
@@ -647,7 +671,10 @@ impl SessionManager {
             }
             Action::PruneWorktrees { repo } => {
                 let git = self.git.clone();
-                let ours = self.data_dir.join("worktrees");
+                let (data_dir, sessions_dir) = (
+                    self.data_dir.clone(),
+                    self.runtime.platform().paths().sessions_dir.clone(),
+                );
                 blocking(move || {
                     let repo = git.open(&repo).map_err(git_error)?;
                     let stale: Vec<PathBuf> = repo
@@ -657,7 +684,10 @@ impl SessionManager {
                         .filter(|worktree| worktree.prunable)
                         .map(|worktree| worktree.path)
                         .collect();
-                    if stale.iter().any(|path| !path.starts_with(&ours)) {
+                    if stale
+                        .iter()
+                        .any(|path| !worktree_folder(&data_dir, &sessions_dir, path))
+                    {
                         return Err(Error::Invalid(
                             "the repository also has stale worktree records that aren't \
                              Brigadier's; prune them yourself with `git worktree prune`"
@@ -912,7 +942,7 @@ impl SessionManager {
                 let conversation_gone = match owner.split_once(':') {
                     Some((
                         "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
-                        | "checks" | "preview" | "preview-data",
+                        | "checks" | "preview" | "preview-data" | "session-folder",
                         id,
                     )) => !catalog.conversations.iter().any(|c| c.id.0 == id),
                     _ => false,
@@ -1162,6 +1192,9 @@ fn project_of(records: &Records, worktrees: &Path, action: &Action) -> Option<Pr
     };
     let canonical = std::fs::canonicalize(worktrees).unwrap_or_else(|_| worktrees.to_owned());
     let of_path = |path: &Path| {
+        if let Some(conversation) = records.folder_conversation(path) {
+            return conversation.project_id.clone();
+        }
         let rest = path
             .strip_prefix(worktrees)
             .or_else(|_| path.strip_prefix(&canonical))
@@ -1204,6 +1237,12 @@ fn project_of(records: &Records, worktrees: &Path, action: &Action) -> Option<Pr
         Action::RemoveEmptyDir(bound) => of_path(bound.path()),
         _ => None,
     }
+}
+
+/// Whether `path` is where Brigadier makes work folders: the data directory's `worktrees`, or
+/// the session folders' root.
+fn worktree_folder(data_dir: &Path, sessions_dir: &Path, path: &Path) -> bool {
+    path.starts_with(data_dir.join("worktrees")) || path.starts_with(sessions_dir)
 }
 
 /// The project all of `found` name, when there is at least one and each names the same.
@@ -1351,7 +1390,12 @@ impl Scanner<'_> {
     }
 
     fn bind_data(&self, path: &Path) -> Option<Bound> {
-        match removal::bind(&self.records.data_dir, path) {
+        let root = if path.starts_with(&self.records.sessions_dir) {
+            &self.records.sessions_dir
+        } else {
+            &self.records.data_dir
+        };
+        match removal::bind(root, path) {
             Ok(bound) => Some(bound),
             Err(err) => {
                 tracing::debug!(path = %path.display(), error = %err, "left out of the scan");
@@ -1398,6 +1442,19 @@ impl Scanner<'_> {
         let held = self.held(|_| true);
         let live = self.held(|state| state == OwnerState::Live);
         let mut open = Vec::new();
+        // Session folders' worktrees: a session's `work/` and its workers' (a Chat's `work/`
+        // is a plain folder, no worktree).
+        let mut folders = Vec::new();
+        for session in subdirs(&self.records.sessions_dir) {
+            folders.push(session.join("work"));
+            folders.extend(
+                subdirs(&session.join("workers"))
+                    .into_iter()
+                    .map(|worker| worker.join("work")),
+            );
+        }
+        folders.retain(|path| path.join(".git").is_file());
+        let mut groups = vec![folders];
         for project_dir in subdirs(&self.data("worktrees")) {
             let worktrees = subdirs(&project_dir);
             if worktrees.is_empty() {
@@ -1417,6 +1474,9 @@ impl Scanner<'_> {
                 }
                 continue;
             }
+            groups.push(worktrees);
+        }
+        for worktrees in groups {
             for path in worktrees {
                 let key = path.display().to_string();
                 if live.contains(&key) {
@@ -1577,7 +1637,6 @@ impl Scanner<'_> {
 
     /// Git's records of worktrees in the data directory whose folders are gone.
     fn stale_worktree_records(&mut self) {
-        let ours = self.data("worktrees");
         let mut repos: Vec<PathBuf> = self
             .records
             .projects
@@ -1601,7 +1660,7 @@ impl Scanner<'_> {
             };
             let stale: Vec<&brigadier_git::WorktreeInfo> =
                 worktrees.iter().filter(|w| w.prunable).collect();
-            let mine = stale.iter().filter(|w| w.path.starts_with(&ours)).count();
+            let mine = stale.iter().filter(|w| self.records.ours(&w.path)).count();
             if mine == 0 {
                 continue;
             }
@@ -1845,7 +1904,7 @@ impl Scanner<'_> {
             let (what, many) = match owner.split_once(':') {
                 Some((
                     "orch" | "session" | "workers" | "thread-temp" | "background" | "checks"
-                    | "preview" | "preview-data",
+                    | "preview" | "preview-data" | "session-folder",
                     _,
                 )) => ("a session", "sessions"),
                 Some(("chat", _)) => ("a Chat", "Chats"),
@@ -2132,7 +2191,11 @@ impl Scanner<'_> {
             if !self.records.scratch_idle.contains(&conversation.id) {
                 continue;
             }
-            let tmp = super::workers::session_temp_dir(&conversation.id);
+            let tmp = self
+                .records
+                .sessions_dir
+                .join(conversation.id.short())
+                .join("tmp");
             let (owner, _) = super::lifecycle::conversation_owner(conversation);
             let temps = self
                 .records
@@ -2338,13 +2401,36 @@ impl Scanner<'_> {
 
     fn usage(&self, project_blobs: &HashMap<String, Vec<PathBuf>>) -> ScanUsage {
         let size = |path: PathBuf| removal::allocated_size(&path);
-        let total_bytes = size(self.records.data_dir.clone());
+        let records = self.records;
+        // The session folders' root lies outside the data directory, but in tests.
+        let sessions_apart = !records.sessions_dir.starts_with(&records.data_dir);
+        let total_bytes = size(records.data_dir.clone())
+            + if sessions_apart {
+                size(records.sessions_dir.clone())
+            } else {
+                0
+            };
+        // Each conversation's folder (its workers' are inside it, so counted once).
+        let folder = |conversation: &Conversation| {
+            let path = records.sessions_dir.join(conversation.id.short());
+            let bytes = size(path.clone());
+            (bytes > 0 || path.is_dir()).then(|| SessionFolderUsage {
+                conversation_id: conversation.id.clone(),
+                title: conversation.title.clone(),
+                kind: conversation.kind,
+                archived: conversation.lifecycle == Lifecycle::Archived,
+                path: path.display().to_string(),
+                bytes,
+            })
+        };
+        let by_size = |folders: &mut Vec<SessionFolderUsage>| {
+            folders.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.title.cmp(&b.title)));
+        };
         let mut projects = Vec::new();
-        for project in &self.records.projects {
-            let mut scratch = 0;
+        for project in &records.projects {
+            let mut sessions = Vec::new();
             let (mut last_used_ms, mut conversations, mut archived) = (project.created_at_ms, 0, 0);
-            for conversation in self
-                .records
+            for conversation in records
                 .conversations
                 .iter()
                 .filter(|c| c.project_id.as_ref() == Some(&project.id))
@@ -2356,18 +2442,11 @@ impl Scanner<'_> {
                         archived += 1;
                     }
                 }
-                scratch += size(self.data("orch").join(&conversation.id.0));
-                scratch += size(self.data("chat").join(&conversation.id.0));
-                for task in self
-                    .records
-                    .tasks
-                    .get(&conversation.id)
-                    .into_iter()
-                    .flatten()
-                {
-                    scratch += size(self.data("scratch").join(&task.id.0));
+                if conversation.tab_chat.is_none() {
+                    sessions.extend(folder(conversation));
                 }
             }
+            by_size(&mut sessions);
             let blobs_bytes = project_blobs
                 .get(&project.id.0)
                 .into_iter()
@@ -2385,12 +2464,19 @@ impl Scanner<'_> {
                 last_used_ms,
                 conversations,
                 archived,
-                worktrees_bytes: size(self.data("worktrees").join(&project.id.0)),
                 brain_bytes: size(self.data("brains").join(&project.id.0)),
                 blobs_bytes,
-                scratch_bytes: scratch,
+                sessions_bytes: sessions.iter().map(|folder| folder.bytes).sum(),
+                sessions,
             });
         }
+        let chat_folders: u64 = records
+            .conversations
+            .iter()
+            .filter(|c| c.project_id.is_none() && c.tab_chat.is_none())
+            .filter_map(folder)
+            .map(|folder| folder.bytes)
+            .sum();
         // The event store and routing's history (quota samples, outcomes, research).
         let database = [
             "brigadier.db",
@@ -2419,6 +2505,10 @@ impl Scanner<'_> {
                 bytes: database,
             },
             SharedUsage {
+                part: SharedPart::ChatFolders,
+                bytes: chat_folders,
+            },
+            SharedUsage {
                 part: SharedPart::OtherBlobs,
                 bytes: blobs.saturating_sub(project_blob_total),
             },
@@ -2442,7 +2532,7 @@ impl Scanner<'_> {
         let counted: u64 = shared.iter().map(|part| part.bytes).sum::<u64>()
             + projects
                 .iter()
-                .map(|p| p.worktrees_bytes + p.brain_bytes + p.scratch_bytes)
+                .map(|p| p.sessions_bytes + p.brain_bytes)
                 .sum::<u64>()
             + project_blob_total.min(blobs);
         shared.push(SharedUsage {

@@ -734,9 +734,8 @@ async fn agent_files_go_only_with_proof_once_what_they_served_is_gone() {
 /// end from sweeping, is listed while its session is idle and swept from here.
 #[tokio::test]
 async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
-    use crate::manager::workers::session_temp_dir;
     let (flow, _worktree, _branch) = session("disk-thread-scratch").await;
-    let tmp = session_temp_dir(&flow.conversation);
+    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
     crate::manager::flow::scratch_sweep_over(&flow, &tmp).await;
     let (items, _) = scan(&flow, context()).await;
     assert!(
@@ -1069,5 +1068,65 @@ async fn freeing_up_a_project_keeps_the_project_its_files_and_branches() {
         .find(|p| p.project_id == project)
         .expect("the project stays");
     assert_eq!(used.conversations, 0);
+    flow.stop().await;
+}
+
+/// A session's folder and its records stay while the session exists, archived included, and
+/// are offered once it is gone; Storage counts each folder once, under its project.
+#[tokio::test]
+async fn session_folders_stay_while_their_session_exists_and_are_counted_once() {
+    let (flow, _, _) = session("disk-session-folders").await;
+    let id = flow.conversation.clone();
+    let dir = flow.manager.session_dir(&id);
+    std::fs::write(dir.record().join("ledger.md"), vec![b'x'; 256 * 1024]).unwrap();
+    flow.manager.archive(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    let (items, usage) = scan(&flow, context()).await;
+    let project = &usage.projects[0];
+    assert_eq!(project.sessions.len(), 1, "{:?}", project.sessions);
+    let folder = &project.sessions[0];
+    assert_eq!(folder.conversation_id, id);
+    assert!(folder.archived);
+    assert_eq!(Path::new(&folder.path), dir.root());
+    assert!(folder.bytes >= 256 * 1024, "{}", folder.bytes);
+    assert_eq!(project.sessions_bytes, folder.bytes);
+    assert!(usage.total_bytes >= folder.bytes);
+    assert!(
+        !labels(&items).iter().any(|label| label.contains("gone")),
+        "an archived session's records are kept: {:?}",
+        labels(&items)
+    );
+    // The folder of a session that is gone is offered, and goes when picked.
+    let sessions = &flow.manager.runtime.platform().paths().sessions_dir;
+    let gone = sessions.join("gone0001");
+    std::fs::create_dir_all(gone.join("record")).unwrap();
+    std::fs::write(gone.join("record").join("ledger.md"), "old").unwrap();
+    let owner = "session-folder:01a1-gone-session";
+    flow.manager
+        .runtime
+        .ledger()
+        .record(
+            owner,
+            Artifact::ScratchDir {
+                path: gone.to_string_lossy().into_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let (items, _) = scan(&flow, context()).await;
+    let row = named(&items, "a session that is gone");
+    assert!(
+        matches!(&row.action, Action::Dispose { owners } if owners.len() == 1 && owners[0].0 == owner),
+        "{:?}",
+        row.action
+    );
+    let cleaned = flow
+        .manager
+        .clean_storage(row.action.clone(), context())
+        .await
+        .unwrap();
+    assert!(cleaned.failures.is_empty(), "{cleaned:?}");
+    assert!(!gone.exists());
+    assert!(dir.record().join("ledger.md").is_file());
     flow.stop().await;
 }

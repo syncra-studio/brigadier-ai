@@ -59,7 +59,7 @@ const sum = (items: readonly { bytes: number }[]) => items.reduce((total, item) 
 
 /** A project's disk use in all. */
 export function projectBytes(project: ProjectUsage): number {
-  return project.worktreesBytes + project.brainBytes + project.blobsBytes + project.scratchBytes;
+  return project.sessionsBytes + project.brainBytes + project.blobsBytes;
 }
 
 /**
@@ -70,7 +70,12 @@ export function usageParts(report: StorageReport): Part[] {
   const projects = (pick: (project: ProjectUsage) => number) =>
     report.projects.reduce((total, project) => total + pick(project), 0);
   const parts: Part[] = [
-    { key: "work", label: "Work folders", bytes: projects((p) => p.worktreesBytes), color: PART_COLOR.work },
+    {
+      key: "work",
+      label: "Work folders",
+      bytes: projects((p) => p.sessionsBytes) + shared(report, "chatFolders"),
+      color: PART_COLOR.work,
+    },
     {
       key: "conversations",
       label: "Conversations",
@@ -91,11 +96,7 @@ export function usageParts(report: StorageReport): Part[] {
       color: PART_COLOR.logs,
     },
   ];
-  const other = Math.max(
-    0,
-    report.totalBytes - sum(parts),
-    projects((p) => p.scratchBytes) + shared(report, "other"),
-  );
+  const other = Math.max(0, report.totalBytes - sum(parts), shared(report, "other"));
   return [...parts, { key: "other", label: "Other", bytes: other, color: PART_COLOR.other }];
 }
 
@@ -104,13 +105,18 @@ export function projectParts(project: ProjectUsage): Part[] {
   return [
     { key: "brains", label: "Brains", bytes: project.brainBytes, color: PART_COLOR.brains },
     { key: "conversations", label: "Conversations", bytes: project.blobsBytes, color: PART_COLOR.conversations },
-    {
-      key: "work",
-      label: "Work folders",
-      bytes: project.worktreesBytes + project.scratchBytes,
-      color: PART_COLOR.work,
-    },
+    { key: "work", label: "Work folders", bytes: project.sessionsBytes, color: PART_COLOR.work },
   ];
+}
+
+/** A project's session folders as parts of its opened row, biggest first. */
+export function sessionParts(project: ProjectUsage): Part[] {
+  return project.sessions.map((folder) => ({
+    key: folder.conversationId,
+    label: folder.title || "Untitled session",
+    bytes: folder.bytes,
+    color: PART_COLOR.work,
+  }));
 }
 
 /** What every project shares: models, logs and recordings, and the rest no project holds. */

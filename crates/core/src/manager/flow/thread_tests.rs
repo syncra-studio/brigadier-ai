@@ -84,10 +84,11 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         assert_eq!(spec.cwd, worktree);
         assert!(spec.owned_cwd, "a New worktree is Brigadier's");
         let scratch = spec.sweep_dir.clone().expect("its sweep folder");
-        assert!(scratch.ends_with(format!("orch/{}", flow.conversation.0)));
+        let folder = flow.manager.session_dir(&flow.conversation);
+        assert_eq!(scratch, folder.dev());
         let env: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
-        // Its temporary files go to its short folder under /tmp, never the data folder's.
-        let tmp = crate::manager::workers::session_temp_dir(&flow.conversation);
+        // Its temporary files go to its session folder's `tmp/`, never the data folder's.
+        let tmp = folder.tmp();
         assert_eq!(env.get("TMPDIR").map(String::as_str), tmp.to_str());
         assert!(tmp.is_dir());
         for name in [

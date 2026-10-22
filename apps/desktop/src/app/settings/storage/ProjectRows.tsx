@@ -6,6 +6,7 @@ import {
   count,
   isUnused,
   projectParts,
+  sessionParts,
   size,
   usedWords,
   type Part,
@@ -90,6 +91,9 @@ export function ProjectRows({
               : "None left over from finished sessions"
         }
       />
+      {sessionParts(project).map((part, index) => (
+        <DetailRow key={part.key} part={part} line={shortPath(project.sessions[index]!.path)} />
+      ))}
       <div className="border-divider flex items-center gap-2 border-t pt-3">
         <span className="text-foreground/65 min-w-0 flex-1 text-xs">
           {items === 0

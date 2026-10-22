@@ -281,6 +281,7 @@ impl Uninstall {
         let mut after = targets(&paths, &app.identifier);
         if !keep_data {
             after.push(data_target(&paths.data_dir));
+            after.push(sessions_target(&paths.sessions_dir));
         }
         if let Some(bundle) = &bundle {
             after.push(bundle_target(bundle));
@@ -434,6 +435,16 @@ fn data_target(data_dir: &Path) -> Target {
         label: format!("Data folder {}", data_dir.display()),
         root: data_dir.parent().unwrap_or(data_dir).to_owned(),
         path: data_dir.to_owned(),
+        trash: true,
+    }
+}
+
+/// The sessions' folders (`~/.brigadier/s`), which live outside the data folder.
+fn sessions_target(sessions_dir: &Path) -> Target {
+    Target {
+        label: format!("Session folders {}", sessions_dir.display()),
+        root: sessions_dir.parent().unwrap_or(sessions_dir).to_owned(),
+        path: sessions_dir.to_owned(),
         trash: true,
     }
 }
@@ -626,6 +637,9 @@ fn finish(
                 #[cfg(windows)]
                 drop(lock);
                 remove(&data_target(data_dir), &mut failures);
+                if paths.sessions_dir.exists() {
+                    remove(&sessions_target(&paths.sessions_dir), &mut failures);
+                }
             }
             Err(err) => failures.push(err.to_string()),
         }

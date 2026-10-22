@@ -2089,7 +2089,10 @@ impl SessionManager {
     ) -> Result<Workspace> {
         let conversation = self.core.conversation(&task.conversation_id)?;
         let repo = self.tasks_repo(&conversation, task)?;
-        let scratch = self.owned_dir("scratch", &task.id.0);
+        let scratch = self
+            .session_dir(&task.conversation_id)
+            .worker(task)
+            .join("tmp");
         self.prepare_owned_dir(owner, &scratch).await?;
         if task.access.repo == RepoAccess::None {
             return Ok(Workspace {
@@ -2199,16 +2202,10 @@ impl SessionManager {
                 (base.clone(), base, on_snapshot)
             }
         };
-        let project = conversation
-            .project_id
-            .as_ref()
-            .map(|id| id.0.clone())
-            .unwrap_or_else(|| "none".into());
-        let worktree = self.owned_dir("worktrees", &project).join(format!(
-            "task-{}-{}",
-            task.number,
-            &task.id.0[task.id.0.len() - 8..]
-        ));
+        let worktree = self
+            .session_dir(&task.conversation_id)
+            .worker(task)
+            .join("work");
         let branch = match task.kind.writes() {
             true => Some(task_branch(
                 &self.branch_prefix(&task.conversation_id).await,
@@ -2318,13 +2315,7 @@ impl SessionManager {
         &self,
         conversation: &crate::model::Conversation,
     ) -> PathBuf {
-        let project = conversation
-            .project_id
-            .as_ref()
-            .map(|id| id.0.clone())
-            .unwrap_or_else(|| "none".into());
-        self.owned_dir("worktrees", &project)
-            .join(format!("session-{}", conversation.id.short()))
+        self.session_dir(&conversation.id).work()
     }
 
     /// The branch accepted work lands on, created for a new-worktree session on first use
@@ -2380,6 +2371,7 @@ impl SessionManager {
                     branch.clone(),
                     start.clone(),
                 );
+                let branch_name = branch.clone();
                 let platform = self.runtime.platform().clone();
                 // A new branch starts from the newest base: its remote is fetched first.
                 let fresh = match &start {
@@ -2418,6 +2410,11 @@ impl SessionManager {
                         }
                     };
                     repo.add_worktree(&path, spec).map_err(git_error)?;
+                    // What the session's branch merges into, for `gh pr create` and whoever
+                    // reads the target later (S7): the base chosen on the rail.
+                    if let Err(err) = repo.set_merge_base(&branch_name, &base_name) {
+                        tracing::warn!(%err, "couldn't record the session branch's base in git config");
+                    }
                     super::sidecars::stand_in_at(&git, &path);
                     // A new branch's worktree gets the checkout's gitignored env files (and
                     // what `.worktreeinclude` names), so the app runs here as it does there.
@@ -5162,19 +5159,7 @@ pub(crate) fn test_data_dir(id: &TaskId) -> PathBuf {
     test_data_root().join(name)
 }
 
-/// The temporary folder of session `id`'s thread: short and free of spaces, under the
-/// system's temporary folder like a task's test data folder, never in the app's data folder,
-/// whose long path with spaces breaks what the commands make there (a Unix socket's path
-/// holds at most 104 bytes on macOS). Named like a task's test data folder (`brigadier-test-`
-/// and 8 letters or digits; the first, `t`, is never a task id's hex), so the sweeps,
-/// sandboxes and protections that know those know it.
-pub(crate) fn session_temp_dir(id: &ConversationId) -> PathBuf {
-    let letters: Vec<char> = id.0.chars().filter(char::is_ascii_alphanumeric).collect();
-    let tail: String = letters[letters.len().saturating_sub(7)..].iter().collect();
-    test_data_root().join(format!("brigadier-test-t{tail:0>7}"))
-}
-
-/// The cleanup owner of a session thread's temporary folder ([`session_temp_dir`]).
+/// The cleanup owner of a session thread's temporary folder (its folder's `tmp/`).
 pub(crate) fn thread_temp_owner(id: &ConversationId) -> String {
     format!("thread-temp:{id}")
 }

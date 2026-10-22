@@ -1727,7 +1727,7 @@ async fn a_workers_preview_carries_its_task_and_ends_with_its_folder() {
     let site = of(&board, &one);
     let app = of(&board, &two);
     assert_eq!(site.name, "site");
-    assert!(site.workspace.contains("task-1"), "{}", site.workspace);
+    assert!(site.workspace.contains("workers/1-"), "{}", site.workspace);
     assert_eq!(app.kind, crate::work::PreviewKind::App);
     // A worker's preview is its task's request's.
     let request = Flow::task(&board, 1).request_id.clone();

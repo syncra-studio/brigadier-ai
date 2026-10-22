@@ -1460,6 +1460,8 @@ impl SessionManager {
         self.forget_brain_conversation(&id, conversation.project_id.clone())
             .await;
         self.forget_routing(&id, &tasks).await;
+        // Its folder goes, its records with it (S7): Archive keeps them.
+        self.remove_session_dir(&id).await;
         let store = self.core.store().clone();
         // Its own blobs go now, not a day later; then the usual collection of older leftovers.
         self.delete_change_records(&id).await?;

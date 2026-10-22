@@ -3150,6 +3150,7 @@ impl SessionManager {
         let conversation = self.core.conversation(&conv.id)?;
         self.tab_chat_may_run(&conversation)?;
         let (owner, area) = super::lifecycle::conversation_owner(&conversation);
+        self.prepare_session_dir(&conversation).await?;
         // A tab chat reads its session's checkout, which is never its own: it runs in a
         // scratch folder of its own, and only that goes with it.
         let mut tab_checkout = None;

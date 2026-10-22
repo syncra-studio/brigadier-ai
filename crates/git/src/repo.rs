@@ -209,6 +209,27 @@ impl Repo {
         Ok(())
     }
 
+    /// Records `base` as the branch `branch` merges into, in git config
+    /// (`branch.<branch>.gh-merge-base`, the key `gh pr create` reads for its base).
+    pub fn set_merge_base(&self, branch: &str, base: &str) -> Result<()> {
+        self.validate_branch(branch)?;
+        self.validate_branch(base)?;
+        let key = format!("branch.{branch}.gh-merge-base");
+        self.cmd(&["config", key.as_str(), base], false)?;
+        Ok(())
+    }
+
+    /// The branch `branch` merges into, as [`Self::set_merge_base`] recorded it.
+    pub fn merge_base_of(&self, branch: &str) -> Result<Option<String>> {
+        self.validate_branch(branch)?;
+        let key = format!("branch.{branch}.gh-merge-base");
+        let out = self.run(&["config", "--get", key.as_str()], true)?;
+        Ok(match out.status.code() {
+            Some(0) => Some(parse::line(&out.stdout)?),
+            _ => None,
+        })
+    }
+
     /// Runs `work` holding the repository's ref lock, the one every landing and branch delete
     /// takes: the engine's ref check sees no landing half done. `work` must not land or delete.
     pub fn with_ref_lock<R>(&self, work: impl FnOnce() -> R) -> R {

@@ -102,6 +102,7 @@ mod routing;
 mod run;
 pub mod search;
 mod secrets;
+mod session_dir;
 mod setup_script;
 mod shell_changes;
 mod side_chat;
@@ -870,9 +871,19 @@ impl SessionManager {
             .clone())
     }
 
-    /// `<data>/<area>/<id>`: a Brigadier-owned folder.
+    /// A Brigadier-owned folder of conversation or job `id`: a session's own areas are parts of
+    /// its folder ([`session_dir`]): the thread's files (`orch`) in `dev/`, a Chat's working
+    /// folder in `work/`, previews' logs in `logs/`, the workers' home in `workers/home`.
+    /// Anything else is `<data>/<area>/<id>`.
     fn owned_dir(&self, area: &str, id: &str) -> PathBuf {
-        self.data_dir.join(area).join(id)
+        let session = || self.session_dir(&ConversationId(id.to_owned()));
+        match area {
+            "orch" => session().dev(),
+            "chat" => session().work(),
+            preview::LOG_AREA => session().logs(),
+            "worker-home" => session().workers_home(),
+            _ => self.data_dir.join(area).join(id),
+        }
     }
 
     /// A CLI session's event as its handlers get it: in development builds, with what an

@@ -82,6 +82,7 @@ impl SessionManager {
         let projects = self.project_repos();
         let git = self.git.clone();
         let data_dir = self.data_dir.clone();
+        let sessions_dir = self.runtime.platform().paths().sessions_dir.clone();
         blocking(move || {
             let Some(path) = expand(&typed, home.as_deref()) else {
                 return Ok(invalid(if cfg!(windows) {
@@ -90,8 +91,9 @@ impl SessionManager {
                     "Type the folder's full path, like ~/code/app."
                 }));
             };
-            let data_dir = canonical(&data_dir);
-            let brigadier_own = |path: &Path| path.starts_with(&data_dir);
+            let (data_dir, sessions_dir) = (canonical(&data_dir), canonical(&sessions_dir));
+            let brigadier_own =
+                |path: &Path| path.starts_with(&data_dir) || path.starts_with(&sessions_dir);
             let metadata = match std::fs::metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {

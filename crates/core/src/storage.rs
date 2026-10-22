@@ -53,13 +53,27 @@ pub struct ProjectUsage {
     /// Its conversations (chats and sessions, side chats left out), archived ones included.
     pub conversations: u32,
     pub archived: u32,
-    pub worktrees_bytes: u64,
     /// Its Brain and code index.
     pub brain_bytes: u64,
     /// Stored transcripts' attachments, reports and artifacts of its conversations.
     pub blobs_bytes: u64,
-    /// Its conversations' and workers' working folders.
-    pub scratch_bytes: u64,
+    /// Its sessions' folders (worktrees, temporary files, previews, logs, records and their
+    /// workers' folders): the sum of `sessions`.
+    pub sessions_bytes: u64,
+    /// Each of its sessions' folders, biggest first.
+    pub sessions: Vec<SessionFolderUsage>,
+}
+
+/// What one session's (or Chat's) folder takes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFolderUsage {
+    pub conversation_id: ConversationId,
+    pub title: String,
+    pub kind: ConversationKind,
+    pub archived: bool,
+    pub path: String,
+    pub bytes: u64,
 }
 
 /// What something shared by every project takes.
@@ -74,6 +88,8 @@ pub struct SharedUsage {
 #[serde(rename_all = "camelCase")]
 pub enum SharedPart {
     Database,
+    /// The folders of Chats (which belong to no project).
+    ChatFolders,
     /// Stored content no project's conversations reference (Chats, the Personal Brain's, …).
     OtherBlobs,
     Models,

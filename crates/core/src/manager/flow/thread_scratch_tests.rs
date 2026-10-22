@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::workers::session_temp_dir;
 use crate::work::RequestState;
 
 fn script<F, Fut>(f: F) -> Script
@@ -39,7 +38,7 @@ fn spawn_in(dir: &Path, program: &str, args: &[&str]) -> Child {
 /// What the thread's turn leaves in its temporary folder: a second checkout's build output, a
 /// stopped test's process and a running helper's.
 fn litter(turn: &Turn, children: &Arc<Mutex<Vec<Child>>>) -> PathBuf {
-    let tmp = session_temp_dir(&turn.conversation().unwrap());
+    let tmp = turn.session_tmp();
     let target = tmp.join("bt-main/target");
     std::fs::create_dir_all(&target).unwrap();
     std::fs::write(target.join("out.bin"), vec![7u8; 64 * 1024]).unwrap();
@@ -91,7 +90,7 @@ async fn a_threads_scratch_goes_once_its_request_is_over() {
     .await;
     flow.say("Build main apart.").await;
     flow.settled().await;
-    let tmp = session_temp_dir(&flow.conversation);
+    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
     super::eventually("the scratch to go", || {
         std::fs::read_dir(&tmp).is_ok_and(|mut entries| entries.next().is_none())
     })
@@ -140,7 +139,7 @@ async fn a_waiting_request_keeps_the_threads_scratch() {
         })
         .await;
     flow.settled().await;
-    let tmp = session_temp_dir(&flow.conversation);
+    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
     // Give a sweep the time it would take: nothing goes.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert!(tmp.join("bt-main/target/out.bin").exists());
@@ -206,7 +205,7 @@ async fn a_listening_server_stays_through_the_sweep() {
     .await;
     flow.say("Serve the site.").await;
     flow.settled().await;
-    let tmp = session_temp_dir(&flow.conversation);
+    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
     super::eventually("the build output to go", || !tmp.join("bt-main").exists()).await;
     let ended = |index: usize| {
         children.lock().unwrap()[index]
@@ -275,7 +274,7 @@ async fn the_launch_sweeps_what_a_quit_left() {
     .await;
     flow.say("First.").await;
     flow.settled().await;
-    let tmp = session_temp_dir(&flow.conversation);
+    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
     super::scratch_sweep_over(&flow, &tmp).await;
     // Left while the app was down.
     std::fs::create_dir_all(tmp.join("bt-verify/target")).unwrap();
@@ -302,7 +301,7 @@ async fn a_server_below_a_wrapper_in_the_folder_itself_keeps_it() {
         script(move |turn| {
             let made = made.clone();
             async move {
-                let tmp = session_temp_dir(&turn.conversation().unwrap());
+                let tmp = turn.session_tmp();
                 std::fs::create_dir_all(&tmp).unwrap();
                 std::fs::write(tmp.join("index.html"), b"<p>served</p>").unwrap();
                 let wrapper = spawn_in(
@@ -328,7 +327,7 @@ async fn a_server_below_a_wrapper_in_the_folder_itself_keeps_it() {
     .await;
     flow.say("Serve the site.").await;
     flow.settled().await;
-    let tmp = session_temp_dir(&flow.conversation);
+    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
     // The sweep the request's end started may still hold the thread: sweep again once free.
     let mut swept = None;
     for _ in 0..250 {
@@ -377,7 +376,7 @@ async fn a_temp_folder_replaced_by_a_link_is_left_alone() {
     .await;
     flow.say("First.").await;
     flow.settled().await;
-    let tmp = session_temp_dir(&flow.conversation);
+    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
     super::scratch_sweep_over(&flow, &tmp).await;
     let elsewhere =
         std::env::temp_dir().join(format!("brigadier-scratch-link-{}", flow.conversation));

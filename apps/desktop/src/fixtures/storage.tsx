@@ -63,10 +63,10 @@ function project(name: string, path: string, mb: number, daysAgo: number, fields
     lastUsedMs: NOW - daysAgo * DAY,
     conversations: 12,
     archived: 0,
-    worktreesBytes: 0,
     brainBytes: bytes - blobs,
     blobsBytes: blobs,
-    scratchBytes: 0,
+    sessionsBytes: 0,
+    sessions: [],
     ...fields,
   };
 }

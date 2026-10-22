@@ -29,7 +29,7 @@ use brigadier_providers::{
 };
 
 use super::conversation::{Cli, ConvLive};
-use super::workers::{session_temp_dir, thread_temp_owner};
+use super::workers::thread_temp_owner;
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
     ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
@@ -283,10 +283,10 @@ impl SessionManager {
         prompt
     }
 
-    /// The thread's short temporary folder ([`session_temp_dir`]), made and recorded under
+    /// The thread's temporary folder (its session folder's `tmp/`), made and recorded under
     /// its own owner, which goes with the session.
     pub(crate) async fn thread_temp(&self, id: &ConversationId) -> Result<PathBuf> {
-        let dir = session_temp_dir(id);
+        let dir = self.session_dir(id).tmp();
         self.prepare_owned_dir(&thread_temp_owner(id), &dir).await?;
         Ok(dir)
     }

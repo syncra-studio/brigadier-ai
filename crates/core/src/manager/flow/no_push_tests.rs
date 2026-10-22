@@ -136,7 +136,8 @@ async fn an_idle_thread_gets_no_turn_from_engine_events() {
 }
 
 /// The strip-down's first start archives the sessions open then, through the normal archive
-/// path; a later start leaves sessions alone.
+/// path, and so does the first start with session folders (S7); a later start leaves sessions
+/// alone.
 #[tokio::test]
 async fn sessions_open_at_the_upgrade_are_archived() {
     let mut flow = Flow::start(
@@ -147,8 +148,11 @@ async fn sessions_open_at_the_upgrade_are_archived() {
     .await;
     flow.say("Hello.").await;
     flow.settled().await;
-    // As a data folder from before the strip-down: no marker yet.
-    let marker = flow.dir.join("data").join(crate::manager::upgrade::MARKER);
+    // As a data folder from before session folders: their marker isn't there yet.
+    let marker = flow
+        .dir
+        .join("data")
+        .join(crate::manager::upgrade::MARKERS[1]);
     std::fs::remove_file(&marker).unwrap();
     flow.restart().await;
     assert_eq!(

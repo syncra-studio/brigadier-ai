@@ -1,18 +1,22 @@
 //! The one-time pass at the first start after the strip-down (STRIP-DOWN-PLAN.md S1): nothing
 //! is migrated. Every session open then is archived through the normal archive path, and every
 //! open Chat's CLI session is forgotten, so its next turn starts over without the old
-//! instructions. A marker file in the data folder keeps it to one launch.
+//! instructions. A marker file in the data folder keeps it to one launch. S7's session folders
+//! (`session_dir`) ran it again once: sessions and Chats then move to folders of their own.
 
 use super::SessionManager;
 use crate::model::{ConversationKind, Lifecycle};
 
-/// The marker of [`SessionManager::archive_open_at_upgrade`], in the data folder.
-pub(super) const MARKER: &str = "strip-down-1";
+/// The markers of [`SessionManager::archive_open_at_upgrade`], in the data folder: the pass
+/// runs once more for each new one.
+pub(super) const MARKERS: [&str; 2] = ["strip-down-1", "session-folders"];
 
 impl SessionManager {
     pub(super) async fn archive_open_at_upgrade(&self) {
-        let marker = self.data_dir.join(MARKER);
-        if marker.exists() {
+        if MARKERS
+            .iter()
+            .all(|marker| self.data_dir.join(marker).exists())
+        {
             return;
         }
         let (mut archived, mut forgotten) = (0, 0);
@@ -32,8 +36,10 @@ impl SessionManager {
                 forgotten += 1;
             }
         }
-        if let Err(err) = std::fs::write(&marker, "") {
-            tracing::warn!(error = %err, "could not record the upgrade pass; the next launch runs it again");
+        for marker in MARKERS {
+            if let Err(err) = std::fs::write(self.data_dir.join(marker), "") {
+                tracing::warn!(error = %err, "could not record the upgrade pass; the next launch runs it again");
+            }
         }
         tracing::info!(archived, forgotten, "sessions open at the upgrade archived");
     }

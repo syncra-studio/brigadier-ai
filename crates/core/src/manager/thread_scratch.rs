@@ -14,7 +14,7 @@
 //!   full checks), and what still runs below the CLI (its MCP servers). One whose tree or
 //!   process group holds such a server (an `npm run dev` above its listening node) keeps it:
 //!   ending it would end the server too.
-//! - **Its temporary folder** ([`super::workers::session_temp_dir`], its commands' and checks'
+//! - **Its temporary folder** (its session folder's `tmp/`, its commands' and checks'
 //!   TMPDIR): what works inside it ends (but a listening server), then everything in it goes
 //!   (but where a kept server works: the whole folder, when it works in the folder itself);
 //!   the folder stays, as its CLI's TMPDIR.
@@ -40,7 +40,6 @@ use brigadier_providers::Artifact;
 use brigadier_sandbox::removal;
 
 use super::conversation::ConvLive;
-use super::workers::session_temp_dir;
 use super::{SessionManager, blocking};
 use crate::Result;
 use crate::model::{ConversationId, ConversationKind, Lifecycle};
@@ -190,7 +189,7 @@ impl SessionManager {
         id: &ConversationId,
         left: Vec<(u32, Option<f64>)>,
     ) -> Result<Swept> {
-        let tmp = session_temp_dir(id);
+        let tmp = self.session_dir(id).tmp();
         let command_temps = self.claude_command_temps(id);
         let others = self.recorded_elsewhere(id);
         let platform = self.runtime.platform().clone();
