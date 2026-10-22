@@ -14,6 +14,7 @@ import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { Conversation, ConversationView as View, OrchestratorStep, Question, Request, Task, UserRequest } from "@/ipc/generated";
+import { rowOf } from "@/fixtures/workerRows";
 import { select } from "@/state/actions";
 import { useApp } from "@/state/store";
 
@@ -62,6 +63,9 @@ mockIPC((command, payload) => {
       };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
+    // Its CLI's thread, with its worker's row (S14).
+    case "threadView":
+      return { method: req.method, view: { entries: [], turns: [], workers: [rowOf(worker)] } };
     default:
       return { method: req.method };
   }
@@ -89,13 +93,12 @@ const composer = () => document.querySelector("[data-slot=composer]");
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
-    await until("the Background rows", () => row("ci") !== null);
     await until("the question card", () => composer()?.textContent?.includes("Build the Plugins and Skills page") ?? false);
     await until("the Workers strip", () => composer()?.querySelector("[data-slot=composer-status-slot]") !== null);
     await sleep(200);
     seen.jobCards = document.querySelectorAll("[data-slot=job-card]").length;
-    const buttons = (activity: string) => [...(row(activity)?.parentElement?.querySelectorAll('[data-slot="summary-row-action"] button') ?? [])].map((button) => button.textContent);
-    seen.background = { ci: buttons("ci") };
+    // The session's own events (CI) are no Background rows: those are its CLI's tasks (S14).
+    seen.ciRow = row("ci") !== null;
     const rail = composer()!.querySelector("[data-slot=composer-status-slot]")!;
     seen.rail = rail.textContent;
     seen.railRows = rail.children.length;

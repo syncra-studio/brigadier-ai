@@ -26,6 +26,7 @@ import { fixtureInput } from "@/fixtures/input";
 import type { Conversation, EventEnvelope, Message, Page, PageContent, Project, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
+import { rowOf, showRows } from "@/fixtures/workerRows";
 import { newSessionTab, openPageTab, selectTab, useSessionTabs } from "@/state/sessionTabs";
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { emptyThread, useApp } from "@/state/store";
@@ -79,6 +80,8 @@ for (const envelope of (planned.events as unknown as EventEnvelope[]).filter((ev
 }
 const items = layout ? planMessages : messages;
 useBoard.setState({ board: layout ? { ...board, loaded: true, head: items.at(-1)?.id ?? null } : { ...emptyBoard(ID), loaded: true, head: items.at(-1)?.id ?? null } });
+// Its workers as their rows (S14), with its thread.
+if (layout) showRows(ID, Object.values(board.tasks).map((task) => rowOf(task)));
 useApp.setState((state) => ({
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },

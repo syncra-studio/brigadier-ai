@@ -1497,6 +1497,22 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     assert!(a.waiting[0].what.contains("curl"), "{a:#?}");
     assert!(a.waiting[0].card.is_some());
     assert_eq!(a.agent, ProviderKind::Claude);
+    // The prompt came as thread news too, before it is answered (news is debounced).
+    let mut sent = Vec::new();
+    while !sent
+        .iter()
+        .any(|rows: &Vec<crate::thread_view::WorkerRow>| {
+            rows.iter().any(|row| !row.waiting.is_empty())
+        })
+    {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(20), news.recv())
+            .await
+            .expect("the prompt's rows as news")
+            .unwrap();
+        if let Some(rows) = item.workers {
+            sent.push(rows);
+        }
+    }
     answers
         .lock()
         .unwrap()
@@ -1551,7 +1567,6 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     assert_eq!(b.ahead, 0);
 
     // The rows came as thread news too, the prompt included.
-    let mut sent = Vec::new();
     while let Ok(item) = news.try_recv() {
         if let Some(rows) = item.workers {
             sent.push(rows);
@@ -1583,4 +1598,82 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
             .all(|c| !tasks.contains(&c.id.0))
     );
     flow.stop().await;
+}
+
+/// S14: a closed worker's thread still opens from its session's Workers row: its CLI's
+/// session files go to the session's record, kept until the session is deleted, not with
+/// the worker.
+#[tokio::test]
+async fn a_closed_workers_thread_still_reads_from_its_session() {
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if let Some(Role::Worker { .. }) = worker {
+                    return Reply::text("Wrote it.");
+                }
+                if !turn.input.contains("Start one.") {
+                    return Reply::text("Noted.");
+                }
+                let started =
+                    brigadier(&turn, CliRequest::Start(Box::new(start("Write it.")))).await;
+                let id = id_of(&started);
+                wait_for(&turn, &[&id], 1).await;
+                let closed = brigadier(&turn, CliRequest::Close { id: id.clone() }).await;
+                answers.lock().unwrap().insert("closed".into(), closed);
+                Reply::text("Closed it.")
+            })
+        })
+    };
+    let options = Options {
+        behavior: Arc::new(FakeBehavior {
+            session_file: true,
+            cleanup: true,
+            ..FakeBehavior::default()
+        }),
+        ..Options::default()
+    };
+    let flow = Flow::start("cli-closed-worker-thread", options, script).await;
+    flow.say("Start one.").await;
+    flow.until("it is closed", |_| {
+        answers.lock().unwrap().contains_key("closed")
+    })
+    .await;
+    flow.settled().await;
+    let rows = flow
+        .manager
+        .worker_rows_of(&flow.conversation, true)
+        .await
+        .unwrap();
+    let row = rows.first().cloned().expect("its row stays");
+    assert!(row.gone, "{row:#?}");
+    super::eventually_async("its thread to read after close", || {
+        let manager = flow.manager.clone();
+        let id = flow.conversation.clone();
+        let task = row.id.clone();
+        async move {
+            let view = manager.worker_thread(&id, &task).await.unwrap();
+            view.entries
+                .iter()
+                .any(|entry| format!("{entry:?}").contains("Wrote it."))
+        }
+    })
+    .await;
+    let lineage = crate::ledger::lineage_owner(&flow.conversation.0);
+    let held = flow.manager.runtime.ledger().artifacts(&lineage);
+    let sessions = held
+        .iter()
+        .filter(|artifact| {
+            matches!(
+                artifact,
+                brigadier_providers::Artifact::ClaudeSession { .. }
+            )
+        })
+        .count();
+    assert_eq!(sessions, 2, "the session's own and its worker's: {held:#?}");
 }

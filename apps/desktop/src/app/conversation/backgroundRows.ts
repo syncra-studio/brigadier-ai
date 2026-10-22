@@ -1,15 +1,11 @@
-import { ciJobs, ciWatches, runFailed, shortSha } from "@/app/conversation/activity/slotView";
 import { taskShown } from "@/app/conversation/backgroundTasks";
-import { isRunRequest } from "@/app/conversation/blocks";
-import { lastMessageAtMs, liveMergeClick } from "@/app/conversation/liveJob";
 import { previewActive } from "@/app/conversation/previewStatus";
-import type { BackgroundTask, Preview, Task } from "@/ipc/generated";
-import type { Board } from "@/state/board";
+import type { BackgroundTask, Preview } from "@/ipc/generated";
 
 /**
- * The context card's Background rows (Q91): one row per thing the session has going in the
- * background, with its state in a word: a process it keeps running, and its own events while
- * they run (the CI watch, a merge). A worker's second copy of an app
+ * The context card's Background rows (Q91, S12): one row per thing the session has going in the
+ * background, with its state in a word: a preview it keeps running (`brigadier preview`), and its
+ * CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`). A worker's second copy of an app
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
@@ -19,27 +15,10 @@ import type { Board } from "@/state/board";
 
 export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "waiting" | "merging" | "done";
 
-/** The session's events the rows read off the board, as liveJob.ts reads them. */
-export type BackgroundEvents = Pick<Board, "orchestratorSteps" | "requests">;
-
-/** An event row's button: open the CI run. */
-export type EventAction = { type: "openCi"; url: string };
-
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
   /** One of the CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`). */
-  | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; state: BackgroundState }
-  | {
-    type: "event";
-    id: string;
-    startedAtMs: number;
-    name: string;
-    state: BackgroundState;
-    /** More of where it stands, after its state: "3 of 5". */
-    words: string | null;
-    tip: string;
-    action: EventAction | null;
-  };
+  | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; state: BackgroundState };
 
 /** Leading `NAME=value` assignments, as a shell reads them before the command. */
 const ASSIGNMENTS = /^(?:\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/;
@@ -52,6 +31,9 @@ export function appCommand(command: string): string {
 /** A headless browser driven at a page: a check of the app serving it. */
 const BROWSER = /(chrome|chromium|headless|playwright|puppeteer)/i;
 
+/** A copy of an app that only looks at it: a browser at it, or a smoke test. */
+const lookOnly = (preview: Preview) => BROWSER.test(preview.command) || /smoke/i.test(preview.name);
+
 /** The port a preview serves on, or points a browser at. */
 function portOf(preview: Preview): string | null {
   return (
@@ -60,30 +42,6 @@ function portOf(preview: Preview): string | null {
     preview.command.match(/localhost:(\d+)|127\.0\.0\.1:(\d+)/)?.slice(1).find(Boolean) ??
     null
   );
-}
-
-/**
- * The rows for the session's own events while they run, as the Job card reads them (an
- * overnight run's are its card's): the CI watch until its result, and a merge at work. Each
- * leaves once it ends, passed, failed or merged.
- */
-export function eventRows(board: BackgroundEvents): BackgroundRow[] {
-  const rows: BackgroundRow[] = [];
-  const steps = board.orchestratorSteps.filter((step) => !isRunRequest(step.requestId));
-  const watching = ciWatches(steps).filter((watch) => watch.result === null);
-  if (watching.length > 0) {
-    const runs = watching.flatMap((watch) => watch.runs);
-    const { done, total } = ciJobs(runs);
-    const open = runs.find(runFailed) ?? runs.find((run) => run.status !== "completed") ?? runs[0];
-    rows.push({ type: "event", id: "ci", startedAtMs: watching[0]!.sinceMs, name: "CI", state: "checking", words: total > 0 ? `${done} of ${total} jobs` : null,
-      tip: watching.map((watch) => `${watch.branch} · ${shortSha(watch.sha)}`).join("\n"), action: open?.url ? { type: "openCi", url: open.url } : null });
-  }
-  const click = liveMergeClick(board, steps, lastMessageAtMs(board));
-  if (click?.kind.type === "mergeRequested") {
-    rows.push({ type: "event", id: "merge", startedAtMs: click.atMs, name: `Merge into ${click.kind.base}`, state: "merging", words: null,
-      tip: `${click.kind.branch} into ${click.kind.base}`, action: null });
-  }
-  return rows;
 }
 
 /** The rows for the CLI's own background tasks that still have one at `now` (`taskShown`). */
@@ -99,12 +57,7 @@ export function taskRows(tasks: readonly BackgroundTask[], now: number): Backgro
  * oldest) is the row; the others are its state while they run: "smoke testing" for a worker
  * that only looks at the running app or a browser at it, "checking" for any other worker's copy.
  */
-export function backgroundRows(
-  previews: readonly Preview[],
-  tasks: Record<string, Task> | null,
-  workerName: (task: Task) => string | null,
-  events: BackgroundEvents | null = null,
-): BackgroundRow[] {
+export function backgroundRows(previews: readonly Preview[], workerName: (taskId: string) => string | null): BackgroundRow[] {
   const active = previews.filter((preview) => previewActive(preview.state)).toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id));
   const browsers = active.filter((preview) => BROWSER.test(preview.command));
   const apps = active.filter((preview) => !browsers.includes(preview));
@@ -125,12 +78,7 @@ export function backgroundRows(
     if (served) served.with.push(browser);
     else leads.push({ lead: browser, with: [] });
   }
-  const lookOnly = (preview: Preview) => {
-    const task = preview.taskId ? tasks?.[preview.taskId] : undefined;
-    return BROWSER.test(preview.command) || /smoke/i.test(preview.name) || task?.liveLook === true;
-  };
   const rows: BackgroundRow[] = leads.map(({ lead, with: copies }) => {
-    const task = lead.taskId ? tasks?.[lead.taskId] : undefined;
     const state: BackgroundState =
       lead.state.type === "starting"
         ? lead.building ? "building" : "starting"
@@ -141,8 +89,7 @@ export function backgroundRows(
             : copies.length > 0
               ? "checking"
               : "running";
-    return { type: "preview", id: lead.id, startedAtMs: lead.startedAtMs, preview: lead, state, worker: task ? workerName(task) : null, with: copies };
+    return { type: "preview", id: lead.id, startedAtMs: lead.startedAtMs, preview: lead, state, worker: lead.taskId ? workerName(lead.taskId) : null, with: copies };
   });
-  if (events) rows.push(...eventRows(events));
   return rows.toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
 }

@@ -7,7 +7,6 @@ import {
 } from "react";
 
 import { FloatingSummary } from "@/app/conversation/FloatingSummary";
-import { JobStack } from "@/app/conversation/JobStack";
 import { SummaryContent } from "@/app/conversation/SummaryContent";
 import { STACK, useKeptScroll } from "@/app/conversation/summaryScroll";
 import { openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
@@ -105,8 +104,11 @@ export function SummaryPane({
  */
 export function PinnedSummary({
   conversation,
+  cards = null,
 }: {
   conversation: Conversation | null;
+  /** The cards under the context card, which stay in its place while it is hidden (the job's, "Resumes at"). */
+  cards?: ReactNode;
 }) {
   const shown = useApp(summaryShownOf);
   const float = useSummary((s) => s.layout === "float");
@@ -151,17 +153,17 @@ export function PinnedSummary({
             "summary-hidden:invisible summary-hidden:translate-x-full summary-hidden:scale-80 summary-hidden:opacity-0 origin-top-right motion-safe:group-data-settled/pane:transition-[opacity,translate,scale,visibility] motion-safe:group-data-settled/pane:duration-300 motion-safe:group-data-settled/pane:ease-summary-card",
           )}
         >
-          {content && <SummaryContent conversation={conversation} active={visible} />}
+          {content && <SummaryContent conversation={conversation} active={visible} cards={cards} />}
         </aside>
       </div>
-      {conversation?.kind === "session" && !visible && !(float && floating) && (
+      {conversation?.kind === "session" && cards && !visible && !(float && floating) && (
         <div className="pointer-events-none absolute inset-y-0 end-0 z-20 flex max-w-full flex-col">
           <div aria-label="Job" data-slot="job-stack" className={STACK}>
-            <JobStack conversationId={conversation.id} />
+            {cards}
           </div>
         </div>
       )}
-      {float && <FloatingSummary conversation={conversation} />}
+      {float && <FloatingSummary conversation={conversation} cards={cards} />}
     </>
   );
 }

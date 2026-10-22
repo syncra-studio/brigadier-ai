@@ -45,24 +45,6 @@ test("a Background row leaves as soon as its process ends, failed, finished or s
   assert.equal(seen.restartOrDismiss, 0);
 });
 
-test("Background shows the session's events while they run: CI with Open CI, a merge at work; each opens Progress and leaves once it ends", { timeout: 90000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "activities.html?events=1", "activities-result", 60000)) as {
-    order: string[]; rows: Record<string, Row>; buttons: Record<string, string[]>; buttonsVisibleAtRest: boolean; opened: string | null; calls: string[];
-    ended: boolean; next: Record<string, string>; merged: string[]; restartOrDismiss: number;
-  };
-  // Newest first, each with its state and how far it got.
-  assert.deepEqual(seen.order, ["ci"]);
-  assert.deepEqual(seen.rows["ci"], { label: "CI", state: "checking · 3 of 5 jobs", moving: true, elapsed: "3m", tip: "main · 4e1c49e9" });
-  assert.deepEqual(seen.buttons, { ci: ["Open CI"] });
-  assert.equal(seen.buttonsVisibleAtRest, false, "Open CI shows on hover, as Stop does");
-  assert.equal(seen.opened, "panel:reviews Progress");
-  assert.deepEqual(seen.calls, ["open_url https://github.com/o/r/actions/runs/7"]);
-  assert.equal(seen.ended, true, "CI passed: no rows");
-  assert.deepEqual(seen.next, { merge: "merging" });
-  assert.deepEqual(seen.merged, []);
-  assert.equal(seen.restartOrDismiss, 0);
-});
-
 type Look = { icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };
 
 test("Background rows: a spinner while a process is on its way, a green live dot once it is up, a pause sign while held; the word shimmers while it works, and nothing moves with less motion", { timeout: 120000 }, async (t) => {

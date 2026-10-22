@@ -37,10 +37,9 @@ test("an overnight run is the session's one Job card in every state, with Start,
   assert.match(columns.running.detail[0], /^Wraps up at 7:30/);
   assert.equal(columns.running.stop, true);
 
-  // A usage limit: the same card, and the limit's own wait under it, the only wait card left.
-  assert.deepEqual(columns.quota.cards, ["context", "job", "schedule"]);
+  // A usage limit of its workers: the same card; their limits show in their Workers rows (S14).
+  assert.deepEqual(columns.quota.cards, ["context", "job"]);
   assert.equal(columns.quota.run, "quota");
-  assert.match(columns.quota.schedule, /^2 workers resume at 3:00/);
 
   // Done in full: all green, what came of it, the time it took, and Merge.
   assert.deepEqual(columns.finished, {

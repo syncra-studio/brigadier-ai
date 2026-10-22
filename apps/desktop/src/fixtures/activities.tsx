@@ -5,9 +5,7 @@
  * and writes what it saw. With `states=1` it shows a row in each state (building, starting,
  * running, paused, smoke testing, checking) and writes how each one's icon and word look and move.
  * With `ended=1` it runs processes, then ends them (failed, finished, stopped) and writes that
- * their rows left. With `events=1` it shows the
- * session's events while they run (the CI watch, then a merge at work), opens CI, ends them, and
- * writes what it saw. With `tasks=1` the CLI's own background tasks come as its live stream says
+ * their rows left. With `tasks=1` the CLI's own background tasks come as its live stream says
  * them (a `run_in_background` command and a background subagent): their rows, Stop, the command's
  * output, and each row dropping on the CLI's own timing; it writes what it saw.
  * Synthetic IPC; no daemon.
@@ -22,7 +20,8 @@ import { OutputTab } from "@/app/side-panel/OutputTab";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundTask, CiRun, Conversation, EventEnvelope, OrchestratorStep, Preview, Request, Task, UserRequest } from "@/ipc/generated";
+import { rowOf, showRows } from "@/fixtures/workerRows";
+import type { BackgroundTask, Conversation, EventEnvelope, Preview, Request, Task } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { applyThreadNews, useCliThread } from "@/state/cliThread";
 import { sessionTabs } from "@/state/sessionTabs";
@@ -49,6 +48,8 @@ const app: Preview = { id: "preview-2", conversationId: id, taskId: "task-2", na
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks: { [worker.id]: worker },
   // The worker goes on with other work while its dev app builds.
   activity: { "task-2": "$ cargo clippy --workspace" } } });
+// The preview's tip names its worker by the session's worker rows.
+showRows(id, [rowOf(worker)]);
 useApp.setState({
   summaryShown: { [id]: true }, selection: { type: "conversation", id }, conversations: { [id]: conversation },
   info: { platform: "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
@@ -92,12 +93,15 @@ const read = (activity: string) => {
 const action = (activity: string, label: string) =>
   row(activity)?.parentElement?.querySelector<HTMLButtonElement>(`[data-slot="summary-row-action"] button[aria-label^="${label}"]`) ?? null;
 const stop = (activity: string) => action(activity, "Stop");
+/** The rows' ids, top to bottom. */
+const ids = () => [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
+const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 30)));
+
 /** Whether a row's actions show without the mouse over it or focus on it. */
 const actionsVisible = (activity: string) => {
   const place = row(activity)?.parentElement?.querySelector<HTMLElement>('[data-slot="summary-row-action"]');
   return !!place && getComputedStyle(place).display !== "none";
 };
-const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 30)));
 
 /** One row in each state: a build, an app starting, the thread's page up, a paused app, an app a
  * worker smoke-tests, and an app a worker checks against its own copy. */
@@ -192,8 +196,6 @@ const api: Preview = { ...own, id: "preview-12", name: "api server", command: "n
 const docs: Preview = { ...own, id: "preview-13", name: "docs build", command: "pnpm docs", building: false, state: { type: "running" }, startedAtMs: now - 5 * MIN };
 const storybook: Preview = { ...own, id: "preview-14", name: "storybook", command: "pnpm storybook", building: false, state: { type: "running" }, startedAtMs: now - 3 * MIN };
 
-/** The rows' ids, top to bottom. */
-const ids = () => [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
 /** The card's Restart and × buttons, wherever they are: there are none any more. */
 const restartOrDismiss = () => document.querySelectorAll('[data-slot="summary-card"] button[aria-label^="Restart"], [data-slot="summary-card"] button[aria-label^="Dismiss"]').length;
 
@@ -213,53 +215,6 @@ async function driveEnded(): Promise<Record<string, unknown>> {
   await frame();
   seen.ended = ids();
   seen.section = !!section();
-  seen.restartOrDismiss = restartOrDismiss();
-  return seen;
-}
-
-/** The session's own events at work: a CI watch, then a merge. */
-const steps = (atMs: number, ...kinds: unknown[]): OrchestratorStep[] => kinds.map((kind) => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 }));
-const ciRun = { workflow: "test", url: "https://github.com/o/r/actions/runs/7", status: "in_progress", conclusion: "", jobsDone: 3, jobsTotal: 5 } as unknown as CiRun;
-const ciWatch = (result?: string) => ({ type: "ciWatch", repo: "o/r", branch: "main", sha: "4e1c49e99aa", waiting: false, runs: [ciRun], ...(result ? { result } : {}) });
-const working = { r1: { id: "r1", conversationId: id, preview: "", state: { type: "working" }, startedAtMs: now - 10 * MIN, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [] } as unknown as UserRequest };
-const setBoard = (parts: Partial<NonNullable<ReturnType<typeof useBoard.getState>["board"]>>) => useBoard.setState({ board: { ...useBoard.getState().board!, ...parts } });
-
-async function driveEvents(): Promise<Record<string, unknown>> {
-  const seen: Record<string, unknown> = {};
-  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
-  setBoard({ requests: working, orchestratorSteps: steps(now - 3 * MIN, ciWatch()) });
-  await frame();
-  // `until=running` stops with every event at work, for a screenshot.
-  if (params.get("until") === "running") return seen;
-  seen.order = ids();
-  seen.rows = Object.fromEntries(ids().map((activity) => [activity, read(activity!)]));
-  seen.buttons = Object.fromEntries(ids().map((activity) => {
-    const place = row(activity!)?.nextElementSibling;
-    return [activity, place?.matches('[data-slot="summary-row-action"]') ? [...place.querySelectorAll("button")].map((button) => button.textContent) : []];
-  }));
-  seen.buttonsVisibleAtRest = actionsVisible("ci");
-  // An event opens the Progress tab.
-  row("ci")?.click();
-  await frame();
-  const tabs = sessionTabs(id);
-  const front = tabs.tabs.find((candidate) => candidate.id === tabs.active);
-  seen.opened = front?.kind === "panel" ? `${front.id} ${front.title}` : front?.kind ?? null;
-  action("ci", "Open CI")?.click();
-  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 1; ) await frame();
-  seen.calls = calls.toSorted();
-  // CI gave its result: gone.
-  setBoard({ orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - MIN, ciWatch("passed"))] });
-  await frame();
-  seen.ended = !section();
-  // The user's merge click is at work.
-  setBoard({ orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }) });
-  await frame();
-  seen.next = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
-  // Merged: its row leaves.
-  setBoard({ orchestratorSteps: [...steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }),
-    ...steps(now, { type: "merged", branch: "session", base: "main", commits: 3, askedIn: null, head: "abc", mergeCommit: "def" })] });
-  await frame();
-  seen.merged = ids();
   seen.restartOrDismiss = restartOrDismiss();
   return seen;
 }
@@ -319,7 +274,6 @@ function Fixture() {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("tasks")) void driveTasks().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("ended")) void driveEnded().then((seen) => setResult(JSON.stringify(seen)));
-    else if (params.has("events")) void driveEvents().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     // `shot=1` leaves the result off the page, for a screenshot.
     else if (params.has("states")) void readStates().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     else send({ type: "previewUpdated", preview: page }, { type: "previewUpdated", preview: app },

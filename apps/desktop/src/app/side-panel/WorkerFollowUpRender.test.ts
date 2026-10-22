@@ -3,9 +3,7 @@ import { test } from "node:test";
 import React from "react";
 import ReactDOMServer from "react-dom/server";
 import { createServer } from "vite";
-import { createStore } from "zustand/vanilla";
-
-import type { RawEntry, Task } from "@/ipc/generated";
+import type { RawEntry, ThreadView, WorkerRow } from "@/ipc/generated";
 
 /** A worker that reported, was messaged with changes and works again (issue #208). */
 const OLD = "Done, following the change of direction: the rows are cards now.";
@@ -19,11 +17,12 @@ const entries: RawEntry[] = [
   { type: "command", itemId: "c1", command: "ls src", cwd: null, status: "inProgress", exitCode: null, output: "", durationMs: null },
 ].map((event, index) => ({ streamSeq: index + 1, atMs: 1000 + index, event }) as unknown as RawEntry);
 
-const task = {
-  id: "t1", number: 1, title: "Rows", conversationId: "c", state: "running", spec: "Build the rows.",
-  createdAtMs: 1000, updatedAtMs: 2000, attempts: [], outputs: [], messages: [SENT], reworkRounds: 1, error: null,
-  report: { summary: OLD, artifacts: [], needsUser: [] },
-} as unknown as Task;
+const row: WorkerRow = {
+  id: "t1", number: 1, title: "Rows", agent: "claude", model: null, startedAtMs: 1000, working: true, lastEnd: "done", gone: false,
+  lastEventAtMs: 2000, limit: null, freshContext: false, waiting: [], mcp: [], branch: null, base: null, diff: null, ahead: 0, merged: false,
+};
+/** Its thread as `workerThread` reads it from its CLI's files. */
+const thread = (): ThreadView => ({ entries: entries.map((entry) => ({ event: entry.event, atMs: entry.atMs })), turns: [] });
 
 test("a worker messaged after its answer keeps that answer in history, then the message, then the new turn", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
@@ -31,32 +30,30 @@ test("a worker messaged after its answer keeps that answer in history, then the 
   try {
     const { WorkerThread } = await server.ssrLoadModule("/src/app/side-panel/WorkerThread.tsx");
     const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
-    const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
-    const render = (shown: Task) => {
-      const store = createStore(() => ({
-        board: { ...emptyBoard("c"), loaded: true, tasks: { t1: shown }, transcripts: { t1: { entries, loading: false, hasMore: false } } },
-        orchestrator: null,
-      }));
-      return ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
-        React.createElement(TooltipProvider, null, React.createElement(WorkerThread, { task: shown }))));
+    const { useWorkerThreads } = await server.ssrLoadModule("/src/state/cliThread.ts");
+    const render = (shown: WorkerRow) => {
+      // A server render reads a store's first state.
+      Object.assign(useWorkerThreads.getInitialState().views, { t1: thread() });
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(TooltipProvider, null, React.createElement(WorkerThread, { conversationId: "c", row: shown })));
     };
-    const html = render(task);
+    const html = render(row);
     const at = (text: string) => html.indexOf(text);
     assert.ok(at(OLD) >= 0, "the old answer stays");
     assert.equal(html.split(OLD).length, 2, "the old answer shows once");
     assert.ok(at(SENT) > at(OLD), "the message the worker received follows its old answer");
-    assert.equal(at("[settings]"), -1, "Brigadier's own notes on the message stay out");
+    // Its brief is its first bubble, not a message it was sent.
+    assert.match(html, /data-slot="worker-brief"[^]*Build the rows\./);
     assert.ok(at("Listing files in src") > at(SENT), "the new turn's live step follows the message");
     assert.equal(html.split(SENT).length, 2, "the message shows once, not again under previous messages");
 
     // Stopped before it reported again, its old answer stays where it was, not the answer at the bottom.
-    const stopped = render({ ...task, state: "stopped" } as unknown as Task);
+    const stopped = render({ ...row, working: false, lastEnd: "stopped" });
     assert.ok(stopped.indexOf(OLD) >= 0 && stopped.indexOf(OLD) < stopped.indexOf(SENT));
     assert.equal(stopped.split(OLD).length, 2);
 
     // When the new turn reports, its answer is the final one at the bottom; the old one stays above.
     const NEW = "Done: the rows are compact.";
-    const reported = { ...task, state: "reported", report: { summary: NEW, artifacts: [], needsUser: [] } } as unknown as Task;
+    const reported: WorkerRow = { ...row, working: false, lastEnd: "done" };
     entries.push({ streamSeq: 99, atMs: 3000, event: { type: "toolCall", itemId: "r2", name: "mcp__brigadier__submit_report", input: JSON.stringify({ summary: NEW }), status: "completed", output: "ok" } } as unknown as RawEntry);
     const after = render(reported);
     // History past the last three rows folds under previous messages, the old answer with it.

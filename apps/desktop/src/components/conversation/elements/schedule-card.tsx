@@ -31,13 +31,13 @@ export function ScheduleCard({
   title: string;
   /** "when the Claude limit resets". */
   reason?: string | undefined;
-  /** When it happens. */
-  atMs: number;
+  /** When it happens; none when nothing is set to happen on its own. */
+  atMs?: number | null | undefined;
   nowMs: number;
   /** Earlier tries, oldest first. */
   history?: readonly ScheduleRun[] | undefined;
 }) {
-  const left = formatCountdown(atMs, nowMs);
+  const left = atMs == null ? null : formatCountdown(atMs, nowMs);
   return (
     <div data-slot="schedule-card" className={cn("flex w-full min-w-0 gap-2", className)} {...props}>
       {/* The icon on the first line's height; everything else lines up after it. */}
@@ -47,13 +47,15 @@ export function ScheduleCard({
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="min-w-0 flex-1 truncate">{title}</span>
-          <time
-            dateTime={new Date(atMs).toISOString()}
-            title={formatTime(atMs)}
-            className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}
-          >
-            {left === "now" ? "now" : `in ${left}`}
-          </time>
+          {atMs != null && (
+            <time
+              dateTime={new Date(atMs).toISOString()}
+              title={formatTime(atMs)}
+              className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}
+            >
+              {left === "now" ? "now" : `in ${left}`}
+            </time>
+          )}
         </div>
         {reason && <p className="text-muted-foreground text-xs wrap-anywhere">{reason}</p>}
         {history && history.length > 0 && (

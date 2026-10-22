@@ -786,6 +786,16 @@ impl CleanupLedger {
         self.remove(owner, artifacts).await
     }
 
+    /// Moves `from`'s CLI session files to `to`, which holds them from then on: nothing is
+    /// touched on disk.
+    pub async fn hand_over_session_files(&self, from: &str, to: &str) -> Result<()> {
+        for artifact in self.artifacts(from).into_iter().filter(session_file) {
+            self.record(to, artifact.clone()).await?;
+            self.unrecord(from, artifact).await?;
+        }
+        Ok(())
+    }
+
     /// Forgets a recorded artifact that was never created after all: nothing is touched.
     pub async fn unrecord(&self, owner: &str, artifact: Artifact) -> Result<()> {
         self.append(DomainEvent::CleanupRemoved {
@@ -1393,6 +1403,11 @@ fn lineage_holders(owner: &str) -> Vec<String> {
 /// and workers keep theirs.
 fn lineage_owner_for(owner: &str, artifact: &Artifact) -> Option<String> {
     let lineage = lineage_of(owner)?;
+    session_file(artifact).then_some(lineage)
+}
+
+/// A CLI session's transcript or what goes with it.
+fn session_file(artifact: &Artifact) -> bool {
     matches!(
         artifact,
         Artifact::ClaudeSession { .. }
@@ -1400,7 +1415,6 @@ fn lineage_owner_for(owner: &str, artifact: &Artifact) -> Option<String> {
             | Artifact::CodexThread { .. }
             | Artifact::CodexGeneratedImages { .. }
     )
-    .then_some(lineage)
 }
 
 struct OwnerLedger {

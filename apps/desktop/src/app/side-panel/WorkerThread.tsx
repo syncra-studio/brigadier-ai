@@ -9,47 +9,31 @@ import {
 
 import { ActionRow, exitOf } from "@/app/side-panel/ActionRow";
 import { EntryView } from "@/app/side-panel/EntryView";
-import { WorkerAnswer } from "@/app/side-panel/WorkerAnswer";
 import { WorkerBrief } from "@/app/side-panel/WorkerBrief";
 import { WorkerMarkdown } from "@/app/side-panel/WorkerMarkdown";
-import { receivedMessage, workerDone, workerOutcome, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
+import { rowFinished, workerStateOf } from "@/app/conversation/activity/workerState";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { itemCall, stepWords } from "@/app/conversation/activity/words";
-import { type ThreadEntry, threadEntries, type TranscriptItem, TranscriptFolder } from "@/components/conversation";
-import { Button } from "@/components/controls";
+import { foldTranscript, type ThreadEntry, threadEntries } from "@/components/conversation";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import { ChevronRight } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
-import type { RawEntry, Task } from "@/ipc/generated";
+import type { ThreadView, WorkerRow } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
-import { loadEarlierWorkerEntries, openWorkerTranscript } from "@/state/actions";
-import { useBoard } from "@/state/board";
-
-/** Read-only worker replies and activity, with instructions and early steps folded above. */
-
-const NO_ENTRIES: RawEntry[] = [];
+import { loadWorkerThread, useWorkerThreads } from "@/state/cliThread";
 
 /**
- * Folds a growing transcript incrementally: live entries are applied on top of what was
- * folded; a reload or an older page (a different first entry) folds from scratch.
+ * A worker's thread, read only: its own CLI's session files (`workerThread`), with its brief and
+ * early steps folded above. It has no composer: the user answers a worker in its session, which
+ * relays it (G19.Q6).
  */
-class IncrementalFold {
-  private folder = new TranscriptFolder();
-  private first: RawEntry | undefined;
 
-  fold(entries: readonly RawEntry[]): TranscriptItem[] {
-    if (entries[0] !== this.first) {
-      this.folder = new TranscriptFolder();
-      this.first = entries[0];
-    }
-    return this.folder.push(entries).items;
-  }
-}
-
+/** How often a working worker's thread is read again while its panel is open. */
+export const WORKER_THREAD_EVERY_MS = 1_500;
 
 /** An earlier report, where the worker sent it: its answer of that turn. */
 function EarlierAnswer({ text }: { text: string }) {
@@ -70,67 +54,74 @@ function liveLabel(entries: readonly ThreadEntry[]): string | null {
 }
 
 /**
- * "Working for 1m 2s" while it works, "Worked for 3m 10s" once done, "Stopped after 3m 10s" when
- * it was stopped before its work was used, over a hairline.
+ * "Working for 1m 2s" while it works, "Worked for 3m 10s" once finished, "Stopped after 3m 10s"
+ * when it was stopped, over a hairline: from its start to its CLI's last word.
  */
-function WorkHeader({ task }: { task: Task }) {
-  const done = workerDone(task);
+function WorkHeader({ row }: { row: WorkerRow }) {
+  const clock = useNow(60_000);
+  const done = rowFinished(row, clock);
   const now = useNow(done ? null : 1000);
-  const start = task.attempts[0]?.startedAtMs ?? task.createdAtMs;
-  const took = formatDuration(Math.max(0, (done ? task.updatedAtMs : now) - start));
+  const took = formatDuration(Math.max(0, (done ? (row.lastEventAtMs ?? now) : now) - row.startedAtMs));
+  const stopped = workerStateOf(row, clock).kind === "stopped";
   return (
     <div data-slot="worker-work-header" className="text-foreground/50 border-border border-b pb-2 text-sm tabular-nums">
-      {workerOutcome(task) === "stopped" ? `Stopped after ${took}` : done ? `Worked for ${took}` : `Working for ${took}`}
+      {stopped ? `Stopped after ${took}` : done ? `Worked for ${took}` : `Working for ${took}`}
     </div>
   );
 }
 
+/**
+ * A worker's thread as its CLI keeps it, read when its panel opens, again whenever its row
+ * changes, and every 1.5 s while it works.
+ */
+function useWorkerThread(conversationId: string, row: WorkerRow): { view: ThreadView | null; error: string | null } {
+  const view = useWorkerThreads((s) => s.views[row.id] ?? null);
+  const [error, setError] = useState<string | null>(null);
+  // Any change of its row (an event of its CLI, a wait, its git) reads it again.
+  const changed = JSON.stringify(row);
+  useEffect(() => {
+    let current = true;
+    const read = () =>
+      loadWorkerThread(conversationId, row.id).then(
+        () => current && setError(null),
+        (cause: unknown) => current && setError(cause instanceof Error ? cause.message : String(cause)),
+      );
+    void read();
+    const timer = row.working ? window.setInterval(() => void read(), WORKER_THREAD_EVERY_MS) : null;
+    return () => {
+      current = false;
+      if (timer !== null) window.clearInterval(timer);
+    };
+    // Its row's every change reads it again.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [conversationId, row.id, row.working, changed]);
+  return { view, error };
+}
 
 /** A message the worker was sent, among its thread's entries. */
 const received = (entry: ThreadEntry) => entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user";
 
-export function WorkerThread({ task }: { task: Task }) {
-  const transcript = useBoard((s) => s.board?.transcripts[task.id]);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    void openWorkerTranscript(task.conversationId, task.id).catch((cause: unknown) =>
-      setError(cause instanceof Error ? cause.message : String(cause)),
-    );
-  }, [task.conversationId, task.id]);
-
-  const [folding] = useState(() => new IncrementalFold());
-  const raw = transcript?.entries ?? NO_ENTRIES;
-  const failed = task.state === "failed";
-  // Of its CLI's input, the thread shows the messages it was sent after its brief, where they came.
-  const entries = useMemo(
-    () =>
-      threadEntries(folding.fold(raw)).filter(
-        (entry) =>
-          !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user" && receivedMessage(entry.item.text, task.messages) === null) &&
-          !workerCliNotice(entry, failed),
-      ),
-    [folding, raw, failed, task.messages],
+export function WorkerThread({ conversationId, row }: { conversationId: string; row: WorkerRow }) {
+  const { view, error } = useWorkerThread(conversationId, row);
+  const clock = useNow(60_000);
+  const state = workerStateOf(row, clock);
+  const working = row.working;
+  const failed = state.kind === "failed";
+  // Its own items, not its subagents': their Agent call's row stands for them.
+  const items = useMemo(
+    () => foldTranscript((view?.entries ?? []).filter((entry) => !entry.parent).map((entry, index) => ({ streamSeq: index, atMs: entry.atMs ?? 0, event: entry.event }))).items,
+    [view],
   );
-  // A message shown where it came is not listed again with the previous messages.
-  const unplaced = task.messages.filter((message) => !entries.some((entry) =>
-    entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user" && receivedMessage(entry.item.text, task.messages) === message));
-  const working = workerWorking(task);
-  const done = workerDone(task);
-  // Its latest report is the answer at the bottom once it is done; sent back to work (and maybe
-  // stopped at that), the report stays where it sent it, above the message that sent it back.
-  const reportAt = entries.findLastIndex((entry) => entry.kind === "report");
-  const lastReport = entries[reportAt];
-  const reportInPlace = reportAt >= 0 && (!done || entries.slice(reportAt + 1).some(received));
-  // The prompt and early steps belong to the same previous-messages disclosure.
-  const tail = entries.at(-1);
-  // The report is the answer when there is one; a message after it ("Reported.") stays a message.
-  const finalReply = done && !task.report?.summary && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
-  const visibleEntries = finalReply ? entries.slice(0, -1) : entries;
-  const activity = workerActivity(visibleEntries);
+  const all = useMemo(() => threadEntries(items).filter((entry) => !workerCliNotice(entry, failed)), [items, failed]);
+  // Its first message is its brief, as the thread's first bubble.
+  const briefAt = all.findIndex(received);
+  const brief = briefAt >= 0 ? all[briefAt] : undefined;
+  const entries = useMemo(() => all.filter((_, index) => index !== briefAt), [all, briefAt]);
+  const activity = workerActivity(entries);
   const previous = activity.slice(0, Math.max(0, activity.length - 3));
-  const previousCount = unplaced.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
+  const previousCount = previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
   const recent = activity.slice(previous.length);
-  const last = visibleEntries.at(-1);
+  const last = entries.at(-1);
   // A thought with no words yet is the live line's "Thinking".
   const thinking = working && last?.kind === "item" && last.item.kind === "reasoning" && last.item.streaming && last.item.text.trim() ? last.item : null;
   const now = working ? liveLabel(entries) : null;
@@ -150,31 +141,20 @@ export function WorkerThread({ task }: { task: Task }) {
         renderStep={(step, key) => <ActionRow key={key} item={step} />}
       />
     ) : item.entry.kind === "report" ? (
-      item.entry === lastReport ? (reportInPlace ? <WorkerAnswer key={item.entry.key} task={task} earlier /> : null)
-        : item.entry.summary && <EarlierAnswer key={item.entry.key} text={item.entry.summary} />
+      item.entry.summary && <EarlierAnswer key={item.entry.key} text={item.entry.summary} />
     ) : (
-      <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} sent={task.messages} />
+      <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} sent={[]} />
     );
   const [open, setOpen] = useState(false);
 
-  // A finished worker opens at its report's top; a live one follows new output while the view
-  // is scrolled to the bottom.
+  // A live one follows new output while the view is scrolled to the bottom.
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
-  const placed = useRef(false);
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (!element || entries.length === 0) return;
-    const report = element.querySelector<HTMLElement>('[data-slot="worker-report"]');
-    if (!placed.current && !working && report) {
-      placed.current = true;
-      pinned.current = false;
-      report.scrollIntoView({ block: "start" });
-      return;
-    }
-    placed.current = true;
     if (pinned.current) element.scrollTop = element.scrollHeight;
-  }, [entries, working]);
+  }, [entries]);
 
   return (
     <div
@@ -189,19 +169,16 @@ export function WorkerThread({ task }: { task: Task }) {
       }}
     >
       {/* An action still running when the user stopped the worker reads "Stopped …". */}
-      <StoppedBy.Provider value={task.state === "stopped" ? { atMs: task.updatedAtMs } : null}>
+      <StoppedBy.Provider value={state.kind === "stopped" ? { atMs: row.lastEventAtMs ?? row.startedAtMs } : null}>
       <div className="max-w-thread mx-auto min-w-0 gap-activity flex flex-col pt-5">
-        <WorkerBrief text={task.spec} />
-        <WorkHeader task={task} />
-        {(previousCount > 0 || transcript?.hasMore) && <Collapsible open={open} onOpenChange={setOpen}>
+        {brief?.kind === "item" && brief.item.kind === "message" && <WorkerBrief text={brief.item.text} />}
+        <WorkHeader row={row} />
+        {previousCount > 0 && <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger className="text-foreground/50 border-border hover:text-foreground flex min-h-7 w-full items-center gap-1 border-b text-start text-sm">
             {previousCount} previous {previousCount === 1 ? "message" : "messages"}
             <ChevronRight aria-hidden className={cn("size-3", open ? "-rotate-90" : "rotate-90")} />
           </CollapsibleTrigger>
           <CollapsibleContent className="gap-activity flex flex-col py-4">
-            {transcript?.hasMore && <Button size="xs" variant="ghost" className="self-start" disabled={transcript.loading}
-              onClick={() => void loadEarlierWorkerEntries(task.conversationId, task.id)}>Load earlier</Button>}
-            {unplaced.map((text, index) => <WorkerMarkdown key={index} text={text} />)}
             {previous.map((item, index) => show(item, index))}
           </CollapsibleContent>
         </Collapsible>}
@@ -213,9 +190,8 @@ export function WorkerThread({ task }: { task: Task }) {
         {recent.map((item, index) => show(item, previous.length + index))}
         {thinking && <ThinkingLine text={thinking.text} />}
         {now && !nowInGroup && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
-        {!working && !done && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
-        {!reportInPlace && <WorkerAnswer task={task} text={finalReply} />}
-        {task.error && <p className="text-destructive text-sm">{task.error}</p>}
+        {/* What it waits for, from its row: the user (in its session), or a limit's reset. */}
+        {(state.kind === "needsYou" || state.kind === "limit") && <p data-slot="worker-waits" className="text-foreground/65 text-sm">{state.word}</p>}
       </div>
       </StoppedBy.Provider>
     </div>

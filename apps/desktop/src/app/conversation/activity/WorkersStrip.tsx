@@ -7,17 +7,19 @@ import { WorkerGlyph } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { ChevronRight, StopCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { useNow } from "@/hooks/use-now";
 import { stopWorkers } from "@/state/actions";
-import { useBoard } from "@/state/board";
+import { useWorkerRows } from "@/state/cliThread";
 
-/** The Workers strip's view, live: `null` while it has nothing to show. */
+/** The Workers strip's view, live from the session's worker rows: `null` while it has nothing to show. */
 export function useWorkersStrip(conversationId: string): StripView | null {
-  const json = useBoard((s) => {
-    const board = s.board;
-    if (board?.conversationId !== conversationId) return null;
-    const view = workersStrip(Object.values(board.tasks));
+  const rows = useWorkerRows(conversationId);
+  // A worker turns quiet after minutes: the clock is read again now and then.
+  const now = useNow(rows.length > 0 ? 30_000 : null);
+  const json = useMemo(() => {
+    const view = workersStrip(rows, now);
     return view ? JSON.stringify(view) : null;
-  });
+  }, [rows, now]);
   return useMemo(() => (json ? (JSON.parse(json) as StripView) : null), [json]);
 }
 
@@ -75,7 +77,7 @@ export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ 
       {stop.error && <p role="alert" className="text-destructive px-2 text-xs">{stop.error}</p>}
       {open && (
         <ul className="max-h-queue-max flex flex-col overflow-y-auto">
-          {view.rows.map((id) => <StripRow key={id} taskId={id} />)}
+          {view.rows.map((id) => <StripRow key={id} conversationId={conversationId} taskId={id} />)}
         </ul>
       )}
     </div>

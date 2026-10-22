@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
+import { useState } from "react";
 
-import { workerDone, workerWorking } from "@/app/conversation/workerPresentation";
+import { rowFinished, rowWaiting } from "@/app/conversation/activity/workerState";
 import { AgentRow } from "@/app/side-panel/AgentRow";
 import { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
+import { useNow } from "@/hooks/use-now";
+import type { WorkerRow } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { useBoard } from "@/state/board";
+import { useWorkerRows } from "@/state/cliThread";
 
 /**
  * One section of the list, a page at a time: the first `page` rows, then "Show N more" for
@@ -13,7 +14,7 @@ import { useBoard } from "@/state/board";
  */
 function AgentSection({
   title,
-  ids,
+  rows,
   page,
   counted,
   trailing,
@@ -21,7 +22,7 @@ function AgentSection({
   className,
 }: {
   title: string;
-  ids: readonly string[];
+  rows: readonly WorkerRow[];
   page: number;
   counted?: boolean;
   trailing?: string | undefined;
@@ -29,21 +30,21 @@ function AgentSection({
   className?: string;
 }) {
   const [pages, setPages] = useState(1);
-  if (ids.length === 0 && !empty) return null;
-  const shown = ids.slice(0, page * pages);
-  const hidden = ids.length - shown.length;
+  if (rows.length === 0 && !empty) return null;
+  const shown = rows.slice(0, page * pages);
+  const hidden = rows.length - shown.length;
   return (
     <section className={cn("flex flex-col", className)}>
       <h3 className="text-muted-foreground mb-2 flex items-center gap-2 px-2 text-label">
-        <span className="flex-1">{counted ? `${title} · ${ids.length}` : title}</span>
+        <span className="flex-1">{counted ? `${title} · ${rows.length}` : title}</span>
         {trailing && <span className="text-xs tabular-nums">{trailing}</span>}
       </h3>
-      {ids.length === 0 ? (
+      {rows.length === 0 ? (
         <p className="text-muted-foreground px-2 text-sm">{empty}</p>
       ) : (
         <ul className="flex flex-col gap-0.5">
-          {shown.map((id) => (
-            <AgentRow key={id} taskId={id} />
+          {shown.map((row) => (
+            <AgentRow key={row.id} row={row} />
           ))}
         </ul>
       )}
@@ -60,40 +61,18 @@ function AgentSection({
   );
 }
 
-/** Active workers first, then finished workers, newest first within each group. */
-export function useWorkerIds(conversationId: string): { active: string[]; finished: string[] } {
-  const ids = useBoard(
-    useShallow((s) => {
-      if (s.board?.conversationId !== conversationId) return [];
-      const tasks = Object.values(s.board.tasks).toSorted((a, b) => b.createdAtMs - a.createdAtMs || b.number - a.number);
-      // `|` separates the two lists.
-      return [
-        ...tasks.filter((task) => !workerDone(task)).map((task) => task.id),
-        "|",
-        ...tasks.filter(workerDone).map((task) => task.id),
-      ];
-    }),
-  );
-  return useMemo(() => {
-    const split = ids.indexOf("|");
-    return { active: ids.slice(0, Math.max(split, 0)), finished: ids.slice(split + 1) };
-  }, [ids]);
-}
-
 /** Rows a section shows before "Show N more": 4 active and 10 done. */
 const ACTIVE_PAGE = 4;
 const DONE_PAGE = 10;
 
 /** Every worker of the session, ordered by recency. */
 export function WorkerList({ conversationId }: { conversationId: string }) {
-  const lists = useWorkerIds(conversationId);
-  const waiting = useBoard(
-    (s) =>
-      s.board?.conversationId === conversationId
-        ? Object.values(s.board.tasks).filter((task) => !workerDone(task) && !workerWorking(task))
-            .length
-        : 0,
-  );
+  // Newest first, as the engine sends them; at work first, then finished.
+  const rows = useWorkerRows(conversationId);
+  const now = useNow(30_000);
+  const active = rows.filter((row) => !rowFinished(row, now));
+  const finished = rows.filter((row) => rowFinished(row, now));
+  const waiting = active.filter((row) => rowWaiting(row, now)).length;
   return (
     <div
       className="min-h-0 flex-1 overflow-y-auto px-3 py-5"
@@ -102,14 +81,14 @@ export function WorkerList({ conversationId }: { conversationId: string }) {
         <AgentSection
           title="Active"
           counted
-          ids={lists.active}
+          rows={active}
           page={ACTIVE_PAGE}
           trailing={waiting > 0 ? `${waiting} waiting` : undefined}
           empty={`No active ${WORKERS_LABEL.toLowerCase()}`}
         />
         <AgentSection
           title="Done"
-          ids={lists.finished}
+          rows={finished}
           page={DONE_PAGE}
           counted
           className="mt-6"

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef } from "react";
+import { type ReactNode, useContext, useEffect, useRef } from "react";
 
 import { SummaryContent } from "@/app/conversation/SummaryContent";
 import { STACK, useKeptScroll } from "@/app/conversation/summaryScroll";
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
  * under the top bar, reaching at most the window's bottom inset. The top bar's button or Escape
  * closes it; a click elsewhere or a resize leaves it shown.
  */
-export function FloatingSummary({ conversation }: { conversation: Conversation | null }) {
+export function FloatingSummary({ conversation, cards = null }: { conversation: Conversation | null; cards?: ReactNode }) {
   const { ref, onScroll } = useKeptScroll(`${conversation?.id ?? "draft"}/column`, true);
   // A row that opens the side panel (the workers, a worker) or a tab moves on to it: the summary
   // closes rather than stay where it opened, over the panel, and focus stays off the top bar's
@@ -65,7 +65,7 @@ export function FloatingSummary({ conversation }: { conversation: Conversation |
           "text-foreground max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) rounded-none bg-transparent shadow-none ring-0",
         )}
       >
-        <SummaryContent conversation={conversation} active />
+        <SummaryContent conversation={conversation} active cards={cards} />
       </PopoverContent>
     </>
   );

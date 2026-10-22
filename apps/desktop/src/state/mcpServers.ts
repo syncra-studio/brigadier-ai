@@ -1,56 +1,25 @@
-import { useMemo } from "react";
-
-import { workerName } from "@/app/conversation/rowWords";
 import type { McpServer } from "@/components/conversation/elements/mcp-server-panel";
-import type { AgentMcpServers, McpServerState, ProviderKind, Task } from "@/ipc/generated";
-import { mcpAgentKey, useBoard } from "@/state/board";
+import type { McpServerState, ProviderKind, WorkerRow } from "@/ipc/generated";
 
 /** One agent's MCP servers, as the MCP server panel shows them under the agent's name. */
 export type McpServerGroup = {
-  /** The agent's key on the board: `lead`, or `task:<id>` for a worker. */
+  /** `lead` for the session's own CLI, or `task:<id>` for a worker. */
   key: string;
   /** "Lead · Claude", or the worker's name. */
   agentLabel: string;
-  /** What the agent's CLI said when it started, not kept current since. */
-  atStart: boolean;
   servers: McpServer[];
 };
 
-function shownServer(server: McpServerState, atStart: boolean): McpServer {
+export function shownServer(server: McpServerState): McpServer {
   return {
     id: server.name,
     name: server.name,
     transport: server.transport ?? undefined,
     status: server.status,
-    atStart,
+    // Each CLI's list is kept current by its own events (S14).
+    atStart: false,
     tools: server.tools,
   };
-}
-
-/** The MCP servers of a board's agents, its own model's first, then each worker's in task order. */
-export function mcpServerGroups(
-  agents: Readonly<Record<string, AgentMcpServers>>,
-  tasks: Readonly<Record<string, Task>>,
-): McpServerGroup[] {
-  const order = (agent: AgentMcpServers) =>
-    agent.taskId === null ? -1 : (tasks[agent.taskId]?.number ?? Number.MAX_SAFE_INTEGER);
-  return Object.values(agents)
-    .filter((agent) => agent.servers.length > 0)
-    .toSorted((a, b) => order(a) - order(b) || (a.taskId ?? "").localeCompare(b.taskId ?? ""))
-    .map((agent) => {
-      const task = agent.taskId === null ? undefined : tasks[agent.taskId];
-      return {
-        key: mcpAgentKey(agent.taskId),
-        agentLabel:
-          agent.taskId === null
-            ? LEAD_LABELS[agent.provider]
-            : task
-              ? workerName(tasks, task)
-              : "Worker",
-        atStart: agent.atStart,
-        servers: agent.servers.map((server) => shownServer(server, agent.atStart)),
-      };
-    });
 }
 
 /**
@@ -62,12 +31,22 @@ const LEAD_LABELS: Record<ProviderKind, string> = {
   codex: "Lead · Codex",
 };
 
-const NO_AGENTS: Readonly<Record<string, AgentMcpServers>> = {};
-const NO_TASKS: Readonly<Record<string, Task>> = {};
-
-/** The MCP servers of `conversationId`'s agents whose CLI runs now, when its board is the one in view. */
-export function useMcpServers(conversationId: string): McpServerGroup[] {
-  const agents = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.mcpServers : NO_AGENTS));
-  const tasks = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.tasks : NO_TASKS));
-  return useMemo(() => mcpServerGroups(agents, tasks), [agents, tasks]);
+/**
+ * The MCP servers of a session's agents, as their CLIs last said: the session's own first (its
+ * thread's `mcp`), then each worker's (its row's `mcp`) under its name, in the order the workers
+ * came. An agent with none has no group.
+ */
+export function mcpServerGroups(
+  lead: readonly McpServerState[],
+  provider: ProviderKind,
+  rows: readonly WorkerRow[],
+  name: (row: WorkerRow) => string | null,
+): McpServerGroup[] {
+  const groups: McpServerGroup[] = [];
+  if (lead.length > 0) groups.push({ key: "lead", agentLabel: LEAD_LABELS[provider], servers: lead.map(shownServer) });
+  for (const row of rows.toSorted((a, b) => a.number - b.number)) {
+    if (row.mcp.length === 0) continue;
+    groups.push({ key: `task:${row.id}`, agentLabel: name(row) ?? "Worker", servers: row.mcp.map(shownServer) });
+  }
+  return groups;
 }

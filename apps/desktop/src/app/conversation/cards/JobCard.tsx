@@ -5,7 +5,7 @@ import type { LiveJob } from "@/app/conversation/liveJob";
 import type { OvernightActions, OvernightCardModel } from "@/app/conversation/overnightAdapter";
 import { runJob } from "@/app/conversation/runJob";
 import { useRunCommand } from "@/app/conversation/useRunCommand";
-import { JobProgress, ScheduleCard } from "@/components/conversation";
+import { JobProgress } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { ConfirmDialog } from "@/components/overlays";
 import { cn } from "@/lib/utils";
@@ -189,24 +189,3 @@ export function RunJobCard({
   );
 }
 
-/**
- * Something that waits on a set time, in the same column: a session paused until a usage limit
- * resets, an overnight run's planned end, a retry at a time. Only for a time the board holds.
- */
-export function WaitCard({
-  title,
-  reason,
-  atMs,
-  nowMs,
-}: {
-  title: string;
-  reason?: string | undefined;
-  atMs: number;
-  nowMs: number;
-}) {
-  return (
-    <StackCard>
-      <ScheduleCard className="px-5 py-3.5 text-label" title={title} reason={reason} atMs={atMs} nowMs={nowMs} />
-    </StackCard>
-  );
-}

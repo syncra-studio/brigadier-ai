@@ -30,6 +30,7 @@ import { WorkerThread } from "@/app/side-panel/WorkerThread";
 import { TooltipProvider } from "@/components/overlays";
 import type { ItemStatus, RawEntry, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
+import { rowOf, showRows, threadOf } from "@/fixtures/workerRows";
 
 const query = new URLSearchParams(location.search);
 
@@ -63,7 +64,7 @@ const workerEntries: RawEntry[] = [
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method === "listWorkerEvents") return { method: req.method, page: { entries: workerEntries, next: null } };
+  if (req.method === "workerThread") return { method: req.method, view: threadOf(workerEntries) };
   return { method: req.method };
 });
 
@@ -72,9 +73,9 @@ const worker = {
   createdAtMs: now - 10_000, updatedAtMs: now - 2000, attempts: [], outputs: [], report: null, messages: [], error: null,
 } as unknown as Task;
 
-useBoard.setState({
-  board: { ...emptyBoard(CHAT), loaded: true, transcripts: { t1: { entries: workerEntries, loading: false, hasMore: false } } } as unknown as ReturnType<typeof emptyBoard>,
-});
+useBoard.setState({ board: { ...emptyBoard(CHAT), loaded: true } });
+const workerRow = rowOf(worker, { lastEventAtMs: now - 2000 });
+showRows(CHAT, [workerRow]);
 
 /** A finished command in a group, its row opening to its Shell box. */
 type Ran = { key: string; command: string };
@@ -134,7 +135,7 @@ function Page() {
           <LoneLive />
         </section>
         <section data-case="worker-lone" className="flex h-96 flex-col">
-          <WorkerThread task={worker} />
+          <WorkerThread conversationId={CHAT} row={workerRow} />
         </section>
       </main>
     </TooltipProvider>

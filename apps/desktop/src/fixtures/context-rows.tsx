@@ -3,20 +3,26 @@
  * reference order: the project and its branch row, the workers (two at work, one done), what
  * runs in the background and the sources; under it, the Job card of the plan's phase at work
  * (Q88). For screenshots and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
+ * The rows read the session's own CLI items and its workers' rows (S14). `?waiting=1` has its
+ * workers wait on the user (a permission, a question, a sign-in); `?limit=usage` or
+ * `?limit=credits` gives its last turn that limit, with the session's wait for it (MA5).
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { JobStack } from "@/app/conversation/JobStack";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
+import { ResumesAtCard } from "@/app/conversation/cards/ResumesAtCard";
 import { SessionJobTab } from "@/app/side-panel/JobTab";
 import { SourcesTab } from "@/app/side-panel/SourcesTab";
 import { AgentsPanelContext, type AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { Conversation, OrchestratorStep, Plan, Preview, Request, Task } from "@/ipc/generated";
+import type { Conversation, FileEntry, Plan, QuotaWait, Request, Task, ThreadTurn, WorkerWait } from "@/ipc/generated";
+import { rowOf, showRows } from "@/fixtures/workerRows";
 import { emptyBoard, useBoard } from "@/state/board";
 import { openPanelTab, sessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -25,8 +31,13 @@ const id = "context-rows-fixture";
 const params = new URLSearchParams(location.search);
 const now = Date.now();
 const MIN = 60_000;
+const limit = params.get("limit");
+const RESET = now + 95 * 60_000;
+const quotaWait: QuotaWait | null = limit === "usage"
+  ? { reason: "Claude's 5-hour window resets", resetsAtMs: RESET, rule: null, ranking: null, sinceMs: now, limitKind: "usageWindow" }
+  : null;
 const conversation: Conversation = { id, kind: "session", title: "Add the web interface", projectId: "p1",
-  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait,
   setup: { type: "session", repo: "/work/todo-app", environment: { type: "newWorktree", branch: "brigadier/web-ui", base: "main", path: "/work/todo-app-web-ui", start: null },
     permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const base = Object.values(night.tasks)[0] as unknown as Task;
@@ -48,38 +59,56 @@ plan.steps = [
   { ...open, title: "API routes", taskId: "task-3", number: 2, startedAtMs: now - 4.5 * MIN, endedAtMs: null },
   { ...open, title: "The web page", taskId: "task-2", number: 3, endedAtMs: null },
 ];
-const page: Preview = { id: "preview-1", conversationId: id, name: "todo app", command: "npm run dev", kind: "web", workdir: "/work/todo-app-web-ui",
-  workspace: "/work/todo-app-web-ui", pid: 42, log: null, url: "http://localhost:3000/", state: { type: "running" }, building: false, startedAtMs: now - 3 * MIN, endedAtMs: null };
-const step = (kind: OrchestratorStep["kind"], at: number): OrchestratorStep => ({ requestId: "r1", kind, atMs: now - at * MIN, position: 0 });
-useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [plan.id]: plan },
-  previews: { [page.id]: page },
-  // The MCP servers each agent's CLI connected: the session's own model at its start, a worker's kept current.
-  mcpServers: {
-    lead: { taskId: null, provider: "claude", atStart: true, servers: [
-      { name: "linear", status: "connected", tools: ["search_issues", "get_issue"], transport: "http" },
-      { name: "figma", status: "needs-auth", tools: [], transport: null },
-    ] },
-    "task:task-3": { taskId: "task-3", provider: "codex", atStart: false, servers: [{ name: "postgres", status: "failed", tools: [], transport: null }] },
-  },
-  diffs: { "task-2": { files: [], insertions: 120, deletions: 4 }, "task-3": { files: [], insertions: 48, deletions: 0 } },
-  orchestratorSteps: [
-    step({ type: "searchedWeb", query: "express static files" } as OrchestratorStep["kind"], 13),
-    step({ type: "tool", itemId: "t1", name: "mcp__claude_ai_Linear__search_issues", detail: "web ui", status: "completed", throughPosition: 0 } as OrchestratorStep["kind"], 12),
-    step({ type: "readPage", url: "https://expressjs.com/en/starter/static-files.html" } as OrchestratorStep["kind"], 12),
-    step({ type: "readPage", url: "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/form" } as OrchestratorStep["kind"], 11),
-  ] } });
+useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [plan.id]: plan } } });
+// The session's own CLI: what it called and fetched, its MCP servers, the dev server it runs in
+// the background, and its workers' rows.
+const tool = (itemId: string, name: string, input: unknown, at: number): FileEntry =>
+  ({ event: { type: "toolCall", itemId, name, input: JSON.stringify(input), status: "completed", output: null }, atMs: now - at * MIN });
+const entries: FileEntry[] = [
+  { event: { type: "message", itemId: "u1", role: "user", text: "Add a web interface to the todo app" }, atMs: now - 14 * MIN },
+  tool("s1", "WebSearch", { query: "express static files" }, 13),
+  tool("t1", "mcp__linear__search_issues", { query: "web ui" }, 12),
+  tool("f1", "WebFetch", { url: "https://expressjs.com/en/starter/static-files.html", prompt: "How?" }, 12),
+  tool("f2", "WebFetch", { url: "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/form", prompt: "Forms" }, 11),
+];
+const turns: ThreadTurn[] = [{ userMessage: "u1", startedAtMs: now - 14 * MIN, endedAtMs: null, end: null, error: null, requests: ["r1"],
+  ...(limit === "usage" && { limit: { kind: "usageWindow", resetsAtMs: RESET, window: "five_hour" } }),
+  ...(limit === "credits" && { limit: { kind: "credits", resetsAtMs: null, window: null } }) }];
+const waits: WorkerWait[][] = params.has("waiting")
+  ? [[{ kind: "permission", what: "npm install express", card: null }], [{ kind: "question", what: "Which port should the server use?", card: null }, { kind: "signIn", what: "figma", card: null }]]
+  : [];
+const diffs: Record<string, { insertions: number; deletions: number }> = { "task-2": { insertions: 120, deletions: 4 }, "task-3": { insertions: 48, deletions: 0 } };
+showRows(id, Object.values(tasks).map((task, index) => rowOf(task, {
+  waiting: waits[index] ?? [],
+  ...(task.id === "task-3" && { mcp: [{ name: "postgres", status: "failed", tools: [], transport: null }] }),
+}, diffs[task.id] ? { files: [], ...diffs[task.id]! } : null)), {
+  entries,
+  turns,
+  mcp: [
+    { name: "linear", status: "connected", tools: ["search_issues", "get_issue"], transport: "http" },
+    { name: "figma", status: "needs-auth", tools: [], transport: null },
+  ],
+  background: [{ id: "b1", itemId: "c9", kind: "shell", label: "npm run dev", status: "running", startedAtMs: now - 3 * MIN, endedAtMs: null, outputFile: "/tmp/b1.out", summary: null, lastLine: "listening on :3000" }],
+});
 useApp.setState({
   summaryShown: { [id]: true }, selection: { type: "conversation", id }, conversations: { [id]: conversation },
   projects: { p1: { id: "p1", name: "todo-app" } } as never,
   info: { platform: "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });
+/** Which worker the Workers tab shows, as the fixture last drew. */
+let panelShown: string | null = null;
+/** The "Resumes at" card's requests, in order. */
+const asked: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "getSessionDiff") return { method: req.method, stat: { files: [], insertions: 380, deletions: 2 }, commits: 4 };
-  if (req.method === "getWorkerDiffs") return { method: req.method, diffs: useBoard.getState().board?.diffs ?? {} };
+  if (req.method === "continueWaiting" || req.method === "dontResume") {
+    asked.push(req.method);
+    if (req.method === "dontResume") useApp.setState((state) => ({ conversations: { ...state.conversations, [id]: { ...state.conversations[id]!, quotaWait: null } } }));
+  }
   return { method: req.method };
 });
 
@@ -88,6 +117,8 @@ if (params.get("tab") === "sources") openPanelTab(id, { type: "sources" }, "Sour
 if (params.get("tab") === "progress") openPanelTab(id, { type: "reviews" }, "Progress");
 
 const card = () => document.querySelector<HTMLElement>('[data-slot="summary-card"]');
+/** The "Resumes at" card's words. */
+const wait = () => document.querySelector<HTMLElement>('[data-slot="schedule-card"]');
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
 
 /** What the card shows at rest, and what its clicks do: they open things, never grow the card. */
@@ -127,6 +158,21 @@ async function drive(): Promise<string> {
     [group.querySelector("p")?.textContent, ...[...group.querySelectorAll('[data-slot="mcp-server-panel"] > li')].map((row) => row.querySelector("button")?.textContent)]);
   seen.sourcesTab = [...document.querySelectorAll('[data-slot="sources-part"]')].map((part) =>
     [...part.querySelectorAll("h3, [data-slot=sources-line]")].map((line) => line.textContent?.trim()));
+  // Waiting on you: each worker's wait, under its name; a click opens that worker.
+  const waiting = [...card()!.querySelectorAll<HTMLButtonElement>('[data-slot="waiting-row"]')];
+  seen.waiting = waiting.map((row) => [row.dataset.wait, row.textContent?.replace(/\s+/g, " ").trim()]);
+  waiting.at(-1)?.click();
+  await frame();
+  seen.waitingOpens = panelShown;
+  // The "Resumes at" card, its buttons and what they ask.
+  seen.wait = wait()?.textContent ?? null;
+  seen.waitButtons = [...document.querySelectorAll('[data-slot="wait-card-actions"] button')].map((button) => button.textContent?.trim());
+  document.querySelector<HTMLButtonElement>('[data-slot="continue-now"]')?.click();
+  await frame();
+  document.querySelector<HTMLButtonElement>('[data-slot="dont-resume"]')?.click();
+  if (limit === "usage") for (let i = 0; i < 20 && wait(); i++) await frame();
+  seen.asked = asked;
+  seen.waitAfter = wait()?.textContent ?? null;
   return JSON.stringify(seen);
 }
 
@@ -141,6 +187,9 @@ function FrontTab() {
 function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [panel, setPanel] = useState<AgentsPanelState>(undefined);
+  useEffect(() => {
+    panelShown = panel ?? null;
+  }, [panel]);
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("drive")) void drive().then(setResult);
@@ -151,7 +200,7 @@ function Fixture() {
       <main className="bg-background text-foreground relative flex h-screen w-full min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="h-titlebar flex items-center px-5 text-sm font-medium">Add the web interface</header>
-          <PinnedSummary conversation={conversation} />
+          <PinnedSummary conversation={conversation} cards={<><JobStack conversationId={id} /><ResumesAtCard conversationId={id} /></>} />
           <FrontTab />
         </div>
       </main>

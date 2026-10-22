@@ -51,7 +51,7 @@ function chromium(): string {
   throw new Error("Worker activity rendering test needs Chromium. Set CHROME_BIN to an installed Chrome/Chromium.");
 }
 
-type Rendering = { noStrip: boolean; thread: Record<string, string>; summary: string; list: string; strip: string; stripRows: number; avatars: number[]; stripStops: string[]; listStops: string[]; headerStop?: string; doneHeaderStop: boolean; sent: string[] };
+type Rendering = { fromRail: { title: string; thread: boolean; brief: string; composer: boolean }; noStrip: boolean; thread: Record<string, string>; summary: string; list: string; strip: string; stripRows: number; avatars: number[]; stripStops: string[]; listStops: string[]; headerStop?: string; doneHeaderStop: boolean; sent: string[] };
 
 // Vite serves the real React components, and Chromium clicks the real Collapsible trigger.
 // Disposable profiles and Vite's cache use the system temporary folder, never the app's data.
@@ -159,12 +159,16 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   assert.match(rendering.thread.blocked!, /Check blocked is waiting/);
   assert.match(rendering.thread.completed!, /Check completed finished/);
   assert.match(rendering.thread.stopped!, /Check stopped stopped/);
-  // Three at work: a line each (name, and a soft "working" only while it works), then the
+  // Three at work: a line each (name, and its state from its row in a soft word), then the
   // finished ones in one row; what each runs stays in the Workers panel.
   assert.match(rendering.summary, /Check active working/);
-  assert.match(rendering.summary, /Check blocked(?! working)/);
-  assert.match(rendering.summary, /Check queued(?! working)/);
+  assert.match(rendering.summary, /Check blocked needs you/);
+  assert.match(rendering.summary, /Check queued limit until/);
   assert.match(rendering.summary, /1 done · 1 stopped/);
+  // The rail says the same state words.
+  assert.match(rendering.strip, /Check active·Working/);
+  assert.match(rendering.strip, /Check blocked·Needs you/);
+  assert.match(rendering.strip, /Check queued·Limit until/);
   assert.doesNotMatch(rendering.summary, /\$ /);
   // The Workers panel lists them as the reference does: Active, then Done, one line each; what a
   // waiting worker waits for is in its row's tooltip.
@@ -175,4 +179,6 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   assert.match(rendering.list, /2m ago/);
   assert.ok(rendering.avatars.every((width) => width === 16));
   assert.doesNotMatch(Object.values(rendering.thread).join(" "), /task-\d+|Editing|Ran |Used a tool|\d+m|\+\d+/);
+  // A worker opened from the rail shows its own thread (its CLI's, from `workerThread`) and no composer.
+  assert.deepEqual(rendering.fromRail, { title: "Check blocked", thread: true, brief: "Check the blocked case.", composer: false });
 });

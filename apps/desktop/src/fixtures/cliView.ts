@@ -9,6 +9,7 @@ import type { FileChangeKind, FileEntry, Message, OrchestratorStep, ProviderEven
 import { applyActivityNews } from "@/state/activity";
 import { type Board, useBoard } from "@/state/board";
 import { useCliThread } from "@/state/cliThread";
+import { rowOf } from "@/fixtures/workerRows";
 import { useApp } from "@/state/store";
 
 type ToolKind = Extract<OrchestratorStep["kind"], { type: "tool" }>;
@@ -156,7 +157,10 @@ function sync(): void {
     const own = board?.conversationId === id ? board : null;
     const last = made.get(id);
     if (last && last.items === thread.items && last.board === own) continue;
-    views[id] = fixtureView(thread.items, own);
+    // Its workers as their rows (S14), from the fixture's tasks; what else the view holds stays.
+    const held = useCliThread.getState().views[id];
+    const workers = own ? Object.values(own.tasks).toSorted((a, b) => b.createdAtMs - a.createdAtMs).map((task) => rowOf(task, {}, own.diffs[task.id] ?? null)) : (held?.workers ?? []);
+    views[id] = { ...held, ...fixtureView(thread.items, own), workers };
     made.set(id, { items: thread.items, board: own, view: views[id] });
   }
   const { views: held } = useCliThread.getState();

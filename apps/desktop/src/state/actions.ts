@@ -41,6 +41,7 @@ import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { realActivity, onRealActivity } from "@/state/activity";
 import { useCliThread } from "@/state/cliThread";
+import { unmergedRows } from "@/app/conversation/activity/workerState";
 import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
   boardHeld,
@@ -53,8 +54,6 @@ import {
   ORCHESTRATOR_ENTRIES,
   updateBoard,
   useBoard,
-  WORKER_ENTRIES,
-  type WorkerTranscript,
 } from "@/state/board";
 import {
   confirmSent,
@@ -516,15 +515,6 @@ export async function rateMessage(
 export async function getSessionDiff(id: string): Promise<{ stat: DiffStat; commits: number } | null> {
   const { stat, commits } = await request({ method: "getSessionDiff", id });
   return stat ? { stat, commits } : null;
-}
-
-/** Reads what each worker at work on a change changed so far into the conversation's board. */
-export async function refreshWorkerDiffs(conversationId: string): Promise<void> {
-  const { diffs } = await request({ method: "getWorkerDiffs", conversationId });
-  updateBoard(conversationId, (board) => ({
-    ...board,
-    diffs: Object.fromEntries(diffs.map((diff) => [diff.taskId, diff.stat])),
-  }));
 }
 
 function storeConversation(conversation: Conversation): void {
@@ -1257,6 +1247,16 @@ export async function stopTask(taskId: string): Promise<void> {
   await request({ method: "stopTask", taskId });
 }
 
+/** "Continue now" on a session waiting for a limit: its waiting message goes now (MA5). */
+export async function continueWaiting(conversationId: string): Promise<void> {
+  await request({ method: "continueWaiting", conversationId });
+}
+
+/** "Don't resume": nothing goes on its own; the session is idle until the user sends (MA5). */
+export async function dontResume(conversationId: string): Promise<void> {
+  await request({ method: "dontResume", conversationId });
+}
+
 /**
  * Stop all: stops every running or waiting worker of the conversation; the ids stopped. They
  * show stopped at once.
@@ -1287,85 +1287,6 @@ export async function restoreKeptWork(taskId: string): Promise<RestoreOutcome> {
 export async function readArtifact(id: string, offset: number, limit: number) {
   const { text } = await request({ method: "readArtifact", id, offset, limit });
   return text;
-}
-
-/** Transcript entries fetched per page. */
-const WORKER_PAGE = 500;
-
-function updateWorkerTranscript(
-  conversationId: string,
-  taskId: string,
-  update: (transcript: WorkerTranscript) => WorkerTranscript,
-): void {
-  updateBoard(conversationId, (board) => ({
-    ...board,
-    transcripts: {
-      ...board.transcripts,
-      [taskId]: update(
-        board.transcripts[taskId] ?? { entries: [], hasMore: false, loading: false },
-      ),
-    },
-  }));
-}
-
-/**
- * Starts following a worker's transcript: loads its newest page, keeping live entries that
- * arrived meanwhile. Transcripts load only when their card is opened.
- */
-export async function openWorkerTranscript(conversationId: string, taskId: string): Promise<void> {
-  const board = useBoard.getState().board;
-  if (board?.conversationId !== conversationId || board.transcripts[taskId]) return;
-  updateWorkerTranscript(conversationId, taskId, (transcript) => ({ ...transcript, loading: true }));
-  try {
-    const { page } = await request({
-      method: "listWorkerEvents",
-      taskId,
-      before: null,
-      limit: WORKER_PAGE,
-    });
-    const newest = page.entries.at(-1)?.streamSeq ?? 0;
-    updateWorkerTranscript(conversationId, taskId, (transcript) => ({
-      entries: [
-        ...page.entries,
-        ...transcript.entries.filter((entry) => entry.streamSeq > newest),
-      ].slice(-WORKER_ENTRIES),
-      hasMore: page.hasMore,
-      loading: false,
-    }));
-  } catch (error) {
-    // Forget it, so opening the card again retries the load.
-    updateBoard(conversationId, (current) => {
-      const { [taskId]: _failed, ...transcripts } = current.transcripts;
-      return { ...current, transcripts };
-    });
-    throw error;
-  }
-}
-
-export async function loadEarlierWorkerEntries(
-  conversationId: string,
-  taskId: string,
-): Promise<void> {
-  const transcript = useBoard.getState().board?.transcripts[taskId];
-  const oldest = transcript?.entries[0];
-  if (!transcript || !oldest || transcript.loading) return;
-  updateWorkerTranscript(conversationId, taskId, (current) => ({ ...current, loading: true }));
-  try {
-    const { page } = await request({
-      method: "listWorkerEvents",
-      taskId,
-      before: oldest.streamSeq,
-      limit: WORKER_PAGE,
-    });
-    updateWorkerTranscript(conversationId, taskId, (current) => ({
-      entries: [...page.entries, ...current.entries],
-      hasMore: page.hasMore,
-      loading: false,
-    }));
-  } catch (error) {
-    updateWorkerTranscript(conversationId, taskId, (current) => ({ ...current, loading: false }));
-    throw error;
-  }
 }
 
 /** A stored image (a mockup's screenshot) as a blob, for an `<img>`. */
@@ -1402,10 +1323,16 @@ function failureText(verb: string, failed: { conversation: Conversation; error: 
   return `Couldn't ${verb} ${naming(failed.map((entry) => entry.conversation))}: ${reasons.join("; ")}`;
 }
 
-/** "Archived session", "Archived 3 chats". */
+/**
+ * "Archived session", "Archived 3 chats"; with the titles of their workers whose work isn't
+ * merged into them yet ("Archived session. Not merged: clamp util").
+ */
 function archivedText(list: Conversation[]): string {
   const noun = conversationNoun(list);
-  return list.length === 1 ? `Archived ${noun}` : `Archived ${list.length} ${noun}`;
+  const text = list.length === 1 ? `Archived ${noun}` : `Archived ${list.length} ${noun}`;
+  const { views } = useCliThread.getState();
+  const unmerged = list.flatMap((c) => unmergedRows(views[c.id]?.workers ?? []).map((row) => row.title));
+  return unmerged.length > 0 ? `${text}. Not merged: ${unmerged.join(", ")}` : text;
 }
 
 /** What each archive toast's Undo brings back, by toast. */

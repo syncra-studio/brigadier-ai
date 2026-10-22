@@ -1,11 +1,14 @@
 import { createContext, memo, useContext, useState } from "react";
 
+import { rowName, workerStateOf } from "@/app/conversation/activity/workerState";
 import { namedTasks, plainLine, workerName } from "@/app/conversation/rowWords";
 import { WorkerGlyph } from "@/components/conversation";
+import { useNow } from "@/hooks/use-now";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import type { Task, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
+import { useCliThread, useWorkerRow, workerRowIn } from "@/state/cliThread";
 
 /**
  * A worker named anywhere in the conversation: its chip (glyph and name in a pill, which opens
@@ -42,12 +45,22 @@ export function taskStateLabel(task: Task): string {
   return task.state === "paused" && task.quotaWait ? "Waiting for quota" : TASK_STATE_LABELS[task.state];
 }
 
-/** What a worker is called (see `workerName`), rather than its `task-N`. */
+/**
+ * What a worker is called, rather than its `task-N`: its row's name among its session's rows
+ * (`rowName`). A worker no thread read lists yet (a view still loading, a stored run's) keeps the
+ * board's name for it (`workerName`).
+ */
 export function useWorkerName(taskId: string): string | null {
-  return useBoard((s) => {
+  const fromRow = useCliThread((s) => {
+    const found = workerRowIn(s.views, taskId);
+    return found ? rowName(s.views[found.conversationId]?.workers ?? [], taskId) : null;
+  });
+  const fromBoard = useBoard((s) => {
+    if (fromRow !== null) return null;
     const task = s.board?.tasks[taskId];
     return task && s.board ? workerName(s.board.tasks, task) : null;
   });
+  return fromRow ?? fromBoard;
 }
 
 /** Worker prose uses job names; paths and code identifiers keep their literal spelling. */
@@ -79,12 +92,17 @@ export const WorkerChip = memo(function WorkerChip({
 }) {
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(taskId);
-  const number = useBoard((s) => s.board?.tasks[taskId]?.number);
-  const stateLabel = useBoard((s) => {
-    const task = s.board?.tasks[taskId];
+  const row = useWorkerRow(taskId);
+  const [open, setOpen] = useState(false);
+  // Its state as its row says it when the tooltip opens.
+  const now = useNow(open ? 30_000 : null);
+  const boardNumber = useBoard((s) => (row ? undefined : s.board?.tasks[taskId]?.number));
+  const boardLabel = useBoard((s) => {
+    const task = row ? undefined : s.board?.tasks[taskId];
     return task ? taskStateLabel(task) : undefined;
   });
-  const [open, setOpen] = useState(false);
+  const number = row?.number ?? boardNumber;
+  const stateLabel = row ? workerStateOf(row, now).word : boardLabel;
   if (name === null || number === undefined || stateLabel === undefined) {
     return <span className="shrink-0">a worker</span>;
   }

@@ -49,7 +49,7 @@ mockIPC(async (command, payload) => {
     case "getPullRequest": return { method: req.method, pullRequest: null };
     case "getRunDiff": return { method: req.method, diff: null };
     case "listFiles": return { method: req.method, files: [], truncated: false };
-    case "listWorkerEvents": return { method: req.method, page: { entries: [], hasMore: false } };
+    case "workerThread": return { method: req.method, view: { entries: [], turns: [] } };
     default: return { method: req.method };
   }
 });

@@ -4,6 +4,8 @@ import { leadTranscript, workerPatch } from "@/fixtures/flow";
 import type { Message, ProviderEvent, RawEntry, Report, Task } from "@/ipc/generated";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
+import { useWorkerThreads } from "@/state/cliThread";
+import { threadOf } from "@/fixtures/workerRows";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -65,6 +67,8 @@ if (stress) events.push(
   { type: "message", itemId: "wide-reply", role: "assistant", text: `Inspect ${longPath}.\n\n\`\`\`text\n${"long code line ".repeat(40)}\n\`\`\`` },
   { type: "command", itemId: "wide-command", command: `cat ${longPath}`, cwd: null, status: "completed", exitCode: 0, output: "Read file", durationMs: null },
 );
+// Its CLI's thread opens with its brief, as the first message it was sent.
+events.unshift({ type: "message", itemId: "brief", role: "user", text: tasks.t1.spec });
 const entries: RawEntry[] = events.map((event, index) => ({ streamSeq: index + 1, atMs: now - 60000 + index * 100, event }));
 leadTranscript.splice(0, leadTranscript.length, ...entries);
 useBoard.setState({ board: { ...board, tasks, plans: {}, approvals: {}, waiting: {}, questions: {}, decisions: [], thinking: [], machineSteps: [], orchestratorSteps: [],
@@ -215,9 +219,13 @@ if (stress && !query.has("manual")) {
     await wait();
     const closed = sidebar.dataset.state === "collapsed";
     // A worker first shown without truncation gains its disclosure after a width change.
+    const short = "Inspect the desktop worker panel and make its header compact. Keep its close button and model details easy to reach when the sidebar gets narrow.";
     useBoard.setState(({ board: current }) => ({ board: { ...current!, tasks: { ...current!.tasks,
-      t1: { ...current!.tasks.t1!, spec: "Inspect the desktop worker panel and make its header compact. Keep its close button and model details easy to reach when the sidebar gets narrow." },
+      t1: { ...current!.tasks.t1!, spec: short },
     } } }));
+    // Its brief is its thread's first message, as its CLI keeps it.
+    leadTranscript[0] = { ...leadTranscript[0]!, event: { type: "message", itemId: "brief", role: "user", text: short } };
+    useWorkerThreads.setState((state) => ({ views: { ...state.views, t1: threadOf(leadTranscript) } }));
     find('button[title="Open File summary"]')!.click();
     await ready('[data-slot="worker-brief"] .aui-md');
     sidebar.style.setProperty("--right-sidebar-width", "600px");
@@ -265,31 +273,3 @@ if (headerTest) {
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
 }
 
-/** The dialog's added lines, tinted in the diff engine's own shadow root. */
-const lines = () => [...document.querySelectorAll("[role=dialog] diffs-container")].flatMap((host) => [...host.shadowRoot?.querySelectorAll("[data-line-type=change-addition]") ?? []]);
-if (diffTest) {
-  const result = document.body.appendChild(document.createElement("pre"));
-  result.id = "workers-diff-result";
-  void (async () => {
-    for (let i = 0; i < 100 && !find('button[title="Open File summary"]'); i++) await wait(50);
-    find('button[title="Open File summary"]')!.click();
-    let chip: HTMLElement | undefined;
-    for (let i = 0; i < 100 && !chip; i++) {
-      chip = [...document.querySelectorAll<HTMLElement>("[data-slot=file-list] button")].find((button) => button.textContent?.includes("task-1.diff"));
-      await wait(50);
-    }
-    chip!.click();
-    for (let i = 0; i < 100 && lines().length < 6 * 40; i++) await wait(50);
-    await wait(300);
-    // The diff's dialog: a pinned summary floats as a popover (also a dialog) once the worker's panel narrows the thread.
-    const dialog = find("[role=dialog][data-slot=dialog-content]")!;
-    const box = dialog.getBoundingClientRect();
-    const list = find("[data-slot=artifact-diff]");
-    result.textContent = JSON.stringify({
-      title: dialog.querySelector("h2")?.textContent,
-      colouredLines: lines().length,
-      fits: box.top >= 0 && box.bottom <= innerHeight,
-      scrolls: !!list && list.scrollHeight > list.clientHeight,
-    });
-  })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
-}

@@ -1,19 +1,19 @@
+import { rowFinished } from "@/app/conversation/activity/workerState";
 import { useAction } from "@/app/conversation/useAction";
-import { workerStoppable } from "@/app/conversation/workerPresentation";
 import { TooltipIconButton } from "@/components/controls";
 import { StopCircle } from "@/components/icons";
+import { useNow } from "@/hooks/use-now";
+import type { WorkerRow } from "@/ipc/generated";
 import { stopTask } from "@/state/actions";
-import { useBoard } from "@/state/board";
 
 /**
- * The user's Stop for one worker while it runs or waits to run (UI audit M4), on its strip row,
- * its Workers list row and in its view's header. The thread hears that the user stopped it.
+ * The user's Stop for one worker while it is at work or waits (UI audit M4), on its strip row,
+ * its Workers list row and in its view's header: by its row, while its CLI runs. The thread
+ * hears that the user stopped it.
  */
-export function StopWorker({ taskId, name }: { taskId: string; name: string }) {
-  const stoppable = useBoard((s) => {
-    const task = s.board?.tasks[taskId];
-    return !!task && workerStoppable(task);
-  });
+export function StopWorker({ row, name }: { row: WorkerRow; name: string }) {
+  const now = useNow(60_000);
+  const stoppable = !row.gone && !rowFinished(row, now);
   const stop = useAction();
   if (!stoppable) return null;
   return (
@@ -25,7 +25,7 @@ export function StopWorker({ taskId, name }: { taskId: string; name: string }) {
         disabled={stop.busy}
         onClick={(event) => {
           event.stopPropagation();
-          stop.run(() => stopTask(taskId));
+          stop.run(() => stopTask(row.id));
         }}
         className="text-foreground/60 hover:text-foreground shrink-0"
       >

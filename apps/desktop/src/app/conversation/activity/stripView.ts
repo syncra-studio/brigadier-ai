@@ -1,9 +1,9 @@
-import { workerDone, workerStoppable, workerWorking } from "@/app/conversation/workerPresentation";
-import type { Task } from "@/ipc/generated";
+import { rowFinished, rowWaiting } from "@/app/conversation/activity/workerState";
+import type { WorkerRow } from "@/ipc/generated";
 
 /** What the Workers strip on the composer shows (THREAD-UX-PLAN.md §3.5): the workers at it. */
 export type StripView = {
-  /** Its rows, by task id: the workers running or waiting, oldest first. */
+  /** Its rows, by task id: the workers working or waiting, oldest first. */
   rows: string[];
   working: number;
   waiting: number;
@@ -12,19 +12,20 @@ export type StripView = {
 };
 
 /**
- * The session's workers the strip is about: only those still running or waiting to run. Finished
- * ones (done, stopped, failed) leave it at once and stay in the context card. `null` when none
- * are at work, so it hides.
+ * The session's workers the strip is about: only those still at work or waiting (on the user, on
+ * a limit), by their rows (`workerStateOf`). Finished ones (done, merged, stopped, failed) leave
+ * it at once and stay in the context card. `null` when none are at work, so it hides.
  */
-export function workersStrip(tasks: readonly Task[]): StripView | null {
-  const live = tasks.filter((task) => !workerDone(task)).toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.number - b.number);
+export function workersStrip(rows: readonly WorkerRow[], now: number): StripView | null {
+  const live = rows.filter((row) => !rowFinished(row, now)).toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.number - b.number);
   if (live.length === 0) return null;
-  const working = live.filter(workerWorking).length;
+  const waiting = live.filter((row) => rowWaiting(row, now)).length;
   return {
-    rows: live.map((task) => task.id),
-    working,
-    waiting: live.length - working,
-    stoppable: live.some(workerStoppable),
+    rows: live.map((row) => row.id),
+    working: live.length - waiting,
+    waiting,
+    // The daemon's `stop_workers` stops every worker whose CLI still runs.
+    stoppable: live.some((row) => !row.gone),
   };
 }
 

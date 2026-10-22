@@ -1,36 +1,38 @@
 import { type ReactNode, useMemo } from "react";
 
+import { rowName } from "@/app/conversation/activity/workerState";
+import { webUse } from "@/app/conversation/cliFacts";
 import { hostOf, useUsedSources } from "@/app/conversation/PinnedSummary";
 import { McpServerPanel } from "@/components/conversation";
+import type { FileEntry } from "@/ipc/generated";
 import { Globe, Search } from "@/components/icons";
-import { useMcpServers } from "@/state/mcpServers";
+import { mcpServerGroups } from "@/state/mcpServers";
 import { toast } from "@/state/toasts";
-import { useBoard } from "@/state/board";
+import { useCliThread, useSessionMcp, useWorkerRows } from "@/state/cliThread";
 import { openLink } from "@/state/links";
+import { useApp } from "@/state/store";
+
+const NO_ENTRIES: readonly FileEntry[] = [];
 
 /**
- * Every source the session used, in a tab of its own (the context card's Sources › View all):
- * the MCP servers its agents have connected, under each agent's name, then what it used
- * (attachments, links, integrations), then each web search with its words and each page it
- * opened, which opens in the browser again.
+ * Every source the session used, in a tab of its own (the context card's Sources › View all): the
+ * MCP servers its agents' CLIs have, under each agent's name (the session's own, then each
+ * worker's from its row), then what it used (attachments, pages, MCP servers), then each web
+ * search with its words and each page it opened, which opens in the browser again. All of it from
+ * its CLIs, as their threads and rows say.
  */
 export function SourcesTab({ conversationId }: { conversationId: string }) {
-  const used = useUsedSources(conversationId).filter((source) => source.key !== "web");
-  const mcp = useMcpServers(conversationId);
-  const json = useBoard((s) =>
-    s.board?.conversationId === conversationId
-      ? JSON.stringify(
-          s.board.orchestratorSteps.flatMap((step) =>
-            step.kind.type === "searchedWeb" ? [["search", step.kind.query]] : step.kind.type === "readPage" ? [["page", step.kind.url]] : [],
-          ),
-        )
-      : "[]",
-  );
-  const { searches, pages } = useMemo(() => {
-    const steps = JSON.parse(json) as ["search" | "page", string][];
-    const of = (kind: "search" | "page") => [...new Set(steps.flatMap(([each, value]) => (each === kind ? [value] : [])))];
-    return { searches: of("search"), pages: of("page") };
-  }, [json]);
+  // Its pages are listed with what it opened, below.
+  const used = useUsedSources(conversationId).filter((source) => !source.key.startsWith("link:"));
+  const lead = useSessionMcp(conversationId);
+  const rows = useWorkerRows(conversationId);
+  const provider = useApp((s) => {
+    const setup = s.conversations[conversationId]?.setup;
+    return setup?.type === "session" ? setup.orchestrator.provider : setup?.type === "chat" ? setup.model.provider : "claude";
+  });
+  const mcp = useMemo(() => mcpServerGroups(lead, provider, rows, (row) => rowName(rows, row.id)), [lead, provider, rows]);
+  const entries = useCliThread((s) => s.views[conversationId]?.entries ?? NO_ENTRIES);
+  const { searches, pages } = useMemo(() => webUse(entries), [entries]);
   const empty = mcp.length === 0 && used.length === 0 && searches.length === 0 && pages.length === 0;
   return (
     <div data-slot="sources-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">

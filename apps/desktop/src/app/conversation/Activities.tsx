@@ -4,63 +4,56 @@ import { useShallow } from "zustand/react/shallow";
 import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows } from "@/app/conversation/backgroundRows";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
-import { workerName } from "@/app/conversation/rowWords";
+import { rowName } from "@/app/conversation/activity/workerState";
 import { StateIcon, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import { Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
-import { openUrl } from "@/ipc/client";
 import type { BackgroundTask, Preview } from "@/ipc/generated";
 import { stopBackgroundTask, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { useCliThread } from "@/state/cliThread";
+import { useCliThread, useWorkerRows } from "@/state/cliThread";
 import { openLink } from "@/state/links";
 import { openPanelTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
 
 /**
- * One thing the session has going: a preview (the thread's or a worker's), a background task of
- * its CLI's, or an event (CI, a merge).
+ * One thing the session has going: a preview (the thread's or a worker's), or a background task
+ * of its CLI's.
  */
 type Activity = BackgroundRow;
 
-/** A process or an event at work: its word shimmers. Paused or done, it rests. */
+/** A process at work: its word shimmers. Paused or done, it rests. */
 const live = (state: BackgroundState) => state !== "paused" && state !== "done";
 
 /** What a row is for, first letter up: "Dev app", "Core tests". A command stands as it is. */
 const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
 
 const label = (activity: Activity) =>
-  activity.type === "event"
-    ? activity.name
-    : activity.type === "task"
+  activity.type === "task"
       ? activity.task.kind === "terminal" ? commandWords(activity.task.label) : activity.task.label
       : activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name);
 
 /** No background tasks. */
 const NO_TASKS: readonly BackgroundTask[] = [];
+/** No previews. */
+const NO_PREVIEWS: readonly Preview[] = [];
 
 /**
  * "Background": what the session has going in the background, one row per thing: the thread's
- * and the workers' previews, its CLI's own background tasks (by the CLI's rules, `taskShown`),
- * and its own events while they run (the CI watch, a merge at work), each with its state in a
- * word and an icon (a worker's copy of an app or a browser at it is a state of the app's row),
- * how long it has gone, and its button on hover: Stop on a process, Open CI on the CI watch. A click on a web preview that is up opens its page in the browser
- * (Brigadier's, by Settings › Browser), with what it prints one button away; an event opens the
- * Progress tab; any other preview opens what it prints in a tab. The rows come from the live board:
- * one leaves as soon as its thing ends, finished, failed or stopped (the thread's fold keeps the
+ * and the workers' previews (`brigadier preview`) and its CLI's own background tasks (by the CLI's
+ * rules, `taskShown`), each with its state in a word and an icon (a worker's copy of an app or a
+ * browser at it is a state of the app's row), how long it has gone, and Stop on hover. A click on
+ * a web preview that is up opens its page in the browser (Brigadier's, by Settings › Browser),
+ * with what it prints one button away; any other preview opens what it prints in a tab. A row
+ * leaves as soon as its thing ends, finished, failed or stopped (the thread's fold keeps the
  * history).
  */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
-  const board = useBoard(useShallow((s) => {
-    if (s.board?.conversationId !== conversationId) return null;
-    const { previews, tasks, orchestratorSteps, requests } = s.board;
-    return { previews, tasks, orchestratorSteps, requests };
-  }));
+  const previews = useBoard(useShallow((s) => (s.board?.conversationId === conversationId ? Object.values(s.board.previews) : NO_PREVIEWS)));
+  const workers = useWorkerRows(conversationId);
   const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
-  const rows = board
-    ? backgroundRows(Object.values(board.previews), board.tasks, (task) => workerName(board.tasks, task), board)
-    : [];
+  const rows = backgroundRows(previews, (taskId) => rowName(workers, taskId));
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
   const since = [...rows, ...cliTasks].map((thing) => `${thing.id}@${thing.startedAtMs}`).join();
@@ -91,25 +84,10 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
   const meta = elapsedWords((activity.type === "task" ? (activity.task.endedAtMs ?? now) : now) - activity.startedAtMs);
   const state = (
     <span data-state={activity.state} className={cn("text-muted-foreground", live(activity.state) && "shimmer")}>
-      {" "}{activity.state}{activity.type === "event" && activity.words ? ` · ${activity.words}` : ""}
+      {" "}{activity.state}
     </span>
   );
   if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} name={name} meta={meta} state={activity.state} words={state} />;
-  if (activity.type === "event") {
-    return (
-      <SummaryRowButton
-        data-activity={activity.id}
-        title={activity.tip}
-        icon={<StateIcon state={activity.state} />}
-        meta={meta}
-        action={activity.action ? <OpenCiButton url={activity.action.url} /> : undefined}
-        onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}
-      >
-        {name}
-        {state}
-      </SummaryRowButton>
-    );
-  }
   const tip = [
     `${previewWord(activity.preview)}: ${activity.preview.command}`,
     activity.worker && `From ${activity.worker}`,
@@ -169,15 +147,6 @@ function TaskRow({ conversationId, task, name, meta, state, words }: {
       {name}
       {words}
     </SummaryRowButton>
-  );
-}
-
-/** An event row's button: Open CI opens the CI run in the browser. */
-function OpenCiButton({ url }: { url: string }) {
-  return (
-    <Button variant="ghost" size="xs" aria-label="Open CI" onClick={() => void openUrl(url).catch((reason: unknown) => toast(`Couldn't open it: ${String(reason)}`, { tone: "error" }))}>
-      Open CI
-    </Button>
   );
 }
 

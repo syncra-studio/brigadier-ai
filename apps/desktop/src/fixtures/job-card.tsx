@@ -4,7 +4,8 @@ import { type ReactNode, useEffect, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { createStore } from "zustand/vanilla";
 
-import { StackCard, WaitCard } from "@/app/conversation/cards/JobCard";
+import { StackCard } from "@/app/conversation/cards/JobCard";
+import { WaitCard } from "@/app/conversation/cards/ResumesAtCard";
 import { type Job } from "@/app/conversation/job";
 import { JobStack } from "@/app/conversation/JobStack";
 import { JobTimeline } from "@/app/side-panel/JobTab";

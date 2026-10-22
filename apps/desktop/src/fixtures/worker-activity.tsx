@@ -13,6 +13,7 @@ import type { Task } from "@/ipc/generated";
 import { createStore } from "zustand/vanilla";
 
 import { BoardStoreContext, emptyBoard, useBoard } from "@/state/board";
+import { rowOf, showRows, threadOf } from "@/fixtures/workerRows";
 const base = Object.values(night.tasks)[0] as unknown as Task;
 // One request, not answered yet: its finished worker stays in the strip.
 const conversationId = "worker-fixture";
@@ -26,6 +27,15 @@ const tasks = { active: task("active", 1, "running"), blocked: task("blocked", 2
   // Stopped before it landed: it counts as stopped, never as done (BUILD-PLAN A7).
   stopped: task("stopped", 5, "stopped") };
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, tasks } });
+// The same workers as their rows (S14), newest first: one at work, one waiting on the user, one
+// held by a usage limit, one done and one stopped.
+showRows(conversationId, [
+  rowOf(tasks.queued, { working: true, limit: { kind: "usageWindow", resetsAtMs: 3_600_000, window: "five_hour" } }),
+  rowOf(tasks.blocked, { working: true, waiting: [{ kind: "permission", what: "pnpm install", card: null }] }),
+  rowOf(tasks.active),
+  rowOf(tasks.completed, { lastEventAtMs: tasks.completed.updatedAtMs }),
+  rowOf(tasks.stopped, { lastEventAtMs: tasks.stopped.updatedAtMs }),
+]);
 // A session whose workers all finished: no strip.
 const idleId = "worker-fixture-idle";
 const idleBoard = createStore(() => ({
@@ -36,6 +46,8 @@ const idleBoard = createStore(() => ({
 const sent: string[] = [];
 mockIPC((cmd, args) => {
   sent.push(JSON.stringify({ cmd, args }));
+  const method = (args as { request?: { method?: string } } | undefined)?.request?.method;
+  if (method === "workerThread") return { method, view: threadOf([{ streamSeq: 1, atMs: 9000, event: { type: "message", itemId: "brief", role: "user", text: "Check the blocked case." } }]) };
   return null;
 });
 function Fixture() {
@@ -48,7 +60,8 @@ function Fixture() {
     const open = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-expanded]')?.click(), 100);
     // The running worker's own Stop, on its strip row (UI audit M4).
     const stop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-label="Stop Check active"]')?.click(), 250);
-    const timer = setTimeout(() => setResult(JSON.stringify({
+    let seen: Record<string, unknown> = {};
+    const snapshot = setTimeout(() => { seen = {
       thread: Object.fromEntries([...document.querySelectorAll('main > section[data-task]')].map((row) => [row.getAttribute("data-task"), row.textContent])),
       summary: document.querySelector('[aria-label="Session workers"]')?.textContent,
       list: document.querySelector('[data-slot="worker-list"]')?.textContent,
@@ -61,11 +74,24 @@ function Fixture() {
       doneHeaderStop: !!document.querySelector('[data-slot="worker-view-done"] [data-slot="worker-stop"]'),
       sent: sent.filter((call) => call.includes("stopTask")),
       avatars: [...document.querySelectorAll('[data-slot="task-row"] span[aria-hidden] svg')].map((svg) => svg.getBoundingClientRect().width),
-    })), 400);
+    }; }, 350);
+    // A worker opened from the rail: its thread, read only, with no composer (G19.Q6).
+    const rail = setTimeout(() => [...document.querySelectorAll<HTMLButtonElement>('[data-slot="workers-strip-row"]')].find((row) => row.textContent?.includes("Check blocked"))?.click(), 380);
+    const timer = setTimeout(() => {
+      const view = document.querySelector('[data-slot="worker-list"]');
+      setResult(JSON.stringify({ ...seen, fromRail: {
+        title: view?.querySelector('[data-slot="worker-header"] h2')?.textContent,
+        thread: !!view?.querySelector('[data-slot="worker-thread"]'),
+        brief: view?.querySelector('[data-slot="worker-brief"]')?.textContent,
+        composer: !!view?.querySelector('[data-slot="composer"], [contenteditable], textarea'),
+      } }));
+    }, 600);
     return () => {
       clearTimeout(listStop);
       clearTimeout(open);
       clearTimeout(stop);
+      clearTimeout(snapshot);
+      clearTimeout(rail);
       clearTimeout(timer);
     };
   }, []);

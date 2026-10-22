@@ -28,6 +28,7 @@ import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { BrowserBounds, Conversation, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
+import { rowOf, showRows, threadOf } from "@/fixtures/workerRows";
 import { useApp } from "@/state/store";
 import { useBrowsers } from "@/state/browsers";
 import { emitTerminalOutput, toggleTerminal, useTerminalPlaces } from "@/state/terminalPlaces";
@@ -83,6 +84,8 @@ useBoard.setState({
     },
   },
 });
+// The worker as its row (S14).
+showRows(id, [rowOf(task)]);
 const conversation: Conversation = {
   id, kind: "session", projectId: "fixture-project", title: "Independent panes",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
@@ -243,8 +246,8 @@ mockIPC(
         branch: "sidebar-redesign", remote: null, upstream: null, ahead: 0, staged: [],
         changes: [{ path: "src/app.tsx", oldPath: null, status: "modified" }], merging: null, rebasing: null,
       } };
-    if (req.method === "listWorkerEvents")
-      return { method: req.method, page: { entries: [], hasMore: false } };
+    if (req.method === "workerThread")
+      return { method: req.method, view: threadOf(useBoard.getState().board?.transcripts[req.taskId]?.entries ?? []) };
     return { method: req.method };
   },
   { shouldMockEvents: false },

@@ -3,30 +3,29 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
+type Seen = { row: boolean; text: string; word: string; tone: string; red: boolean; buttons: number; afterStatus?: number; afterPush?: number };
 const card = async (t: test.TestContext, query: string) =>
-  JSON.parse(await renderFixturePage(t, `pr-card.html?${query}`, "pr-card-result", 15000)) as { row: boolean; shown: string[]; sent?: string[]; asked?: boolean };
+  JSON.parse(await renderFixturePage(t, `pr-card.html?${query}`, "pr-card-result", 15000)) as Seen;
 
-// The pull request row offers what applies to it, one button each; none for a draft with nothing to fix.
-test("the pull request row shows the buttons its state calls for", { timeout: 120000 }, async (t) => {
-  assert.deepEqual((await card(t, "state=failing")).shown, ["Fix CI", "Merge now"]);
-  assert.deepEqual((await card(t, "state=conflicts")).shown, ["Address comments", "Resolve conflicts"]);
-  assert.deepEqual((await card(t, "state=merged")).shown, ["Revert"]);
+// S14: the pull request row is `#N`, its title and its state in a word and a colour; it has no actions.
+test("the pull request row shows its number, a state word and its colour, failed checks in red, and no buttons", { timeout: 120000 }, async (t) => {
+  const failing = await card(t, "state=failing");
+  assert.equal(failing.row, true);
+  assert.match(failing.text, /^#7 Add notes/);
+  assert.deepEqual([failing.word, failing.tone, failing.red, failing.buttons], ["Checks failed", "failed", true, 0]);
+  const open = await card(t, "state=approved");
+  assert.deepEqual([open.word, open.tone, open.red, open.buttons], ["Open", "good", false, 0]);
+  const conflicts = await card(t, "state=conflicts");
+  assert.deepEqual([conflicts.word, conflicts.tone, conflicts.buttons], ["Conflicts", "warning", 0]);
   const draft = await card(t, "state=draft");
-  assert.equal(draft.row, true);
-  assert.deepEqual(draft.shown, []);
+  assert.deepEqual([draft.word, draft.tone, draft.buttons], ["Draft", "quiet", 0]);
+  const merged = await card(t, "state=merged");
+  assert.deepEqual([merged.word, merged.tone, merged.buttons], ["Merged", "quiet", 0]);
 });
 
-// Approved, with a review thread still unresolved: Address comments shows, and sends its request
-// once as the user's.
-test("an approved pull request with an unresolved thread asks to address its comments", { timeout: 60000 }, async (t) => {
-  const seen = await card(t, "state=approved&click=Address%20comments");
-  assert.deepEqual(seen.shown, ["Address comments", "Merge now"]);
-  assert.deepEqual(seen.sent, ["Address the review comments on PR #7."]);
-  assert.equal(seen.asked, true);
-});
-
-// Revert on a merged pull request sends the same request as the merge message's Revert.
-test("Revert on a merged pull request sends the merge message's request", { timeout: 60000 }, async (t) => {
-  const seen = await card(t, "state=merged&click=Revert");
-  assert.deepEqual(seen.sent, ["Revert merge f00dfee (PR #7) on main and push it the way it went in"]);
+// The row reads `gh` again when a `git push` (or `gh pr`) command of the thread finishes, never on other commands.
+test("after a git push item the pull request row reads gh again", { timeout: 60000 }, async (t) => {
+  const seen = await card(t, "state=approved&push=1");
+  assert.equal(seen.afterStatus, 0);
+  assert.equal(seen.afterPush, 1);
 });

@@ -5047,6 +5047,17 @@ impl SessionManager {
         self.grants.revoke_owner(&owner);
         // Its CLI's session folder goes with what the task leaves (BUILD-PLAN D2.2).
         self.keep_saved_files(&task.id).await;
+        // Its CLI's session files are its thread, which its session's Workers row still opens:
+        // they stay with the session's record until the session is deleted (S14).
+        let lineage = crate::ledger::lineage_owner(&task.conversation_id.0);
+        if let Err(err) = self
+            .runtime
+            .ledger()
+            .hand_over_session_files(&owner, &lineage)
+            .await
+        {
+            tracing::warn!(task = %task.id, error = %err, "the worker's session files go with it");
+        }
         let leftovers = self.runtime.ledger().dispose(&owner).await;
         if !leftovers.is_clean() {
             tracing::warn!(task = %task.id, ?leftovers, "some of the task's leftovers will be retried at the next launch");

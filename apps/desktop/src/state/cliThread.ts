@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
-import type { AttachmentRef, BackgroundTask, FileEntry, FileImage, ProviderEvent, ThreadNews, ThreadView } from "@/ipc/generated";
+import type { AttachmentRef, FileEntry, FileImage, McpServerState, ProviderEvent, ThreadNews, ThreadView, WorkerRow } from "@/ipc/generated";
 
 /**
  * The thread as the CLI keeps it (S9): per conversation, the engine's `threadView` (its CLI's own
@@ -105,11 +105,23 @@ function isDelta(event: ProviderEvent): boolean {
   return event.type === "messageDelta" || event.type === "reasoningDelta" || event.type === "commandOutputDelta";
 }
 
+/** What news carries whole, all of it, when any of it changed: the view's, as it stands. */
+type Lists = Partial<Pick<ThreadView, "background" | "mcp" | "workers">>;
+
+/** The lists a piece of news carries. */
+function listsOf(news: ThreadNews): Lists {
+  return {
+    ...(news.background && { background: news.background }),
+    ...(news.mcp && { mcp: news.mcp }),
+    ...(news.workers && { workers: news.workers }),
+  };
+}
+
 /**
- * Reads under way, with what the stream said meanwhile (items, and the CLI's background tasks
- * when they changed), and whether a turn ended meanwhile.
+ * Reads under way, with what the stream said meanwhile (items, and the CLI's background tasks,
+ * MCP servers and the session's workers when they changed), and whether a turn ended meanwhile.
  */
-const reads = new Map<string, { heard: FileEntry[]; background?: BackgroundTask[]; again: boolean }>();
+const reads = new Map<string, { heard: FileEntry[]; lists: Lists; again: boolean }>();
 
 function setView(conversationId: string, view: ThreadView): void {
   useCliThread.setState((state) => ({ views: { ...state.views, [conversationId]: view } }));
@@ -126,7 +138,7 @@ export async function loadThreadView(conversationId: string): Promise<void> {
     going.again = true;
     return;
   }
-  const read: { heard: FileEntry[]; background?: BackgroundTask[]; again: boolean } = { heard: [], again: false };
+  const read: { heard: FileEntry[]; lists: Lists; again: boolean } = { heard: [], lists: {}, again: false };
   reads.set(conversationId, read);
   try {
     const { view } = await request({ method: "threadView", conversationId });
@@ -135,7 +147,7 @@ export async function loadThreadView(conversationId: string): Promise<void> {
     const seen = new Set(view.entries.filter((entry) => itemIdOf(entry.event) === null).map((entry) => JSON.stringify(entry)));
     const fresh = heard.filter((entry) => itemIdOf(entry.event) !== null || !seen.has(JSON.stringify(entry)));
     const landed = fresh.length > 0 ? { ...view, entries: mergeEntries(view.entries, fresh) } : view;
-    setView(conversationId, read.background ? { ...landed, background: read.background } : landed);
+    setView(conversationId, { ...landed, ...read.lists });
   } catch (error) {
     console.error("reading the thread failed", error);
   } finally {
@@ -159,16 +171,17 @@ function flushNews(): void {
     const read = reads.get(id);
     if (read) {
       read.heard.push(...news.entries);
-      if (news.background) read.background = news.background;
+      Object.assign(read.lists, listsOf(news));
       continue;
     }
     // A thread not read yet is read whole when it opens.
     const view = next[id] ?? views[id];
-    if (!view || (news.entries.length === 0 && !news.background)) continue;
+    const lists = listsOf(news);
+    if (!view || (news.entries.length === 0 && Object.keys(lists).length === 0)) continue;
     next[id] = {
       ...view,
       ...(news.entries.length > 0 && { entries: mergeEntries(view.entries, news.entries) }),
-      ...(news.background && { background: news.background }),
+      ...lists,
     };
   }
   if (Object.keys(next).length > 0) useCliThread.setState((state) => ({ views: { ...state.views, ...next } }));
@@ -198,6 +211,45 @@ export function useThreadView(conversationId: string | null): ThreadView | null 
     if (conversationId && !useCliThread.getState().views[conversationId]) void loadThreadView(conversationId);
   }, [conversationId]);
   return view;
+}
+
+const NO_ROWS: readonly WorkerRow[] = [];
+const NO_SERVERS: readonly McpServerState[] = [];
+
+/** A session's own workers, as their CLIs and git show them (S14), newest first. */
+export function useWorkerRows(conversationId: string | null): readonly WorkerRow[] {
+  return useCliThread((s) => (conversationId ? (s.views[conversationId]?.workers ?? NO_ROWS) : NO_ROWS));
+}
+
+/** The MCP servers a session's own CLI has, as it last said. */
+export function useSessionMcp(conversationId: string): readonly McpServerState[] {
+  return useCliThread((s) => s.views[conversationId]?.mcp ?? NO_SERVERS);
+}
+
+/** A worker's row, in whichever session's thread lists it. */
+export function workerRowIn(views: Readonly<Record<string, ThreadView>>, taskId: string): { conversationId: string; row: WorkerRow } | null {
+  for (const [conversationId, view] of Object.entries(views)) {
+    const row = view.workers?.find((each) => each.id === taskId);
+    if (row) return { conversationId, row };
+  }
+  return null;
+}
+
+/** A worker's row, live; `null` while no thread read lists it. */
+export function useWorkerRow(taskId: string | null): WorkerRow | null {
+  return useCliThread((s) => (taskId ? (workerRowIn(s.views, taskId)?.row ?? null) : null));
+}
+
+/**
+ * Workers' own threads, read only (`workerThread`): each from its CLI's session files, by task
+ * id, read when its panel opens and again as its row changes.
+ */
+export const useWorkerThreads = create<{ views: Readonly<Record<string, ThreadView>> }>(() => ({ views: {} }));
+
+/** Reads worker `taskId`'s thread into `useWorkerThreads`. */
+export async function loadWorkerThread(conversationId: string, taskId: string): Promise<void> {
+  const { view } = await request({ method: "workerThread", conversationId, taskId });
+  useWorkerThreads.setState((state) => ({ views: { ...state.views, [taskId]: view } }));
 }
 
 /** A view's entries by item id. */

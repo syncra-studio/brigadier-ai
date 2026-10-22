@@ -23,7 +23,6 @@ export * from "./SourceGroup";
 export * from "./SourceHeader";
 export * from "./SourceMoreMenu";
 export * from "./TabPage";
-export * from "./WorkerAnswer";
 export * from "./WorkerBrief";
 export * from "./WorkerFileRow";
 export * from "./WorkerHeader";

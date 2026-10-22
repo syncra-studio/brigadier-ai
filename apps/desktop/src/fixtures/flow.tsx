@@ -11,6 +11,7 @@
  * holds the stores for probes.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { threadOf } from "@/fixtures/workerRows";
 import { createRoot } from "react-dom/client";
 
 import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
@@ -462,8 +463,8 @@ mockIPC((command, payload) => {
       return { method: req.method, diff: null };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
-    case "listWorkerEvents":
-      return { method: req.method, page: { entries: leadTranscript, hasMore: false } };
+    case "workerThread":
+      return { method: req.method, view: threadOf(leadTranscript) };
     case "readArtifact":
       return { method: req.method, text: { text: workerPatch, offset: 0, totalBytes: workerPatch.length, binary: false } };
     default:

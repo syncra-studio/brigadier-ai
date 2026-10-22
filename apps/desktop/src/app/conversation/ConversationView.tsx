@@ -20,7 +20,8 @@ import { ChatActions, RenameDialog } from "@/app/shell/ChatActions";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { PastedTextPane } from "@/app/side-panel/PastedTextPane";
-import { WorkerDiffs } from "@/app/side-panel/WorkerSummary";
+import { JobStack } from "@/app/conversation/JobStack";
+import { ResumesAtCard } from "@/app/conversation/cards/ResumesAtCard";
 import { reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { foldedEntries } from "@/app/conversation/railHistory";
@@ -887,8 +888,8 @@ export function ConversationView({
                               className={cn("isolate flex min-h-0 flex-1 flex-col", covered && "invisible")}
                             >
                               <SummaryPane summary={summary}>
-                                {summary && <PinnedSummary conversation={conversation} />}
-                                {conversation && <WorkerDiffs conversationId={conversation.id} />}
+                                {summary && <PinnedSummary conversation={conversation}
+                                  cards={conversation?.kind === "session" ? <SessionCards conversationId={conversation.id} /> : null} />}
                                 <Thread
                                   components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
@@ -985,6 +986,19 @@ export const Welcome: FC = () => {
     </div>
   );
 };
+
+/**
+ * The cards under a session's context card, and in its place while it is hidden: its Job card
+ * and its "Resumes at" card (MA5).
+ */
+function SessionCards({ conversationId }: { conversationId: string }) {
+  return (
+    <>
+      <JobStack conversationId={conversationId} />
+      <ResumesAtCard conversationId={conversationId} />
+    </>
+  );
+}
 
 const THREAD_COMPONENTS: ThreadComponents = {
   AssistantMessage: RequestBlock,
