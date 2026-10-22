@@ -1,8 +1,8 @@
 import type { JobStageState } from "@/components/conversation/elements/job-progress";
 
 /**
- * A session's job (Q88): the steps it works through, in order. For a change: Building,
- * Reviewing, Fixing, Checks, Merging; for a phased plan, the steps of the phase at work. Its tab
+ * A session's job (Q88): the steps it works through, in order. For a change: Building, CI,
+ * Merging; for a phased plan, the steps of the phase at work. Its tab
  * shows it step by step; the Job card says what is happening now instead (liveJob.ts).
  */
 
@@ -10,7 +10,7 @@ export type JobStepState = JobStageState;
 
 export interface JobStep {
   id: string;
-  /** "Reviewing", "Checks", a phase's step. */
+  /** "Building", "CI", a phase's step. */
   name: string;
   state: JobStepState;
   /** How far the step at work is: "3 of 5". */
@@ -19,7 +19,7 @@ export interface JobStep {
   failedLabel?: string | undefined;
   startedAtMs?: number | null | undefined;
   endedAtMs?: number | null | undefined;
-  /** What happened, in a line: "Review found 3 issues, all fixed", "CI passed in 4m". */
+  /** What happened, in a line: "2 workers built it", "CI passed". */
   summary?: string | undefined;
 }
 
@@ -35,7 +35,7 @@ export function phaseWords(job: Job): string | null {
 }
 
 /**
- * The card's one line: the step at work and how far it is ("Reviewing · 3 of 5"); a failure
+ * The card's one line: the step at work and how far it is ("Building · 3 of 5"); a failure
  * first, then what happens about it ("Checks failed · fixing"); a phased plan's phase before it.
  */
 export function jobLabel(job: Job): string {

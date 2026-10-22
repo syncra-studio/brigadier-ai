@@ -479,7 +479,6 @@ function view(id: string): View {
     notices: [],
     memories: [],
     overnight: [],
-    reviews: [],
     previews: [],
     peerMessages: s.peers,
   } as unknown as View;

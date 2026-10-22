@@ -129,7 +129,7 @@ function view(): View {
     orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: "a1", ratings: {}, streaming: null,
-    notices: [], memories: [], overnight: [], reviews: [], previews: previews ? [server(5173), ...(previews > 1 ? [server(3000)] : [])] : [],
+    notices: [], memories: [], overnight: [], previews: previews ? [server(5173), ...(previews > 1 ? [server(3000)] : [])] : [],
   } as unknown as View;
 }
 

@@ -245,7 +245,7 @@ impl SessionManager {
         if self.runtime.faked() {
             return;
         }
-        let Some(sessions) = brigadier_review::codex_sessions(self.runtime.cli_env()) else {
+        let Some(sessions) = super::codex_children::codex_sessions(self.runtime.cli_env()) else {
             return;
         };
         let Some(store) = self.runtime.routing_store().cloned() else {
@@ -262,7 +262,7 @@ impl SessionManager {
             .map(|at| UNIX_EPOCH + Duration::from_millis(at))
             .and_then(|at| at.checked_sub(CHILD_LOOK_SLACK));
         let children = tokio::task::spawn_blocking(move || {
-            brigadier_review::child_threads_since(&sessions, &thread, since)
+            super::codex_children::child_threads_since(&sessions, &thread, since)
         })
         .await
         .unwrap_or_default();
@@ -278,7 +278,7 @@ impl SessionManager {
 pub(crate) async fn meter_children(
     store: &std::sync::Arc<crate::routing::RoutingStore>,
     row: TurnUsage,
-    children: Vec<brigadier_review::ChildThread>,
+    children: Vec<super::codex_children::ChildThread>,
 ) {
     for child in children {
         let Some(usage) = child.usage else {
@@ -379,7 +379,7 @@ mod tests {
         };
         let sessions = dir.join("sessions");
         let turn_end = || async {
-            let children = brigadier_review::child_threads(&sessions, parent);
+            let children = crate::manager::codex_children::child_threads(&sessions, parent);
             meter_children(&store, row.clone(), children).await;
         };
         // The first turn end meters what it used so far; the second, with nothing new, adds

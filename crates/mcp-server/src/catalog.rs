@@ -10,12 +10,11 @@ use brigadier_core::tools::{
     LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, NoteProgress,
     OfferFeedback, OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog,
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
-    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RequestReview, RerunTask,
-    ReviewPlan, Role, RouteFollowUp, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SaveReport,
-    SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession, StartPreview,
-    StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
-    SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun, ToolCall,
-    WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, Role, RouteFollowUp, RunCommand,
+    RunTools, RunUnsandboxed, SaveMemory, SaveReport, SearchTranscript, SetHeadline, SettleStep,
+    SettleWait, ShowSession, StartPreview, StartVerifier, StopPreview, StopWorker, StoreOutput,
+    SubmitOutline, SubmitReport, SuggestFullAccess, SuggestSetting, TabChatCall, TabTools,
+    TerminalRun, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -63,11 +62,7 @@ with their attachments). On their yes to the work, land the mockup, then delegat
 
 `subject`: a review's task; a merge task's conflicting task (none merges the session's base \
 into its branch); a fix's task: after a phase's verifier it continues that work and lands it \
-with its own, after a landing it takes the task's open review findings and resumes its worker's \
-session.
-
-\"Merge it when done\" while workers write is consent: call finish_session with those words; \
-it holds the merge until they land.";
+with its own.";
 
 const MESSAGE_WORKER: &str = "Send text to a worker: an instruction that steers its current \
 work, or sends a reported worker back to work. Answer a worker's question with answer_worker. \
@@ -134,7 +129,7 @@ the user's (kind constraint, in their exact words with its `scope`), or (persona
 about them across projects (where they live, their trade, their tools, a preference; never \
 credentials, health or money details). What the user settled cites their message (`user_message`, with their \
 words in `quote`): Brigadier checks both. Anything else is kept as your claim, unverified, with \
-its evidence (`files`, `check` or `finding`, and the words it shows in `quote`), re-read whenever \
+its evidence (`files` or `check`, and the words it shows in `quote`), re-read whenever \
 the claim is used. Do it silently. Returns the node id; pass it as `replaces` to correct it, or a \
 claim you find wrong.";
 
@@ -173,25 +168,16 @@ specific words; no preamble, no restating the request, no filler (\"This plan wi
 \"robust\", \"seamless\"). Most plans fit in 8 to 15 lines; bigger work may need more, but never pad.";
 
 const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon as you have \
-judged it: don't wait for its plan review, which runs in the background and may arrive after the \
-go-ahead (then send the lead the findings you agree with by message_worker). Put what the \
-outline gets wrong, and anything the brief implies, in `corrections`; the brief wins any \
+judged it. Put what the outline gets wrong, and anything the brief implies, in `corrections`; the brief wins any \
 conflict. Under \"Ask for approval\" this shows the user an \"Implement this plan?\" card and the \
 go-ahead goes once they start it. Returns at once.";
 
 const START_VERIFIER: &str = "Your call, for big or risky work only: start a fresh verifier \
-on top of a reported implement task's commits. It asks for a review of the whole work by the \
-other vendor, checks every \"done when\" for real, fixes and commits what fails, triages the \
-review's findings and reports. Land the verifier's task then (its commits hold the lead's), not \
+on top of a reported implement task's commits. It checks every \"done when\" for real, fixes \
+and commits what fails, and reports. Land the verifier's task then (its commits hold the lead's), not \
 the lead's. Small work needs none: land the lead. With fresh: true it gets only the original \
 request, the user's constraints, done_when and the candidate commit (a task's, or commit for your \
 own work) and tries to break it. Returns at once.";
-
-const REQUEST_REVIEW: &str = "Ask the other vendor to review your candidate commit (your \
-checkout's HEAD by default), small changes too. What earlier reviews already cover isn't \
-reviewed again: only what came after, and after findings their fix is re-checked. It waits \
-for the findings (wait_seconds) and returns them in its reply; one still running then \
-arrives as a message. With no other-vendor reviewer, or reviews off, it says so.";
 
 const ATTACH_PROOF: &str = "Attach a screenshot or short recording you made of the change \
 (PNG, JPEG, GIF, WebP, MP4, MOV or WebM, at most 11 MB), or a log or test run's output (.log or \
@@ -206,7 +192,7 @@ too) and nothing of it still runs or waits to land. Done: all of it is met and l
 some is left for a later run; blocked: what is left needs the user. Done should rest on \
 evidence for every criterion at the tip (its report's, or yours in `done_when`) and the full \
 checks passing there; what has none is said in the result and marked in the morning report, \
-not refused. With reviews on, its review must have ended and been recorded. A step settled done moves the tip the user's Merge takes, once every \
+not refused. A step settled done moves the tip the user's Merge takes, once every \
 step before it is done too.";
 
 const END_RUN: &str = "Only during an overnight run: end it now, because every selected step \
@@ -217,19 +203,6 @@ const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decid
 money, handling credentials yourself (a token, a password, the keychain directly), or destroying \
 something outside this session's own work. Not for pushes, pull requests or deploys (just do \
 those, on the git and gh sign-in the user set up) nor for work inside the session. Returns at once; the decision arrives later as a message.";
-
-const WORKER_REQUEST_REVIEW: &str = "Start one review of your committed work by a model from the other \
-vendor, from where your work started to your last commit (uncommitted changes are committed for \
-you first). Returns at once: keep working, and the findings arrive later as a message from \
-Brigadier. Don't wait for them unless your task says so: report once your checks pass and your \
-evidence is in, and findings that arrive after your report go to the thread. Fix what you \
-agree with and commit; for a finding you don't, say why in your report. It is advisory and there \
-are no rounds: call it once.";
-
-const REVIEW_PLAN: &str = "Your call, for a plan of your own that is big or risky: start one \
-review of it by a model from the other vendor, against the brief you give. Returns at once: \
-carry on (delegate, or wait for nothing), and the findings arrive later as a [plan review …] \
-message. Weigh them against the brief; there are no rounds.";
 
 const READ_PAGE: &str = "Read the page the user's latest message was sent from (its id is in \
 the [page …] note on that message): its title, its text in Markdown and its revision. Only that \
@@ -257,30 +230,14 @@ const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits 
 session's branch: the lead's task once its report is in, or a verifier you started for big or \
 risky work (its commits hold the lead's). Call it after reading the report. Brigadier commits \
 what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, no review \
-and no checks start (request_review and your checks are yours to run). If the branch moved \
+and no checks start (your checks and reviews are yours to run). If the branch moved \
 meanwhile, the commits are rebased onto it and land at once. Conflicts come back to you: \
 delegate a merge task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
-base branch on the user's word, as you judge it: [merge] (their click; leave consent out), a \
-card answer that agrees, or a message that asks for it (\"merge it\", also together with the \
-work: then merge as soon as it has landed, without asking again). A question about the merge, \
-or a \"not\" about something else, is no \"no\"; a \"wait\", a \"no\" or a condition aimed at \
-the merge is. Pass in consent the card's id, or their words quoted exactly from the message; \
-Brigadier checks only that it is the user's and no earlier merge used it. It merges what has \
-landed and names what still runs; when the user asked to merge once the work is done (\"merge it \
-when done\"), pass when \"workers_finish\": it holds the merge ([merge held]) and tells you \
-[merge due] once the workers land: call it again then, without asking. Its result also states \
-what the user wrote since and work that landed after their consent. The session keeps its \
-worktree and branch after the merge. Returns when merged, saying where its full checks and reviews stand. \
-While merging on its own is on, call it once the work is shipped as your instructions say: a change \
-the user can see, however small, first gets its proof (the change used in the running app or page, \
-its picture attached with attach_proof); a grep or a test isn't that proof.";
-
-const STOP_MERGE: &str = "Stop the held merge when the user's words since their consent take it \
-back or put it off (\"wait\", \"don't merge yet\", a new condition on it). A question about the \
-merge or words about something else leave it standing: then don't call this. Call it before you \
-answer, then answer once, saying it stopped.";
+base branch now, when the user asked for the merge (their words, a card answer, or [merge]: \
+their click). It merges what has landed and names what still runs; the session keeps its \
+worktree and branch after the merge. You may instead merge with git yourself.";
 
 const NOTE_FOR_USER: &str = "Keep the user's session summary current: kind \"decided\" for a \
 judgement call you made on their behalf that they'd want to know, with why (\"Decided for \
@@ -299,19 +256,9 @@ const WATCH_CI: &str = "Watch the GitHub Actions runs of a push: it returns at o
 
 const CLEAN_UP: &str = "Only when the user asks to clean up: removes what this session's \
 finished work left that nothing uses any more (finished tasks' worktrees, folders and merged \
-branches, ended reviews' checkouts), by Brigadier's own records, and says what went and what \
+branches), by Brigadier's own records, and says what went and what \
 stayed and why. Brigadier already cleans up after you; never delete branches, worktrees or temp \
 folders by hand.";
-
-const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
-one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
-that fixed it, task-7, or none for your own fix), open (not fixed; it should be), or dismissed \
-(not worth fixing, with why). Before you record one fixed, check it in the merged code (read its \
-lines at the session branch's tip, or run its test) and say how in checked: a worker's report or \
-your notes are no check, and without checked it shows as unverified, never as clean. Set high on \
-an open one that loses data, breaks the build or a security boundary. Brigadier only stores and \
-shows what you record: the review line counts your open and unverified ones, and finish_session \
-lists them for the user. Record again when a status changes.";
 
 const SET_HEADLINE: &str = "Say what the session is doing now, for the user's Job card: \
 `headline` in a few plain words (\"Starting the dev server\", \"The build failed\", \"It's up \
@@ -410,9 +357,8 @@ user's own tabs only when they ask.",
 
 const SUGGEST_SETTING: &str = "Suggest changing one setting on a card whose one button makes \
 the change, when what the user asked for needs it: this session's permission level \
-(`permission`: ask_for_approval, approve_for_me or full_access), the Browser setting \
-(`browser`: on or off) or merging on its own once work is ready (`merge_on_own`: on or off). \
-reason: one line on why it helps with what they asked. Nothing changes until the user presses \
+(`permission`: ask_for_approval, approve_for_me or full_access) or the Browser setting \
+(`browser`: on or off). reason: one line on why it helps with what they asked. Nothing changes until the user presses \
 the button; every other setting is theirs alone. Refused when the setting is already so, during \
 an overnight run, and a second time in one request.";
 
@@ -763,12 +709,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
         Role::Worker { checks: true, .. } => CHECKER.get_or_init(|| {
             worker_tools()
                 .into_iter()
-                .filter(|tool| {
-                    !matches!(
-                        tool.name.as_ref(),
-                        "ask_thread" | "submit_outline" | "request_review"
-                    )
-                })
+                .filter(|tool| !matches!(tool.name.as_ref(), "ask_thread" | "submit_outline"))
                 .collect()
         }),
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
@@ -846,11 +787,6 @@ fn orchestrator_tools() -> Vec<Tool> {
             START_VERIFIER,
             input_schema::<StartVerifier>(),
         ),
-        tool(
-            "request_review",
-            REQUEST_REVIEW,
-            input_schema::<RequestReview>(),
-        ),
         tool("attach_proof", ATTACH_PROOF, input_schema::<AttachProof>()),
         tool(
             "propose_overnight",
@@ -868,16 +804,10 @@ fn orchestrator_tools() -> Vec<Tool> {
             FINISH_SESSION,
             input_schema::<FinishSession>(),
         ),
-        tool("stop_merge", STOP_MERGE, input_schema::<StopMerge>()),
         tool(
             "note_for_user",
             NOTE_FOR_USER,
             input_schema::<NoteForUser>(),
-        ),
-        tool(
-            "record_findings",
-            RECORD_FINDINGS,
-            input_schema::<RecordFindings>(),
         ),
         tool("ci_status", CI_STATUS, input_schema::<CiPush>()),
         tool("watch_ci", WATCH_CI, input_schema::<CiPush>()),
@@ -904,7 +834,6 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("clean_up", CLEAN_UP, no_arguments()),
-        tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
         tool("read_page", READ_PAGE, input_schema::<ReadPage>()),
         tool("write_page", WRITE_PAGE, input_schema::<WritePage>()),
         tool("save_report", SAVE_REPORT, input_schema::<SaveReport>()),
@@ -958,7 +887,6 @@ fn worker_tools() -> Vec<Tool> {
             SUBMIT_OUTLINE,
             input_schema::<SubmitOutline>(),
         ),
-        tool("request_review", WORKER_REQUEST_REVIEW, no_arguments()),
         tool(
             "note_progress",
             NOTE_PROGRESS,
@@ -1071,7 +999,7 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     ("close_tab", "close a tab"),
     (
         "suggest_setting",
-        "permission level, browser on or off, merge on its own, settings",
+        "permission level, browser on or off, settings",
     ),
     (
         "offer_feedback",
@@ -1157,10 +1085,6 @@ const DELEGATE_TASK_FIELDS: &[(&str, &str)] = &[
         "True when it takes the whole request: Brigadier adds the user's message verbatim.",
     ),
     (
-        "fuse",
-        "research only: true when a wrong answer would cost the user; both vendors research the same brief, back as answers A and B.",
-    ),
-    (
         "areas",
         "Optional parts it touches (\"frontend\", \"backend\", \"infra\", \"docs\", \"tests\") when the spec's paths don't say; routing goes by them.",
     ),
@@ -1220,28 +1144,12 @@ pub enum ParseError {
     UnknownTool(String),
     /// The arguments do not match the tool's schema.
     BadArguments { tool: String, reason: String },
-    /// A tool that is gone, called by a session that started before: what to call instead.
-    Retired { tool: String, instead: &'static str },
 }
-
-/// Tools that are gone, and what a session that still calls one is told to do instead
-/// (BUILD-PLAN rule R).
-const RETIRED: &[(&str, &str)] = &[
-    (
-        "review_candidate",
-        "call request_review, with the same commit and wait_seconds.",
-    ),
-    (
-        "review_code",
-        "call request_review: it starts the same review of your committed work, and its findings arrive as a message.",
-    ),
-];
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownTool(name) => write!(f, "There is no tool named {name:?} for you."),
-            Self::Retired { tool, instead } => write!(f, "{tool} is gone: {instead}"),
             Self::BadArguments { tool, reason } => {
                 write!(f, "Invalid arguments for {tool}: {reason}")
             }
@@ -1259,13 +1167,7 @@ pub fn parse_call(
     // Models sometimes send `null` for an optional argument; it means "left out".
     arguments.retain(|_, value| !value.is_null());
     let arguments = Value::Object(arguments);
-    let unknown = || match RETIRED.iter().find(|(tool, _)| *tool == name) {
-        Some((tool, instead)) => ParseError::Retired {
-            tool: (*tool).to_owned(),
-            instead,
-        },
-        None => ParseError::UnknownTool(name.to_owned()),
-    };
+    let unknown = || ParseError::UnknownTool(name.to_owned());
     if has_browser_tools(role)
         && let Some(call) = browser_call(name, &arguments)
     {
@@ -1298,14 +1200,11 @@ pub fn parse_call(
                 "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
-                "request_review" => OrchestratorCall::RequestReview(args(name, arguments)?),
                 "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
-                "stop_merge" => OrchestratorCall::StopMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
-                "record_findings" => OrchestratorCall::RecordFindings(args(name, arguments)?),
                 "ci_status" => OrchestratorCall::CiStatus(args(name, arguments)?),
                 "watch_ci" => OrchestratorCall::WatchCi(args(name, arguments)?),
                 "suggest_full_access" => {
@@ -1323,7 +1222,6 @@ pub fn parse_call(
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
                 "clean_up" => OrchestratorCall::CleanUp,
-                "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 "read_page" => OrchestratorCall::ReadPage(args(name, arguments)?),
                 "write_page" => OrchestratorCall::WritePage(args(name, arguments)?),
                 "save_report" => OrchestratorCall::SaveReport(args(name, arguments)?),
@@ -1352,7 +1250,6 @@ pub fn parse_call(
                 "submit_outline" if !checks => {
                     WorkerCall::SubmitOutline(args::<SubmitOutline>(name, arguments)?)
                 }
-                "request_review" if !checks => WorkerCall::RequestReview,
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
                 "query_brain" => WorkerCall::QueryBrain(args::<QueryBrain>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
@@ -1575,8 +1472,6 @@ mod tests {
             "first ask_user \"Want a mockup first?\" (Yes / Skip",
             "message_worker with their attachments",
             "land the mockup, then delegate with `matches_mockup`",
-            "after a landing it takes the task's open review findings and resumes its worker's session",
-            "\"Merge it when done\" while workers write is consent",
         ] {
             assert!(DELEGATE_TASK.contains(said), "{said}");
         }
@@ -1661,30 +1556,39 @@ mod tests {
             .find(|tool| tool.name == "approve_outline")
             .unwrap();
         let description = approve.description.as_deref().unwrap();
-        assert!(description.contains("don't wait for its plan review"));
+        assert!(!description.contains("review"), "{description}");
         assert!(description.contains("Implement this plan?"));
         assert!(names.contains(&"start_verifier".to_owned()));
     }
 
-    /// Q68: a thread merging on its own read the bar in its instructions, meant to prove a page
-    /// change, and merged unseen; finish_session, read as it merges, says it too (guidance only).
+    /// finish_session merges when the thread judges the user asked: it asks for no consent,
+    /// holds nothing and names no review.
     #[test]
-    fn finish_session_reminds_that_a_visible_change_gets_its_proof_first() {
+    fn finish_session_merges_with_no_consent_hold_or_review() {
         let tools = orchestrator_tools();
         let finish = tools
             .iter()
             .find(|tool| tool.name == "finish_session")
             .unwrap();
         let description = finish.description.as_deref().unwrap();
-        assert!(description.contains("While merging on its own is on"));
-        assert!(
-            description.contains("a change the user can see, however small, first gets its proof")
-        );
-        assert!(description.contains("a grep or a test isn't that proof"));
+        assert!(description.contains("when the user asked for the merge"));
+        for gone in ["consent", "held", "review", "anyway"] {
+            assert!(!description.contains(gone), "{gone}: {description}");
+        }
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        let old = serde_json::json!({ "user_words": "merge it" });
+        assert!(parse_call(&thread, "finish_session", old.as_object().cloned()).is_err());
+        assert!(matches!(
+            parse_call(&thread, "finish_session", None),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::FinishSession(_)))
+        ));
     }
 
     #[test]
-    fn the_thread_searches_the_code_index_and_asks_for_plan_reviews() {
+    fn the_thread_searches_the_code_index() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
             run: RunTools::None,
@@ -1697,7 +1601,6 @@ mod tests {
             "code_search",
             "code_refs",
             "project_map",
-            "review_plan",
             "delegate_task",
             "land_phase",
             "finish_session",
@@ -1713,13 +1616,6 @@ mod tests {
         assert!(matches!(
             parse_call(&thread, "project_map", None),
             Ok(ToolCall::Orchestrator(OrchestratorCall::ProjectMap))
-        ));
-        let mut arguments = JsonObject::new();
-        arguments.insert("plan".into(), Value::String("1. Edit a.rs".into()));
-        arguments.insert("brief".into(), Value::String("Fix the bug".into()));
-        assert!(matches!(
-            parse_call(&thread, "review_plan", Some(arguments)),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::ReviewPlan(_)))
         ));
     }
 
@@ -1850,15 +1746,15 @@ mod tests {
         }
     }
 
-    /// suggest_setting takes the permission level, the browser and merging on its own; any
-    /// other setting (voice, models, providers, computer use…) doesn't parse.
+    /// suggest_setting takes the permission level and the browser; any other setting (merging on
+    /// its own, voice, models, providers, computer use…) doesn't parse.
     #[test]
     fn a_suggested_setting_is_one_of_the_few_the_thread_may_suggest() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
             run: RunTools::None,
         };
-        for setting in ["permission", "browser", "merge_on_own"] {
+        for setting in ["permission", "browser"] {
             let arguments = serde_json::json!({ "setting": setting, "value": "on", "reason": "r" });
             assert!(
                 matches!(
@@ -1869,6 +1765,7 @@ mod tests {
             );
         }
         for setting in [
+            "merge_on_own",
             "voice",
             "model",
             "providers",
@@ -2366,37 +2263,38 @@ mod tests {
         }
     }
 
-    /// SESSION-FIXES-PLAN.md Q7: every thread records review findings; no worker does.
+    /// Reviews are plain commands (strip-down S5): no role has a review, findings or merge-hold
+    /// tool, and a late call of one is an unknown tool.
     #[test]
-    fn the_thread_records_review_findings() {
+    fn no_role_has_a_review_or_merge_hold_tool() {
+        let gone = [
+            "request_review",
+            "record_findings",
+            "review_plan",
+            "stop_merge",
+            "review_candidate",
+            "review_code",
+        ];
         for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
                 run,
             };
-            assert!(
-                tools_for(&thread)
-                    .iter()
-                    .any(|tool| tool.name == "record_findings")
-            );
-            let call = serde_json::json!({"items": [
-                {"id": "R1.1", "status": "fixed", "task": "task-2"},
-                {"id": "R1.2", "status": "dismissed", "why": "by design", "high": false},
-            ]});
-            let Ok(ToolCall::Orchestrator(OrchestratorCall::RecordFindings(args))) =
-                parse_call(&thread, "record_findings", call.as_object().cloned())
-            else {
-                panic!("record_findings parses for {run:?}");
-            };
-            assert_eq!(args.items.len(), 2);
-            assert_eq!(args.items[0].task.as_deref(), Some("task-2"));
-        }
-        for checks in [false, true] {
-            assert!(
-                !tools_for(&worker(checks))
-                    .iter()
-                    .any(|tool| tool.name == "record_findings")
-            );
+            for role in [thread.clone(), worker(false), worker(true)] {
+                for name in gone {
+                    assert!(
+                        tools_for(&role).iter().all(|tool| tool.name != name),
+                        "{name} for {role:?}"
+                    );
+                    assert!(
+                        matches!(
+                            parse_call(&role, name, None),
+                            Err(ParseError::UnknownTool(_))
+                        ),
+                        "{name} for {role:?}"
+                    );
+                }
+            }
         }
     }
 
@@ -2438,48 +2336,6 @@ mod tests {
         assert!(parse_call(&thread, "propose_merge", late.as_object().cloned()).is_err());
     }
 
-    /// review_candidate and review_code are gone: request_review takes both places, and a
-    /// session that started before is told what to call instead (BUILD-PLAN rule R).
-    #[test]
-    fn request_review_replaces_review_candidate_and_review_code() {
-        let thread = Role::Orchestrator {
-            conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
-        };
-        for role in [thread.clone(), worker(false)] {
-            let names: Vec<_> = tools_for(&role)
-                .iter()
-                .map(|tool| tool.name.to_string())
-                .collect();
-            assert!(names.contains(&"request_review".to_owned()), "{role:?}");
-            for old in ["review_candidate", "review_code"] {
-                assert!(!names.contains(&old.to_owned()), "{role:?}");
-            }
-        }
-        let wait = serde_json::json!({ "commit": "abc", "wait_seconds": 0 });
-        assert!(matches!(
-            parse_call(&thread, "request_review", wait.as_object().cloned()),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::RequestReview(args)))
-                if args.commit.as_deref() == Some("abc") && args.wait_seconds == Some(0)
-        ));
-        assert!(matches!(
-            parse_call(&worker(false), "request_review", None),
-            Ok(ToolCall::Worker(WorkerCall::RequestReview))
-        ));
-        let late = parse_call(&thread, "review_candidate", None).unwrap_err();
-        assert!(
-            late.to_string()
-                .starts_with("review_candidate is gone: call request_review"),
-            "{late}"
-        );
-        let late = parse_call(&worker(false), "review_code", None).unwrap_err();
-        assert!(
-            late.to_string()
-                .starts_with("review_code is gone: call request_review"),
-            "{late}"
-        );
-    }
-
     #[test]
     fn a_gate_member_cannot_ask_the_orchestrator() {
         let names = |role: &Role| -> Vec<String> {
@@ -2490,10 +2346,8 @@ mod tests {
         };
         assert!(names(&worker(false)).contains(&"ask_thread".to_owned()));
         assert!(!names(&worker(false)).contains(&"ask_orchestrator".to_owned()));
-        assert!(names(&worker(false)).contains(&"request_review".to_owned()));
         let checker = names(&worker(true));
         assert!(!checker.contains(&"ask_thread".to_owned()));
-        assert!(!checker.contains(&"request_review".to_owned()));
         assert!(checker.contains(&"submit_report".to_owned()));
         let question = || {
             let mut arguments = JsonObject::new();

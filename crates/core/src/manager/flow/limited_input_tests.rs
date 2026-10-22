@@ -38,9 +38,6 @@ fn limited_on(marker: &'static str, resets_in_ms: Option<i64>, log: &Log) -> Scr
     Arc::new(move |turn: Turn| {
         let (log, limited) = (log.clone(), limited.clone());
         Box::pin(async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if !turn.is_orchestrator() {
                 let reply = turn
                     .call("submit_report", json!({"summary": "Looked."}))
@@ -223,9 +220,6 @@ fn worker_limited_on_message(pin: Option<&'static str>, log: &WorkerLog) -> Scri
     Arc::new(move |turn: Turn| {
         let log = log.clone();
         Box::pin(async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if turn.is_orchestrator() {
                 if turn.input.contains("Tell it.") {
                     let reply = turn

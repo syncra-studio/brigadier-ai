@@ -1,6 +1,6 @@
 /**
  * The thread's settings cards (`suggest_setting`) under a request, over the IPC mock: a
- * permission level, the built-in browser and merging on its own. Pressing a card's button makes
+ * permission level and the built-in browser. Pressing a card's button makes
  * its change, and the card then says so. No daemon.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -23,7 +23,7 @@ const conversation = {
   },
 } as Conversation;
 useApp.setState((state) => ({
-  settings: { ...state.settings, browserEnabled: false, autoMerge: false },
+  settings: { ...state.settings, browserEnabled: false },
   conversations: { [id]: conversation },
 }));
 
@@ -39,8 +39,7 @@ function Fixture() {
     <TooltipProvider>
       <ViewContext.Provider value={{ selection: { type: "conversation", id }, conversation, embedded: false }}>
         <main className="bg-background text-foreground mx-auto flex h-screen w-full max-w-thread flex-col gap-3 overflow-y-auto px-5 py-10 text-sm">
-          <p className="bg-foreground/5 self-end rounded-2xl px-3 py-2">Merge it yourself from now on, and check the page in the browser.</p>
-          <ThreadStep step={{ kind: { type: "settingSuggested", change: { setting: "mergeOnOwn", on: true }, reason: "You asked me to merge finished work myself." }, position: 1 }} />
+          <p className="bg-foreground/5 self-end rounded-2xl px-3 py-2">Check the page in the browser, and ask me before each step.</p>
           <ThreadStep step={{ kind: { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser, which is off." }, position: 2 }} />
           <ThreadStep step={{ kind: { type: "settingSuggested", change: { setting: "permission", level: "askForApproval" }, reason: "You want to approve each step before it runs." }, position: 3 }} />
           <p>Each waits on your press; nothing changes until then.</p>

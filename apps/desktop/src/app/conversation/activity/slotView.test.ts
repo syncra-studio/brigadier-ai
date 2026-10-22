@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ciPill, ciWatches, heldMerge, mergeWords } from "@/app/conversation/activity/slotView";
-import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { CiRun, OrchestratorStep, OrchestratorStepKind, Question, Task } from "@/ipc/generated";
+import { ciPill, ciWatches } from "@/app/conversation/activity/slotView";
+import type { CiRun, OrchestratorStep, OrchestratorStepKind } from "@/ipc/generated";
 
 let at = 0;
 const step = (kind: OrchestratorStepKind): OrchestratorStep => {
@@ -87,70 +86,4 @@ test("a watch's result stays once it is over, in its own words", () => {
   assert.deepEqual(words([ended("test", "failure")], "failed"), { state: "failed", words: "CI failed · test" });
   assert.deepEqual(words([], "no runs"), { state: "ended", words: "No CI runs" });
   assert.deepEqual(words([run(0, 2)], "stopped"), { state: "ended", words: "Stopped watching CI" });
-});
-
-const base = Object.values(night.tasks)[0] as unknown as Task;
-const tasks = (
-  states: Record<string, Task["state"]>,
-  kind: Task["kind"] = "implement",
-  createdAtMs = -1,
-  subject: Task["subject"] = null,
-): Record<string, Task> =>
-  Object.fromEntries(Object.entries(states).map(([id, state]) => [id, { ...base, id, state, kind, createdAtMs, subject }]));
-const held = (askedIn = "m1", waiting = ["t1", "t2"]): OrchestratorStep =>
-  step({ type: "mergeHeld", branch: "brigadier/s", base: "main", askedIn, consentedAtMs: 0, condition: "workersFinish", waiting, tip: "abc" });
-test("the held merge counts the writers it still waits for", () => {
-  const steps = [held()];
-  const running = heldMerge(steps, tasks({ t1: "running", t2: "landing" }));
-  assert.equal(running?.waiting, 2);
-  assert.equal(mergeWords(running!), "Merging after 2 workers finish");
-  // A reported task hasn't landed yet: it still counts.
-  assert.equal(mergeWords(heldMerge(steps, tasks({ t1: "landed", t2: "reported" }))!), "Merging after 1 worker finishes");
-  // Reviews don't hold a merge (#241, #242).
-  assert.equal(mergeWords(heldMerge(steps, tasks({ t1: "landed", t2: "landed" }))!), "Merging…");
-});
-
-test("the held merge names a merge task started after the hold, issue 223", () => {
-  // The merge met conflicts: held with nothing to wait for, then a merge task brings main in.
-  const hold = held("m1", []);
-  const steps = [hold];
-  const after = hold.atMs + 1;
-  const merging = heldMerge(steps, tasks({ t9: "running" }, "merge", after));
-  assert.equal(merging?.waiting, 1);
-  assert.equal(mergeWords(merging!), "Merging after main is merged in");
-  // A merge task into a worker's work (a subject) doesn't bring main in: it is a writer.
-  assert.equal(mergeWords(heldMerge(steps, tasks({ t9: "running" }, "merge", after, "t3"))!), "Merging after 1 worker finishes");
-  // A writer started after the hold counts as one it waits for.
-  assert.equal(mergeWords(heldMerge(steps, tasks({ t9: "running" }, "implement", after))!), "Merging after 1 worker finishes");
-  // One that started before the hold, and isn't one it waits for, doesn't; nor does a scout.
-  assert.equal(mergeWords(heldMerge(steps, tasks({ t9: "running" }, "merge", hold.atMs - 1))!), "Merging…");
-  assert.equal(mergeWords(heldMerge(steps, tasks({ t9: "running" }, "scout", after))!), "Merging…");
-});
-
-const mergeCard = (createdAtMs: number, answer: string | null = null): Question => ({
-  id: "q1", conversationId: "c1", taskId: null, requestId: null, position: 0,
-  kind: { type: "merge", branch: "brigadier/s", base: "main", conflicted: false, conflicts: [] },
-  text: "Merge brigadier/s into main?", options: [], recommended: null, items: [], answer, answers: [],
-  createdAtMs, answeredAtMs: answer === null ? null : createdAtMs + 1,
-});
-
-test("the held merge waits for the user's yes while a merge card asks", () => {
-  const all = tasks({ t1: "landed", t2: "landed" });
-  const asking = heldMerge([held()], all, [mergeCard(5)]);
-  assert.equal(asking?.asking, true);
-  assert.equal(mergeWords(asking!), "Waiting for your yes to merge");
-  // Answered, or a card from before the user's yes: the merge goes on as held.
-  assert.equal(mergeWords(heldMerge([held()], all, [mergeCard(5, "Merge")])!), "Merging…");
-  assert.equal(heldMerge([held()], all, [mergeCard(-1)])?.asking, false);
-});
-
-test("the held merge goes once the merge lands, is cancelled or is stopped", () => {
-  const all = tasks({ t1: "running" });
-  assert.equal(heldMerge([held(), step({ type: "merged", branch: "brigadier/s", base: "main", commits: 2, askedIn: "m1" })], all), null);
-  assert.equal(heldMerge([held(), step({ type: "mergeCancelled", askedIn: "m1" })], all), null);
-  assert.equal(heldMerge([held(), step({ type: "mergeStopped", askedIn: "m1", reason: "task-5 failed" })], all), null);
-  // Another consent's Cancel leaves it; a later hold after a Cancel shows again.
-  assert.notEqual(heldMerge([held("m2"), step({ type: "mergeCancelled", askedIn: "m1" })], all), null);
-  assert.notEqual(heldMerge([held(), step({ type: "mergeCancelled", askedIn: "m1" }), held("m3")], all), null);
-  assert.equal(heldMerge([], all), null);
 });

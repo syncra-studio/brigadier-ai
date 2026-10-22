@@ -6,7 +6,7 @@
 //!   reads, runs and makes tiny edits in the session's workspace and calls the Brigadier MCP
 //!   tools ([`tools`]);
 //! - workers, one CLI session per task, in their own worktrees ([`workers`]), whose accepted
-//!   work lands as one reviewed commit ([`landing`]);
+//!   work lands on the session's branch ([`landing`]);
 //! - one CLI session per Chat, with no orchestrator and no workers;
 //! - the cards the user answers ([`cards`]), the grants the sessions hold, and the lifecycle
 //!   (hibernate, archive, restore, delete) with the cleanup of everything they create
@@ -32,6 +32,7 @@ mod clean_up;
 mod cli;
 mod close_tab;
 mod closing;
+mod codex_children;
 mod cold;
 mod computer_host;
 mod open_in_app;
@@ -57,7 +58,6 @@ mod find_repos;
 mod flow;
 mod fork;
 mod fresh_base;
-mod fusion;
 mod git_actions;
 mod inbox_store;
 mod instructions;
@@ -67,11 +67,10 @@ mod kept;
 mod kept_live_tests;
 mod landing;
 mod lifecycle;
+mod local_files;
 mod machine;
 mod mcp_auth;
 mod memory_guard;
-mod merge_consent;
-mod merge_record;
 mod outcomes;
 mod outputs;
 pub mod overnight;
@@ -99,8 +98,6 @@ mod requests;
 mod reruns;
 mod research;
 mod review;
-mod review_hold;
-mod review_runs;
 mod routing;
 mod run;
 pub mod search;
@@ -121,7 +118,6 @@ mod tools;
 mod trust;
 mod undo;
 mod uninstall;
-mod unreviewed;
 pub(super) mod upgrade;
 mod usage;
 mod usage_view;
@@ -159,7 +155,6 @@ pub use closing::Turn;
 pub use conversation::SendOutcome;
 pub(crate) use conversation::interrupted_by_quit;
 pub use instructions::{COMMAND_PATHS_MAX, command_paths, lexical};
-pub(crate) use landing::held_merge;
 pub use mcp_auth::McpSignInStatus;
 pub use side_chat::BrowserPage;
 pub use takeover::{HostedTerminal, TerminalHost, TerminalSnapshot, WorkerTerminal};
@@ -200,8 +195,6 @@ pub struct SessionManager {
     /// and the open ones replaced) and while a review result decides a plan, so the two
     /// can't interleave.
     plans: tokio::sync::Mutex<()>,
-    /// Held while a one-shot review is looked for and recorded, so a range is reviewed once.
-    reviews: tokio::sync::Mutex<()>,
     /// Held while an open uncommitted-changes question is looked for and one opened, so two
     /// delegations at once open one card (#179).
     uncommitted_asks: tokio::sync::Mutex<()>,
@@ -225,13 +218,6 @@ pub struct SessionManager {
     background_runs: background_runs::BackgroundRuns,
     /// The previews running now ([`preview`]).
     previews: preview::Previews,
-    /// The one-shot reviews running now, by id: their conversation, and what ends one when
-    /// its conversation closes.
-    running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
-    /// The reviews a `request_review` call waits on, by session and range,
-    /// with how many calls wait: their replies carry the outcome, so no message of it is
-    /// delivered (#137, #193), unless all of them were cancelled (#332).
-    review_replies: Mutex<review_runs::ReplyClaims>,
     /// When each ready session's pull request was last looked up at a connect
     /// (`refresh_pull_request_soon`).
     pr_looked_up: Mutex<HashMap<ConversationId, std::time::Instant>>,
@@ -252,12 +238,6 @@ pub struct SessionManager {
     /// Tasks being stopped: a landing that fails meanwhile (its worktree going away under
     /// it) is no news for the orchestrator.
     stopping: Mutex<HashSet<TaskId>>,
-    /// Held while a fix of landed work is checked and created, so two can't both find none
-    /// running (SESSION-FIXES-PLAN.md Q6.1: one fix at a time resumes a session).
-    fixes_starting: tokio::sync::Mutex<()>,
-    /// Held while a fused pair's report is weighed and recorded, so of two reports coming in
-    /// at once one waits and the other carries both (Q77).
-    fusing: tokio::sync::Mutex<()>,
     /// Held while a rerun one tier up is checked and made, so a task reruns once.
     reruns_starting: tokio::sync::Mutex<()>,
     /// Held while a message to another session is checked against the hop and rate rules
@@ -446,7 +426,6 @@ impl SessionManager {
             local_checkouts: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),
-            reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             change_records: request_changes::ChangeRecords::default(),
             known_windows: std::sync::Mutex::new(HashMap::new()),
@@ -455,8 +434,6 @@ impl SessionManager {
             source_output: source_actions::SourceOutput::default(),
             background_runs: background_runs::BackgroundRuns::default(),
             previews: preview::Previews::default(),
-            running_reviews: Mutex::default(),
-            review_replies: Mutex::default(),
             pr_looked_up: Mutex::default(),
             #[cfg(test)]
             gh_override: Mutex::default(),
@@ -466,8 +443,6 @@ impl SessionManager {
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
-            fixes_starting: tokio::sync::Mutex::new(()),
-            fusing: tokio::sync::Mutex::new(()),
             reruns_starting: tokio::sync::Mutex::new(()),
             peer_sends: tokio::sync::Mutex::new(()),
             cut_off: Mutex::new(HashSet::new()),

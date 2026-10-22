@@ -87,7 +87,7 @@ impl SessionManager {
                     (_, None) => None,
                     (kind, Some(role)) => {
                         return Err(Error::Invalid(format!(
-                            "a {kind:?} task can't be a {role:?}: leads, parallel workers and fixes are implement tasks; start a verifier with start_verifier, and every landing gets its review by itself"
+                            "a {kind:?} task can't be a {role:?}: leads, parallel workers and fixes are implement tasks; start a verifier with start_verifier"
                         )));
                     }
                 };
@@ -255,68 +255,7 @@ impl SessionManager {
                         attachments.push(image);
                     }
                 }
-                // A research question costly to get wrong goes to both vendors, when both can
-                // take it (Q77), with the same files, areas and quality floor.
-                if args.fuse
-                    && let Some(reply) = crate::heap(|| {
-                        self.delegate_fused(
-                            id,
-                            &args,
-                            super::fusion::FusedBrief {
-                                spec: spec.clone(),
-                                effort: effort.clone(),
-                                request: request.clone(),
-                                attachments: attachments.clone(),
-                                areas: areas.clone(),
-                                floor,
-                                needs: needs.clone(),
-                                integrations: args.integrations.clone(),
-                            },
-                        )
-                    })
-                    .await?
-                {
-                    return Ok(reply);
-                }
-                // A fix of landed work resumes the worker that did it, on its model; one fix
-                // at a time resumes a session (SESSION-FIXES-PLAN.md Q6.1).
-                let held = subject.as_ref().filter(|subject| {
-                    role == Some(WorkerRole::Fix)
-                        && subject.landed.is_some()
-                        && subject.review_hold.is_some()
-                });
-                // Held until the fix is on the board, so two at once can't both pass the check.
-                let _starting = match held {
-                    Some(_) => Some(self.fixes_starting.lock().await),
-                    None => None,
-                };
-                if let Some(held) = held
-                    && let Some(fix) = crate::heap(|| self.core.board(id))
-                        .await?
-                        .tasks
-                        .values()
-                        .find(|task| {
-                            !task.state.is_final()
-                                && task.role == Some(WorkerRole::Fix)
-                                && task.subject.as_ref() == Some(&held.id)
-                        })
-                {
-                    // One fix at a time resumes the session: a second is told where the first
-                    // stands, not refused (#251).
-                    return Ok(format!(
-                        "task-{} fixes task-{}'s findings already ({:?}), so no new task started: send it more with message_worker.",
-                        fix.number, held.number, fix.state
-                    ));
-                }
-                let pin = match held {
-                    Some(held) => Some(brigadier_router::Pin {
-                        provider: Some(held.route.choice.provider),
-                        model: held.route.choice.model.clone(),
-                        effort: Some(effort),
-                        by_user: false,
-                    }),
-                    None => pin(args.provider.as_deref(), args.model, Some(effort))?,
-                };
+                let pin = pin(args.provider.as_deref(), args.model, Some(effort))?;
                 let avoid = subject
                     .as_ref()
                     .filter(|_| args.kind == TaskKind::Review)
@@ -582,9 +521,6 @@ impl SessionManager {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 crate::heap(|| self.verify_task(id, args)).await
             }
-            OrchestratorCall::RequestReview(args) => {
-                crate::heap(|| self.request_review(id, args)).await
-            }
             OrchestratorCall::AttachProof(args) => {
                 crate::heap(|| self.attach_proof(id, args)).await
             }
@@ -609,17 +545,10 @@ impl SessionManager {
             }
             OrchestratorCall::FinishSession(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
-                let consent = args.consent.as_deref().unwrap_or(&args.user_words);
-                crate::heap(|| self.finish_session_when(id, consent, args.message, args.when)).await
-            }
-            OrchestratorCall::StopMerge(args) => {
-                crate::heap(|| self.stop_merge(id, &args.why)).await
+                crate::heap(|| self.finish_session(id, args.message)).await
             }
             OrchestratorCall::NoteForUser(args) => {
                 crate::heap(|| self.note_for_user(id, args)).await
-            }
-            OrchestratorCall::RecordFindings(args) => {
-                crate::heap(|| self.record_findings(id, args)).await
             }
             OrchestratorCall::CiStatus(args) => crate::heap(|| self.ci_status(id, args)).await,
             OrchestratorCall::WatchCi(args) => crate::heap(|| self.watch_ci(id, args)).await,
@@ -677,9 +606,6 @@ impl SessionManager {
             }
             OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
             OrchestratorCall::CleanUp => crate::heap(|| self.clean_up(id)).await,
-            OrchestratorCall::ReviewPlan(args) => {
-                crate::heap(|| self.review_thread_plan(id, args)).await
-            }
             OrchestratorCall::ReadPage(args) => crate::heap(|| self.read_page(id, args)).await,
             OrchestratorCall::WritePage(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
@@ -817,19 +743,6 @@ impl SessionManager {
         request: Option<String>,
         kind: OrchestratorStepKind,
     ) {
-        // A step that ends a held merge is stored under the lock a tip update holds from its
-        // read to its write, so a landing told meanwhile can't hold the ended merge again.
-        let ends = matches!(
-            kind,
-            OrchestratorStepKind::Merged { .. }
-                | OrchestratorStepKind::MergeCancelled { .. }
-                | OrchestratorStepKind::MergeStopped { .. }
-        );
-        let conv = self.conv(id).ok().filter(|_| ends);
-        let _moves = match &conv {
-            Some(conv) => Some(conv.held_moves.lock().await),
-            None => None,
-        };
         let step = OrchestratorStep {
             request_id: request,
             kind,
@@ -963,9 +876,6 @@ impl SessionManager {
             WorkerCall::SubmitOutline(args) => {
                 self.submit_outline(&conversation_id, &task_id, args.outline)
                     .await
-            }
-            WorkerCall::RequestReview => {
-                self.worker_request_review(&conversation_id, &task_id).await
             }
             // The app shows the note from the call itself, in the worker's live events.
             WorkerCall::NoteProgress(args) => {
@@ -1237,10 +1147,6 @@ impl SessionManager {
                     SettingChange::Browser { on },
                     settings.browser_enabled == on,
                 )
-            }
-            SuggestedSetting::MergeOnOwn => {
-                let on = switch()?;
-                (SettingChange::MergeOnOwn { on }, settings.auto_merge == on)
             }
         };
         if already {

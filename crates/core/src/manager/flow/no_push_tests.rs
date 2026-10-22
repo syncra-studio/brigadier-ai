@@ -81,7 +81,7 @@ async fn an_idle_thread_gets_no_turn_from_engine_events() {
     flow.say_to(&b, "Share.").await;
     flow.settled_in(&b).await;
     flow.manager
-        .merge_session(&b, super::click(), false)
+        .merge_session(&b, super::click())
         .await
         .unwrap();
     flow.until_in(&b, "b's merge", |board| {
@@ -93,16 +93,12 @@ async fn an_idle_thread_gets_no_turn_from_engine_events() {
     .await;
     flow.settled_in(&b).await;
 
-    // The user's settings change: starting workers, reviews, the browser, and A's permission.
+    // The user's settings change: starting workers, the browser, and A's permission.
     edit_settings(&flow, |settings| {
         settings.start_workers_on_own = !settings.start_workers_on_own;
-        settings.review_work = !settings.review_work;
         settings.browser_enabled = !settings.browser_enabled;
     })
     .await;
-    flow.manager
-        .reviews_switched(flow.core.settings().review_work)
-        .await;
     let mut setup = flow.core.conversation(&a).unwrap().setup;
     let Some(Setup::Session { permission, .. }) = &mut setup else {
         panic!("a session");

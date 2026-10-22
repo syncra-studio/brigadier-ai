@@ -26,9 +26,6 @@ fn used(input: i64) -> ProviderEvent {
 fn reporting_twice() -> Script {
     Arc::new(|turn| {
         Box::pin(async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if turn.is_orchestrator() {
                 if turn.input.contains("Count the lines.") {
                     let reply = turn

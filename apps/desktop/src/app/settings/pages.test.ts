@@ -52,7 +52,6 @@ test("search finds every merged setting on Configuration, and no Recent activity
       "Ask for approval",
       "Approve for me",
       "Full access",
-      "Review the work",
     ]) {
       assert.ok(
         found(query).some((result) => result.page.id === "configuration" && result.row !== null),

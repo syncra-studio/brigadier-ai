@@ -36,7 +36,6 @@ export * from "./JoinedAnswer";
 export * from "./JoinedAnswerActions";
 export * from "./LimitBar";
 export * from "./LoadEarlier";
-export * from "./MergeWarningRow";
 export * from "./ModelChanged";
 export * from "./MovedMessageNotice";
 export * from "./Notices";

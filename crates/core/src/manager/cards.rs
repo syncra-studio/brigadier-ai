@@ -458,8 +458,8 @@ impl SessionManager {
         if answers.iter().any(String::is_empty) {
             return Err(Error::Invalid("an answer is empty".into()));
         }
-        // A merge card answered in the user's own words is never their consent: the card
-        // records "Not yet", and their words are a new request, which carries that decision.
+        // A merge card answered in the user's own words: the card records "Not yet", and their
+        // words are a new request, which carries that decision.
         let typed = match &question.kind {
             QuestionKind::Merge { base, .. }
                 if !round[0]
@@ -492,8 +492,7 @@ impl SessionManager {
         // Recorded before it is delivered: until the answer is in the inbox, the request
         // counts as carried, or a settle in between would end it (its card answered, nothing
         // queued) and open its time again with the answer's turn.
-        // A merge card's answer starts no work: merge cards are retired, and none of their
-        // answers is consent (BUILD-PLAN A4).
+        // A merge card's answer starts no work: merge cards are retired (BUILD-PLAN A4).
         let delivers = matches!(&question.kind, QuestionKind::Orchestrator);
         if delivers {
             self.answering(&conversation_id, &card_id, question.request_id.clone())
@@ -531,7 +530,6 @@ impl SessionManager {
                         ),
                     );
                 }
-                // The card's id: an answer that agrees to a merge is consent (#240).
                 let text = if round.len() == 1 {
                     format!(
                         "[answer] You asked the user: \"{}\"\nThe user answered: {answer}\n[card {}]",
@@ -573,8 +571,7 @@ impl SessionManager {
                         None,
                     )
                     .await?;
-                // The card points at the message its words went as: that message is neither
-                // consent nor the user writing since they declined.
+                // The card points at the message its words went as.
                 question.words_id = Some(match sent {
                     SendOutcome::Sent(message) => message.id,
                     SendOutcome::Queued(item) => item.id,

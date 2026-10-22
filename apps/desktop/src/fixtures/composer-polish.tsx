@@ -114,7 +114,7 @@ mockIPC((command, payload) => {
           plans: [], requests: [request], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [],
           compactions: [], decisions: [], waiting: [], queue, run: "idle",
           runRequest: null, head: "a1", ratings: {}, streaming: null, notices: [], memories: [], overnight: [],
-          reviews: [], previews: [],
+          previews: [],
         } as unknown as View,
       };
     default:

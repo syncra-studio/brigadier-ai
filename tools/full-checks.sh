@@ -102,7 +102,7 @@ git diff --check
 if $cross; then
   crates=(
     -p brigadier-core -p brigadier-store -p brigadier-ipc -p brigadier-providers
-    -p brigadier-brain -p brigadier-index -p brigadier-router -p brigadier-review
+    -p brigadier-brain -p brigadier-index -p brigadier-router
     -p brigadier-git -p brigadier-registry -p brigadier-sandbox -p brigadier-mcp-server
     -p brigadier-browser-data
   )

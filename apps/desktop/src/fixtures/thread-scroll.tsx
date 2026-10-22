@@ -152,7 +152,7 @@ function view(id: string): View {
     head: stored[id]?.at(-1)?.id ?? null,
     ratings: {},
     streaming: running ? { messageId: "working-answer", text: paragraph(0, 0), requestId: "working-r0" } : null,
-    notices: [], memories: [], overnight: [], reviews: [], previews: [],
+    notices: [], memories: [], overnight: [], previews: [],
   } as unknown as View;
 }
 

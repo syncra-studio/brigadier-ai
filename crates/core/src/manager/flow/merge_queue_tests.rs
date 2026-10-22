@@ -156,10 +156,7 @@ async fn queued_then_merged(name: &str, auto: bool) {
     let dir = scratch.clone();
     let flow = Flow::start(
         name,
-        Options {
-            auto_merge: true,
-            ..Options::default()
-        },
+        Options::default(),
         script(move |turn| {
             let dir = dir.clone();
             async move {
@@ -214,10 +211,7 @@ async fn a_queued_pull_request_merging_while_a_command_runs_is_recorded_after_it
     let (dir, ran, done) = (scratch.clone(), running.clone(), finish.clone());
     let flow = Flow::start(
         "merge-queue-busy",
-        Options {
-            auto_merge: true,
-            ..Options::default()
-        },
+        Options::default(),
         script(move |turn| {
             let (dir, ran, done) = (dir.clone(), ran.clone(), done.clone());
             async move {
@@ -313,10 +307,7 @@ async fn queued_across_a_restart(name: &str, merged_while_off: bool) {
     let dir = scratch.clone();
     let mut flow = Flow::start(
         name,
-        Options {
-            auto_merge: true,
-            ..Options::default()
-        },
+        Options::default(),
         script(move |turn| {
             let dir = dir.clone();
             async move {

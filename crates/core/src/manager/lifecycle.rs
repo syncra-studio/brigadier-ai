@@ -253,8 +253,6 @@ impl SessionManager {
                 crate::heap(|| self.dispose_task(&task, TaskState::Stopped)).await;
             }
             crate::heap(|| self.expire_stale_cards(&conversation.id)).await;
-            // A one-shot review the restart cut off is over; the orchestrator hears it.
-            crate::heap(|| self.recover_reviews(&conversation.id)).await;
             if let Some(live) = &live
                 && live.recovering(false).await
             {
@@ -268,9 +266,6 @@ impl SessionManager {
             if conversation.lifecycle != Lifecycle::Archived {
                 self.rewatch_pr(&conversation.id).await;
             }
-            // A held merge whose writers ended while Brigadier was down is stopped, waits or
-            // is due now (SESSION-FIXES-PLAN.md Q3).
-            self.check_held_merge(&conversation.id).await;
             // What other sessions sent it and it hadn't taken goes again (once).
             crate::heap(|| self.recover_peer_messages(&conversation, &owed)).await;
             // What waits for the user matches the tasks and reports as they are now.
@@ -1013,16 +1008,25 @@ impl SessionManager {
             closing.join_all().await;
         }
         let _lane = self.closing.lane.lock().await;
+        // What an older Brigadier kept of landed workers for their reviews goes too.
+        let mut held = Vec::new();
         if let Ok(tasks) = self.core.tasks(id).await {
-            for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
+            for task in tasks {
+                let owner = format!("review-hold:{}", task.id);
+                if !self.runtime.ledger().artifacts(&owner).is_empty() {
+                    // The held session's folder goes now (BUILD-PLAN D2.2).
+                    self.keep_saved_files(&task.id).await;
+                    held.push(owner);
+                }
+                if task.state.is_final() {
+                    continue;
+                }
                 if let Some(live) = self.existing_task_live(&task.id) {
                     live.close_cli().await;
                 }
                 self.dispose_task(&task, TaskState::Stopped).await;
             }
         }
-        // What landed workers kept for their reviews' findings goes too.
-        self.settle_all_holds(id).await;
         // Its thread's commands in the background stop.
         self.stop_background_runs(id);
         let (owner, _) = conversation_owner(conversation);
@@ -1036,12 +1040,12 @@ impl SessionManager {
             // The checkout an older Brigadier ran the session's full checks in.
             format!("checks:{id}"),
         ];
+        owners.extend(held);
         // Its previews' log folder.
         let previews = super::preview::preview_owner(id);
         if !self.runtime.ledger().artifacts(&previews).is_empty() {
             owners.push(previews);
         }
-        self.stop_reviews(id);
         self.stop_ci_watches(id).await;
         let session_worktree_goes = self.keep_session_changes(conversation).await;
         if session_worktree_goes {

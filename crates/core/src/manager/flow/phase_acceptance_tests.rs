@@ -1,11 +1,11 @@
 //! An overnight phase settles done only with evidence per criterion at its tip (BUILD-PLAN E2,
-//! research A5(a)), with reviews on and with reviews off.
+//! research A5(a)).
 //!
 //! The run's one phase has three criteria. Its lead's report meets the first two with lines its
 //! file still shows, and names nothing for the third. The thread's first settle quotes words
 //! the tip doesn't show: the criterion isn't bound to the tip. Lines it quotes at the tip then
-//! settle it. The settlement and the morning report carry each criterion's evidence, and the
-//! review's state: none asked for with reviews on, "No review was run" with them off.
+//! settle it. The settlement and the morning report carry each criterion's evidence; nothing
+//! reviews the phase.
 
 use std::sync::{Arc, Mutex};
 
@@ -47,15 +47,12 @@ fn plan() -> ProposedPlan {
     }
 }
 
-async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
+#[tokio::test]
+async fn a_phase_settles_done_only_with_evidence_at_its_tip() {
     let seen: Arc<Mutex<Seen>> = Arc::default();
     let log = seen.clone();
     let flow = Flow::start(
-        if reviews {
-            "acceptance-on"
-        } else {
-            "acceptance-off"
-        },
+        "acceptance",
         Options::default(),
         script(move |turn| {
             let log = log.clone();
@@ -133,9 +130,6 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
         }),
     )
     .await;
-    let mut settings = flow.core.settings();
-    settings.review_work = reviews;
-    flow.core.update_settings(settings).await.unwrap();
     flow.say("Hello.").await;
     flow.settled().await;
 
@@ -205,15 +199,9 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
     ] {
         assert!(evidence.contains(line), "{line}: {evidence}");
     }
-    let review = settled.review.clone().unwrap();
-    if reviews {
-        // Nothing reviews the phase by itself.
-        assert_eq!(review, "No review was asked for.");
-    } else {
-        assert_eq!(review, "No review was run: reviews are off.");
-    }
+    assert_eq!(settled.review, None, "nothing reviews the phase");
 
-    // The morning report says what each criterion rests on, and the review's state.
+    // The morning report says what each criterion rests on.
     let id = run.report_message_id.clone().expect("a report");
     let head = flow.core.head(&flow.conversation).await.unwrap().unwrap();
     let messages = flow.core.branch(&flow.conversation, &head).await.unwrap();
@@ -224,23 +212,7 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
         "{report}"
     );
     assert!(report.contains("Evidence: p1-c3: p1.txt:2"), "{report}");
-    if !reviews {
-        assert!(
-            report.contains("No review was run: reviews are off."),
-            "{report}"
-        );
-    }
     flow.stop().await;
-}
-
-#[tokio::test]
-async fn a_phase_settles_done_only_with_evidence_at_its_tip_with_reviews_on() {
-    a_phase_settles_done_only_with_evidence_at_its_tip(true).await;
-}
-
-#[tokio::test]
-async fn a_phase_settles_done_only_with_evidence_at_its_tip_with_reviews_off() {
-    a_phase_settles_done_only_with_evidence_at_its_tip(false).await;
 }
 
 const FRESH_RULE: &str = "A standing rule for this session: keep every greeting lowercase.";

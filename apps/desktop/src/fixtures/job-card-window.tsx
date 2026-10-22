@@ -1,9 +1,9 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a session's whole
- * window while a worker builds, CI checks a push, a merge waits for the worker, and the thread
- * asks the user something (IPC mocked). A plain session shows no Job card: the question card
- * stays above the composer (R3), CI and the held merge are Background rows with Open CI and
- * Cancel, and the rail above the composer holds the Workers strip alone. What it saw goes as
+ * window while a worker builds, CI checks a push, and the thread asks the user something (IPC
+ * mocked). A plain session shows no Job card: the question card stays above the composer (R3),
+ * CI is a Background row with Open CI, and the rail above the composer holds the Workers strip
+ * alone. What it saw goes as
  * JSON into `<pre id="job-card-window-result">`.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -36,7 +36,6 @@ const question: Question = {
 };
 const step = (atMs: number, kind: unknown): OrchestratorStep => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 });
 const steps = [
-  step(start + 2 * 60_000, { type: "mergeHeld", branch: "brigadier/s", base: "main", askedIn: "r1", consentedAtMs: start + 2 * 60_000, condition: "workersFinish", waiting: ["t1"], tip: "abc" }),
   step(start + 3 * 60_000, {
     type: "ciWatch", repo: "o/r", branch: "main", sha: "4e1c49e99aa", waiting: false,
     runs: [{ workflow: "test", url: "https://github.com/o/r/actions/runs/1", status: "in_progress", conclusion: "", jobsDone: 3, jobsTotal: 5 }],
@@ -56,7 +55,7 @@ mockIPC((command, payload) => {
           plans: [], requests: [request], workerSteps: [], orchestratorSteps: steps, machineSteps: [], thinking: [],
           compactions: [], decisions: [], waiting: [], queue: { items: [], paused: false }, run: "idle",
           runRequest: null, head: null, ratings: {}, streaming: null, notices: [], memories: [], overnight: [],
-          reviews: [], previews: [], backgroundRuns: [],
+          previews: [], backgroundRuns: [],
           // The thread's headline: outside a plan or an overnight run no card shows it.
           headline: { text: "Building the registry", detail: "Next: the Plugins and Skills page", failed: false, atMs: start + 4 * 60_000 },
         } as unknown as View,
@@ -90,18 +89,17 @@ const composer = () => document.querySelector("[data-slot=composer]");
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
-    await until("the Background rows", () => row("ci") !== null && row("merge") !== null);
+    await until("the Background rows", () => row("ci") !== null);
     await until("the question card", () => composer()?.textContent?.includes("Build the Plugins and Skills page") ?? false);
     await until("the Workers strip", () => composer()?.querySelector("[data-slot=composer-status-slot]") !== null);
     await sleep(200);
     seen.jobCards = document.querySelectorAll("[data-slot=job-card]").length;
     const buttons = (activity: string) => [...(row(activity)?.parentElement?.querySelectorAll('[data-slot="summary-row-action"] button') ?? [])].map((button) => button.textContent);
-    seen.background = { ci: buttons("ci"), merge: buttons("merge") };
+    seen.background = { ci: buttons("ci") };
     const rail = composer()!.querySelector("[data-slot=composer-status-slot]")!;
     seen.rail = rail.textContent;
     seen.railRows = rail.children.length;
     seen.railHasCi = /CI/.test(composer()!.textContent ?? "");
-    seen.railHasMerge = /Merging after/.test(composer()!.textContent ?? "");
     // The question card sits above the composer's field.
     const field = composer()!.querySelector("[data-slot=composer-input]");
     const asking = [...composer()!.querySelectorAll("*")].find((node) => node.children.length === 0 && node.textContent?.includes("Build the Plugins and Skills page"));

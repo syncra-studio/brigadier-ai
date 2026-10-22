@@ -64,7 +64,7 @@ const view = (id: string) => ({
   conversation: useApp.getState().conversations[id], messages: { messages: [], hasMore: false },
   tasks: [], approvals: [], questions: [], plans: [], overnight: [], requests: [], workerSteps: [], orchestratorSteps: [],
   machineSteps: [], decisions: [], waiting: [], compactions: [], ratings: {}, queue: emptyBoard(id).queue,
-  run: "idle", runRequest: null, head: null, context: null, streaming: null, thinking: [], notices: [], memories: [], reviews: [], previews: [],
+  run: "idle", runRequest: null, head: null, context: null, streaming: null, thinking: [], notices: [], memories: [], previews: [],
 });
 
 mockIPC((command, payload) => {

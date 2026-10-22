@@ -105,11 +105,6 @@ pub struct Project {
     /// about. A folder with none is asked about.
     #[serde(default)]
     pub trust: Vec<FolderTrust>,
-    /// A session of it merged on its own once: the merge messages after that one stay quiet
-    /// about it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(as = "Option<bool>", optional)]
-    pub auto_merged: bool,
 }
 
 impl Project {
@@ -943,17 +938,6 @@ pub struct Settings {
     /// What goes before the names of the branches Brigadier makes (sessions, forks, workers)
     /// and the name Create branch suggests, unless the project has its own. Empty: none.
     pub branch_prefix: String,
-    /// Another vendor's model reviews the sessions' work in the background: each landing, the
-    /// thread's own commits, a lead's outline, and a worker's own change when it asks. Off, no
-    /// review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
-    #[serde(default = "default_true")]
-    pub review_work: bool,
-    /// The tab merges its work on its own once it judges it ready: a pull request on GitHub,
-    /// or into the base here, with no consent asked. Off (the default), it says the work is
-    /// ready and the user merges. A user who turned it on keeps it on; settings saved before
-    /// this field existed, or that never set it, read as off.
-    #[serde(default)]
-    pub auto_merge: bool,
     /// The first-run setup (welcome, name, agents, then projects) was finished or skipped.
     pub onboarded: bool,
     /// The first launch's welcome intro was played through to its Continue, so a setup left
@@ -1215,8 +1199,6 @@ impl Default for Settings {
             pr_style: GitStyle::default(),
             pr_instructions: String::new(),
             branch_prefix: DEFAULT_BRANCH_PREFIX.to_owned(),
-            review_work: true,
-            auto_merge: false,
             onboarded: false,
             intro_seen: false,
             user_name: String::new(),
@@ -1459,9 +1441,6 @@ pub struct ConversationView {
     pub memories: Vec<crate::knowledge::MemoryChange>,
     /// Its overnight runs, a segment each, oldest first.
     pub overnight: Vec<crate::overnight::OvernightRun>,
-    /// Its one-shot reviews, oldest first.
-    #[serde(default)]
-    pub reviews: Vec<crate::work::ReviewRun>,
     /// Its previews, oldest first.
     #[serde(default)]
     pub previews: Vec<crate::work::Preview>,
@@ -1471,9 +1450,6 @@ pub struct ConversationView {
     /// What the session is doing now, in the thread's words; none once the user wrote since.
     #[serde(default)]
     pub headline: Option<crate::work::SessionHeadline>,
-    /// Why the last merge into the base was refused, while it stands.
-    #[serde(default)]
-    pub merge_refused: Option<crate::work::MergeRefused>,
     /// The ended previews and background runs the user dismissed or restarted from the
     /// Background rows (Q94), by id.
     #[serde(default)]
@@ -2516,9 +2492,12 @@ pub enum DomainEvent {
     PlanUpdated {
         plan: Plan,
     },
-    /// A one-shot review started or ended (full snapshot).
+    /// An older Brigadier's one-shot review started or ended. Nothing records it now; stored
+    /// ones are read and skipped.
     ReviewUpdated {
-        review: crate::work::ReviewRun,
+        #[serde(default)]
+        #[ts(type = "unknown")]
+        review: serde_json::Value,
     },
     /// An older Brigadier's run of the full checks became due, started or ended. Nothing
     /// records it now; stored ones are read and skipped.
@@ -2532,11 +2511,12 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         headline: Option<crate::work::SessionHeadline>,
     },
-    /// A merge into the base was refused by the merge rule, or (none) the refusal is over: a
-    /// merge went through, or the user said to merge anyway.
+    /// An older Brigadier's refusal of a merge into the base, or its end. Nothing records it
+    /// now; stored ones are read and skipped.
     MergeRefusalSet {
-        conversation_id: ConversationId,
-        refusal: Option<crate::work::MergeRefused>,
+        #[serde(default)]
+        #[ts(type = "unknown")]
+        refusal: serde_json::Value,
     },
     /// A command of the thread's went to the background, or ended there (full snapshot).
     BackgroundRunUpdated {
@@ -2566,11 +2546,22 @@ pub enum DomainEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authored_from: Option<String>,
     },
-    /// The thread's changes no review covered yet moved on, or a review covered them
-    /// (BUILD-PLAN B2; full snapshot, `None`: there are none).
+    /// An older Brigadier's record of the thread's changes no review covered yet. Nothing
+    /// records it now; stored ones are read and skipped.
     UnreviewedChanged {
+        #[serde(default)]
+        #[ts(type = "unknown")]
+        range: serde_json::Value,
+    },
+    /// On a local checkout, snapshots of its files (commits no ref names) when the thread's
+    /// request `request_id` started (`start`) and as last looked at (`tip`), its commits
+    /// included: the thread's self-edit metric counts its uncommitted change from them.
+    ThreadFilesSeen {
         conversation_id: ConversationId,
-        range: Option<crate::work::UnreviewedRange>,
+        request_id: String,
+        branch: String,
+        start: String,
+        tip: String,
     },
     /// A command output of the thread's was stored whole; the model got a digest of it, or
     /// (a failing Claude `Bash` call) the CLI's excerpt (THREAD-PLAN.md Q4).
@@ -2842,6 +2833,7 @@ impl DomainEvent {
             Self::McpServersUpdated { .. } => "mcp_servers.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::UnreviewedChanged { .. } => "thread.unreviewed",
+            Self::ThreadFilesSeen { .. } => "thread.files",
             Self::OutputStored { .. } => "output.stored",
             Self::CheckRan { .. } => "check.ran",
             Self::ThreadLooked { .. } => "thread.looked",
@@ -2989,7 +2981,6 @@ mod tests {
                 trusted: false,
                 decided_at_ms: 1,
             }],
-            auto_merged: false,
         };
         // The project's folder, never answered: asked about, and not trusted until then.
         assert!(!project.counts_trusted("/code/now"));
@@ -3107,27 +3098,12 @@ mod tests {
     }
 
     #[test]
-    fn work_is_reviewed_by_default_and_for_settings_saved_before_the_switch() {
-        assert!(Settings::default().review_work);
-        let settings: Settings = serde_json::from_str(r#"{"hibernateAfterMinutes":12}"#).unwrap();
-        assert!(settings.review_work);
-        let settings: Settings = serde_json::from_str(r#"{"reviewWork":false}"#).unwrap();
-        assert!(!settings.review_work);
-    }
-
-    #[test]
-    fn work_does_not_merge_on_its_own_by_default_and_for_settings_saved_before_the_switch() {
-        assert!(!Settings::default().auto_merge);
-        let settings: Settings = serde_json::from_str(r#"{"hibernateAfterMinutes":12}"#).unwrap();
-        assert!(!settings.auto_merge);
-        let settings: Settings = serde_json::from_str(r#"{"autoMerge":false}"#).unwrap();
-        assert!(!settings.auto_merge);
-    }
-
-    #[test]
-    fn work_keeps_merging_on_its_own_when_the_user_turned_it_on() {
-        let settings: Settings = serde_json::from_str(r#"{"autoMerge":true}"#).unwrap();
-        assert!(settings.auto_merge);
+    fn settings_saved_with_the_old_review_and_merge_switches_still_load() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"reviewWork":false,"autoMerge":true,"hibernateAfterMinutes":12}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.hibernate_after_minutes, 12);
     }
 
     #[test]

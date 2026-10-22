@@ -36,7 +36,7 @@ struct Seen {
     answer: Option<String>,
 }
 
-/// A false `learned` line from a worker whose check passed and whose review was clean, and a
+/// A false `learned` line from a worker whose check passed, and a
 /// convention the thread kept on its own, reach a later worker's brief, a `query_brain`
 /// answer and a forced rebirth briefing as unverified claims with their source; a handoff
 /// line that quotes the user is a user decision, one that doesn't is the thread's claim.
@@ -112,8 +112,6 @@ async fn claims_reach_briefs_answers_and_rebirths_labelled_unverified() {
                         turn.write("NOTES.md", "notes\n");
                         turn.git(&["add", "NOTES.md"]);
                         turn.git(&["commit", "-qm", "Write the notes"]);
-                        let review = turn.call("request_review", json!({})).await;
-                        assert!(!review.is_error, "{}", review.text);
                         let reply = turn
                             .call(
                                 "submit_report",

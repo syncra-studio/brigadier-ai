@@ -25,9 +25,6 @@ async fn limited_on_report(name: &str) -> Flow {
         name,
         Options::default(),
         script(|turn| async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if !turn.is_orchestrator() {
                 let reply = turn
                     .call("submit_report", json!({"summary": "Looked."}))

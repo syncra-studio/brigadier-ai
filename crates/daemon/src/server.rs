@@ -749,17 +749,14 @@ impl Session {
                     .map(|()| Response::AnswerQuestion)
                     .map_err(IpcError::from)
             }
-            Request::MergeSession {
-                conversation_id,
-                anyway,
-            } => {
+            Request::MergeSession { conversation_id } => {
                 let origin = brigadier_core::work::AnswerOrigin {
                     input: Some(brigadier_core::work::AnswerInput::Click),
                     client: self.client.name.clone(),
                     pid: self.client.pid,
                 };
                 let sessions = self.daemon.sessions.clone();
-                heap(|| sessions.merge_session(&conversation_id, origin, anyway))
+                heap(|| sessions.merge_session(&conversation_id, origin))
                     .await
                     .map(|text| Response::MergeSession { text })
                     .map_err(IpcError::from)
@@ -2255,9 +2252,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 .await?;
             Response::AnswerFeedbackOffer
         }
-        Request::CancelMerge { conversation_id } => Response::CancelMerge {
-            text: heap(|| sessions.cancel_merge(&conversation_id)).await?,
-        },
         Request::CloseWorkspace { conversation_id } => Response::CloseWorkspace {
             text: heap(|| sessions.close_workspace(&conversation_id)).await?,
         },
@@ -2509,13 +2503,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| core.update_settings(brigadier_core::accounts::edited(&before, *settings)))
                     .await?;
             heap(|| daemon.awake.apply()).await;
-            if before.review_work != settings.review_work {
-                // Workers waiting for a review go on.
-                let (sessions, on) = (daemon.sessions.clone(), settings.review_work);
-                daemon
-                    .supervisor
-                    .spawn(async move { sessions.reviews_switched(on).await });
-            }
             if before.computer_use != settings.computer_use {
                 // The helper stops, and running agents' calls are refused, until it is on again.
                 let sessions = daemon.sessions.clone();

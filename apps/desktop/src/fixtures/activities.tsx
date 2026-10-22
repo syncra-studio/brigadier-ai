@@ -6,8 +6,7 @@
  * row in each state (building, starting, running, paused, smoke testing, checking) and writes how
  * each one's icon and word look and move. With `ended=1` it runs processes, then ends them
  * (failed, finished, stopped) and writes that their rows left. With `events=1` it shows the
- * session's events while they run (a review, the CI watch, a held merge, then a merge at work,
- * then refused), opens CI, cancels the merge, merges anyway, ends them, and
+ * session's events while they run (the CI watch, then a merge at work), opens CI, ends them, and
  * writes what it saw.
  * Synthetic IPC; no daemon.
  */
@@ -20,7 +19,7 @@ import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, CiRun, Conversation, EventEnvelope, OrchestratorStep, Preview, Request, ReviewRun, Task, UserRequest } from "@/ipc/generated";
+import type { BackgroundRun, CiRun, Conversation, EventEnvelope, OrchestratorStep, Preview, Request, Task, UserRequest } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -69,14 +68,6 @@ mockIPC((command, payload) => {
   if (req.method === "previewLog") return { method: req.method, tail: "VITE ready in 286 ms", url: null };
   if (req.method === "stopPreview") calls.push(`stopPreview ${req.previewId}`);
   if (req.method === "stopBackgroundRun") calls.push(`stopBackgroundRun ${req.runId}`);
-  if (req.method === "cancelMerge") {
-    calls.push(`cancelMerge ${req.conversationId}`);
-    return { method: req.method, text: "Cancelled the merge." };
-  }
-  if (req.method === "mergeSession") {
-    calls.push(`mergeSession anyway=${String(req.anyway)}`);
-    return { method: req.method, text: "Merged." };
-  }
   return { method: req.method };
 });
 
@@ -238,23 +229,19 @@ async function driveEnded(): Promise<Record<string, unknown>> {
   return seen;
 }
 
-/** The session's own events at work: a Codex review, a CI watch, a merge held for the worker. */
+/** The session's own events at work: a CI watch, then a merge. */
 const steps = (atMs: number, ...kinds: unknown[]): OrchestratorStep[] => kinds.map((kind) => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 }));
 const ciRun = { workflow: "test", url: "https://github.com/o/r/actions/runs/7", status: "in_progress", conclusion: "", jobsDone: 3, jobsTotal: 5 } as unknown as CiRun;
 const ciWatch = (result?: string) => ({ type: "ciWatch", repo: "o/r", branch: "main", sha: "4e1c49e99aa", waiting: false, runs: [ciRun], ...(result ? { result } : {}) });
-const held = { type: "mergeHeld", branch: "session", base: "main", askedIn: "r1", consentedAtMs: now - 2 * MIN, condition: { type: "workersDone" }, waiting: ["task-2"], tip: "abc" };
-const codex = (state: ReviewRun["state"]): Record<string, ReviewRun> => ({ "review-1": { id: "review-1", conversationId: id, requestId: "r1", taskId: null, kind: "code", base: "aaaaaaa000",
-  tip: "4e1c49e999", author: "claude", reviewer: "codex", reviewerModel: null, notify: { type: "orchestrator" }, state, startedAtMs: now - 4 * MIN, endedAtMs: null, items: [] } as unknown as ReviewRun });
 const working = { r1: { id: "r1", conversationId: id, preview: "", state: { type: "working" }, startedAtMs: now - 10 * MIN, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [] } as unknown as UserRequest };
 const setBoard = (parts: Partial<NonNullable<ReturnType<typeof useBoard.getState>["board"]>>) => useBoard.setState({ board: { ...useBoard.getState().board!, ...parts } });
 
 async function driveEvents(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
-  setBoard({ requests: working, reviews: codex({ type: "running" }),
-    orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - 2 * MIN, held)] });
+  setBoard({ requests: working, orchestratorSteps: steps(now - 3 * MIN, ciWatch()) });
   await frame();
-  // `until=…` stops at a moment, for a screenshot: `running`, every event at work; `refused`, the refused merge.
+  // `until=running` stops with every event at work, for a screenshot.
   if (params.get("until") === "running") return seen;
   seen.order = ids();
   seen.rows = Object.fromEntries(ids().map((activity) => [activity, read(activity!)]));
@@ -262,40 +249,27 @@ async function driveEvents(): Promise<Record<string, unknown>> {
     const place = row(activity!)?.nextElementSibling;
     return [activity, place?.matches('[data-slot="summary-row-action"]') ? [...place.querySelectorAll("button")].map((button) => button.textContent) : []];
   }));
-  seen.buttonsVisibleAtRest = actionsVisible("ci") || actionsVisible("merge");
+  seen.buttonsVisibleAtRest = actionsVisible("ci");
   // An event opens the Progress tab.
-  row("review-1")?.click();
+  row("ci")?.click();
   await frame();
   const tabs = sessionTabs(id);
   const front = tabs.tabs.find((candidate) => candidate.id === tabs.active);
   seen.opened = front?.kind === "panel" ? `${front.id} ${front.title}` : front?.kind ?? null;
   action("ci", "Open CI")?.click();
-  action("merge", "Cancel")?.click();
-  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 2; ) await frame();
+  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 1; ) await frame();
   seen.calls = calls.toSorted();
-  // The merge was cancelled, the review ended, CI gave its result: all gone.
-  setBoard({ reviews: codex({ type: "clean" }),
-    orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - 2 * MIN, held), ...steps(now - MIN, ciWatch("passed"), { type: "mergeCancelled", askedIn: "r1" })] });
+  // CI gave its result: gone.
+  setBoard({ orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - MIN, ciWatch("passed"))] });
   await frame();
   seen.ended = !section();
   // The user's merge click is at work.
   setBoard({ orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }) });
   await frame();
   seen.next = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
-  // The merge rule refused it. The row waits on the user, its Merge anyway in sight.
-  setBoard({ mergeRefused: { reason: "The checks haven't run on abc1234.", sha: "abc1234000", branch: "session", base: "main", waivable: true, atMs: now - 30_000 } });
-  await frame();
-  seen.refused = read("merge");
-  seen.refusedButtons = [...(row("merge")?.nextElementSibling?.querySelectorAll("button") ?? [])].map((button) => button.textContent);
-  seen.refusedVisibleAtRest = actionsVisible("merge");
-  if (params.get("until") === "refused") return seen;
-  calls.length = 0;
-  action("merge", "Merge anyway")?.click();
-  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 1; ) await frame();
-  seen.anyway = [...calls];
   // Merged: its row leaves.
   setBoard({ orchestratorSteps: [...steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }),
-    ...steps(now, { type: "merged", branch: "session", base: "main", commits: 3, askedIn: null, head: "abc", mergeCommit: "def", checksSkipped: true })] });
+    ...steps(now, { type: "merged", branch: "session", base: "main", commits: 3, askedIn: null, head: "abc", mergeCommit: "def" })] });
   await frame();
   seen.merged = ids();
   seen.restartOrDismiss = restartOrDismiss();

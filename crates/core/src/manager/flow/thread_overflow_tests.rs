@@ -81,9 +81,6 @@ fn thread(
             if turn.input.contains("Write the handoff note") {
                 return Reply::text(NOTE);
             }
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if !turn.is_orchestrator() {
                 return Reply::text("Done.");
             }

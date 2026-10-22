@@ -969,10 +969,7 @@ async fn the_thread_attaches_a_preview_s_screenshot_from_the_browser_tool_as_mer
     let log = said.clone();
     let flow = Flow::start(
         "browser-tool-proof",
-        Options {
-            auto_merge: true,
-            ..Options::default()
-        },
+        Options::default(),
         script(move |turn| {
             let log = log.clone();
             async move {

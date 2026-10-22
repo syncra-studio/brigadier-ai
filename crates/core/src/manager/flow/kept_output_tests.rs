@@ -129,9 +129,6 @@ fn handing_over_with(firsts: &Arc<Mutex<Vec<Fresh>>>, saved: Option<std::path::P
     script(move |turn| {
         let (firsts, saved) = (firsts.clone(), saved.clone());
         async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if turn.is_orchestrator() {
                 if turn.input.contains("Find the marker.") {
                     let reply = turn

@@ -1,5 +1,4 @@
-import { questionOpen } from "@/app/conversation/cards/questionRound";
-import type { CiRun, OrchestratorStep, OrchestratorStepKind, Question, Task, TaskState } from "@/ipc/generated";
+import type { CiRun, OrchestratorStep, OrchestratorStepKind } from "@/ipc/generated";
 
 type CiWatchKind = Extract<OrchestratorStepKind, { type: "ciWatch" }>;
 
@@ -112,72 +111,4 @@ export function ciPill(watches: readonly CiWatchView[]): { state: CiState; words
 /** The short sha a pill names a push by. */
 export function shortSha(sha: string): string {
   return sha.slice(0, 8);
-}
-
-const FINAL: readonly TaskState[] = ["landed", "done", "rejected", "stopped", "failed"];
-
-/** The merge the user said yes to while workers wrote, held until they finish. */
-export type HeldMergeView = {
-  branch: string;
-  base: string;
-  /** The write tasks it still waits for. */
-  waiting: number;
-  /** One of them is a merge task bringing the base in (the merge met conflicts). */
-  mergingIn: boolean;
-  /** A merge card asked since the user's yes waits for their answer: the merge waits on it. */
-  asking: boolean;
-  sinceMs: number;
-};
-
-const WRITES: readonly Task["kind"][] = ["implement", "merge"];
-
-/**
- * The held merge (SESSION-FIXES-PLAN.md Q3), while it is held: its latest `mergeHeld` row with
- * no merge, Cancel or stop since. It waits for the write tasks that ran when it was held, or
- * started since (a merge task after conflicts, #223), until each is final (the daemon's
- * `is_final`); reviews don't hold it (#241, #242). When the thread asks again on a merge card
- * (the user wrote since their yes), it waits for that answer.
- */
-export function heldMerge(
-  steps: readonly OrchestratorStep[],
-  tasks: Readonly<Record<string, Task>>,
-  questions: readonly Question[] = [],
-): HeldMergeView | null {
-  type Held = { kind: Extract<OrchestratorStepKind, { type: "mergeHeld" }>; sinceMs: number };
-  let held: Held | null = null as Held | null;
-  for (const step of steps) {
-    const kind = step.kind;
-    const askedIn: string | undefined = held?.kind.askedIn;
-    if (kind.type === "mergeHeld") {
-      held = { kind, sinceMs: held && askedIn === kind.askedIn ? held.sinceMs : step.atMs };
-    } else if (kind.type === "merged" || ((kind.type === "mergeCancelled" || kind.type === "mergeStopped") && kind.askedIn === askedIn)) {
-      held = null;
-    }
-  }
-  if (!held) return null;
-  const sinceMs = held.sinceMs;
-  const writers = Object.values(tasks).filter(
-    (task) =>
-      !FINAL.includes(task.state) &&
-      (held.kind.waiting.includes(task.id) || (WRITES.includes(task.kind) && task.createdAtMs >= sinceMs)),
-  );
-  const waiting = writers.length;
-  // A merge task with no subject brings the base in; one with a subject merges into a worker's.
-  const mergingIn = writers.some((task) => task.kind === "merge" && task.subject === null);
-  const consentedAtMs = held.kind.consentedAtMs;
-  const asking = questions.some(
-    (question) => question.kind.type === "merge" && questionOpen(question) && question.createdAtMs >= consentedAtMs,
-  );
-  return { branch: held.kind.branch, base: held.kind.base, waiting, mergingIn, asking, sinceMs };
-}
-
-/**
- * "Merging after main is merged in" while a merge task resolves conflicts, "Merging after 2
- * workers finish", then "Merging…"; while a merge card waits, "Waiting for your yes to merge".
- */
-export function mergeWords(merge: Pick<HeldMergeView, "base" | "waiting" | "mergingIn" | "asking">): string {
-  if (merge.asking) return "Waiting for your yes to merge";
-  if (merge.mergingIn) return `Merging after ${merge.base} is merged in`;
-  if (merge.waiting > 0) return `Merging after ${merge.waiting} ${merge.waiting === 1 ? "worker finishes" : "workers finish"}`;
-  return "Merging…";
 }

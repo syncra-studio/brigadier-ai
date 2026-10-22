@@ -1,6 +1,6 @@
 //! The agents' own tools for the work that has a component of its own (thread-truth grill,
-//! 10-21): the session's headline and the review. Checks are plain commands the thread runs
-//! in its own shell (STRIP-DOWN-PLAN.md S4): no check tool, no build lease. Brigadier starts
+//! 10-21): the session's headline. Checks and reviews are plain commands the thread runs in its
+//! own shell (STRIP-DOWN-PLAN.md S4, S5): no check or review tool, no build lease. Brigadier starts
 //! none of that work by itself; it stores what the tools say and sends it as events.
 
 use std::sync::{Arc, Mutex};
@@ -298,7 +298,7 @@ async fn two_sessions_heavy_commands_run_at_once_without_a_lease_row() {
 
 /// Brigadier starts no review, no checks and no fix by itself: not for a turn in which the
 /// thread commits 240 lines of code over 6 files, nor for a worker's landing. Only the agents
-/// start them (request_review, their own shell, delegate_task).
+/// start them (their own shell, delegate_task).
 #[tokio::test]
 async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
     let flow = Flow::start(
@@ -366,7 +366,6 @@ async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
     // Time for anything automatic to start.
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     let board = flow.board().await;
-    assert!(board.reviews.is_empty(), "{:#?}", board.reviews);
     assert!(
         board.background_runs.is_empty(),
         "{:#?}",

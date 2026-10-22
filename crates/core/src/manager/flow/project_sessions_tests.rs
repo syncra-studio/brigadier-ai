@@ -512,7 +512,7 @@ async fn the_board_lists_siblings_and_tells_no_overlap_or_merge() {
     flow.say_to(&b, "Write gamma.").await;
     flow.settled_in(&b).await;
     flow.manager
-        .merge_session(&b, super::click(), false)
+        .merge_session(&b, super::click())
         .await
         .unwrap();
     flow.until_in(&b, "b's merge", |board| {
@@ -855,7 +855,7 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
 
     // B merges; a follow-up routed to it goes, with the fact attached.
     flow.manager
-        .merge_session(&b, super::click(), false)
+        .merge_session(&b, super::click())
         .await
         .unwrap();
     flow.until_in(&b, "b's merge", |board| {
@@ -977,7 +977,7 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     );
 
     flow.manager
-        .merge_session(&a, super::click(), false)
+        .merge_session(&a, super::click())
         .await
         .unwrap();
     flow.until_in(&a, "a's merge", |board| {

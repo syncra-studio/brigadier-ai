@@ -1,5 +1,5 @@
 //! Restart survival (BUILD-PLAN D1.4, research A3): a daemon killed while a worker waits (on
-//! its question, its outline's go-ahead, its review, the user's pause or quota) loses no
+//! its question, its outline's go-ahead, the user's pause or quota) loses no
 //! worker: each keeps its task and resumes its own CLI session, so what it read before the
 //! kill is still in its context. A landing the kill cut off after the target moved is found
 //! landed, and one cut off before is not.
@@ -11,7 +11,6 @@ use serde_json::json;
 use tokio::sync::Notify;
 
 use super::super::phases::WAITING_FOR_GO_AHEAD;
-use super::super::review_runs::WAITING_FOR_REVIEW;
 use super::super::workers::ASKED_THE_THREAD;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::work::TaskState;
@@ -37,7 +36,7 @@ struct WorkerTurn {
 type Log = Arc<Mutex<Vec<WorkerTurn>>>;
 
 /// Logs each worker turn, then answers it with `worker`, given how many turns its CLI session
-/// took before (0: a new session's first); the thread's and the reviewer's turns go to
+/// took before (0: a new session's first); the thread's turns go to
 /// `thread`.
 fn logged<T, TF, W, WF>(log: &Log, thread: T, worker: W) -> Script
 where
@@ -50,7 +49,7 @@ where
     script(move |turn| {
         let (log, thread, worker) = (log.clone(), thread.clone(), worker.clone());
         async move {
-            if turn.is_orchestrator() || turn.is_review() {
+            if turn.is_orchestrator() {
                 return thread(turn).await;
             }
             let earlier = {
@@ -126,9 +125,6 @@ async fn a_worker_waiting_on_its_question_is_asked_again_and_resumes_after_a_kil
         logged(
             &log,
             |turn| async move {
-                if turn.is_review() {
-                    return Reply::text("No findings.");
-                }
                 if turn.input.contains("[question from task-1") {
                     if turn.input.contains("before Brigadier restarted") {
                         let reply = turn
@@ -195,9 +191,6 @@ async fn a_lead_waiting_for_its_go_ahead_still_waits_after_a_kill() {
         logged(
             &log,
             |turn| async move {
-                if turn.is_review() {
-                    return Reply::text("No findings.");
-                }
                 if turn.input.contains("Go ahead with task-1.") {
                     let reply = turn
                         .call("approve_outline", json!({"task": "task-1"}))
@@ -257,106 +250,6 @@ async fn a_lead_waiting_for_its_go_ahead_still_waits_after_a_kill() {
     flow.stop().await;
 }
 
-/// A verifier that waited for its own code review when the daemon died: the review ended with
-/// the daemon, so the verifier resumes its own session.
-#[tokio::test]
-async fn a_verifier_waiting_for_its_review_resumes_after_a_kill() {
-    let log = Log::default();
-    let mut flow = Flow::start(
-        "restart-review",
-        Options {
-            // The review never ends: the kill cuts it off.
-            reviews: Some(script(|_| std::future::pending())),
-            ..Options::default()
-        },
-        logged(
-            &log,
-            |turn| async move {
-                if turn.input.contains("[report task-1") {
-                    let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("");
-                }
-                if turn.input.contains("Do it.") {
-                    return delegate(&turn, "implement").await;
-                }
-                Reply::text("")
-            },
-            |turn, earlier| async move {
-                if !turn.prompt.contains("You verify this phase") {
-                    turn.write("ticket.txt", "VT-88213\n");
-                    turn.git(&["add", "ticket.txt"]);
-                    turn.git(&["commit", "-qm", "Add the ticket"]);
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "Wrote it.", "changes": ["ticket.txt"]}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Reported.");
-                }
-                // Its resumed session (told it was interrupted, maybe also of its review's
-                // end) reports.
-                if earlier > 0 {
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": format!("Verified. {PLANTED}"),
-                                   "changes": ["ticket.txt"]}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Reported.");
-                }
-                turn.tool_output(PLANTED);
-                let started = turn.call("request_review", json!({})).await;
-                assert!(
-                    started.text.starts_with("Started a review"),
-                    "{}",
-                    started.text
-                );
-                Reply::text("Waiting for the review.")
-            },
-        ),
-    )
-    .await;
-    flow.say("Do it.").await;
-    flow.until("the verifier to wait for its review", |board| {
-        board
-            .tasks
-            .values()
-            .any(|task| task.blocked_reason.as_deref() == Some(WAITING_FOR_REVIEW))
-    })
-    .await;
-    flow.crash().await;
-    let board = flow
-        .until("the verifier's report", |board| {
-            board
-                .tasks
-                .values()
-                .any(|task| task.number == 2 && task.report.is_some())
-        })
-        .await;
-    assert_ne!(Flow::task(&board, 2).state, TaskState::Stopped);
-    // The verifier's own turns: its first, then the one its resumed session took.
-    let turns = log.lock().unwrap().clone();
-    let verifier: Vec<WorkerTurn> = turns
-        .iter()
-        .filter(|turn| turn.native_id != turns[0].native_id)
-        .cloned()
-        .collect();
-    assert!(verifier.len() >= 2, "{verifier:#?}");
-    // Its own session resumed (told it was interrupted, or of its review's end, whichever
-    // came first).
-    assert!(
-        verifier
-            .iter()
-            .all(|turn| turn.native_id == verifier[0].native_id)
-    );
-    flow.stop().await;
-}
-
 /// A worker the user paused when the daemon died stays paused, and the user's resume starts
 /// its own session again.
 #[tokio::test]
@@ -369,9 +262,6 @@ async fn a_paused_worker_stays_paused_after_a_kill_and_resumes_its_own_session()
         logged(
             &log,
             |turn| async move {
-                if turn.is_review() {
-                    return Reply::text("No findings.");
-                }
                 if turn.input.contains("Do it.") {
                     return delegate(&turn, "scout").await;
                 }
@@ -421,9 +311,6 @@ async fn a_worker_waiting_for_quota_still_waits_after_a_kill() {
         logged(
             &log,
             |turn| async move {
-                if turn.is_review() {
-                    return Reply::text("No findings.");
-                }
                 if turn.input.contains("Do it.") {
                     return delegate(&turn, "scout").await;
                 }
@@ -457,9 +344,6 @@ async fn reported_task(name: &str, heard: &Arc<Mutex<Vec<String>>>) -> Flow {
         script(move |turn| {
             let heard = heard.clone();
             async move {
-                if turn.is_review() {
-                    return Reply::text("No findings.");
-                }
                 if turn.is_orchestrator() {
                     heard.lock().unwrap().push(turn.input.clone());
                     if turn.input.contains("Do it.") {

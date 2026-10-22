@@ -52,10 +52,6 @@ export const CONFIGURATION_ROWS = {
   askForApproval: levelRow("askForApproval"),
   approveForMe: levelRow("approveForMe"),
   fullAccess: levelRow("fullAccess"),
-  reviewWork: {
-    label: "Review the work",
-    description: "Choose whether another AI model reviews bigger or risky changes",
-  },
   startWorkersOnOwn: {
     label: "Start workers on its own",
     description: "Choose whether a session starts helpers when they help, or asks you first",
@@ -74,7 +70,7 @@ export const CONFIGURATION_ROWS = {
 
 /**
  * How Brigadier works for the user: one card of the defaults new sessions and chats start with
- * (models, permission level, reviews, starting workers), what the composer
+ * (models, permission level, starting workers), what the composer
  * shows, and the Brain's spare quota. Each row says in a line what it chooses; its menu explains the
  * choices.
  */
@@ -108,7 +104,6 @@ export function ConfigurationPage() {
           fallback={orchestrator ?? automatic}
         />
         <PermissionRow value={permission} />
-        <SwitchSetting setting="reviewWork" row={CONFIGURATION_ROWS.reviewWork} />
         <SwitchSetting setting="startWorkersOnOwn" row={CONFIGURATION_ROWS.startWorkersOnOwn} />
       </SettingsCard>
 

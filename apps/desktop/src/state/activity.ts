@@ -260,12 +260,6 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
       if (next.tasks[id] === state && next.titles?.[id] === title) return next;
       return { ...next, tasks: { ...next.tasks, [id]: state }, titles: { ...next.titles, [id]: title } };
     }
-    case "reviewUpdated":
-      return phased(
-        current,
-        `review:${event.review.id}`,
-        event.review.state.type === "running" ? "reviewing" : undefined,
-      );
     case "orchestratorStepped":
       return stepped(current, event.step.kind);
     case "approvalUpdated":
@@ -296,8 +290,6 @@ function conversationOf({ stream, event }: EventEnvelope): string | null {
   switch (event.type) {
     case "orchestratorStepped":
       return stream.startsWith("conversation:") ? stream.slice("conversation:".length) : null;
-    case "reviewUpdated":
-      return event.review.conversationId;
     case "runStateChanged":
       return event.conversationId;
     case "requestUpdated":

@@ -160,7 +160,7 @@ signedIn: boolean,
 /**
  * The GitHub login, when `gh` could say it.
  */
-login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn, } | { "method": "waitGitHubSignIn" } | { "method": "cancelGitHubSignIn" } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
+login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn, } | { "method": "waitGitHubSignIn" } | { "method": "cancelGitHubSignIn" } | { "method": "answerFeedbackOffer" } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */

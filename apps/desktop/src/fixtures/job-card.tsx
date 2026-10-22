@@ -10,7 +10,7 @@ import { JobStack } from "@/app/conversation/JobStack";
 import { JobTimeline } from "@/app/side-panel/JobTab";
 import { SummaryRow, SummarySection } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
-import type { CiRun, OrchestratorStep, Plan, Preview, Question, Request, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
+import type { CiRun, OrchestratorStep, Plan, Preview, Question, Request, Task, UserRequest } from "@/ipc/generated";
 import { type Board, BoardStoreContext, emptyBoard, type ShownApproval } from "@/state/board";
 
 // Each column is the summary's column of cards (PinnedSummary's STACK) for a session of its own,
@@ -24,8 +24,6 @@ mockIPC((command, payload) => (command === "ipc_request" ? { method: (payload as
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
-const review = (state: ReviewState, startedAtMs: number, endedAtMs: number | null = null): ReviewRun =>
-  ({ id: "v1", conversationId: "c", requestId: "r1", taskId: null, kind: "code", notify: { type: "orchestrator" }, base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs, number: 1, items: [] }) as unknown as ReviewRun;
 const step = (atMs: number, kind: unknown): OrchestratorStep => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 });
 const ciRun = (workflow: string, status: string, conclusion: string, jobsDone = 0, jobsTotal = 0): CiRun =>
   ({ workflow, url: `https://github.com/o/r/actions/runs/${workflow}`, status, conclusion, jobsDone, jobsTotal }) as unknown as CiRun;
@@ -37,18 +35,8 @@ const byId = <T extends { id: string }>(items: T[]) => Object.fromEntries(items.
 
 const working = { requests: byId([request("r1", T0, { type: "working" })]) };
 const ended = { requests: byId([request("r1", T0, { type: "done" }, NOW - MIN)]) };
-const held = step(T0 + 2 * MIN, { type: "mergeHeld", branch: "brigadier/s", base: "main", askedIn: "r1", consentedAtMs: T0 + 2 * MIN, condition: "workersFinish", waiting: ["t1"], tip: "abc" });
 const merged = (head: string) =>
   step(T0 + 9 * MIN, { type: "merged", branch: "brigadier/s", base: "main", commits: 4, askedIn: null, head, mergeCommit: "4e1c49e0001" });
-/** The merge rule refused the merge. */
-const refused = (waivable: boolean) => ({
-  reason: "The checks haven't run on 7d2a91f, the tip of brigadier/s.",
-  sha: "7d2a91f000",
-  branch: "brigadier/s",
-  base: "main",
-  waivable,
-  atMs: T0 + 4 * MIN,
-});
 const question: Question = { id: "q1", kind: { type: "orchestrator" }, answer: null, answeredAtMs: null, answers: [], createdAtMs: T0 + 5 * MIN, items: [{ question: "Build the page as drawn?", options: [] }] } as unknown as Question;
 const plan = {
   id: "p1", conversationId: "c", requestId: "r1", position: 0, title: "Settings", body: "# Settings", state: { type: "approved" }, createdAtMs: T0, decidedAtMs: T0,
@@ -62,21 +50,12 @@ const plan = {
 /** Each moment: the board's events, and the thread's headline where it set one. */
 const MOMENTS: Record<string, Partial<Board>> = {
   // First: the page doesn't scroll (the app's root clips), and their buttons are clicked.
-  heldMerge: { ...working, tasks: byId([task("t1", "running")]), orchestratorSteps: [held] },
-  mergeRefused: { ...working, mergeRefused: refused(true) },
   ciFailed: { ...ended, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "completed", "failure", 5, 5)], "failed")] },
   idle: ended,
   working: { ...working, tasks: byId([task("t1", "running")]) },
-  reviewRunning: { ...working, reviews: byId([review({ type: "running" }, T0 + 3 * MIN)]) },
-  reviewFindings: { ...ended, reviews: byId([review({ type: "findings", count: 3 }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
-  reviewClean: { ...ended, reviews: byId([review({ type: "clean" }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
   ciChecking: { ...working, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "in_progress", "", 3, 5)])] },
   merging: { ...working, orchestratorSteps: [step(T0 + 9 * MIN, { type: "mergeRequested", id: "m1", branch: "brigadier/s", base: "main", origin: {} })] },
   merged: { ...ended, orchestratorSteps: [merged("head111")] },
-  mergeRefusedFirm: { ...working, mergeRefused: refused(false) },
-  // The user wrote since the refusal: it is theirs to raise again, not the card's.
-  mergeRefusedOld: { requests: byId([request("r2", T0 + 5 * MIN, { type: "done" }, T0 + 6 * MIN)]), mergeRefused: refused(true) },
-  mergedAnyway: { ...ended, orchestratorSteps: [step(T0 + 9 * MIN, { type: "merged", branch: "brigadier/s", base: "main", commits: 4, askedIn: null, head: "7d2a91f000", mergeCommit: "4e1c49e0001", checksSkipped: true })] },
   waitingAnswer: { ...working, questions: { q1: question } },
   waitingApproval: { ...working, approvals: { a1: { id: "a1", state: { type: "pending" }, createdAtMs: T0 + 5 * MIN, subject: { type: "cli" } } as unknown as ShownApproval } },
   workerFailed: { ...working, tasks: byId([task("t1", "failed", { error: "The registry tests failed" })]) },
@@ -88,16 +67,14 @@ const MOMENTS: Record<string, Partial<Board>> = {
   headline: {
     ...working,
     tasks: byId([task("t1", "running")]),
-    orchestratorSteps: [held],
     headline: { text: "Investigating the dev server", detail: "Looking for what holds port 1420", failed: false, atMs: T0 + 6 * MIN },
   },
   plan: { ...working, tasks: byId([task("t1", "running")]), plans: { p1: plan } },
-  // A plan's card: the thread's headline over the phase bar; the held merge's Cancel is its Background row's.
+  // A plan's card: the thread's headline over the phase bar.
   planHeadline: {
     ...working,
     tasks: byId([task("t1", "running")]),
     plans: { p1: plan },
-    orchestratorSteps: [held],
     headline: { text: "Investigating the dev server", detail: "Looking for what holds port 1420", failed: false, atMs: T0 + 6 * MIN },
   },
   // Merged, then CI that GitHub marked cancelled (a cache save timed out), then the thread's words
@@ -116,8 +93,6 @@ const MOMENTS: Record<string, Partial<Board>> = {
     plans: { p1: plan },
     headline: { text: "The tests still fail", detail: "Next: ask you how to go on", failed: true, atMs: T0 + 7 * MIN },
   },
-  // A refused merge in a plan: the card says so, Merge anyway is the Background row's.
-  planMergeRefused: { ...working, tasks: byId([task("t1", "running")]), plans: { p1: plan }, mergeRefused: refused(true) },
 };
 
 /** A stand-in for the context card: its surface and two of its rows. */
@@ -158,20 +133,10 @@ function Session({ id, parts }: { id: string; parts: (typeof MOMENTS)[string] })
 const FAILED: Job = {
   steps: [
     { id: "build", name: "Building", state: "done", startedAtMs: NOW - 50 * MIN, summary: "Two workers built it" },
-    { id: "review", name: "Reviewing", state: "done", startedAtMs: NOW - 20 * MIN, summary: "Review found 3 issues, all fixed" },
     { id: "ci", name: "CI", state: "failed", failedLabel: "CI failed", startedAtMs: NOW - 9 * MIN, summary: "2 tests failed in the desktop app" },
-    { id: "fix", name: "Fixing", state: "active", startedAtMs: NOW - 4 * MIN },
     { id: "merge", name: "Merging", state: "pending" },
   ],
 };
-
-const FINDINGS = (
-  <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 ps-4 text-xs">
-    <li>The sidebar ignores the saved width after a restart.</li>
-    <li>A worker's name can wrap under its avatar.</li>
-    <li>The tab bar's close button has no label.</li>
-  </ul>
-);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -215,7 +180,6 @@ function Fixture() {
         tab: {
           steps: steps.map((item) => item.querySelector("div > span")?.textContent),
           current: steps.map((item) => item.getAttribute("aria-current")),
-          findings: tab.querySelectorAll('[data-slot="timeline"] ul > li').length,
         },
       });
       document.body.append(result);
@@ -235,7 +199,7 @@ function Fixture() {
           <WaitCard title="Resumes at 4:00 AM" reason="when the Claude limit resets" atMs={NOW + 2 * 60 * MIN + 10 * MIN} nowMs={NOW} />
         </Column>
         <div data-shot="tab" className="bg-background w-160">
-          <JobTimeline job={FAILED} details={{ review: FINDINGS }} />
+          <JobTimeline job={FAILED} />
         </div>
       </div>
     </TooltipProvider>

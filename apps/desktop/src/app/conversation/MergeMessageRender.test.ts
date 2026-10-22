@@ -15,9 +15,6 @@ type Seen = {
   checkedInThread: boolean;
   headers: string[];
   card: { title: string; merged: string; buttons: string[]; rowWords: string[] } | null;
-  warning: string[];
-  tab: string | null;
-  reviews: string[];
   revert: { shown: string; sent: string[]; after: string[] };
 };
 
@@ -41,13 +38,11 @@ test("a turn's proofs show captioned in its Preview card under its answer", { ti
   assert.deepEqual(seen.read, ["proof-shot", "proof-video"]);
 });
 
-// What was checked never lists in the thread, and nothing is wrong here: no footer row. A turn
-// that merged with no files of its own counted shows the merge's own Changes card, Revert in it;
+// What was checked never lists in the thread. A turn that merged with no files of its own counted shows the merge's own Changes card, Revert in it;
 // Revert asks in the card's footer, then sends the thread its fixed request once.
 test("a merge with nothing counted shows its own Changes card with Revert, and no Checked list", { timeout: 60000 }, async (t) => {
   const seen = await render(t);
   assert.equal(seen.checkedInThread, false);
-  assert.deepEqual(seen.warning, []);
   assert.deepEqual(seen.headers, ["Merged into main (PR #7)"]);
   assert.equal(seen.card, null);
   assert.deepEqual(seen.revert, {
@@ -72,15 +67,4 @@ test("a merge in a later turn shows on the edited turn's card and in its own tur
   assert.equal(seen.card?.merged, "Merged into main (PR #7)");
   assert.deepEqual(seen.card?.buttons, ["Revert", "View changes"]);
   assert.deepEqual(seen.headers, ["Merged into main (PR #7)"]);
-  assert.deepEqual(seen.warning, []);
-});
-
-// Something really wrong with the merged code is the Changes card's footer row, which opens the
-// Progress tab, which lists each.
-test("an open finding and a failed CI run read as the card's footer row, which opens the Progress tab", { timeout: 60000 }, async (t) => {
-  const seen = await render(t, "&warn=1");
-  assert.deepEqual(seen.warning, ["One review finding is still open and CI failed"]);
-  assert.equal(seen.tab, "panel:reviews");
-  // There, under Merging, only what is really wrong: no stale checks, no proofs line.
-  assert.deepEqual(seen.reviews, ["! Codex review of 0000aaa..9999bbb: one finding still open", "! CI failed on a1b2c3d"]);
 });

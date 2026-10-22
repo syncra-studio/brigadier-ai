@@ -426,45 +426,6 @@ impl SessionManager {
             })
             .collect()
     }
-
-    /// A review finding's evidence, by its id (`R3.2`): its location and the check outputs its
-    /// text names, each with `quote`. None when the finding names neither: a review is no
-    /// evidence of its own.
-    pub(crate) async fn finding_cites(
-        &self,
-        id: &ConversationId,
-        finding: &str,
-        quote: &str,
-    ) -> std::result::Result<Vec<(String, String)>, String> {
-        let board = self
-            .core
-            .board(id)
-            .await
-            .map_err(|err| format!("this session's reviews can't be read: {err}"))?;
-        let found = board
-            .reviews
-            .values()
-            .flat_map(|review| &review.items)
-            .find(|item| item.id.eq_ignore_ascii_case(finding.trim()))
-            .ok_or_else(|| format!("this session has no review finding {}", finding.trim()))?;
-        let mut cites: Vec<String> = found
-            .location
-            .iter()
-            .filter(|location| lines_cite(location).is_some())
-            .cloned()
-            .collect();
-        cites.extend(
-            found
-                .title
-                .split(|c: char| c.is_whitespace() || "`()[],;".contains(c))
-                .filter_map(output_alias)
-                .map(str::to_owned),
-        );
-        Ok(cites
-            .into_iter()
-            .map(|cite| (cite, quote.to_owned()))
-            .collect())
-    }
 }
 
 #[cfg(test)]

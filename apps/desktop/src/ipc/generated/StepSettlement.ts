@@ -19,6 +19,6 @@ left: Array<string>,
  */
 tip: string | null, atMs: number, 
 /**
- * What review it had: settled (and how), or that none was run because reviews are off.
+ * What review an older Brigadier recorded for it; none now.
  */
 review?: string, };

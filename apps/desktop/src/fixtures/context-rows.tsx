@@ -16,7 +16,7 @@ import { AgentsPanelContext, type AgentsPanelState } from "@/app/conversation/Wo
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, Conversation, OrchestratorStep, Plan, Preview, Request, ReviewRun, Task } from "@/ipc/generated";
+import type { BackgroundRun, Conversation, OrchestratorStep, Plan, Preview, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { openPanelTab, sessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -44,20 +44,16 @@ const plan = { ...(Object.values(night.plans)[0] as unknown as Plan), id: "plan-
 const { settled: _settled, ...open } = plan.steps[0]!;
 plan.steps = [
   { ...plan.steps[0]!, title: "Data model and storage", taskId: "task-1", number: 1 },
-  // Phase 2 began after the first phase's review.
+  // Phase 2 began after the first phase.
   { ...open, title: "API routes", taskId: "task-3", number: 2, startedAtMs: now - 4.5 * MIN, endedAtMs: null },
   { ...open, title: "The web page", taskId: "task-2", number: 3, endedAtMs: null },
 ];
-const review: ReviewRun = { id: "review-1", conversationId: id, requestId: "r1", taskId: null, kind: "code", base: "a1", tip: "b2", author: "claude", reviewer: "codex",
-  reviewerModel: "reviewer", notify: { type: "orchestrator" }, state: { type: "findings", count: 5 }, startedAtMs: now - 9 * MIN, endedAtMs: now - 7 * MIN, findings: null, number: 1,
-  items: [1, 2, 3, 4, 5].map((n) => ({ id: `R1.${n}`, severity: "P2", title: `Finding ${n}`, location: "src/server.js:12", high: false,
-    status: { type: "fixed", task: null, why: null, checked: "its test passes at the tip" } })) } as ReviewRun;
 const page: Preview = { id: "preview-1", conversationId: id, name: "todo app", command: "npm run dev", kind: "web", workdir: "/work/todo-app-web-ui",
   workspace: "/work/todo-app-web-ui", pid: 42, log: null, url: "http://localhost:3000/", state: { type: "running" }, building: false, startedAtMs: now - 3 * MIN, endedAtMs: null };
 const run: BackgroundRun = { id: "run-1", conversationId: id, requestId: "r1", tool: "run", name: "api tests", command: "npm test -- --watch",
   startedAtMs: now - 2 * MIN, endedAtMs: null, state: { type: "running" } };
 const step = (kind: OrchestratorStep["kind"], at: number): OrchestratorStep => ({ requestId: "r1", kind, atMs: now - at * MIN, position: 0 });
-useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [plan.id]: plan }, reviews: { [review.id]: review },
+useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [plan.id]: plan },
   previews: { [page.id]: page }, backgroundRuns: { [run.id]: run },
   // The MCP servers each agent's CLI connected: the session's own model at its start, a worker's kept current.
   mcpServers: {

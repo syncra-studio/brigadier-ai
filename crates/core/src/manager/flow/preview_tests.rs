@@ -94,7 +94,7 @@ fn thread(replies: Replies) -> Script {
             } else if input.contains("Please stop it.") {
                 ("stop_preview", json!({}))
             } else if input.contains("Please merge.") {
-                ("finish_session", json!({ "user_words": "Please merge." }))
+                ("finish_session", json!({}))
             } else if input.contains("Show me the log.") {
                 ("preview_log", json!({}))
             } else {

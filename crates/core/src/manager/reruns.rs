@@ -135,13 +135,6 @@ impl SessionManager {
                 task.number
             ));
         }
-        // Its rerun would say what ran it, and it is judged against its partner's answer (Q77).
-        if let Some(label) = super::fusion::fused_label(task) {
-            return Err(format!(
-                "task-{} is {label} of a fused pair: it is judged against the other answer, not rerun. Delegate a new task if you want more.",
-                task.number
-            ));
-        }
         if task.rerun.is_some() {
             return Err(format!(
                 "task-{} is already a rerun one tier up; it doesn't rerun again. Delegate a new task if you want more.",
@@ -231,8 +224,6 @@ impl SessionManager {
     pub(crate) fn reruns_by_itself(task: &Task) -> bool {
         brigadier_router::reruns(task_category(task))
             && task.rerun.is_none()
-            // A fused answer is judged against its partner's, not rerun on another model.
-            && task.fusion.is_none()
             && task.pin.as_ref().is_none_or(|pin| pin.model.is_none())
     }
 

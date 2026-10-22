@@ -1,8 +1,7 @@
-//! Auto-merge (WORKSPACES-PLAN.md phase 3): with "Merge on its own" on, the thread merges with
-//! no consent asked, and its instructions carry the bar as guidance; off, the merge needs the
-//! user's consent. A pull request the thread merged on GitHub is recorded as the tab's merge,
-//! and the session branch moves onto the new base, so the next request starts from it rather
-//! than from the commits a squash merge rewrote.
+//! Merges the thread makes (WORKSPACES-PLAN.md phase 3): a pull request the thread merged on
+//! GitHub is recorded as the tab's merge, and the session branch moves onto the new base, so the
+//! next request starts from it rather than from the commits a squash merge rewrote; a merge's
+//! proof and its revert.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -11,7 +10,6 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::manager::ci::Gh;
-use crate::manager::prompts::AUTO_MERGE;
 use crate::work::{OrchestratorStepKind, TabState};
 
 pub(super) fn script<F, Fut>(f: F) -> Script
@@ -92,10 +90,7 @@ async fn squash_merged(name: &str, single_branch: bool) {
     let (dir, said) = (scratch.clone(), log.clone());
     let flow = Flow::start(
         name,
-        Options {
-            auto_merge: true,
-            ..Options::default()
-        },
+        Options::default(),
         script(move |turn| {
             let (dir, said) = (dir.clone(), said.clone());
             async move {
@@ -212,7 +207,6 @@ async fn squash_merged(name: &str, single_branch: bool) {
                 head,
                 merge_commit,
                 pr,
-                auto,
                 requests,
                 base,
                 commits,
@@ -221,7 +215,6 @@ async fn squash_merged(name: &str, single_branch: bool) {
                 head.clone(),
                 merge_commit.clone(),
                 *pr,
-                *auto,
                 requests.clone(),
                 base.clone(),
                 *commits,
@@ -235,7 +228,6 @@ async fn squash_merged(name: &str, single_branch: bool) {
             Some(head.clone()),
             Some(squash.clone()),
             Some(7),
-            true,
             vec![request],
             "main".to_owned(),
             1
@@ -383,13 +375,11 @@ async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_befor
         .orchestrator_steps
         .iter()
         .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::Merged {
-                pr, auto, requests, ..
-            } => Some((*pr, *auto, requests.clone())),
+            OrchestratorStepKind::Merged { pr, requests, .. } => Some((*pr, requests.clone())),
             _ => None,
         })
         .collect();
-    assert_eq!(merged, [(Some(7), false, vec![ready])]);
+    assert_eq!(merged, [(Some(7), vec![ready])]);
     // The sibling tab hears nothing of it: it reads git itself when it needs to.
     flow.say_to(&sibling, "Hello.").await;
     flow.settled_in(&sibling).await;
@@ -486,190 +476,16 @@ async fn a_pull_request_into_another_branch_or_not_fetched_yet_is_not_recorded()
 
 type Log = Arc<Mutex<Vec<String>>>;
 
-/// A session whose thread commits NOTES.md on "Ship it." and calls finish_session with no
-/// consent; it logs whether its instructions carry the bar, and finish_session's reply.
-async fn shipping(name: &str, auto_merge: bool) -> (Flow, Log) {
-    let log: Log = Arc::default();
-    let said = log.clone();
-    // Each ship writes new notes, so a second session has something to merge too.
-    let shipped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let flow = Flow::start(
-        name,
-        Options {
-            auto_merge,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (said, shipped) = (said.clone(), shipped.clone());
-            async move {
-                if !turn.is_orchestrator() {
-                    return Reply::text("Done.");
-                }
-                if turn.input.contains("Ship it.") {
-                    said.lock()
-                        .unwrap()
-                        .push(format!("bar: {}", turn.prompt.contains(AUTO_MERGE)));
-                    let workspace = &turn.cwd;
-                    let n = shipped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    std::fs::write(workspace.join("NOTES.md"), format!("notes {n}\n")).unwrap();
-                    git(workspace, &["add", "NOTES.md"]);
-                    git(workspace, &["commit", "-q", "-m", "Add notes"]);
-                    let reply = turn.call("finish_session", json!({})).await;
-                    said.lock()
-                        .unwrap()
-                        .push(format!("finish_session: {} {}", reply.is_error, reply.text));
-                    return Reply::text("Done.");
-                }
-                Reply::text("Noted.")
-            }
-        }),
-    )
-    .await;
-    (flow, log)
-}
-
-fn merges(board: &crate::board::Board) -> Vec<(bool, Option<String>)> {
+/// The merge commit of each merge recorded, oldest first.
+fn merges(board: &crate::board::Board) -> Vec<Option<String>> {
     board
         .orchestrator_steps
         .iter()
         .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::Merged {
-                auto, merge_commit, ..
-            } => Some((*auto, merge_commit.clone())),
+            OrchestratorStepKind::Merged { merge_commit, .. } => Some(merge_commit.clone()),
             _ => None,
         })
         .collect()
-}
-
-/// On: the thread's instructions carry the bar, and its finish_session merges with no consent,
-/// recorded as an auto merge.
-#[tokio::test]
-async fn with_merging_on_its_own_on_the_thread_merges_with_no_consent() {
-    let (flow, log) = shipping("auto-merge-on", true).await;
-    flow.say("Ship it.").await;
-    let board = flow.settled().await;
-    let log = log.lock().unwrap().clone();
-    assert_eq!(log[0], "bar: true");
-    assert!(
-        log[1].starts_with(
-            "finish_session: false [finished] On its own, as the user's setting has it: "
-        ),
-        "{}",
-        log[1]
-    );
-    let main = git(&flow.repo, &["rev-parse", "main"]);
-    assert_eq!(merges(&board), [(true, Some(main))]);
-    assert!(
-        board.questions.is_empty(),
-        "no card: {:#?}",
-        board.questions
-    );
-    flow.stop().await;
-}
-
-/// A merge carries its record: the commit it merged, and what ran on it. The first merge on its
-/// own in a project says so; the next one, from another session of the project, stays quiet.
-#[tokio::test]
-async fn the_first_merge_on_its_own_in_a_project_is_marked_once() {
-    let (flow, _) = shipping("auto-merge-first", true).await;
-    let record = |board: &crate::board::Board| {
-        board
-            .orchestrator_steps
-            .iter()
-            .find_map(|step| match &step.kind {
-                OrchestratorStepKind::Merged { record, head, .. } => {
-                    Some((record.clone().expect("a merge record"), head.clone()))
-                }
-                _ => None,
-            })
-            .expect("merged")
-    };
-    flow.say("Ship it.").await;
-    let (first, head) = record(&flow.settled().await);
-    assert!(first.first_auto);
-    assert_eq!(Some(first.head.clone()), head);
-    // Nothing ran on it: the record shows each part missing.
-    assert!(first.ci.is_none() && first.verifier.is_none());
-    let sibling = flow
-        .manager
-        .create_session_from(&flow.conversation, None)
-        .await
-        .unwrap()
-        .id;
-    flow.say_to(&sibling, "Ship it.").await;
-    let (second, _) = record(&flow.settled_in(&sibling).await);
-    assert!(!second.first_auto, "quiet after the first");
-    flow.stop().await;
-}
-
-/// Off: no bar in the instructions, and finish_session with no consent merges nothing.
-#[tokio::test]
-async fn with_merging_on_its_own_off_a_merge_still_needs_consent() {
-    let (flow, log) = shipping("auto-merge-off", false).await;
-    flow.say("Ship it.").await;
-    let board = flow.settled().await;
-    let log = log.lock().unwrap().clone();
-    assert_eq!(log[0], "bar: false");
-    assert!(log[1].starts_with("finish_session: true "), "{}", log[1]);
-    assert!(merges(&board).is_empty());
-    assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));
-    flow.stop().await;
-}
-
-/// A merge held on an auto go-ahead (workers still wrote, or conflicts) doesn't outlive the
-/// switch: once the user turns merging on its own off, it needs their consent.
-#[tokio::test]
-async fn a_merge_held_on_its_own_needs_consent_once_the_switch_is_off() {
-    let flow = Flow::start(
-        "auto-merge-held-off",
-        Options {
-            auto_merge: true,
-            ..Options::default()
-        },
-        script(|turn| async move {
-            if turn.is_orchestrator() && turn.input.contains("Add notes.") {
-                let workspace = &turn.cwd;
-                std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
-                git(workspace, &["add", "NOTES.md"]);
-                git(workspace, &["commit", "-q", "-m", "Add notes"]);
-            }
-            Reply::text("Done.")
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let checkout = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
-    let branch = git(&checkout, &["branch", "--show-current"]);
-    flow.manager
-        .orchestrator_step(
-            &flow.conversation,
-            OrchestratorStepKind::MergeHeld {
-                branch: branch.clone(),
-                base: "main".into(),
-                asked_in: "auto:1".into(),
-                consented_at_ms: 1,
-                condition: crate::work::MergeCondition::Now,
-                waiting: Vec::new(),
-                tip: git(&flow.repo, &["rev-parse", &branch]),
-            },
-        )
-        .await;
-    let mut settings = flow.core.settings();
-    settings.auto_merge = false;
-    flow.core.update_settings(settings).await.unwrap();
-    let refused = flow
-        .manager
-        .finish_session(&flow.conversation, "", None)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refused.contains("merging on its own was turned off since this merge was held"),
-        "{refused}"
-    );
-    assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));
-    flow.stop().await;
 }
 
 /// The thread attaches a screenshot it made of the change: Brigadier keeps a copy, records it
@@ -812,15 +628,12 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
 
 /// Revert on the merge message sends the thread "Revert merge ‹sha› on ‹base› the way it went
 /// in" as the user's message: one message, and the thread's revert lands on the base the way
-/// the merge went in (here, merged on this Mac on its own).
+/// the merge went in (here, merged on this Mac).
 #[tokio::test]
 async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_lands() {
     let flow = Flow::start(
         "auto-merge-revert",
-        Options {
-            auto_merge: true,
-            ..Options::default()
-        },
+        Options::default(),
         script(|turn| async move {
             if !turn.is_orchestrator() {
                 return Reply::text("Done.");
@@ -848,7 +661,7 @@ async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_l
     flow.say("Ship it.").await;
     let board = flow.settled().await;
     assert!(super::thread_tests::on_main(&flow, "NOTES.md"));
-    let merged = merges(&board)[0].1.clone().unwrap();
+    let merged = merges(&board)[0].clone().unwrap();
     // The request the merge message's Revert sends.
     let revert = format!("Revert merge {} on main the way it went in", &merged[..7]);
     flow.say(&revert).await;

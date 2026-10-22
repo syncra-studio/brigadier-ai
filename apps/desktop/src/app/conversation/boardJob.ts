@@ -4,39 +4,25 @@ import { isRunRequest } from "@/app/conversation/blocks";
 import type { Job, JobStep, JobStepState } from "@/app/conversation/job";
 import type { JobStage } from "@/components/conversation/elements/job-progress";
 import { contextPlanId, contextPlanIds, latestPlanRequest, planStepStatus, stepStates } from "@/app/conversation/planProgress";
-import { batchReviews, type FindingRow, findingRows } from "@/app/conversation/reviewStatus";
-import type { MergeRecord, OrchestratorStep, OrchestratorStepKind, Plan, ReviewRun, Task, TaskState } from "@/ipc/generated";
+import type { OrchestratorStep, OrchestratorStepKind, Plan, Task, TaskState } from "@/ipc/generated";
 import { type Board, useBoard } from "@/state/board";
-import { useApp } from "@/state/store";
 
 /**
  * The session's job read off its board (Q88): what its change went through since the last merge
- * (Building, Reviewing, Fixing, CI, Merging), or the phase at work of its plan. Each step is
- * one the board holds; while one is at work, the steps the session still goes through follow it
- * as pending (a review when reviews are on, the merge when it merges on its own). Every earlier merge closes a job of its own, kept for the job's tab.
+ * (Building, CI, Merging), or the phase at work of its plan. Each step is one the board holds.
+ * Every earlier merge closes a job of its own, kept for the job's tab.
  */
 
-export type JobStepId = "build" | "review" | "fix" | "ci" | "merge";
-
-/** The board's facts about one step, for the job's tab: a review's findings, a merge's record. */
-export type JobFacts = {
-  findings: FindingRow[];
-  /** The merge that closed the job, with what was checked of it. */
-  merge: { commit: string | null; base: string; pr: boolean; record: MergeRecord | null } | null;
-};
+export type JobStepId = "build" | "ci" | "merge";
 
 export type BoardJob = Job & {
   atMs: number;
   /** The newest work start, even when several workers share one step's earliest start. */
   latestStartedAtMs: number;
-  facts: JobFacts;
 };
 
-/** What a job is read from: the board's parts and the two settings that add steps to come. */
-export type JobInput = Pick<Board, "tasks" | "reviews" | "orchestratorSteps" | "plans" | "requests" | "overnight"> & {
-  reviewWork: boolean;
-  autoMerge: boolean;
-};
+/** What a job is read from: the board's parts. */
+export type JobInput = Pick<Board, "tasks" | "orchestratorSteps" | "plans" | "requests" | "overnight">;
 
 /** The work kinds that build: a change, or an app driven to a state. */
 const BUILDS = new Set<Task["kind"]>(["implement", "operate"]);
@@ -63,8 +49,6 @@ function buildState(state: TaskState): JobStepState | "stopped" {
       return "done";
   }
 }
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function buildStep(tasks: readonly Task[], phase: JobStepState | null): JobStep | null {
   if (tasks.length === 0 && phase === null) return null;
@@ -95,46 +79,6 @@ function buildStep(tasks: readonly Task[], phase: JobStepState | null): JobStep 
           ? `${done === 1 ? "A worker" : `${done} workers`} built it`
           : undefined,
   };
-}
-
-/** How many findings the reviews hold (one stored before findings were items counts its own). */
-function findingCount(reviews: readonly ReviewRun[]): number {
-  return reviews.reduce(
-    (sum, review) => sum + (review.items.length > 0 ? review.items.length : review.state.type === "findings" ? review.state.count : 0),
-    0,
-  );
-}
-
-function reviewStep(reviews: readonly ReviewRun[]): JobStep | null {
-  if (reviews.length === 0) return null;
-  const running = reviews.filter((review) => review.state.type === "running").length;
-  const found = findingCount(reviews);
-  const ended = reviews.flatMap((review) => (review.endedAtMs === null ? [] : [review.endedAtMs]));
-  return {
-    id: "review",
-    name: "Reviewing",
-    state: running > 0 ? "active" : "done",
-    count: running > 0 && reviews.length > 1 ? `${reviews.length - running} of ${reviews.length}` : undefined,
-    startedAtMs: Math.min(...reviews.map((review) => review.startedAtMs)),
-    endedAtMs: running === 0 && ended.length > 0 ? Math.max(...ended) : null,
-    summary:
-      running > 0
-        ? undefined
-        : reviews.every((review) => review.state.type === "failed")
-          ? "Review couldn’t run"
-          : found === 0
-            ? "Review found nothing to fix"
-            : `Review found ${plural(found, "issue")}`,
-  };
-}
-
-/** What the thread did about the findings: "2 fixed, 1 dismissed", "1 left open". */
-function settledWords(rows: readonly FindingRow[]): string | undefined {
-  const fixed = rows.filter((row) => row.status === "Fixed" || row.status === "Unverified").length;
-  const dismissed = rows.filter((row) => row.status === "Dismissed").length;
-  const open = rows.filter((row) => row.status === "Open").length;
-  const words = [fixed > 0 && `${fixed} fixed`, dismissed > 0 && `${dismissed} dismissed`, open > 0 && `${open} left open`];
-  return words.filter(Boolean).join(", ") || undefined;
 }
 
 type CiWatch = Extract<OrchestratorStepKind, { type: "ciWatch" }>;
@@ -172,8 +116,7 @@ function mergeStep(steps: readonly OrchestratorStep[], merged: { kind: Merged; a
   return null;
 }
 
-const ORDER: readonly JobStepId[] = ["build", "review", "fix", "ci", "merge"];
-const NAMES: Record<JobStepId, string> = { build: "Building", review: "Reviewing", fix: "Fixing", ci: "CI", merge: "Merging" };
+const ORDER: readonly JobStepId[] = ["build", "ci", "merge"];
 
 /** One job: the board's steps between `since` and `until`, closed by `merged` when one did. */
 function windowJob(
@@ -185,48 +128,17 @@ function windowJob(
 ): BoardJob | null {
   const inWindow = (atMs: number) => atMs >= since && atMs < until;
   const tasks = phase?.tasks ?? Object.values(input.tasks).filter((task) => builds(task) && !isRunRequest(task.requestId) && inWindow(task.createdAtMs));
-  const reviews = batchReviews(Object.values(input.reviews), since, until).filter((review) => !isRunRequest(review.requestId));
   const steps = input.orchestratorSteps.filter((step) => inWindow(step.atMs) && !isRunRequest(step.requestId));
   const watch = steps.flatMap((step) => (step.kind.type === "ciWatch" ? [{ kind: step.kind, atMs: step.atMs }] : [])).at(-1);
-  const findings = findingRows(reviews);
-
-  // A build that starts once the reviews have begun is a fix: the job never goes back to
-  // Building (#423).
-  const trouble = Math.min(...reviews.map((review) => review.startedAtMs));
-  const lead = phase?.tasks[0];
-  const fixes = tasks.filter((task) => task !== lead && task.createdAtMs > trouble);
-  const build = buildStep(tasks.filter((task) => !fixes.includes(task)), phase?.state ?? null);
-  const fixing = fixes.some((task) => buildState(task.state) === "active" || buildState(task.state) === "pending");
-  const review = reviewStep(reviews);
+  const build = buildStep(tasks, phase?.state ?? null);
   const ci = ciStep(watch);
   const merge = mergeStep(steps, merged);
-  const unrecorded = findings.filter((row) => row.status === "New").length;
-  const live = fixing || [build, review, ci, merge].some((step) => step?.state === "active");
-  const fix: JobStep | null =
-    findingCount(reviews) > 0 || fixes.length > 0
-      ? {
-          id: "fix",
-          name: "Fixing",
-          // While a review still runs, its findings wait for it.
-          state: fixing || (unrecorded > 0 && live && review?.state !== "active") ? "active" : unrecorded > 0 ? "pending" : "done",
-          count: unrecorded > 0 ? `${plural(unrecorded, "finding")} to go` : undefined,
-          summary: unrecorded > 0 ? undefined : settledWords(findings),
-        }
-      : null;
   const real: Partial<Record<JobStepId, JobStep>> = Object.fromEntries(
-    ([["build", build], ["review", review], ["fix", fix], ["ci", ci], ["merge", merge]] as const).filter(([, step]) => step !== null),
+    ([["build", build], ["ci", ci], ["merge", merge]] as const).filter(([, step]) => step !== null),
   );
-  // A job is the board's: a review or a worker's build. A question has none.
-  if (!real.build && !real.review && !real.merge) return null;
-  // While a step is at work, what the session still goes through comes after it.
-  const furthest = Math.max(...ORDER.map((id, index) => (real[id] ? index : -1)));
-  const expected = new Set<JobStepId>([...(input.reviewWork ? (["review"] as const) : []), ...(input.autoMerge ? (["merge"] as const) : [])]);
-  const listed: JobStep[] = ORDER.flatMap((id, index) => {
-    const step = real[id];
-    if (step) return [step];
-    return live && !merged && index > furthest && expected.has(id) ? [{ id, name: NAMES[id], state: "pending" as const }] : [];
-  });
-  const result = onwards(listed);
+  // A job is the board's: a worker's build or a merge. A question has none.
+  if (!real.build && !real.merge) return null;
+  const result = onwards(ORDER.flatMap((id) => (real[id] ? [real[id]] : [])));
   const atMs = Math.min(...result.flatMap((step) => (step.startedAtMs ? [step.startedAtMs] : [])), merged?.atMs ?? Number.POSITIVE_INFINITY);
   return {
     steps: result,
@@ -234,13 +146,8 @@ function windowJob(
     latestStartedAtMs: Math.max(
       Number.isFinite(atMs) ? atMs : since,
       ...tasks.map((task) => task.createdAtMs),
-      ...reviews.map((item) => item.startedAtMs),
       ...result.flatMap((step) => (step.startedAtMs == null ? [] : [step.startedAtMs])),
     ),
-    facts: {
-      findings,
-      merge: merged ? { commit: merged.kind.mergeCommit ?? null, base: merged.kind.base, pr: merged.kind.pr !== undefined, record: merged.kind.record ?? null } : null,
-    },
   };
 }
 
@@ -277,7 +184,7 @@ function currentPhase(
   const since = startOf(index) ?? (index > 0 ? (startOf(index - 1) ?? plan.decidedAtMs ?? plan.createdAtMs) : (plan.decidedAtMs ?? plan.createdAtMs));
   const task = plan.steps[index]?.taskId ? input.tasks[plan.steps[index]!.taskId!] : undefined;
   const status = statuses[index]!;
-  // The phase's lead builds until it reports; past that, its reviews are at work.
+  // The phase's lead builds until it reports.
   const state: JobStepState = task ? (buildState(task.state) === "stopped" ? "done" : (buildState(task.state) as JobStepState)) : status === "stopped" ? "done" : status;
   // The phase's other builds (its fixes): those since it started that no other phase leads.
   const leads = new Set(plan.steps.flatMap((step) => (step.taskId ? [step.taskId] : [])));
@@ -339,12 +246,10 @@ export function sessionJobs(input: JobInput): { current: BoardJob | null; past: 
 
 /** The board's session's jobs, live; null while the board is another conversation's. */
 export function useSessionJobs(conversationId: string): { current: BoardJob | null; past: BoardJob[] } | null {
-  const reviewWork = useApp((s) => s.settings.reviewWork);
-  const autoMerge = useApp((s) => s.settings.autoMerge);
   const json = useBoard((s) => {
     const board = s.board;
     if (!board || board.conversationId !== conversationId) return null;
-    return JSON.stringify(sessionJobs({ ...board, reviewWork, autoMerge }));
+    return JSON.stringify(sessionJobs(board));
   });
   return useMemo(() => (json ? (JSON.parse(json) as ReturnType<typeof sessionJobs>) : null), [json]);
 }

@@ -1234,7 +1234,7 @@ export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || step.kind.type === "settingSuggested" || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || (step.kind.type === "settingSuggested" && step.kind.change.setting !== "mergeOnOwn") || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

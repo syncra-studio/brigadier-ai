@@ -3,13 +3,10 @@ import { test } from "node:test";
 
 import { type LiveInput, liveJob } from "@/app/conversation/liveJob";
 import type { ShownApproval } from "@/state/board";
-import type { CiRun, OrchestratorStep, Preview, Question, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
+import type { CiRun, OrchestratorStep, Preview, Question, Task, UserRequest } from "@/ipc/generated";
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
-
-const review = (id: string, startedAtMs: number, state: ReviewState, endedAtMs: number | null = null): ReviewRun =>
-  ({ id, conversationId: "c", requestId: "r1", taskId: null, kind: "code", base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs, number: 1, items: [] }) as unknown as ReviewRun;
 
 const step = (atMs: number, kind: OrchestratorStep["kind"]): OrchestratorStep => ({ requestId: "r1", kind, atMs, position: 0 });
 
@@ -25,7 +22,7 @@ const question = (id: string, createdAtMs: number, kind: Question["kind"]["type"
 const byId = <T extends { id: string }>(items: T[]) => Object.fromEntries(items.map((item) => [item.id, item]));
 
 const input = (parts: Partial<LiveInput>): LiveInput => ({
-  tasks: {}, approvals: {}, questions: {}, reviews: {}, previews: {}, orchestratorSteps: [], requests: {},
+  tasks: {}, approvals: {}, questions: {}, previews: {}, orchestratorSteps: [], requests: {},
   ...parts,
 });
 
@@ -50,16 +47,6 @@ test("with nothing running and nothing waiting there is no card; while the threa
   assert.equal(liveJob(input({ ...idle, tasks }))!.sinceMs, 20);
 });
 
-test("review: who reviews while it runs, then what it found, or that it is clean", () => {
-  assert.deepEqual(words({ ...working, reviews: byId([review("v1", 20, { type: "running" })]) }), ["running", "Codex is reviewing", "The changes up to 4e1c49e"]);
-  assert.deepEqual(words({ ...idle, reviews: byId([review("v1", 60, { type: "findings", count: 3 }, 70)]) }), [
-    "done",
-    "Review found 3 issues",
-    "From Codex’s review of 4e1c49e",
-  ]);
-  assert.deepEqual(words({ ...idle, reviews: byId([review("v1", 60, { type: "clean" }, 70)]) })![1], "Review found nothing to fix");
-});
-
 test("merge: merging, then merged", () => {
   const merged = step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "head111", mergeCommit: "4e1c49e000" } as OrchestratorStep["kind"]);
   assert.deepEqual(words({ ...idle, orchestratorSteps: [merged] }), ["merged", "Merged into main", "4e1c49e · 3 commits"]);
@@ -72,42 +59,9 @@ test("merge: merging, then merged", () => {
   // Nor while the user's next message runs.
   const next = { requests: byId([request("r1", 10, { type: "done" }, 70), request("r2", 100, { type: "working" })]) };
   assert.equal(words({ ...next, orchestratorSteps: [requested] })![1], "Working");
-  // Merged anyway: it says the checks were skipped.
-  const skipped = step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "head111", mergeCommit: "4e1c49e000", checksSkipped: true } as OrchestratorStep["kind"]);
-  assert.equal(words({ ...idle, orchestratorSteps: [skipped] })![1], "Merged into main · checks skipped");
-  const anyway = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {}, anyway: true } as unknown as OrchestratorStep["kind"]);
-  assert.deepEqual(words({ ...working, orchestratorSteps: [anyway] }), ["running", "Merging into main", "Without the checks, as you said"]);
 });
 
-/** The merge rule refused the merge at 30. */
-const refused = (waivable: boolean, atMs = 30) => ({ reason: "The checks haven't run on 7d2a91f, the tip of s.", sha: "7d2a91f000", branch: "s", base: "main", waivable, atMs });
-
-test("a merge the merge rule refused: why, waiting on the user only when they can waive it", () => {
-  const job = liveJob(input({ ...working, mergeRefused: refused(true) }))!;
-  assert.deepEqual([job.tone, job.headline, job.detail], ["waiting", "Can’t merge yet", "The checks haven't run on 7d2a91f, the tip of s."]);
-  // It waits on the user before what runs: a review at work now doesn't hide it.
-  const running = byId([review("v1", 40, { type: "running" })]);
-  assert.equal(liveJob(input({ ...working, reviews: running, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
-  // One the user can’t waive: the words.
-  const firm = liveJob(input({ ...working, mergeRefused: refused(false) }))!;
-  assert.deepEqual([firm.headline, firm.tone], ["Can’t merge yet", "waiting"]);
-  // Over once the user wrote since, or a merge went through after it.
-  assert.equal(liveJob(input({ requests: byId([request("r2", 40, { type: "done" }, 50)]), mergeRefused: refused(true) })), null);
-  const merged = step(60, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "7d2a91f000", mergeCommit: "4e1c49e000" } as OrchestratorStep["kind"]);
-  assert.equal(liveJob(input({ ...idle, orchestratorSteps: [merged], mergeRefused: refused(true) }))!.headline, "Merged into main");
-  // Newer than the thread's headline, it wins over it.
-  const headline = { text: "Fixing the tests", detail: null, failed: false, atMs: 20 };
-  assert.equal(liveJob(input({ ...working, headline, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
-  const later = liveJob(input({ ...working, headline: { ...headline, atMs: 40 }, mergeRefused: refused(true) }))!;
-  assert.deepEqual([later.tone, later.headline], ["waiting", "Fixing the tests"]);
-});
-
-test("the held merge and CI in words; CI's outcome stays until the next message", () => {
-  const held = step(30, { type: "mergeHeld", branch: "s", base: "main", askedIn: "r1", consentedAtMs: 30, condition: { type: "workersDone" }, waiting: ["t1"], tip: "abc" } as unknown as OrchestratorStep["kind"]);
-  const tasks = byId([{ id: "t1", kind: "implement", state: "running", requestId: "r1", createdAtMs: 20, updatedAtMs: 20 } as unknown as Task]);
-  const job = liveJob(input({ ...working, tasks, orchestratorSteps: [held] }))!;
-  assert.deepEqual([job.headline, job.detail], ["Merging after 1 worker finishes", "Into main once they’re done, as you asked"]);
-
+test("CI in words; its outcome stays until the next message", () => {
   const checking = liveJob(input({ ...working, orchestratorSteps: [ci(30, [run("test", "in_progress", "", 3, 5)])] }))!;
   assert.deepEqual([checking.headline, checking.detail], ["Checking CI · 3 of 5 jobs done", "main · 4e1c49e9"]);
   // Long after it ended (no 4-second linger), the outcome holds until the user writes.
@@ -120,7 +74,7 @@ test("the held merge and CI in words; CI's outcome stays until the next message"
 
 test("waiting on you points at the cards below, never copying them, and comes before anything else", () => {
   const questions = byId([question("q1", 40)]);
-  const busy = { ...working, questions, reviews: byId([review("v1", 20, { type: "running" })]) };
+  const busy = { ...working, questions, orchestratorSteps: [ci(20, [run("test", "in_progress", "", 3, 5)])] };
   assert.deepEqual(words(busy), ["waiting", "Waiting for your answer below", null]);
   assert.deepEqual(words({ ...working, questions: byId([question("q1", 40, "merge")]) })!.slice(0, 2), ["waiting", "Waiting for your yes below"]);
   const approvals = byId([{ id: "a1", state: { type: "pending" }, createdAtMs: 40, subject: { type: "cli" } } as unknown as ShownApproval]);
@@ -142,23 +96,22 @@ test("failures in the work: a worker that failed, a dev server that died; before
 });
 
 test("a finished outcome stays until the next message; what still runs stays whenever it began", () => {
-  const clean = byId([review("v1", 20, { type: "clean" }, 40)]);
-  assert.equal(words({ ...idle, reviews: clean })![1], "Review found nothing to fix");
+  const passed = [ci(40, [run("test", "completed", "success")], "passed")];
+  assert.equal(words({ ...idle, orchestratorSteps: passed })![1], "CI passed");
   const next = { requests: byId([request("r1", 10, { type: "done" }, 50), request("r2", 60, { type: "working" })]) };
-  assert.equal(words({ ...next, reviews: clean })![1], "Working");
-  const running = byId([review("v1", 20, { type: "running" })]);
-  assert.equal(words({ ...next, reviews: running })![1], "Codex is reviewing");
+  assert.equal(words({ ...next, orchestratorSteps: passed })![1], "Working");
+  const checking = [ci(20, [run("test", "in_progress", "", 3, 5)])];
+  assert.equal(words({ ...next, orchestratorSteps: checking })![1], "Checking CI · 3 of 5 jobs done");
   // While the thread goes on, an outcome since the last message says more than Working.
-  assert.equal(words({ ...working, reviews: clean })![1], "Review found nothing to fix");
+  assert.equal(words({ ...working, orchestratorSteps: passed })![1], "CI passed");
   // Stopped: stays until the next message.
   assert.deepEqual(words({ requests: byId([request("r1", 10, { type: "stopped" }, 50)]) }), ["stopped", "Stopped", "You stopped it"]);
 });
 
 test("the thread's headline wins until something that needs the user, or a failure, comes after it", () => {
   const headline = { text: "Investigating the dev server", detail: "Looking for what holds port 1420", failed: false, atMs: 40 };
-  const held = step(30, { type: "mergeHeld", branch: "s", base: "main", askedIn: "r1", consentedAtMs: 30, condition: { type: "workersDone" }, waiting: ["t1"], tip: "abc" } as unknown as OrchestratorStep["kind"]);
   const tasks = byId([{ id: "t1", kind: "implement", state: "running", requestId: "r1", createdAtMs: 20, updatedAtMs: 20 } as unknown as Task]);
-  const job = liveJob(input({ ...working, tasks, orchestratorSteps: [held], headline }))!;
+  const job = liveJob(input({ ...working, tasks, headline }))!;
   assert.deepEqual([job.tone, job.headline, job.detail], ["running", "Investigating the dev server", "Looking for what holds port 1420"]);
   // A failure after it: the failure shows.
   const failed = byId([{ id: "t2", title: "Backend", state: "failed", error: "Tests failed", requestId: "r1", createdAtMs: 45, updatedAtMs: 50 } as unknown as Task]);

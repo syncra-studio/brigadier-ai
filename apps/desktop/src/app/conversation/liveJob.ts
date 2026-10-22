@@ -1,14 +1,14 @@
 import { useMemo } from "react";
 
-import { ciPill, ciWatches, heldMerge, mergeWords, shortSha } from "@/app/conversation/activity/slotView";
+import { ciPill, ciWatches, shortSha } from "@/app/conversation/activity/slotView";
 import { isRunRequest, isWorking } from "@/app/conversation/blocks";
 import { questionOpen } from "@/app/conversation/cards/questionRound";
-import type { OrchestratorStep, ProviderKind } from "@/ipc/generated";
+import type { OrchestratorStep } from "@/ipc/generated";
 import { type Board, liveRequest, useBoard } from "@/state/board";
 
 /**
  * The Job card as a live summary of the session right now (J1): one headline and one detail
- * line; the buttons are the Background rows' (Open CI, Cancel, Merge anyway). The thread's own
+ * line; the buttons are the Background rows' (Open CI, Cancel). The thread's own
  * headline (`set_headline`) gives the words (J2), and says whether they tell of a failure;
  * before it sets one, or when something that needs the user or failed came after it, the board's
  * events give them, in this order (J5): waiting on you, something failed, something running, done. Running and waiting things show whenever they started; a finished outcome only
@@ -34,58 +34,18 @@ export type LiveJob = {
 /** The board's parts it reads; `headline` is the thread's (`set_headline`), cleared by the user's next message. */
 export type LiveInput = Pick<
   Board,
-  "tasks" | "approvals" | "questions" | "reviews" | "previews" | "orchestratorSteps" | "requests"
+  "tasks" | "approvals" | "questions" | "previews" | "orchestratorSteps" | "requests"
 > &
-  Partial<Pick<Board, "headline" | "mergeRefused">>;
+  Partial<Pick<Board, "headline">>;
 
 type Kind = "waiting" | "failed" | "running" | "done";
 
 /** One thing the board says, with when it happened and, for running ones, how much it says. */
 type Fact = LiveJob & { kind: Kind; atMs: number; rank: number };
 
-export const VENDORS: Record<ProviderKind, string> = { claude: "Claude", codex: "Codex" };
-
 const short = (sha: string) => sha.slice(0, 7);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const firstLine = (text: string | null | undefined) => text?.split("\n").find((line) => line.trim())?.trim() || undefined;
-
-function reviewFacts(input: LiveInput): Fact[] {
-  const reviews = Object.values(input.reviews)
-    .filter((review) => !isRunRequest(review.requestId))
-    .toSorted((a, b) => a.startedAtMs - b.startedAtMs);
-  const running = reviews.filter((review) => review.state.type === "running");
-  if (running.length > 0) {
-    const first = running[0]!;
-    const who = [...new Set(running.map((review) => VENDORS[review.reviewer]))].join(" and ");
-    return [
-      {
-        kind: "running",
-        rank: 4,
-        tone: "running",
-        headline: `${who} ${running.length > 1 && who.includes(" and ") ? "are" : "is"} reviewing`,
-        detail: running.length > 1 ? `${running.length} reviews at work` : `The changes up to ${short(first.tip)}`,
-        sinceMs: first.startedAtMs,
-        atMs: first.startedAtMs,
-      },
-    ];
-  }
-  const latest = reviews.at(-1);
-  if (!latest || latest.endedAtMs === null) return [];
-  const ended = { sinceMs: latest.startedAtMs, endedAtMs: latest.endedAtMs, atMs: latest.endedAtMs };
-  const from = `From ${VENDORS[latest.reviewer]}’s review of ${short(latest.tip)}`;
-  switch (latest.state.type) {
-    case "clean":
-      return [{ ...ended, kind: "done", rank: 0, tone: "done", headline: "Review found nothing to fix", detail: from }];
-    case "findings": {
-      const count = latest.items.length > 0 ? latest.items.length : latest.state.count;
-      return [{ ...ended, kind: "done", rank: 0, tone: "done", headline: `Review found ${plural(count, "issue")}`, detail: from }];
-    }
-    case "failed":
-      return [{ ...ended, kind: "failed", rank: 0, tone: "failed", headline: "The review couldn’t run", detail: firstLine(latest.state.reason) }];
-    default:
-      return [];
-  }
-}
 
 function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
   const all = ciWatches(steps.filter((step) => !isRunRequest(step.requestId)));
@@ -110,19 +70,6 @@ function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
 function mergeFacts(input: LiveInput, since: number): Fact[] {
   const facts: Fact[] = [];
   const steps = input.orchestratorSteps.filter((step) => !isRunRequest(step.requestId));
-  const held = heldMerge(steps, input.tasks, Object.values(input.questions));
-  // A held merge whose card asks: the question below is what waits, its own fact.
-  if (held && !held.asking) {
-    facts.push({
-      kind: "running",
-      rank: 6,
-      tone: "running",
-      headline: mergeWords(held),
-      detail: `Into ${held.base} once they’re done, as you asked`,
-      sinceMs: held.sinceMs,
-      atMs: held.sinceMs,
-    });
-  }
   const last = steps.findLast((step) => ["mergeRequested", "merged", "mergeCancelled", "mergeStopped"].includes(step.kind.type));
   const click = liveMergeClick(input, steps, since);
   if (click?.kind.type === "mergeRequested") {
@@ -131,36 +78,22 @@ function mergeFacts(input: LiveInput, since: number): Fact[] {
       rank: 7,
       tone: "running",
       headline: `Merging into ${click.kind.base}`,
-      detail: click.kind.anyway ? "Without the checks, as you said" : `${click.kind.branch} into ${click.kind.base}`,
+      detail: `${click.kind.branch} into ${click.kind.base}`,
       sinceMs: click.atMs,
       atMs: click.atMs,
     });
   }
   if (last?.kind.type === "merged") {
     const kind = last.kind;
-    const sha = kind.mergeCommit ?? kind.head ?? kind.record?.head;
+    const sha = kind.mergeCommit ?? kind.head;
     const detail = [sha && short(sha), kind.pr !== undefined && `#${kind.pr}`, plural(kind.commits, "commit")].filter(Boolean).join(" · ");
     facts.push({
       kind: "done",
       rank: 0,
       tone: "merged",
-      headline: `Merged into ${kind.base}${kind.checksSkipped ? " · checks skipped" : ""}`,
+      headline: `Merged into ${kind.base}`,
       detail,
       atMs: last.atMs,
-    });
-  }
-  // The merge rule refused the merge: the user decides, unless they wrote since, or a merge
-  // came after it.
-  const refused = input.mergeRefused;
-  const mergedSince = steps.some((step) => step.kind.type === "merged" && refused && step.atMs > refused.atMs);
-  if (refused && refused.atMs >= since && !mergedSince) {
-    facts.push({
-      kind: refused.waivable ? "waiting" : "failed",
-      rank: 0,
-      tone: "waiting",
-      headline: "Can’t merge yet",
-      detail: refused.reason,
-      atMs: refused.atMs,
     });
   }
   return facts;
@@ -273,7 +206,7 @@ function latestOf(facts: readonly Fact[]): Fact | undefined {
 
 export function liveJob(input: LiveInput): LiveJob | null {
   const since = lastMessageAtMs(input);
-  const facts = [...waitingFacts(input), ...workFailures(input), ...reviewFacts(input), ...ciFacts(input.orchestratorSteps), ...mergeFacts(input, since), ...stopFacts(input)];
+  const facts = [...waitingFacts(input), ...workFailures(input), ...ciFacts(input.orchestratorSteps), ...mergeFacts(input, since), ...stopFacts(input)];
   // The thread or a worker at work, with nothing more to say: Working, naming no worker (J3).
   const live = liveRequest(input);
   const workers = Object.values(input.tasks).filter((task) => isWorking(task) && !isRunRequest(task.requestId));

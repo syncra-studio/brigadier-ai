@@ -52,9 +52,6 @@ fn growing(provider: &'static str, growth: Growth, seen: &Arc<Mutex<Seen>>) -> S
     script(move |turn| {
         let seen = seen.clone();
         async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if turn.is_orchestrator() {
                 if turn.input.contains("Read the logs.") {
                     let reply = turn

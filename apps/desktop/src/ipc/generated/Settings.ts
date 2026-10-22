@@ -96,19 +96,6 @@ prInstructions: string,
  */
 branchPrefix: string, 
 /**
- * Another vendor's model reviews the sessions' work in the background: each landing, the
- * thread's own commits, a lead's outline, and a worker's own change when it asks. Off, no
- * review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
- */
-reviewWork: boolean, 
-/**
- * The tab merges its work on its own once it judges it ready: a pull request on GitHub,
- * or into the base here, with no consent asked. Off (the default), it says the work is
- * ready and the user merges. A user who turned it on keeps it on; settings saved before
- * this field existed, or that never set it, read as off.
- */
-autoMerge: boolean, 
-/**
  * The first-run setup (welcome, name, agents, then projects) was finished or skipped.
  */
 onboarded: boolean, 

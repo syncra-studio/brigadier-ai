@@ -11,7 +11,7 @@ const model = (id: string, change: Partial<OvernightRun>): OvernightCardModel =>
   run: { id, state: "proposed", merged: null, finishedAtMs: null, ...change } as OvernightRun,
   details: { waiting: 0, decided: 0, steps: [], phaseProgress: {}, remaining: 0 },
 });
-const job = (atMs: number) => ({ steps: [], atMs, latestStartedAtMs: atMs, facts: { findings: [], merge: null } }) as BoardJob;
+const job = (atMs: number) => ({ steps: [], atMs, latestStartedAtMs: atMs }) as BoardJob;
 const task = (id: string, createdAtMs: number, state: Task["state"]): Task =>
   ({ id, kind: "implement", requestId: "r1", createdAtMs, updatedAtMs: 200, state }) as Task;
 
@@ -37,8 +37,6 @@ test("new work after a run takes the card even when unmerged pre-run work shares
   const over = model("a", { state: "finished", finishedAtMs: 100 });
   const input = {
     ...emptyBoard("c"),
-    reviewWork: false,
-    autoMerge: false,
     tasks: { old: task("old", 10, "landed"), newer: task("newer", 100, "running") },
   };
   // Updated work and work started exactly when the run ended do not replace it.

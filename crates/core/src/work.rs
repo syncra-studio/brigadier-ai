@@ -950,11 +950,6 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(skip)]
     pub deaths: Vec<String>,
-    /// Landed, with its CLI session and branch kept for its review's findings: the branch it
-    /// landed on. Cleared when the batch settles (SESSION-FIXES-PLAN.md Q6.1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(skip)]
-    pub review_hold: Option<String>,
     /// It looks at the integrated tree's own dev build, live, for the visible changes that
     /// landed: the one live check of the app, instead of one per worker (§11).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -988,27 +983,8 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rerun: Option<brigadier_router::Rerun>,
-    /// One answer of a fused pair (Q77): the same research by the other vendor's worker too,
-    /// both reports going to the thread together and blind, as answers A and B.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(skip)]
-    pub fusion: Option<Fusion>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
-}
-
-/// A task's part in a fused pair (Q77).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Fusion {
-    /// The other vendor's task on the same brief.
-    pub partner: TaskId,
-    /// How the thread knows its answer: "A" or "B", never by vendor or model.
-    pub label: String,
-    /// Its report reached the thread (with its partner's, or alone once the partner ended
-    /// without one).
-    #[serde(default)]
-    pub delivered: bool,
 }
 
 /// A worker's use of the project's Brain, shown on its row and in the Inspector
@@ -1374,7 +1350,7 @@ pub struct StepSettlement {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(skip)]
     pub evidence: Vec<String>,
-    /// What review it had: settled (and how), or that none was run because reviews are off.
+    /// What review an older Brigadier recorded for it; none now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub review: Option<String>,
@@ -1518,218 +1494,6 @@ pub struct Plan {
     pub decided_at_ms: Option<i64>,
 }
 
-// ----- one-shot reviews ---------------------------------------------------------------------
-
-/// What a one-shot review reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum ReviewKind {
-    /// The commits `base..tip`: a landing's, or a worker's own (`request_review`).
-    Code,
-    /// A lead's outline, with the code it starts from (`tip`) checked out.
-    Plan,
-}
-
-/// Where a one-shot review stands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ReviewState {
-    Running,
-    /// It found nothing.
-    Clean,
-    Findings {
-        count: u32,
-    },
-    /// It could not run, or was cut off.
-    Failed {
-        reason: String,
-    },
-}
-
-/// Who hears what a one-shot review found.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ReviewFor {
-    /// The orchestrator: a landing's review, an outline's.
-    Orchestrator,
-    /// The worker that asked for it (`request_review`); the orchestrator once it has reported or
-    /// ended.
-    Worker { task_id: TaskId },
-}
-
-/// One read-only review by the vendor other than the work's author's (THREAD-PLAN.md §2 Q12),
-/// in a detached checkout of its own. Nothing waits for it: its findings reach whoever asked
-/// as a message, also after the session was merged. A range (`base`, `tip`) is reviewed once.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewRun {
-    pub id: String,
-    pub conversation_id: ConversationId,
-    /// The user request it belongs to.
-    #[serde(default)]
-    pub request_id: Option<String>,
-    /// The task whose work it reads: the task that landed, the worker that asked, the lead
-    /// whose outline it is.
-    #[serde(default)]
-    pub task_id: Option<TaskId>,
-    pub kind: ReviewKind,
-    /// Where the change starts (a plan review: the commit its lead starts from).
-    pub base: String,
-    /// The commit reviewed.
-    pub tip: String,
-    /// The vendor that wrote the work.
-    pub author: ProviderKind,
-    pub reviewer: ProviderKind,
-    /// The reviewer's model; none when no model of its vendor could take it.
-    pub reviewer_model: Option<String>,
-    pub notify: ReviewFor,
-    pub state: ReviewState,
-    pub started_at_ms: i64,
-    pub ended_at_ms: Option<i64>,
-    /// The reviewer's full text, in the blob store.
-    #[serde(default)]
-    pub findings: Option<String>,
-    /// Its place among the conversation's reviews, from 1: its findings are `R{number}.{n}`.
-    /// 0 for a review recorded before findings were items.
-    #[serde(default)]
-    pub number: u32,
-    /// What it found, one item per finding (SESSION-FIXES-PLAN.md Q7): split from its text by
-    /// the engine; each one's status is the thread's (`record_findings`).
-    #[serde(default)]
-    pub items: Vec<Finding>,
-    /// The landed tip whose review it is part of, when that isn't its own `tip`: a worker's
-    /// own review that hadn't reached it when it reported, of work that landed with commits
-    /// after it (those get a review of their own). The landing's hold settles once every
-    /// review of it has.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub landing: Option<String>,
-    /// The thread's answer waits for it: `run_check` told the thread to end its turn and wait
-    /// for this review of its own change (BUILD-PLAN B2), so a clean end is news too. Recorded,
-    /// so a restart still tells it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(skip)]
-    pub answer_waits: bool,
-}
-
-/// What was checked of the code a merge took, as Brigadier recorded it when it merged: each
-/// check with the commit it ran on, so one on an older commit reads stale and one that never
-/// ran reads missing. Informational: nothing here holds or gates a merge.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeRecord {
-    /// The commit whose code merged (the session branch's head).
-    pub head: String,
-    /// The other vendor's code reviews since the last merge, oldest first.
-    pub reviews: Vec<MergeReview>,
-    /// The branch's last CI watch.
-    pub ci: Option<MergeCi>,
-    /// The screenshots and recordings attached since the last merge.
-    pub proofs: u32,
-    /// The last fresh verifier's result, when one ran.
-    pub verifier: Option<MergeVerifier>,
-    /// It merged on its own, the project's first such merge: the message says so once.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(as = "Option<bool>", optional)]
-    pub first_auto: bool,
-}
-
-/// A review of the merged work: who reviewed which range, and how its findings were settled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeReview {
-    /// The review it counts ([`ReviewRun::id`]), so its counts follow the thread's later word
-    /// on its findings. Empty in records stored before it was kept.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    #[ts(skip)]
-    pub review: String,
-    pub reviewer: ProviderKind,
-    pub model: Option<String>,
-    pub from: String,
-    pub to: String,
-    pub state: ReviewState,
-    pub fixed: u32,
-    pub dismissed: u32,
-    /// Open, or not recorded by the thread.
-    pub open: u32,
-    /// It reviewed up to the merged head.
-    pub on_head: bool,
-}
-
-impl MergeReview {
-    /// Whether it counts `review`: by id, or by reviewer and range in an older record.
-    pub(crate) fn counts(&self, review: &ReviewRun) -> bool {
-        if self.review.is_empty() {
-            self.reviewer == review.reviewer && self.from == review.base && self.to == review.tip
-        } else {
-            self.review == review.id
-        }
-    }
-
-    /// Its state and counts as `review` holds them now.
-    pub(crate) fn recount(&mut self, review: &ReviewRun) {
-        let count = |settled: fn(&FindingStatus) -> bool| {
-            review
-                .items
-                .iter()
-                .filter(|item| settled(&item.status))
-                .count() as u32
-        };
-        self.state = review.state.clone();
-        self.fixed = count(|status| matches!(status, FindingStatus::Fixed { .. }));
-        self.dismissed = count(|status| matches!(status, FindingStatus::Dismissed { .. }));
-        self.open =
-            count(|status| matches!(status, FindingStatus::Open { .. } | FindingStatus::New));
-    }
-}
-
-/// A CI watch's result on its commit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeCi {
-    pub sha: String,
-    /// "passed", "failed", "no runs", "stopped"; none while it still ran.
-    pub result: Option<String>,
-    pub on_head: bool,
-}
-
-/// A fresh verifier's result on its commit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeVerifier {
-    pub commit: String,
-    /// None while it hadn't reported.
-    pub result: Option<ChecksResult>,
-    pub on_head: bool,
-}
-
-/// One finding of a review. Brigadier splits it from the review's text; the thread decides
-/// what became of it, and Brigadier only stores and shows that.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Finding {
-    /// `R3.2`: the conversation's third review, its second finding.
-    pub id: String,
-    /// `P0` to `P3`, as the reviewer wrote it; none for a review whose text couldn't be split.
-    pub severity: Option<String>,
-    pub title: String,
-    /// `path:line`, when the reviewer gave one.
-    pub location: Option<String>,
-    #[serde(default)]
-    pub status: FindingStatus,
-    /// The thread marked it high severity.
-    #[serde(default)]
-    pub high: bool,
-}
-
 /// A command of the thread's (`run`) still going after the time a tool call may
 /// hold the thread ([`crate::manager`]'s background runs): it goes on in the background, owned
 /// by the session rather than the thread's CLI, and its result comes to the thread as a
@@ -1779,23 +1543,6 @@ pub struct SessionHeadline {
     pub at_ms: i64,
 }
 
-/// Why the session's last merge into its base was refused (the merge rule, thread-truth grill
-/// Q5): the run_checks it needs haven't passed on the branch's commit. It stays until a merge
-/// goes through or the user says to merge anyway.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeRefused {
-    /// In plain words: "The checks haven't run on 1a2b3c4d5e."
-    pub reason: String,
-    /// The commit it would have merged.
-    pub sha: String,
-    pub branch: String,
-    pub base: String,
-    /// The user can merge it anyway ("Merge anyway": merge_session with anyway).
-    pub waivable: bool,
-    pub at_ms: i64,
-}
-
 /// Where a background run stands.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
@@ -1817,28 +1564,6 @@ pub enum BackgroundRunState {
     },
 }
 
-/// The thread's own changes for a request that no review covered yet, taken together
-/// (BUILD-PLAN B2): a `request_review` covers them, and the range starts again after it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct UnreviewedRange {
-    /// The request the changes were made for.
-    pub request_id: String,
-    /// The branch they are on (the session's, or a local checkout's).
-    pub branch: String,
-    /// The commit they start after.
-    pub base: String,
-    /// The last of them looked at (`base` while there are none).
-    pub tip: String,
-    /// A local checkout, whose changes stay uncommitted: `base` and `tip` are snapshot commits
-    /// of its files, which no ref names.
-    #[serde(default)]
-    pub local: bool,
-    /// On a local checkout, the snapshot of its files when the request started.
-    #[serde(default)]
-    pub start: Option<String>,
-}
-
 /// The base's upstream at a session's merge (#224): the merge isn't pushed to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1857,33 +1582,6 @@ pub enum MergeCondition {
     Now,
     /// "merge when done": the running work ending, said in words.
     WorkersFinish,
-}
-
-/// What became of a finding, as the thread recorded it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum FindingStatus {
-    /// The thread hasn't recorded it yet.
-    #[default]
-    New,
-    /// Fixed, in the task named (`task-7`), or by the thread itself.
-    Fixed {
-        task: Option<String>,
-        why: Option<String>,
-        /// How the thread checked the fix in the merged code (the lines it read at a commit,
-        /// a test it ran). None: it took the fix on a report's or its notes' word, and the
-        /// finding shows as unverified, never as clean.
-        #[serde(default)]
-        checked: Option<String>,
-    },
-    /// Still open: nobody fixed it (yet).
-    Open { why: Option<String> },
-    /// Not worth fixing, and why.
-    Dismissed { why: String },
 }
 
 // ----- the message queue --------------------------------------------------------------------
@@ -2289,8 +1987,8 @@ pub enum OrchestratorStepKind {
     },
     /// "Stopped {worker}": the orchestrator's `stop_worker`, or the user's Stop all.
     Stopped { task_id: TaskId, reason: String },
-    /// "Reviewed {worker}'s change": a one-shot code review of the tasks' work ended with a
-    /// verdict (clean, or `findings` problems found).
+    /// "Reviewed {worker}'s change": an older Brigadier's one-shot code review of the tasks'
+    /// work ended with a verdict (clean, or `findings` problems found). Nothing records it now.
     Reviewed {
         task_ids: Vec<TaskId>,
         findings: u32,
@@ -2378,24 +2076,10 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         pr: Option<u32>,
-        /// It merged on its own (auto-merge on), with no consent asked.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        #[ts(as = "Option<bool>", optional)]
-        auto: bool,
         /// The requests whose work it merged.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[ts(as = "Option<Vec<String>>", optional)]
         requests: Vec<String>,
-        /// What was checked of the code it merged, as recorded then (the merge message's
-        /// "Checked" list); none on merges from before it was kept.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        record: Option<Box<MergeRecord>>,
-        /// It merged without a passing run_checks on its commit, because the user said to merge
-        /// anyway ("Merge anyway", or their own words).
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        #[ts(as = "Option<bool>", optional)]
-        checks_skipped: bool,
     },
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.
@@ -2435,9 +2119,8 @@ pub enum OrchestratorStepKind {
     },
     /// The user started the offer `id` as the session `session`.
     SessionOfferTaken { id: String, session: ConversationId },
-    /// The user's merge, held until no worker writes (SESSION-FIXES-PLAN.md Q3): "Merging
-    /// after N workers finish". Pending until a `Merged`, `MergeCancelled` or `MergeStopped`
-    /// step with the same `asked_in`.
+    /// An older Brigadier's merge, held until no worker wrote ("Merging after N workers
+    /// finish"). Nothing holds a merge now; stored ones are read.
     MergeHeld {
         branch: String,
         base: String,
@@ -2454,25 +2137,19 @@ pub enum OrchestratorStepKind {
         #[serde(default)]
         tip: String,
     },
-    /// The user clicked "Merge into main" on the side panel (BUILD-PLAN A4): consent to merge
-    /// the session branch into its base, once, unless they write again first. `id` is what a
-    /// merge on it names as `asked_in`.
+    /// The user clicked "Merge into main" on the side panel (BUILD-PLAN A4): the thread was
+    /// told to merge the session branch into its base. `id` is what a merge on it names as
+    /// `asked_in`.
     MergeRequested {
         id: String,
         branch: String,
         base: String,
         /// Who sent the click: the client and how.
         origin: AnswerOrigin,
-        /// It was "Merge anyway": the user skips the checks a merge into the base needs.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        #[ts(as = "Option<bool>", optional)]
-        anyway: bool,
     },
-    /// The user cancelled the held merge (the pill's Cancel): its consent is spent.
+    /// The user cancelled an older Brigadier's held merge. Nothing records it now.
     MergeCancelled { asked_in: String },
-    /// The held merge stopped without merging (a writer failed or was stopped, a finding is
-    /// open, or the thread read the user's words as taking it back): this hold ends, but the
-    /// thread may hold a merge on the same consent again.
+    /// An older Brigadier's held merge stopped without merging. Nothing records it now.
     MergeStopped { asked_in: String, reason: String },
     /// The CI watch of a push (`watch_ci`, SESSION-FIXES-PLAN.md Q1), as it goes: one row per
     /// push, updated in place, "Checking CI…" while `result` is none.
@@ -3727,7 +3404,8 @@ pub enum SettingChange {
     },
     /// Settings › Browser's switch.
     Browser { on: bool },
-    /// Settings › Git's "Merge on its own when the work is ready".
+    /// Settings › Git's "Merge on its own when the work is ready", from an older Brigadier:
+    /// that setting is gone, and its card's button changes nothing.
     MergeOnOwn { on: bool },
 }
 

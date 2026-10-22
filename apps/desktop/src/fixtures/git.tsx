@@ -96,9 +96,8 @@ mockIPC(async (command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "updateSettings") {
-    const { gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix, autoMerge } =
-      req.settings;
-    writes.push({ gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix, autoMerge });
+    const { gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix } = req.settings;
+    writes.push({ gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix });
     if (slow > 0) await new Promise((resolve) => setTimeout(resolve, slow));
     return { method: req.method, settings: req.settings };
   }
@@ -244,27 +243,9 @@ function Fixture() {
       () => setValue(box("Pull request instructions"), "Title under 70 characters. Body in bullets. No emoji."),
       () => openMenu("Pull requests"),
       () => pickMenu("Conventional Commits"),
-      () => {
-        // The merge switch: off by default, and a click turns it on and saves it.
-        const merge = row("Merge on its own when the work is ready");
-        seen.autoMerge = {
-          description: text(merge?.querySelector(".text-xs")),
-          checked: merge?.querySelector('[role="switch"]')?.getAttribute("aria-checked"),
-        };
-        merge?.querySelector<HTMLElement>('[role="switch"]')?.click();
-      },
-      () => {
-        const merge = row("Merge on its own when the work is ready");
-        seen.autoMergeOn = {
-          checked: merge?.querySelector('[role="switch"]')?.getAttribute("aria-checked"),
-          saved: settings().autoMerge,
-        };
-      },
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 3000));
         seen.prDuringSave = settings().prInstructions;
-        // Saved behind the pull request edit still on its way.
-        seen.autoMergeWritten = writes.some((write) => write.autoMerge === true);
         seen.writes = writes.length;
         setResult(JSON.stringify(seen));
       },

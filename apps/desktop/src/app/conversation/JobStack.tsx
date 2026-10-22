@@ -43,7 +43,7 @@ function useWaits(conversationId: string): Wait[] {
 /**
  * The session's Job card, only for a job of several steps: an overnight run, in every state of
  * the run, or a plan, its phase bar under what is happening right now (J1). Never otherwise: the
- * session's state is the tab's and the sidebar's, its checks, reviews, CI and merges are the
+ * session's state is the tab's and the sidebar's, its CI and merges are the
  * Background rows', buttons included. Then what the session waits for at a set time: cards of
  * their own, under the context card or in its place while it is hidden.
  */

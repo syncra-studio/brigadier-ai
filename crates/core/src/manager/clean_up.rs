@@ -1,8 +1,8 @@
 //! `clean_up` (SESSION-FIXES-PLAN.md bug 6): the thread's way to clean up when the user asks.
 //! Brigadier already removes what a session's finished work leaves; this retries what it
 //! couldn't and removes what is no longer in use, going only by its records of this
-//! conversation: the cleanup ledger's owners of its tasks and reviews, and its tasks'
-//! branches. Nothing found by name is touched, so another session's work never is.
+//! conversation: the cleanup ledger's owners of its tasks (and of an older Brigadier's held
+//! landings), and its tasks' branches. Nothing found by name is touched, so another session's work never is.
 
 use std::path::PathBuf;
 
@@ -11,34 +11,27 @@ use brigadier_providers::Artifact;
 use super::{SessionManager, blocking, git_error};
 use crate::Result;
 use crate::model::ConversationId;
-use crate::work::{ReviewState, Task};
+use crate::work::Task;
 
 impl SessionManager {
     /// Removes what this conversation's records hold that nothing uses any more, and says what
     /// went and what stayed, and why.
     pub(crate) async fn clean_up(&self, id: &ConversationId) -> Result<String> {
         let tasks = self.core.tasks(id).await?;
-        let board = self.core.board(id).await?;
         let ledger = self.runtime.ledger();
         let mut removed: Vec<String> = Vec::new();
         let mut kept: Vec<String> = Vec::new();
         let mut owners: Vec<(String, String)> = Vec::new();
         for task in &tasks {
             let name = format!("task-{}", task.number);
-            let held = super::review_hold::hold_owner(&task.id);
+            // An older Brigadier kept a landed worker's session for its review under this
+            // owner; nothing holds one now.
+            let held = format!("review-hold:{}", task.id);
             let holds = !ledger.artifacts(&format!("task:{}", task.id)).is_empty()
                 || !ledger.artifacts(&held).is_empty();
             if !task.state.is_final() {
                 if holds {
                     kept.push(format!("{name}'s worktree and folders: it still works"));
-                }
-                continue;
-            }
-            if task.review_hold.is_some() {
-                if holds {
-                    kept.push(format!(
-                        "{name}'s worktree and session: kept until its review's findings and the session's full checks settle"
-                    ));
                 }
                 continue;
             }
@@ -49,19 +42,7 @@ impl SessionManager {
             owners.push((format!("task:{}", task.id), name.clone()));
             owners.push((held, name));
         }
-        for review in board.reviews.values() {
-            let owner = format!("review:{}", review.id);
-            if review.state == ReviewState::Running {
-                if !ledger.artifacts(&owner).is_empty() {
-                    kept.push(format!(
-                        "review {}'s checkout: it still runs",
-                        review.number
-                    ));
-                }
-                continue;
-            }
-            owners.push((owner, format!("review {}", review.number)));
-        }
+
         // The session's own worktree is never this tool's: a merge keeps it, Close workspace
         // removes it, and a Close whose removal failed leaves a folder the user may still work
         // in (phase A verify).
@@ -82,10 +63,7 @@ impl SessionManager {
             }
         }
         // Finished tasks' branches the engine left: deleted if merged, kept if not.
-        for task in tasks
-            .iter()
-            .filter(|task| task.state.is_final() && task.review_hold.is_none())
-        {
+        for task in tasks.iter().filter(|task| task.state.is_final()) {
             let Some((repo, branch, target)) = branch_of(task, self) else {
                 continue;
             };

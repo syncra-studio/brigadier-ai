@@ -540,74 +540,7 @@ async fn a_new_workspace_or_level_resumes_the_thread_with_a_note() {
     flow.stop().await;
 }
 
-/// The thread asks for a review of its own plan and carries on at once; the other vendor's
-/// findings reach it as a message. Its code index tools answer for the session's project.
-#[tokio::test]
-async fn the_threads_plan_review_runs_in_the_background() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "thread-plan",
-        Options {
-            reviews: Some(script(|turn| async move {
-                assert!(turn.input.contains("Rename the README"), "{}", turn.input);
-                Reply::text("- [P2] The plan never checks the links to README.md.")
-            })),
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains("[plan review") {
-                    return Reply::text("I'll check the links too.");
-                }
-                let map = turn.call("project_map", json!({})).await;
-                assert!(!map.is_error, "{}", map.text);
-                let started = turn
-                    .call(
-                        "review_plan",
-                        json!({"plan": "1. Rename the README to README.txt.",
-                               "brief": "The user wants a plain-text README."}),
-                    )
-                    .await;
-                assert!(!started.is_error, "{}", started.text);
-                assert!(
-                    started.text.starts_with("Started a review of your plan"),
-                    "{}",
-                    started.text
-                );
-                Reply::text("Planned.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Make the README plain text.").await;
-    flow.until("the plan review's findings", |_| {
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|input| input.contains("[plan review of your plan"))
-    })
-    .await;
-    flow.settled().await;
-    let board = flow.board().await;
-    let review = board.reviews.values().next().expect("a plan review");
-    assert_eq!(review.kind, crate::work::ReviewKind::Plan);
-    assert!(review.task_id.is_none());
-    assert_eq!(review.author, ProviderKind::Claude);
-    assert_eq!(review.reviewer, ProviderKind::Codex);
-    let heard = inputs.lock().unwrap().clone();
-    let findings = heard
-        .iter()
-        .find(|input| input.contains("[plan review of your plan"))
-        .unwrap();
-    assert!(findings.contains("never checks the links"), "{findings}");
-    flow.stop().await;
-}
-
-/// Notes of 150 lines: a change big enough to ask the other vendor to review.
+/// Notes of 150 lines: a big change.
 pub(super) fn reviewed_notes() -> String {
     (1..=150).map(|n| format!("note {n}\n")).collect()
 }
@@ -619,109 +552,6 @@ pub(super) fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: 
     git(workspace, &["add", file]);
     git(workspace, &["commit", "-q", "-m", message]);
     git(workspace, &["rev-parse", "HEAD"])
-}
-
-/// The code reviews of the session, oldest first, once all have ended.
-async fn code_reviews(flow: &Flow, count: usize) -> Vec<crate::work::ReviewRun> {
-    let board = flow
-        .until("the reviews to end", |board| {
-            board.reviews.len() >= count
-                && board
-                    .reviews
-                    .values()
-                    .all(|review| review.state != crate::work::ReviewState::Running)
-        })
-        .await;
-    let mut reviews: Vec<_> = board.reviews.values().cloned().collect();
-    reviews.sort_by_key(|review| review.started_at_ms);
-    reviews
-}
-
-/// The thread commits, asks for its review and merges in the same turn, as the user asked: the
-/// review of its commit has started (for the thread, with no task) before the merge, so it counts with the merged
-/// work, and the merge's answer says it still runs. No card opens.
-#[tokio::test]
-async fn a_merge_counts_the_review_of_the_threads_own_commit() {
-    let release = Arc::new(tokio::sync::Notify::new());
-    let held = release.clone();
-    let flow = Flow::start(
-        "thread-commit-merge",
-        Options {
-            reviews: Some(script(move |_| {
-                let held = held.clone();
-                async move {
-                    held.notified().await;
-                    Reply::text("- [P2] NOTES.md has no title — NOTES.md:1\n  Add one.")
-                }
-            })),
-            ..Options::default()
-        },
-        script(|turn| async move {
-            if turn.input.contains("Add notes and merge.") {
-                commit_in_workspace(
-                    &turn,
-                    "notes.txt",
-                    &reviewed_notes(),
-                    "Add notes\n\nBrigadier-Author: thread",
-                );
-                turn.call("request_review", json!({"wait_seconds": 0}))
-                    .await;
-                let reply = turn
-                    .call("finish_session", json!({"user_words": "merge"}))
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                assert!(reply.text.contains("review still runs"), "{}", reply.text);
-                return Reply::text("Merged; the review still runs.");
-            }
-            Reply::text("Noted.")
-        }),
-    )
-    .await;
-    flow.say("Add notes and merge.").await;
-    let board = flow
-        .until("the merge", |board| {
-            board
-                .orchestrator_steps
-                .iter()
-                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-        })
-        .await;
-    assert!(board.approvals.is_empty(), "no merge card");
-    let merged = board
-        .orchestrator_steps
-        .iter()
-        .find(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-        .unwrap()
-        .clone();
-    assert!(
-        matches!(
-            &merged.kind,
-            OrchestratorStepKind::Merged {
-                commits: 1,
-                asked_in: Some(_),
-                ..
-            }
-        ),
-        "{merged:?}"
-    );
-    let reviews: Vec<_> = board.reviews.values().cloned().collect();
-    assert_eq!(reviews.len(), 1, "{reviews:#?}");
-    let review = &reviews[0];
-    assert!(review.task_id.is_none(), "the thread's own commit");
-    assert_eq!(review.kind, crate::work::ReviewKind::Code);
-    assert_eq!(review.notify, crate::work::ReviewFor::Orchestrator);
-    assert_eq!(review.state, crate::work::ReviewState::Running);
-    assert!(
-        review.started_at_ms <= merged.at_ms,
-        "started before the merge, so it counts with the merged work"
-    );
-    release.notify_one();
-    let reviews = code_reviews(&flow, 1).await;
-    assert_eq!(
-        reviews[0].state,
-        crate::work::ReviewState::Findings { count: 1 }
-    );
-    flow.stop().await;
 }
 
 /// The script of the merge tests below: commits NOTES.md on "Add notes.", merges on "yes,
@@ -743,9 +573,7 @@ fn merging_thread(seen: Arc<Mutex<Vec<Seen>>>) -> Script {
                 return Reply::text("Notes added, ready to merge.");
             }
             if turn.input.contains("yes, merge it") {
-                let reply = turn
-                    .call("finish_session", json!({"user_words": "yes, merge it"}))
-                    .await;
+                let reply = turn.call("finish_session", json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 log.lock().unwrap().push((reply.text.clone(), Vec::new()));
                 return Reply::text("Merged.");
@@ -1120,56 +948,23 @@ async fn a_step_left_running_under_a_stopped_reply_reads_stopped_after_a_restart
 }
 
 /// A preview the thread started holds nothing up: its answer is done while the preview runs.
-/// A review it asked for of its own change does (BUILD-PLAN B2): the request keeps working until the
-/// findings came and the thread took them in, in the same request.
 #[tokio::test]
-async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_working() {
-    let review_gate = Arc::new(tokio::sync::Notify::new());
-    let findings_gate = Arc::new(tokio::sync::Notify::new());
-    let (review_wait, findings_wait) = (review_gate.clone(), findings_gate.clone());
+async fn a_running_preview_leaves_the_answer_done() {
     let flow = Flow::start(
         "thread-background-work",
-        Options {
-            // Findings steered into a turn that runs then (one a late message started) are
-            // taken in there, as a real CLI's model would, not dropped (#296).
-            behavior: Arc::new(super::FakeBehavior {
-                take_in_steers: true,
-                ..super::FakeBehavior::default()
-            }),
-            reviews: Some(script(move |_| {
-                let gate = review_wait.clone();
-                async move {
-                    gate.notified().await;
-                    Reply::text("- [P2] NOTES.md has no title — NOTES.md:1\n  Add one.")
-                }
-            })),
-            ..Options::default()
-        },
-        script(move |turn| {
-            let gate = findings_wait.clone();
-            async move {
-                if turn.input.contains("Start the site.") {
-                    let reply = turn
-                        .call(
-                            "start_preview",
-                            json!({ "command": "echo up; sleep 600", "name": "site" }),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("The site runs.");
-                }
-                if turn.input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "notes.txt", &reviewed_notes(), "Add notes");
-                    turn.call("request_review", json!({"wait_seconds": 0}))
-                        .await;
-                    return Reply::text("Added NOTES.md.");
-                }
-                if turn.input.contains("[review of your commits") {
-                    gate.notified().await;
-                    return Reply::text("Fixed the title.");
-                }
-                Reply::text("Noted.")
+        Options::default(),
+        script(move |turn| async move {
+            if turn.input.contains("Start the site.") {
+                let reply = turn
+                    .call(
+                        "start_preview",
+                        json!({ "command": "echo up; sleep 600", "name": "site" }),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("The site runs.");
             }
+            Reply::text("Noted.")
         }),
     )
     .await;
@@ -1193,47 +988,6 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
         first.worked
     );
     assert!(board.tasks.is_empty(), "no worker: {:?}", board.tasks);
-
-    // A change it asked a review for: its request works while the review runs.
-    flow.say("Add notes.").await;
-    let board = flow
-        .until("the review running, the thread idle", |board| {
-            board.requests.len() == 2
-                && board.run == crate::work::RunState::Idle
-                && board
-                    .reviews
-                    .values()
-                    .any(|review| review.state == crate::work::ReviewState::Running)
-        })
-        .await;
-    let request = board.latest_request().unwrap().clone();
-    assert_eq!(request.state, crate::work::RequestState::Working);
-    assert_eq!(
-        board.requests[&first.id].state,
-        crate::work::RequestState::Done
-    );
-
-    // The findings arrive: the thread takes them in, in the same request. (On a slow machine
-    // the request can read Done for a moment between the review's end and that turn.)
-    review_gate.notify_one();
-    let board = flow
-        .until("the findings turn to work", |board| {
-            board.run == crate::work::RunState::Running
-        })
-        .await;
-    assert_eq!(board.requests.len(), 2, "the same request");
-    findings_gate.notify_one();
-    let board = flow
-        .until("the findings turn to end", |board| {
-            board.requests[&request.id].state == crate::work::RequestState::Done
-        })
-        .await;
-    assert!(
-        board.requests[&request.id]
-            .worked
-            .iter()
-            .all(|span| span.to_ms.is_some())
-    );
     flow.manager
         .stop_preview(flow.conversation.clone(), None)
         .await
@@ -1244,10 +998,8 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
 /// What the thread was told by its finish_session calls, in order.
 type MergeReplies = Arc<Mutex<Vec<(String, bool)>>>;
 
-async fn finish(turn: &Turn, words: &str, replies: &MergeReplies) -> bool {
-    let reply = turn
-        .call("finish_session", json!({ "user_words": words }))
-        .await;
+async fn finish(turn: &Turn, replies: &MergeReplies) -> bool {
+    let reply = turn.call("finish_session", json!({})).await;
     replies
         .lock()
         .unwrap()
@@ -1265,10 +1017,10 @@ pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
 
 /// Merging is asked for in words, with no card: the thread proposes it in its reply, judges
 /// the user's answers ("No, not yet." and "don't merge it" aren't a yes), and merges on their
-/// "yes, merge it", once. finish_session refuses words the user never wrote, and a yes already
-/// used for a merge (#222).
+/// "yes, merge it", once: Brigadier checks no consent, and a second call finds nothing left to
+/// merge.
 #[tokio::test]
-async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
+async fn the_merge_is_asked_in_words_and_happens_on_the_users_yes() {
     let replies: MergeReplies = Arc::default();
     let log = replies.clone();
     let flow = Flow::start(
@@ -1280,11 +1032,7 @@ async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
                 let input = turn.input.clone();
                 if input.contains("Add notes.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    // Before the user answered: the thread's guess at a yes is no consent.
-                    assert!(!finish(&turn, "yes", &log).await);
-                    return Reply::text(
-                        "Notes added, and the review is clean. Merge them into `main`?",
-                    );
+                    return Reply::text("Notes added. Merge them into `main`?");
                 }
                 if input.contains("No, not yet.") {
                     return Reply::text("OK, it stays on its branch. Merge it into `main` now?");
@@ -1293,9 +1041,9 @@ async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
                     return Reply::text("Left unmerged.");
                 }
                 if input.contains("yes, merge it") {
-                    assert!(finish(&turn, "yes, merge it", &log).await);
-                    // One yes, one merge.
-                    assert!(!finish(&turn, "yes, merge it", &log).await);
+                    assert!(finish(&turn, &log).await);
+                    // One merge: nothing is left to merge.
+                    assert!(!finish(&turn, &log).await);
                     return Reply::text("Merged.");
                 }
                 Reply::text("Done.")
@@ -1317,25 +1065,13 @@ async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
     flow.settled().await;
     assert!(on_main(&flow, "NOTES.md"), "merged on the yes");
     let replies = replies.lock().unwrap().clone();
-    let errors: Vec<_> = replies.iter().filter(|(_, error)| *error).collect();
-    assert_eq!(errors.len(), 2, "{replies:#?}");
+    assert_eq!(replies.len(), 2, "{replies:#?}");
     assert!(
-        errors.iter().all(|(text, _)| text.contains("[not merged]")),
+        replies[0].0.starts_with("[finished] `") && !replies[0].1,
         "{replies:#?}"
     );
     assert!(
-        replies[0]
-            .0
-            .contains("is no message, card answer or click of the user's"),
-        "{replies:#?}"
-    );
-    assert!(
-        replies[2].0.contains("of the user's since the last merge"),
-        "{replies:#?}"
-    );
-    let finished = replies.iter().find(|(_, error)| !error).unwrap();
-    assert!(
-        finished.0.contains("[finished] As the user asked"),
+        replies[1].1 && replies[1].0.contains("has no commits that `main` lacks"),
         "{replies:#?}"
     );
     let board = flow.board().await;
@@ -1346,196 +1082,6 @@ async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
         .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
         .collect();
     assert_eq!(merged.len(), 1, "{merged:#?}");
-    flow.stop().await;
-}
-
-/// A "wait" the user sends while the merge is being prepared doesn't refuse it: the thread
-/// judged the consent it names, and the result quotes what they wrote since, for the thread to
-/// tell them at once (#243).
-#[tokio::test]
-async fn a_wait_sent_while_the_merge_is_prepared_is_named_in_its_result() {
-    let replies: MergeReplies = Arc::default();
-    let log = replies.clone();
-    let flow = Flow::start(
-        "thread-merge-withdrawn",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if turn.input.contains("Add notes and merge it.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    assert!(finish(&turn, "merge it", &log).await);
-                    return Reply::text("Merged; you wrote \"wait!\" meanwhile.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    let (reached, release) = (
-        Arc::new(tokio::sync::Notify::new()),
-        Arc::new(tokio::sync::Notify::new()),
-    );
-    *flow
-        .manager
-        .conv(&flow.conversation)
-        .unwrap()
-        .merge_pause
-        .lock()
-        .unwrap() = Some((reached.clone(), release.clone()));
-    flow.say("Add notes and merge it.").await;
-    reached.notified().await;
-    flow.say("wait!").await;
-    release.notify_one();
-    flow.until("the merge", |_| !replies.lock().unwrap().is_empty())
-        .await;
-    flow.settled().await;
-    let replies = replies.lock().unwrap().clone();
-    assert!(replies[0].0.contains("[finished]"), "{replies:#?}");
-    assert!(replies[0].0.contains("\"wait!\""), "{replies:#?}");
-    assert!(on_main(&flow, "NOTES.md"));
-    flow.stop().await;
-}
-
-/// A "wait" the user is still sending (its message not yet stored) when the merge takes its
-/// first look holds the merge until it is stored. The thread judged the consent it names, so the
-/// merge goes, and its result names what the user wrote since, for the thread to act on (#240).
-#[tokio::test]
-async fn a_wait_still_being_stored_when_the_merge_looks_is_named_in_its_result() {
-    let replies: MergeReplies = Arc::default();
-    let log = replies.clone();
-    let (started, release) = (
-        Arc::new(tokio::sync::Notify::new()),
-        Arc::new(tokio::sync::Notify::new()),
-    );
-    let writing = started.clone();
-    let flow = Flow::start(
-        "thread-merge-storing",
-        Options::default(),
-        script(move |turn| {
-            let (log, writing) = (log.clone(), writing.clone());
-            async move {
-                if turn.input.contains("Add notes and merge it.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    // The user's "wait!" is being stored now.
-                    writing.notified().await;
-                    assert!(finish(&turn, "merge it", &log).await);
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes and merge it.").await;
-    let conv = flow.manager.conv(&flow.conversation).unwrap();
-    let (core, id) = (flow.core.clone(), flow.conversation.clone());
-    let (signal, held) = (started.clone(), release.clone());
-    let write = tokio::spawn(async move {
-        conv.user_write(async {
-            signal.notify_one();
-            held.notified().await;
-            core.append_user_message(id.clone(), "wait!".into(), Vec::new(), Vec::new())
-                .await
-        })
-        .await
-        .unwrap();
-    });
-    // Whenever the merge's look comes, the write is under way: it waits for it.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    release.notify_one();
-    write.await.unwrap();
-    flow.until("the merge", |_| !replies.lock().unwrap().is_empty())
-        .await;
-    let replies = replies.lock().unwrap().clone();
-    assert!(
-        replies[0]
-            .0
-            .contains("The user wrote after the consent it went on: \"wait!\""),
-        "{replies:#?}"
-    );
-    flow.stop().await;
-}
-
-/// The user editing a queued message while the merge is being prepared is named in its result,
-/// as a new message would be: an older queued item isn't, its edit is (#243).
-#[tokio::test]
-async fn a_queued_message_edited_while_the_merge_is_prepared_is_named_in_its_result() {
-    let replies: MergeReplies = Arc::default();
-    let log = replies.clone();
-    let flow = Flow::start(
-        "thread-merge-queue-edit",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if turn.input.contains("Add notes and merge it.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    assert!(finish(&turn, "merge it", &log).await);
-                    return Reply::text("Merged; you edited a queued message meanwhile.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    let item = flow
-        .core
-        .enqueue(
-            &flow.conversation,
-            "Later: rename the flag".into(),
-            Vec::new(),
-            Vec::new(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-    let (reached, release) = (
-        Arc::new(tokio::sync::Notify::new()),
-        Arc::new(tokio::sync::Notify::new()),
-    );
-    *flow
-        .manager
-        .conv(&flow.conversation)
-        .unwrap()
-        .merge_pause
-        .lock()
-        .unwrap() = Some((reached.clone(), release.clone()));
-    // Sent after the item was queued: the queued item is older than the consent.
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    flow.manager
-        .send_message(
-            flow.conversation.clone(),
-            "Add notes and merge it.".into(),
-            Vec::new(),
-            Vec::new(),
-            true,
-            None,
-        )
-        .await
-        .unwrap();
-    reached.notified().await;
-    flow.manager
-        .edit_queued(
-            &flow.conversation,
-            &item.id,
-            "wait, don't merge".into(),
-            Vec::new(),
-            Vec::new(),
-        )
-        .await
-        .unwrap();
-    release.notify_one();
-    flow.until("the merge", |_| !replies.lock().unwrap().is_empty())
-        .await;
-    let replies = replies.lock().unwrap().clone();
-    assert!(replies[0].0.contains("[finished]"), "{replies:#?}");
-    assert!(
-        replies[0].0.contains("\"wait, don't merge\""),
-        "{replies:#?}"
-    );
-    assert!(on_main(&flow, "NOTES.md"));
     flow.stop().await;
 }
 
@@ -3588,10 +3134,9 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
             async move {
                 if turn.is_orchestrator() {
                     for (setting, value) in [
-                        ("merge_on_own", "on"),
-                        ("merge_on_own", "on"),
-                        ("browser", "on"),
                         ("browser", "off"),
+                        ("browser", "off"),
+                        ("browser", "on"),
                         ("permission", "approve_for_me"),
                         ("permission", "ask_for_approval"),
                         ("permission", "full_access"),
@@ -3612,14 +3157,14 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
     )
     .await;
     let before = flow.core.settings();
-    assert!(before.browser_enabled && !before.auto_merge);
-    flow.say("Merge it yourself from now on.").await;
+    assert!(before.browser_enabled);
+    flow.say("Turn the browser off.").await;
     let board = flow.settled().await;
     let replies = replies.lock().unwrap().clone();
     let errors: Vec<bool> = replies.iter().map(|reply| reply.0).collect();
     assert_eq!(
         errors,
-        [false, true, true, false, false, true, false, true],
+        [false, true, true, false, true, false, true],
         "{replies:#?}"
     );
     assert!(replies[1].1.contains("already shown"), "{}", replies[1].1);
@@ -3629,9 +3174,9 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
         replies[2].1
     );
     assert!(
-        replies[7].1.contains("\"on\" or \"off\""),
+        replies[6].1.contains("\"on\" or \"off\""),
         "{}",
-        replies[7].1
+        replies[6].1
     );
     let cards: Vec<_> = board
         .orchestrator_steps
@@ -3649,7 +3194,6 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
     assert_eq!(
         cards,
         [
-            crate::work::SettingChange::MergeOnOwn { on: true },
             crate::work::SettingChange::Browser { on: false },
             crate::work::SettingChange::Permission {
                 level: PermissionLevel::ApproveForMe
@@ -3661,10 +3205,7 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
     );
     // Nothing changed: only the user's press does that.
     let after = flow.core.settings();
-    assert_eq!(
-        (after.browser_enabled, after.auto_merge),
-        (before.browser_enabled, before.auto_merge)
-    );
+    assert_eq!(after.browser_enabled, before.browser_enabled);
     let Some(Setup::Session { permission, .. }) =
         flow.core.conversation(&flow.conversation).unwrap().setup
     else {

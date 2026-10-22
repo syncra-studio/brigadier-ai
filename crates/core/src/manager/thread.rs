@@ -333,16 +333,9 @@ impl SessionManager {
         if !self.core.settings().computer_use {
             prompt = prompt.replacen(super::prompts::COMPUTER_ROUTING, "", 1);
         }
-        if !self.reviews_on() {
-            prompt.push_str(&super::prompts::reviews_off_section());
-        }
         prompt.push_str(&super::prompts::git_writing_section(&self.core.settings()));
         prompt.push_str(&super::prompts::browser_section(
             self.core.settings().browser_enabled,
-        ));
-        prompt.push_str(&super::prompts::auto_merge_section(
-            self.auto_merge_in(&conversation.id),
-            super::browser_tool::agents_browse(self.core.settings().browser_enabled),
         ));
         prompt.push_str(&super::prompts::integrations_section(
             &self.thread_integrations(&conversation.id).await,
@@ -574,7 +567,7 @@ impl SessionManager {
     }
 
     /// Looks for the thread's new commits on its workspace's branch and records them: its
-    /// unreviewed range and self-edit metric read them; nothing starts. `in_turn`: a turn runs
+    /// self-edit metric reads them; nothing starts. `in_turn`: a turn runs
     /// (or just ended), so every new commit is the thread's; otherwise only a range with a
     /// commit marked as the thread's is (the user's own commits between turns are not).
     pub(crate) async fn scan_thread_commits(&self, id: &ConversationId, in_turn: bool) {
@@ -614,8 +607,6 @@ impl SessionManager {
         self.scan_branch(id, repo, branch, Some(from.clone()), in_turn)
             .await;
         self.record_thread_tip(id, branch, tip, None).await;
-        // The landing isn't the thread's own change: its range starts again after it.
-        crate::heap(|| self.unreviewed_moved(id, branch, tip)).await;
     }
 
     /// Looks at `branch` from its recorded tip to `upto` (its tip now by default), with
@@ -662,22 +653,8 @@ impl SessionManager {
             Ok(Some((tip, theirs.then_some(seen))))
         })
         .await;
-        // A local checkout's changes are measured from snapshots of its files, its commits
-        // included ([`SessionManager::record_local_changes`]).
-        let local = self
-            .local_checkout(id)
-            .is_some_and(|(_, local)| local == branch);
         match found {
             Ok(Some((tip, base))) => {
-                if !local {
-                    match &base {
-                        Some(base) => {
-                            crate::heap(|| self.thread_commits_unreviewed(id, branch, base, &tip))
-                                .await;
-                        }
-                        None => crate::heap(|| self.unreviewed_moved(id, branch, &tip)).await,
-                    }
-                }
                 self.record_thread_tip(id, branch, &tip, base.as_ref())
                     .await;
             }

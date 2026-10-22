@@ -49,28 +49,20 @@ test("a Background row leaves as soon as its process ends, failed, finished or s
   assert.equal(seen.restartOrDismiss, 0);
 });
 
-test("Background shows the session's events while they run: a review, CI with Open CI, a held merge with Cancel, a merge at work, a refused one with Merge anyway; each opens Progress and leaves once it ends", { timeout: 90000 }, async (t) => {
+test("Background shows the session's events while they run: CI with Open CI, a merge at work; each opens Progress and leaves once it ends", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?events=1", "activities-result", 60000)) as {
     order: string[]; rows: Record<string, Row>; buttons: Record<string, string[]>; buttonsVisibleAtRest: boolean; opened: string | null; calls: string[];
     ended: boolean; next: Record<string, string>; merged: string[]; restartOrDismiss: number;
-    refused: Row; refusedButtons: string[]; refusedVisibleAtRest: boolean; anyway: string[];
   };
   // Newest first, each with its state and how far it got.
-  assert.deepEqual(seen.order, ["merge", "ci", "review-1"]);
-  assert.deepEqual(seen.rows["review-1"], { label: "Codex review", state: "reviewing", moving: true, elapsed: "4m", tip: "The changes up to 4e1c49e" });
+  assert.deepEqual(seen.order, ["ci"]);
   assert.deepEqual(seen.rows["ci"], { label: "CI", state: "checking · 3 of 5 jobs", moving: true, elapsed: "3m", tip: "main · 4e1c49e9" });
-  assert.deepEqual(seen.rows["merge"], { label: "Merge into main", state: "waiting · on 1 worker", moving: true, elapsed: "2m", tip: "Merging after 1 worker finishes" });
-  assert.deepEqual(seen.buttons, { merge: ["Cancel"], ci: ["Open CI"], "review-1": [] });
-  assert.equal(seen.buttonsVisibleAtRest, false, "Open CI and Cancel show on hover, as Stop does");
+  assert.deepEqual(seen.buttons, { ci: ["Open CI"] });
+  assert.equal(seen.buttonsVisibleAtRest, false, "Open CI shows on hover, as Stop does");
   assert.equal(seen.opened, "panel:reviews Progress");
-  assert.deepEqual(seen.calls, ["cancelMerge activities-fixture", "open_url https://github.com/o/r/actions/runs/7"]);
-  assert.equal(seen.ended, true, "the review ended, CI passed and the merge was cancelled: no rows");
+  assert.deepEqual(seen.calls, ["open_url https://github.com/o/r/actions/runs/7"]);
+  assert.equal(seen.ended, true, "CI passed: no rows");
   assert.deepEqual(seen.next, { merge: "merging" });
-  // Refused for want of checks: it waits on the user, Merge anyway always in sight, and merges without them.
-  assert.deepEqual(seen.refused, { label: "Merge into main", state: "waiting · for you", moving: true, elapsed: null, tip: "The checks haven't run on abc1234." });
-  assert.deepEqual(seen.refusedButtons, ["Merge anyway"]);
-  assert.equal(seen.refusedVisibleAtRest, true);
-  assert.deepEqual(seen.anyway, ["mergeSession anyway=true"]);
   assert.deepEqual(seen.merged, []);
   assert.equal(seen.restartOrDismiss, 0);
 });

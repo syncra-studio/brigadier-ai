@@ -491,7 +491,6 @@ dependencies = [
  "brigadier-index",
  "brigadier-providers",
  "brigadier-registry",
- "brigadier-review",
  "brigadier-router",
  "brigadier-sandbox",
  "brigadier-store",
@@ -722,18 +721,6 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "yaml-rust2",
-]
-
-[[package]]
-name = "brigadier-review"
-version = "0.1.0"
-dependencies = [
- "brigadier-providers",
- "brigadier-sandbox",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]

@@ -918,23 +918,14 @@ pub enum Request {
         #[ts(optional, as = "Option<Vec<brigadier_core::FeedbackSent>>")]
         results: Vec<brigadier_core::FeedbackSent>,
     },
-    /// The user clicked "Merge into main" on the side panel: the session branch merges into
-    /// its base on this click, once. `anyway`: it was "Merge anyway", the user skipping the
-    /// checks a merge into the base needs (the card shows it on a refused merge).
+    /// The user clicked "Merge into main" on the side panel: the thread is told to merge the
+    /// session branch into its base.
     MergeSession {
         conversation_id: ConversationId,
-        #[serde(default)]
-        #[ts(optional, as = "Option<bool>")]
-        anyway: bool,
     },
     /// "Close workspace": removes the session's own worktree, its uncommitted changes kept as
     /// a commit on its branch first. The next change makes a fresh one in the same folder.
     CloseWorkspace {
-        conversation_id: ConversationId,
-    },
-    /// Cancels the session's held merge ("Merging after N workers finish"): its consent is
-    /// spent. A merge that already went answers "Too late: already merged".
-    CancelMerge {
         conversation_id: ConversationId,
     },
     /// Proposes an overnight run from the user's words and the plan read from them (`None`:
@@ -1828,10 +1819,6 @@ pub enum Response {
     WaitGitHubSignIn,
     CancelGitHubSignIn,
     AnswerFeedbackOffer,
-    /// What became of the Cancel, for the user.
-    CancelMerge {
-        text: String,
-    },
     /// What the click set going, for the user.
     MergeSession {
         text: String,

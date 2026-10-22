@@ -526,29 +526,15 @@ impl SessionManager {
         // What's missing doesn't refuse the settle (#251): the thread hears it and the morning
         // report marks it.
         let mut unevidenced = Vec::new();
-        // Done only with evidence for every criterion at this tip and, with reviews on, its
-        // review settled (BUILD-PLAN E2).
-        let (evidence, review) = if args.outcome == StepOutcome::Done {
-            use super::acceptance::NotAccepted;
-            match crate::heap(|| self.accept_phase(id, &run, args.phase, &tip, &args.done_when))
-                .await
-            {
-                Ok(accepted) => {
-                    unevidenced.extend(accepted.unmet);
-                    (accepted.evidence, Some(accepted.review))
-                }
-                Err(NotAccepted::Review(why)) => {
-                    if let Ok(mut waits) = self.overnight.settle_waits.lock() {
-                        waits.insert((run.id.clone(), args.phase));
-                    }
-                    return Err(Error::Invalid(why));
-                }
-            }
+        // Done only with evidence for every criterion at this tip (BUILD-PLAN E2).
+        let evidence = if args.outcome == StepOutcome::Done {
+            let accepted =
+                crate::heap(|| self.accept_phase(id, &run, args.phase, &tip, &args.done_when))
+                    .await;
+            unevidenced.extend(accepted.unmet);
+            accepted.evidence
         } else {
-            (
-                Vec::new(),
-                (!self.reviews_on()).then(|| "No review was run: reviews are off.".to_owned()),
-            )
+            Vec::new()
         };
         let settlement = StepSettlement {
             outcome: args.outcome,
@@ -557,7 +543,7 @@ impl SessionManager {
             tip: Some(tip.clone()),
             at_ms: now_ms(),
             evidence,
-            review,
+            review: None,
             unevidenced: unevidenced.clone(),
         };
         let plan = self
@@ -1008,7 +994,7 @@ pub(crate) fn run_brief(run: &OvernightRun, words: &str, done: &[u32]) -> String
         ));
     }
     text.push_str(&format!("\n{}\n", directives_text(run)));
-    text.push_str("\nHow the run goes: give each phase's work to a lead with delegate_task and `phase: <its number>` (tiny edits you make yourself, committed on the run's branch). Land finished work with land_phase. Once a phase's whole scope and every \"done when\" are met and landed, settle it with settle_step (partial or blocked with what is left, when it can't be finished): done needs evidence for each criterion that holds at the run's tip, from its report or lines you quote at the tip in settle_step's done_when, and, with reviews on, its review ended and its findings recorded; the user's Merge takes the work up to the last phase settled done with every phase before it done. Phases that build on one left unfinished wait. When every selected phase is settled, or all that is left needs the user, call end_run. Nobody can answer before the morning: decide what the plan and the Rules settle (note_for_user, kind decided) and list what only the user can do (note_for_user, kind waiting).");
+    text.push_str("\nHow the run goes: give each phase's work to a lead with delegate_task and `phase: <its number>` (tiny edits you make yourself, committed on the run's branch). Land finished work with land_phase. Once a phase's whole scope and every \"done when\" are met and landed, settle it with settle_step (partial or blocked with what is left, when it can't be finished): done needs evidence for each criterion that holds at the run's tip, from its report or lines you quote at the tip in settle_step's done_when; the user's Merge takes the work up to the last phase settled done with every phase before it done. Phases that build on one left unfinished wait. When every selected phase is settled, or all that is left needs the user, call end_run. Nobody can answer before the morning: decide what the plan and the Rules settle (note_for_user, kind decided) and list what only the user can do (note_for_user, kind waiting).");
     text
 }
 

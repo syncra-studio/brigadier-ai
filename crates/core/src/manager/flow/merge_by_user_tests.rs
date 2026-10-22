@@ -1,7 +1,7 @@
-//! Merging is the user's act (BUILD-PLAN A3, A4): only their click on "Merge into main" or
-//! their own words merge. Merge cards are retired: an old card's answer never authorises a
-//! merge (live, or stored across a restart), and an upgrade closes open merge cards and cancels a merge held on one. The
-//! session keeps its workspace through a merge, and an old post-merge removal is taken back.
+//! Merging is the user's act (BUILD-PLAN A3, A4): their click on "Merge into main" or their own
+//! words, as the thread judges them; Brigadier checks no consent. Merge cards are retired: an
+//! upgrade closes open merge cards. The session keeps its workspace through a merge, and an old
+//! post-merge removal is taken back.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -10,12 +10,9 @@ use serde_json::json;
 
 use super::thread_tests::{commit_in_workspace, on_main};
 use super::{Flow, Options, Reply, Script, Turn, click, git};
-use crate::manager::landing::pending_merge;
 use crate::model::{CardId, DomainEvent, Environment, Lifecycle, Setup};
 use crate::now_ms;
-use crate::work::{
-    AnswerInput, MergeCondition, OrchestratorStepKind, Question, QuestionKind, RunState,
-};
+use crate::work::{AnswerInput, OrchestratorStepKind, Question, QuestionKind, RunState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -53,9 +50,7 @@ async fn session(name: &str) -> (Flow, Log) {
                     return Reply::text("Merged.");
                 }
                 if turn.input.contains("just merge it") {
-                    let reply = turn
-                        .call("finish_session", json!({ "user_words": "just merge it" }))
-                        .await;
+                    let reply = turn.call("finish_session", json!({})).await;
                     log(format!("finish_session: {} {}", reply.is_error, reply.text));
                     return Reply::text("Merged.");
                 }
@@ -416,27 +411,20 @@ async fn a_merge_reads_pushed_once_its_base_is_pushed() {
     flow.stop().await;
 }
 
-/// The click merges, once: it is recorded with where it came from, the thread merges on its
-/// [merge], and a second finish_session on the same click is refused. Nothing was ever put on a
-/// card, and the workspace stays with its branch at the merge.
+/// The click merges: it is recorded with where it came from, the thread merges on its [merge],
+/// and a second finish_session finds nothing left to merge. Nothing was ever put on a card, and
+/// the workspace stays with its branch at the merge.
 #[tokio::test]
 async fn a_click_merges_once_and_keeps_the_workspace() {
     let (flow, log) = session("merge-click").await;
     flow.say("Add notes.").await;
     flow.settled().await;
-    // Without the click or the user's words, there is no merge.
-    assert!(
-        flow.manager
-            .finish_session(&flow.conversation, "", None)
-            .await
-            .is_err()
-    );
     let (_, branch) = workspace(&flow);
     let tip = git(&flow.repo, &["rev-parse", &branch]);
     let request = flow.board().await.latest_request().unwrap().id.clone();
     let reply = flow
         .manager
-        .merge_session(&flow.conversation, click(), false)
+        .merge_session(&flow.conversation, click())
         .await
         .unwrap();
     assert!(reply.contains("Merging"), "{reply}");
@@ -444,7 +432,7 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     let board = flow.settled().await;
     assert!(on_main(&flow, "NOTES.md"));
     // The merge on this Mac records the head it merged, its merge commit and the request whose
-    // work it took; no PR, and the user's click, not an auto merge.
+    // work it took; no PR.
     let record = board
         .orchestrator_steps
         .iter()
@@ -453,16 +441,9 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
                 head,
                 merge_commit,
                 pr,
-                auto,
                 requests,
                 ..
-            } => Some((
-                head.clone(),
-                merge_commit.clone(),
-                *pr,
-                *auto,
-                requests.clone(),
-            )),
+            } => Some((head.clone(), merge_commit.clone(), *pr, requests.clone())),
             _ => None,
         })
         .unwrap();
@@ -472,7 +453,6 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
             Some(tip),
             Some(git(&flow.repo, &["rev-parse", "main"])),
             None,
-            false,
             vec![request]
         )
     );
@@ -492,17 +472,17 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     assert_eq!(origin.input, Some(AnswerInput::Click));
     assert_eq!(origin.client, "Brigadier");
     assert_eq!(logged(&log, "finish_session: false [finished]").len(), 1);
-    // The click is spent: no second merge on it.
+    // Nothing is left to merge: no second merge.
     assert!(
         flow.manager
-            .finish_session(&flow.conversation, "", None)
+            .finish_session(&flow.conversation, None)
             .await
             .is_err()
     );
     // And with nothing left to merge, the button's request is refused.
     let nothing = flow
         .manager
-        .merge_session(&flow.conversation, click(), false)
+        .merge_session(&flow.conversation, click())
         .await
         .unwrap_err()
         .to_string();
@@ -523,80 +503,6 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     flow.stop().await;
 }
 
-/// A click after the user's words spends both: once it merged, the words before it don't
-/// authorise another merge of what comes later.
-#[tokio::test]
-async fn a_spent_click_never_falls_back_to_the_words_before_it() {
-    let (flow, _) = session("merge-spent-click").await;
-    flow.say("Add notes. Then merge it into main.").await;
-    flow.settled().await;
-    flow.manager
-        .merge_session(&flow.conversation, click(), false)
-        .await
-        .unwrap();
-    flow.until("the merge", |board| merged(board) == 1).await;
-    flow.settled().await;
-    let (path, _) = workspace(&flow);
-    let path = path.expect("the worktree stays");
-    std::fs::write(path.join("LATER.md"), "later\n").unwrap();
-    git(&path, &["add", "LATER.md"]);
-    git(&path, &["commit", "-qm", "Add later"]);
-    let refused = flow
-        .manager
-        .finish_session(&flow.conversation, "merge it into main", None)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(refused.contains("[not merged]"), "{refused}");
-    assert_eq!(merged(&flow.board().await), 1);
-    assert!(!on_main(&flow, "LATER.md"));
-    flow.stop().await;
-}
-
-/// A card's answer is the user's word (#240): the thread judges it and names the card in
-/// `consent`, and it merges once. With nothing named, the answer alone merges nothing.
-#[tokio::test]
-async fn a_card_answer_merges_when_the_thread_names_it() {
-    let (flow, _) = session("merge-card-answer").await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let card = plant_merge_card(&flow, None).await;
-    flow.manager
-        .answer_question(
-            flow.conversation.clone(),
-            card.id.clone(),
-            vec!["Merge into main".into()],
-            Some(click()),
-        )
-        .await
-        .unwrap();
-    flow.settled().await;
-    assert_eq!(merged(&flow.board().await), 0);
-    assert!(
-        flow.manager
-            .finish_session(&flow.conversation, "", None)
-            .await
-            .is_err()
-    );
-    let card = card.id.to_string();
-    let merged_on = flow
-        .manager
-        .finish_session(&flow.conversation, &card, None)
-        .await
-        .unwrap();
-    assert!(merged_on.contains("[finished]"), "{merged_on}");
-    assert!(on_main(&flow, "NOTES.md"));
-    let again = flow
-        .manager
-        .finish_session(&flow.conversation, &card, None)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(again.contains("used for a merge already"), "{again}");
-    assert_eq!(merged(&flow.board().await), 1);
-    flow.stop().await;
-}
-
 /// The user's own words still merge, and close a merge card left open.
 #[tokio::test]
 async fn words_still_merge_and_close_an_old_open_card() {
@@ -613,46 +519,19 @@ async fn words_still_merge_and_close_an_old_open_card() {
     flow.stop().await;
 }
 
-/// At the upgrade, an open merge card is withdrawn and the thread hears of it once; a merge
-/// held on a card's answer (#240) or on the user's words stays.
+/// At the upgrade, an open merge card is withdrawn and the thread hears of it once.
 #[tokio::test]
-async fn an_upgrade_closes_open_merge_cards_and_keeps_a_held_merge() {
+async fn an_upgrade_closes_open_merge_cards() {
     let (mut flow, log) = session("merge-upgrade").await;
     flow.say("Add notes.").await;
     flow.settled().await;
-    let (_, branch) = workspace(&flow);
     let open = plant_merge_card(&flow, None).await;
-    let answered = plant_merge_card(&flow, Some("Merge into main")).await;
-    flow.manager
-        .orchestrator_step(
-            &flow.conversation,
-            OrchestratorStepKind::MergeHeld {
-                branch: branch.clone(),
-                base: "main".into(),
-                asked_in: answered.id.to_string(),
-                consented_at_ms: now_ms(),
-                condition: MergeCondition::WorkersFinish,
-                waiting: Vec::new(),
-                tip: String::new(),
-            },
-        )
-        .await;
     flow.restart().await;
     let board = flow.settled().await;
     let withdrawn = &board.questions[&open.id];
     assert!(
         !withdrawn.is_open() && withdrawn.answer.is_none(),
         "{withdrawn:#?}"
-    );
-    assert!(
-        !board
-            .orchestrator_steps
-            .iter()
-            .any(|step| matches!(&step.kind, OrchestratorStepKind::MergeCancelled { .. }))
-    );
-    assert_eq!(
-        pending_merge(&board).map(|held| held.asked_in),
-        Some(answered.id.to_string())
     );
     flow.say("Anything new?").await;
     // The note has no request of its own: its turn may follow the user's after that request

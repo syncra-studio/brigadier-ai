@@ -102,9 +102,6 @@ fn scout(
         let (ready, armed, seen, native) =
             (ready.clone(), armed.clone(), seen.clone(), native.clone());
         async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if turn.is_orchestrator() {
                 if turn.input.contains("Find the ticket.") {
                     let mut args = json!({"effort": "medium", "title": "Find the ticket",

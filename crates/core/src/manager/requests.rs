@@ -17,15 +17,13 @@ use std::collections::HashSet;
 use super::SessionManager;
 use super::conversation::{ConvLive, Envelope};
 use super::decisions::waiting_run;
-use super::landing::pending_merge;
 use super::prompts;
 use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
 use crate::overnight::{OvernightRun, OvernightState};
 use crate::work::{
-    CardState, OrchestratorStepKind, PlanState, QuestionKind, RequestState, ReviewKind,
-    ReviewState, Task, TaskId, TaskState,
+    CardState, OrchestratorStepKind, PlanState, QuestionKind, RequestState, Task, TaskId, TaskState,
 };
 
 impl SessionManager {
@@ -244,20 +242,10 @@ impl SessionManager {
         if board.requests.is_empty() {
             return;
         }
-        // A fused answer whose partner ended without one goes alone; its request works until
-        // then. Not from here: delivering settles requests too.
-        if lone_fused(&board) {
-            let manager = self.arc();
-            let id = conversation_id.clone();
-            self.spawn(async move {
-                manager.deliver_lone_fused(&id).await;
-            });
-        }
         let Ok(conv) = self.conv(conversation_id) else {
             return;
         };
         let activity = conv.request_activity().await;
-        let reviews_on = self.reviews_on();
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
@@ -294,7 +282,7 @@ impl SessionManager {
                 // A message it sent waits for its reply, which wakes the thread when it comes
                 // (SESSION-MESSAGING-PLAN.md §5.2): nothing polls.
                 RequestState::Waiting
-            } else if owed_a_turn(&board, id) || (reviews_on && reviewing_own_work(&board, id)) {
+            } else if owed_a_turn(&board, id) {
                 // Brigadier wakes the thread for it later: its answer isn't written yet, so it
                 // isn't over between turns. A stop or a failure above wins.
                 RequestState::Working
@@ -389,9 +377,7 @@ impl SessionManager {
             || activity.carried.contains(id)
             || runs_in(&board, id)
             || blocked_on_the_thread(&board, id);
-        (!under_way
-            && (owed_a_turn(&board, id) || (self.reviews_on() && reviewing_own_work(&board, id))))
-        .then(|| latest.id.clone())
+        (!under_way && owed_a_turn(&board, id)).then(|| latest.id.clone())
     }
 
     /// What a turn tells the orchestrator besides user messages: each envelope, labelled when
@@ -543,31 +529,6 @@ fn tasks_in(board: &Board, request: &str, matches: impl Fn(TaskState) -> bool) -
         .any(|task| task.request_id.as_deref() == Some(request) && matches(task.state))
 }
 
-/// Whether a fused answer of the request waits to reach the thread with its partner's, or
-/// alone (Q77): its request still works.
-fn held_fused_in(board: &Board, request: &str) -> bool {
-    board.tasks.values().any(|task| {
-        task.request_id.as_deref() == Some(request)
-            && task.report.is_some()
-            && task.fusion.as_ref().is_some_and(|fusion| !fusion.delivered)
-    })
-}
-
-/// Whether a fused answer of `board` waits for a partner that ended without a report: it goes
-/// alone ([`SessionManager::deliver_lone_fused`]).
-fn lone_fused(board: &Board) -> bool {
-    board.tasks.values().any(|task| {
-        task.report.is_some()
-            && task.fusion.as_ref().is_some_and(|fusion| {
-                !fusion.delivered
-                    && board
-                        .tasks
-                        .get(&fusion.partner)
-                        .is_none_or(|partner| partner.state.is_final() && partner.report.is_none())
-            })
-    })
-}
-
 /// Whether a task of the request runs, lands, or is about to (a fix Brigadier checks and
 /// lands once its worker's turn is over), or a command of its thread runs in the background:
 /// its result comes as a message.
@@ -578,7 +539,6 @@ fn runs_in(board: &Board, request: &str) -> bool {
             TaskState::Queued | TaskState::Starting | TaskState::Running | TaskState::Landing
         )
     }) || relanding_in(board, request)
-        || held_fused_in(board, request)
         || board.background_runs.values().any(|run| {
             run.state == crate::work::BackgroundRunState::Running
                 && run.request_id.as_deref() == Some(request)
@@ -587,48 +547,18 @@ fn runs_in(board: &Board, request: &str) -> bool {
 
 /// Whether Brigadier still owes the request a turn: something under way will wake the thread
 /// for it with what its answer needs (w43 bug 2). Between turns such a request isn't over, so
-/// its block doesn't fold on a line written mid-way. It is owed one for:
-/// - a CI watch started in it with no result yet: the result comes as a `[ci …]` message;
-/// - the user's merge held in it (SESSION-FIXES-PLAN.md Q3) while a writer works: the last
-///   one's end tells the thread `[merge due]` or `[merge stopped]`. A review doesn't hold it
-///   (#242);
-///
-/// A review or the session's full checks that run on after the thread answered hold nothing
-/// up: their findings or a failure come as a message all the same.
+/// its block doesn't fold on a line written mid-way. It is owed one for a CI watch started in
+/// it with no result yet: the result comes as a `[ci …]` message.
 ///
 /// A request stopped or failed stays so whatever it is owed (see `settle_requests`); the
-/// user's Stop also ends its watches and held merge (`SessionManager::interrupt`).
+/// user's Stop also ends its watches (`SessionManager::interrupt`).
 pub(super) fn owed_a_turn(board: &Board, request: &str) -> bool {
-    let watched = board.orchestrator_steps.iter().any(|step| {
+    board.orchestrator_steps.iter().any(|step| {
         step.request_id.as_deref() == Some(request)
             && matches!(
                 step.kind,
                 OrchestratorStepKind::CiWatch { result: None, .. }
             )
-    });
-    let held = pending_merge(board).is_some_and(|held| held.request.as_deref() == Some(request))
-        && board.tasks.values().any(|task| {
-            task.kind.writes()
-                && matches!(
-                    task.state,
-                    TaskState::Queued
-                        | TaskState::Starting
-                        | TaskState::Running
-                        | TaskState::Landing
-                )
-        });
-    watched || held
-}
-
-/// Whether a review of the thread's own changes for the request runs (BUILD-PLAN B2): the
-/// request isn't done while it does, whether or not the thread answered already. Its findings
-/// come as a message, the valid ones get fixed, and then the answer stands.
-pub(super) fn reviewing_own_work(board: &Board, request: &str) -> bool {
-    board.reviews.values().any(|review| {
-        review.kind == ReviewKind::Code
-            && review.task_id.is_none()
-            && review.state == ReviewState::Running
-            && review.request_id.as_deref() == Some(request)
     })
 }
 
@@ -1070,43 +1000,6 @@ mod tests {
         }
     }
 
-    fn held_merge() -> OrchestratorStepKind {
-        OrchestratorStepKind::MergeHeld {
-            branch: "brigadier/c/session".into(),
-            base: "main".into(),
-            asked_in: "m1".into(),
-            consented_at_ms: 0,
-            condition: crate::work::MergeCondition::WorkersFinish,
-            waiting: Vec::new(),
-            tip: String::new(),
-        }
-    }
-
-    /// A code review for the thread, filed under `request` (none: under its task's).
-    fn review_of(id: &str, request: Option<&str>, task: Option<&Task>) -> crate::work::ReviewRun {
-        crate::work::ReviewRun {
-            id: id.into(),
-            conversation_id: ConversationId("c".into()),
-            request_id: request.map(str::to_owned),
-            task_id: task.map(|task| task.id.clone()),
-            kind: crate::work::ReviewKind::Code,
-            base: "a".into(),
-            tip: "b".into(),
-            author: brigadier_providers::ProviderKind::Claude,
-            reviewer: brigadier_providers::ProviderKind::Codex,
-            reviewer_model: None,
-            notify: crate::work::ReviewFor::Orchestrator,
-            state: ReviewState::Running,
-            started_at_ms: 0,
-            ended_at_ms: None,
-            findings: None,
-            number: 1,
-            items: Vec::new(),
-            landing: None,
-            answer_waits: false,
-        }
-    }
-
     /// The same push watched again from a later request: its row moves to that request, so the
     /// later request works while the watch runs and the earlier one is done. An update of the
     /// earlier watch still on its way doesn't take the row back.
@@ -1144,10 +1037,9 @@ mod tests {
     }
 
     /// What wakes the thread later keeps its request working between turns (w43 bug 2): a CI
-    /// watch with no result, and a held merge while a writer runs. A review is a late event and
-    /// holds nothing.
+    /// watch with no result. An older Brigadier's held merge holds nothing now.
     #[test]
-    fn a_request_is_owed_a_turn_for_a_watch_or_a_held_merge() {
+    fn a_request_is_owed_a_turn_for_a_watch() {
         let owed = owed_a_turn;
         // A CI watch, until its result.
         let mut board = Board::default();
@@ -1157,46 +1049,23 @@ mod tests {
         board.orchestrator_steps[0].kind = watch(Some("passed"));
         assert!(!owed(&board, "r1"));
 
-        // A held merge, while what it waits for runs: then the thread is told of it.
+        // A stored held merge, while a writer runs: nothing is owed for it.
         let mut board = Board::default();
-        board.orchestrator_steps.push(step_of("r1", held_merge()));
-        assert!(!owed(&board, "r1"), "nothing runs: the thread has heard");
-        let writer = task_of("r0", TaskState::Running);
-        board.tasks.insert(writer.id.clone(), writer);
-        assert!(owed(&board, "r1"), "a writer of an earlier request");
-        assert!(!owed(&board, "r0"), "the merge is r1's");
-        board.tasks.clear();
-        // A review doesn't hold the merge (#242), so it owes the held merge's request nothing.
-        let review = review_of("rv0", Some("r0"), None);
-        board.reviews.insert(review.id.clone(), review);
-        assert!(!owed(&board, "r1"), "a review of the session's work");
-        board.reviews.clear();
-        let writer = task_of("r0", TaskState::Running);
-        board.tasks.insert(writer.id.clone(), writer);
         board.orchestrator_steps.push(step_of(
             "r1",
-            OrchestratorStepKind::MergeCancelled {
+            OrchestratorStepKind::MergeHeld {
+                branch: "brigadier/c/session".into(),
+                base: "main".into(),
                 asked_in: "m1".into(),
+                consented_at_ms: 0,
+                condition: crate::work::MergeCondition::WorkersFinish,
+                waiting: Vec::new(),
+                tip: String::new(),
             },
         ));
-        assert!(!owed(&board, "r1"), "cancelled");
-
-        // A review of a landed task's work is a late event: it owes nothing.
-        let mut board = Board::default();
-        let landed = task_of("r1", TaskState::Landed);
-        board.tasks.insert(landed.id.clone(), landed.clone());
-        let review = review_of("rv1", None, Some(&landed));
-        board.reviews.insert(review.id.clone(), review);
-        assert!(!owed(&board, "r1"), "a late review after the answer");
-
-        // A review of the thread's own commits, by its request: its findings come as a
-        // message; the request isn't done while it runs (BUILD-PLAN B2).
-        let mut board = Board::default();
-        let review = review_of("rv2", Some("r1"), None);
-        board.reviews.insert(review.id.clone(), review);
+        let writer = task_of("r0", TaskState::Running);
+        board.tasks.insert(writer.id.clone(), writer);
         assert!(!owed(&board, "r1"));
-        assert!(reviewing_own_work(&board, "r1"));
-        assert!(!reviewing_own_work(&board, "r2"));
     }
 
     #[test]

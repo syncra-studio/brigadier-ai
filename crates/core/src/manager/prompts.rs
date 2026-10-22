@@ -81,28 +81,6 @@ macro_rules! research_fan_out {
     };
 }
 
-/// A research question costly to get wrong goes to both vendors, judged blind by the thread (Q77).
-macro_rules! fusion_lead {
-    () => {
-        "When a wrong answer would cost the user (money, a purchase, a choice hard to undo, a fact they will act on), delegate that research with fuse: true and the whole question in one brief, not split: two workers research it independently and their reports come back together as answers A and B. Judge them yourself: first name where they disagree (facts, numbers, the pick) and check what decides it, then write one answer as usual. Never guess or say which model gave which answer. When only one worker started or one answer came back, answer as usual, with no word about it."
-    };
-}
-
-/// How a fused answer shows its judging (Q86): no Confidence or Disagreement lines; a
-/// disagreement only where it changes what to do.
-macro_rules! fused_answer {
-    () => {
-        "In a fused answer, never write `Confidence:` or `Disagreement:` lines. Show a disagreement only when it changes what the reader should do: if it changes your pick, as a condition in the first sentence; otherwise as one first-person sentence where it belongs (\"I'm not fully sure of …: one source says …, but …, so I used …\"). If you are unsure overall, say so once in the first sentence."
-    };
-}
-
-/// The whole fusion rule, as new instructions hold it.
-macro_rules! fusion_rule {
-    () => {
-        concat!(fusion_lead!(), " ", fused_answer!())
-    };
-}
-
 /// The interview on cards, when the user asks to be grilled or a request is too vague (Q78).
 macro_rules! grilling_rule {
     () => {
@@ -177,9 +155,6 @@ macro_rules! chat_thread {
             "
 - ",
             research_fan_out!(),
-            "
-- ",
-            fusion_rule!(),
             "
 - Start a worker with delegate_task: kind research (it searches the web, compares and writes files) or operate (it uses an app on this computer or a website, with target and end_state). A Chat has no repository, so no other kind. Each report comes later as a message ([report task-N …]), a worker's question as [question from task-N], which you answer with answer_worker. Write your answer from the reports.
 - You write no files yourself. A file the user wants (a list, a table, a document) is made by a research worker in its outputs folder. ",
@@ -300,12 +275,11 @@ How to work:
 - Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
 - {fan_out} {clarify} {start}
-- {fusion}
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) in your shell before your final answer. Before a merge, run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output. Never background a command with `&` or nohup. Run dev servers and apps with start_preview.
 - {own_commits}
-- Call request_review for a large or risky change before you merge it; small edits need none.
-- A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end (fresh: true sees only request, constraints, done_when, commit; own work too).
+- For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none.
+- A big job (many parts, several workers, or hours of work): start_verifier at the end (fresh: true sees only request, constraints, done_when, commit; own work too).
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with ask_user (never a question in your text). Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
@@ -315,7 +289,7 @@ How to work:
 - {OFFER_SESSION_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once; when they ask you to report something to its developers, call it with asked true.
 - {HEADLINE_RULE}
-- Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
+- Tools return at once; never wait or poll: reports, questions and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
@@ -334,7 +308,6 @@ How you handle workers:{WORKER_RULES}{code_rules}{preferences}"#,
         fan_out = research_fan_out!(),
         clarify = clarify_rule!(),
         start = start_rule!(),
-        fusion = fusion_rule!(),
         workers = workers_rule(start_workers),
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
@@ -436,9 +409,6 @@ macro_rules! no_promised_files {
 /// Where a worker's file shows in an answer (Q84).
 pub(crate) const INLINE_FILES: &str = inline_files!();
 
-/// How a fused answer shows its judging (Q86), for the note that brings answers A and B.
-pub(crate) const FUSED_ANSWER: &str = fused_answer!();
-
 /// The thread never says a file or link comes later (Q81).
 pub(crate) const NO_PROMISED_FILES: &str = no_promised_files!();
 
@@ -469,12 +439,8 @@ const NATIVE_COMMANDS: &str =
 const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use your own CLI shell for builds, tests, logs and listings, in your workspace.";
 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its self-edit
-/// metric and unreviewed range count it as the thread's.
+/// metric counts it as the thread's.
 pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
-
-/// The trailer key with which a commit of the thread's names the review findings it fixes
-/// (`R2.2, R2.3`).
-pub(crate) const FIXES_TRAILER: &str = "Brigadier-Fixes";
 
 /// What the thread does with its own changes: on the user's own checkout (`local`) they stay
 /// uncommitted unless the user asks (UI audit M6), elsewhere it commits them with the trailer.
@@ -484,7 +450,7 @@ fn own_commits(local: bool) -> String {
             .to_owned()
     } else {
         format!(
-            "Commit your changes on your workspace's branch with `git commit --trailer \"{THREAD_TRAILER}\"`. A commit that only fixes review findings, nothing else, also adds `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`."
+            "Commit your changes on your workspace's branch with `git commit --trailer \"{THREAD_TRAILER}\"`."
         )
     }
 }
@@ -552,7 +518,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout. They carry the user's git name: call them the workers', never the user's own."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on their word, as you judge it: [merge] (call finish_session without consent), a card answer that agrees, or a message that asks for it (\"merge it\"), with the work landed, without asking again. Pass its card id or their words quoted in consent. Never on silence, or a \"no\", \"wait\" or condition aimed at the merge; a question about it, or a \"not\" about something else, is no \"no\". You may say once that the work is ready to merge. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
+            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merge it into `{base}` when the user asks (their words, or [merge]: their click on Merge into main): run `git merge` yourself in the repository's checkout of `{base}`, or call finish_session. Never on silence, or a \"no\", \"wait\" or condition aimed at the merge. You may say once that the work is ready to merge. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
         ),
     }
 }
@@ -618,56 +584,12 @@ const CHAT_VOICE: &str = concat!(voice_core!(), answer_style!(), research_report
 /// The same for a tab chat, which has no `save_report`.
 const TAB_CHAT_VOICE: &str = concat!(voice_core!(), answer_style!());
 
-/// What the thread does while the user has reviews off; it replaces what its instructions say
-/// about reviews (Settings' "Review the work").
-pub(crate) const REVIEWS_OFF: &str = "Reviews are off (the user's setting): request_review and review_plan start none, and a verifier doesn't ask for one. Nothing waits for a review: judge the work yourself, from its report, its diff and its checks, and say in your final answer that no review ran. A review that started before may still send its findings; weigh them as usual.";
-
-/// The thread's instructions while reviews are off, after what they say about reviews.
-pub(crate) fn reviews_off_section() -> String {
-    format!("\n\n{REVIEWS_OFF} This replaces what these instructions say about reviews.")
-}
-
 /// What a session does while the user has Brigadier's built-in browser off (Settings ›
 /// Browser). Instructions never mention the browser while it is on.
 pub(crate) const BROWSER_OFF: &str = "Brigadier's built-in browser is off (the user's setting): for you it doesn't exist. Never offer to open a page in it or say a page will open there; links and preview URLs you give the user open in their default browser.";
 
 /// What an agent with the `computer` tools is told about them.
 pub(crate) const COMPUTER_USE: &str = "You can see and drive apps on this Mac with the `computer` tools. They work in the background: the user's windows stay where they are and their pointer doesn't move. Before your first one, load the `computer-use` skill and follow it. Use them when the job needs an app's interface (operating an app, checking a change in the running app); never bring a window to the front unless asked. A look or demo shows pages in the app it is about when it can; else in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end.";
-
-/// How the thread ships and merges while the user has "Merge on its own" on (WORKSPACES-PLAN.md
-/// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine gates
-/// no merge; the merge message shows what was verified.
-pub(crate) const AUTO_MERGE: &str = "Merging on its own is on (the user's setting): when the work is ready, ship it and merge it yourself, with no consent asked; this replaces what your instructions say about waiting for the user's yes to merge. With a GitHub remote and `gh` signed in: push the branch, open a pull request, babysit its CI and reviews, fix, and merge it with `gh pr merge`; Brigadier records the merge and brings the base up to date when your request ends. When the base needs a merge queue or auto-merge (the merge is refused, or the pull request only joins the queue), use `gh pr merge --auto` with the same method instead of failing or waiting yourself: say it is queued, not merged; Brigadier watches it and records the merge when GitHub lands it. Otherwise finish_session merges it into the base here.
-Ship it the way a careful engineer would; you judge how much a change needs, and a change the user can see always comes with its proof. What usually makes a merge safe:
-- the project's full checks passed on the final commit, after your last change;
-- the other vendor's review of the final commit (request_review reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
-- with a pull request, green CI on it (ci_status reads its checks);
-- for a change the user can see (a page, a screen, a control, its words or its look), however small: the app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof), with a short caption of what it shows. Reading the code, a grep or a passing test isn't that proof: it shows the change is there, not that it works for the user;
-- for a change you judge big or risky: a fresh verifier (start_verifier with fresh: true) that tries to break it against the original request.
-When something can't be had (CI broken on main, the other vendor out of quota), decide whether to merge or wait, and say what was missing. The merge message (your reply that says it merged) shows what was verified: the pull request or commit, the checks on the final commit, the review and how each finding was settled, CI, the proof, the verifier's verdict if one ran, and anything left out. \"Beyond this request:\" lists what you found outside it (filed as issues when the repo is on GitHub); never drop a finding without saying so.";
-
-/// How a change on a web page is proved where agents have the browser tools (Q82): the same
-/// tool that works pages drives the preview's.
-pub(crate) const BROWSER_PROOF: &str = "For a change on a web page (a web app's preview, a site), however small, get the proof with your browser tools: browser_open on the preview's URL opens it in a background Browser tab, use the change there (browser_click, browser_type), then browser_screenshot; attach_proof takes the file it saves, with a short caption of what it shows (\"Added a todo with a due date\"). A change in a desktop app's own window is shown with computer use.";
-
-/// What the thread is told about merging on its own: with the browser tools, how a web page's
-/// change is proved with them.
-fn auto_merge_text(browser_tools: bool) -> String {
-    if browser_tools {
-        format!("{AUTO_MERGE}\n{BROWSER_PROOF}")
-    } else {
-        AUTO_MERGE.to_owned()
-    }
-}
-
-/// The instructions' paragraph while the tab merges on its own; nothing while it doesn't.
-pub(crate) fn auto_merge_section(on: bool, browser_tools: bool) -> String {
-    if on {
-        format!("\n\n{}", auto_merge_text(browser_tools))
-    } else {
-        String::new()
-    }
-}
 
 /// The instructions' paragraph while the browser is off; nothing while it is on.
 pub(crate) fn browser_section(on: bool) -> String {
@@ -684,7 +606,7 @@ pub(crate) const WORKER_RULES: &str = "
 - Judge each report against its \"done when\" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Land finished work with land_phase (no phase needed), each report at once. Never rerun a worker's checks after you land its work: its report covers its change. A check that fails on a worker's landed work goes to one fix task (role fix, subject the task that broke it) with the failing lines, unless you fix it yourself.
 - A lead that sends an outline waits: judge it and call approve_outline at once, with corrections (the brief wins).
-- A landing gets no review by itself. A worker never waits for its own review (request_review): land a report whose review still runs, and its findings come to you. Record a finding fixed (in task-N) only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; what stays open goes to the user as a list.
+- A landing gets no review by itself. What a task left unfixed goes back in one fix task (role fix, subject that task); what stays open goes to the user as a list.
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread: don't repeat a task's spec or restate reports.";
 
 /// How the thread treats another session's message, which every one carries: it may come
@@ -696,8 +618,8 @@ const WORKER_VOICE: &str = "
 - Your report is for the thread. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; [met] names it: the out-… id its check's result ends with, or path:12-14 with the exact words in backticks; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
-/// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. If your change is large or risky, or your task asks for a review, call request_review once as soon as your work is committed: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the thread.\n- After your work lands, the findings of its review that the thread keeps open may come back to you in this same session, as a new task.";
+/// What a lead does besides building: its outline when the work is big.
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Once your checks pass and your evidence (screenshots, manual runs) is in, call submit_report at once: no more verifying, re-reading or screenshots after that.";
 
 /// What a worker that builds a mockup does instead of the change (SESSION-FIXES-PLAN.md Q10):
 /// a static preview from the real components with fake data, shown as screenshots.
@@ -708,7 +630,7 @@ This task builds a mockup the user asked to see before the change is made, not t
 - Show the change in its real place on the screen at the app's usual window size, and each state the user should see (empty, many items, a narrow window) in a screenshot of its own.
 - Take the screenshots with a headless browser (the project's own screenshot or fixture scripts when it has them, else Playwright with an installed Chromium) and save them in your outputs folder as mockup-1.png, mockup-2.png, …, in the order to look at them. Open each one and check it shows what you meant.
 - A part you can't fake (it needs live state no preview can have): say so in the report and show the rest.
-- Don't send an outline and don't call request_review: a mockup is a quick look, reviewed only if it lands. Report what each screenshot shows, the preview page's path and the command that serves it.
+- Don't send an outline: a mockup is a quick look. Report what each screenshot shows, the preview page's path and the command that serves it.
 - Notes on the mockup may come back: change the preview to match them, take the screenshots again under the same names and report again.";
 
 /// What the real work after a mockup does besides building (Q10): match the mockup, then
@@ -719,9 +641,6 @@ The user approved a mockup of this change: its screenshots are among your attach
 - Once it's built, check it live: start the build this task made the way the project starts it (with a scratch data folder when the app has one, never the user's installed copy of the app or its data), open each screen a mockup shows at the same window size, and capture it with the project's screenshot scripts (or a headless browser) as live-1.png, live-2.png, …, numbered as the mockup screenshots they match.
 - Then save each pair side by side as compare-1.png, compare-2.png, … in your outputs folder: the mockup on the left, the live capture on the right, each labelled (for example a small HTML page showing both, screenshotted with a headless browser). Open each one and check both halves show.
 - Under verification, for each pair: the screen's name, the three files, what matches, and each difference with whether you fixed it or why it stays.";
-
-/// [`LEAD_STEPS`] while the user has reviews off: no review of its own.
-const LEAD_STEPS_UNREVIEWED: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Reviews are off (the user's setting): don't call request_review. Once your checks pass and your evidence (screenshots, manual runs) is in, call submit_report at once: no more verifying, re-reading or screenshots after that.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -844,9 +763,8 @@ Rules:
 
 /// A worker's task, the first message of each new CLI session it gets (a successor's too):
 /// the date, the task and its kind, where it works (`repo_note`), the rules for that kind,
-/// `extra` (a review's or merge's brief, notes) and the spec. `reviewed`: the user's "Review the
-/// work" setting, which decides whether a lead asks for its own review.
-pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: bool) -> String {
+/// `extra` (a review's or merge's brief, notes) and the spec.
+pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String {
     let kind = match task.kind {
         TaskKind::Scout => {
             "scout: look around the repository and answer the question. Change nothing."
@@ -880,7 +798,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
         let commits = if merge {
             " Run the merge with git and commit it yourself, and any fix after it; never rebase, reset or amend the merge away, and never move any other branch."
         } else if task.route.choice.provider == brigadier_providers::ProviderKind::Codex {
-            " Commit each finished step with a short plain message if you can; when your sandbox can't write git's files, leave the changes: Brigadier commits them when you ask for a review or report."
+            " Commit each finished step with a short plain message if you can; when your sandbox can't write git's files, leave the changes: Brigadier commits them when you report."
         } else {
             " Commit each finished step with a short plain message."
         };
@@ -898,16 +816,11 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
         format!(
             "\n- Work only inside this worktree, on its branch.{commits} Don't switch branches or touch other checkouts, and never delete a branch, worktree or temp folder: Brigadier cleans up after you, and \"Operation not permitted\" on one is Brigadier protecting it. {leftovers}{listed}\n- Put scratch notes, logs and throwaway scripts in your scratch folder, never in the repository.\n- Don't write new tests unless the task asks for them. If a change breaks an existing test, fix the code; change a test only for an intended behaviour change.\n- Before you report, check your own change: the checks of what you touched (its tests, format, lint, types), never the whole suite or an app build.{reading}{role}",
             role = match task.role {
-                // A mockup is a quick look: no outline, no review until it lands.
+                // A mockup is a quick look: no outline.
                 _ if task.mockup == Some(MockupPart::Builds) => "",
-                // The live look changes nothing: no outline, no review.
+                // The live look changes nothing: no outline.
                 _ if task.live_look => LIVE_LOOK,
-                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement && reviewed => {
-                    LEAD_STEPS
-                }
-                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => {
-                    LEAD_STEPS_UNREVIEWED
-                }
+                Some(WorkerRole::Lead) | None if task.kind == TaskKind::Implement => LEAD_STEPS,
                 _ => "",
             }
         )
@@ -996,7 +909,7 @@ pub(crate) const SCRIPTED_UI_COMPUTER: &str =
     " Not for checking your own change: that is the scripted UI checks above.";
 
 /// The live look's role: it changes nothing and looks at the integrated tree's own build.
-const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's landed work, and you look at it live. Build its dev app, launch it yourself with the computer tools on a fresh data folder in your scratch folder, check each change the task names, and report what you saw for each. No outline, no request_review, no commits.";
+const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's landed work, and you look at it live. Build its dev app, launch it yourself with the computer tools on a fresh data folder in your scratch folder, check each change the task names, and report what you saw for each. No outline, no commits.";
 
 /// How a worker whose change shows in an app checks it live with the `computer` tools, with the
 /// project's dev-app command when it is known (SESSION-FIXES-PLAN.md "Computer use").
@@ -1279,7 +1192,7 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
         "Outputs (the user saves them from the task card; read_artifact reads them; link one once, inline where your answer speaks of it, as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy)",
         task.outputs
             .iter()
-            .map(|o| output_line(task, o, &cut(&o.title, 120)))
+            .map(|o| output_line(o, &cut(&o.title, 120)))
             .collect(),
         &mut text,
     );
@@ -1291,24 +1204,12 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
     text
 }
 
-/// One of a report's outputs as the thread reads it. Both of a fused pair work on one brief and
-/// often write the same file name, so each of theirs comes with the link that opens its own
-/// copy (#378).
-fn output_line(task: &Task, output: &ArtifactRef, title: &str) -> String {
-    let line = format!(
+/// One of a report's outputs as the thread reads it.
+fn output_line(output: &ArtifactRef, title: &str) -> String {
+    format!(
         "{} ({}, {} bytes): {title}",
         output.id, output.mime, output.bytes
-    );
-    let (Some(_), Some(name)) = (&task.fusion, output.file_name.as_deref()) else {
-        return line;
-    };
-    let link = format!("outputs/task-{}/{name}", task.number);
-    let link = if name.contains(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '<' | '>')) {
-        format!("<{link}>")
-    } else {
-        link
-    };
-    format!("{line}; link it as [{name}]({link})")
+    )
 }
 
 /// How a report's "needs the user" list is headed: an overnight run's are listed for the user
@@ -1392,7 +1293,7 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
             "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; link one once, inline where your answer speaks of it, as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path):",
         );
         for output in &task.outputs {
-            text.push_str(&format!("\n- {}", output_line(task, output, &output.title)));
+            text.push_str(&format!("\n- {}", output_line(output, &output.title)));
         }
     }
     text.push_str("\n[/report]");
@@ -1607,11 +1508,7 @@ mod tests {
 
     /// What a worker reads before it starts: its system prompt, then its first message.
     fn worker(task: &Task) -> String {
-        format!(
-            "{}\n\n{}",
-            worker_system(""),
-            worker_brief(task, "", "", true)
-        )
+        format!("{}\n\n{}", worker_system(""), worker_brief(task, "", ""))
     }
 
     /// SESSION-FIXES-PLAN.md Q6.6: workers start from the brief's Brain section and write back
@@ -1730,10 +1627,10 @@ mod tests {
     }
 
     #[test]
-    fn a_lead_outlines_big_work_reviews_small_work_and_commits_its_steps() {
+    fn a_lead_outlines_big_work_and_commits_its_steps() {
         let lead = worker(&task("claude", Some("lead")));
         assert!(lead.contains("submit_outline"));
-        assert!(lead.contains("call request_review once"));
+        assert!(!lead.contains("request_review"));
         assert!(lead.contains("Commit each finished step"));
         assert!(!lead.contains("when your sandbox can't write git's files"));
         assert!(lead.contains(
@@ -1743,7 +1640,7 @@ mod tests {
         assert!(lead.contains("query_brain"));
         // Codex's sandbox may keep it from committing: Brigadier commits for it.
         let codex = worker(&task("codex", Some("lead")));
-        assert!(codex.contains("Brigadier commits them when you ask for a review or report"));
+        assert!(codex.contains("Brigadier commits them when you report"));
         // A verifier follows its own steps, not a lead's.
         let verifier = worker(&task("claude", Some("verifier")));
         assert!(!verifier.contains("submit_outline"));
@@ -1769,24 +1666,16 @@ mod tests {
         assert!(!system.contains("Add the flag"));
         assert!(!system.contains("Today is"));
         assert!(system.ends_with(instructions));
-        let brief = worker_brief(
-            &task("claude", Some("lead")),
-            "Your worktree: /w/t1",
-            "",
-            true,
-        );
+        let brief = worker_brief(&task("claude", Some("lead")), "Your worktree: /w/t1", "");
         assert!(brief.starts_with("Today is "));
         assert!(brief.contains("Task task-1: Add the flag"));
         assert!(brief.contains("never send SIGCONT or any other signal to resume them"));
         assert!(brief.contains("Your worktree: /w/t1"));
         assert!(brief.ends_with("The task:\nAdd the flag."));
-        // A lead stops once its checks and the review are green (THREAD-UX-PLAN.md §4.1 a).
+        // A lead stops once its checks are green (THREAD-UX-PLAN.md §4.1 a).
         assert!(brief.contains(
             "call submit_report at once: no more verifying, re-reading or screenshots after that"
         ));
-        // Its review runs while it gathers its evidence and runs its checks: no idle wait.
-        assert!(brief.contains("If your change is large or risky, or your task asks for a review, call request_review once as soon as your work is committed: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it"));
-        assert!(brief.contains("Findings that arrive after your report go to the thread."));
         assert!(brief.contains("Do exactly what the task asks"));
         // #66: the user reads a worker's words, which name the thread as they know it.
         assert!(brief.contains("call ask_thread"));
@@ -1840,7 +1729,7 @@ mod tests {
         look.live_look = true;
         assert!(checks_live(&look));
         assert!(!scripted_ui(&look));
-        let brief = worker_brief(&look, "", &worker_computer(Some(&dev_app)), true);
+        let brief = worker_brief(&look, "", &worker_computer(Some(&dev_app)));
         assert!(brief.contains("Checking it live (your change shows in an app)"));
         assert!(brief.contains(
             "the way the project starts it (here: build and open it as one start_preview"
@@ -1852,7 +1741,6 @@ mod tests {
         assert!(brief.contains("never start a second copy beside it"));
         assert!(brief.contains("You change nothing: your worktree is the session's landed work"));
         assert!(!brief.contains("submit_outline"));
-        assert!(!brief.contains("call request_review once"));
         let mut matched = ui.clone();
         matched.mockup = Some(MockupPart::Matches {
             task: crate::work::TaskId("t-mock".into()),
@@ -1868,7 +1756,7 @@ mod tests {
         for task in [&backend, &scout, &merge] {
             assert!(!checks_live(task) && !scripted_ui(task), "{:?}", task.kind);
         }
-        assert!(!worker_brief(&backend, "", "", true).contains("Checking it live"));
+        assert!(!worker_brief(&backend, "", "").contains("Checking it live"));
     }
 
     #[test]
@@ -1877,7 +1765,7 @@ mod tests {
         operator.kind = TaskKind::Operate;
         operator.target = Some("TextEdit, the window \"Notes\"".into());
         operator.end_state = Some("The note reads \"hi\"".into());
-        let brief = worker_brief(&operator, "", "", true);
+        let brief = worker_brief(&operator, "", "");
         assert!(
             brief.contains(
                 "Target: TextEdit, the window \"Notes\"\nEnd state: The note reads \"hi\""
@@ -1894,10 +1782,10 @@ mod tests {
         assert!(brief.contains("Don't change files in the repository"));
         assert!(!brief.contains("How to write code"));
         operator.route.choice.provider = ProviderKind::Codex;
-        let codex = worker_brief(&operator, "", "", true);
+        let codex = worker_brief(&operator, "", "");
         assert!(codex.contains("call tools.mcp__brigadier__submit_report: what you did"));
         // Other kinds hear none of it.
-        let lead = worker_brief(&task("claude", Some("lead")), "", "", true);
+        let lead = worker_brief(&task("claude", Some("lead")), "", "");
         assert!(!lead.contains("How to operate"));
     }
 
@@ -1908,24 +1796,23 @@ mod tests {
         let mut researcher = task("codex", None);
         researcher.kind = TaskKind::Research;
         let words = "The thread writes its answer from your report and notes, so write them in plain sentences: no line or list item starts with bold text.";
-        assert!(worker_brief(&researcher, "", "", true).contains(words));
-        assert!(!worker_brief(&task("codex", None), "", "", true).contains(words));
+        assert!(worker_brief(&researcher, "", "").contains(words));
+        assert!(!worker_brief(&task("codex", None), "", "").contains(words));
     }
 
-    /// Q10: a mockup's worker builds a preview, not the change, and skips the lead's outline
-    /// and review; the real work matches the mockup and captures the live app to compare; a
+    /// Q10: a mockup's worker builds a preview, not the change, and skips the lead's outline;
+    /// the real work matches the mockup and captures the live app to compare; a
     /// plain task hears neither.
     #[test]
     fn a_mockup_brief_builds_a_preview_and_the_real_work_captures_the_live_app() {
         let mut mockup = task("claude", Some("lead"));
         mockup.mockup = Some(MockupPart::Builds);
-        let brief = worker_brief(&mockup, "", "", true);
+        let brief = worker_brief(&mockup, "", "");
         assert!(brief.contains("This task builds a mockup the user asked to see"));
         assert!(brief.contains("the project's real components and styles with fake data"));
         assert!(brief.contains("save them in your outputs folder as mockup-1.png"));
         assert!(brief.contains("Change nothing in the product's code or behaviour"));
         assert!(brief.contains("How to write code"));
-        assert!(!brief.contains("call request_review once"));
         assert!(!brief.contains("send your outline with submit_outline"));
         assert!(!brief.contains("save_as"));
 
@@ -1933,7 +1820,7 @@ mod tests {
         real.mockup = Some(MockupPart::Matches {
             task: crate::work::TaskId("t2".into()),
         });
-        let brief = worker_brief(&real, "", "", true);
+        let brief = worker_brief(&real, "", "");
         assert!(brief.contains("The user approved a mockup of this change"));
         assert!(brief.contains(
             "with the project's screenshot scripts (or a headless browser) as live-1.png"
@@ -1941,28 +1828,12 @@ mod tests {
         assert!(brief.contains("never the user's installed copy of the app or its data"));
         assert!(brief.contains("save each pair side by side as compare-1.png"));
         assert!(brief.contains("for each pair: the screen's name, the three files"));
-        // It is still the work's lead: outline when big, one review.
-        assert!(brief.contains("call request_review once"));
+        // It is still the work's lead: outline when big.
+        assert!(brief.contains("send your outline with submit_outline"));
         assert!(!brief.contains("This task builds a mockup"));
 
-        let plain = worker_brief(&task("claude", Some("lead")), "", "", true);
+        let plain = worker_brief(&task("claude", Some("lead")), "", "");
         assert!(!plain.contains("mockup"));
-    }
-
-    #[test]
-    fn a_lead_asks_for_its_review_only_while_reviews_are_on() {
-        let lead = task("claude", Some("lead"));
-        let reviewed = worker_brief(&lead, "", "", true);
-        assert!(reviewed.contains("call request_review once"));
-        let unreviewed = worker_brief(&lead, "", "", false);
-        assert!(
-            !unreviewed.contains("call request_review once"),
-            "{unreviewed}"
-        );
-        assert!(
-            unreviewed.contains("Reviews are off (the user's setting): don't call request_review.")
-        );
-        assert!(unreviewed.contains("call submit_report at once"));
     }
 }
 
@@ -2154,7 +2025,6 @@ mod environment_tests {
         assert!(!own.contains("not committed"));
         let local = prompt(&session("fullAccess"));
         assert!(!local.contains(THREAD_TRAILER));
-        assert!(!local.contains(FIXES_TRAILER));
         assert!(local.contains("Asked to commit, write a plain message in the project's style with no Brigadier trailer"));
     }
 
@@ -2203,7 +2073,7 @@ mod environment_tests {
                         WORKER_RULES
                             .contains("Never rerun a worker's checks after you land its work")
                     );
-                    assert!(WORKER_RULES.contains("A worker never waits for its own review"));
+                    assert!(!WORKER_RULES.contains("request_review"));
                     assert!(prompt.contains(&callable(MOCKUPS, provider)));
                     assert!(prompt.contains("Never answer \"I can't\""));
                     assert!(
@@ -2222,13 +2092,13 @@ mod environment_tests {
                         run.is_none()
                     );
                     assert!(prompt.contains("How to write code:"));
-                    // The full checks before a merge, a review asked for a large or risky
-                    // change, extra care only for a big job (B1, B2).
+                    // The full checks before a merge, a second look at a large or risky change
+                    // with the CLIs' own means (S5), extra care only for a big job (B1, B2).
                     assert!(
                         prompt.contains("Before a merge, run the project's full checks yourself")
                     );
                     assert!(prompt.contains("in your shell before your final answer"));
-                    assert!(prompt.contains("request_review for a large or risky change before you merge it; small edits need none."));
+                    assert!(prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell"));
                     assert!(!prompt.contains("Reviews by the other vendor scale with risk"));
                     assert!(!prompt.contains("risky mark"));
                     assert!(
@@ -2239,7 +2109,6 @@ mod environment_tests {
                     for name in [
                         "delegate_task",
                         "start_verifier",
-                        "review_plan",
                         "query_brain",
                         "remember",
                         "code_search",
@@ -2293,8 +2162,9 @@ mod environment_tests {
                     ] {
                         assert!(!prompt.contains(step), "{step}");
                     }
-                    // Vendor-specific parts are picked here, never named in the text.
-                    let lower = prompt.to_lowercase();
+                    // Vendor-specific parts are picked here, never named in the text; the one
+                    // command a thread runs for a second look is the exception.
+                    let lower = prompt.replace("`codex review`", "").to_lowercase();
                     for name in ["claude", "codex", "delegator", "chatgpt", "openai"] {
                         assert!(!lower.contains(name), "{name} in {permission} {provider:?}");
                     }
@@ -2406,8 +2276,8 @@ mod environment_tests {
         });
         assert!(!worktree.contains("propose_merge"));
         assert!(worktree.contains("You may say once that the work is ready to merge"));
-        assert!(worktree.contains("[merge] (call finish_session without consent)"));
-        assert!(worktree.contains("a card answer that agrees, or a message that asks for it"));
+        assert!(worktree.contains("Merge it into `main` when the user asks (their words, or [merge]: their click on Merge into main): run `git merge` yourself"));
+        assert!(!worktree.contains("consent"));
         assert!(worktree.contains("stays with the session through merges"));
         assert!(!worktree.contains("there is no card"));
         // Every byte is paid for on every call: it stays near 11 KB, code rules included (15 KB
@@ -2641,73 +2511,6 @@ mod environment_tests {
         assert!(off.contains("start them only on a yes, and otherwise do the work yourself"));
     }
 
-    /// "Merge on its own" puts the bar in a session's instructions only while it is on.
-    #[test]
-    fn the_merge_on_its_own_paragraph_comes_only_while_it_is_on() {
-        assert!(auto_merge_section(false, true).is_empty());
-        assert_eq!(auto_merge_section(true, false), format!("\n\n{AUTO_MERGE}"));
-    }
-
-    /// The Q68 bar is guidance the agent judges (the user, 10-18: the LLM stays free): what
-    /// usually makes a merge safe, no must-lists, thresholds or loops, no hand-back when an
-    /// item can't be had, and the merge message shows what was verified.
-    #[test]
-    fn the_merge_bar_is_guidance_the_agent_judges() {
-        for words in [
-            "with no consent asked",
-            "you judge how much a change needs",
-            "What usually makes a merge safe",
-            "the project's full checks passed on the final commit",
-            "request_review",
-            "each finding fixed or answered in one line",
-            "green CI",
-            "start_preview",
-            "a screenshot or short recording attached to the merge message",
-            "(attach_proof)",
-            "a change the user can see always comes with its proof",
-            "however small",
-            "a grep or a passing test isn't that proof",
-            "a change you judge big or risky",
-            "start_verifier with fresh: true",
-            "decide whether to merge or wait, and say what was missing",
-            "shows what was verified",
-            "\"Beyond this request:\"",
-            "filed as issues when the repo is on GitHub",
-            "`gh pr merge`",
-            "merge queue or auto-merge",
-            "`gh pr merge --auto` with the same method instead of failing",
-            "say it is queued, not merged",
-        ] {
-            assert!(AUTO_MERGE.contains(words), "{words}");
-        }
-        let lower = AUTO_MERGE.to_lowercase();
-        for words in [
-            "must",
-            "never merge",
-            "don't merge",
-            "only merge",
-            "start the list again",
-            "leave the merge to the user",
-            "lines changed",
-            "workers",
-        ] {
-            assert!(!lower.contains(words), "{words}");
-        }
-        assert!(
-            !AUTO_MERGE.chars().any(|c| c.is_ascii_digit()),
-            "no thresholds"
-        );
-    }
-
-    /// Q68: a one-file page change was merged on its own on a grep check. A change the user can
-    /// see comes with its proof however small, and a grep or a test isn't it; still guidance,
-    /// so a missing proof is the agent's call, said in the merge message.
-    #[test]
-    fn a_change_the_user_can_see_comes_with_its_proof_however_small() {
-        assert!(AUTO_MERGE.contains("Reading the code, a grep or a passing test isn't that proof"));
-        assert!(BROWSER_PROOF.contains("(a web app's preview, a site), however small"));
-    }
-
     /// While the built-in browser is on, the instructions don't mention it: the browser tools
     /// describe themselves, and turning it off has nothing to take away but the note.
     #[test]
@@ -2733,25 +2536,6 @@ mod environment_tests {
         assert!(!mentions(&worker_system("")));
         assert!(browser_section(true).is_empty());
         assert!(mentions(&browser_section(false)));
-    }
-
-    /// Q82: where agents have the browser tools, a web page's UI proof for a merge comes from
-    /// them (the preview's URL opened, the change used, a screenshot attached); without them,
-    /// and for a desktop app's window, the proof is had as before.
-    #[test]
-    fn the_merge_proof_of_a_web_change_comes_from_the_browser_tools_where_agents_have_them() {
-        let with = auto_merge_section(true, true);
-        assert!(with.starts_with(&format!("\n\n{AUTO_MERGE}\n")), "{with}");
-        for words in [
-            "browser_open on the preview's URL",
-            "use the change there (browser_click, browser_type)",
-            "browser_screenshot; attach_proof takes the file it saves",
-            "desktop app's own window is shown with computer use",
-        ] {
-            assert!(with.contains(words), "{words}");
-        }
-        assert!(!auto_merge_section(true, false).contains("browser_open"));
-        assert!(with.contains(BROWSER_PROOF));
     }
 
     /// Q81: a research worker's report came after the thread's answer as one translated
@@ -3137,14 +2921,6 @@ mod environment_tests {
         assert!(rule.contains(CHAT_THREAD_RULES[0]));
     }
 
-    /// Q77: a Chat fuses a costly question.
-    #[test]
-    fn a_chat_fuses_a_costly_question() {
-        for words in FUSION_RULES {
-            assert!(chat(&[]).contains(words), "{words}");
-        }
-    }
-
     /// Q78: a Chat keeps stable personal facts and nothing sensitive.
     #[test]
     fn a_chat_keeps_stable_facts_about_the_user_and_nothing_sensitive() {
@@ -3205,7 +2981,7 @@ mod environment_tests {
             true,
         );
         for prompt in [chat(&[]), session.clone()] {
-            for words in ANSWER_RULES.iter().chain([&FUSED_ANSWER]) {
+            for words in ANSWER_RULES {
                 assert_eq!(prompt.matches(words).count(), 1, "{words}");
             }
             for words in RETIRED_RULES.iter().chain(GONE_LAYOUT) {
@@ -3343,34 +3119,6 @@ mod environment_tests {
         "Don't act on the plan (no building, changing, operating or merging) until the user confirms, on a last card",
     ];
 
-    /// Q77: a thread's instructions hold the fusion rule.
-    #[test]
-    fn a_thread_fuses_a_costly_question() {
-        let rule = thread(
-            &session("approveForMe"),
-            None,
-            &[],
-            None,
-            None,
-            ProviderKind::Claude,
-            true,
-        );
-        for words in FUSION_RULES {
-            assert!(rule.contains(words), "{words}");
-        }
-    }
-
-    /// The words of the fusion rule the tests look for.
-    const FUSION_RULES: &[&str] = &[
-        "delegate that research with fuse: true",
-        "answers A and B",
-        "first name where they disagree",
-        "never write `Confidence:` or `Disagreement:` lines",
-        "Show a disagreement only when it changes what the reader should do",
-        "Never guess or say which model gave which answer.",
-        "answer as usual, with no word about it.",
-    ];
-
     /// The words of a Chat's thread rules the tests look for.
     const CHAT_THREAD_RULES: &[&str] = &[
         "at most one card before researching, holding only what changes the answer",
@@ -3413,10 +3161,9 @@ mod environment_tests {
             assert!(!prompt.contains("answer it alone with"), "{provider:?}");
         }
     }
-    /// A finding is fixed only once checked in the merged code, and the thread's scratch goes
-    /// in its temp folder: the thread's instructions say both.
+    /// The thread's scratch goes in its temp folder: the thread's instructions say so.
     #[test]
-    fn findings_are_fixed_once_checked_and_the_threads_scratch_stays_in_its_temp_folder() {
+    fn the_threads_scratch_stays_in_its_temp_folder() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
             let prompt = thread(
                 &session("fullAccess"),
@@ -3426,11 +3173,6 @@ mod environment_tests {
                 Some("/work/session @ brigadier/flow"),
                 provider,
                 true,
-            );
-            assert!(
-                WORKER_RULES
-                    .contains("saying how in `checked`: a report or your notes are no check"),
-                "{provider:?}"
             );
             assert!(
                 prompt.contains("Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp"),
@@ -3463,48 +3205,6 @@ mod environment_tests {
         }
     }
 
-    /// SESSION-FIXES-PLAN.md Q6.1: review fixes resume the landed worker's session; the
-    /// prompts say so.
-    #[test]
-    fn review_fixes_resume_the_landed_workers_session() {
-        let prompt = thread(
-            &session("fullAccess"),
-            None,
-            &[],
-            None,
-            Some("/work/session @ brigadier/flow"),
-            ProviderKind::Claude,
-            true,
-        );
-        assert!(prompt.contains("which resumes that worker's session"));
-        assert!(WORKER_RULES.contains(
-            "a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session"
-        ));
-        assert!(WORKER_RULES.contains("A landing gets no review by itself."));
-        assert!(WORKER_RULES.contains("goes to the user as a list"));
-        assert!(LEAD_STEPS.contains("may come back to you in this same session"));
-    }
-
-    /// The review rules after the tour: the thread's fix commit names its findings, and the
-    /// thread's instructions say so.
-    #[test]
-    fn a_threads_fix_commit_names_its_findings() {
-        let prompt = thread(
-            &worktree_session("fullAccess"),
-            None,
-            &[],
-            None,
-            Some("/work/session @ brigadier/flow"),
-            ProviderKind::Claude,
-            true,
-        );
-        assert!(prompt.contains(&format!("--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`.")));
-        // Only a commit that does nothing else skips its review through the Fixes trailer.
-        assert!(
-            prompt.contains("A commit that only fixes review findings, nothing else, also adds")
-        );
-    }
-
     /// S4: the thread runs the project's full checks itself, as a plain command, and no
     /// instruction names a Brigadier check tool, a checks verdict or a cache.
     #[test]
@@ -3523,14 +3223,49 @@ mod environment_tests {
                 prompt.contains("run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output."),
                 "{prompt}"
             );
+            for gone in ["run_check", "from the cache", "needs run_checks"] {
+                assert!(!prompt.contains(gone), "{gone}: {prompt}");
+            }
+        }
+    }
+
+    /// S5: reviews and merges are plain commands. The thread gets a second look with `codex
+    /// review` or a subagent when a change is large or risky, and merges with git or
+    /// finish_session on the user's word; no instruction names a Brigadier review, a finding,
+    /// a consent, a held merge or a way past a gate.
+    #[test]
+    fn the_thread_reviews_and_merges_with_plain_commands() {
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let prompt = thread(
+                &worktree_session("fullAccess"),
+                None,
+                &[],
+                None,
+                Some("/work/session @ brigadier/flow"),
+                provider,
+                true,
+            );
+            assert!(
+                prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none."),
+                "{prompt}"
+            );
+            assert!(prompt.contains("run `git merge` yourself"), "{prompt}");
             for gone in [
-                "run_check",
-                "merge anyway",
-                "from the cache",
-                "needs run_checks",
+                "request_review",
+                "record_findings",
+                "review_plan",
+                "stop_merge",
+                "Brigadier-Fixes",
+                "consent",
+                "[merge held]",
+                "anyway",
+                "fuse",
             ] {
                 assert!(!prompt.contains(gone), "{gone}: {prompt}");
             }
+        }
+        for text in [WORKER_RULES, LEAD_STEPS, LIVE_LOOK, WORKER_MOCKUP] {
+            assert!(!text.contains("request_review"), "{text}");
         }
     }
 

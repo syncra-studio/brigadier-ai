@@ -167,10 +167,8 @@ pub struct DelegateTask {
     pub effort: String,
     /// For `review` tasks: the task whose candidate commit is reviewed, e.g. "task-2". For
     /// `merge` tasks: the task whose work conflicts with the branch it lands on; none to merge
-    /// the session's base into the session branch (finish_session says when). For a `fix`:
-    /// the task whose work it fixes. Of a phase's verifier, it continues from that work and
-    /// lands it with its own; of a landed task, it takes that task's open review findings and
-    /// resumes its worker's session.
+    /// the session's base into the session branch. For a `fix`: the task whose work it fixes.
+    /// Of a phase's verifier, it continues from that work and lands it with its own.
     #[serde(default)]
     pub subject: Option<String>,
     /// For `operate`: the app, dev build path or URL to work in, and the window if known.
@@ -188,12 +186,6 @@ pub struct DelegateTask {
     /// go by `attachments`.
     #[serde(default)]
     pub include_request: bool,
-    /// Research only, when a wrong answer would cost the user (money, a choice hard to
-    /// undo): true has both vendors' workers research the same brief independently, and
-    /// their reports come to you together as answers A and B. Leave `provider` and `model`
-    /// out.
-    #[serde(default)]
-    pub fuse: bool,
     /// Optional: the parts of the codebase it touches ("frontend", "backend", "infra",
     /// "docs", "tests"), when the spec's paths don't make it plain. Routing and the user's
     /// routing rules go by them.
@@ -218,7 +210,7 @@ pub struct DelegateTask {
     pub phase: Option<u32>,
     /// Its part in the request: "lead" (one per phase, the default for implement tasks),
     /// "parallel" (a stream of its own files next to the lead) or "fix" (what a phase's
-    /// verifier left, or the open review findings of a landed task).
+    /// verifier left, or what a landed task left unfixed).
     #[serde(default)]
     pub role: Option<WorkerRole>,
     /// True for an implement task that builds a mockup the user asked for: a static preview of
@@ -330,20 +322,6 @@ impl RouteFollowUp {
 pub struct TaskRef {
     /// The task, e.g. "task-3".
     pub task: String,
-}
-
-/// `request_review`: the other vendor's review of the thread's candidate commit, reusing
-/// what earlier reviews already cover.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RequestReview {
-    /// The candidate commit; your checkout's HEAD when absent.
-    #[serde(default)]
-    pub commit: Option<String>,
-    /// How long to wait for the findings, in seconds, so they come back in this reply
-    /// (default 600, at most 1700; 0 returns at once and they arrive as a message).
-    #[serde(default)]
-    pub wait_seconds: Option<u64>,
 }
 
 /// `attach_proof`: a screenshot, short recording, log or test output the thread made of the
@@ -685,9 +663,6 @@ pub struct Remember {
     /// The out-… id a check's result ends with, whose output shows it.
     #[serde(default)]
     pub check: Option<String>,
-    /// A review finding's id (R3.2) whose location or check output shows it.
-    #[serde(default)]
-    pub finding: Option<String>,
 }
 
 /// `search_transcript`: search this conversation's full transcript.
@@ -804,8 +779,8 @@ pub struct ProposePlan {
 pub struct ApproveOutline {
     /// The lead's task, e.g. "task-3".
     pub task: String,
-    /// What the lead must change in its outline: the review findings you agree with and
-    /// anything the brief implies. Leave it out when the outline is right as it is.
+    /// What the lead must change in its outline: what you found wrong in it and anything the
+    /// brief implies. Leave it out when the outline is right as it is.
     #[serde(default)]
     pub corrections: Option<String>,
 }
@@ -829,18 +804,6 @@ pub struct LandPhase {
     /// The task whose commits land, e.g. "task-3": a phase's verifier, or the lead of a
     /// small request.
     pub task: String,
-}
-
-/// `review_plan`: one review of the thread's own plan by the other vendor, in the background.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewPlan {
-    /// The plan: the steps in order with the files each touches, how each "done when" will
-    /// be checked, and the risks.
-    pub plan: String,
-    /// What the plan must achieve: the user's request in their words, the constraints and
-    /// the settled decisions. The reviewer judges the plan against it.
-    pub brief: String,
 }
 
 /// `read_page`: the page the user's latest message was sent from, as it is now.
@@ -893,47 +856,14 @@ pub struct WriteTabFile {
     pub base_revision: String,
 }
 
-/// `finish_session`: merge the session branch into its base (new-worktree sessions), once the
-/// user consented, as the thread judges their words.
+/// `finish_session`: merge the session branch into its base (new-worktree sessions) now, as
+/// the thread judges the user asked.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FinishSession {
-    /// What the user consented in: the id of their card answer or "Merge into main" click, or
-    /// their own words quoted exactly from the message that asks for the merge ("yes, merge
-    /// it"). Leave it out on [merge] (their click). On [merge due], pass the same again.
-    #[serde(default)]
-    pub consent: Option<String>,
-    /// The user's words, as `consent` takes them (kept for older threads).
-    #[serde(default)]
-    pub user_words: String,
     /// The merge commit message, when a merge commit is needed.
     #[serde(default)]
     pub message: Option<String>,
-    /// When it merges: "now" (the default) merges what has landed, even while workers still
-    /// write; "workers_finish", when the user asked to merge once the running work is done,
-    /// holds it until they land.
-    #[serde(default)]
-    pub when: MergeWhen,
-}
-
-/// When `finish_session` merges (#243).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MergeWhen {
-    /// Now: what has landed.
-    #[default]
-    Now,
-    /// Once the workers writing now have landed.
-    WorkersFinish,
-}
-
-/// `stop_merge`: stop the held merge, because the user's words since their consent take it
-/// back or put it off.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StopMerge {
-    /// Why, in a few of the user's words ("they said wait for the demo").
-    pub why: String,
 }
 
 /// `list_sessions`: the project sessions this thread can message.
@@ -1021,43 +951,6 @@ pub struct NoteForUser {
     pub why: Option<String>,
 }
 
-/// What became of a review finding, as `record_findings` says it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum FindingVerdict {
-    /// Fixed: name the task that fixed it in `task`, or leave it out for your own fix, and
-    /// say in `checked` how you checked it in the merged code.
-    Fixed,
-    /// Not fixed, and it still should be: it goes back to the worker, or to the user's list.
-    Open,
-    /// Not worth fixing: say why in `why`.
-    Dismissed,
-}
-
-/// One finding's record.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FindingRecord {
-    /// The finding's id from the review's message (`R3.2`).
-    pub id: String,
-    pub status: FindingVerdict,
-    /// For a fixed one: the task that fixed it (`task-7`).
-    #[serde(default)]
-    pub task: Option<String>,
-    /// For a fixed one: how you checked the fix in the merged code, the session branch's tip
-    /// (the lines you read there, with the commit, or the test you ran and what it said). A
-    /// worker's report or your notes are no check: leave it out then, and the finding shows
-    /// as unverified.
-    #[serde(default)]
-    pub checked: Option<String>,
-    /// Why, in your words, for the user: required to dismiss.
-    #[serde(default)]
-    pub why: Option<String>,
-    /// It is high severity (it loses data, breaks a build or a security boundary).
-    #[serde(default)]
-    pub high: Option<bool>,
-}
-
 /// `ci_status` and `watch_ci`: the push to look at (SESSION-FIXES-PLAN.md Q1).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1068,13 +961,6 @@ pub struct CiPush {
     pub branch: String,
     /// The commit pushed (a full or short sha).
     pub sha: String,
-}
-
-/// `record_findings`: what became of a review's findings, each one, in one call.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RecordFindings {
-    pub items: Vec<FindingRecord>,
 }
 
 /// `suggest_full_access`: something the user asked for needs more than the session's sandbox
@@ -1093,8 +979,8 @@ pub struct SuggestFullAccess {
 #[serde(deny_unknown_fields)]
 pub struct SuggestSetting {
     pub setting: SuggestedSetting,
-    /// permission: "ask_for_approval", "approve_for_me" or "full_access"; browser and
-    /// merge_on_own: "on" or "off".
+    /// permission: "ask_for_approval", "approve_for_me" or "full_access"; browser: "on" or
+    /// "off".
     pub value: String,
     /// One line for the user: why the change helps with what they asked.
     pub reason: String,
@@ -1108,8 +994,6 @@ pub enum SuggestedSetting {
     Permission,
     /// Settings › Browser, on or off.
     Browser,
-    /// Merging on its own when the work is ready (Settings › Git).
-    MergeOnOwn,
 }
 
 /// `offer_feedback`: the user seems annoyed with Brigadier itself, or asked to report something
@@ -1166,8 +1050,7 @@ pub struct SettleStep {
     /// The step's number in the run's plan (the source plan's phase number).
     pub phase: u32,
     pub outcome: crate::work::StepOutcome,
-    /// What the step changed, how each "done when" was checked and what the review found and
-    /// what was done about it, in a few sentences.
+    /// What the step changed and how each "done when" was checked, in a few sentences.
     pub summary: String,
     /// For a partial or blocked step: what is left, one line each (for blocked, exactly what
     /// only the user can do).
@@ -1255,14 +1138,11 @@ pub enum OrchestratorCall {
     ProposePlan(ProposePlan),
     ApproveOutline(ApproveOutline),
     StartVerifier(StartVerifier),
-    RequestReview(RequestReview),
     AttachProof(AttachProof),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
-    StopMerge(StopMerge),
     NoteForUser(NoteForUser),
-    RecordFindings(RecordFindings),
     CiStatus(CiPush),
     WatchCi(CiPush),
     SuggestFullAccess(SuggestFullAccess),
@@ -1278,7 +1158,6 @@ pub enum OrchestratorCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     CleanUp,
-    ReviewPlan(ReviewPlan),
     ReadPage(ReadPage),
     WritePage(WritePage),
     SaveReport(SaveReport),
@@ -1314,14 +1193,11 @@ pub const THREAD_TOOLS: &[&str] = &[
     "propose_plan",
     "approve_outline",
     "start_verifier",
-    "request_review",
     "attach_proof",
     "request_approval",
     "land_phase",
     "finish_session",
-    "stop_merge",
     "note_for_user",
-    "record_findings",
     "ci_status",
     "watch_ci",
     "suggest_full_access",
@@ -1336,7 +1212,6 @@ pub const THREAD_TOOLS: &[&str] = &[
     "code_refs",
     "project_map",
     "clean_up",
-    "review_plan",
     "read_page",
     "write_page",
     "save_report",
@@ -1398,14 +1273,11 @@ impl OrchestratorCall {
             Self::ProposePlan(_) => "propose_plan",
             Self::ApproveOutline(_) => "approve_outline",
             Self::StartVerifier(_) => "start_verifier",
-            Self::RequestReview(_) => "request_review",
             Self::AttachProof(_) => "attach_proof",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
-            Self::StopMerge(_) => "stop_merge",
             Self::NoteForUser(_) => "note_for_user",
-            Self::RecordFindings(_) => "record_findings",
             Self::CiStatus(_) => "ci_status",
             Self::WatchCi(_) => "watch_ci",
             Self::SuggestFullAccess(_) => "suggest_full_access",
@@ -1421,7 +1293,6 @@ impl OrchestratorCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::CleanUp => "clean_up",
-            Self::ReviewPlan(_) => "review_plan",
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",
             Self::SaveReport(_) => "save_report",
@@ -1715,9 +1586,6 @@ fn empty_item(item: &str) -> bool {
 pub enum WorkerCall {
     AskOrchestrator(AskOrchestrator),
     SubmitOutline(SubmitOutline),
-    /// `request_review`: one review of the worker's committed work by the other vendor; returns
-    /// at once, and the findings arrive as a message.
-    RequestReview,
     SubmitReport(SubmitReport),
     QueryBrain(QueryBrain),
     CodeSearch(CodeSearch),
@@ -1735,7 +1603,6 @@ impl WorkerCall {
         match self {
             Self::AskOrchestrator(_) => "ask_thread",
             Self::SubmitOutline(_) => "submit_outline",
-            Self::RequestReview => "request_review",
             Self::SubmitReport(_) => "submit_report",
             Self::QueryBrain(_) => "query_brain",
             Self::CodeSearch(_) => "code_search",

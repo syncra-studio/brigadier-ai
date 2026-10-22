@@ -74,7 +74,7 @@ mockIPC((command, payload) => {
         plans: [plan], requests: [request], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [],
         compactions: [], decisions: [], waiting: [], queue: { items: [], paused: false }, run: "idle",
         runRequest: null, head: "a1", ratings: { a1: "good" }, streaming: null, notices: [], memories: [], overnight: [],
-        reviews: [], previews: [],
+        previews: [],
       } as unknown as View,
     };
   return { method: req.method };

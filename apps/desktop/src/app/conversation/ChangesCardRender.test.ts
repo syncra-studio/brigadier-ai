@@ -9,16 +9,14 @@ type Look = {
   title: string | null;
   counts: string | null;
   status: string | null;
-  problem: string | null;
   buttons: string[];
   files: [string, string, string][];
   more: string | null;
-  warning: [string, string, string] | null;
   confirm: string | null;
 };
 type Seen = {
   error?: string;
-  cases: Record<"merged-finding" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "thread-reverted" | "branch" | "merge-only" | "local" | "pushed" | "waiting" | "reviewed", Look>;
+  cases: Record<"merged" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "thread-reverted" | "branch" | "merge-only" | "local" | "pushed" | "waiting" | "reviewed", Look>;
   measured: {
     confirmGap: number | null;
     revertingInset: number | null;
@@ -28,7 +26,6 @@ type Seen = {
   };
   row: unknown;
   viewChanges: unknown;
-  finding: string | null;
   branchRow: unknown;
   cancelled: string[];
   revertedOpen: number;
@@ -39,22 +36,21 @@ type Seen = {
 const FIRST = [["public/", "index.html", "+11 −2"], ["src/", "server.js", "+22 −5"], ["src/", "store.js", "+5 −0"]];
 
 // The Changes card in each state of the user's design (Of3wE).
-test("the Changes card: merged with a finding, folded, all files, Revert's question, reverting, reverted, not merged, a merge alone", { timeout: 120000 }, async (t) => {
+test("the Changes card: merged, folded, all files, Revert's question, reverting, reverted, not merged, a merge alone", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "changes-card.html?drive=1", "changes-card-result", 60000)) as Seen;
   assert.equal(seen.error, undefined);
   const { cases } = seen;
-  // Merged, an open finding: three files, then Show more; the finding is the footer row, named.
-  const finding = cases["merged-finding"];
-  assert.deepEqual([finding.state, finding.title, finding.counts, finding.status, finding.problem], ["merged", "Edited 6 files", "+88 −7", "Merged into main", null]);
-  assert.deepEqual(finding.buttons, ["Revert", "View changes", "Fold the files"]);
-  assert.deepEqual(finding.files, FIRST);
-  assert.equal(finding.more, "Show 3 more files");
-  assert.deepEqual(finding.warning, ["One review finding is still open", "R4.1 · A malformed request path can crash the server", "Open finding"]);
-  // Folded: just the header; the finding moves into its line, never hidden.
-  assert.deepEqual([cases.collapsed.files, cases.collapsed.warning, cases.collapsed.problem], [[], null, "1 open finding"]);
+  // Merged: three files, then Show more.
+  const merged = cases.merged;
+  assert.deepEqual([merged.state, merged.title, merged.counts, merged.status], ["merged", "Edited 6 files", "+88 −7", "Merged into main"]);
+  assert.deepEqual(merged.buttons, ["Revert", "View changes", "Fold the files"]);
+  assert.deepEqual(merged.files, FIRST);
+  assert.equal(merged.more, "Show 3 more files");
+  // Folded: just the header.
+  assert.deepEqual(cases.collapsed.files, []);
   assert.deepEqual(cases.collapsed.buttons, ["Revert", "View changes", "Show the files"]);
-  // Every file, and no footer with nothing wrong.
-  assert.deepEqual([cases.all.files.length, cases.all.more, cases.all.warning], [6, "Show less", null]);
+  // Every file.
+  assert.deepEqual([cases.all.files.length, cases.all.more], [6, "Show less"]);
   // Revert asks in the footer first; sent, the footer reads Reverting….
   assert.equal(cases.confirm.confirm, "Revert these 6 files on main?Adds one commit that undoes +88 −7. Work merged after this stays.CancelRevert 6 files");
   assert.deepEqual(cases.confirm.buttons, ["View changes", "Fold the files"]);
@@ -87,10 +83,9 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
   // The design's measures: Cancel and Revert 4 apart, "Reverting…" 12 in, counts right-aligned, a
   // waiting row's Undo and Keep before its counts, shown on the washed row while it has focus.
   assert.deepEqual(seen.measured, { confirmGap: 4, revertingInset: 12, counts: ["end"], reviewBeforeCounts: true, focused: { shown: "flex", washed: true } });
-  // A row opens that file's part of the merge in a tab; View changes all of it; Open finding the Progress tab.
+  // A row opens that file's part of the merge in a tab; View changes all of it.
   assert.deepEqual(seen.row, { id: "review:f1f1f1f1", target: { type: "commit", commit: "f1f1f1f1", staged: false, path: "public/index.html" } });
   assert.deepEqual(seen.viewChanges, { id: "review:f1f1f1f1", target: { type: "commit", commit: "f1f1f1f1", staged: false } });
-  assert.equal(seen.finding, "panel:reviews");
   // Not merged, a row opens its part of the turn.
   assert.deepEqual(seen.branchRow, { id: "review", target: { type: "lastTurn", requestId: "branch", path: "public/index.html", staged: false } });
   // Revert, Merge and Redo ask the thread, once each.

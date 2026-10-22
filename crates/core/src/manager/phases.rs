@@ -1,9 +1,8 @@
 //! A request's phases, as the delegator runs them: the orchestrator splits a big request into
 //! phases only when they must run one after another, each phase gets one lead, and a lead whose
 //! work is big writes an outline first. The orchestrator gets the outline at once and gives the
-//! go-ahead (the user gives it under "Ask for approval"); it judges the outline itself, and a
-//! plan review is its call (`review_plan`). A verifier is the orchestrator's call, for big or
-//! risky work. Nothing here rejects, re-reviews or counts rounds.
+//! go-ahead (the user gives it under "Ask for approval"); it judges the outline itself. A
+//! verifier is the orchestrator's call, for big or risky work. Nothing here rejects, re-reviews or counts rounds.
 
 use tokio::sync::oneshot;
 
@@ -1035,10 +1034,9 @@ impl SessionManager {
     }
 
     /// Starts a fresh verifier of `lead`'s phase: its own worktree on a branch from the lead's
-    /// last commit, the phase's brief, outline and the lead's report. It asks for one review
-    /// by the other vendor (`request_review`, unless the user has reviews off), checks every "done when" for real while it runs,
-    /// triages the findings, fixes and commits what fails, and reports; the orchestrator then
-    /// lands the phase with it.
+    /// last commit, the phase's brief, outline and the lead's report. It checks every "done
+    /// when" for real, fixes and commits what fails, and reports; the orchestrator then lands
+    /// the phase with it.
     pub(crate) async fn start_verifier(
         &self,
         lead: &Task,
@@ -1058,18 +1056,10 @@ impl SessionManager {
         // The lead's whole report: its risks, open questions, decisions and artifacts too, not
         // only what it says it checked (BUILD-PLAN E2).
         let report = super::prompts::report_text(lead, report, "the phase's lead");
-        // Reviews off (the user's setting): the same steps without the review.
-        let spec = if !self.reviews_on() {
-            format!(
-                "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish. Reviews are off (the user's setting): don't call request_review.\n1. Check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n2. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n3. Then submit_report: pass or fail per \"done when\" with its evidence, what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
-                number = lead.number,
-            )
-        } else {
-            format!(
-                "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish.\n1. Call request_review once, first: it starts a review of the whole phase by the other vendor and returns at once.\n2. Meanwhile check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n3. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n4. The review's findings arrive as a message from Brigadier (if your checks finish first, end your turn: the findings start your next one). Triage them: fix and commit each one you agree with; for one you don't, say why.\n5. Then submit_report: pass or fail per \"done when\" with its evidence, what the review found and what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
-                number = lead.number,
-            )
-        };
+        let spec = format!(
+            "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish.\n1. Check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n2. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n3. Then submit_report: pass or fail per \"done when\" with its evidence, what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
+            number = lead.number,
+        );
         let verifier = self
             .create_task_as(
                 &lead.conversation_id,

@@ -140,11 +140,6 @@ impl Turn {
             .contains(crate::manager::prompts::THREAD_OPENING)
     }
 
-    /// A one-shot review's session ([`Options::reviews`] answers it).
-    pub fn is_review(&self) -> bool {
-        self.prompt == brigadier_review::REVIEW_ROLE
-    }
-
     /// The number of the task a worker works on (`task-N`).
     pub fn task_number(&self) -> Option<u32> {
         let rest = self.prompt.split("Task task-").nth(1)?;
@@ -381,18 +376,13 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
-        "request_review" if orchestrator => {
-            ToolCall::Orchestrator(O::RequestReview(arg(name, args)))
-        }
         "attach_proof" => ToolCall::Orchestrator(O::AttachProof(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
-        "stop_merge" => ToolCall::Orchestrator(O::StopMerge(arg(name, args))),
         "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "set_headline" => ToolCall::Orchestrator(O::SetHeadline(arg(name, args))),
-        "record_findings" => ToolCall::Orchestrator(O::RecordFindings(arg(name, args))),
         "suggest_full_access" => ToolCall::Orchestrator(O::SuggestFullAccess(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
@@ -404,9 +394,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
-        "request_review" => ToolCall::Worker(W::RequestReview),
         "note_progress" => ToolCall::Worker(W::NoteProgress(arg(name, args))),
-        "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
         "save_report" => ToolCall::Orchestrator(O::SaveReport(arg(name, args))),
@@ -582,14 +570,7 @@ struct FakeCli {
     home: PathBuf,
     behavior: Arc<FakeBehavior>,
     script: Script,
-    /// What answers its one-shot reviews ([`no_findings`] unless a test scripts them).
-    reviews: Script,
     host: Arc<OnceLock<Weak<SessionManager>>>,
-}
-
-/// A one-shot reviewer that finds nothing.
-fn no_findings() -> Script {
-    Arc::new(|_| Box::pin(async { Reply::text("No findings.") }))
 }
 
 impl FakeCli {
@@ -751,11 +732,7 @@ impl Provider for FakeCli {
                 .await;
             let (steer_tx, steers) = mpsc::unbounded_channel();
             let prompt = spec.append_system_prompt.clone().unwrap_or_default();
-            let script = if prompt == brigadier_review::REVIEW_ROLE {
-                self.reviews.clone()
-            } else {
-                self.script.clone()
-            };
+            let script = self.script.clone();
             let brief = BRIEFS.lock().unwrap().get(&native_id).cloned();
             let session = Arc::new(FakeSession {
                 kind: self.kind,
@@ -1226,13 +1203,11 @@ async fn open_store(data: &Path) -> brigadier_store::Store {
     .unwrap()
 }
 
-/// The manager on `store`, its CLIs running `script` (and `reviews` for one-shot reviews),
-/// once it has seen both CLIs' models.
+/// The manager on `store`, its CLIs running `script`, once it has seen both CLIs' models.
 async fn boot(
     data: &Path,
     store: brigadier_store::Store,
     script: &Script,
-    reviews: &Script,
     specs: &Specs,
     behavior: &Arc<FakeBehavior>,
 ) -> (Arc<SessionManager>, Arc<Core>) {
@@ -1247,10 +1222,9 @@ async fn boot(
     });
     let host: Arc<OnceLock<Weak<SessionManager>>> = Arc::default();
     let fake = {
-        let (specs, script, reviews, host, behavior, data) = (
+        let (specs, script, host, behavior, data) = (
             specs.clone(),
             script.clone(),
-            reviews.clone(),
             host.clone(),
             behavior.clone(),
             data.clone(),
@@ -1267,7 +1241,6 @@ async fn boot(
                 behavior: behavior.clone(),
                 specs: specs.clone(),
                 script: script.clone(),
-                reviews: reviews.clone(),
                 host: host.clone(),
             })
         }
@@ -1540,7 +1513,6 @@ pub(crate) struct Flow {
     pub conversation: ConversationId,
     dir: Scratch,
     script: Script,
-    reviews: Script,
     specs: Specs,
     pub behavior: Arc<FakeBehavior>,
     /// The permission level its sessions start on.
@@ -1556,8 +1528,6 @@ pub(crate) struct Options {
     pub seed: Option<&'static str>,
     /// A copy of a real store's database the data folder starts with.
     pub store: Option<PathBuf>,
-    /// What answers the one-shot reviews (both vendors'); by default they find nothing.
-    pub reviews: Option<Script>,
     /// The thread's vendor (Claude by default).
     pub thread: ProviderKind,
     pub behavior: Arc<FakeBehavior>,
@@ -1566,9 +1536,6 @@ pub(crate) struct Options {
     /// The user's answer to "Trust this folder?" for the repository (trusted by default, as
     /// the app asks when the project is first entered); `None` leaves it unanswered.
     pub trusted: Option<bool>,
-    /// Settings › Git's "Merge on its own" (on by default in the app); off here, so a merge
-    /// needs the user's consent unless a test turns it on.
-    pub auto_merge: bool,
 }
 
 impl Default for Options {
@@ -1578,12 +1545,10 @@ impl Default for Options {
             plan_mode: false,
             seed: None,
             store: None,
-            reviews: None,
             thread: ProviderKind::Claude,
             behavior: Arc::default(),
             files: Vec::new(),
             trusted: Some(true),
-            auto_merge: false,
         }
     }
 }
@@ -1614,16 +1579,9 @@ impl Flow {
         if let Some(seed) = options.seed {
             store.append(seed_events(seed)).await.unwrap();
         }
-        let reviews = options.reviews.clone().unwrap_or_else(no_findings);
         let specs = Specs::default();
-        let (manager, core) =
-            boot(&data, store, &script, &reviews, &specs, &options.behavior).await;
+        let (manager, core) = boot(&data, store, &script, &specs, &options.behavior).await;
         dir.ledger = Some(manager.runtime.ledger().clone());
-        let mut settings = core.settings();
-        if settings.auto_merge != options.auto_merge {
-            settings.auto_merge = options.auto_merge;
-            core.update_settings(settings).await.unwrap();
-        }
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
@@ -1670,7 +1628,6 @@ impl Flow {
             conversation: conversation.id,
             dir,
             script,
-            reviews,
             specs,
             behavior: options.behavior,
             permission: options.permission,
@@ -1691,15 +1648,7 @@ impl Flow {
         tokio::time::sleep(closed).await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
-        let (manager, core) = boot(
-            &data,
-            store,
-            &self.script,
-            &self.reviews,
-            &self.specs,
-            &self.behavior,
-        )
-        .await;
+        let (manager, core) = boot(&data, store, &self.script, &self.specs, &self.behavior).await;
         self.dir.ledger = Some(manager.runtime.ledger().clone());
         self.manager = manager;
         self.core = core;
@@ -1712,15 +1661,7 @@ impl Flow {
         self.manager.halt().await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
-        let (manager, core) = boot(
-            &data,
-            store,
-            &self.script,
-            &self.reviews,
-            &self.specs,
-            &self.behavior,
-        )
-        .await;
+        let (manager, core) = boot(&data, store, &self.script, &self.specs, &self.behavior).await;
         self.dir.ledger = Some(manager.runtime.ledger().clone());
         self.manager = manager;
         self.core = core;
@@ -1936,18 +1877,13 @@ impl Flow {
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "timed out waiting for {what}; run {:?}, requests {:?}, reviews {:?}, previews \
-                 {:?}; tasks: {:#?}",
+                "timed out waiting for {what}; run {:?}, requests {:?}, previews {:?}; tasks: \
+                 {:#?}",
                 board.run,
                 board
                     .requests
                     .values()
                     .map(|request| &request.state)
-                    .collect::<Vec<_>>(),
-                board
-                    .reviews
-                    .values()
-                    .map(|review| &review.state)
                     .collect::<Vec<_>>(),
                 board
                     .previews
@@ -2111,8 +2047,6 @@ mod ending_tests;
 #[cfg(unix)]
 mod engine_tests;
 #[cfg(unix)]
-mod fusion_tests;
-#[cfg(unix)]
 mod grilling_tests;
 #[cfg(unix)]
 mod open_in_app_tests;
@@ -2127,14 +2061,10 @@ mod fault_tests;
 #[cfg(unix)]
 mod feedback_tests;
 #[cfg(unix)]
-mod findings_tests;
-#[cfg(unix)]
 mod fresh_base_tests;
 #[cfg(unix)]
 #[cfg(unix)]
 mod git_writing_tests;
-#[cfg(unix)]
-mod held_merge_tests;
 #[cfg(unix)]
 mod honesty_tests;
 #[cfg(unix)]
@@ -2188,8 +2118,6 @@ mod peer_delivery_tests;
 #[cfg(unix)]
 mod peer_kit;
 #[cfg(unix)]
-mod peer_provenance_tests;
-#[cfg(unix)]
 mod peer_reply_tests;
 #[cfg(unix)]
 mod peer_restart_tests;
@@ -2202,6 +2130,8 @@ mod peer_view_tests;
 mod peer_wait_tests;
 #[cfg(unix)]
 mod phase_acceptance_tests;
+#[cfg(unix)]
+mod plain_merge_tests;
 #[cfg(unix)]
 mod plan_tests;
 #[cfg(unix)]
@@ -2223,13 +2153,7 @@ mod restart_waits_tests;
 #[cfg(unix)]
 mod resume_tests;
 #[cfg(unix)]
-mod review_hold_tests;
-#[cfg(unix)]
 mod review_picks_tests;
-#[cfg(unix)]
-mod review_switch_tests;
-#[cfg(unix)]
-mod review_tiers_tests;
 #[cfg(unix)]
 mod source_branch_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.

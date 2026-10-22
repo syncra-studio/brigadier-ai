@@ -33,9 +33,6 @@ where
     Arc::new(move |turn: Turn| {
         let (log, answer) = (log.clone(), answer.clone());
         Box::pin(async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             let seen = Seen {
                 provider: turn.provider,
                 account: turn.account.clone(),
@@ -711,9 +708,6 @@ async fn a_workers_task_carries_on_with_another_account_of_its_provider() {
         Arc::new(move |turn: Turn| {
             let workers = workers.clone();
             Box::pin(async move {
-                if turn.is_review() {
-                    return Reply::text("No findings.");
-                }
                 if turn.is_orchestrator() {
                     if turn.input.contains("[report task-1") {
                         return Reply::text("Looked around.");

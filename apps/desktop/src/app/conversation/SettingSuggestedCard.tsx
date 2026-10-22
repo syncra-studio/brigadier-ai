@@ -1,12 +1,11 @@
-import { isMade, makeChange, settingPage, settingWords } from "@/app/conversation/settingCard";
+import { isMade, makeChange, type ShownSettingChange, settingPage, settingWords } from "@/app/conversation/settingCard";
 import { setSessionPermission } from "@/app/shell/SetupPickers";
 import { OfferCard, OfferError } from "@/app/conversation/OfferCard";
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
-import { Branch, Globe, ShieldExclamation } from "@/components/icons";
+import { Globe, ShieldExclamation } from "@/components/icons";
 import { Button } from "@/components/controls";
-import type { SettingChange } from "@/ipc/generated";
 import { PERMISSION_LABELS } from "@/lib/setup";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
@@ -16,13 +15,13 @@ import { useApp } from "@/state/store";
  * lead's reason, one button that makes it and a link to its Settings page. Nothing changes until
  * the button is pressed; once the setting is that way the button gives way to a line saying so.
  */
-export function SettingSuggestedCard({ change, reason }: { change: SettingChange; reason: string }) {
+export function SettingSuggestedCard({ change, reason }: { change: ShownSettingChange; reason: string }) {
   const conversation = useViewConversation();
   const settings = useApp((s) => s.settings);
   const action = useAction();
   const words = settingWords(change, PERMISSION_LABELS);
   const made = isMade(change, settings, conversation);
-  const Icon = change.setting === "browser" ? Globe : change.setting === "mergeOnOwn" ? Branch : ShieldExclamation;
+  const Icon = change.setting === "browser" ? Globe : ShieldExclamation;
   return (
     <OfferCard
       label={words.title}

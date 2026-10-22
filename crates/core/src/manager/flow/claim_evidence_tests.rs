@@ -1,13 +1,12 @@
-//! Facts need evidence (BUILD-PLAN E1, Q38), with reviews on and with reviews off.
+//! Facts need evidence (BUILD-PLAN E1, Q38).
 //!
 //! A worker's `learned` lines and the thread's `remember` claims carry their evidence: lines of
 //! a file or a check's output, each with the words they show. Whenever a claim is used (a later
 //! worker's brief, a `query_brain` answer, a rebirth briefing) its source is re-read: words
 //! still there make the *source* verified, and the line says so beside the claim, which stays
 //! unverified. A false claim with a real but unrelated quote is never briefed as a verified
-//! fact; a quote its source doesn't hold says so; a line with no evidence stays a bare claim; a
-//! review finding counts only through its location or a check output its text names, and one
-//! that contradicts a claim supersedes it.
+//! fact; a quote its source doesn't hold says so; a line with no evidence stays a bare claim;
+//! and a claim with evidence that contradicts another supersedes it.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,8 +16,6 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::manager::context_pack::BRAIN_HEADING;
-use crate::model::DomainEvent;
-use crate::work::{Finding, ReviewFor, ReviewKind, ReviewRun, ReviewState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -43,7 +40,7 @@ const UNRELATED: &str = "Retries never stop";
 const MISQUOTED: &str = "Retries stop after five tries";
 /// False, with no evidence at all.
 const BARE: &str = "Retries are kept in the database";
-/// What a review finding with evidence says instead of [`BARE`].
+/// What a claim with evidence says instead of [`BARE`].
 const CONTRADICTION: &str = "Retries are set in retry.txt, not in the database";
 
 #[derive(Default)]
@@ -58,7 +55,7 @@ struct Seen {
     brief: Option<String>,
     /// Every input the thread got.
     thread: Vec<String>,
-    /// The bare claim's node, which a contradicting finding replaces.
+    /// The bare claim's node, which a contradicting claim replaces.
     bare: Option<String>,
 }
 
@@ -72,55 +69,12 @@ fn learned(output: &str) -> Vec<String> {
     ]
 }
 
-/// A finished review with three findings: one at the file's lines, one naming the check's
-/// output, one with neither.
-fn review(flow: &Flow, output: &str) -> ReviewRun {
-    let finding = |n: u32, title: String, location: Option<&str>| Finding {
-        id: format!("R9.{n}"),
-        severity: Some("P3".into()),
-        title,
-        location: location.map(str::to_owned),
-        status: Default::default(),
-        high: false,
-    };
-    ReviewRun {
-        id: "review-evidence".into(),
-        conversation_id: flow.conversation.clone(),
-        request_id: None,
-        task_id: None,
-        kind: ReviewKind::Code,
-        base: "base".into(),
-        tip: "tip".into(),
-        author: ProviderKind::Claude,
-        reviewer: ProviderKind::Codex,
-        reviewer_model: None,
-        notify: ReviewFor::Orchestrator,
-        state: ReviewState::Findings { count: 3 },
-        started_at_ms: 0,
-        ended_at_ms: Some(1),
-        findings: None,
-        number: 9,
-        items: vec![
-            finding(1, "The retry limit is right".into(), Some("retry.txt:2")),
-            finding(2, format!("The check {output} shows it stops"), None),
-            finding(3, "Retries look fine".into(), None),
-        ],
-        landing: None,
-        answer_waits: false,
-    }
-}
-
-async fn set_reviews(flow: &Flow, on: bool) {
-    let mut settings = flow.core.settings();
-    settings.review_work = on;
-    flow.core.update_settings(settings).await.unwrap();
-}
-
-async fn claims_carry_their_evidence(reviews: bool) {
+#[tokio::test]
+async fn claims_carry_their_evidence() {
     let seen: Arc<Mutex<Seen>> = Arc::default();
     let log = seen.clone();
     let flow = Flow::start(
-        if reviews { "claim-evidence-on" } else { "claim-evidence-off" },
+        "claim-evidence",
         Options::default(),
         script(move |turn| {
             let log = log.clone();
@@ -144,20 +98,13 @@ async fn claims_carry_their_evidence(reviews: bool) {
                         assert!(!reply.is_error, "{}", reply.text);
                         return Reply::text("Landed.");
                     }
-                    if turn.input.contains("Keep the findings.") {
-                        let quote = |finding: &str, title: &str, words: &str| {
-                            json!({"kind": "convention", "title": title,
-                                   "finding": finding, "quote": words})
-                        };
+                    if turn.input.contains("Keep the claims.") {
                         for args in [
-                            quote("R9.1", "Retry limit per the review", FILE_WORDS),
-                            quote("R9.2", "Retry check per the review", CHECK_WORDS),
-                            quote("R9.3", "Retries reviewed fine", "Retries look fine"),
                             json!({"kind": "convention", "title": "Retry limit by its lines",
                                    "files": ["retry.txt:2"], "quote": FILE_WORDS}),
-                            // A finding that contradicts the bare claim, with its evidence.
+                            // A claim that contradicts the bare one, with its evidence.
                             json!({"kind": "convention", "title": CONTRADICTION,
-                                   "finding": "R9.1", "quote": FILE_WORDS,
+                                   "files": ["retry.txt:2"], "quote": FILE_WORDS,
                                    "replaces": log.lock().unwrap().bare.clone().unwrap()}),
                         ] {
                             let reply = turn.call("remember", args).await;
@@ -223,7 +170,6 @@ async fn claims_carry_their_evidence(reviews: bool) {
         }),
     )
     .await;
-    set_reviews(&flow, reviews).await;
     let project = flow
         .core
         .conversation(&flow.conversation)
@@ -335,23 +281,14 @@ async fn claims_carry_their_evidence(reviews: bool) {
         assert!(line.contains("[worker claim, unverified]"), "{line}");
     }
 
-    // A review's findings, and the thread's own claim with its lines.
-    flow.core
-        .record_conversation(
-            &flow.conversation,
-            vec![DomainEvent::ReviewUpdated {
-                review: review(&flow, &output),
-            }],
-        )
-        .await
-        .unwrap();
+    // The thread's own claims with their lines.
     seen.lock().unwrap().bare = brain
         .nodes(&NodeFilter::default())
         .unwrap()
         .into_iter()
         .find(|node| node.title == BARE)
         .map(|node| node.id);
-    flow.say("Keep the findings.").await;
+    flow.say("Keep the claims.").await;
     flow.settled().await;
     let kept = seen.lock().unwrap().kept.clone();
     assert!(
@@ -359,28 +296,11 @@ async fn claims_carry_their_evidence(reviews: bool) {
         "{}",
         kept[0]
     );
+    // A contradicting claim with evidence supersedes the bare one.
     assert!(
-        kept[1].contains(&format!("its source {output} shows your words")),
+        kept[1].contains("its source retry.txt:2 shows your words"),
         "{}",
         kept[1]
-    );
-    // A finding that names no lines and no output is no evidence.
-    assert!(
-        kept[2].contains("finding R9.3 names no lines or check output, so it is no evidence"),
-        "{}",
-        kept[2]
-    );
-    assert!(!kept[2].contains("shows your words"), "{}", kept[2]);
-    assert!(
-        kept[3].contains("its source retry.txt:2 shows your words"),
-        "{}",
-        kept[3]
-    );
-    // A contradicting finding with evidence supersedes the claim.
-    assert!(
-        kept[4].contains("its source retry.txt:2 shows your words"),
-        "{}",
-        kept[4]
     );
     let current: Vec<String> = brain
         .nodes(&NodeFilter {
@@ -479,16 +399,6 @@ async fn claims_carry_their_evidence(reviews: bool) {
         "the edited file no longer shows the words: {reply}"
     );
     flow.stop().await;
-}
-
-#[tokio::test]
-async fn claims_carry_their_evidence_with_reviews_on() {
-    claims_carry_their_evidence(true).await;
-}
-
-#[tokio::test]
-async fn claims_carry_their_evidence_with_reviews_off() {
-    claims_carry_their_evidence(false).await;
 }
 
 /// A worker's report after a restart goes on from its report's version before: the version is

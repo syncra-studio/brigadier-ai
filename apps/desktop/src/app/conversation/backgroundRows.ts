@@ -1,6 +1,6 @@
-import { ciJobs, ciWatches, heldMerge, mergeWords, runFailed, shortSha } from "@/app/conversation/activity/slotView";
+import { ciJobs, ciWatches, runFailed, shortSha } from "@/app/conversation/activity/slotView";
 import { isRunRequest } from "@/app/conversation/blocks";
-import { lastMessageAtMs, liveMergeClick, VENDORS } from "@/app/conversation/liveJob";
+import { lastMessageAtMs, liveMergeClick } from "@/app/conversation/liveJob";
 import { previewActive } from "@/app/conversation/previewStatus";
 import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
 import type { Board } from "@/state/board";
@@ -8,7 +8,7 @@ import type { Board } from "@/state/board";
 /**
  * The context card's Background rows (Q91): one row per thing the session has going in the
  * background, with its state in a word: a process it keeps running, and its own events while
- * they run (a review, the CI watch, a merge). A worker's second copy of an app
+ * they run (the CI watch, a merge). A worker's second copy of an app
  * that already has a row (a smoke test of the running app, a check against it) and a headless
  * browser pointed at it are a state of that row, never rows of their own.
  *
@@ -16,14 +16,13 @@ import type { Board } from "@/state/board";
  * the history.
  */
 
-export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "waiting" | "reviewing" | "merging";
+export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "waiting" | "merging";
 
 /** The session's events the rows read off the board, as liveJob.ts reads them. */
-export type BackgroundEvents = Pick<Board, "tasks" | "questions" | "reviews" | "orchestratorSteps" | "requests"> &
-  Partial<Pick<Board, "mergeRefused">>;
+export type BackgroundEvents = Pick<Board, "orchestratorSteps" | "requests">;
 
-/** An event row's button: open the CI run, cancel the held merge, merge without the checks. */
-export type EventAction = { type: "openCi"; url: string } | { type: "cancelMerge" } | { type: "mergeAnyway" };
+/** An event row's button: open the CI run. */
+export type EventAction = { type: "openCi"; url: string };
 
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
@@ -69,22 +68,13 @@ export function runState(command: string): BackgroundState {
   return "running";
 }
 
-const short = (sha: string) => sha.slice(0, 7);
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
 /**
  * The rows for the session's own events while they run, as the Job card reads them (an
- * overnight run's are its card's): each review at work, the CI watch until its result, and a
- * merge held for workers, at work, or refused while the user may still merge it anyway. Each
+ * overnight run's are its card's): the CI watch until its result, and a merge at work. Each
  * leaves once it ends, passed, failed or merged.
  */
 export function eventRows(board: BackgroundEvents): BackgroundRow[] {
   const rows: BackgroundRow[] = [];
-  for (const review of Object.values(board.reviews)) {
-    if (review.state.type !== "running" || isRunRequest(review.requestId)) continue;
-    rows.push({ type: "event", id: review.id, startedAtMs: review.startedAtMs, name: `${VENDORS[review.reviewer]} review`, state: "reviewing",
-      words: null, tip: `The changes up to ${short(review.tip)}`, action: null });
-  }
   const steps = board.orchestratorSteps.filter((step) => !isRunRequest(step.requestId));
   const watching = ciWatches(steps).filter((watch) => watch.result === null);
   if (watching.length > 0) {
@@ -94,22 +84,10 @@ export function eventRows(board: BackgroundEvents): BackgroundRow[] {
     rows.push({ type: "event", id: "ci", startedAtMs: watching[0]!.sinceMs, name: "CI", state: "checking", words: total > 0 ? `${done} of ${total} jobs` : null,
       tip: watching.map((watch) => `${watch.branch} · ${shortSha(watch.sha)}`).join("\n"), action: open?.url ? { type: "openCi", url: open.url } : null });
   }
-  const held = heldMerge(steps, board.tasks, Object.values(board.questions));
-  const since = lastMessageAtMs(board);
-  const click = liveMergeClick(board, steps, since);
-  const refused = board.mergeRefused;
-  if (held) {
-    const words = held.asking ? "for your yes" : held.mergingIn ? `for ${held.base} to merge in` : held.waiting > 0 ? `on ${plural(held.waiting, "worker")}` : null;
-    rows.push({ type: "event", id: "merge", startedAtMs: held.sinceMs, name: `Merge into ${held.base}`, state: words ? "waiting" : "merging", words,
-      tip: mergeWords(held), action: { type: "cancelMerge" } });
-  } else if (click?.kind.type === "mergeRequested" && !(refused && refused.atMs >= click.atMs)) {
+  const click = liveMergeClick(board, steps, lastMessageAtMs(board));
+  if (click?.kind.type === "mergeRequested") {
     rows.push({ type: "event", id: "merge", startedAtMs: click.atMs, name: `Merge into ${click.kind.base}`, state: "merging", words: null,
       tip: `${click.kind.branch} into ${click.kind.base}`, action: null });
-  } else if (refused?.waivable && refused.atMs >= since && !steps.some((step) => step.kind.type === "merged" && step.atMs > refused.atMs)) {
-    // The merge rule refused it: the user may merge it anyway, until they write again or a
-    // merge goes through. One the user can't waive is a failure: gone.
-    rows.push({ type: "event", id: "merge", startedAtMs: refused.atMs, name: `Merge into ${refused.base}`, state: "waiting", words: "for you",
-      tip: refused.reason, action: { type: "mergeAnyway" } });
   }
   return rows;
 }

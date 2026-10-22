@@ -231,8 +231,6 @@ export const useApp = create<AppState>()(() => ({
     prStyle: "repository",
     prInstructions: "",
     branchPrefix: "brigadier/",
-    reviewWork: true,
-    autoMerge: false,
     accounts: [],
     manualAccounts: [],
     switchProviders: true,
@@ -695,13 +693,11 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "approvalUpdated":
     case "questionUpdated":
     case "planUpdated":
-    case "reviewUpdated":
     case "backgroundRunUpdated":
     case "headlineSet":
-    case "mergeRefusalSet":
     case "mcpServersUpdated":
     case "threadCommitsSeen":
-    case "unreviewedChanged":
+    case "threadFilesSeen":
     case "outputStored":
     case "checkRan":
     case "threadLooked":
@@ -725,8 +721,11 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "agentConnectChanged":
     // Its desktop notification is the shell's; the Usage menu reads `accounts.warnings`.
     case "quotaWillBeLost":
-    // Only in old stored events: the checks it told of are gone.
+    // Only in old stored events: the checks, reviews and merge refusals they told of are gone.
     case "integratedCheckUpdated":
+    case "reviewUpdated":
+    case "mergeRefusalSet":
+    case "unreviewedChanged":
       return slice;
   }
 }

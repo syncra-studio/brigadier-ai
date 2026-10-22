@@ -57,8 +57,6 @@ pub(crate) struct Runs {
     /// The generic recovery is ending the old daemon's tasks: their missing results are not
     /// verdicts on a run's checks (the round starts again afterwards).
     pub(crate) recovering: std::sync::atomic::AtomicBool,
-    /// Phases whose settling waits for their review: the thread hears when it ends.
-    pub(crate) settle_waits: std::sync::Mutex<std::collections::HashSet<(OvernightRunId, u32)>>,
 }
 
 impl SessionManager {

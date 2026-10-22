@@ -46,9 +46,6 @@ where
     script(move |turn| {
         let (log, answer) = (log.clone(), answer.clone());
         async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if turn.is_orchestrator() {
                 if turn.input.contains("Find the ticket.") {
                     let reply = turn

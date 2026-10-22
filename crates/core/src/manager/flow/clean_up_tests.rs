@@ -22,9 +22,6 @@ async fn clean_up_removes_merged_work_and_explains_how_to_discard_kept_unmerged_
         "clean-up",
         Options::default(),
         script(|turn| async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if !turn.is_orchestrator() {
                 if !turn.cwd.join("A.md").exists() {
                     turn.write("A.md", "note\n");

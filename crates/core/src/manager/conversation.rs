@@ -149,10 +149,6 @@ pub enum SendOutcome {
     Queued(QueuedMessage),
 }
 
-/// The label of a clean review of the thread's own changes, told only when its request_review
-/// call went on before it ended: then it is owed, whatever the thread did meanwhile (#513).
-pub(crate) const CLEAN_REVIEW: &str = "review of your commits · clean";
-
 /// Something for the orchestrator's next turn.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Envelope {
@@ -570,8 +566,7 @@ pub(crate) struct ConvLive {
     /// both start a model for them.
     retry: tokio::sync::Mutex<()>,
     /// How many times the user wrote: a message or a queue item stored (sent, edited, moved
-    /// from the queue). Held while each is stored, and by a merge from its last look at the
-    /// user's consent until it lands, so a "wait" sent meanwhile either stops it or comes after.
+    /// from the queue). Held while each is stored, so two are stored one after the other.
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
     /// Serializes the full-access notice check and write, including persisted notices.
     pub(super) full_access_notice: tokio::sync::Mutex<()>,
@@ -579,9 +574,8 @@ pub(crate) struct ConvLive {
     pub(super) feedback_offer: tokio::sync::Mutex<()>,
     /// Serializes the starts of its session offers (`offer_session`'s Start as session).
     pub(super) session_offer: tokio::sync::Mutex<()>,
-    /// The landing lock of the session's merge: `finish_session` holds it from its look at
-    /// the user's consent to the move of the base, and a Cancel of the held merge takes it, so
-    /// one of them wins (SESSION-FIXES-PLAN.md Q3).
+    /// The landing lock of the session's merge: `finish_session` holds it from its look at the
+    /// branch to the move of the base, so two merges never interleave.
     pub(super) merge_lock: tokio::sync::Mutex<()>,
     /// Held while a merged pull request is looked up and recorded, so two request ends
     /// settling at once record it once.
@@ -590,9 +584,6 @@ pub(crate) struct ConvLive {
     pub(super) pr_watch: std::sync::atomic::AtomicBool,
     /// The watch saw the pull request merged on GitHub: recorded at the next idle moment.
     pub(super) pr_merge_due: std::sync::atomic::AtomicBool,
-    /// What the thread was last told of the held merge (its consent's `asked_in`, and
-    /// "due" or "waiting"), so each is said once.
-    pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
     /// The thread was told the user closed the session's workspace, and that the next change
     /// makes a fresh one in the same folder: that fresh one is no news to it (#39).
     pub(super) workspace_closed: std::sync::atomic::AtomicBool,
@@ -603,10 +594,6 @@ pub(crate) struct ConvLive {
     /// A turn ran since the thread's scratch was last swept: the next time its requests are
     /// all over, it is swept ([`super::thread_scratch`]).
     pub(super) scratch_used: std::sync::atomic::AtomicBool,
-    /// The session's own landings on a held merge's branch, `from` → `to`, until the held tip
-    /// moves along them: two landings may record theirs out of order. Held while the tip is
-    /// read and moved on.
-    pub(super) held_moves: tokio::sync::Mutex<HashMap<String, String>>,
     /// The CI watches it runs (`watch_ci`), ended when it closes.
     pub(super) ci_watches: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
@@ -620,7 +607,7 @@ pub(crate) struct ConvLive {
     /// The running turn and the output of the thread's running commands
     /// ([`super::thread_items`]).
     items: std::sync::Mutex<super::thread_items::ThreadItems>,
-    /// Tests: what a merge waits for once prepared, before its last look at consent.
+    /// Tests: what a merge waits for once prepared, before it moves the base.
     #[cfg(test)]
     pub(super) merge_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
@@ -659,12 +646,10 @@ impl ConvLive {
             pr_merge: tokio::sync::Mutex::new(()),
             pr_watch: std::sync::atomic::AtomicBool::new(false),
             pr_merge_due: std::sync::atomic::AtomicBool::new(false),
-            merge_told: std::sync::Mutex::new(None),
             workspace_closed: std::sync::atomic::AtomicBool::new(false),
             user_rebase: std::sync::Mutex::new(None),
             user_rebase_looked: std::sync::atomic::AtomicBool::new(false),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
-            held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             replies: std::sync::Mutex::default(),
@@ -680,8 +665,7 @@ impl ConvLive {
     }
 
     /// Stores what the user wrote (`write`: a message or a queue item) and counts it, as one
-    /// step for a merge's look at their consent: a merge sees either the write or the count.
-    /// Waits while a merge lands.
+    /// step.
     pub(super) async fn user_write<T>(
         &self,
         write: impl std::future::Future<Output = Result<T>>,
@@ -1113,22 +1097,6 @@ impl ConvLive {
         }
     }
 
-    /// Whether the inbox holds an envelope of `kind`, `label` and `task` for `request`.
-    pub(super) async fn inbox_holds(
-        &self,
-        kind: InjectionKind,
-        label: &str,
-        task: Option<&TaskId>,
-        request: Option<&str>,
-    ) -> bool {
-        self.state.lock().await.inbox.iter().any(|(queued, of)| {
-            queued.kind == kind
-                && queued.label == label
-                && queued.task_id.as_ref() == task
-                && of.as_deref() == request
-        })
-    }
-
     /// How many envelopes like `envelope` (its text too) the inbox holds for `request`.
     pub(super) async fn inbox_count(&self, envelope: &Envelope, request: Option<&str>) -> usize {
         let state = self.state.lock().await;
@@ -1162,15 +1130,6 @@ impl ConvLive {
         state
             .inbox
             .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
-    }
-
-    /// Whether the last turn for `request` was stopped, a Stop that had no turn to interrupt
-    /// included.
-    pub(super) async fn request_stopped(&self, request: &str) -> bool {
-        matches!(
-            self.state.lock().await.outcomes.get(request),
-            Some(RequestState::Stopped)
-        )
     }
 
     /// Whether no turn runs and nothing waits for one.
@@ -1234,14 +1193,6 @@ pub(super) struct RequestActivity {
     /// The requests the CLI's background jobs run for, and how many of each still run (none:
     /// the turn of one's end is still to come).
     pub background: HashMap<String, u32>,
-}
-
-/// What the thread hears with the user's message while a merge is held on their earlier
-/// words (#222).
-pub(super) fn held_merge_note(branch: &str, base: &str) -> String {
-    format!(
-        "[merge held] The user's merge of `{branch}` into `{base}` is held on their earlier words, until the work and the full checks are done. Their consent stands unless this message takes it back or puts it off (a \"wait\", a \"no\" or a new condition aimed at the merge): then call stop_merge before you answer. A question about the merge, or words about something else, leave it standing. Answer once."
-    )
 }
 
 impl SessionManager {
@@ -2287,11 +2238,10 @@ impl SessionManager {
         }
         self.stop_background_runs(&id);
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
-        // thread for them later or merges on its own: the CI watches, and the held merge
-        // (the composer's Stop stops the workers too). A failed turn ends none of it: what
-        // it started may still come, and works its request again then, as a late event does.
+        // thread for them later: the CI watches (the composer's Stop stops the workers too). A
+        // failed turn ends none of it: what it started may still come, and works its request
+        // again then, as a late event does.
         self.stop_ci_watches(&id).await;
-        self.stop_merge_for_stop(&id).await;
         // With no turn to interrupt, the thread shows stopped now.
         self.idle_without_turn(&conv).await;
         self.settle_requests(&id).await;
@@ -2870,11 +2820,6 @@ impl SessionManager {
                         .swap(false, std::sync::atomic::Ordering::SeqCst)
                 {
                     Box::pin(self.reconcile_pr_merge(&conv.id, None)).await;
-                }
-                // A held merge that waited on a message the user wrote looks again once the
-                // thread has read it (SESSION-FIXES-PLAN.md Q3).
-                if session {
-                    self.check_held_merge(&conv.id).await;
                 }
                 return;
             }
@@ -3797,17 +3742,6 @@ impl SessionManager {
         }
         if conv.kind == ConversationKind::Session && self.plan_mode(&conv.id) {
             parts.push(PLAN_MODE_NOTE.into());
-        }
-        // A merge held on the user's earlier words: the thread judges whether these take it
-        // back before it answers, so it answers once (#222).
-        if conv.kind == ConversationKind::Session
-            && let Ok(board) = self.core.board(&conv.id).await
-            && let Some(held) = super::landing::pending_merge(&board)
-            && users.iter().any(|message| {
-                message.id != held.asked_in && message.created_at_ms >= held.consented_at_ms
-            })
-        {
-            parts.push(held_merge_note(&held.branch, &held.base));
         }
         parts.extend(notes.iter().cloned());
         if !parts.is_empty() {

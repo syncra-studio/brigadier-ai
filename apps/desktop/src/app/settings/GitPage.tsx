@@ -66,11 +66,6 @@ export const GIT_ROWS = {
     description:
       "Commits from the Source panel and the agents' commits leave out Co-authored-by lines that name an AI, not people's",
   },
-  autoMerge: {
-    label: "Merge on its own when the work is ready",
-    description:
-      "The agent checks its work, opens a pull request when the project is on GitHub, and merges it. Off, it tells you the work is ready and you merge",
-  },
 } as const;
 
 const AUTOMATIC_HINT =
@@ -137,12 +132,6 @@ export function GitPage() {
               placeholder="Add pull request guidance…"
             />
           )}
-        </SettingsCard>
-      </SettingsSection>
-
-      <SettingsSection title="Merging">
-        <SettingsCard>
-          <SwitchSetting setting="autoMerge" row={GIT_ROWS.autoMerge} />
         </SettingsCard>
       </SettingsSection>
 

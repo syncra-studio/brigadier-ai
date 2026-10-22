@@ -1,7 +1,8 @@
 //! Merge tasks (SESSION-FIXES-PLAN.md Q2): the worker merges with real git and commits; the
 //! engine checks the merge (both sides merged, no marker left, nothing missing unless listed
 //! under `deleted`) and fast-forwards the target, and sends the same worker back when the check
-//! fails or the target moved. Session/base conflicts keep the user's yes across the merge.
+//! fails or the target moved. A session merge that conflicts with its base merges once the
+//! conflict is resolved.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -149,16 +150,6 @@ async fn conflicting_session(worker: Worker, sides: Sides) -> Flow {
             let delegated = delegated.clone();
             Box::pin(async move {
                 if turn.is_orchestrator() {
-                    // The thread reads a "wait!" as taking the held merge back (#222).
-                    if turn.input.contains("[merge held] The user's merge")
-                        && turn.input.contains("wait!")
-                    {
-                        let reply = turn
-                            .call("stop_merge", json!({"why": "they said wait"}))
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("Stopped the merge.");
-                    }
                     if turn.input.contains("Add notes") {
                         commit_in_workspace(&turn, "README.md", "# Session\n", "Add notes");
                         commit_in_workspace(&turn, "notes-2.txt", "two\n", "Add notes two");
@@ -247,11 +238,11 @@ fn session(flow: &Flow) -> (String, std::path::PathBuf) {
     }
 }
 
-async fn conflict(flow: &Flow, words: &str) {
+async fn conflict(flow: &Flow) {
     let before = git(&flow.repo, &["rev-parse", "main"]);
     let error = flow
         .manager
-        .finish_session(&flow.conversation, words, None)
+        .finish_session(&flow.conversation, None)
         .await
         .unwrap_err()
         .to_string();
@@ -266,15 +257,11 @@ async fn conflict(flow: &Flow, words: &str) {
             && !error.contains("Don't ask the user"),
         "{error}"
     );
-    assert!(
-        error.contains("consent to this merge still holds"),
-        "{error}"
-    );
+    assert!(error.contains("Nothing was merged"), "{error}");
     assert_eq!(git(&flow.repo, &["rev-parse", "main"]), before);
 }
 
 async fn reported_merge(flow: &Flow) -> Task {
-    // A neutral follow-up must not consume the original consent, even with a "when" in it.
     flow.say("Resolve the conflict and tell me when it's done.")
         .await;
     let board = flow
@@ -343,10 +330,10 @@ async fn resolve(flow: &Flow) -> String {
     landed
 }
 
-async fn finish(flow: &Flow, words: &str) {
+async fn finish(flow: &Flow) {
     let reply = flow
         .manager
-        .finish_session(&flow.conversation, words, None)
+        .finish_session(&flow.conversation, None)
         .await
         .unwrap();
     assert!(reply.contains("[finished]"), "{reply}");
@@ -361,21 +348,21 @@ async fn finish(flow: &Flow, words: &str) {
     );
     assert!(
         flow.manager
-            .finish_session(&flow.conversation, words, None)
+            .finish_session(&flow.conversation, None)
             .await
             .is_err()
     );
 }
 
 #[tokio::test]
-async fn base_conflicts_resolve_and_finish_on_the_original_consent() {
+async fn base_conflicts_resolve_and_finish() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     resolve(&flow).await;
     // The merge task that landed takes no merge task of its own.
     flow.say("Merge task-1 again.").await;
     flow.settled().await;
-    finish(&flow, "merge it").await;
+    finish(&flow).await;
     assert_eq!(
         git(&flow.repo, &["show", "main:README.md"]),
         "# Session and Base"
@@ -388,89 +375,44 @@ async fn base_conflicts_resolve_and_finish_on_the_original_consent() {
     flow.stop().await;
 }
 
-/// A "wait!" between the conflict and the retry: the thread hears the merge is held with it,
-/// reads it as taking the consent back and stops the merge (#222, #240).
-#[tokio::test]
-async fn a_wait_between_conflict_and_retry_stops_the_held_merge() {
-    let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
-    conflict(&flow, "merge it").await;
-    flow.say("wait!").await;
-    flow.settled().await;
-    assert!(
-        flow.board()
-            .await
-            .orchestrator_steps
-            .iter()
-            .any(|step| matches!(
-                &step.kind,
-                OrchestratorStepKind::MergeStopped { reason, .. }
-                    if reason == "The user took it back: they said wait."
-            ))
-    );
-    resolve(&flow).await;
-    assert!(crate::manager::landing::pending_merge(&flow.board().await).is_none());
-    assert_eq!(git(&flow.repo, &["show", "main:README.md"]), "# Base");
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn a_wait_during_conflict_preparation_is_left_to_the_thread() {
-    let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
-    let conv = flow.manager.conv(&flow.conversation).unwrap();
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    *conv.merge_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
-    let manager = flow.manager.clone();
-    let id = flow.conversation.clone();
-    let pending = tokio::spawn(async move { manager.finish_session(&id, "merge it", None).await });
-    reached.notified().await;
-    flow.say("wait!").await;
-    release.notify_one();
-    // The thread judges the "wait!" (#243): it comes to it with [merge held], and stop_merge
-    // ends the hold; the engine refuses nothing for it.
-    let error = pending.await.unwrap().unwrap_err().to_string();
-    assert!(
-        error.contains("conflicts with the current `main`"),
-        "{error}"
-    );
-    assert!(crate::manager::landing::pending_merge(&flow.board().await).is_some());
-    *conv.merge_pause.lock().unwrap() = None;
-    flow.stop().await;
-}
-
 #[tokio::test]
 async fn an_unchanged_resolution_still_lands_two_parents() {
     let flow = conflicting_session(Worker::KeepSession, Sides::default()).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     resolve(&flow).await;
-    finish(&flow, "merge it").await;
+    finish(&flow).await;
     assert_eq!(git(&flow.repo, &["show", "main:README.md"]), "# Session");
     flow.stop().await;
 }
 
-/// A click on "Merge into main" with conflicts with the base: the merge is held on the click,
-/// the conflict resolved, and the merge finishes on it (BUILD-PLAN A4).
+/// A click on "Merge into main" with conflicts with the base: the click is recorded, the
+/// conflict resolved, and the merge finishes (BUILD-PLAN A4).
 #[tokio::test]
-async fn a_click_with_base_conflicts_resolves_and_finishes_on_the_click() {
+async fn a_click_with_base_conflicts_resolves_and_finishes() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
     flow.manager
-        .merge_session(&flow.conversation, super::click(), false)
+        .merge_session(&flow.conversation, super::click())
         .await
         .unwrap();
     flow.settled().await;
     assert!(flow.board().await.questions.is_empty(), "no card");
-    conflict(&flow, "").await;
+    conflict(&flow).await;
     resolve(&flow).await;
-    finish(&flow, "").await;
+    finish(&flow).await;
     let board = flow.board().await;
-    assert!(board.orchestrator_steps.iter().any(|step| matches!(&step.kind, OrchestratorStepKind::Merged { asked_in: Some(id), .. } if id.starts_with("merge-click:"))));
+    assert!(
+        board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(&step.kind, OrchestratorStepKind::MergeRequested { .. }))
+    );
     flow.stop().await;
 }
 
 #[tokio::test]
 async fn a_merge_with_markers_is_refused_and_lands_after_a_fix_on_top() {
     let flow = conflicting_session(Worker::Markers, Sides::default()).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     let session_tip = git(&flow.repo, &["rev-parse", &branch(&flow)]);
     let base_tip = git(&flow.repo, &["rev-parse", "main"]);
     reported_merge(&flow).await;
@@ -492,7 +434,7 @@ async fn a_merge_with_markers_is_refused_and_lands_after_a_fix_on_top() {
     assert_eq!(git(&flow.repo, &["rev-parse", &branch(&flow)]), landed);
     flow.settled().await;
     // The fix on top is still the merge the held consent covers.
-    finish(&flow, "merge it").await;
+    finish(&flow).await;
     assert_eq!(
         git(&flow.repo, &["show", "main:README.md"]),
         "# Session and Base"
@@ -503,7 +445,7 @@ async fn a_merge_with_markers_is_refused_and_lands_after_a_fix_on_top() {
 #[tokio::test]
 async fn a_base_file_dropped_without_a_reason_is_refused_and_lands_once_listed() {
     let flow = conflicting_session(Worker::DropsBaseFile, Sides::default()).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     let session_tip = git(&flow.repo, &["rev-parse", &branch(&flow)]);
     reported_merge(&flow).await;
     let reply = land(&flow).await;
@@ -528,7 +470,7 @@ async fn a_file_one_side_changed_and_the_other_deleted_needs_a_version_or_a_reas
         main_deletes_ignore: true,
     };
     let flow = conflicting_session(Worker::DropsContested, sides).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     reported_merge(&flow).await;
     let reply = land(&flow).await;
     let target = branch(&flow);
@@ -544,7 +486,7 @@ async fn a_file_one_side_changed_and_the_other_deleted_needs_a_version_or_a_reas
     flow.stop().await;
     // Kept in the session's version: it lands as it is.
     let flow = conflicting_session(Worker::KeepsContested, sides).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     resolve(&flow).await;
     assert_eq!(
         git(
@@ -563,7 +505,7 @@ async fn a_file_main_deleted_that_the_session_never_touched_goes_with_no_reason(
         main_deletes_ignore: true,
     };
     let flow = conflicting_session(Worker::Resolve, sides).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     let landed = resolve(&flow).await;
     let files = git(&flow.repo, &["ls-tree", "-r", "--name-only", &landed]);
     assert!(!files.lines().any(|line| line == ".gitignore"), "{files}");
@@ -571,12 +513,11 @@ async fn a_file_main_deleted_that_the_session_never_touched_goes_with_no_reason(
 }
 
 #[tokio::test]
-async fn an_unrelated_merge_parent_after_the_consent_is_no_refusal() {
+async fn an_unrelated_merge_parent_is_no_refusal() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     let branch = branch(&flow);
     let session = git(&flow.repo, &["rev-parse", &branch]);
-    // The session's work is under review: until it ends, the held merge waits for it instead.
     flow.settled().await;
     let common = git(&flow.repo, &["merge-base", &branch, "main"]);
     let tree = git(&flow.repo, &["rev-parse", &format!("{session}^{{tree}}")]);
@@ -608,13 +549,11 @@ async fn an_unrelated_merge_parent_after_the_consent_is_no_refusal() {
     );
     let error = flow
         .manager
-        .finish_session(&flow.conversation, "merge it", None)
+        .finish_session(&flow.conversation, None)
         .await
         .unwrap_err()
         .to_string();
-    // Work after the consent is a fact, not a refusal (#243): the merge is prepared, and the
-    // unrelated history conflicts with main, so nothing merges.
-    assert!(!error.contains("consent doesn't cover it"), "{error}");
+    // The merge is prepared, and the unrelated history conflicts with main, so nothing merges.
     assert!(
         error.contains("conflicts with the current `main`"),
         "{error}"
@@ -626,7 +565,7 @@ async fn an_unrelated_merge_parent_after_the_consent_is_no_refusal() {
 #[tokio::test]
 async fn a_merge_whose_target_moved_goes_back_to_the_same_worker_and_lands_both() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
-    conflict(&flow, "merge it").await;
+    conflict(&flow).await;
     let task = reported_merge(&flow).await;
     let native = task.native_session.clone();
     // Other work lands on the session branch meanwhile, over the same lines.
@@ -658,17 +597,12 @@ async fn a_merge_whose_target_moved_goes_back_to_the_same_worker_and_lands_both(
         "# Session and Base, again"
     );
     flow.settled().await;
-    // The consent held over didn't cover the other work: the merge says it went in too, for
-    // the thread to tell the user (#243).
     let merged = flow
         .manager
-        .finish_session(&flow.conversation, "merge it", None)
+        .finish_session(&flow.conversation, None)
         .await
         .unwrap();
-    assert!(
-        merged.contains("after the user's consent, and it is in this merge too"),
-        "{merged}"
-    );
+    assert!(merged.contains("[finished]"), "{merged}");
     assert_eq!(
         git(&flow.repo, &["show", "main:README.md"]),
         "# Session and Base, again"

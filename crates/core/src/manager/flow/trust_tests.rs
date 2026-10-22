@@ -7,8 +7,13 @@ use std::path::{Path, PathBuf};
 use brigadier_providers::Artifact;
 use brigadier_providers::trust::{TrustCli, plan};
 
-use super::{Flow, Options};
+use super::{Flow, Options, Reply, Script};
 use crate::model::{PermissionLevel, ProjectId};
+
+/// A session that answers every turn the same.
+fn answering() -> Script {
+    std::sync::Arc::new(|_| Box::pin(async { Reply::text("Done.") }))
+}
 
 pub(super) const CLAUDE: &str = "{\n  \"numStartups\": 3,\n  \"projects\": {\n    \"/elsewhere\": {\n      \"hasTrustDialogAccepted\": true\n    }\n  }\n}";
 pub(super) const CODEX: &str =
@@ -88,7 +93,7 @@ fn unanswered() -> Options {
 /// work a thread hands to a project the user hasn't entered does), until the user trusts it.
 #[tokio::test]
 async fn an_unanswered_folder_asks_first_until_trusted() {
-    let flow = Flow::start("trust-unanswered", unanswered(), super::no_findings()).await;
+    let flow = Flow::start("trust-unanswered", unanswered(), answering()).await;
     let project = project_of(&flow);
     assert_eq!(
         flow.manager.permission(&flow.conversation),
@@ -109,7 +114,7 @@ async fn an_unanswered_folder_asks_first_until_trusted() {
 /// project's removal put both files back byte for byte.
 #[tokio::test]
 async fn a_trusted_folder_is_answered_for_both_clis_until_untrusted_or_removed() {
-    let flow = Flow::start("trust-both", unanswered(), super::no_findings()).await;
+    let flow = Flow::start("trust-both", unanswered(), answering()).await;
     let home = Home::new();
     home.serve(&flow);
     let project = project_of(&flow);
@@ -167,7 +172,7 @@ async fn a_trusted_folder_is_answered_for_both_clis_until_untrusted_or_removed()
 /// another folder's answer or a CLI not set up here touches nothing.
 #[tokio::test]
 async fn trust_the_user_gave_a_cli_is_never_recorded_or_removed() {
-    let flow = Flow::start("trust-theirs", unanswered(), super::no_findings()).await;
+    let flow = Flow::start("trust-theirs", unanswered(), answering()).await;
     let home = Home::new();
     let repo = flow.repo.display().to_string();
     let theirs = CLAUDE.replace("/elsewhere", &repo);
@@ -195,7 +200,7 @@ async fn trust_the_user_gave_a_cli_is_never_recorded_or_removed() {
 /// still trusted; an entry no answer stands behind any more is put back.
 #[tokio::test]
 async fn a_restart_finishes_or_undoes_folder_trust_by_the_answers() {
-    let flow = Flow::start("trust-reconcile", unanswered(), super::no_findings()).await;
+    let flow = Flow::start("trust-reconcile", unanswered(), answering()).await;
     let home = Home::new();
     home.serve(&flow);
     let project = project_of(&flow);
@@ -243,7 +248,7 @@ async fn a_restart_finishes_or_undoes_folder_trust_by_the_answers() {
 /// replaces the one that remembered no entry.
 #[tokio::test]
 async fn removal_puts_back_the_value_the_user_set_since() {
-    let flow = Flow::start("trust-theirs-since", unanswered(), super::no_findings()).await;
+    let flow = Flow::start("trust-theirs-since", unanswered(), answering()).await;
     let home = Home::new();
     home.serve(&flow);
     let project = project_of(&flow);
@@ -295,7 +300,7 @@ async fn removal_puts_back_the_value_the_user_set_since() {
 /// checkout, so that is the entry written (and removed), not the worktree's.
 #[tokio::test]
 async fn a_linked_worktree_project_trusts_its_main_checkout() {
-    let flow = Flow::start("trust-linked", unanswered(), super::no_findings()).await;
+    let flow = Flow::start("trust-linked", unanswered(), answering()).await;
     let home = Home::new();
     home.serve(&flow);
     let linked = home.0.join("linked");
@@ -354,7 +359,7 @@ async fn a_linked_worktree_project_trusts_its_main_checkout() {
 /// Tests that set no home write nothing at all.
 #[tokio::test]
 async fn without_a_scratch_home_tests_write_no_cli_settings() {
-    let flow = Flow::start("trust-nowhere", unanswered(), super::no_findings()).await;
+    let flow = Flow::start("trust-nowhere", unanswered(), answering()).await;
     let project = project_of(&flow);
     let report = flow
         .manager

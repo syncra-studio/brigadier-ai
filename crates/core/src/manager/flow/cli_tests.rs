@@ -63,9 +63,6 @@ fn looking(answers: Answers) -> Script {
     Arc::new(move |turn| {
         let answers = answers.clone();
         Box::pin(async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             let keep = |name: &str, value: Value| {
                 answers.lock().unwrap().insert(name.into(), value);
             };

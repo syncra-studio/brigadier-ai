@@ -50,16 +50,12 @@ test("a CI watch has an idle session's row say Watching CI until it ends", () =>
   assert.equal(rowActivity(useActivity.getState().byConversation.c2).phase, null);
 });
 
-test("a review outranks a worker's checks, and the thread's finish_session ends with its turn", () => {
+test("a worker's checks say Checking, and the thread's finish_session ends with its turn", () => {
   const verify = (state: string) =>
     on("c3", { type: "taskUpdated", task: { id: "t1", conversationId: "c3", kind: "verify", state, title: "Verify" } });
-  const review = (type: string) =>
-    on("c3", { type: "reviewUpdated", review: { id: "rv1", conversationId: "c3", state: { type } } });
   applyActivityEvents([verify("running")]);
   assert.equal(phaseOf("c3"), "checking");
-  applyActivityEvents([review("running")]);
-  assert.equal(phaseOf("c3"), "reviewing");
-  applyActivityEvents([review("clean"), verify("done")]);
+  applyActivityEvents([verify("done")]);
   assert.equal(phaseOf("c3"), null);
   const tool = (status: string) =>
     on("c3", {

@@ -924,9 +924,9 @@ impl SessionManager {
         } else {
             self.head_commit(id).await
         };
-        // The claim's evidence, with the words it shows (BUILD-PLAN E1): the cited lines, a
-        // check's output, or a review finding's location or output.
-        let mut evidence: Vec<String> = args
+        // The claim's evidence, with the words it shows (BUILD-PLAN E1): the cited lines or a
+        // check's output.
+        let evidence: Vec<String> = args
             .files
             .iter()
             .map(|file| file.trim().to_owned())
@@ -941,20 +941,6 @@ impl SessionManager {
                 .filter(|quote| !quote.is_empty()),
             Some(_) => None,
         };
-        let mut finding_note = None;
-        if let (Some(finding), None) = (args.finding.as_deref(), &cited) {
-            let found = self
-                .finding_cites(id, finding, words.unwrap_or_default())
-                .await
-                .map_err(|reason| Error::Invalid(format!("not kept: {reason}")))?;
-            if found.is_empty() {
-                finding_note = Some(format!(
-                    "; finding {} names no lines or check output, so it is no evidence",
-                    finding.trim()
-                ));
-            }
-            evidence.extend(found.into_iter().map(|(cite, _)| cite));
-        }
         let sources = match (words, personal) {
             (Some(words), false) => {
                 self.claim_sources(
@@ -987,11 +973,6 @@ impl SessionManager {
                         args.check
                             .iter()
                             .map(|check| format!("check {}", check.trim())),
-                    )
-                    .chain(
-                        args.finding
-                            .iter()
-                            .map(|finding| format!("finding {}", finding.trim())),
                     )
                     .collect(),
                 sources: sources.clone(),
@@ -1062,13 +1043,12 @@ impl SessionManager {
             }
         };
         Ok(format!(
-            "Remembered as {node_id}{}{source}{}.",
+            "Remembered as {node_id}{}{source}.",
             match (personal, cited.is_some()) {
                 (true, _) => " (the user's preferences)",
                 (false, true) => " (a user decision)",
                 (false, false) => " (your claim, unverified)",
             },
-            finding_note.unwrap_or_default()
         ))
     }
 

@@ -317,9 +317,6 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
             }
         }
     }
-    if settings.settings_version < 3 {
-        next.auto_merge = false;
-    }
     if settings.settings_version < 4 && !settings.legacy_switch_accounts {
         for provider in ProviderKind::ALL {
             if !next.manual_accounts.contains(&provider) {
@@ -628,30 +625,6 @@ mod tests {
         let json = serde_json::to_value(&off).unwrap();
         assert!(json.get("switchAccounts").is_none());
         assert!(migrate(&off).is_none());
-    }
-
-    #[test]
-    fn work_stops_merging_on_its_own_once_for_settings_saved_before_the_new_default() {
-        let settings = Settings {
-            auto_merge: true,
-            settings_version: 2,
-            ..Settings::default()
-        };
-        let next = migrate(&settings).expect("version 2 converts");
-        assert!(!next.auto_merge);
-        assert_eq!(next.settings_version, SETTINGS_VERSION);
-        assert!(migrate(&next).is_none());
-    }
-
-    #[test]
-    fn work_keeps_merging_on_its_own_once_the_user_chose_it_after_the_new_default() {
-        let settings = Settings {
-            auto_merge: true,
-            settings_version: SETTINGS_VERSION,
-            ..Settings::default()
-        };
-        assert!(migrate(&settings).is_none());
-        assert!(settings.auto_merge);
     }
 
     #[test]

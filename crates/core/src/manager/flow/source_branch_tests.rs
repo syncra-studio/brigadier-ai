@@ -442,7 +442,6 @@ async fn push_replaces_the_kept_branch_of_a_squash_merged_pull_request_and_nothi
             &flow.conversation,
             None,
             OrchestratorStepKind::Merged {
-                checks_skipped: false,
                 branch: branch.clone(),
                 base: "main".into(),
                 commits: 1,
@@ -451,9 +450,7 @@ async fn push_replaces_the_kept_branch_of_a_squash_merged_pull_request_and_nothi
                 head: Some(head.clone()),
                 merge_commit: Some(squashed.clone()),
                 pr: Some(7),
-                auto: false,
                 requests: Vec::new(),
-                record: None,
             },
         )
         .await;
@@ -555,7 +552,6 @@ async fn sync_after_a_squash_merge_pulls_nothing_back_and_pushes() {
             &flow.conversation,
             None,
             OrchestratorStepKind::Merged {
-                checks_skipped: false,
                 branch: branch.clone(),
                 base: "main".into(),
                 commits: 1,
@@ -564,9 +560,7 @@ async fn sync_after_a_squash_merge_pulls_nothing_back_and_pushes() {
                 head: Some(head.clone()),
                 merge_commit: Some(squashed.clone()),
                 pr: Some(7),
-                auto: false,
                 requests: Vec::new(),
-                record: None,
             },
         )
         .await;

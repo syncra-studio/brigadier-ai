@@ -1,7 +1,6 @@
 //! What waits in a thread's inbox for its next turn lives in memory, so each envelope is also
 //! kept in the store as it is queued: one a stop left there before a turn took it goes again
-//! at the next start, once (#210). Reviews have their own recovery (review_runs.rs, #69) and
-//! another session's messages theirs (peers.rs); reminders are asked again from what is due.
+//! at the next start, once (#210). Another session's messages have their own recovery (peers.rs); reminders are asked again from what is due.
 
 use std::collections::HashMap;
 
@@ -138,22 +137,6 @@ impl Kept {
 }
 
 impl SessionManager {
-    /// Whether session `id`'s inbox holds an envelope of `kind`, `label` and `task` for
-    /// `request`.
-    pub(super) async fn inbox_holds(
-        &self,
-        id: &ConversationId,
-        kind: InjectionKind,
-        label: &str,
-        task: Option<&TaskId>,
-        request: Option<&str>,
-    ) -> bool {
-        match self.conv(id) {
-            Ok(conv) => conv.inbox_holds(kind, label, task, request).await,
-            Err(_) => false,
-        }
-    }
-
     /// Keeps an envelope just queued for `request`, or (`replaces`, its text before) as it
     /// stands once more was folded into it.
     pub(super) async fn keep_queued(

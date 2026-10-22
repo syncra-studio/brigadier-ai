@@ -901,16 +901,6 @@ impl SessionManager {
         if task.state != was {
             self.settle_requests(conversation_id).await;
         }
-        // The last writer ending may make a held merge due (SESSION-FIXES-PLAN.md Q3). A
-        // landing looks again once its review has run (landing.rs), since that review starts
-        // only after the landing is recorded.
-        if task.kind.writes()
-            && task.state.is_final()
-            && !was.is_final()
-            && task.state != TaskState::Landed
-        {
-            self.check_held_merge(conversation_id).await;
-        }
         Ok(Some(task))
     }
 
@@ -1135,19 +1125,6 @@ impl SessionManager {
         if let Some(rerun) = &extra.rerun {
             super::reruns::mark_route(&mut route, rerun);
         }
-        // A fix of landed work resumes its worker's session: on the account it ran on, from
-        // the instructions it last heard (SESSION-FIXES-PLAN.md Q6.1).
-        let resumed = subject.as_ref().filter(|subject| {
-            extra.role == Some(WorkerRole::Fix)
-                && subject.landed.is_some()
-                && subject.review_hold.is_some()
-        });
-        if let Some(subject) = resumed
-            && route.choice.provider == subject.route.choice.provider
-            && route.choice.model == subject.route.choice.model
-        {
-            route.choice.account = subject.route.choice.account.clone();
-        }
         let number = self.core.next_task_number(conversation_id).await?;
         // A plan's reviewer belongs to the plan's request, even when a restart reopens an
         // older plan's review after newer requests.
@@ -1248,7 +1225,6 @@ impl SessionManager {
             native_session: None,
             report_version: None,
             deaths: Vec::new(),
-            review_hold: None,
             live_look: extra.live_look,
             fresh_commit: extra.fresh_commit,
             integrations: extra.integrations,
@@ -1257,7 +1233,6 @@ impl SessionManager {
             takeover: None,
             trial_slot: waits && trial_slot,
             rerun: extra.rerun,
-            fusion: extra.fusion,
             created_at_ms: now,
             updated_at_ms: now,
         };
@@ -1301,33 +1276,9 @@ impl SessionManager {
         self.set_task_state(&conversation_id, &task.id, TaskState::Starting)
             .await?;
         let owner = format!("task:{}", task.id);
-        // A fix of landed work's review findings resumes the session that did the work, in a
-        // worktree made again where it was (SESSION-FIXES-PLAN.md Q6.1).
-        let held = subject
-            .as_ref()
-            .filter(|subject| super::review_hold::fixes_held(&task, subject));
-        let mut resume = None;
-        let workspace = match held {
-            Some(held) => match self.prepare_fix_workspace(&owner, &task, held).await {
-                Ok(workspace) => {
-                    let same_model = task.route.choice.provider == held.route.choice.provider
-                        && task.route.choice.model == held.route.choice.model;
-                    if same_model {
-                        resume = self.held_session(held).await;
-                    }
-                    workspace
-                }
-                Err(err) => {
-                    tracing::warn!(task = %task.id, error = %err, "a fix starts a fresh session: the landed work's worktree couldn't be made again");
-                    self.prepare_workspace(&owner, &task, subject.as_ref())
-                        .await?
-                }
-            },
-            None => {
-                self.prepare_workspace(&owner, &task, subject.as_ref())
-                    .await?
-            }
-        };
+        let workspace = self
+            .prepare_workspace(&owner, &task, subject.as_ref())
+            .await?;
         let task = self
             .update_task(&conversation_id, &task.id, |t| {
                 t.workspace = Some(TaskWorkspace {
@@ -1347,50 +1298,6 @@ impl SessionManager {
             .await?;
         let files = self.worker_files(&task, &workspace.scratch).await;
         drop(fence);
-        if let Some(native_id) = resume {
-            let task = self
-                .update_task(&conversation_id, &task.id, |t| {
-                    t.native_session = Some(native_id.clone());
-                })
-                .await?;
-            let mut text = super::review_hold::workspace_line(
-                task.number,
-                &workspace
-                    .worktree
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                workspace.branch.as_deref().unwrap_or_default(),
-                workspace
-                    .base
-                    .as_ref()
-                    .expect("a fix's workspace has a base"),
-                &workspace.scratch,
-                &test_data_dir(&task.id),
-            );
-            text.push_str("\n\n");
-            text.push_str(&task.spec);
-            for message in &task.messages {
-                text.push_str("\n\n");
-                text.push_str(message);
-            }
-            let resumed = self
-                .launch_worker(
-                    live,
-                    &task,
-                    subject.as_ref(),
-                    Origin::Resume { native_id },
-                    TurnInput::with_files(text, files.clone()),
-                )
-                .await;
-            match resumed {
-                Ok(()) => return Ok(()),
-                // Its session is gone after all: a fresh one starts from the report below.
-                Err(err) => {
-                    tracing::warn!(task = %task.id, error = %err, "a fix starts a fresh session: the landed worker's session couldn't be resumed");
-                }
-            }
-        }
         // What the Brain knows about the task, then what the thread already read, go with its
         // first message (SESSION-FIXES-PLAN.md Q6.6, THREAD-PLAN.md Q8 lever 1).
         // A fresh verifier gets none of the build's context: its spec holds all it reads.
@@ -1736,11 +1643,10 @@ impl SessionManager {
         // A new CLI session hears its task first; a resumed or forked one has it already.
         match (&origin, first) {
             (Origin::New, Some(first)) => {
-                let reviewed = self.reviews_on();
                 first.parts.insert(
                     0,
                     brigadier_providers::InputPart::Text(prompts::worker_brief(
-                        task, &repo_note, &extra, reviewed,
+                        task, &repo_note, &extra,
                     )),
                 );
             }
@@ -3335,37 +3241,6 @@ impl SessionManager {
         if Self::waits_for_go_ahead(&task) {
             return;
         }
-        // A verifier whose own review still runs (`request_review`) waits for its findings: they
-        // start its next turn, and it triages them before it reports. Any other worker never
-        // waits for its review: findings after its report go to the thread. Not while the
-        // user has reviews off: nothing waits on one. The lock orders this with the switch,
-        // which releases those already waiting.
-        let switch = self.reviews.lock().await;
-        if task.role == Some(WorkerRole::Verifier)
-            && self.reviews_on()
-            && self.review_pending(&task).await
-        {
-            self.set_task_blocked(
-                &task.id,
-                Some(super::review_runs::WAITING_FOR_REVIEW.into()),
-            )
-            .await;
-            // A review that ended in between found the worker not blocked yet: its message
-            // started the next turn, so nothing is waited for.
-            if !self.review_pending(&task).await
-                && self
-                    .task_by_id(&task.conversation_id, &task.id)
-                    .await
-                    .is_ok_and(|now| {
-                        now.blocked_reason.as_deref()
-                            == Some(super::review_runs::WAITING_FOR_REVIEW)
-                    })
-            {
-                self.set_task_blocked(&task.id, None).await;
-            }
-            return;
-        }
-        drop(switch);
         // Its own background job (a command or sub-agent) still runs: the job's end starts its
         // next turn, so it waits, unless it waits silently too long.
         if background && status == TurnStatus::Completed {
@@ -3758,12 +3633,6 @@ impl SessionManager {
             }
             (state.handoff_asked, state.last_message.clone())
         };
-        if task.role == Some(WorkerRole::Verifier)
-            && self.reviews_on()
-            && self.review_pending(&task).await
-        {
-            return None;
-        }
         if handoff {
             let missing = handoff_gaps(note.as_deref().unwrap_or_default());
             return (!missing.is_empty()).then(|| {
@@ -4068,11 +3937,6 @@ impl SessionManager {
             _ => None,
         };
         let settled = live.settle.lock().await;
-        // A fused pair's reports are weighed one at a time (Q77).
-        let _fusing = match task.fusion {
-            Some(_) => Some(self.fusing.lock().await),
-            None => None,
-        };
         // Stopped while its report was being stored: the stop stands.
         let task = self.task_by_id(conversation_id, task_id).await?;
         if task.state.is_final() {
@@ -4101,55 +3965,21 @@ impl SessionManager {
                 text.push('\n');
                 text.push_str(&super::reruns::rerun_note(&shown, rerun));
             }
-            // A fused answer waits for its partner's, and both go together (Q77).
-            let fused = match &task.fusion {
-                Some(_) => Some(self.fused_report(&shown, &text).await),
-                None => None,
-            };
-            let (text, partner) = match fused {
-                None => (Some(text), None),
-                Some(super::fusion::FusedReport::Hold) => (None, None),
-                Some(super::fusion::FusedReport::Both { text, partner }) => {
-                    (Some(text), Some(partner))
-                }
-                Some(super::fusion::FusedReport::Alone { text }) => (Some(text), None),
-            };
-            match text {
-                Some(mut text) => {
-                    if task.kind == TaskKind::Research {
-                        text.push('\n');
-                        text.push_str(prompts::RESEARCH_REPORT_NOTE);
-                    }
-                    if let Some(partner) = &partner {
-                        self.update_task(conversation_id, partner, |partner| {
-                            if let Some(fusion) = &mut partner.fusion {
-                                fusion.delivered = true;
-                            }
-                        })
-                        .await?;
-                    }
-                    let envelope = Envelope {
-                        kind: InjectionKind::Report,
-                        label: format!("report task-{}", task.number),
-                        task_id: Some(task.id.clone()),
-                        text,
-                    };
-                    let request = self.request_for(conversation_id, Some(task_id)).await;
-                    self.queue_envelope(conversation_id, envelope, request)
-                        .await
-                }
-                None => None,
+            if task.kind == TaskKind::Research {
+                text.push('\n');
+                text.push_str(prompts::RESEARCH_REPORT_NOTE);
             }
+            let envelope = Envelope {
+                kind: InjectionKind::Report,
+                label: format!("report task-{}", task.number),
+                task_id: Some(task.id.clone()),
+                text,
+            };
+            let request = self.request_for(conversation_id, Some(task_id)).await;
+            self.queue_envelope(conversation_id, envelope, request)
+                .await
         };
-        let delivered = queued.is_some();
-        let task = self
-            .update_task(conversation_id, task_id, |task| {
-                reported(task);
-                if delivered && let Some(fusion) = &mut task.fusion {
-                    fusion.delivered = true;
-                }
-            })
-            .await?;
+        let task = self.update_task(conversation_id, task_id, reported).await?;
         drop(settled);
         live.state.lock().await.nudged = true;
         // What only the user can do is listed for them ("Waiting on you"); a later report
@@ -5242,10 +5072,6 @@ impl SessionManager {
         if drop_branch {
             self.drop_task_branch(task).await;
         }
-        // A fix of landed work ended: the batch it fixed settles.
-        if task.role == Some(WorkerRole::Fix) {
-            self.settle_fixed(task).await;
-        }
         self.tasks_lock().remove(&task.id);
         self.forget_task_previews(&task.id).await;
     }
@@ -5452,8 +5278,6 @@ pub(crate) struct TaskExtra {
     pub fresh_commit: Option<String>,
     /// It reruns a cheaper model's task one tier up (see `reruns`).
     pub rerun: Option<brigadier_router::Rerun>,
-    /// Its part in a fused pair (see `fusion`).
-    pub fusion: Option<crate::work::Fusion>,
     /// The catalog ids of the MCP servers it gets besides its agent's own
     /// (`delegate_task`'s `integrations`).
     pub integrations: Vec<String>,
@@ -5917,10 +5741,6 @@ fn worker_step(task: &Task, was: Option<TaskState>, reported: bool) -> Option<Do
 }
 
 pub(crate) fn route_label(task: &Task) -> String {
-    // A fused answer is known by its letter alone (Q77).
-    if let Some(label) = super::fusion::fused_label(task) {
-        return label;
-    }
     let choice = &task.route.choice;
     let mut label = match &choice.model {
         Some(model) => format!("{} {model}", choice.provider.label()),

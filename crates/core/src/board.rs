@@ -12,9 +12,8 @@ use crate::model::{
 use crate::overnight::OvernightRun;
 use crate::work::{
     Approval, CardId, CardState, Compaction, ConversationActivity, Decision, MessageQueue,
-    OrchestratorStep, OrchestratorStepKind, Plan, PlanState, Question, ReviewRun, ReviewState,
-    RunState, SessionPhase, TabState, Task, TaskId, TaskKind, TaskState, UserRequest, WaitingItem,
-    WorkerStep,
+    OrchestratorStep, OrchestratorStepKind, Plan, PlanState, Question, RunState, SessionPhase,
+    TabState, Task, TaskId, TaskKind, TaskState, UserRequest, WaitingItem, WorkerStep,
 };
 
 /// Notices kept per conversation.
@@ -29,11 +28,10 @@ pub(crate) const KINDS: &[&str] = &[
     "approval.updated",
     "question.updated",
     "plan.updated",
-    "review.updated",
     "integrated_check.updated",
     "background_run.updated",
     "thread.seen",
-    "thread.unreviewed",
+    "thread.files",
     "output.stored",
     "thread.looked",
     "preview.updated",
@@ -185,14 +183,10 @@ pub(crate) struct Board {
     pub(crate) waits_listed: HashSet<String>,
     /// Its overnight runs, a segment each.
     pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
-    /// Its one-shot reviews, by id.
-    pub(crate) reviews: HashMap<String, ReviewRun>,
     /// The thread's commands that went to the background, by id.
     pub(crate) background_runs: HashMap<String, crate::work::BackgroundRun>,
     /// The thread's headline for the session now (`set_headline`).
     pub(crate) headline: Option<crate::work::SessionHeadline>,
-    /// Why the last merge into the base was refused, while it stands.
-    pub(crate) merge_refused: Option<crate::work::MergeRefused>,
     /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
     /// model's), with the daemon process that heard them ([`crate::boot_id`]).
     pub(crate) mcp_servers: HashMap<Option<String>, (String, crate::model::AgentMcpServers)>,
@@ -205,9 +199,6 @@ pub(crate) struct Board {
     /// its local checkout's files per request, oldest first (its self-edit metric, UI audit
     /// M6).
     pub(crate) thread_authored: Vec<Authored>,
-    /// The thread's changes for its newest request that no review covered yet (BUILD-PLAN B2).
-    /// Boxed: a board is cloned on deep stacks, and every byte of it counts there.
-    pub(crate) unreviewed: Option<Box<crate::work::UnreviewedRange>>,
     /// The thread's command outputs stored whole, by alias (`out-<id>`).
     pub(crate) outputs: HashMap<String, crate::work::StoredOutput>,
     /// What the thread read and searched, bounded ([`crate::manager::reads::ReadLog`]);
@@ -460,11 +451,6 @@ impl Board {
             };
             works.then(|| (format!("task:{}", task.id), phase))
         });
-        let reviews = self
-            .reviews
-            .values()
-            .filter(|review| review.state == ReviewState::Running)
-            .map(|review| (format!("review:{}", review.id), SessionPhase::Reviewing));
         let steps = self
             .orchestrator_steps
             .iter()
@@ -498,9 +484,7 @@ impl Board {
                 }
                 _ => None,
             });
-        let merge = crate::manager::held_merge(self)
-            .map(|asked_in| (format!("merge:{asked_in}"), SessionPhase::Merging));
-        let mut phases: Vec<_> = tasks.chain(reviews).chain(steps).chain(merge).collect();
+        let mut phases: Vec<_> = tasks.chain(steps).collect();
         phases.sort_by(|a, b| a.0.cmp(&b.0));
         phases
     }
@@ -545,32 +529,11 @@ impl Board {
                 plan.position = position;
                 self.plans.insert(plan.id.clone(), plan);
             }
-            DomainEvent::ReviewUpdated { review } => {
-                // A merge's record counts the thread's later word on the review's findings too:
-                // one it settles after the merge no longer reads open there.
-                for step in &mut self.orchestrator_steps {
-                    if let crate::work::OrchestratorStepKind::Merged {
-                        record: Some(record),
-                        ..
-                    } = &mut step.kind
-                    {
-                        for merged in &mut record.reviews {
-                            if merged.counts(review) {
-                                merged.recount(review);
-                            }
-                        }
-                    }
-                }
-                self.reviews.insert(review.id.clone(), review.clone());
-            }
             DomainEvent::BackgroundRunUpdated { run } => {
                 self.background_runs.insert(run.id.clone(), run.clone());
             }
             DomainEvent::HeadlineSet { headline, .. } => {
                 self.headline = headline.clone();
-            }
-            DomainEvent::MergeRefusalSet { refusal, .. } => {
-                self.merge_refused = refusal.clone();
             }
             DomainEvent::McpServersUpdated {
                 task_id,
@@ -615,31 +578,31 @@ impl Board {
                     });
                 }
             }
-            DomainEvent::UnreviewedChanged { range, .. } => {
-                if let Some(range) = range
-                    && range.local
-                    && let Some(start) = &range.start
+            DomainEvent::ThreadFilesSeen {
+                request_id,
+                branch,
+                start,
+                tip,
+                ..
+            } => {
+                let same = |known: &Authored| {
+                    matches!(known, Authored::Files { request_id: request, start: from, .. }
+                        if request == request_id && from == start)
+                };
+                match self
+                    .thread_authored
+                    .iter_mut()
+                    .rev()
+                    .find(|known| same(known))
                 {
-                    let same = |known: &Authored| {
-                        matches!(known, Authored::Files { request_id, start: from, .. }
-                            if *request_id == range.request_id && from == start)
-                    };
-                    match self
-                        .thread_authored
-                        .iter_mut()
-                        .rev()
-                        .find(|known| same(known))
-                    {
-                        Some(Authored::Files { tip, .. }) => tip.clone_from(&range.tip),
-                        _ => self.thread_authored.push(Authored::Files {
-                            request_id: range.request_id.clone(),
-                            branch: range.branch.clone(),
-                            start: start.clone(),
-                            tip: range.tip.clone(),
-                        }),
-                    }
+                    Some(Authored::Files { tip: last, .. }) => last.clone_from(tip),
+                    _ => self.thread_authored.push(Authored::Files {
+                        request_id: request_id.clone(),
+                        branch: branch.clone(),
+                        start: start.clone(),
+                        tip: tip.clone(),
+                    }),
                 }
-                self.unreviewed = range.clone().map(Box::new);
             }
             DomainEvent::OutputStored { output, .. } => {
                 self.outputs.insert(output.alias.clone(), output.clone());
@@ -1081,13 +1044,6 @@ impl Board {
         let mut plans: Vec<Plan> = self.plans.values().cloned().collect();
         plans.sort_by_key(|plan| plan.position);
         plans
-    }
-
-    /// Its one-shot reviews, oldest first.
-    pub(crate) fn sorted_reviews(&self) -> Vec<ReviewRun> {
-        let mut reviews: Vec<ReviewRun> = self.reviews.values().cloned().collect();
-        reviews.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms).then(a.id.cmp(&b.id)));
-        reviews
     }
 
     /// The thread's background runs, oldest first (by number).

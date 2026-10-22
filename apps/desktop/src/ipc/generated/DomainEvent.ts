@@ -16,7 +16,6 @@ import type { Lifecycle } from "./Lifecycle";
 import type { MachineStep } from "./MachineStep";
 import type { McpServerState } from "./McpServerState";
 import type { MemoryChange } from "./MemoryChange";
-import type { MergeRefused } from "./MergeRefused";
 import type { Message } from "./Message";
 import type { MessageQueue } from "./MessageQueue";
 import type { ModelFallback } from "./ModelFallback";
@@ -42,7 +41,6 @@ import type { RawSessionId } from "./RawSessionId";
 import type { RawState } from "./RawState";
 import type { ReplyHold } from "./ReplyHold";
 import type { ResolvedBy } from "./ResolvedBy";
-import type { ReviewRun } from "./ReviewRun";
 import type { RunState } from "./RunState";
 import type { SessionHeadline } from "./SessionHeadline";
 import type { Settings } from "./Settings";
@@ -53,7 +51,6 @@ import type { TaskId } from "./TaskId";
 import type { TextPhase } from "./TextPhase";
 import type { ThreadRead } from "./ThreadRead";
 import type { ThreadSearch } from "./ThreadSearch";
-import type { UnreviewedRange } from "./UnreviewedRange";
 import type { UpdatesView } from "./UpdatesView";
 import type { UserRequest } from "./UserRequest";
 import type { WaitingItem } from "./WaitingItem";
@@ -76,13 +73,13 @@ requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */
-subject: string, rating: Rating, } | { "type": "ratingCleared", subject: string, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: ReviewRun, } | { "type": "integratedCheckUpdated", check: unknown, } | { "type": "headlineSet", conversationId: ConversationId, headline: SessionHeadline | null, } | { "type": "mergeRefusalSet", conversationId: ConversationId, refusal: MergeRefused | null, } | { "type": "backgroundRunUpdated", run: BackgroundRun, } | { "type": "mcpServersUpdated", conversationId: ConversationId, taskId: string | null, provider: ProviderKind, servers: Array<McpServerState>, atStart: boolean, boot: string, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, 
+subject: string, rating: Rating, } | { "type": "ratingCleared", subject: string, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: unknown, } | { "type": "integratedCheckUpdated", check: unknown, } | { "type": "headlineSet", conversationId: ConversationId, headline: SessionHeadline | null, } | { "type": "mergeRefusalSet", refusal: unknown, } | { "type": "backgroundRunUpdated", run: BackgroundRun, } | { "type": "mcpServersUpdated", conversationId: ConversationId, taskId: string | null, provider: ProviderKind, servers: Array<McpServerState>, atStart: boolean, boot: string, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, 
 /**
  * The thread made the commits from this one to `tip` itself (in its turn, or with its
  * trailer): the record of who wrote them, since a commit it makes on the user's own
  * checkout carries no trailer (UI audit M6).
  */
-authoredFrom?: string | null, } | { "type": "unreviewedChanged", conversationId: ConversationId, range: UnreviewedRange | null, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
+authoredFrom?: string | null, } | { "type": "unreviewedChanged", range: unknown, } | { "type": "threadFilesSeen", conversationId: ConversationId, requestId: string, branch: string, start: string, tip: string, } | { "type": "outputStored", conversationId: ConversationId, output: StoredOutput, } | { "type": "checkRan", conversationId: ConversationId, 
 /**
  * The worker's task; none for the thread.
  */

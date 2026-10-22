@@ -508,7 +508,7 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
 
 test("the lead's suggested setting shows as its card, and its tool call doesn't", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
-  const change = { type: "settingSuggested", change: { setting: "mergeOnOwn", on: true }, reason: "You asked it to merge by itself." } as const;
+  const change = { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser." } as const;
   const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, requests: {}, workerSteps: [],
     orchestratorSteps: [
       teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__suggest_setting", detail: null, status: "completed", throughPosition: 0 }),

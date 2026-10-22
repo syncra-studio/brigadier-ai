@@ -13,9 +13,6 @@ use crate::tools::ToolHost;
 fn calling_badly() -> Script {
     Arc::new(|turn| {
         Box::pin(async move {
-            if turn.is_review() {
-                return Reply::text("No findings.");
-            }
             if turn.is_orchestrator() {
                 if turn.input.contains("Count the lines.") {
                     ToolHost::bad_call(&*turn.host, &turn.grant, "stop_worker");

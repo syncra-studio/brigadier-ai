@@ -7,7 +7,6 @@ import type { FeedbackSent } from "./FeedbackSent";
 import type { FileStat } from "./FileStat";
 import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
-import type { MergeRecord } from "./MergeRecord";
 import type { MergedUpstream } from "./MergedUpstream";
 import type { ProofKind } from "./ProofKind";
 import type { ProviderKind } from "./ProviderKind";
@@ -114,23 +113,9 @@ mergeCommit?: string,
  */
 pr?: number, 
 /**
- * It merged on its own (auto-merge on), with no consent asked.
- */
-auto?: boolean, 
-/**
  * The requests whose work it merged.
  */
-requests?: Array<string>, 
-/**
- * What was checked of the code it merged, as recorded then (the merge message's
- * "Checked" list); none on merges from before it was kept.
- */
-record?: MergeRecord, 
-/**
- * It merged without a passing run_checks on its commit, because the user said to merge
- * anyway ("Merge anyway", or their own words).
- */
-checksSkipped?: boolean, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, results?: Array<FeedbackSent>, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
+requests?: Array<string>, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, results?: Array<FeedbackSent>, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.
@@ -152,11 +137,7 @@ tip: string, } | { "type": "mergeRequested", id: string, branch: string, base: s
 /**
  * Who sent the click: the client and how.
  */
-origin: AnswerOrigin, 
-/**
- * It was "Merge anyway": the user skips the checks a merge into the base needs.
- */
-anyway?: boolean, } | { "type": "mergeCancelled", askedIn: string, } | { "type": "mergeStopped", askedIn: string, reason: string, } | { "type": "ciWatch", 
+origin: AnswerOrigin, } | { "type": "mergeCancelled", askedIn: string, } | { "type": "mergeStopped", askedIn: string, reason: string, } | { "type": "ciWatch", 
 /**
  * `owner/name` on GitHub.
  */

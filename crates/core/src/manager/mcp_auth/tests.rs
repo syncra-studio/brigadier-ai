@@ -1315,10 +1315,9 @@ mod in_brigadier {
         flow.specs()
             .into_iter()
             .filter(|(_, spec)| {
-                spec.append_system_prompt.as_deref().is_some_and(|prompt| {
-                    !prompt.contains(crate::manager::prompts::THREAD_OPENING)
-                        && prompt != brigadier_review::REVIEW_ROLE
-                })
+                spec.append_system_prompt
+                    .as_deref()
+                    .is_some_and(|prompt| !prompt.contains(crate::manager::prompts::THREAD_OPENING))
             })
             .collect()
     }

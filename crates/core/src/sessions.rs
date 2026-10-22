@@ -233,7 +233,6 @@ impl Core {
             repos,
             prefs: Default::default(),
             trust: Vec::new(),
-            auto_merged: false,
         };
         self.record(vec![(
             streams::CATALOG.into(),
@@ -243,21 +242,6 @@ impl Core {
         )])
         .await?;
         Ok(project)
-    }
-
-    /// Records that a session of project `id` merged on its own; whether it was the first.
-    pub async fn mark_auto_merged(&self, id: &ProjectId) -> Result<bool> {
-        let mut project = self.project(id)?;
-        if project.auto_merged {
-            return Ok(false);
-        }
-        project.auto_merged = true;
-        self.record(vec![(
-            streams::CATALOG.into(),
-            DomainEvent::ProjectUpdated { project },
-        )])
-        .await?;
-        Ok(true)
     }
 
     pub async fn update_project(&self, id: ProjectId, patch: ProjectPatch) -> Result<Project> {
@@ -1522,11 +1506,9 @@ impl Core {
             notices: board.notices.clone(),
             memories: board.memories.clone(),
             overnight: board.sorted_runs(),
-            reviews: board.sorted_reviews(),
             previews: board.sorted_previews(),
             background_runs: board.sorted_background_runs(),
             headline: board.headline.clone(),
-            merge_refused: board.merge_refused.clone(),
             background_cleared: board.sorted_background_cleared(),
             mcp_servers: board.current_mcp_servers(),
             peer_messages: board.sorted_peer_messages(),

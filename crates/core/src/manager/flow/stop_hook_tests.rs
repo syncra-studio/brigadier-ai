@@ -2,13 +2,12 @@
 //! A5(c), (e)).
 //!
 //! - **The `Stop` hook** refuses a Claude worker's turn that ends with no report, once per stop;
-//!   it never refuses one that waits: for its outline's go-ahead, its own review, its background
-//!   job or its question.
+//!   it never refuses one that waits: for its outline's go-ahead, its background job or its
+//!   question.
 //! - **A question nobody answers** goes on after the wait only with its recorded safe default,
 //!   and only when it is operational; a consent or product question keeps waiting, its worker
 //!   ends its turn, and the answer starts its next one.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -181,84 +180,6 @@ async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
     flow.settled().await;
     assert!(seen(&log, "no job").is_some(), "no job: the turn is held");
     assert_eq!(seen(&log, "outline"), None);
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn a_verifier_waiting_for_its_own_review_ends_its_turn() {
-    let log: Log = Arc::default();
-    let released: Arc<AtomicBool> = Arc::default();
-    let (seen_by, release, hold) = (log.clone(), released.clone(), released.clone());
-    let flow = Flow::start(
-        "stop-hook-review",
-        Options {
-            reviews: Some(script(move |_| {
-                let hold = hold.clone();
-                async move {
-                    // The review runs until the test lets it end.
-                    for _ in 0..600 {
-                        if hold.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                    Reply::text("No findings.")
-                }
-            })),
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = seen_by.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    if turn.input.contains("[report task-1") {
-                        let reply = turn.call("start_verifier", json!({"task": "task-1"})).await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("");
-                    }
-                    return delegate_once(&turn, "Build it").await;
-                }
-                if turn.input.contains("[review of your work") {
-                    return report(&turn).await;
-                }
-                if turn.prompt.contains("You verify this phase") {
-                    let started = turn.call("request_review", json!({})).await;
-                    assert!(!started.is_error, "{}", started.text);
-                    let waiting = turn.stop_decision(false).await;
-                    log.lock().unwrap().push(("review".into(), waiting));
-                    return Reply::text("Waiting for the review.");
-                }
-                turn.write("built.txt", "built\n");
-                turn.git(&["add", "built.txt"]);
-                turn.git(&["commit", "-qm", "Build it"]);
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "Built.", "changes": ["built.txt"]}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("Reported.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Build it.").await;
-    // The review ends only once the verifier's turn is over and it waits for it.
-    flow.until("the verifier to wait for its review", |board| {
-        board.tasks.values().any(|task| {
-            task.blocked_reason.as_deref() == Some(super::super::review_runs::WAITING_FOR_REVIEW)
-        })
-    })
-    .await;
-    release.store(true, Ordering::SeqCst);
-    flow.until("the verifier to report", |board| {
-        board.tasks.values().any(|task| {
-            task.role == Some(crate::work::WorkerRole::Verifier) && task.report.is_some()
-        })
-    })
-    .await;
-    assert_eq!(seen(&log, "review"), None);
     flow.stop().await;
 }
 

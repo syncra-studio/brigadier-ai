@@ -1,17 +1,12 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ReactNode } from "react";
 
-import { mergeProblems } from "@/app/conversation/activity/mergeChecks";
-import { type BoardJob, useSessionJobs } from "@/app/conversation/boardJob";
-import { CodeSpans } from "@/app/conversation/cards/codeSpans";
+import { useSessionJobs } from "@/app/conversation/boardJob";
 import { type Job, type JobStep, phaseWords } from "@/app/conversation/job";
 import { overnightActions, useOvernightCards } from "@/app/conversation/overnightAdapter";
-import type { FindingLabel, FindingRow } from "@/app/conversation/reviewStatus";
 import { Timeline, type TimelineEvent } from "@/components/conversation";
-import { Badge } from "@/components/controls";
 import { RunPart } from "@/app/side-panel/RunPart";
 import { TabPage } from "@/app/side-panel/TabPage";
 import { formatTime } from "@/lib/format";
-import { VENDOR_LABELS } from "@/lib/routing";
 
 /** A step's line under its name: what happened, or that it comes next. */
 function stepDetail(step: JobStep, next: boolean): string | undefined {
@@ -22,10 +17,9 @@ function stepDetail(step: JobStep, next: boolean): string | undefined {
 
 /**
  * One job's steps on a timeline (Q88), under its phase when it is a plan's: each with when it
- * ran, what happened and what comes next; under a step, what it holds in full (`details`: a
- * review's findings, the checks of a merge).
+ * ran, what happened and what comes next.
  */
-export function JobTimeline({ job, title, details }: { job: Job; title?: ReactNode; details?: Readonly<Record<string, ReactNode>> | undefined }) {
+export function JobTimeline({ job, title }: { job: Job; title?: ReactNode }) {
   const next = job.steps.find((step) => step.state === "pending");
   const events: TimelineEvent[] = job.steps.map((step) => {
     const at = step.startedAtMs ?? step.endedAtMs;
@@ -35,7 +29,6 @@ export function JobTimeline({ job, title, details }: { job: Job; title?: ReactNo
       time: at ? formatTime(at) : "",
       title: step.state === "failed" ? (step.failedLabel ?? `${step.name} failed`) : step.name,
       detail: stepDetail(step, step === next),
-      more: details?.[step.id],
       failed: step.state === "failed",
     };
   });
@@ -49,39 +42,10 @@ export function JobTimeline({ job, title, details }: { job: Job; title?: ReactNo
   );
 }
 
-/** Under a job's steps, what the board holds of them: the review's findings, what is wrong with the merged code. */
-function jobDetails(job: BoardJob): Record<string, ReactNode> {
-  const { findings, merge } = job.facts;
-  const problems = merge?.record ? mergeProblems(merge.record, VENDOR_LABELS) : [];
-  return {
-    ...(findings.length > 0 && {
-      review: (
-        <ul className="flex flex-col pt-1">
-          {findings.map((finding) => (
-            <Finding key={finding.id} finding={finding} />
-          ))}
-        </ul>
-      ),
-    }),
-    ...(problems.length > 0 && {
-      merge: (
-        <ul data-slot="job-merge-checked" className="flex flex-col gap-0.5 pt-1 text-xs">
-          {problems.map((line) => (
-            <li key={line} data-warn className="text-warning">
-              {line}
-            </li>
-          ))}
-        </ul>
-      ),
-    }),
-  };
-}
-
 /**
  * The session's job tab, opened from the Job card or a merge's warning line: its overnight runs,
  * newest first (each with its plan, its phases and its report), then the job at work, step by
- * step, then each earlier merge's, newest first, with every review's findings at full width and
- * what is wrong with each merged commit, if anything.
+ * step, then each earlier merge's, newest first.
  */
 export function SessionJobTab({ conversationId }: { conversationId: string }) {
   const jobs = useSessionJobs(conversationId);
@@ -93,49 +57,10 @@ export function SessionJobTab({ conversationId }: { conversationId: string }) {
       {runs.toReversed().map((model) => (
         <RunPart key={model.run.id} model={model} actions={overnightActions} />
       ))}
-      {jobs?.current && <JobTimeline job={jobs.current} title="Now" details={jobDetails(jobs.current)} />}
+      {jobs?.current && <JobTimeline job={jobs.current} title="Now" />}
       {past.map((job) => (
-        <JobTimeline
-          key={job.atMs}
-          job={job}
-          title={job.steps.at(-1)?.summary ?? "Merged"}
-          details={jobDetails(job)}
-        />
+        <JobTimeline key={job.atMs} job={job} title={job.steps.at(-1)?.summary ?? "Merged"} />
       ))}
     </TabPage>
   );
 }
-
-/**
- * Each chip coloured as the app's badges are: open warns, fixed is done, a fix nobody checked
- * warns softly, dismissed is quiet.
- */
-const STATUS_BADGE: Record<FindingLabel, ComponentProps<typeof Badge>> = {
-  Open: { variant: "warning" },
-  New: { variant: "secondary" },
-  Fixed: { variant: "success" },
-  Unverified: { variant: "outline", className: "border-warning/50 text-warning" },
-  Dismissed: { variant: "outline", className: "border-divider text-foreground/65" },
-};
-
-/** One finding at full width: what the thread recorded and how severe, its whole title, where, and the thread's words on it. */
-function Finding({ finding }: { finding: FindingRow }) {
-  return (
-    <li data-slot="reviews-finding" title={finding.id} className="border-divider flex min-w-0 items-start gap-2 border-b py-2 text-sm last:border-b-0">
-      <Badge data-slot="finding-status" {...STATUS_BADGE[finding.status]}>{finding.status}</Badge>
-      {finding.severity && (
-        <Badge variant="outline" className="border-divider text-foreground/65">
-          {finding.severity}
-        </Badge>
-      )}
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-foreground wrap-break-word">
-          <CodeSpans text={finding.title} />
-        </span>
-        {finding.location && <span className="text-muted-foreground font-mono text-xs break-all">{finding.location}</span>}
-        {finding.note && <span className="text-muted-foreground text-xs">{finding.note}</span>}
-      </span>
-    </li>
-  );
-}
-

@@ -7,12 +7,8 @@
 //!   [met] with no evidence that holds at the tip, keeps the phase from settling done.
 //! - **Bound to the accepted tip.** Quoted lines count when the run's worktree, which is at the
 //!   tip, still shows their words.
-//! - **The review.** With reviews on, the phase's reviews must have ended and their findings
-//!   been recorded; with reviews off, the settlement says no review was run.
 
-use std::collections::HashSet;
 use std::path::Path;
-use std::time::Duration;
 
 use brigadier_brain::Source;
 
@@ -20,26 +16,15 @@ use super::super::SessionManager;
 use super::super::evidence::{met, names_criterion, quoted_lines};
 use crate::model::ConversationId;
 use crate::overnight::{OvernightPhase, OvernightRun};
-use crate::work::{FindingStatus, ReviewState, Task, WorkerRole};
-
-/// How long settling waits for a phase's review still running before it says so.
-const REVIEW_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 30 });
+use crate::work::{Task, WorkerRole};
 
 /// What a phase settled done rests on.
 pub(crate) struct Accepted {
     /// Each criterion with the evidence that met it at the tip.
     pub evidence: Vec<String>,
-    /// Its review, as the morning report says it.
-    pub review: String,
     /// What is missing, conflicting, failed, unchecked or not bound to the tip: a fact the
     /// step settles with (#251), not a refusal.
     pub unmet: Vec<String>,
-}
-
-/// Why a phase can't settle done yet.
-pub(crate) enum NotAccepted {
-    /// Its review hasn't ended, or its findings aren't recorded.
-    Review(String),
 }
 
 impl SessionManager {
@@ -52,23 +37,20 @@ impl SessionManager {
         number: u32,
         tip: &str,
         own: &[String],
-    ) -> std::result::Result<Accepted, NotAccepted> {
-        let review = self.phase_review(id, run, number).await?;
+    ) -> Accepted {
         let Some(phase) = run.phases.iter().find(|phase| phase.number == number) else {
-            return Ok(Accepted {
+            return Accepted {
                 evidence: Vec::new(),
-                review,
                 unmet: Vec::new(),
-            });
+            };
         };
         let board = match self.core.board(id).await {
             Ok(board) => board,
             Err(err) => {
-                return Ok(Accepted {
+                return Accepted {
                     evidence: Vec::new(),
-                    review,
                     unmet: vec![format!("the board can't be read: {err}")],
-                });
+                };
             }
         };
         let tasks = phase_tasks(&board, run, number);
@@ -177,134 +159,9 @@ impl SessionManager {
                 )),
             }
         }
-        Ok(Accepted {
+        Accepted {
             evidence,
-            review,
             unmet: problems,
-        })
-    }
-
-    /// A review ended: when settling its run's phase waited for it and nothing of the phase is
-    /// reviewed any more, the thread hears it may settle now.
-    pub(crate) async fn settle_wait_over(&self, review: &crate::work::ReviewRun) {
-        let Some(task_id) = &review.task_id else {
-            return;
-        };
-        let Ok(board) = self.core.board(&review.conversation_id).await else {
-            return;
-        };
-        let Some((run_id, number)) = board
-            .tasks
-            .get(task_id)
-            .and_then(|task| Some((task.run.as_ref()?.run_id.clone(), task.phase?)))
-        else {
-            return;
-        };
-        let waited = self
-            .overnight
-            .settle_waits
-            .lock()
-            .is_ok_and(|waits| waits.contains(&(run_id.clone(), number)));
-        let Some(run) = board.runs.get(&run_id).filter(|_| waited) else {
-            return;
-        };
-        let tasks: HashSet<_> = phase_tasks(&board, run, number)
-            .into_iter()
-            .map(|task| task.id.clone())
-            .collect();
-        let running = board.reviews.values().any(|other| {
-            other.state == ReviewState::Running
-                && other
-                    .task_id
-                    .as_ref()
-                    .is_some_and(|task| tasks.contains(task))
-        });
-        if running {
-            return;
-        }
-        if let Ok(mut waits) = self.overnight.settle_waits.lock() {
-            waits.remove(&(run_id, number));
-        }
-        self.tell_thread(
-            run,
-            "phase review ended",
-            format!("[run] Phase {number}'s review has ended: settle the phase now with settle_step (record its findings first, if it had any)."),
-        )
-        .await;
-    }
-
-    /// The phase's review as it stands: with reviews on, it waits a little for one still
-    /// running, and refuses one whose findings aren't recorded.
-    async fn phase_review(
-        &self,
-        id: &ConversationId,
-        run: &OvernightRun,
-        number: u32,
-    ) -> std::result::Result<String, NotAccepted> {
-        if !self.reviews_on() {
-            return Ok("No review was run: reviews are off.".to_owned());
-        }
-        let started = std::time::Instant::now();
-        loop {
-            let Ok(board) = self.core.board(id).await else {
-                return Err(NotAccepted::Review("the board can't be read".into()));
-            };
-            let tasks: HashSet<_> = phase_tasks(&board, run, number)
-                .into_iter()
-                .map(|task| task.id.clone())
-                .collect();
-            let reviews: Vec<_> = board
-                .reviews
-                .values()
-                .filter(|review| {
-                    review
-                        .task_id
-                        .as_ref()
-                        .is_some_and(|task| tasks.contains(task))
-                })
-                .collect();
-            if reviews
-                .iter()
-                .any(|review| review.state == ReviewState::Running)
-            {
-                if started.elapsed() < REVIEW_WAIT {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
-                return Err(NotAccepted::Review(format!(
-                    "Phase {number}'s review still runs, and a phase is done only once it has ended and its findings are recorded. You hear when it ends; settle the phase then."
-                )));
-            }
-            let open: Vec<&str> = reviews
-                .iter()
-                .flat_map(|review| &review.items)
-                .filter(|item| item.status == FindingStatus::New)
-                .map(|item| item.id.as_str())
-                .collect();
-            if !open.is_empty() {
-                return Err(NotAccepted::Review(format!(
-                    "Phase {number}'s review findings {} aren't recorded yet: record each with record_findings (fixed, and how it was checked, or why not), then settle the phase.",
-                    open.join(", ")
-                )));
-            }
-            let said: Vec<String> = reviews
-                .iter()
-                .map(|review| match &review.state {
-                    ReviewState::Clean => format!("R{} found nothing", review.number),
-                    ReviewState::Findings { count } => {
-                        format!("R{}'s {count} findings are recorded", review.number)
-                    }
-                    ReviewState::Failed { reason } => {
-                        format!("R{} could not run ({reason})", review.number)
-                    }
-                    ReviewState::Running => format!("R{} runs", review.number),
-                })
-                .collect();
-            return Ok(if said.is_empty() {
-                "No review was asked for.".to_owned()
-            } else {
-                format!("Review settled: {}.", said.join("; "))
-            });
         }
     }
 }

@@ -2,7 +2,6 @@ import { type FC, type ReactNode, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { useAskRequest } from "@/app/conversation/activity/askRequest";
-import { mergeWarning } from "@/app/conversation/activity/mergeChecks";
 import { mergeViewTarget, mergeWords, type TurnMerge } from "@/app/conversation/activity/MergeMessage";
 import { type Merged, redoRequest, revertRequest } from "@/app/conversation/activity/revert";
 import { isFinal } from "@/app/conversation/blocks";
@@ -10,7 +9,6 @@ import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { ChangesFileRow } from "@/app/conversation/ChangesFileRow";
 import { PRIMARY, QUIET } from "@/app/conversation/changesPills";
 import { mergeStats } from "@/app/conversation/mergeStats";
-import { MergeWarningRow } from "@/app/conversation/MergeWarningRow";
 import { RevertConfirmRow } from "@/app/conversation/RevertConfirmRow";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
@@ -23,7 +21,6 @@ import {
   PullRequestMerged,
   Spinner,
   Trash,
-  TriangleExclamationErrorWarning,
 } from "@/components/icons";
 import { Button, RoundBadge } from "@/components/controls";
 import { Counts, RowText, SettingsCard } from "@/components/shared";
@@ -34,7 +31,7 @@ import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useMergeUndo } from "@/state/mergeUndo";
 import { keepChanges, undoChanges } from "@/state/pendingChanges";
-import { openFileTab, openPanelTab, openReviewTab } from "@/state/sessionTabs";
+import { openFileTab, openReviewTab } from "@/state/sessionTabs";
 import { useSettledTabs } from "@/state/tabStates";
 import { toast } from "@/state/toasts";
 
@@ -45,9 +42,7 @@ import { toast } from "@/state/toasts";
  * in the card's footer first, and View changes. Not merged yet: Discard (the turn's Undo) and
  * Merge into main. Reverted: one line, "Reverted 6 files", folded. Files that wait for review
  * keep Undo All, Keep All and Review Changes. Each file row opens that file's diff in a tab; the
- * first three show, the rest under "Show N more files". Something really wrong with the merged
- * code (an open review finding, a failed check) is the card's footer row, or, folded, a line in
- * its header: it never folds away.
+ * first three show, the rest under "Show N more files".
  */
 
 /** The files listed before "Show {n} more files". */
@@ -129,24 +124,6 @@ function useReverted(merge: Merged | null): { reverted: boolean; undo: MergeUndo
 }
 
 /**
- * The open review findings of a merge's reviews, by their ids ("R4.1"), with the first one's
- * title: the footer row names it.
- */
-function useOpenFinding(merge: Merged | null): { id: string; title: string } | null {
-  const tips = merge?.record?.reviews.filter((review) => review.open > 0).map((review) => review.to) ?? [];
-  const key = tips.join(" ");
-  const found = useBoard((s) => {
-    if (!key) return null;
-    const runs = Object.values(s.board?.reviews ?? {}).filter((run) => key.split(" ").some((tip) => run.tip.startsWith(tip) || tip.startsWith(run.tip)));
-    const item = runs.toSorted((a, b) => a.number - b.number).flatMap((run) => run.items).find((each) => each.status.type === "open");
-    return item ? `${item.id}\n${item.title}` : null;
-  });
-  if (!found) return null;
-  const [id = "", title = ""] = found.split("\n");
-  return { id, title };
-}
-
-/**
  * The Changes card under a finished turn's answer. It sums what each of the turn's requests
  * recorded of its own changes (the thread's own edits and commands and its workers' landings,
  * never what the user changed meanwhile), and for a request from before that was kept, what its
@@ -214,7 +191,6 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const diff = known ?? fetched?.stat ?? null;
   const merged = merge?.merge ?? null;
   const { reverted, undo, pushed } = useReverted(merged);
-  const finding = useOpenFinding(merged);
   // Folded by the user, else folded once reverted.
   const [fold, setFold] = useState<{ reverted: boolean; open: boolean } | null>(null);
   const open = fold && fold.reverted === reverted ? fold.open : !reverted;
@@ -272,9 +248,6 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
         ]
           .filter(Boolean)
           .join(" · ");
-  // Something really wrong with the merged code: the footer row, or folded, the header's line.
-  const problem = merged?.record && !reverted ? mergeWarning(merged.record) : null;
-  const openFindings = merged?.record?.reviews.reduce((sum, each) => sum + each.open, 0) ?? 0;
   if (sent === "sent" && threadBusy) setSent("taken");
   if (sent === "taken" && !threadBusy) setSent("no");
   const reverting = sent !== "no" && !reverted;
@@ -395,7 +368,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
       </>
     );
   }
-  const foldable = files.length > 0 || !!problem || confirming || reverting;
+  const foldable = files.length > 0 || confirming || reverting;
 
   return (
     <SettingsCard inset split={false} data-slot="turn-diff" data-state={reverted ? "reverted" : merged ? "merged" : "branch"} data-open={open || undefined}>
@@ -419,15 +392,6 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
                 <span data-slot="turn-diff-status" className={cn("min-w-0 truncate", reverted && "text-muted-foreground")}>
                   {status}
                 </span>
-              )}
-              {!open && problem && (
-                <>
-                  <span aria-hidden className="text-muted-foreground">·</span>
-                  <span data-slot="turn-diff-problem" className="text-warning flex shrink-0 items-center gap-1.25">
-                    <TriangleExclamationErrorWarning aria-hidden className="size-3" />
-                    {openFindings > 0 ? `${openFindings} open ${openFindings === 1 ? "finding" : "findings"}` : problem.replace(/\.$/, "")}
-                  </span>
-                </>
               )}
             </span>
           }
@@ -470,14 +434,6 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
               </li>
             )}
           </ul>
-        )}
-        {problem && (
-          <MergeWarningRow
-            problem={problem}
-            finding={finding}
-            openFindings={openFindings}
-            onOpen={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}
-          />
         )}
         {merged && (confirming || reverting) && (
           <RevertConfirmRow

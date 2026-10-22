@@ -19,7 +19,6 @@ import type {
   EventEnvelope,
   MachineStep,
   MemoryChange,
-  MergeRefused,
   MessageQueue,
   Notice,
   OrchestratorLogEntry,
@@ -32,7 +31,6 @@ import type {
   ProviderEvent,
   Question,
   RawEntry,
-  ReviewRun,
   RunState,
   SessionHeadline,
   StreamingMessage,
@@ -84,16 +82,12 @@ export type Board = {
   approvals: Record<string, ShownApproval>;
   questions: Record<string, Question>;
   plans: Record<string, Plan>;
-  /** One-shot reviews by the other vendor (a landing's, a worker's own, an outline's), by id. */
-  reviews: Record<string, ReviewRun>;
   /** The thread's previews (a dev server, the app it runs for the user), by id. */
   previews: Record<string, Preview>;
   /** The thread's run commands still going after a minute, owned by the session, by id. */
   backgroundRuns: Record<string, BackgroundRun>;
   /** What the session is doing now, in the thread's words (set_headline); null once the user wrote since. */
   headline: SessionHeadline | null;
-  /** Why the last merge into the base was refused (the merge rule), while it stands; null once a merge went through or the user said to merge anyway. */
-  mergeRefused: MergeRefused | null;
   /** The ended previews and runs the user dismissed or restarted from the Background rows (Q94), by id. */
   backgroundCleared: string[];
   /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
@@ -371,11 +365,9 @@ export function emptyBoard(conversationId: string): Board {
     approvals: {},
     questions: {},
     plans: {},
-    reviews: {},
     previews: {},
     backgroundRuns: {},
     headline: null,
-    mergeRefused: null,
     backgroundCleared: [],
     mcpServers: {},
     overnight: {},
@@ -426,9 +418,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "approvalUpdated",
   "questionUpdated",
   "planUpdated",
-  "reviewUpdated",
   "headlineSet",
-  "mergeRefusalSet",
   "mcpServersUpdated",
   "previewUpdated",
   "previewsCleared",
@@ -489,8 +479,6 @@ export function boardFromView(
     approvals: byId(view.approvals.filter(shownApproval)),
     questions: byId(view.questions),
     plans: byId(view.plans),
-    // A daemon from before one-shot reviews sends none.
-    reviews: byId(view.reviews ?? []),
     // A daemon from before previews sends none.
     previews: byId(view.previews ?? []),
     // Nor one from before the thread's long commands went to the background.
@@ -498,7 +486,6 @@ export function boardFromView(
     // Nor one from before the thread wrote a headline.
     headline: view.headline ?? null,
     // Nor one from before the merge rule.
-    mergeRefused: view.mergeRefused ?? null,
     backgroundCleared: view.backgroundCleared ?? [],
     // Nor one from before agents told their MCP servers.
     mcpServers: Object.fromEntries((view.mcpServers ?? []).map((agent) => [mcpAgentKey(agent.taskId), agent])),
@@ -702,14 +689,10 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, questions: placed(board.questions, event.question, envelope, board) };
     case "planUpdated":
       return { ...board, plans: placed(board.plans, event.plan, envelope, board) };
-    case "reviewUpdated":
-      return { ...board, reviews: { ...board.reviews, [event.review.id]: event.review } };
     case "backgroundRunUpdated":
       return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
     case "headlineSet":
       return { ...board, headline: event.headline };
-    case "mergeRefusalSet":
-      return { ...board, mergeRefused: event.refusal };
     case "mcpServersUpdated": {
       const key = mcpAgentKey(event.taskId);
       const { [key]: _gone, ...others } = board.mcpServers;

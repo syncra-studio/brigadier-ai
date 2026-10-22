@@ -17,7 +17,7 @@ use crate::board::Board;
 use crate::manager::worker_resume::INTERRUPTED;
 use crate::model::{Environment, OvernightRunId, Setup};
 use crate::overnight::{OvernightRun, OvernightState, ProposedPhase, ProposedPlan, StopReason};
-use crate::work::{PhaseStage, Plan, ReviewKind, ReviewState, StepOutcome, TaskState, WorkerRole};
+use crate::work::{PhaseStage, Plan, StepOutcome, TaskState, WorkerRole};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -588,27 +588,6 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         session_tip,
         "the session's branch is unchanged"
     );
-    let notes = super::git(
-        &flow.repo,
-        &[
-            "log",
-            "-1",
-            "--format=%H",
-            &workspace.branch,
-            "--",
-            "notes.txt",
-        ],
-    );
-    // A tiny edit gets the thread's own checks only: no other-vendor review (BUILD-PLAN B2).
-    assert!(
-        !board
-            .reviews
-            .values()
-            .any(|review| review.kind == ReviewKind::Code && review.tip == notes.trim()),
-        "the thread's tiny commit gets no review: {:#?}",
-        board.reviews
-    );
-
     // The thread worked from the run's worktree during the run.
     let turns = thread.turns.lock().unwrap().clone();
     let during: Vec<_> = turns
@@ -635,7 +614,6 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         "### Commits",
         "Add p1.txt",
         "Add notes",
-        "review",
         "### Decided for you",
         "Named the files pN.txt.",
         "### Waiting on you",
@@ -644,9 +622,8 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         "How each phase was checked:",
         "Settled: Made p1.txt",
         "Usage: ",
-        // The audited answer's three labelled lines (#115).
+        // The audited answer's labelled lines (#115).
         "### Details\nChecks: phase 1: settled with evidence for 1 criterion",
-        "\nReview: ",
         "\nNot checked: ",
     ] {
         assert!(report.contains(section), "{section}\n{report}");
@@ -1461,66 +1438,6 @@ async fn a_bare_goals_plan_keeps_the_users_restrictions() {
     assert_eq!(
         stages,
         [PhaseStage::Done, PhaseStage::Skipped, PhaseStage::Done]
-    );
-    flow.stop().await;
-}
-
-/// A review that ends after its run's report wakes nobody, yet its findings aren't lost: the
-/// user reads them in the thread.
-#[tokio::test]
-async fn findings_after_the_runs_report_reach_the_thread() {
-    let thread = Arc::new(Thread {
-        order: vec![1],
-        ..Default::default()
-    });
-    let flow = flow_with("overnight-late-review", thread).await;
-    let run = start_run(&flow, "/overnight Make one file.", 1).await;
-    let board = finished(&flow, &run.id).await;
-    let lead = board
-        .tasks
-        .values()
-        .find(|task| task.role == Some(WorkerRole::Lead))
-        .expect("the lead")
-        .clone();
-    let late = crate::work::ReviewRun {
-        id: "late-review".into(),
-        conversation_id: flow.conversation.clone(),
-        request_id: lead.request_id.clone(),
-        task_id: Some(lead.id.clone()),
-        kind: ReviewKind::Code,
-        base: "a1b2c3d4".into(),
-        tip: lead.landed.clone().expect("landed"),
-        author: lead.route.choice.provider,
-        reviewer: brigadier_providers::ProviderKind::Codex,
-        reviewer_model: None,
-        notify: crate::work::ReviewFor::Orchestrator,
-        state: ReviewState::Findings { count: 1 },
-        started_at_ms: 0,
-        ended_at_ms: Some(1),
-        findings: None,
-        number: 0,
-        items: Vec::new(),
-        landing: None,
-        answer_waits: false,
-    };
-    flow.manager
-        .tell_review(&late, Some("- [P1] p1.txt is empty — p1.txt:1"))
-        .await;
-    let notices: Vec<String> = flow
-        .events()
-        .await
-        .into_iter()
-        .filter_map(|event| match event {
-            crate::model::DomainEvent::ConversationNotice { notice, .. } => Some(notice.text),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        notices
-            .iter()
-            .any(|text| text.contains("ended after the run's report")
-                && text.contains("p1.txt is empty")),
-        "{notices:?}"
     );
     flow.stop().await;
 }

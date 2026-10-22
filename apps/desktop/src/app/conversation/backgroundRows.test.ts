@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { appCommand, type BackgroundEvents, backgroundRows, runState } from "@/app/conversation/backgroundRows";
-import type { BackgroundRun, CiRun, OrchestratorStep, Preview, PreviewState, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
+import type { BackgroundRun, CiRun, OrchestratorStep, Preview, PreviewState, Task, UserRequest } from "@/ipc/generated";
 
 const preview = (id: string, name: string, command: string, startedAtMs: number, state: PreviewState = { type: "running" }, extra: Partial<Preview> = {}): Preview =>
   ({ id, conversationId: "c", name, command, workdir: "/w", workspace: "/w", pid: 1, state, startedAtMs, endedAtMs: null, log: null, kind: "web", building: false, ...extra }) as Preview;
@@ -62,8 +62,6 @@ test("a row leaves as soon as its process ends: failed, finished or stopped alik
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"]): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
-const review = (id: string, startedAtMs: number, state: ReviewState, requestId = "r1"): ReviewRun =>
-  ({ id, conversationId: "c", requestId, taskId: null, kind: "code", base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs: null, items: [] }) as unknown as ReviewRun;
 const step = (atMs: number, kind: unknown, requestId = "r1"): OrchestratorStep => ({ requestId, kind: kind as OrchestratorStep["kind"], atMs, position: 0 });
 const ciRun = (status: string, conclusion: string, jobsDone: number, jobsTotal: number): CiRun =>
   ({ workflow: "test", url: "https://ci/test", status, conclusion, jobsDone, jobsTotal }) as unknown as CiRun;
@@ -73,17 +71,10 @@ const ci = (atMs: number, runs: CiRun[], result?: string) =>
 /** The thread at work since 10. */
 const working = { r1: request("r1", 10, { type: "working" }) };
 const board = (parts: Partial<BackgroundEvents>): BackgroundEvents =>
-  ({ tasks: {}, questions: {}, reviews: {}, orchestratorSteps: [], requests: working, mergeRefused: null, ...parts });
+  ({ orchestratorSteps: [], requests: working, ...parts });
 /** The event rows as they read: name, state, more words, button. */
 const events = (parts: Partial<BackgroundEvents>) =>
   backgroundRows([], [], null, () => null, board(parts)).map((row) => row.type === "event" ? [row.name, row.state, row.words, row.action?.type ?? null] : [row.id]);
-
-test("a review is a row while it runs, and leaves when it ends", () => {
-  assert.deepEqual(events({ reviews: { "review-1": review("review-1", 20, { type: "running" } as ReviewState) } }), [["Codex review", "reviewing", null, null]]);
-  assert.deepEqual(events({ reviews: { "review-1": review("review-1", 20, { type: "clean" } as ReviewState) } }), []);
-  assert.deepEqual(events({ reviews: { "review-1": review("review-1", 20, { type: "failed", reason: "no model" } as ReviewState) } }), []);
-  assert.deepEqual(events({ reviews: { "review-1": review("review-1", 20, { type: "running" } as ReviewState, "run-night") } }), []);
-});
 
 test("the CI watch is a row with Open CI while it watches, and leaves when its result comes", () => {
   const watching = backgroundRows([], [], null, () => null, board({ orchestratorSteps: [ci(30, [ciRun("in_progress", "", 3, 5)])] }));
@@ -93,32 +84,17 @@ test("the CI watch is a row with Open CI while it watches, and leaves when its r
   assert.deepEqual(events({ orchestratorSteps: [ci(30, [ciRun("completed", "success", 5, 5)], "passed")] }), []);
 });
 
-test("a merge held for workers is a row with Cancel, one at work a row of its own, a refused one waits with Merge anyway; each leaves once over", () => {
-  const held = step(30, { type: "mergeHeld", branch: "s", base: "main", askedIn: "r1", consentedAtMs: 30, condition: { type: "workersDone" }, waiting: ["t1"], tip: "abc" });
-  const tasks = { t1: { id: "t1", kind: "implement", state: "running", requestId: "r1", createdAtMs: 20, updatedAtMs: 20 } as unknown as Task };
-  assert.deepEqual(events({ tasks, orchestratorSteps: [held] }), [["Merge into main", "waiting", "on 1 worker", "cancelMerge"]]);
+test("a merge at work is a row of its own, and leaves once over", () => {
   const requested = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {} });
   assert.deepEqual(events({ orchestratorSteps: [requested] }), [["Merge into main", "merging", null, null]]);
   const merged = step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: "r1", head: "abc", mergeCommit: "def" });
-  assert.deepEqual(events({ tasks, orchestratorSteps: [held, requested, merged] }), []);
-  assert.deepEqual(events({ tasks, orchestratorSteps: [held, step(50, { type: "mergeCancelled", askedIn: "r1" })] }), []);
-  const refused = { reason: "The checks haven't run on abc.", sha: "abc", branch: "s", base: "main", waivable: true, atMs: 70 };
-  // Refused for want of checks: the click's row waits on the user, with Merge anyway, until they
-  // write again or a merge goes through. One they can't waive is a failure: no row.
-  const waiting = backgroundRows([], [], null, () => null, board({ orchestratorSteps: [requested], mergeRefused: refused }));
-  assert.deepEqual(waiting.map((row) => row.type === "event" && [row.name, row.state, row.words, row.tip, row.action]), [
-    ["Merge into main", "waiting", "for you", "The checks haven't run on abc.", { type: "mergeAnyway" }],
-  ]);
-  assert.deepEqual(events({ mergeRefused: refused }), [["Merge into main", "waiting", "for you", "mergeAnyway"]]);
-  assert.deepEqual(events({ orchestratorSteps: [requested], mergeRefused: { ...refused, waivable: false } }), []);
-  assert.deepEqual(events({ orchestratorSteps: [requested, step(90, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: "r1", head: "abc", mergeCommit: "def", checksSkipped: true })], mergeRefused: refused }), []);
-  assert.deepEqual(events({ mergeRefused: refused, requests: { ...working, r2: request("r2", 75, { type: "working" }) } }), []);
+  assert.deepEqual(events({ orchestratorSteps: [requested, merged] }), []);
   // A click whose work is over (turned down, or stopped) merges nothing.
   assert.deepEqual(events({ orchestratorSteps: [requested], requests: { r1: request("r1", 10, { type: "done" }) } }), []);
 });
 
 test("event rows sort newest first with the processes", () => {
-  const sorted = backgroundRows([preview("preview-1", "Dev app", "pnpm dev", 25)], [], null, () => null,
-    board({ orchestratorSteps: [ci(100, [])], reviews: { "review-1": review("review-1", 20, { type: "running" } as ReviewState) } }));
-  assert.deepEqual(sorted.map((row) => row.id), ["ci", "preview-1", "review-1"]);
+  const sorted = backgroundRows([preview("preview-1", "Dev app", "pnpm dev", 25), preview("preview-2", "Docs", "pnpm docs", 20)], [], null, () => null,
+    board({ orchestratorSteps: [ci(100, [])] }));
+  assert.deepEqual(sorted.map((row) => row.id), ["ci", "preview-1", "preview-2"]);
 });
