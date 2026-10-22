@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier show <id> --json",
+  "type": "object",
+  "required": [
+    "kind",
+    "id",
+    "title",
+    "state",
+    "agent",
+    "model",
+    "effort",
+    "branch",
+    "changes",
+    "createdAtMs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "session",
+        "worker"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "asking",
+        "asleep",
+        "done",
+        "failed",
+        "landed",
+        "landing",
+        "needs-you",
+        "paused",
+        "queued",
+        "ready",
+        "ready-to-land",
+        "rejected",
+        "reported",
+        "starting",
+        "stopped",
+        "taken-over",
+        "working"
+      ]
+    },
+    "agent": {
+      "enum": [
+        "claude",
+        "codex"
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "changes": {
+      "$ref": "#/$defs/changes"
+    },
+    "createdAtMs": {
+      "type": "integer"
+    },
+    "checkout": {
+      "enum": [
+        "worktree",
+        "local"
+      ]
+    },
+    "base": {
+      "type": "string"
+    },
+    "waiting": {
+      "type": "object",
+      "required": [
+        "questions",
+        "approvals"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "questions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approvals": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "workers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/worker"
+      }
+    },
+    "parent": {
+      "type": "string"
+    },
+    "number": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "task": {
+      "type": "string"
+    },
+    "report": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "changes": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "files",
+        "insertions",
+        "deletions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "insertions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "required": [
+        "id",
+        "number",
+        "title",
+        "agent",
+        "model",
+        "effort",
+        "state",
+        "branch",
+        "changes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string"
+        },
+        "agent": {
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "starting",
+            "working",
+            "asking",
+            "paused",
+            "reported",
+            "taken-over",
+            "landing",
+            "ready-to-land",
+            "landed",
+            "done",
+            "rejected",
+            "stopped",
+            "failed"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changes": {
+          "$ref": "#/$defs/changes"
+        }
+      }
+    }
+  }
+}

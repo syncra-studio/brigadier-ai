@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier read <id> --json",
+  "type": "object",
+  "required": [
+    "kind",
+    "id",
+    "state",
+    "view",
+    "items",
+    "hasMore"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "session",
+        "worker"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "asking",
+        "asleep",
+        "done",
+        "failed",
+        "landed",
+        "landing",
+        "needs-you",
+        "paused",
+        "queued",
+        "ready",
+        "ready-to-land",
+        "rejected",
+        "reported",
+        "starting",
+        "stopped",
+        "taken-over",
+        "working"
+      ]
+    },
+    "view": {
+      "enum": [
+        "last",
+        "items",
+        "screen"
+      ]
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "hasMore": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": [
+        "kind",
+        "text",
+        "atMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "message",
+            "reasoning",
+            "tool",
+            "command",
+            "turn-end",
+            "error"
+          ]
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant",
+            "system",
+            "peer"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "done",
+            "failed"
+          ]
+        },
+        "exit": {
+          "type": "integer"
+        },
+        "atMs": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

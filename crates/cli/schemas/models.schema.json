@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier models --json (planned)",
+  "type": "object",
+  "required": [
+    "models",
+    "accounts",
+    "guidance",
+    "rules"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "agent",
+          "model",
+          "available"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "efforts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "agent",
+          "current"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agent": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "usage": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "window",
+                "usedPercent"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "window": {
+                  "type": "string"
+                },
+                "usedPercent": {
+                  "type": "number"
+                },
+                "resetsAtMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "guidance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "work",
+          "agent",
+          "model",
+          "reason"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "work": {
+            "type": "string"
+          },
+          "agent": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "shipped",
+              "user"
+            ]
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rule"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "rule": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

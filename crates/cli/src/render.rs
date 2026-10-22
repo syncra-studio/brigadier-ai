@@ -1,0 +1,234 @@
+//! The text output of each command (`--json` prints the reply's output as is).
+
+use crate::protocol::{
+    Changes, Item, ItemKind, ReadOutput, SessionsOutput, ShowOutput, WorkerRow, WorkersOutput,
+};
+
+/// Lays out rows in columns, two spaces apart; the last column is never padded.
+fn table(rows: &[Vec<String>]) -> String {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..columns)
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|cell| cell.chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let mut out = String::new();
+    for row in rows {
+        let mut line = String::new();
+        for (column, cell) in row.iter().enumerate() {
+            if column + 1 == row.len() {
+                line.push_str(cell);
+            } else {
+                line.push_str(cell);
+                let pad = widths[column] - cell.chars().count() + 2;
+                line.extend(std::iter::repeat_n(' ', pad));
+            }
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+fn changes(changes: Option<Changes>) -> String {
+    match changes {
+        Some(changes) => format!("+{} −{}", changes.insertions, changes.deletions),
+        None => "-".into(),
+    }
+}
+
+pub fn sessions(output: &SessionsOutput) -> String {
+    let mut out = String::new();
+    if let Some(project) = &output.project {
+        out.push_str(&format!("{project}\n"));
+    }
+    if output.sessions.is_empty() {
+        out.push_str("No sessions.\n");
+        return out;
+    }
+    let mut rows = vec![vec![
+        "ID".into(),
+        "STATE".into(),
+        "CHANGES".into(),
+        "WORKERS".into(),
+        "BRANCH".into(),
+        "TITLE".into(),
+    ]];
+    for session in &output.sessions {
+        let title = if session.caller {
+            format!("{} (this session)", session.title)
+        } else {
+            session.title.clone()
+        };
+        rows.push(vec![
+            session.id.clone(),
+            session.state.word().into(),
+            changes(session.changes),
+            session.workers.to_string(),
+            session.branch.clone().unwrap_or_else(|| "-".into()),
+            title,
+        ]);
+    }
+    out.push_str(&table(&rows));
+    out
+}
+
+fn worker_rows(workers: &[WorkerRow]) -> String {
+    let mut rows = vec![vec![
+        "ID".into(),
+        "#".into(),
+        "STATE".into(),
+        "AGENT".into(),
+        "MODEL".into(),
+        "CHANGES".into(),
+        "TITLE".into(),
+    ]];
+    for worker in workers {
+        let model = match (&worker.model, &worker.effort) {
+            (Some(model), Some(effort)) => format!("{model} ({effort})"),
+            (Some(model), None) => model.clone(),
+            (None, Some(effort)) => format!("default ({effort})"),
+            (None, None) => "default".into(),
+        };
+        rows.push(vec![
+            worker.id.clone(),
+            worker.number.to_string(),
+            worker.state.word().into(),
+            worker.agent.word().into(),
+            model,
+            changes(worker.changes),
+            worker.title.clone(),
+        ]);
+    }
+    table(&rows)
+}
+
+pub fn workers(output: &WorkersOutput) -> String {
+    if output.workers.is_empty() {
+        return "This session has no workers.\n".into();
+    }
+    worker_rows(&output.workers)
+}
+
+pub fn show(output: &ShowOutput) -> String {
+    let mut rows: Vec<Vec<String>> = vec![
+        vec!["id".into(), output.id.clone()],
+        vec!["kind".into(), output.kind.word().into()],
+        vec!["title".into(), output.title.clone()],
+        vec!["state".into(), output.state.clone()],
+    ];
+    if let Some(parent) = &output.parent {
+        rows.push(vec!["session".into(), parent.clone()]);
+    }
+    if let Some(number) = output.number {
+        rows.push(vec!["number".into(), number.to_string()]);
+    }
+    rows.push(vec!["agent".into(), output.agent.word().into()]);
+    rows.push(vec![
+        "model".into(),
+        output.model.clone().unwrap_or_else(|| "default".into()),
+    ]);
+    if let Some(effort) = &output.effort {
+        rows.push(vec!["effort".into(), effort.clone()]);
+    }
+    if let Some(checkout) = output.checkout {
+        let checkout = match checkout {
+            crate::protocol::Checkout::Worktree => "own worktree",
+            crate::protocol::Checkout::Local => "local checkout",
+        };
+        rows.push(vec!["checkout".into(), checkout.into()]);
+    }
+    if let Some(branch) = &output.branch {
+        rows.push(vec!["branch".into(), branch.clone()]);
+    }
+    if let Some(base) = &output.base {
+        rows.push(vec!["base".into(), base.clone()]);
+    }
+    if let Some(changed) = output.changes {
+        rows.push(vec![
+            "changes".into(),
+            format!("{} in {} files", changes(Some(changed)), changed.files),
+        ]);
+    }
+    if let Some(waiting) = output.waiting
+        && waiting.questions + waiting.approvals > 0
+    {
+        rows.push(vec![
+            "waiting".into(),
+            format!(
+                "{} questions, {} approvals",
+                waiting.questions, waiting.approvals
+            ),
+        ]);
+    }
+    if let Some(error) = &output.error {
+        rows.push(vec!["error".into(), error.clone()]);
+    }
+    let mut out = table(&rows);
+    if let Some(task) = &output.task {
+        out.push_str(&format!("\nTask:\n{}\n", task.trim_end()));
+    }
+    if let Some(report) = &output.report {
+        out.push_str(&format!("\nReport:\n{}\n", report.trim_end()));
+    }
+    if let Some(workers) = &output.workers
+        && !workers.is_empty()
+    {
+        out.push_str("\nWorkers:\n");
+        out.push_str(&worker_rows(workers));
+    }
+    out
+}
+
+fn item(item: &Item) -> String {
+    let mut out = match item.kind {
+        ItemKind::Message => {
+            let who = match item.role {
+                Some(crate::protocol::Role::User) => "user",
+                Some(crate::protocol::Role::Assistant) | None => "assistant",
+                Some(crate::protocol::Role::System) => "system",
+                Some(crate::protocol::Role::Peer) => "other session",
+            };
+            format!("[{who}]\n{}\n", item.text.trim_end())
+        }
+        ItemKind::Reasoning => format!("[thinking] {}\n", item.text.trim_end()),
+        ItemKind::Command => format!("$ {}\n", item.text.trim_end()),
+        ItemKind::Tool => format!("[tool] {}\n", item.text.trim_end()),
+        ItemKind::TurnEnd => format!("[turn ended] {}\n", item.text.trim_end()),
+        ItemKind::Error => format!("[error] {}\n", item.text.trim_end()),
+    };
+    if let Some(output) = &item.output
+        && !output.trim().is_empty()
+    {
+        for line in output.trim_end().lines() {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    match (item.status, item.exit) {
+        (_, Some(exit)) => out.push_str(&format!("  (exit {exit})\n")),
+        (Some(crate::protocol::ItemStatus::Running), None) => out.push_str("  (running)\n"),
+        (Some(crate::protocol::ItemStatus::Failed), None) => out.push_str("  (failed)\n"),
+        _ => {}
+    }
+    out
+}
+
+pub fn read(output: &ReadOutput) -> String {
+    let mut out = format!("{} {} · {}\n", output.kind.word(), output.id, output.state);
+    if output.items.is_empty() {
+        out.push_str("Nothing yet.\n");
+        return out;
+    }
+    if output.has_more {
+        out.push_str("(earlier items not shown)\n");
+    }
+    for entry in &output.items {
+        out.push('\n');
+        out.push_str(&item(entry));
+    }
+    out
+}

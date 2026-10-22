@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier app --json (planned)",
+  "type": "object",
+  "required": [
+    "action",
+    "result"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "state",
+        "read-terminal",
+        "open",
+        "terminal-run",
+        "show-session",
+        "close-tab"
+      ]
+    },
+    "result": {
+      "type": "object"
+    }
+  }
+}

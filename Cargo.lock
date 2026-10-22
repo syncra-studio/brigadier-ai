@@ -470,6 +470,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "brigadier-cli"
+version = "0.1.0"
+dependencies = [
+ "brigadier-sandbox",
+ "interprocess",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "brigadier-core"
 version = "0.1.0"
 dependencies = [

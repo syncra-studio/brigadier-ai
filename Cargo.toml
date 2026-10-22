@@ -15,6 +15,7 @@ members = [
   "crates/mcp-server",
   "crates/daemon",
   "crates/browser-data",
+  "crates/cli",
   "apps/desktop/src-tauri",
 ]
 default-members = ["crates/*"]
@@ -43,6 +44,7 @@ brigadier-brain = { path = "crates/brain" }
 brigadier-index = { path = "crates/index" }
 brigadier-browser-data = { path = "crates/browser-data" }
 brigadier-registry = { path = "crates/registry" }
+brigadier-cli = { path = "crates/cli" }
 
 anyhow = "1.0.104"
 base64 = "0.23.1"

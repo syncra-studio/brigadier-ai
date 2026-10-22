@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier send --json (planned)",
+  "type": "object",
+  "required": [
+    "id",
+    "queued"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "queued": {
+      "type": "boolean",
+      "description": "Queued into a running turn rather than starting one."
+    }
+  }
+}

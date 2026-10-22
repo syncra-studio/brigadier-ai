@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier sessions --json",
+  "type": "object",
+  "required": [
+    "project",
+    "sessions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "state",
+          "branch",
+          "changes",
+          "workers",
+          "caller"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "starting",
+              "working",
+              "needs-you",
+              "failed",
+              "stopped",
+              "asleep",
+              "ready"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changes": {
+            "$ref": "#/$defs/changes"
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "caller": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "changes": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "files",
+        "insertions",
+        "deletions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "insertions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

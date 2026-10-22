@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier wait --json (planned)",
+  "type": "object",
+  "required": [
+    "events",
+    "timedOut"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "timedOut": {
+      "type": "boolean"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "event",
+          "atMs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "event": {
+            "enum": [
+              "turn-ended",
+              "needs-input",
+              "gone",
+              "usage-limit",
+              "fresh-context"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "A turn's last message."
+          },
+          "resetsAtMs": {
+            "type": "integer"
+          },
+          "atMs": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}

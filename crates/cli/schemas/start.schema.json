@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier start --json (planned)",
+  "type": "object",
+  "required": [
+    "worker"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "worker": {
+      "$ref": "#/$defs/worker"
+    }
+  },
+  "$defs": {
+    "changes": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "files",
+        "insertions",
+        "deletions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "insertions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "required": [
+        "id",
+        "number",
+        "title",
+        "agent",
+        "model",
+        "effort",
+        "state",
+        "branch",
+        "changes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string"
+        },
+        "agent": {
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "starting",
+            "working",
+            "asking",
+            "paused",
+            "reported",
+            "taken-over",
+            "landing",
+            "ready-to-land",
+            "landed",
+            "done",
+            "rejected",
+            "stopped",
+            "failed"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changes": {
+          "$ref": "#/$defs/changes"
+        }
+      }
+    }
+  }
+}

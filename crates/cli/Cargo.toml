@@ -1,0 +1,21 @@
+[package]
+name = "brigadier-cli"
+description = "brigadier: the command a session calls to read and drive Brigadier, and its protocol."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "brigadier"
+path = "src/main.rs"
+
+[dependencies]
+brigadier-sandbox.workspace = true
+interprocess = "2.4.4"
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

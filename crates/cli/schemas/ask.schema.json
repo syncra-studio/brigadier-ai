@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier ask --json (planned)",
+  "type": "object",
+  "required": [
+    "answer"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "answer": {
+      "type": "string"
+    },
+    "option": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "The chosen option's index (0 is the first), or null for a free-text answer."
+    }
+  }
+}
