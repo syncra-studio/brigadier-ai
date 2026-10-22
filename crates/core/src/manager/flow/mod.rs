@@ -540,6 +540,9 @@ pub(crate) struct FakeBehavior {
     /// Off, it is dropped.
     pub take_in_steers: bool,
     pub cleanup: bool,
+    /// Claude keeps each session's thread in a session file of its own shape, as Claude Code
+    /// does ([`session_line`]), and names it at its start.
+    pub session_file: bool,
     pub fail_cleanup: std::sync::atomic::AtomicBool,
     pub cleanup_error: Mutex<Option<String>>,
     pub removals: Mutex<Vec<Removal>>,
@@ -559,6 +562,40 @@ fn transcribe(path: &Path, input: bool, text: &str) {
     use std::io::Write;
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let line = serde_json::json!({ "input": input, "text": text });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    writeln!(file, "{line}").unwrap();
+}
+
+/// Adds a line to a scripted Claude session's file in Claude Code's own shape, stamped now.
+fn session_line(path: &Path, mut line: Value) {
+    use std::io::Write;
+    let ms = crate::now_ms();
+    let (days, rest) = (ms.div_euclid(86_400_000), ms.rem_euclid(86_400_000));
+    // Days since 1970-01-01 as a civil date (Howard Hinnant's days_from_civil, inverted).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    line["timestamp"] = Value::String(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rest / 3_600_000,
+        rest / 60_000 % 60,
+        rest / 1000 % 60,
+        rest % 1000
+    ));
+    line["uuid"] = line
+        .get("uuid")
+        .cloned()
+        .unwrap_or_else(|| Value::String(uuid::Uuid::new_v4().to_string()));
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -735,14 +772,27 @@ impl Provider for FakeCli {
                     std::fs::write(path, "session state")?;
                 }
             }
+            let session_file = (self.behavior.session_file && self.kind == ProviderKind::Claude)
+                .then(|| {
+                    self.home
+                        .join("projects")
+                        .join(format!("{native_id}.jsonl"))
+                });
+            if let Some(file) = &session_file {
+                std::fs::create_dir_all(file.parent().unwrap())?;
+            }
+            let file = match &session_file {
+                Some(file) => Some(file.display().to_string()),
+                None => (self.behavior.cleanup && saved)
+                    .then(|| fake_files(&self.home, &native_id)[0].display().to_string()),
+            };
             let _ = tx
                 .send(ProviderEvent::SessionStarted {
                     native_id: native_id.clone(),
                     model: spec.model.clone(),
                     cwd: Some(spec.cwd.display().to_string()),
                     cli_version: Some("1.0.0".into()),
-                    file: (self.behavior.cleanup && saved)
-                        .then(|| fake_files(&self.home, &native_id)[0].display().to_string()),
+                    file,
                 })
                 .await;
             let (steer_tx, steers) = mpsc::unbounded_channel();
@@ -752,6 +802,7 @@ impl Provider for FakeCli {
             let session = Arc::new(FakeSession {
                 kind: self.kind,
                 transcript: self.transcripts.join(&native_id),
+                session_file,
                 behavior: self.behavior.clone(),
                 account: self.account.clone(),
                 native_id,
@@ -900,6 +951,8 @@ struct FakeSession {
     kind: ProviderKind,
     /// Its transcript ([`transcribe`]).
     transcript: PathBuf,
+    /// Its session file in Claude Code's shape ([`FakeBehavior::session_file`]).
+    session_file: Option<PathBuf>,
     behavior: Arc<FakeBehavior>,
     account: Option<String>,
     native_id: String,
@@ -1022,8 +1075,26 @@ impl ProviderSession for FakeSession {
             let take_in_steers = self.behavior.take_in_steers;
             let stops = self.stops.clone();
             stops.0.store(false, std::sync::atomic::Ordering::SeqCst);
+            let session_file = self.session_file.clone();
+            let said = input_text(&input);
             tokio::spawn(async move {
                 let _ = tx.send(ProviderEvent::TurnStarted { turn_id: None }).await;
+                // Claude echoes the message it took, with its line's id in the session file.
+                if let Some(file) = &session_file {
+                    let uuid = uuid::Uuid::new_v4().to_string();
+                    session_line(
+                        file,
+                        serde_json::json!({"type": "user", "uuid": uuid, "parentUuid": null,
+                            "message": {"role": "user", "content": said}}),
+                    );
+                    let _ = tx
+                        .send(ProviderEvent::Message {
+                            item_id: uuid,
+                            role: Speaker::User,
+                            text: said,
+                        })
+                        .await;
+                }
                 let mut turn = turn;
                 let reply = loop {
                     let again = turn.clone();
@@ -1037,7 +1108,20 @@ impl ProviderSession for FakeSession {
                             .await;
                     }
                     if !reply.text.is_empty() {
-                        let item_id = uuid::Uuid::new_v4().to_string();
+                        let item_id = match &session_file {
+                            // Claude's text block id: its message's id and the block's index.
+                            Some(file) => {
+                                let message = format!("msg_{}", uuid::Uuid::new_v4().simple());
+                                session_line(
+                                    file,
+                                    serde_json::json!({"type": "assistant", "message": {
+                                        "id": message, "role": "assistant",
+                                        "content": [{"type": "text", "text": reply.text}]}}),
+                                );
+                                format!("{message}:0")
+                            }
+                            None => uuid::Uuid::new_v4().to_string(),
+                        };
                         if reply.answer {
                             let _ = tx
                                 .send(ProviderEvent::MessageDelta {
@@ -1105,6 +1189,16 @@ impl ProviderSession for FakeSession {
                         .await;
                     TurnStatus::Failed
                 } else if let Some(message) = reply.error {
+                    if let Some(file) = &session_file {
+                        session_line(
+                            file,
+                            serde_json::json!({"type": "assistant", "isApiErrorMessage": true,
+                                "error": "invalid_request", "message": {
+                                    "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+                                    "role": "assistant",
+                                    "content": [{"type": "text", "text": message}]}}),
+                        );
+                    }
                     let _ = tx
                         .send(ProviderEvent::Error {
                             error: brigadier_providers::ProviderError {
@@ -1118,6 +1212,14 @@ impl ProviderSession for FakeSession {
                         .await;
                     TurnStatus::Failed
                 } else if stops.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    if let Some(file) = &session_file {
+                        session_line(
+                            file,
+                            serde_json::json!({"type": "user", "message": {"role": "user",
+                                "content": [{"type": "text",
+                                    "text": "[Request interrupted by user]"}]}}),
+                        );
+                    }
                     TurnStatus::Interrupted
                 } else {
                     TurnStatus::Completed
@@ -2046,6 +2148,7 @@ mod claim_evidence_tests;
 mod clean_up_tests;
 #[cfg(unix)]
 mod cli_tests;
+mod cli_thread_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[cfg(unix)]
 mod computer_host_tests;

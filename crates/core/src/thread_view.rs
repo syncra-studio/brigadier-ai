@@ -132,9 +132,24 @@ pub(crate) fn view(
     }
     let running = live.is_some_and(|live| live.open);
     if let Some(live) = live {
-        entries = session_file::merge(entries, live.entries.clone());
+        // Once the turn ended its file holds it: what the stream said keeps only items the
+        // file may still lack, which meet the file's by id. What has no id of its own (an
+        // error) would show twice.
+        let more = live
+            .entries
+            .iter()
+            .filter(|entry| running || session_file::item_id(&entry.event).is_some())
+            .cloned()
+            .collect();
+        entries = session_file::merge(entries, more);
     }
-    let turns = turns(&entries, records, running);
+    let mut turns = turns(&entries, records, running);
+    if running
+        && let Some(turn) = turns.last_mut()
+        && turn.error.is_none()
+    {
+        turn.error = live.and_then(|live| live.error.clone());
+    }
     ThreadView { entries, turns }
 }
 
