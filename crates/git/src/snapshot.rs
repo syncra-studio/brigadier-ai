@@ -257,9 +257,11 @@ impl Repo {
         Ok(parse::text(&self.cmd(&args, true)?)?.to_owned())
     }
 
-    /// A worker's current files against the parent's current branch, including untracked work.
+    /// A worker's current files, untracked work included, against where it and the parent's
+    /// branch meet: what the parent gained since then isn't the worker's.
     pub fn worker_diff(&self, parent_branch: &str) -> Result<DiffStat> {
-        let parent = self.branch_commit(parent_branch)?;
+        let tip = self.branch_commit(parent_branch)?;
+        let parent = self.merge_base(&self.resolve("HEAD")?, &tip)?;
         self.diff_stat(&parent, &self.snapshot_tree()?)
     }
 
@@ -554,6 +556,13 @@ mod tests {
         fs::write(repo.root.join("worker-dirty"), "three\n").unwrap();
         assert_eq!(repo.worker_diff("main").unwrap().insertions, 3);
         fs::remove_file(repo.root.join("worker-dirty")).unwrap();
+        // What the parent gained since the worker started isn't the worker's.
+        repo.cmd(&["checkout", "main"], false).unwrap();
+        fs::write(repo.root.join("parent-gain"), "p\nq\n").unwrap();
+        repo.commit_changes("Parent", true).unwrap();
+        repo.cmd(&["checkout", "worker"], false).unwrap();
+        let stat = repo.worker_diff("main").unwrap();
+        assert_eq!((stat.insertions, stat.deletions), (2, 0));
         repo.cmd(&["checkout", "main"], false).unwrap();
         repo.snapshot_turn("s1", 1, false).unwrap();
         fs::write(repo.root.join("own"), "own\n").unwrap();
