@@ -239,6 +239,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         dictation_feed: None,
         dictations: Started::new(daemon.dictation.clone()),
         page_feed: None,
+        thread_feed: None,
         storage_feed: None,
         computer_feed: None,
         app_feed: None,
@@ -288,6 +289,7 @@ struct Session {
     dictations: Started,
     /// Page changes, once subscribed to the live feed.
     page_feed: Option<broadcast::Receiver<PageChange>>,
+    thread_feed: Option<broadcast::Receiver<brigadier_core::thread_view::ThreadNews>>,
     /// How a clean under way goes (Settings › Storage), once subscribed to the live feed.
     storage_feed: Option<broadcast::Receiver<CleanProgress>>,
     /// Computer use's news, once subscribed to the live feed.
@@ -412,6 +414,11 @@ impl Session {
                         self.writer.write(&ServerFrame::StorageClean { progress }).await?;
                     }
                 }
+                news = next_thread_news(&mut self.thread_feed) => {
+                    if let Some(news) = news {
+                        self.writer.write(&ServerFrame::ThreadNews { news }).await?;
+                    }
+                }
                 change = next_page_change(&mut self.page_feed) => {
                     if let Some(PageChange { id, revision }) = change {
                         self.writer.write(&ServerFrame::PageChanged { id, revision }).await?;
@@ -475,6 +482,9 @@ impl Session {
                 self.set_metrics(metrics);
                 if self.page_feed.is_none() {
                     self.page_feed = Some(self.daemon.pages.subscribe());
+                }
+                if self.thread_feed.is_none() {
+                    self.thread_feed = Some(self.daemon.sessions.subscribe_thread_news());
                 }
                 if self.storage_feed.is_none() {
                     self.storage_feed = Some(self.daemon.storage.subscribe_progress());
@@ -1233,6 +1243,27 @@ async fn next_clean_progress(
             Err(RecvError::Closed) => {
                 *feed = None;
                 None
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+async fn next_thread_news(
+    feed: &mut Option<broadcast::Receiver<brigadier_core::thread_view::ThreadNews>>,
+) -> Option<brigadier_core::thread_view::ThreadNews> {
+    match feed {
+        Some(rx) => loop {
+            match rx.recv().await {
+                Ok(news) => break Some(news),
+                // Behind: what it missed is read again with the next `threadView`.
+                Err(RecvError::Lagged(missed)) => {
+                    tracing::warn!(missed, "a connection missed thread news");
+                }
+                Err(RecvError::Closed) => {
+                    *feed = None;
+                    break None;
+                }
             }
         },
         None => std::future::pending().await,
@@ -2061,6 +2092,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => {
             let (data, mime) =
                 heap(|| sessions.read_thread_image(&conversation_id, &item_id)).await?;
+            Response::ReadThreadImage { data, mime }
+        }
+        Request::ThreadView { conversation_id } => Response::ThreadView {
+            view: sessions.thread_view(&conversation_id)?,
+        },
+        Request::ReadSessionFileImage {
+            conversation_id,
+            image,
+        } => {
+            let (data, mime) = sessions.thread_image(&conversation_id, &image)?;
             Response::ReadThreadImage { data, mime }
         }
         Request::ReadBackgroundRun {

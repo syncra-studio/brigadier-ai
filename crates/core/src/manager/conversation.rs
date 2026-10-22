@@ -4046,6 +4046,7 @@ impl SessionManager {
             tokio::select! {
                 event = events.recv() => {
                     self.note_thread_progress(&conv, &cli, event.as_ref()).await;
+                    self.follow_cli_thread(&conv, event.as_ref()).await;
                     match event {
                     // Never stored.
                     Some(ProviderEvent::Progress { .. }) => {}

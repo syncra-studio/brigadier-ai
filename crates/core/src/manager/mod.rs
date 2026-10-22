@@ -32,6 +32,7 @@ mod cards;
 mod ci;
 mod clean_up;
 mod cli;
+mod cli_thread;
 mod cli_tools;
 mod close_tab;
 mod closing;
@@ -281,6 +282,12 @@ pub struct SessionManager {
     tab_chats: side_chat::TabChats,
     /// The checkouts a tab chat saved a file in, for every window ([`page_tools`]).
     checkout_saves: tokio::sync::broadcast::Sender<crate::work::WorkspaceTarget>,
+    /// Each conversation's running turn as its CLI streams it ([`cli_thread`]).
+    cli_threads: std::sync::Mutex<HashMap<ConversationId, crate::thread_view::LiveTurn>>,
+    /// What live streams add to threads, for every window.
+    thread_news: tokio::sync::broadcast::Sender<crate::thread_view::ThreadNews>,
+    /// CLI session files read for threads.
+    session_files: crate::thread_view::FileCache,
     /// Tests: the home whose CLI settings folder trust is written to. Without it, tests write
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
@@ -470,6 +477,9 @@ impl SessionManager {
             pages: std::sync::OnceLock::new(),
             tab_chats: side_chat::TabChats::default(),
             checkout_saves: tokio::sync::broadcast::channel(16).0,
+            cli_threads: std::sync::Mutex::default(),
+            thread_news: tokio::sync::broadcast::channel(1024).0,
+            session_files: crate::thread_view::FileCache::default(),
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
             #[cfg(test)]

@@ -728,6 +728,16 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
+    /// The thread as its CLI keeps it (S9, behind `BRIGADIER_CLI_THREAD`): its CLI session
+    /// files' items, the live stream's after them, and its turns. `threadNews` frames extend it.
+    ThreadView {
+        conversation_id: ConversationId,
+    },
+    /// An image a CLI session file of the conversation holds, as base64 with its media type.
+    ReadSessionFileImage {
+        conversation_id: ConversationId,
+        image: brigadier_providers::session_file::FileImage,
+    },
     /// A background run's output (`run-<n>`): its end, up to 256 KiB, so far while it runs.
     ReadBackgroundRun {
         conversation_id: ConversationId,
@@ -1693,6 +1703,9 @@ pub enum Response {
         data: String,
         mime: String,
     },
+    ThreadView {
+        view: brigadier_core::thread_view::ThreadView,
+    },
     ReadBackgroundRun {
         output: String,
         /// How many bytes it printed in all (more than `output` holds when its start was cut).
@@ -2209,6 +2222,11 @@ pub enum ServerFrame {
     /// every subscribed connection when a tab chat saves a file in a session's checkout. Live only.
     WorkspaceChanged {
         target: WorkspaceTarget,
+    },
+    /// What a CLI's live stream added to a thread ([`Request::ThreadView`]). Sent to every
+    /// subscribed connection. Live only.
+    ThreadNews {
+        news: brigadier_core::thread_view::ThreadNews,
     },
     /// What this connection's search with `id` found next, or that it ended. Live only.
     Search {

@@ -9,9 +9,10 @@ import type { EventEnvelope } from "./EventEnvelope";
 import type { Outcome } from "./Outcome";
 import type { SearchUpdate } from "./SearchUpdate";
 import type { TerminalOutput } from "./TerminalOutput";
+import type { ThreadNews } from "./ThreadNews";
 import type { WorkspaceTarget } from "./WorkspaceTarget";
 
 /**
  * Frames sent by the daemon.
  */
-export type ServerFrame = { "type": "welcome", daemon: DaemonInfo, lastSeq: number, } | { "type": "response", id: number, result: Outcome, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "pageChanged", id: string, revision: string | null, } | { "type": "workspaceChanged", target: WorkspaceTarget, } | { "type": "search", id: number, update: SearchUpdate, } | { "type": "computerUse", status: ComputerUseStatus, } | { "type": "computerUseSetupNeeded" } | { "type": "appCall", call: AppCall, } | { "type": "storageClean", progress: CleanProgress, } | { "type": "closing" };
+export type ServerFrame = { "type": "welcome", daemon: DaemonInfo, lastSeq: number, } | { "type": "response", id: number, result: Outcome, } | { "type": "event", event: EventEnvelope, } | { "type": "lagged", resumeAfter: number, } | { "type": "metrics", metrics: DaemonMetrics, } | { "type": "terminal", output: TerminalOutput, } | { "type": "dictation", update: DictationUpdate, } | { "type": "pageChanged", id: string, revision: string | null, } | { "type": "workspaceChanged", target: WorkspaceTarget, } | { "type": "threadNews", news: ThreadNews, } | { "type": "search", id: number, update: SearchUpdate, } | { "type": "computerUse", status: ComputerUseStatus, } | { "type": "computerUseSetupNeeded" } | { "type": "appCall", call: AppCall, } | { "type": "storageClean", progress: CleanProgress, } | { "type": "closing" };
