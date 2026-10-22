@@ -11,6 +11,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
+import { jumpInThread } from "@/components/conversation";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
@@ -109,12 +110,25 @@ useApp.setState({ conversations: { [id]: conversation }, connection: { status: "
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Waits for a condition (never a guess at timing), failing with what it waited for. */
-async function until(what: string, check: () => boolean, ms = 10_000) {
+async function until(what: string, check: () => boolean, ms = 10_000, state = () => field()?.innerHTML ?? "no field") {
   const end = performance.now() + ms;
   while (!check()) {
-    if (performance.now() > end) throw new Error(`timed out waiting for ${what}: ${field()?.innerHTML ?? "no field"}`);
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}: ${state()}`);
     await sleep(16);
   }
+}
+/** Waits until `button` is enabled, in the thread's view and in the same place for a few checks. */
+async function still(button: HTMLButtonElement) {
+  let last = "";
+  let checks = 0;
+  await until("the chip still in view", () => {
+    const rect = button.getBoundingClientRect();
+    const view = thread()!.getBoundingClientRect();
+    const now = `${rect.top},${rect.left}`;
+    checks = !button.disabled && now === last && rect.top >= view.top && rect.bottom <= view.bottom ? checks + 1 : 0;
+    last = now;
+    return checks >= 3;
+  }, 10_000, () => `${JSON.stringify(button.getBoundingClientRect())}, disabled ${button.disabled}`);
 }
 const field = () => document.querySelector<HTMLElement>("[data-slot=composer-input] [contenteditable=true]");
 const typed = () => field()?.textContent ?? "";
@@ -158,6 +172,9 @@ const pane = () => document.querySelector<HTMLElement>("[data-slot=pasted-text-p
 /** The open pasted text's editor: editable, or read only. */
 const editor = () => document.querySelector<HTMLElement>("[data-slot=pasted-text-editor] [contenteditable=true]");
 const shown = () => document.querySelector("[data-slot=pasted-text-editor] [contenteditable=false]");
+/** The thread's scrolling view, and how many rows it holds. */
+const thread = () => document.querySelector<HTMLElement>("[data-slot=aui_thread-viewport]");
+const rows = () => document.querySelector("[data-slot=aui_message-group]")?.children.length ?? 0;
 
 function pasteData(data: Record<string, string>) {
   const clipboardData = new DataTransfer();
@@ -286,6 +303,7 @@ async function drive() {
     await until("the editor closed", () => editor() === null && pane() === null);
     await until("the edited text stored", () => document.querySelectorAll("[data-slot=composer-attachment]").length === 0 && pasteChip() !== null);
     field()!.focus();
+    const rowsBefore = rows();
     const both = await send();
     seen.both = {
       text: both.text,
@@ -296,11 +314,17 @@ async function drive() {
     // The earlier message shows its pasted text's chip where it was pasted; it opens read only.
     const bubble = () => [...document.querySelectorAll("[data-slot=inline-paste]")].find((chip) => !field()!.contains(chip));
     await until("the chip in the sent message", () => bubble() !== undefined);
-    // The thread ends with the turns sent above: the earlier message is scrolled to first.
+    // The thread ends with the turns sent above: the earlier message is scrolled to first. The
+    // click goes where the chip is, so it waits for the send's own turn to show (its spring moves
+    // the view), scrolls as the user's jump (a scroll of no one's is undone while the thread
+    // follows), and clicks once the chip holds still in view, ready.
+    await until("the sent turn shown", () => rows() > rowsBefore);
+    jumpInThread(bubble()!);
     bubble()!.scrollIntoView({ block: "center" });
-    await sleep(100);
-    await fixtureClick(bubble()!.querySelector("button")!);
-    await until("the read-only editor", () => shown()?.querySelector("h1")?.textContent === "Notes");
+    const open = bubble()!.querySelector("button")!;
+    await still(open);
+    await fixtureClick(open);
+    await until("the read-only editor", () => shown()?.querySelector("h1")?.textContent === "Notes", 10_000, () => pane()?.outerHTML ?? `no pane; the chip at ${JSON.stringify(bubble()?.getBoundingClientRect())}`);
     seen.bubble = {
       pane: pane()?.getAttribute("aria-label"),
       dialog: document.querySelector("[role=dialog]") !== null,

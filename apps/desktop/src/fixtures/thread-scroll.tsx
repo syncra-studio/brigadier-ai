@@ -481,21 +481,27 @@ const steps = {
     await open("other");
     // Gone from memory: it loads again, its long replies' full text after it.
     useApp.setState((state) => ({ threads: { ...state.threads, long: emptyThread } }));
-    await select({ type: "conversation", id: "long" });
-    const early: number[] = [];
-    // While its history loads the column is empty: a screen reader's "Loading conversation", no placeholder lines.
+    // While its history loads the column is empty: a screen reader's "Loading conversation", no
+    // placeholder lines. Read at every change the page makes, from before the switch: on a slow
+    // machine the switch's own render can outlast the load, so a timer could miss it.
     let loading = false;
     let placeholders = 0;
+    const read = () => {
+      if (($('[data-slot="aui_message-group"]')?.children.length ?? 0) > 0) return;
+      loading ||= $('[data-slot="aui_thread-history-loading"]')?.textContent === "Loading conversation";
+      placeholders += document.querySelectorAll('[data-slot="aui_thread-column"] [data-slot="skeleton"]').length;
+    };
+    const changes = new MutationObserver(read);
+    changes.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+    await select({ type: "conversation", id: "long" });
+    const early: number[] = [];
     for (let at = 0; at < 12; at++) {
       await wait(100);
       early.push(Math.round(viewport().scrollTop));
-      if (rows().length === 0) {
-        loading ||= $('[data-slot="aui_thread-history-loading"]')?.textContent === "Loading conversation";
-        placeholders += document.querySelectorAll('[data-slot="aui_thread-column"] [data-slot="skeleton"]').length;
-      }
     }
     // A slower machine loads it later: the last sample is once it has.
     await settle(0);
+    changes.disconnect();
     early.push(Math.round(viewport().scrollTop));
     const back = rows().find((row) => row.dataset["messageId"] === id);
     return { top: Math.round(top), restored: Math.round(viewport().scrollTop), offset, restoredOffset: back ? round(back.getBoundingClientRect().top - viewTop()) : null, early, loading, placeholders };
