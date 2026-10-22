@@ -283,8 +283,17 @@ async fn watchdog_dead_worker_cli_is_still_replaced() {
     let gone = live.watch(crate::now_ms()).await;
     assert!(!gone.alive);
     let now = gone.orphaned_at_ms.unwrap() + Timing::current().grace;
-    tick_worker(&flow, &task, &live, now).await;
-    super::eventually("dead CLI replacement", || flow.specs().len() >= 3).await;
+    // The watchdog's own round may hold the worker when this one comes, and this one then
+    // leaves it: the next tick acts.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while flow.specs().len() < 3 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for dead CLI replacement"
+        );
+        tick_worker(&flow, &task, &live, now).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert!(live.watch(crate::now_ms()).await.generation > watch.generation);
     flow.stop().await;
 }

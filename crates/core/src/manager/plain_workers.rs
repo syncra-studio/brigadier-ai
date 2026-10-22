@@ -505,11 +505,13 @@ impl SessionManager {
                 task.error = Some(reason.clone());
             })
             .await;
-        self.dispose_task(task, TaskState::Failed).await;
+        // Heard before the worker turns final: a `brigadier wait` that sees it final with
+        // nothing queued ends empty and would miss it.
         let mut event = event(&task.id, EventKind::Gone);
         event.message = Some(reason);
         self.worker_events
             .push(&task.conversation_id, &task.id, None, event);
+        self.dispose_task(task, TaskState::Failed).await;
     }
 
     /// One of the caller's own workers, by an id `brigadier workers` showed; another
