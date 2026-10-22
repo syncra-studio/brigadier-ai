@@ -873,7 +873,6 @@ impl Provider for Codex {
                 thread,
                 model,
                 notices,
-                network_access,
             } = match started {
                 Ok(started) => started,
                 Err(err) => {
@@ -891,7 +890,6 @@ impl Provider for Codex {
                 shared,
                 access: spec.access,
                 writable_roots: writable_roots(&spec),
-                network_access,
                 effort: spec.effort.clone(),
             });
             session
@@ -995,7 +993,7 @@ impl Provider for Codex {
                 Error::Invalid(format!("working directory {}: {err}", cwd.display()))
             })?;
             // Brigadier archived the thread when it closed it; the terminal would ask first.
-            let (config, _network_access) = self
+            let config = self
                 .control(async |rpc: &Rpc| {
                     unarchive_thread(rpc, &native_id).await?;
                     thread_config(rpc, &spec, &cwd).await
@@ -1040,13 +1038,11 @@ impl Provider for Codex {
     }
 }
 
-/// A started thread, its model, warnings for the user, and the user's own `network_access` for
-/// the workspace sandbox (G5), read rather than set by Brigadier.
+/// A started thread, its model, and warnings for the user.
 struct Opened {
     thread: p::Thread,
     model: String,
     notices: Vec<String>,
-    network_access: bool,
 }
 
 /// The call that opens a session's thread.
@@ -1165,7 +1161,7 @@ async fn open_thread(
             tracing::warn!(%error, "Codex didn't take Brigadier's skills");
         }
     }
-    let (config, network_access) = thread_config(rpc, spec, cwd).await?;
+    let config = thread_config(rpc, spec, cwd).await?;
     // Only a folder Brigadier created may have its trust entry recorded and undone. Codex keys
     // trust on the main checkout for a worktree, which is the user's: watched, never touched.
     // A thread with a home of its own writes trust into that home's copy of the config only.
@@ -1260,7 +1256,6 @@ async fn open_thread(
         thread,
         model,
         notices,
-        network_access,
     })
 }
 
@@ -1389,24 +1384,15 @@ fn web_search(tools: ToolSet) -> Option<&'static str> {
 }
 
 /// Per-thread config: Brigadier's MCP servers on, the user's off but in a session with their
-/// setup ([`ToolSet::user_setup`]), and the workspace sandbox, or the session's permission
-/// profile. Alongside it, the user's own `network_access` for the workspace sandbox (G5):
-/// Brigadier reads it rather than setting it, for [`sandbox_policy`] to reuse every turn.
-async fn thread_config(
-    rpc: &Rpc,
-    spec: &SessionSpec,
-    cwd: &Path,
-) -> Result<(Map<String, Value>, bool)> {
+/// setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
+/// session's permission profile.
+async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<String, Value>> {
     let effective: Value = rpc
         .call(
             "config/read",
             &json!({ "includeLayers": false, "cwd": cwd.display().to_string() }),
         )
         .await?;
-    let network_access = effective
-        .pointer("/config/sandbox_workspace_write/network_access")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     let mut servers = mcp_config(&effective, spec);
     let mut config = Map::new();
     // A thread works from a folder of Brigadier's, where Codex reads no project config: its
@@ -1450,6 +1436,10 @@ async fn thread_config(
         config.insert(
             "sandbox_workspace_write".into(),
             json!({
+                // The `brigadier` CLI reaches the daemon over a Unix socket; Codex's sandbox
+                // allows that only with network on (its `unix_sockets` allow-list needs network
+                // on too), so Ask and Accept edits keep network on.
+                "network_access": true,
                 "writable_roots": writable_roots(spec)
                     .iter()
                     .map(|root| root.display().to_string())
@@ -1457,7 +1447,7 @@ async fn thread_config(
             }),
         );
     }
-    Ok((config, network_access))
+    Ok(config)
 }
 
 /// The session's `BRIGADIER_*` variables (who calls `brigadier`, its grant, the data folder) in
@@ -1698,20 +1688,15 @@ fn thread_sandbox(access: Access) -> Option<p::SandboxMode> {
 }
 
 /// Codex's own sandbox at `access`: `workspace-write` (the working directory and
-/// `writable_roots`) below Full access, none at Full access. `network_access` is `thread`'s own
-/// value, read from the user's `~/.codex/config.toml` at thread start, never set by Brigadier
-/// (G5): a network command the user's config leaves off then raises Codex's own escalation
-/// prompt.
-fn sandbox_policy(
-    access: Access,
-    writable_roots: &[PathBuf],
-    network_access: bool,
-) -> p::SandboxPolicy {
+/// `writable_roots`, with the network) below Full access, none at Full access. The `brigadier`
+/// CLI reaches the daemon over a Unix socket; Codex's sandbox allows that only with network on
+/// (its `unix_sockets` allow-list needs network on too), so Ask and Accept edits keep network on.
+fn sandbox_policy(access: Access, writable_roots: &[PathBuf]) -> p::SandboxPolicy {
     match access {
         Access::Ask | Access::AcceptEdits => p::SandboxPolicy::WorkspaceWrite {
             exclude_slash_tmp: false,
             exclude_tmpdir_env_var: false,
-            network_access,
+            network_access: true,
             writable_roots: writable_roots
                 .iter()
                 .map(|root| p::AbsolutePathBuf(root.display().to_string()))
@@ -2066,9 +2051,6 @@ pub struct CodexSession {
     access: Access,
     /// What its workspace sandbox writes besides its working directory.
     writable_roots: Vec<PathBuf>,
-    /// The user's own `network_access` for the workspace sandbox (G5), read once at thread
-    /// start and reused every turn: Brigadier never sets it.
-    network_access: bool,
     effort: Option<String>,
 }
 
@@ -2123,11 +2105,7 @@ impl CodexSession {
                     input: Self::input(input)?,
                     effort,
                     summary: Some(p::ReasoningSummary::Auto),
-                    sandbox_policy: Some(sandbox_policy(
-                        self.access,
-                        &self.writable_roots,
-                        self.network_access,
-                    )),
+                    sandbox_policy: Some(sandbox_policy(self.access, &self.writable_roots)),
                     approval_policy: Some(approval_policy(self.access)),
                     approvals_reviewer: Some(REVIEWER),
                     ..Default::default()
@@ -3032,32 +3010,23 @@ mod tests {
                     "{tools:?} {access:?}"
                 );
                 assert_eq!(thread_sandbox(access), None, "every turn sets it");
-                // `network_access` passes through untouched either way: it is the user's own
-                // `~/.codex/config.toml` value, read once at thread start, never Brigadier's own
-                // choice (G5).
-                for user_network_access in [false, true] {
-                    let policy =
-                        sandbox_policy(access, &writable_roots(&session), user_network_access);
-                    match (&policy, sandbox) {
-                        (p::SandboxPolicy::DangerFullAccess, "danger-full-access") => {}
-                        (
-                            p::SandboxPolicy::WorkspaceWrite {
-                                writable_roots,
-                                network_access,
-                                ..
-                            },
-                            "workspace-write",
-                        ) => {
-                            let roots: Vec<&str> =
-                                writable_roots.iter().map(|root| root.0.as_str()).collect();
-                            assert_eq!(roots, [real.as_str()]);
-                            assert_eq!(
-                                *network_access, user_network_access,
-                                "the user's own config decides, not Brigadier"
-                            );
-                        }
-                        _ => panic!("{access:?}: {policy:?}"),
+                let policy = sandbox_policy(access, &writable_roots(&session));
+                match (&policy, sandbox) {
+                    (p::SandboxPolicy::DangerFullAccess, "danger-full-access") => {}
+                    (
+                        p::SandboxPolicy::WorkspaceWrite {
+                            writable_roots,
+                            network_access,
+                            ..
+                        },
+                        "workspace-write",
+                    ) => {
+                        let roots: Vec<&str> =
+                            writable_roots.iter().map(|root| root.0.as_str()).collect();
+                        assert_eq!(roots, [real.as_str()]);
+                        assert!(*network_access);
                     }
+                    _ => panic!("{access:?}: {policy:?}"),
                 }
                 let command = terminal_command(
                     "/usr/local/bin/codex".into(),

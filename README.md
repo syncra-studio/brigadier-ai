@@ -213,10 +213,11 @@ own permission prompts reach you as cards.
 | **Accept edits** | `acceptEdits` mode: edits files freely, asks before other commands | `on-request` approvals, `workspace-write` sandbox |
 | **Full access** | `bypassPermissions`: never asks | `never` approvals, `danger-full-access` |
 
-Codex's sandbox is Codex's own setting, so it stays at Ask and Accept edits; network access
-follows Codex's own default too, from your `~/.codex/config.toml`, unlike Claude's which always
-stays on. At Full access a session can read, change and delete any file your
-account can, Brigadier's own data included, run any command and use the internet, without asking.
+Codex's sandbox is Codex's own setting, so it stays at Ask and Accept edits; Brigadier keeps
+Codex's network on at Ask and Accept edits because the `brigadier` command needs the daemon
+socket (Full access is Codex's own). At Full access a session can read, change and delete any
+file your account can, Brigadier's own data included, run any command and use the internet,
+without asking.
 The composer shows a notice while a conversation is in Full access. A folder you don't trust runs
 every session there at Ask.
 
