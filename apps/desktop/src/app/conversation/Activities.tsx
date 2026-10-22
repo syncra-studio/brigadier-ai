@@ -1,52 +1,59 @@
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, rowEnded } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows } from "@/app/conversation/backgroundRows";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
-import { latestLine, previewWord } from "@/app/conversation/previewStatus";
+import { previewWord } from "@/app/conversation/previewStatus";
 import { workerName } from "@/app/conversation/rowWords";
 import { StateIcon, SummaryRowButton, SummarySection } from "@/components/conversation";
-import { Terminal, X } from "@/components/icons";
+import { Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
-import { request } from "@/ipc/client";
+import { openUrl } from "@/ipc/client";
 import type { Preview } from "@/ipc/generated";
-import { dismissBackground, previewLogTail, restartBackgroundRun, restartPreview, stopBackgroundRun, stopPreview } from "@/state/actions";
+import { cancelMerge, stopBackgroundRun, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { openLink } from "@/state/links";
 import { openPanelTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
 
-/** One thing running for the session: a preview (the thread's or a worker's) or a long command. */
+/** One thing the session has going: a preview (the thread's or a worker's), a long command, or an event (checks, a review, CI, a merge). */
 type Activity = BackgroundRow;
 
-/** A process at work: its word shimmers. Paused or ended, it rests. */
-const live = (state: BackgroundState) => state !== "paused" && !rowEnded(state);
+/** A process or an event at work: its word shimmers. Paused, it rests. */
+const live = (state: BackgroundState) => state !== "paused";
 
 /** What a row is for, first letter up: "Dev app", "Core tests". A command stands as it is. */
 const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
 
 const label = (activity: Activity) =>
-  activity.type === "preview"
-    ? activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name)
-    : activity.run.name ? title(activity.run.name) : commandWords(activity.run.command);
+  activity.type === "event"
+    ? activity.name
+    : activity.type === "preview"
+      ? activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name)
+      : activity.run.name ? title(activity.run.name) : commandWords(activity.run.command);
 
 /**
- * "Background": what still runs for the session after its turn, one row per process: the
- * thread's and the workers' previews and the thread's long commands, each with its state in a
+ * "Background": what the session has going in the background, one row per thing: the thread's
+ * and the workers' previews, the thread's long commands, and its own events while they run (the
+ * full checks, a review, the CI watch, a held merge or one at work), each with its state in a
  * word and an icon (a worker's copy of an app or a browser at it is a state of the app's row),
- * how long it has gone, and Stop on hover. A click on a web preview that is up opens its page in
- * the browser (Brigadier's, by Settings › Browser), with what it prints one button away; any
- * other row opens what it prints in a tab. One the user stopped leaves the card; one of the
- * thread's that failed stays red with its last line, Restart and × until dealt with, and one
- * that finished on its own leaves too (Q94); the thread's fold keeps the history.
+ * how long it has gone, and its button on hover: Stop on a process, Open CI on the CI watch,
+ * Cancel on a held merge. A click on a web preview that is up opens its page in the browser
+ * (Brigadier's, by Settings › Browser), with what it prints one button away; an event opens the
+ * Progress tab; any other row opens what it prints in a tab. The rows come from the live board:
+ * one leaves as soon as its thing ends, finished, failed or stopped (the thread's fold keeps the
+ * history).
  */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
-  const previews = useBoard(useShallow((s) => s.board?.conversationId === conversationId ? Object.values(s.board.previews) : []));
-  const runs = useBoard(useShallow((s) => s.board?.conversationId === conversationId ? Object.values(s.board.backgroundRuns) : []));
-  const tasks = useBoard((s) => s.board?.conversationId === conversationId ? s.board.tasks : null);
-  const cleared = useBoard((s) => s.board?.conversationId === conversationId ? s.board.backgroundCleared : null);
-  const activities = backgroundRows(previews, runs, tasks, (task) => (tasks ? workerName(tasks, task) : null), { cleared: cleared ?? [] });
+  const board = useBoard(useShallow((s) => {
+    if (s.board?.conversationId !== conversationId) return null;
+    const { previews, backgroundRuns, tasks, questions, reviews, integratedChecks, orchestratorSteps, requests, mergeRefused } = s.board;
+    return { previews, backgroundRuns, tasks, questions, reviews, integratedChecks, orchestratorSteps, requests, mergeRefused };
+  }));
+  const activities = board
+    ? backgroundRows(Object.values(board.previews), Object.values(board.backgroundRuns), board.tasks, (task) => workerName(board.tasks, task), board)
+    : [];
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
   const since = activities.map((activity) => `${activity.id}@${activity.startedAtMs}`).join();
@@ -54,7 +61,7 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
-  const ticking = activities.some((activity) => !rowEnded(activity.state));
+  const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;
     const timer = setInterval(() => setClock((shown) => ({ ...shown, now: Date.now() })), 1000);
@@ -72,13 +79,30 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
 
 function BackgroundRow({ conversationId, activity, now }: { conversationId: string; activity: Activity; now: number }) {
   const name = label(activity);
-  const ended = rowEnded(activity.state);
-  const failed = activity.state === "failed";
-  const lastLine = useLastLine(conversationId, failed ? activity : null);
-  const endedAtMs = activity.type === "preview" ? activity.preview.endedAtMs : activity.run.endedAtMs;
+  const meta = elapsedWords(now - activity.startedAtMs);
+  const state = (
+    <span data-state={activity.state} className={cn("text-muted-foreground", live(activity.state) && "shimmer")}>
+      {" "}{activity.state}{activity.type === "event" && activity.words ? ` · ${activity.words}` : ""}
+    </span>
+  );
+  if (activity.type === "event") {
+    return (
+      <SummaryRowButton
+        data-activity={activity.id}
+        title={activity.tip}
+        icon={<StateIcon state={activity.state} />}
+        meta={meta}
+        action={activity.action ? <EventButton conversationId={conversationId} action={activity.action} /> : undefined}
+        onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}
+      >
+        {name}
+        {state}
+      </SummaryRowButton>
+    );
+  }
   const tip = activity.type === "preview"
     ? [
-      `${activity.state === "finished" ? "Finished" : previewWord(activity.preview)}: ${activity.preview.command}`,
+      `${previewWord(activity.preview)}: ${activity.preview.command}`,
       activity.worker && `From ${activity.worker}`,
       ...activity.with.map((copy: Preview) => `${title(copy.name)}: ${copy.command}`),
     ].filter(Boolean).join("\n")
@@ -93,78 +117,49 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
       data-activity={activity.id}
       title={tip}
       icon={<StateIcon state={activity.state} />}
-      meta={elapsedWords((ended ? (endedAtMs ?? now) : now) - activity.startedAtMs)}
-      muted={activity.state === "finished"}
-      actionVisible={failed}
+      meta={meta}
       action={
-        failed ? (
-          <EndedActions conversationId={conversationId} activity={activity} name={name} />
-        ) : ended ? undefined : (
-          <>
-            {url && (
-              <TooltipIconButton tooltip="Show output" aria-label={`Show output of ${name}`} size="icon-xs" onClick={output}>
-                <Terminal />
-              </TooltipIconButton>
-            )}
-            <StopButton name={name} stop={stop} />
-          </>
-        )
+        <>
+          {url && (
+            <TooltipIconButton tooltip="Show output" aria-label={`Show output of ${name}`} size="icon-xs" onClick={output}>
+              <Terminal />
+            </TooltipIconButton>
+          )}
+          <StopButton name={name} stop={stop} />
+        </>
       }
       onClick={url
         ? () => openLink(url, { agent: true, conversationId }).catch((reason: unknown) => toast(`Couldn't open it: ${String(reason)}`, { tone: "error" }))
         : output}
     >
       {name}
-      <span data-state={activity.state} className={cn(failed ? "text-destructive" : "text-muted-foreground", live(activity.state) && "shimmer")}> {activity.state}</span>
-      {lastLine && <span data-last-line className="text-muted-foreground"> · {lastLine}</span>}
+      {state}
     </SummaryRowButton>
   );
 }
 
-/** A failed row's last line of output: read once when it fails (its log, or a run's kept output). */
-function useLastLine(conversationId: string, activity: Activity | null): string | null {
-  const [found, setFound] = useState<{ key: string; line: string } | null>(null);
-  const endedAtMs = activity && (activity.type === "preview" ? activity.preview.endedAtMs : activity.run.endedAtMs);
-  const key = activity ? `${conversationId} ${activity.id} ${endedAtMs ?? ""}` : null;
-  const source = activity?.type ?? null;
-  const id = activity?.id ?? null;
-  useEffect(() => {
-    if (!key || !source || !id) return;
-    let current = true;
-    const tail = source === "preview"
-      ? previewLogTail(conversationId, id).then(({ tail: text }) => text)
-      : request({ method: "readBackgroundRun", conversationId, runId: id }).then(({ output }) => output);
-    tail.then((text) => current && setFound({ key, line: latestLine(text) }), () => {});
-    return () => {
-      current = false;
-    };
-  }, [key, conversationId, source, id]);
-  return found && found.key === key && found.line ? found.line : null;
-}
-
-/** A failed row's Restart (its own command again: a preview's from its record, a run's by the thread) and its ×, which takes it off the card. */
-function EndedActions({ conversationId, activity, name }: { conversationId: string; activity: Activity; name: string }) {
+/** An event row's button: Open CI opens the CI run in the browser, Cancel takes back the held merge. */
+function EventButton({ conversationId, action }: { conversationId: string; action: Extract<Activity, { type: "event" }>["action"] }) {
   const [busy, setBusy] = useState(false);
-  const act = (what: string, call: () => Promise<void>) => {
-    setBusy(true);
-    call().catch((reason: unknown) => {
-      setBusy(false);
-      toast(`Couldn't ${what} it: ${String(reason)}`, { tone: "error" });
-    });
-  };
-  const restart = activity.type === "preview"
-    ? () => restartPreview(conversationId, activity.id)
-    : () => restartBackgroundRun(conversationId, activity.id);
-  return (
-    <>
-      <Button variant="ghost" size="xs" disabled={busy} aria-label={`Restart ${name}`} onClick={() => act("restart", restart)}>
-        Restart
+  if (action?.type === "openCi") {
+    return (
+      <Button variant="ghost" size="xs" aria-label="Open CI" onClick={() => void openUrl(action.url).catch((reason: unknown) => toast(`Couldn't open it: ${String(reason)}`, { tone: "error" }))}>
+        Open CI
       </Button>
-      <TooltipIconButton tooltip="Dismiss" aria-label={`Dismiss ${name}`} size="icon-xs" disabled={busy}
-        onClick={() => act("dismiss", () => dismissBackground(conversationId, activity.id))}>
-        <X />
-      </TooltipIconButton>
-    </>
+    );
+  }
+  if (action?.type !== "cancelMerge") return null;
+  return (
+    <Button variant="ghost" size="xs" disabled={busy} aria-label="Cancel the merge"
+      onClick={() => {
+        setBusy(true);
+        cancelMerge(conversationId).then(() => setBusy(false), (reason: unknown) => {
+          setBusy(false);
+          toast(`Couldn't cancel it: ${String(reason)}`, { tone: "error" });
+        });
+      }}>
+      Cancel
+    </Button>
   );
 }
 

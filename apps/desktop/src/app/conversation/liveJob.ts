@@ -47,7 +47,7 @@ type Kind = "waiting" | "failed" | "running" | "done";
 /** One thing the board says, with when it happened and, for running ones, how much it says. */
 type Fact = LiveJob & { kind: Kind; atMs: number; rank: number };
 
-const VENDORS: Record<ProviderKind, string> = { claude: "Claude", codex: "Codex" };
+export const VENDORS: Record<ProviderKind, string> = { claude: "Claude", codex: "Codex" };
 
 const short = (sha: string) => sha.slice(0, 7);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -56,7 +56,7 @@ const firstLine = (text: string | null | undefined) => text?.split("\n").find((l
 const checkNumber = (check: IntegratedCheck) => Number(check.id.replace(/^check-/, "")) || 0;
 
 /** The thread's checks, newest last: a worker's own are its row's, an overnight run's its card's. */
-function sessionChecks(input: LiveInput): IntegratedCheck[] {
+export function sessionChecks(input: Pick<LiveInput, "integratedChecks">): IntegratedCheck[] {
   return Object.values(input.integratedChecks)
     .filter((check) => !check.requests.some(isRunRequest) && !check.asked?.taskId)
     .toSorted((a, b) => checkNumber(a) - checkNumber(b));
@@ -185,24 +185,21 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
     });
   }
   const last = steps.findLast((step) => ["mergeRequested", "merged", "mergeCancelled", "mergeStopped"].includes(step.kind.type));
-  // A click with no outcome merges only while the work it set going runs: one the thread
-  // turned down, or a stop cut short, is over.
-  const live = liveRequest(input);
-  const clickLive = (step: OrchestratorStep) => live !== null && (step.atMs >= since || step.requestId === live.live.id || step.requestId === live.newest);
-  if (last?.kind.type === "mergeRequested" && clickLive(last)) {
+  const click = liveMergeClick(input, steps, since);
+  if (click?.kind.type === "mergeRequested") {
     const latest = checks.at(-1);
     facts.push({
       kind: "running",
       rank: 7,
       tone: "running",
-      headline: `Merging into ${last.kind.base}`,
-      detail: last.kind.anyway
+      headline: `Merging into ${click.kind.base}`,
+      detail: click.kind.anyway
         ? "Without the checks, as you said"
         : latest && passedOn([latest], latest.tip)
           ? `Checks passed on ${short(latest.tip)}`
-          : `${last.kind.branch} into ${last.kind.base}`,
-      sinceMs: last.atMs,
-      atMs: last.atMs,
+          : `${click.kind.branch} into ${click.kind.base}`,
+      sinceMs: click.atMs,
+      atMs: click.atMs,
       actions: [],
     });
   }
@@ -238,6 +235,18 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
     });
   }
   return facts;
+}
+
+/**
+ * The user's merge click still at work: the latest merge step of `steps` is the click, with no
+ * outcome yet. A click merges only while the work it set going runs: one the thread turned
+ * down, or a stop cut short, is over.
+ */
+export function liveMergeClick(input: Pick<LiveInput, "requests">, steps: readonly OrchestratorStep[], since: number): OrchestratorStep | null {
+  const last = steps.findLast((step) => ["mergeRequested", "merged", "mergeCancelled", "mergeStopped"].includes(step.kind.type));
+  if (last?.kind.type !== "mergeRequested") return null;
+  const live = liveRequest(input);
+  return live !== null && (last.atMs >= since || last.requestId === live.live.id || last.requestId === live.newest) ? last : null;
 }
 
 /** When the newest of `items` came. */
@@ -323,7 +332,7 @@ function stopFacts(input: LiveInput): Fact[] {
 }
 
 /** When the user last wrote: finished outcomes from before it are gone (J4). */
-function lastMessageAtMs(input: LiveInput): number {
+export function lastMessageAtMs(input: Pick<LiveInput, "requests">): number {
   return Math.max(Number.NEGATIVE_INFINITY, ...Object.values(input.requests).map((request) => request.startedAtMs));
 }
 

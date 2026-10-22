@@ -1109,16 +1109,6 @@ export async function stopBackgroundRun(conversationId: string, runId: string): 
   await request({ method: "stopBackgroundRun", conversationId, runId });
 }
 
-/** The × on an ended preview's or run's Background row (Q94): it leaves the rows; its record stays. */
-export async function dismissBackground(conversationId: string, id: string): Promise<void> {
-  await request({ method: "dismissBackground", conversationId, id });
-}
-
-/** Restart on a failed run's Background row (Q94): the row leaves and the thread runs it again. */
-export async function restartBackgroundRun(conversationId: string, runId: string): Promise<void> {
-  await request({ method: "restartBackgroundRun", conversationId, runId });
-}
-
 export async function pausePreview(conversationId: string, previewId: string): Promise<void> {
   await request({ method: "pausePreview", conversationId, previewId });
 }

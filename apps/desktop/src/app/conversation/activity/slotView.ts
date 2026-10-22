@@ -59,6 +59,14 @@ export function runFailed(run: CiRun): boolean {
   return runDone(run) && FAILED_CONCLUSIONS.includes(run.conclusion);
 }
 
+/** How many of the runs' jobs are done, of all of them: a completed run counts every job done. */
+export function ciJobs(runs: readonly CiRun[]): { done: number; total: number } {
+  return {
+    done: runs.reduce((sum, run) => sum + (runDone(run) ? run.jobsTotal : run.jobsDone), 0),
+    total: runs.reduce((sum, run) => sum + run.jobsTotal, 0),
+  };
+}
+
 /**
  * Where the pill stands, which picks its icon: still `checking` (a spinner), `passed`, `failed`,
  * or `ended` with nothing to pass or fail (no runs, or the watch stopped).
@@ -81,8 +89,7 @@ export function ciPill(watches: readonly CiWatchView[]): { state: CiState; words
   if (live.length > 0 && (live.some((watch) => watch.runs.length === 0) || !runs.every(runDone))) {
     const pushes = live.length > 1 ? ` for ${live.length} pushes` : "";
     if (runs.every(runDone)) return { state: "checking", words: `Waiting for CI to start${pushes}…` };
-    const done = runs.reduce((sum, run) => sum + (runDone(run) ? run.jobsTotal : run.jobsDone), 0);
-    const total = runs.reduce((sum, run) => sum + run.jobsTotal, 0);
+    const { done, total } = ciJobs(runs);
     const words = total === 0 ? `Checking CI${pushes}…` : done < total ? `Checking CI${pushes} · ${done} of ${total} jobs done` : `Checking CI${pushes} · finishing up…`;
     return { state: "checking", words };
   }

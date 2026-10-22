@@ -1,43 +1,42 @@
+import { ciJobs, ciWatches, heldMerge, mergeWords, runFailed, shortSha } from "@/app/conversation/activity/slotView";
+import { isRunRequest } from "@/app/conversation/blocks";
+import { type LiveAction, lastMessageAtMs, liveMergeClick, sessionChecks, VENDORS } from "@/app/conversation/liveJob";
 import { previewActive } from "@/app/conversation/previewStatus";
 import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
+import type { Board } from "@/state/board";
 
 /**
- * The context card's Background rows (Q91): one row per process the session keeps running, with
- * its state in a word. A worker's second copy of an app that already has a row (a smoke test of
- * the running app, a check against it) and a headless browser pointed at it are a state of that
- * row, never rows of their own.
+ * The context card's Background rows (Q91): one row per thing the session has going in the
+ * background, with its state in a word: a process it keeps running, and its own events while
+ * they run (the full checks, a review, the CI watch, a merge). A worker's second copy of an app
+ * that already has a row (a smoke test of the running app, a check against it) and a headless
+ * browser pointed at it are a state of that row, never rows of their own.
  *
- * A row stays while it still needs the user (Q94): one of the thread's that failed stays until
- * its Restart, its dismiss or the thread starts the same process again (its command or its
- * name); one that finished on its own or was stopped leaves at once.
+ * A row leaves as soon as its thing ends, finished, failed or stopped: the thread's fold keeps
+ * the history.
  */
 
-export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "failed" | "finished";
+export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "next" | "waiting" | "reviewing" | "merging";
 
-/** What takes a failed row off the card: the user's dismiss or Restart, or a later pass of its command (`cleared`, by id). */
-export type BackgroundLeft = { cleared: readonly string[] };
+/** The session's events the rows read off the board, as liveJob.ts reads them. */
+export type BackgroundEvents = Pick<Board, "tasks" | "questions" | "reviews" | "integratedChecks" | "orchestratorSteps" | "requests"> &
+  Partial<Pick<Board, "mergeRefused">>;
 
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
-  | { type: "run"; id: string; startedAtMs: number; run: BackgroundRun; state: BackgroundState };
-
-/** Whether a row's process has ended (it failed or finished): its row is still, and its time stops. */
-export const rowEnded = (state: BackgroundState) => state === "failed" || state === "finished";
-
-/** How an ended preview stands on its row: a clean exit finished, any other exit failed; one Brigadier stopped leaves (null). */
-export function endedPreviewState(preview: Preview): "failed" | "finished" | null {
-  if (preview.state.type !== "exited") return null;
-  return preview.state.code === 0 ? "finished" : "failed";
-}
-
-/** How an ended run stands on its row: "exit 0" finished, any other end failed (an interruption too); one stopped leaves (null). */
-export function endedRunState(run: BackgroundRun): "failed" | "finished" | null {
-  switch (run.state.type) {
-    case "finished": return run.state.status === "exit 0" ? "finished" : "failed";
-    case "interrupted": return "failed";
-    default: return null;
-  }
-}
+  | { type: "run"; id: string; startedAtMs: number; run: BackgroundRun; state: BackgroundState }
+  | {
+    type: "event";
+    id: string;
+    startedAtMs: number;
+    name: string;
+    state: BackgroundState;
+    /** More of where it stands, after its state: "3 of 5". */
+    words: string | null;
+    tip: string;
+    /** Its button: open the CI run, cancel the held merge. */
+    action: Exclude<LiveAction, { type: "mergeAnyway" }> | null;
+  };
 
 /** Leading `NAME=value` assignments, as a shell reads them before the command. */
 const ASSIGNMENTS = /^(?:\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/;
@@ -68,27 +67,69 @@ export function runState(command: string): BackgroundState {
   return "running";
 }
 
-/** Whether two of the thread's previews start the same process: the same kind, and the same command or name. */
-const sameProcess = (a: Preview, b: Preview) =>
-  a.kind === b.kind && (appCommand(a.command) === appCommand(b.command) || a.name === b.name);
-
-/** Whether `a` started after `b`. */
-const later = (a: { startedAtMs: number; id: string }, b: { startedAtMs: number; id: string }) =>
-  a.startedAtMs > b.startedAtMs || (a.startedAtMs === b.startedAtMs && a.id.localeCompare(b.id) > 0);
+const short = (sha: string) => sha.slice(0, 7);
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
- * The rows for the session's previews that still run and its long commands, newest first. Of a
- * group of copies of one app, the thread's own (else the oldest) is the row; the others are its
- * state while they run: "smoke testing" for a worker that only looks at the running app or a
- * browser at it, "checking" for any other worker's copy. The thread's that ended stay until
- * `left` takes them off (Q94); a worker's that ended is its worker's to deal with.
+ * The rows for the session's own events while they run, as the Job card reads them (an
+ * overnight run's are its card's, a worker's own checks its row's): the full checks while they
+ * are next and while they run, each review at work, the CI watch until its result, and a merge
+ * held for workers or at work. Each leaves once it ends, passed, failed or merged.
+ */
+export function eventRows(board: BackgroundEvents): BackgroundRow[] {
+  const rows: BackgroundRow[] = [];
+  const check = sessionChecks(board).at(-1);
+  if (check && (check.state.type === "due" || check.state.type === "running")) {
+    const name = check.asked?.scope === "full" ? "Full checks" : "Checks";
+    if (check.state.type === "due") {
+      rows.push({ type: "event", id: check.id, startedAtMs: check.dueAtMs, name, state: "next", words: null, tip: `They run on ${short(check.tip)} once the work lands`, action: null });
+    } else {
+      // run_checks counts its commands: "3 of 5" is the third at work; one alone needs no count.
+      const { command, done, total } = check.state;
+      rows.push({ type: "event", id: check.id, startedAtMs: check.startedAtMs ?? check.dueAtMs, name, state: "checking",
+        words: total > 1 ? `${Math.min(total, done + 1)} of ${total}` : null, tip: command ? `Now: ${command}` : `On ${short(check.tip)}`, action: null });
+    }
+  }
+  for (const review of Object.values(board.reviews)) {
+    if (review.state.type !== "running" || isRunRequest(review.requestId)) continue;
+    rows.push({ type: "event", id: review.id, startedAtMs: review.startedAtMs, name: `${VENDORS[review.reviewer]} review`, state: "reviewing",
+      words: null, tip: `The changes up to ${short(review.tip)}`, action: null });
+  }
+  const steps = board.orchestratorSteps.filter((step) => !isRunRequest(step.requestId));
+  const watching = ciWatches(steps).filter((watch) => watch.result === null);
+  if (watching.length > 0) {
+    const runs = watching.flatMap((watch) => watch.runs);
+    const { done, total } = ciJobs(runs);
+    const open = runs.find(runFailed) ?? runs.find((run) => run.status !== "completed") ?? runs[0];
+    rows.push({ type: "event", id: "ci", startedAtMs: watching[0]!.sinceMs, name: "CI", state: "checking", words: total > 0 ? `${done} of ${total} jobs` : null,
+      tip: watching.map((watch) => `${watch.branch} · ${shortSha(watch.sha)}`).join("\n"), action: open?.url ? { type: "openCi", url: open.url } : null });
+  }
+  const held = heldMerge(steps, board.tasks, Object.values(board.questions));
+  const click = liveMergeClick(board, steps, lastMessageAtMs(board));
+  const refused = board.mergeRefused;
+  if (held) {
+    const words = held.asking ? "for your yes" : held.mergingIn ? `for ${held.base} to merge in` : held.waiting > 0 ? `on ${plural(held.waiting, "worker")}` : null;
+    rows.push({ type: "event", id: "merge", startedAtMs: held.sinceMs, name: `Merge into ${held.base}`, state: words ? "waiting" : "merging", words,
+      tip: mergeWords(held), action: { type: "cancelMerge" } });
+  } else if (click?.kind.type === "mergeRequested" && !(refused && refused.atMs >= click.atMs)) {
+    rows.push({ type: "event", id: "merge", startedAtMs: click.atMs, name: `Merge into ${click.kind.base}`, state: "merging", words: null,
+      tip: `${click.kind.branch} into ${click.kind.base}`, action: null });
+  }
+  return rows;
+}
+
+/**
+ * The rows for the session's previews that still run, its long commands and its events
+ * (`eventRows`), newest first. Of a group of copies of one app, the thread's own (else the
+ * oldest) is the row; the others are its state while they run: "smoke testing" for a worker
+ * that only looks at the running app or a browser at it, "checking" for any other worker's copy.
  */
 export function backgroundRows(
   previews: readonly Preview[],
   runs: readonly BackgroundRun[],
   tasks: Record<string, Task> | null,
   workerName: (task: Task) => string | null,
-  left: BackgroundLeft = { cleared: [] },
+  events: BackgroundEvents | null = null,
 ): BackgroundRow[] {
   const active = previews.filter((preview) => previewActive(preview.state)).toSorted((a, b) => a.startedAtMs - b.startedAtMs || a.id.localeCompare(b.id));
   const browsers = active.filter((preview) => BROWSER.test(preview.command));
@@ -131,21 +172,6 @@ export function backgroundRows(
   for (const run of runs) {
     if (run.state.type === "running") rows.push({ type: "run", id: run.id, startedAtMs: run.startedAtMs, run, state: runState(run.command) });
   }
-  const stays = (id: string, state: "failed" | "finished" | null): state is "failed" =>
-    state === "failed" && !left.cleared.includes(id);
-  for (const preview of previews) {
-    const state = endedPreviewState(preview);
-    if (preview.taskId || !stays(preview.id, state)) continue;
-    // The thread started the same process again, under the same command or name (a restart
-    // with other flags, #510): the new one is its row, and its end is the one that counts.
-    if (previews.some((other) => !other.taskId && later(other, preview) && sameProcess(other, preview))) continue;
-    rows.push({ type: "preview", id: preview.id, startedAtMs: preview.startedAtMs, preview, state, worker: null, with: [] });
-  }
-  for (const run of runs) {
-    const state = endedRunState(run);
-    if (!stays(run.id, state)) continue;
-    if (runs.some((other) => later(other, run) && appCommand(other.command) === appCommand(run.command))) continue;
-    rows.push({ type: "run", id: run.id, startedAtMs: run.startedAtMs, run, state });
-  }
+  if (events) rows.push(...eventRows(events));
   return rows.toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
 }
