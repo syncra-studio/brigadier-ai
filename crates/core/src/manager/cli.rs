@@ -81,19 +81,23 @@ fn session_state(
             _ => SessionState::Ready,
         };
     };
-    if !activity.questions.is_empty() || !activity.approvals.is_empty() {
+    if !activity.questions.is_empty()
+        || !activity.approvals.is_empty()
+        || !activity.sign_ins.is_empty()
+    {
         return SessionState::NeedsYou;
     }
+    // Its CLI's turn decides it works, as the sidebar's ([`crate::board::activity_of`]).
+    if activity.turn_open {
+        return SessionState::Working;
+    }
     match activity.run {
-        RunState::Running => SessionState::Working,
         RunState::Starting => SessionState::Starting,
-        RunState::Failed => SessionState::Failed,
         _ if activity.failed => SessionState::Failed,
         _ if activity.stopped => SessionState::Stopped,
-        _ if !activity.requests.is_empty() => SessionState::Working,
         RunState::Hibernated => SessionState::Asleep,
-        RunState::Idle if conversation.lifecycle == Lifecycle::Hibernated => SessionState::Asleep,
-        RunState::Idle => SessionState::Ready,
+        _ if conversation.lifecycle == Lifecycle::Hibernated => SessionState::Asleep,
+        _ => SessionState::Ready,
     }
 }
 
@@ -411,8 +415,7 @@ impl SessionManager {
     }
 
     async fn cli_activity(&self) -> HashMap<ConversationId, ConversationActivity> {
-        self.core
-            .activity()
+        self.activity()
             .await
             .into_iter()
             .map(|activity| (activity.conversation_id.clone(), activity))

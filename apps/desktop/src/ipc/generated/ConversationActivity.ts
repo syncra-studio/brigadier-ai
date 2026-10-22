@@ -2,15 +2,18 @@
 import type { CardId } from "./CardId";
 import type { ConversationId } from "./ConversationId";
 import type { RunState } from "./RunState";
-import type { SessionPhase } from "./SessionPhase";
 import type { TaskId } from "./TaskId";
 import type { TaskState } from "./TaskState";
 
 /**
- * What the sidebar shows about a conversation: whether it runs, and what waits for the user.
- * The UI keeps it current from the same events as the board.
+ * What the sidebar shows about a conversation: whether its CLI works, and what waits for the
+ * user. The UI keeps it current from the same events as the board, and the CLI's turns.
  */
 export type ConversationActivity = { conversationId: ConversationId, run: RunState, 
+/**
+ * Its CLI's turn is open.
+ */
+turnOpen?: boolean, 
 /**
  * Its tasks that are not over, with their state.
  */
@@ -20,7 +23,7 @@ tasks: Array<[TaskId, TaskState]>,
  */
 titles?: Array<[TaskId, string]>, 
 /**
- * Approvals and plans waiting for the user's decision.
+ * Its CLI's permission prompts and plans waiting for the user's decision.
  */
 approvals: Array<CardId>, 
 /**
@@ -28,20 +31,15 @@ approvals: Array<CardId>,
  */
 questions: Array<CardId>, 
 /**
- * What it is busy with that its row names, keyed by what runs it: `task:`, `review:`,
- * `check:`, `run:`, `tool:`, `merge:` or `ci:` and its id.
+ * Its CLI's MCP servers that want the user to sign in, by name.
  */
-phases: Array<[string, SessionPhase]>, 
+signIns?: Array<string>, 
 /**
- * Its latest request or its run failed, and nothing ran since: it needs the user.
+ * Nothing works, and its CLI did not take the turn or its last turn failed or was cut
+ * off: it needs the user.
  */
 failed?: boolean, 
 /**
- * Its latest request was stopped by the user, and no turn has started since.
+ * Nothing works, and its CLI's last turn was stopped by the user.
  */
-stopped?: boolean, 
-/**
- * Its requests that work, by id: between turns too, while a message waits for a turn or
- * Brigadier owes one a turn, as its composer shows them working.
- */
-requests?: Array<string>, };
+stopped?: boolean, };

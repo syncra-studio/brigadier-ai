@@ -3,6 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use brigadier_providers::{McpServerState, McpStatus};
+
 use crate::knowledge::MemoryChange;
 use crate::model::ConversationId;
 use crate::model::{
@@ -10,10 +12,11 @@ use crate::model::{
     StreamingMessage,
 };
 use crate::overnight::OvernightRun;
+use crate::thread_view::{CliTurn, TurnEnd};
 use crate::work::{
     Approval, CardId, CardState, Compaction, ConversationActivity, Decision, MessageQueue,
-    OrchestratorStep, OrchestratorStepKind, Plan, PlanState, Question, RunState, SessionPhase,
-    TabState, Task, TaskId, TaskKind, TaskState, UserRequest, WaitingItem, WorkerStep,
+    OrchestratorStep, OrchestratorStepKind, Plan, PlanState, Question, RunState, TabState, Task,
+    TaskId, UserRequest, WaitingItem, WorkerStep,
 };
 
 /// Notices kept per conversation.
@@ -233,10 +236,13 @@ impl Board {
         peers
     }
 
-    /// The conversation's activity, or `None` when it neither runs nor waits for the user. A
-    /// failed run or latest request counts as waiting for the user until the next run starts
-    /// (a turn's error fails its request; the CLI's failure, its run).
-    pub(crate) fn activity(&self, id: &ConversationId) -> Option<ConversationActivity> {
+    /// The conversation's activity, or `None` when nothing of it runs or waits for the user,
+    /// with `turn`, where its CLI's turn stands ([`activity_of`]).
+    pub(crate) fn activity(
+        &self,
+        id: &ConversationId,
+        turn: CliTurn,
+    ) -> Option<ConversationActivity> {
         let open: Vec<_> = self
             .tasks
             .values()
@@ -268,63 +274,45 @@ impl Board {
             .filter(|question| question.answer.is_none())
             .map(|question| question.id.clone())
             .collect();
-        let running = matches!(self.run, RunState::Starting | RunState::Running);
-        let phases = self.phases(running);
-        let failed = !running
-            && (self.run == RunState::Failed
-                || self.latest_request().is_some_and(|request| {
-                    matches!(request.state, crate::work::RequestState::Failed { .. })
-                }));
-        let stopped = !running
-            && self
-                .latest_request()
-                .is_some_and(|request| matches!(request.state, crate::work::RequestState::Stopped));
-        let mut requests: Vec<_> = self
-            .requests
-            .values()
-            .filter(|request| request.state == crate::work::RequestState::Working)
-            .map(|request| request.id.clone())
-            .collect();
-        requests.sort();
-        (running
-            || stopped
-            || failed
-            || !requests.is_empty()
-            || !tasks.is_empty()
-            || !approvals.is_empty()
-            || !questions.is_empty()
-            || !phases.is_empty())
-        .then(|| ConversationActivity {
-            conversation_id: id.clone(),
-            run: self.run,
-            tasks,
-            titles,
-            approvals,
-            questions,
-            phases,
-            failed,
-            stopped,
-            requests,
-        })
+        let sign_ins = sign_ins(
+            self.mcp_servers_of(None)
+                .map_or(&[][..], |agent| &agent.servers),
+        );
+        activity_of(
+            ConversationActivity {
+                conversation_id: id.clone(),
+                run: self.run,
+                turn_open: turn.open,
+                tasks,
+                titles,
+                approvals,
+                questions,
+                sign_ins,
+                failed: false,
+                stopped: false,
+            },
+            turn.last_end,
+        )
     }
 
-    /// Where the session stands (WORKSPACES-PLAN.md "States"): needs you (a card or question
-    /// open, or its last run failed), merging (a merge of its work runs), working (its turn, a
-    /// worker or a phase, or `quota_wait`: its messages wait for a limit to reset), ready
-    /// (idle with commits its base lacks), merged (a merge of its work, recorded or seen in
-    /// git, and nothing newer unmerged), reverted (that merge reverted on the base since,
-    /// `reverted`), or none (untouched, or idle with nothing to merge).
+    /// Where the session stands (WORKSPACES-PLAN.md "States"): needs you (a permission prompt,
+    /// plan, question or MCP sign-in open, or its last turn failed), working (its CLI's turn is
+    /// open or starting, or `quota_wait`: its messages wait for a limit to reset), ready (idle
+    /// with commits its base lacks), merged (a merge of its work, recorded or seen in git, and
+    /// nothing newer unmerged), reverted (that merge reverted on the base since, `reverted`),
+    /// or none (untouched, or idle with nothing to merge).
     ///
     /// `ahead` is its branch's commits not in base now, from git; without it the records
     /// decide: a request that settled ready after the last merge is ready.
     pub(crate) fn tab_state(
         &self,
         id: &ConversationId,
+        turn: CliTurn,
         quota_wait: bool,
         ahead: Option<u32>,
         reverted: bool,
     ) -> Option<TabState> {
-        state_of(self.activity(id).as_ref(), quota_wait, || {
+        state_of(self.activity(id, turn).as_ref(), quota_wait, || {
             self.settled_state(ahead, reverted)
         })
     }
@@ -428,65 +416,6 @@ impl Board {
             requests.push(current.to_owned());
         }
         requests
-    }
-
-    /// What the conversation is busy with that its sidebar row names, keyed as
-    /// [`ConversationActivity::phases`] says; its thread's calls count only while `running`, in
-    /// the request its turn serves.
-    fn phases(&self, running: bool) -> Vec<(String, SessionPhase)> {
-        let tasks = self.tasks.values().filter_map(|task| {
-            let works = matches!(
-                task.state,
-                TaskState::Queued
-                    | TaskState::Starting
-                    | TaskState::Running
-                    | TaskState::Blocked
-                    | TaskState::Landing
-            );
-            let phase = match task.kind {
-                TaskKind::Merge => SessionPhase::Merging,
-                TaskKind::Review => SessionPhase::Reviewing,
-                TaskKind::Verify => SessionPhase::Checking,
-                _ => return None,
-            };
-            works.then(|| (format!("task:{}", task.id), phase))
-        });
-        let steps = self
-            .orchestrator_steps
-            .iter()
-            .filter_map(|step| match &step.kind {
-                OrchestratorStepKind::CiWatch {
-                    repo,
-                    branch,
-                    sha,
-                    result: None,
-                    ..
-                } => Some((
-                    format!("ci:{repo} {branch} {sha}"),
-                    SessionPhase::WatchingCi,
-                )),
-                OrchestratorStepKind::Tool {
-                    item_id,
-                    name,
-                    status: brigadier_providers::ItemStatus::InProgress,
-                    ..
-                    // The active turn's own call only: an earlier turn of the same request
-                    // may have left one marked running (#253).
-                } if running
-                    && step.request_id == self.run_request
-                    && step.position >= self.run_since =>
-                {
-                    let phase = match name.rsplit("__").next().unwrap_or(name) {
-                        "finish_session" => SessionPhase::Merging,
-                        _ => return None,
-                    };
-                    Some((format!("tool:{item_id}"), phase))
-                }
-                _ => None,
-            });
-        let mut phases: Vec<_> = tasks.chain(steps).collect();
-        phases.sort_by(|a, b| a.0.cmp(&b.0));
-        phases
     }
 
     /// Applies an event stored at `stream_seq` in the conversation's stream. An object's
@@ -1217,24 +1146,13 @@ mod ci_tests {
         );
     }
 
-    /// An idle session watching CI still shows in the sidebar, as "Watching CI" (#234).
+    /// A CI watch alone is no work of the session: its CLI's turn decides.
     #[test]
-    fn a_running_ci_watch_is_the_sessions_phase_until_it_ends() {
+    fn a_ci_watch_alone_is_no_activity() {
         let id = ConversationId("c1".into());
         let mut board = Board::default();
         board.apply(&watch("o/n", None), 1);
-        let activity = board
-            .activity(&id)
-            .expect("a watch keeps the session active");
-        assert_eq!(
-            activity.phases,
-            [(
-                "ci:o/n main 97c298d5".to_owned(),
-                crate::work::SessionPhase::WatchingCi
-            )]
-        );
-        board.apply(&watch("o/n", Some("passed")), 2);
-        assert_eq!(board.activity(&id), None);
+        assert_eq!(board.activity(&id, CliTurn::default()), None);
     }
 
     /// A reopened conversation's board shows a watch's result for a moment after it ended, as
@@ -1373,8 +1291,46 @@ mod rating_tests {
     }
 }
 
+/// `activity` with its failed and stopped marks from its run and `last_end`, how its CLI's last
+/// turn ended, or `None` when nothing of it runs or waits. Its CLI works while its turn is open
+/// or Brigadier hands it a message (starting); otherwise it failed when the CLI did not take
+/// the turn (a failed run) or its last turn failed or was cut off, and stopped when the user
+/// stopped its last turn. Its workers don't decide it.
+pub(crate) fn activity_of(
+    mut activity: ConversationActivity,
+    last_end: Option<TurnEnd>,
+) -> Option<ConversationActivity> {
+    let working = activity.turn_open || activity.run == RunState::Starting;
+    activity.failed = !working
+        && (activity.run == RunState::Failed
+            || matches!(last_end, Some(TurnEnd::Failed | TurnEnd::Interrupted)));
+    activity.stopped = !working && last_end == Some(TurnEnd::Stopped);
+    (working
+        || activity.run == RunState::Running
+        || activity.failed
+        || activity.stopped
+        || !activity.tasks.is_empty()
+        || !activity.approvals.is_empty()
+        || !activity.questions.is_empty()
+        || !activity.sign_ins.is_empty())
+    .then_some(activity)
+}
+
+/// The names of the CLI's MCP servers in `servers` that want the user to sign in. A claude.ai
+/// connector is left out: the user manages those on claude.ai, and many stay unsigned on
+/// purpose.
+pub(crate) fn sign_ins(servers: &[McpServerState]) -> Vec<String> {
+    servers
+        .iter()
+        .filter(|server| {
+            server.status == McpStatus::NeedsAuth && !server.name.starts_with("claude.ai ")
+        })
+        .map(|server| server.name.clone())
+        .collect()
+}
+
 /// [`Board::tab_state`] from its activity: the first that holds wins, as the app's `tabState`
-/// decides it too (both read `session_states.json`'s cases in their tests).
+/// decides it too (both read `sidebar_states.json`'s cases in their tests).
 pub(crate) fn state_of(
     activity: Option<&ConversationActivity>,
     quota_wait: bool,
@@ -1384,22 +1340,12 @@ pub(crate) fn state_of(
         // A run a usage limit stopped waits for the reset rather than for the user.
         if !activity.approvals.is_empty()
             || !activity.questions.is_empty()
+            || !activity.sign_ins.is_empty()
             || (activity.failed && !quota_wait)
         {
             return Some(TabState::NeedsYou);
         }
-        if activity
-            .phases
-            .iter()
-            .any(|(_, phase)| *phase == SessionPhase::Merging)
-        {
-            return Some(TabState::Merging);
-        }
-        if matches!(activity.run, RunState::Starting | RunState::Running)
-            || !activity.tasks.is_empty()
-            || !activity.phases.is_empty()
-            || !activity.requests.is_empty()
-        {
+        if activity.turn_open || activity.run == RunState::Starting {
             return Some(TabState::Working);
         }
     }
@@ -1409,32 +1355,92 @@ pub(crate) fn state_of(
     settled()
 }
 
-/// The states table both the engine and the app follow, case by case.
+/// The sidebar's states table both the engine and the app follow, case by case.
 #[cfg(test)]
 mod shared_states_tests {
     use super::*;
+    use crate::work::TaskState;
+
+    #[derive(serde::Deserialize)]
+    struct Server {
+        name: String,
+        status: McpStatus,
+    }
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Case {
         name: String,
-        activity: Option<ConversationActivity>,
+        #[serde(default)]
+        turn: CliTurn,
+        #[serde(default)]
+        run: RunState,
+        #[serde(default)]
+        tasks: Vec<(TaskId, TaskState)>,
+        #[serde(default)]
+        approvals: Vec<CardId>,
+        #[serde(default)]
+        plans: Vec<CardId>,
+        #[serde(default)]
+        questions: Vec<CardId>,
+        #[serde(default)]
+        servers: Vec<Server>,
+        #[serde(default)]
         quota_wait: bool,
         settled: Option<TabState>,
         expect: Option<TabState>,
+        /// The app's words for it: a tab state, or "failed" or "stopped".
+        status: Option<String>,
     }
 
     #[test]
     fn the_engine_reads_each_shared_case_as_the_app_does() {
-        let cases: Vec<Case> = serde_json::from_str(include_str!("session_states.json")).unwrap();
-        assert!(cases.len() >= 10);
+        let cases: Vec<Case> = serde_json::from_str(include_str!("sidebar_states.json")).unwrap();
+        assert!(cases.len() >= 20);
         for case in cases {
+            let servers: Vec<_> = case
+                .servers
+                .into_iter()
+                .map(|server| McpServerState {
+                    name: server.name,
+                    status: server.status,
+                    tools: Vec::new(),
+                    transport: None,
+                })
+                .collect();
+            let activity = activity_of(
+                ConversationActivity {
+                    conversation_id: ConversationId("s".into()),
+                    run: case.run,
+                    turn_open: case.turn.open,
+                    tasks: case.tasks,
+                    titles: Vec::new(),
+                    approvals: case.approvals.into_iter().chain(case.plans).collect(),
+                    questions: case.questions,
+                    sign_ins: sign_ins(&servers),
+                    failed: false,
+                    stopped: false,
+                },
+                case.turn.last_end,
+            );
             assert_eq!(
-                state_of(case.activity.as_ref(), case.quota_wait, || case.settled),
+                state_of(activity.as_ref(), case.quota_wait, || case.settled),
                 case.expect,
                 "{}",
                 case.name
             );
+            // The app names a failure or a stop where the engine marks it.
+            let marked = |word: &str| case.status.as_deref() == Some(word);
+            if marked("failed") {
+                assert!(activity.as_ref().is_some_and(|a| a.failed), "{}", case.name);
+            }
+            if marked("stopped") {
+                assert!(
+                    activity.as_ref().is_some_and(|a| a.stopped),
+                    "{}",
+                    case.name
+                );
+            }
         }
     }
 }
@@ -1442,7 +1448,18 @@ mod shared_states_tests {
 #[cfg(test)]
 mod tab_state_tests {
     use super::*;
+    use crate::work::TaskState;
     use crate::work::{Question, QuestionKind};
+
+    /// No turn of the CLI open, and none ended.
+    const IDLE: CliTurn = CliTurn {
+        open: false,
+        last_end: None,
+    };
+    const OPEN: CliTurn = CliTurn {
+        open: true,
+        last_end: None,
+    };
 
     fn id() -> ConversationId {
         ConversationId("tab".into())
@@ -1456,19 +1473,6 @@ mod tab_state_tests {
         event(serde_json::json!({
             "type": "runStateChanged", "conversationId": "tab", "state": state,
             "error": null, "requestId": "r1",
-        }))
-    }
-
-    fn finish_session(status: &str) -> DomainEvent {
-        event(serde_json::json!({
-            "type": "orchestratorStepped",
-            "step": {
-                "requestId": "r1", "atMs": 0, "position": 0,
-                "kind": {
-                    "type": "tool", "itemId": "merge-1", "name": "mcp__brigadier__finish_session",
-                    "detail": null, "status": status, "throughPosition": 0,
-                },
-            },
         }))
     }
 
@@ -1490,65 +1494,27 @@ mod tab_state_tests {
         }))
     }
 
+    /// A last turn the user stopped marks the session stopped, through a reconnect (the board
+    /// and the record are read again), until the next turn opens.
     #[test]
-    fn a_stopped_request_keeps_its_sidebar_mark_until_the_next_turn() {
-        let mut board = Board::default();
-        let request = |state: &str| {
-            event(serde_json::json!({
-                "type": "requestUpdated", "request": {
-                    "id": "r1", "conversationId": "tab", "preview": "Do it",
-                    "state": { "type": state }, "startedAtMs": 1, "endedAtMs": 2,
-                    "steeredInto": null, "steeredAfter": null, "undo": null,
-                    "worked": [], "quotaWait": false,
-                },
-            }))
+    fn a_stopped_turn_keeps_its_sidebar_mark_until_the_next_turn() {
+        let board = Board::default();
+        let stopped = CliTurn {
+            open: false,
+            last_end: Some(TurnEnd::Stopped),
         };
-        board.apply(&request("stopped"), 1);
-        assert!(
-            board.activity(&id()).unwrap().stopped,
-            "a reconnect reads it"
-        );
-        let mut reloaded = Board::default();
-        reloaded.apply(&request("stopped"), 1);
-        assert!(
-            reloaded.activity(&id()).unwrap().stopped,
-            "replaying the stored request keeps it"
-        );
-        board.apply(&run("running"), 2);
-        assert!(!board.activity(&id()).unwrap().stopped);
-        board.apply(&request("done"), 3);
-        board.apply(&run("idle"), 4);
-        assert!(board.activity(&id()).is_none());
-    }
-
-    /// Issue 485: a request that works with no turn, worker or phase going (its message waits
-    /// for a turn, or a turn is owed) reads Working, as its composer shows it, not Ready.
-    #[test]
-    fn a_working_request_between_turns_reads_working() {
-        let mut board = Board::default();
-        let request = |state: &str| {
-            event(serde_json::json!({
-                "type": "requestUpdated", "request": {
-                    "id": "r1", "conversationId": "tab", "preview": "Do it",
-                    "state": { "type": state }, "startedAtMs": 1, "endedAtMs": null,
-                    "steeredInto": null, "steeredAfter": null, "undo": null,
-                    "worked": [], "quotaWait": false,
-                },
-            }))
+        assert!(board.activity(&id(), stopped).unwrap().stopped);
+        let next = CliTurn {
+            open: true,
+            ..stopped
         };
-        board.apply(&ready("r0"), 1);
-        board.apply(&request("working"), 2);
-        board.apply(&run("idle"), 3);
-        assert_eq!(
-            board.activity(&id()).unwrap().requests,
-            vec!["r1".to_owned()]
-        );
-        assert_eq!(
-            board.tab_state(&id(), false, None, false),
-            Some(TabState::Working)
-        );
-        board.apply(&request("done"), 4);
-        assert!(board.activity(&id()).is_none());
+        let activity = board.activity(&id(), next).unwrap();
+        assert!(!activity.stopped && activity.turn_open);
+        let done = CliTurn {
+            open: false,
+            last_end: Some(TurnEnd::Done),
+        };
+        assert!(board.activity(&id(), done).is_none());
     }
 
     /// A session's open workers come with their titles, for their rows under its sidebar row;
@@ -1573,7 +1539,7 @@ mod tab_state_tests {
         };
         board.apply(&task("t1", "Fix the header", "running"), 1);
         board.apply(&task("t2", "Old work", "landed"), 2);
-        let activity = board.activity(&tab).expect("a worker runs");
+        let activity = board.activity(&tab, IDLE).expect("a worker runs");
         assert_eq!(
             activity.tasks,
             vec![(TaskId("t1".into()), TaskState::Running)]
@@ -1583,31 +1549,37 @@ mod tab_state_tests {
             vec![(TaskId("t1".into()), "Fix the header".to_owned())]
         );
         board.apply(&task("t1", "Fix the header", "done"), 3);
-        assert!(board.activity(&tab).is_none());
+        assert!(board.activity(&tab, IDLE).is_none());
     }
 
     /// Each row of the states table, first match winning: a new tab has none (not Merged); an
-    /// open question needs the user, over a running turn; a quota wait, a running turn or
-    /// a phase works; a request that settled ahead of base is ready; a merge after it is
-    /// merged, until a later request settles ahead again; idle with nothing to merge is none.
+    /// open question needs the user, over an open turn; a quota wait or an open turn works,
+    /// a CI watch alone doesn't; a request that settled ahead of base is ready; a merge after
+    /// it is merged, until a later request settles ahead again; idle with nothing to merge is
+    /// none.
     #[test]
     fn a_tab_states_from_needs_you_down_to_none() {
         let tab = id();
         let mut board = Board::default();
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             None,
             "an untouched tab"
         );
         assert_eq!(
-            board.tab_state(&tab, true, None, false),
+            board.tab_state(&tab, IDLE, true, None, false),
             Some(TabState::Working),
             "its messages wait for a limit to reset"
         );
 
         board.apply(&run("running"), 1);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
+            None,
+            "a run with no turn open"
+        );
+        assert_eq!(
+            board.tab_state(&tab, OPEN, false, None, false),
             Some(TabState::Working)
         );
         board.questions.insert(
@@ -1633,18 +1605,18 @@ mod tab_state_tests {
             },
         );
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, OPEN, false, None, false),
             Some(TabState::NeedsYou)
         );
         board.questions.clear();
         board.apply(&run("idle"), 3);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             None,
             "idle, nothing ahead"
         );
 
-        // A phase alone (a CI watch) is work.
+        // A CI watch alone is no work.
         board.apply(
             &event(serde_json::json!({
                 "type": "orchestratorStepped",
@@ -1658,31 +1630,28 @@ mod tab_state_tests {
             })),
             4,
         );
-        assert_eq!(
-            board.tab_state(&tab, false, None, false),
-            Some(TabState::Working)
-        );
+        assert_eq!(board.tab_state(&tab, IDLE, false, None, false), None);
         board.orchestrator_steps.clear();
 
         board.apply(&ready("r1"), 5);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             Some(TabState::Ready)
         );
         board.apply(&merged(), 6);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             Some(TabState::Merged)
         );
         board.apply(&ready("r3"), 7);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             Some(TabState::Ready),
             "newer work"
         );
         board.apply(&merged(), 8);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             Some(TabState::Merged)
         );
     }
@@ -1700,73 +1669,75 @@ mod tab_state_tests {
         }))
     }
 
-    /// A failed run needs the user, in the activity snapshot too (so a reconnect keeps it),
-    /// until the next run starts; a limit's wait over a failed run is work, not the user's.
+    /// A failed run (the CLI did not take the turn) needs the user, in the activity snapshot
+    /// too (so a reconnect keeps it), until the next run starts; so does a last turn that
+    /// failed, until the next turn opens; a limit's wait over a failed run is work, not the
+    /// user's.
     #[test]
     fn a_failed_run_needs_the_user_until_the_next_one_starts() {
         let tab = id();
         let mut board = Board::default();
         board.apply(&run("failed"), 1);
         let activity = board
-            .activity(&tab)
+            .activity(&tab, IDLE)
             .expect("a failed run is in the snapshot");
         assert!(activity.failed);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             Some(TabState::NeedsYou)
         );
         assert_eq!(
-            board.tab_state(&tab, true, None, false),
+            board.tab_state(&tab, IDLE, true, None, false),
             Some(TabState::Working),
             "the limit's wait wins"
         );
         board.apply(&run("starting"), 2);
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
+            board.tab_state(&tab, IDLE, false, None, false),
             Some(TabState::Working)
         );
         board.apply(&run("idle"), 3);
-        assert!(board.activity(&tab).is_none(), "it cleared");
-    }
-
-    /// A merge running reads merging, over the work around it; a reverted latest merge reads
-    /// reverted, and newer work ready again.
-    #[test]
-    fn merging_and_a_reverted_merge() {
-        let tab = id();
-        let mut board = Board::default();
-        board.apply(&run("running"), 1);
-        board.apply(
-            &event(serde_json::json!({
-                "type": "orchestratorStepped",
-                "step": {
-                    "requestId": "r1", "atMs": 0, "position": 1,
-                    "kind": {
-                        "type": "tool", "itemId": "fin-1", "name": "mcp__brigadier__finish_session",
-                        "detail": null, "status": "inProgress", "throughPosition": 1,
-                    },
-                },
-            })),
-            2,
+        assert!(board.activity(&tab, IDLE).is_none(), "it cleared");
+        let failed = CliTurn {
+            open: false,
+            last_end: Some(TurnEnd::Failed),
+        };
+        assert_eq!(
+            board.tab_state(&tab, failed, false, None, false),
+            Some(TabState::NeedsYou)
         );
         assert_eq!(
-            board.tab_state(&tab, false, None, false),
-            Some(TabState::Merging)
+            board.tab_state(
+                &tab,
+                CliTurn {
+                    open: true,
+                    ..failed
+                },
+                false,
+                None,
+                false
+            ),
+            Some(TabState::Working)
         );
-        board.orchestrator_steps.clear();
-        board.apply(&run("idle"), 3);
+    }
+
+    /// A reverted latest merge reads reverted, and newer work ready again.
+    #[test]
+    fn a_reverted_merge() {
+        let tab = id();
+        let mut board = Board::default();
         board.apply(&merged_at(4, "m1"), 4);
         assert_eq!(board.latest_merge(), Some(("m1".to_owned(), 2)));
         assert_eq!(
-            board.tab_state(&tab, false, Some(0), false),
+            board.tab_state(&tab, IDLE, false, Some(0), false),
             Some(TabState::Merged)
         );
         assert_eq!(
-            board.tab_state(&tab, false, Some(0), true),
+            board.tab_state(&tab, IDLE, false, Some(0), true),
             Some(TabState::Reverted)
         );
         assert_eq!(
-            board.tab_state(&tab, false, Some(1), true),
+            board.tab_state(&tab, IDLE, false, Some(1), true),
             Some(TabState::Ready),
             "newer work"
         );
@@ -1835,7 +1806,7 @@ mod tab_state_tests {
         let mut board = Board::default();
         board.apply(&merged(), 1);
         assert_eq!(
-            board.tab_state(&id(), false, None, false),
+            board.tab_state(&id(), IDLE, false, None, false),
             Some(TabState::Merged)
         );
     }
@@ -1848,55 +1819,32 @@ mod tab_state_tests {
         let tab = id();
         let mut board = Board::default();
         assert_eq!(
-            board.tab_state(&tab, false, Some(0), false),
+            board.tab_state(&tab, IDLE, false, Some(0), false),
             None,
             "untouched"
         );
         assert_eq!(
-            board.tab_state(&tab, false, Some(2), false),
+            board.tab_state(&tab, IDLE, false, Some(2), false),
             Some(TabState::Ready)
         );
         board.apply(&ready("r1"), 1);
         assert_eq!(
-            board.tab_state(&tab, false, Some(0), false),
+            board.tab_state(&tab, IDLE, false, Some(0), false),
             Some(TabState::Merged),
             "merged elsewhere"
         );
         board.apply(&merged(), 2);
         assert_eq!(
-            board.tab_state(&tab, false, Some(1), false),
+            board.tab_state(&tab, IDLE, false, Some(1), false),
             Some(TabState::Ready),
             "newer commits"
         );
         assert_eq!(
-            board.tab_state(&tab, false, Some(0), false),
+            board.tab_state(&tab, IDLE, false, Some(0), false),
             Some(TabState::Merged)
         );
-        board.apply(&run("running"), 3);
         assert_eq!(
-            board.tab_state(&tab, false, Some(1), false),
-            Some(TabState::Working)
-        );
-    }
-
-    /// #253: a finish_session an earlier turn left marked running is no phase of a later turn of
-    /// the same request (a reconnect reads the board); the live turn's own call is.
-    #[test]
-    fn a_phase_comes_from_the_active_turn_only() {
-        let mut board = Board::default();
-        board.apply(&run("running"), 1);
-        board.apply(&finish_session("inProgress"), 2);
-        assert_eq!(
-            board.activity(&id()).unwrap().phases,
-            [("tool:merge-1".to_owned(), SessionPhase::Merging)]
-        );
-        board.apply(&run("idle"), 3);
-        // A report starts another turn for the same request.
-        board.apply(&run("starting"), 4);
-        board.apply(&run("running"), 5);
-        assert!(board.activity(&id()).unwrap().phases.is_empty());
-        assert_eq!(
-            board.tab_state(&id(), false, None, false),
+            board.tab_state(&tab, OPEN, false, Some(1), false),
             Some(TabState::Working)
         );
     }

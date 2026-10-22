@@ -8,7 +8,8 @@ use super::SessionManager;
 use super::conversation::ConvLive;
 use super::session_dir::read_lineage;
 use crate::model::ConversationId;
-use crate::thread_view::{self, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
+use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
+use crate::work::ConversationActivity;
 use crate::{Error, Result, now_ms};
 
 impl SessionManager {
@@ -31,6 +32,7 @@ impl SessionManager {
         };
         let mut news = Vec::new();
         let mut ended = None;
+        let mut opened = false;
         let mut noted = None;
         {
             let mut threads = self.cli_threads.lock().unwrap();
@@ -38,6 +40,7 @@ impl SessionManager {
             match event {
                 Some(ProviderEvent::TurnStarted { .. }) => {
                     if !live.open {
+                        opened = true;
                         *live = LiveTurn {
                             open: true,
                             awaiting_user: true,
@@ -52,6 +55,7 @@ impl SessionManager {
                 }) => {
                     let steer = live.open && !live.awaiting_user;
                     if !live.open {
+                        opened = true;
                         *live = LiveTurn {
                             open: true,
                             ..LiveTurn::default()
@@ -121,13 +125,44 @@ impl SessionManager {
                 }
             }
         }
-        if !news.is_empty() || ended.is_some() {
+        if !news.is_empty() || opened || ended.is_some() {
             let _ = self.thread_news.send(ThreadNews {
                 conversation_id: conv.id.clone(),
                 entries: news,
-                turn_ended: ended.is_some(),
+                opened,
+                ended,
             });
         }
+    }
+
+    /// Where conversation `id`'s CLI turn stands: open now, else how its last turn ended.
+    pub(crate) fn cli_turn(&self, id: &ConversationId) -> CliTurn {
+        let open = self
+            .cli_threads
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|live| live.open);
+        CliTurn {
+            open,
+            last_end: thread_view::last_end(&self.session_dir(id).record()),
+        }
+    }
+
+    /// What runs and what waits for the user, per conversation ([`crate::Core::activity`]),
+    /// with each one's CLI turn.
+    pub async fn activity(&self) -> Vec<ConversationActivity> {
+        let turns = self
+            .core
+            .activity_ids()
+            .await
+            .into_iter()
+            .map(|id| {
+                let turn = self.cli_turn(&id);
+                (id, turn)
+            })
+            .collect();
+        self.core.activity(&turns).await
     }
 
     /// Conversation `id`'s thread as its CLI keeps it.

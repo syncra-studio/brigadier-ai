@@ -24,21 +24,21 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
       // Those that need the user float to the top, newest first like the rest.
       ["Deploy the site", "needsYou:Needs you", "Needs you · approval"],
       ["Broken build", "failed:Failed", "Failed"],
-      ["Footer", "working:Working", "Working · watching CI"],
+      ["Ship the release", "needsYou:Needs you", "Needs you · sign-in"],
+      ["Footer", "working:Working", "Working"],
       ["Header", "working:Working", "Working"],
       ["Fix the login", "prOpen:PR open", "PR open · proof attached"],
       ["Tidy the docs", "merged:Merged", "Merged"],
       ["Waiting on a limit", "working:Working", "Working · waiting for reset 14:05"],
       ["Lone worker", "working:Working", "Working"],
       ["Old fix", "reverted:Reverted", "Reverted"],
-      ["Ship the release", "merging:Merging", "Merging"],
       ["Ready to review", "ready:Ready", "Ready"],
       ["Paused task", "stopped:Stopped", "Stopped"],
     ],
   );
   for (const row of seen.rows) {
     assert.ok(row.words, `${row.title}: a plain state word`);
-    assert.equal(row.mark, row.status?.startsWith("working:") || row.status?.startsWith("merging:") ? "spinner" : null, `${row.title}: its mark`);
+    assert.equal(row.mark, row.status?.startsWith("working:") ? "spinner" : null, `${row.title}: its mark`);
     assert.equal(row.error, row.status?.startsWith("failed:"));
     assert.equal(row.plain, true, `${row.title}: no chip`);
   }
@@ -53,7 +53,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(seen.activeAfter, ["Header"]);
   assert.deepEqual(
     seen.rowsAfter,
-    ["Deploy the site", "Broken build", "Old fix", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Ship the release", "Ready to review", "Paused task"],
+    ["Deploy the site", "Broken build", "Old fix", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Ready to review", "Paused task"],
     "a session that starts needing the user moves up",
   );
   assert.deepEqual(seen.projectHeaderAfter, seen.projectHeader, "sessions needing the user add no badge to the header");
@@ -68,7 +68,7 @@ test("the Projects flyout shows a folder and name without a count, preserving it
     sessions: string[];
   };
   assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 });
-  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Ship the release", "Ready to review", "Paused task"]);
+  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Ready to review", "Paused task"]);
 });
 
 test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
@@ -97,9 +97,9 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
     const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}${unread ? "&unread=1" : ""}`, "sessions-result", 20000)) as {
       title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
     }[];
-    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Ready", "Merging", "Merged", "PR open", "Failed", "Stopped", "Reverted"].toSorted());
+    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Ready", "Merged", "PR open", "Failed", "Stopped", "Reverted"].toSorted());
     for (const row of seen) {
-      const busy = row.state === "working" || row.state === "merging";
+      const busy = row.state === "working";
       assert.equal(row.beforeMark, busy ? "spinner" : unread ? "unread" : null, `${row.title}: closed row mark`);
       assert.equal(row.rowMark, busy ? "spinner" : null, `${row.title}: the open row has no unread mark`);
       assert.equal(row.error, row.state === "failed", `${row.title}: errors have a separate leading icon`);

@@ -179,7 +179,7 @@ async fn not_now_puts_a_plan_off_and_the_thread_says_so() {
     let board = flow.settled().await;
     let [plan] = plans(&board).try_into().expect("one plan");
     let waiting = board
-        .activity(&flow.conversation)
+        .activity(&flow.conversation, Default::default())
         .expect("the plan waits for the user");
     assert_eq!(waiting.approvals, std::slice::from_ref(&plan.id));
 
@@ -193,7 +193,7 @@ async fn not_now_puts_a_plan_off_and_the_thread_says_so() {
     assert_eq!(board.plans[&plan.id].state, PlanState::PutOff);
     assert!(
         board
-            .activity(&flow.conversation)
+            .activity(&flow.conversation, Default::default())
             .is_none_or(|activity| activity.approvals.is_empty()),
         "nothing waits for the user"
     );

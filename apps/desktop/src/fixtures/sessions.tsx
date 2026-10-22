@@ -65,16 +65,16 @@ useApp.setState({
   selection: params.has("manual") ? { type: "conversation", id: "w1-a" } : { type: "none" },
 });
 const activity = (id: string, extra: Partial<ConversationActivity>): [string, ReturnType<typeof fromSnapshot>] =>
-  [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], phases: [], ...extra })];
+  [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], ...extra })];
 useActivity.setState({
   byConversation: Object.fromEntries([
-    activity("w1-a", { run: "running", tasks: [["t-1", "running"], ["t-2", "queued"]], titles: [["t-1", "Header layout"], ["t-2", "Header tests"]] }),
-    activity("w1-b", { run: "running", phases: [["ci:o/n main abc", "watchingCi"]] }),
-    activity("w5-a", { run: "running" }),
+    activity("w1-a", { run: "running", turnOpen: true, tasks: [["t-1", "running"], ["t-2", "queued"]], titles: [["t-1", "Header layout"], ["t-2", "Header tests"]] }),
+    activity("w1-b", { run: "running", turnOpen: true }),
+    activity("w5-a", { run: "running", turnOpen: true }),
     activity("w6-a", { approvals: ["a-1"] }),
     activity("w7-a", { failed: true }),
     activity("w11-a", { stopped: true }),
-    activity("w9-a", { run: "running", phases: [["tool:fin-1", "merging"]] }),
+    activity("w9-a", { signIns: ["linear"] }),
   ]),
 });
 let seq = 0;

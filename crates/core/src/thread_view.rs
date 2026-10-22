@@ -79,10 +79,26 @@ pub(crate) struct TurnRecord {
 pub struct ThreadNews {
     pub conversation_id: ConversationId,
     pub entries: Vec<FileEntry>,
-    /// A turn ended: the turns read again (`threadView`) say how.
+    /// A turn opened.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
-    pub turn_ended: bool,
+    pub opened: bool,
+    /// A turn ended, and how: the turns read again (`threadView`) say the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ended: Option<TurnEnd>,
+}
+
+/// Where a conversation's CLI turn stands, as the sidebar reads it: open now, or how its last
+/// turn ended. Nothing of it is stored but `record/turns.jsonl`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliTurn {
+    #[serde(default)]
+    pub open: bool,
+    /// How the last turn ended; none when there is none, or it began and never ended (a crash).
+    #[serde(default)]
+    pub last_end: Option<TurnEnd>,
 }
 
 /// A conversation's live turn: the stream's items since it began.
@@ -281,6 +297,14 @@ pub(crate) fn read_turns(record: &Path) -> Vec<TurnRecord> {
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect()
+}
+
+/// How the last turn of `record/turns.jsonl` ended: its last line's end, none when that line
+/// is a turn's start (it never ended) or there is none.
+pub(crate) fn last_end(record: &Path) -> Option<TurnEnd> {
+    let turns = std::fs::read_to_string(record.join("turns.jsonl")).ok()?;
+    let last = turns.lines().rev().find(|line| !line.trim().is_empty())?;
+    serde_json::from_str::<TurnRecord>(last).ok()?.end
 }
 
 /// Adds a turn's end to `record/turns.jsonl`.

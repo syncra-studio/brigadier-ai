@@ -421,11 +421,12 @@ useActivity.setState({
   byConversation: {
     [id]: {
       run: done ? "idle" : "running",
+      turnOpen: !done,
+      ended: null,
       tasks: Object.fromEntries(Object.values(tasks).map((each) => [each.id, each.state])),
       approvals: new Set(Object.keys(pending)),
       questions: new Set(),
-      phases: {},
-      failed: false,
+      signIns: new Set(),
     },
   },
 });

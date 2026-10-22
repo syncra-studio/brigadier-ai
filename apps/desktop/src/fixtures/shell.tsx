@@ -90,7 +90,7 @@ useApp.setState((state) => ({
   // The session's summary, pinned: its Workers row opens the Workers panel.
   summaryShown: { [ID]: layout },
 }));
-useActivity.setState({ byConversation: { [ID]: fromSnapshot({ conversationId: ID, run: "running", tasks: [], approvals: [], questions: [], phases: [] }) } });
+useActivity.setState({ byConversation: { [ID]: fromSnapshot({ conversationId: ID, run: "running", turnOpen: true, tasks: [], approvals: [], questions: [] }) } });
 useSessionTabs.setState({ sessions: {} });
 // Opened as is (a dev window pointed at this page, for a look at the real window): a long page
 // and a New tab beside the chat.

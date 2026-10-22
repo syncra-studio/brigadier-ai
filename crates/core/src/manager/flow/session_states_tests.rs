@@ -1,5 +1,5 @@
-//! A session's state and its reasons on its row (Q73): a failed run needs the user until the
-//! next run starts, through a reconnect and a restart; its pull request as last seen on GitHub,
+//! A session's state and its reasons on its row (Q73): a CLI turn that failed needs the user
+//! until the next turn, through a reconnect and a restart; its pull request as last seen on GitHub,
 //! looked up when a turn ends and again at a connect for a ready session; a merge reverted on
 //! the base reads reverted, and merged again once the revert is reverted; a session that
 //! changed nothing never reads ready or merged.
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use super::auto_merge_tests::{squash_merge, stub_gh};
-use super::{Flow, Options, Reply, Script, Turn, git};
+use super::{FakeBehavior, Flow, Options, Reply, Script, Turn, git};
 use crate::work::{ConversationActivity, PullRequestState, TabState};
 
 fn script<F, Fut>(f: F) -> Script
@@ -25,13 +25,20 @@ fn failed_in(flow: &Flow, activity: &[ConversationActivity]) -> bool {
         .any(|entry| entry.conversation_id == flow.conversation && entry.failed)
 }
 
-/// A turn that fails reads Needs you, in the activity a reconnect reads and after a restart,
-/// until the next run starts.
+/// A CLI turn that fails reads Needs you, in the activity a reconnect reads and after a
+/// restart (from `record/turns.jsonl`), until the next turn.
 #[tokio::test]
-async fn a_failed_run_needs_the_user_through_a_reconnect_and_a_restart_until_the_next_run() {
+async fn a_failed_turn_needs_the_user_through_a_reconnect_and_a_restart_until_the_next_turn() {
     let mut flow = Flow::start(
         "states-failed",
-        Options::default(),
+        Options {
+            // Claude echoes the user message, which records the turn.
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
         script(|turn| async move {
             if turn.is_orchestrator() && turn.input.contains("Break.") {
                 return Reply::failed("The model is unavailable.");
@@ -49,7 +56,7 @@ async fn a_failed_run_needs_the_user_through_a_reconnect_and_a_restart_until_the
     .await;
     flow.settled().await;
     assert!(
-        failed_in(&flow, &flow.core.activity().await),
+        failed_in(&flow, &flow.manager.activity().await),
         "a reconnect reads it"
     );
     let tab = flow.core.conversation(&flow.conversation).unwrap();
@@ -57,15 +64,15 @@ async fn a_failed_run_needs_the_user_through_a_reconnect_and_a_restart_until_the
 
     flow.restart().await;
     assert!(
-        failed_in(&flow, &flow.core.activity().await),
+        failed_in(&flow, &flow.manager.activity().await),
         "a restart keeps it, though nothing of the session ran since"
     );
 
     flow.say("Again.").await;
     flow.settled().await;
     assert!(
-        !failed_in(&flow, &flow.core.activity().await),
-        "the next run cleared it"
+        !failed_in(&flow, &flow.manager.activity().await),
+        "the next turn cleared it"
     );
     flow.stop().await;
 }

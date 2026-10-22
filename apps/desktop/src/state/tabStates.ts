@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import { request } from "@/ipc/client";
 import type { Conversation, EventEnvelope, PullRequestState, TabState } from "@/ipc/generated";
-import { type RowActivity, rowActivity, useActivity, useRowActivity } from "@/state/activity";
+import { type RowActivity, rowActivity, stoppedOf, useActivity, useRowActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 
 /** What a session's row knows beyond its activity: its settled state, and why it reads so. */
@@ -103,27 +103,26 @@ export function applySettledTabEvents(batch: readonly EventEnvelope[]): void {
 }
 
 /**
- * The first that holds wins, as the daemon's `Board::tab_state` decides it: needs you (a card,
- * a question, or its last turn failed, unless it waits for a limit), merging, working (a turn,
- * a worker, a phase, or its messages wait for a limit to reset), then the settled mark.
+ * The first that holds wins, as the daemon's `Board::tab_state` decides it: needs you (a
+ * permission prompt or plan, a question, an MCP sign-in, or its last turn failed, unless it
+ * waits for a limit), working (its CLI's turn, or its messages wait for a limit to reset),
+ * then the settled mark.
  */
 export function tabState(activity: RowActivity, quotaWait: boolean, settled: Settled["state"]): TabState | null {
-  if (activity.awaiting === "approval" || activity.awaiting === "input") return "needsYou";
+  if (activity.awaiting && activity.awaiting !== "failed") return "needsYou";
   if (activity.awaiting === "failed" && !quotaWait) return "needsYou";
-  if (activity.phase === "merging") return "merging";
-  if (activity.running || activity.phase || quotaWait) return "working";
+  if (activity.running || quotaWait) return "working";
   return settled ?? null;
 }
 
 /** Strongest first. */
-export const TAB_STATES: readonly TabState[] = ["needsYou", "merging", "working", "ready", "merged", "reverted"];
+export const TAB_STATES: readonly TabState[] = ["needsYou", "working", "ready", "merged", "reverted"];
 
 /** A state's words alone ("Needs you"), and after a count of sessions ("2 need you"). */
 export const TAB_STATE_WORDS: Record<TabState, { one: string; many: string }> = {
   needsYou: { one: "Needs you", many: "need you" },
   working: { one: "Working", many: "working" },
   ready: { one: "Ready", many: "ready" },
-  merging: { one: "Merging", many: "merging" },
   merged: { one: "Merged", many: "merged" },
   reverted: { one: "Reverted", many: "reverted" },
 };
@@ -148,8 +147,8 @@ function clock(ms: number): string {
 }
 
 /**
- * Its state with the reason its row's tip names: Working · watching CI / · waiting for reset
- * HH:MM, Needs you · approval / · question, Failed, Stopped, PR open · proof attached. How many
+ * Its state with the reason its row's tip names: Working · waiting for reset HH:MM, Needs you ·
+ * approval / · question / · sign-in, Failed, Stopped, PR open · proof attached. How many
  * workers it runs is never a reason: workers show in the session itself, not its row or tab.
  * `quotaWait`: its messages wait for a limit, which resets at the time given (null: unknown).
  */
@@ -161,19 +160,23 @@ export function sessionStatus(
 ): SessionStatus | null {
   let state: SessionStatus["state"] | null = tabState(activity, quotaWait !== null, settled?.state);
   if (state === "needsYou" && activity.awaiting === "failed") state = "failed";
-  if (state !== "needsYou" && state !== "working" && state !== "merging" && state !== "failed") {
+  if (state !== "needsYou" && state !== "working" && state !== "failed") {
     if (stopped) state = "stopped";
     else if (state !== "merged" && state !== "reverted" && (settled?.pullRequest === "open" || settled?.pullRequest === "draft")) state = "prOpen";
   }
   if (!state) return null;
   let reason: string | null = null;
   if (state === "needsYou") {
-    reason = activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "failed";
+    reason =
+      activity.awaiting === "approval"
+        ? "approval"
+        : activity.awaiting === "input"
+          ? "question"
+          : activity.awaiting === "signIn"
+            ? "sign-in"
+            : "failed";
   } else if (state === "working") {
-    if (activity.phase === "watchingCi") reason = "watching CI";
-    else if (activity.phase === "reviewing") reason = "reviewing";
-    else if (activity.phase === "checking") reason = "checking";
-    else if (quotaWait && !activity.running) {
+    if (quotaWait && !activity.running) {
       reason = quotaWait.resetsAtMs === null ? "waiting for a usage limit" : `waiting for reset ${clock(quotaWait.resetsAtMs)}`;
     }
   } else if ((state === "ready" || state === "prOpen") && settled?.proof) {
@@ -184,7 +187,7 @@ export function sessionStatus(
 
 /** Busy work replaces an unread mark; an idle error keeps its own leading icon. */
 export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean) {
-  const working = activity.awaiting !== "input" && (activity.running || activity.phase !== null || quotaWait);
+  const working = activity.awaiting !== "input" && (activity.running || quotaWait);
   return { working, error: !working && activity.awaiting === "failed", unread: !working && unread };
 }
 
@@ -203,7 +206,7 @@ export function useSessionStatus(id: string): SessionStatus | null {
     return wait ? (wait.resetsAtMs ?? NaN) : null;
   });
   const settled = useSettledTabs((s) => s.byTab[id]);
-  const stopped = useActivity((s) => s.byConversation[id]?.stopped ?? false);
+  const stopped = useActivity((s) => stoppedOf(s.byConversation[id]));
   const status = sessionStatus(
     activity,
     resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets },
@@ -213,11 +216,11 @@ export function useSessionStatus(id: string): SessionStatus | null {
   return status;
 }
 
-/** Whether the session `id` still has something going: it works, merges or needs the user. */
+/** Whether the session `id` still has something going: it works or needs the user. */
 export function stillGoing(id: string): boolean {
   const activity = rowActivity(useActivity.getState().byConversation[id]);
   const state = tabState(activity, !!useApp.getState().conversations[id]?.quotaWait, undefined);
-  return state === "working" || state === "merging" || state === "needsYou";
+  return state === "working" || state === "needsYou";
 }
 
 /** One session's state; re-renders only when it changes. */

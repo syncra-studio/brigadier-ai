@@ -213,7 +213,8 @@ impl SessionManager {
         let ahead = self.tab_ahead(tab).await.map(|(_, ahead)| ahead);
         let board = self.core.board(&tab.id).await.ok()?;
         let reverted = self.merge_reverted(tab, &board, ahead).await;
-        board.tab_state(&tab.id, tab.quota_wait.is_some(), ahead, reverted)
+        let turn = self.cli_turn(&tab.id);
+        board.tab_state(&tab.id, turn, tab.quota_wait.is_some(), ahead, reverted)
     }
 
     /// Whether `tab`'s latest recorded merge is reverted on its base now (asked of git only

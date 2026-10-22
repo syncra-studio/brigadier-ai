@@ -1507,7 +1507,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             catalog: Box::new(core.visible_catalog()),
         },
         Request::GetActivity => Response::GetActivity {
-            activity: heap(|| core.activity()).await,
+            activity: heap(|| sessions.activity()).await,
         },
         Request::CreateProject { name, repo } => {
             let project = heap(|| core.create_project(name, repo)).await?;

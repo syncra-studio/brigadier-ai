@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { EventEnvelope, Plan, PlanState } from "@/ipc/generated";
-import { applyActivityEvents, fromSnapshot, rowActivity, useActivity } from "@/state/activity";
+import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity } from "@/state/activity";
 import { sessionStatus } from "@/state/tabStates";
 
 const plan = (state: PlanState): EventEnvelope => ({
@@ -26,98 +26,69 @@ test("a proposed plan has the sidebar say Awaiting approval, and Not now ends it
 const on = (conversationId: string, event: unknown): EventEnvelope =>
   ({ stream: `conversation:${conversationId}`, event }) as EventEnvelope;
 
-const phaseOf = (conversationId: string) =>
-  rowActivity(useActivity.getState().byConversation[conversationId]).phase;
+const row = (conversationId: string) => rowActivity(useActivity.getState().byConversation[conversationId]);
 
-const stepOn = (conversationId: string, kind: object): EventEnvelope =>
-  on(conversationId, { type: "orchestratorStepped", step: { requestId: "r1", atMs: 0, position: 0, kind } });
-
-const ciWatch = (result?: string) =>
-  on("c2", {
-    type: "orchestratorStepped",
-    step: {
-      requestId: "r1", atMs: 0, position: 0,
-      kind: { type: "ciWatch", repo: "o/n", branch: "main", sha: "abc", waiting: false, runs: [], result },
-    },
-  });
-
-test("a CI watch has an idle session's row say Watching CI until it ends", () => {
-  applyActivityEvents([ciWatch()]);
-  assert.deepEqual(rowActivity(useActivity.getState().byConversation.c2), {
-    running: false, awaiting: null, phase: "watchingCi", workers: 0,
-  });
-  applyActivityEvents([ciWatch("passed")]);
-  assert.equal(rowActivity(useActivity.getState().byConversation.c2).phase, null);
+test("the CLI's turn opening and ending decides Working; Brigadier handing it a message works too", () => {
+  applyActivityEvents([on("c2", { type: "runStateChanged", conversationId: "c2", state: "starting" })]);
+  assert.equal(row("c2").running, true);
+  applyActivityEvents([on("c2", { type: "runStateChanged", conversationId: "c2", state: "running" })]);
+  assert.equal(row("c2").running, false, "a run with no turn open is not work");
+  applyActivityNews({ conversationId: "c2", entries: [], opened: true });
+  assert.equal(row("c2").running, true);
+  applyActivityNews({ conversationId: "c2", entries: [], ended: "done" });
+  assert.deepEqual(row("c2"), { running: false, awaiting: null, workers: 0 });
 });
 
-test("a worker's checks say Checking, and the thread's finish_session ends with its turn", () => {
-  const verify = (state: string) =>
-    on("c3", { type: "taskUpdated", task: { id: "t1", conversationId: "c3", kind: "verify", state, title: "Verify" } });
-  applyActivityEvents([verify("running")]);
-  assert.equal(phaseOf("c3"), "checking");
-  applyActivityEvents([verify("done")]);
-  assert.equal(phaseOf("c3"), null);
-  const tool = (status: string) =>
-    on("c3", {
-      type: "orchestratorStepped",
-      step: {
-        requestId: "r1", atMs: 0, position: 0,
-        kind: { type: "tool", itemId: "i1", name: "mcp__brigadier__finish_session", detail: null, status, throughPosition: 0 },
-      },
-    });
-  applyActivityEvents([on("c3", { type: "runStateChanged", conversationId: "c3", state: "running" }), tool("inProgress")]);
-  assert.equal(phaseOf("c3"), "merging");
-  applyActivityEvents([on("c3", { type: "runStateChanged", conversationId: "c3", state: "idle" })]);
-  assert.equal(phaseOf("c3"), null);
+test("a worker alone is not work; its count still shows", () => {
+  const worker = (state: string) =>
+    on("c3", { type: "taskUpdated", task: { id: "t1", conversationId: "c3", kind: "write", state, title: "Add a test" } });
+  applyActivityEvents([worker("running")]);
+  assert.deepEqual(row("c3"), { running: false, awaiting: null, workers: 0 }, "a quiet row");
+  applyActivityNews({ conversationId: "c3", entries: [], opened: true });
+  assert.deepEqual(row("c3"), { running: true, awaiting: null, workers: 1 });
+  applyActivityEvents([worker("done")]);
+  assert.equal(row("c3").workers, 0);
 });
 
-test("a held merge says Merging until it merges", () => {
-  applyActivityEvents([stepOn("c4", { type: "mergeHeld", askedIn: "m1" })]);
-  assert.equal(phaseOf("c4"), "merging");
-  applyActivityEvents([stepOn("c4", { type: "merged", branch: "b", base: "main", commits: 1, askedIn: "m1" })]);
-  assert.equal(phaseOf("c4"), null);
-  // A fresh consent replaces the held one: cancelling it leaves nothing held.
-  applyActivityEvents([stepOn("c4", { type: "mergeHeld", askedIn: "m2" }), stepOn("c4", { type: "mergeHeld", askedIn: "m3" })]);
-  applyActivityEvents([stepOn("c4", { type: "mergeCancelled", askedIn: "m3" })]);
-  assert.equal(phaseOf("c4"), null);
+test("an MCP server of the session's own CLI that wants a sign-in needs the user; a claude.ai connector or a worker's doesn't", () => {
+  const servers = (taskId: string | null, list: { name: string; status: string }[]) =>
+    on("c4", { type: "mcpServersUpdated", conversationId: "c4", taskId, provider: "claude", atStart: false, boot: "b",
+      servers: list.map((server) => ({ ...server, tools: [], transport: null })) });
+  applyActivityEvents([servers(null, [{ name: "claude.ai Gmail", status: "needs-auth" }, { name: "github", status: "connected" }])]);
+  assert.equal(row("c4").awaiting, null);
+  applyActivityEvents([servers("t1", [{ name: "linear", status: "needs-auth" }])]);
+  assert.equal(row("c4").awaiting, null, "a worker's server");
+  applyActivityEvents([servers(null, [{ name: "linear", status: "needs-auth" }])]);
+  assert.equal(row("c4").awaiting, "signIn");
+  assert.deepEqual(sessionStatus(row("c4"), null, undefined), { state: "needsYou", reason: "sign-in" });
+  applyActivityEvents([servers(null, [{ name: "linear", status: "connected" }])]);
+  assert.equal(row("c4").awaiting, null);
 });
 
-
-test("a stopped request is named through reconnect and clears when another turn starts", () => {
-  const snapshot = fromSnapshot({ conversationId: "stopped", run: "idle", tasks: [], approvals: [], questions: [], phases: [], stopped: true });
+test("a stopped turn is named through reconnect and clears when another turn opens", () => {
+  const snapshot = fromSnapshot({ conversationId: "stopped", run: "idle", tasks: [], approvals: [], questions: [], stopped: true });
   useActivity.setState({ byConversation: { stopped: snapshot } });
-  assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
+  const stopped = () => stoppedOf(useActivity.getState().byConversation.stopped);
+  assert.equal(stopped(), true);
   applyActivityEvents([on("stopped", { type: "runStateChanged", conversationId: "stopped", state: "starting" })]);
-  assert.equal(useActivity.getState().byConversation.stopped?.stopped, false);
-  applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "stopped" } } })]);
-  assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
-  // An earlier request's update (its review kept) leaves the stop be; the next turn clears it.
-  applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "done" } } })]);
-  assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
-  applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "working" } } })]);
-  assert.equal(useActivity.getState().byConversation.stopped?.stopped, false);
+  assert.equal(stopped(), false, "Brigadier hands the CLI a message");
+  applyActivityNews({ conversationId: "stopped", entries: [], opened: true });
+  applyActivityNews({ conversationId: "stopped", entries: [], ended: "stopped" });
+  applyActivityEvents([on("stopped", { type: "runStateChanged", conversationId: "stopped", state: "idle" })]);
+  assert.equal(stopped(), true);
+  applyActivityNews({ conversationId: "stopped", entries: [], opened: true });
+  assert.equal(stopped(), false);
 });
 
-test("a thread that fails while its worker runs reads Needs you · failed, not Working (issue 363)", () => {
-  applyActivityEvents([
-    on("c5", { type: "runStateChanged", conversationId: "c5", state: "running" }),
-    on("c5", { type: "taskUpdated", task: { id: "t1", conversationId: "c5", state: "running", kind: "write", title: "Add a test" } }),
-    on("c5", { type: "runStateChanged", conversationId: "c5", state: "failed" }),
-  ]);
-  const row = rowActivity(useActivity.getState().byConversation.c5);
-  assert.equal(row.running, true);
-  assert.equal(row.awaiting, "failed");
-  assert.deepEqual(sessionStatus(row, null, undefined), { state: "failed", reason: null });
-});
-
-test("a request working between turns reads Working, not Ready, as its composer does (issue 485)", () => {
-  const snapshot = fromSnapshot({ conversationId: "between", run: "idle", tasks: [], approvals: [], questions: [], phases: [], requests: ["r1"] });
-  useActivity.setState({ byConversation: { between: snapshot } });
-  const working = rowActivity(useActivity.getState().byConversation.between);
-  assert.equal(working.running, true);
-  assert.deepEqual(sessionStatus(working, null, { state: "ready" }), { state: "working", reason: null });
-  applyActivityEvents([on("between", { type: "requestUpdated", request: { id: "r1", conversationId: "between", state: { type: "done" } } })]);
-  assert.deepEqual(sessionStatus(rowActivity(useActivity.getState().byConversation.between), null, { state: "ready" }), { state: "ready", reason: null });
-  applyActivityEvents([on("between", { type: "requestUpdated", request: { id: "r2", conversationId: "between", state: { type: "working" } } })]);
-  assert.equal(rowActivity(useActivity.getState().byConversation.between).running, true);
+test("a failed or cut-off last turn reads Failed until the next turn opens; a failed run too", () => {
+  applyActivityNews({ conversationId: "c5", entries: [], opened: true });
+  applyActivityNews({ conversationId: "c5", entries: [], ended: "interrupted" });
+  assert.deepEqual(sessionStatus(row("c5"), null, undefined), { state: "failed", reason: null });
+  applyActivityNews({ conversationId: "c5", entries: [], opened: true });
+  assert.equal(row("c5").awaiting, null);
+  applyActivityNews({ conversationId: "c5", entries: [], ended: "done" });
+  applyActivityEvents([on("c5", { type: "runStateChanged", conversationId: "c5", state: "failed" })]);
+  assert.equal(row("c5").awaiting, "failed");
+  const reloaded = fromSnapshot({ conversationId: "c6", run: "idle", tasks: [], approvals: [], questions: [], failed: true });
+  assert.equal(rowActivity(reloaded).awaiting, "failed", "a failed last turn through a reconnect");
 });

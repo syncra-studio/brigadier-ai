@@ -56,7 +56,7 @@ beforeEach(() => {
   });
   useActivity.setState({
     byConversation: {
-      [id]: fromSnapshot({ conversationId: id, run: "running", tasks: [["w1", "running"], ["w2", "queued"]], approvals: [], questions: [], phases: [] }),
+      [id]: fromSnapshot({ conversationId: id, run: "running", turnOpen: true, tasks: [["w1", "running"], ["w2", "queued"]], approvals: [], questions: [] }),
     },
   });
   mockIPC((_command, payload) => {

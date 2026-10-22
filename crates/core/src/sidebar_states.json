@@ -1,0 +1,33 @@
+[
+  { "name": "an untouched session has none", "expect": null, "status": null },
+  { "name": "a turn that began and never ended (a crash) has no end: none", "turn": { "open": false }, "expect": null, "status": null },
+  { "name": "idle and ready", "settled": "ready", "expect": "ready", "status": "ready" },
+  { "name": "idle and merged", "settled": "merged", "expect": "merged", "status": "merged" },
+  { "name": "idle and reverted", "settled": "reverted", "expect": "reverted", "status": "reverted" },
+  { "name": "a done last turn with work ahead reads ready", "turn": { "lastEnd": "done" }, "settled": "ready", "expect": "ready", "status": "ready" },
+  { "name": "the CLI's open turn works, over ready", "turn": { "open": true }, "run": "running", "settled": "ready", "expect": "working", "status": "working" },
+  { "name": "Brigadier handing the CLI a message works", "run": "starting", "expect": "working", "status": "working" },
+  { "name": "a quota wait works, over ready", "quotaWait": true, "settled": "ready", "expect": "working", "status": "working", "reason": "waiting for a usage limit" },
+  { "name": "a running run with no open turn is not work", "run": "running", "settled": "ready", "expect": "ready", "status": "ready" },
+  { "name": "a worker alone is not work", "tasks": [["t1", "running"]], "expect": null, "status": null },
+  { "name": "a permission prompt needs you, over an open turn", "turn": { "open": true }, "run": "running", "approvals": ["a1"], "expect": "needsYou", "status": "needsYou", "reason": "approval" },
+  { "name": "a proposed plan needs you", "plans": ["p1"], "settled": "ready", "expect": "needsYou", "status": "needsYou", "reason": "approval" },
+  { "name": "a question needs you", "questions": ["q1"], "expect": "needsYou", "status": "needsYou", "reason": "question" },
+  { "name": "a question over a failed turn names the question", "turn": { "lastEnd": "failed" }, "questions": ["q1"], "expect": "needsYou", "status": "needsYou", "reason": "question" },
+  { "name": "an MCP server of the CLI that wants a sign-in needs you", "servers": [{ "name": "linear", "status": "needs-auth" }], "expect": "needsYou", "status": "needsYou", "reason": "sign-in" },
+  {
+    "name": "a claude.ai connector left unsigned does not",
+    "servers": [{ "name": "claude.ai Gmail", "status": "needs-auth" }, { "name": "github", "status": "connected" }],
+    "settled": "ready",
+    "expect": "ready",
+    "status": "ready"
+  },
+  { "name": "a run the CLI did not take failed", "run": "failed", "expect": "needsYou", "status": "failed" },
+  { "name": "a last turn that failed failed", "turn": { "lastEnd": "failed" }, "settled": "ready", "expect": "needsYou", "status": "failed" },
+  { "name": "a last turn cut off failed", "turn": { "lastEnd": "interrupted" }, "expect": "needsYou", "status": "failed" },
+  { "name": "a failed turn waiting for a limit's reset works", "turn": { "lastEnd": "failed" }, "quotaWait": true, "expect": "working", "status": "working", "reason": "waiting for a usage limit" },
+  { "name": "a new turn clears the failure", "turn": { "open": true, "lastEnd": "failed" }, "run": "running", "expect": "working", "status": "working" },
+  { "name": "a stopped last turn reads stopped, over ready", "turn": { "lastEnd": "stopped" }, "settled": "ready", "expect": "ready", "status": "stopped" },
+  { "name": "a stopped last turn with nothing to merge reads stopped", "turn": { "lastEnd": "stopped" }, "expect": null, "status": "stopped" },
+  { "name": "a new turn clears the stop", "turn": { "open": true, "lastEnd": "stopped" }, "run": "running", "expect": "working", "status": "working" }
+]

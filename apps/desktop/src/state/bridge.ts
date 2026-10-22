@@ -11,7 +11,7 @@ import {
   openSettings,
   toggleSettings,
 } from "@/state/actions";
-import { applyActivityEvents, loadActivity } from "@/state/activity";
+import { applyActivityEvents, applyActivityNews, loadActivity } from "@/state/activity";
 import { applyThreadNews, resyncThreadViews } from "@/state/cliThread";
 import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
@@ -151,6 +151,7 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "threadNews":
       applyThreadNews(message.news);
+      applyActivityNews(message.news);
       break;
     case "workspaceChanged":
       emitWorkspaceChanged(message.target);

@@ -1722,54 +1722,40 @@ pub enum RunState {
     Failed,
 }
 
-/// What the sidebar shows about a conversation: whether it runs, and what waits for the user.
-/// The UI keeps it current from the same events as the board.
+/// What the sidebar shows about a conversation: whether its CLI works, and what waits for the
+/// user. The UI keeps it current from the same events as the board, and the CLI's turns.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationActivity {
     pub conversation_id: ConversationId,
     pub run: RunState,
+    /// Its CLI's turn is open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub turn_open: bool,
     /// Its tasks that are not over, with their state.
     pub tasks: Vec<(TaskId, TaskState)>,
     /// The titles of those tasks, for their rows under the session's row.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<(TaskId, String)>>", optional)]
     pub titles: Vec<(TaskId, String)>,
-    /// Approvals and plans waiting for the user's decision.
+    /// Its CLI's permission prompts and plans waiting for the user's decision.
     pub approvals: Vec<CardId>,
     /// Questions not answered yet.
     pub questions: Vec<CardId>,
-    /// What it is busy with that its row names, keyed by what runs it: `task:`, `review:`,
-    /// `check:`, `run:`, `tool:`, `merge:` or `ci:` and its id.
-    pub phases: Vec<(String, SessionPhase)>,
-    /// Its latest request or its run failed, and nothing ran since: it needs the user.
+    /// Its CLI's MCP servers that want the user to sign in, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub sign_ins: Vec<String>,
+    /// Nothing works, and its CLI did not take the turn or its last turn failed or was cut
+    /// off: it needs the user.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub failed: bool,
-    /// Its latest request was stopped by the user, and no turn has started since.
+    /// Nothing works, and its CLI's last turn was stopped by the user.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub stopped: bool,
-    /// Its requests that work, by id: between turns too, while a message waits for a turn or
-    /// Brigadier owes one a turn, as its composer shows them working.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[ts(as = "Option<Vec<String>>", optional)]
-    pub requests: Vec<String>,
-}
-
-/// What a conversation is busy with, as its sidebar row names it ("Watching CI").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum SessionPhase {
-    /// A held merge, a merge worker, or the thread's `finish_session`.
-    Merging,
-    /// A review by the other vendor, or a review worker.
-    Reviewing,
-    /// The thread's `run_check` (in its turn or the background), the session's full checks,
-    /// or a verifier.
-    Checking,
-    /// A CI watch of a push.
-    WatchingCi,
 }
 
 /// Where a session stands, as its chat tab and its sidebar row show it; the first
@@ -1777,14 +1763,12 @@ pub enum SessionPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum TabState {
-    /// An open approval, plan or question, or its last run failed.
+    /// An open approval, plan, question or MCP sign-in, or its last turn failed.
     NeedsYou,
-    /// Its turn, a worker or a phase runs, or its messages wait for a usage limit to reset.
+    /// Its CLI's turn is open or starting, or its messages wait for a usage limit to reset.
     Working,
     /// Idle, with commits its base doesn't have since its last merge.
     Ready,
-    /// A merge of its work runs.
-    Merging,
     /// Its work merged, and nothing newer is unmerged.
     Merged,
     /// Its latest merge was reverted on the base, and nothing newer is unmerged.
@@ -1841,7 +1825,6 @@ impl TabState {
             Self::NeedsYou => "needs the user",
             Self::Working => "working",
             Self::Ready => "ready to merge",
-            Self::Merging => "merging",
             Self::Merged => "merged",
             Self::Reverted => "merged, then reverted",
         }

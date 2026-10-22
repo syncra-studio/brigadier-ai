@@ -174,10 +174,10 @@ impl Core {
         catalog
     }
 
-    /// What runs and what waits for the user, per conversation: those whose board is loaded
-    /// (every conversation that ran or changed since the daemon started), and every open
-    /// session, whose last run may have failed before a restart.
-    pub async fn activity(&self) -> Vec<ConversationActivity> {
+    /// The conversations whose activity there is to tell: those whose board is loaded (every
+    /// conversation that ran or changed since the daemon started), and every open session,
+    /// whose last turn may have failed before a restart (loaded here).
+    pub async fn activity_ids(&self) -> Vec<ConversationId> {
         let open: Vec<ConversationId> = self
             .visible_catalog()
             .conversations
@@ -192,10 +192,21 @@ impl Core {
                 tracing::debug!(conversation = %id, error = %err, "could not load a board");
             }
         }
+        self.boards.lock().await.keys().cloned().collect()
+    }
+
+    /// What runs and what waits for the user, per conversation whose board is loaded, with
+    /// each one's CLI turn from `turns` (none: no turn).
+    pub async fn activity(
+        &self,
+        turns: &HashMap<ConversationId, crate::thread_view::CliTurn>,
+    ) -> Vec<ConversationActivity> {
         let boards = self.boards.lock().await;
         let mut activity: Vec<_> = boards
             .iter()
-            .filter_map(|(id, board)| board.activity(id))
+            .filter_map(|(id, board)| {
+                board.activity(id, turns.get(id).copied().unwrap_or_default())
+            })
             .collect();
         activity.sort_by(|a, b| a.conversation_id.0.cmp(&b.conversation_id.0));
         activity

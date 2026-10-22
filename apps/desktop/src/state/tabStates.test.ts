@@ -2,26 +2,65 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import type { Conversation, ConversationActivity, EventEnvelope, TabState } from "@/ipc/generated";
-import { fromSnapshot, rowActivity } from "@/state/activity";
+import type { Conversation, EventEnvelope, McpStatus, RunState, TabState, TaskState, TurnEnd } from "@/ipc/generated";
+import { applyActivityEvents, applyActivityNews, fromSnapshot, rowActivity, stoppedOf, useActivity } from "@/state/activity";
 import { applySettledTabEvents, isTaskTab, sessionStatus, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
 
-const quiet = { running: false, awaiting: null, phase: null, workers: 0 } as const;
+const quiet = { running: false, awaiting: null, workers: 0 } as const;
 
-type Case = { name: string; activity: ConversationActivity | null; quotaWait: boolean; settled: "ready" | "merged" | "reverted" | null; expect: TabState | null };
+type Case = {
+  name: string;
+  turn?: { open?: boolean; lastEnd?: TurnEnd };
+  run?: RunState;
+  tasks?: [string, TaskState][];
+  approvals?: string[];
+  plans?: string[];
+  questions?: string[];
+  servers?: { name: string; status: McpStatus }[];
+  quotaWait?: boolean;
+  settled?: "ready" | "merged" | "reverted" | null;
+  expect: TabState | null;
+  status: string | null;
+  reason?: string;
+};
 
-test("the app reads each case of the states table as the engine does (crates/core/src/session_states.json)", () => {
-  const cases = JSON.parse(readFileSync(new URL("../../../../crates/core/src/session_states.json", import.meta.url), "utf8")) as Case[];
-  assert.ok(cases.length >= 10);
-  for (const each of cases) {
-    const activity = rowActivity(each.activity ? fromSnapshot(each.activity) : undefined);
-    assert.equal(tabState(activity, each.quotaWait, each.settled ?? undefined), each.expect, each.name);
+/** A case's activity as the app folds it: the run, the CLI's turn news, the cards, the servers. */
+function activityOf(each: Case, id: string) {
+  useActivity.setState({ byConversation: {} });
+  const on = (event: unknown) => ({ stream: `conversation:${id}`, event }) as EventEnvelope;
+  if (each.turn?.lastEnd) {
+    applyActivityNews({ conversationId: id, entries: [], opened: true });
+    applyActivityNews({ conversationId: id, entries: [], ended: each.turn.lastEnd });
+  }
+  if (each.turn?.open) applyActivityNews({ conversationId: id, entries: [], opened: true });
+  applyActivityEvents([
+    on({ type: "runStateChanged", conversationId: id, state: each.run ?? "idle" }),
+    ...(each.tasks ?? []).map(([task, state]) => on({ type: "taskUpdated", task: { id: task, conversationId: id, kind: "write", state, title: task } })),
+    ...(each.approvals ?? []).map((card) => on({ type: "approvalUpdated", approval: { id: card, conversationId: id, state: { type: "pending" } } })),
+    ...(each.plans ?? []).map((card) => on({ type: "planUpdated", plan: { id: card, conversationId: id, state: { type: "proposed" } } })),
+    ...(each.questions ?? []).map((card) => on({ type: "questionUpdated", question: { id: card, conversationId: id, answer: null } })),
+    on({ type: "mcpServersUpdated", conversationId: id, taskId: null, provider: "claude", atStart: false, boot: "b",
+      servers: (each.servers ?? []).map((server) => ({ ...server, tools: [], transport: null })) }),
+  ]);
+  return useActivity.getState().byConversation[id];
+}
+
+test("the app reads each case of the sidebar's states table as the engine does (crates/core/src/sidebar_states.json)", () => {
+  const cases = JSON.parse(readFileSync(new URL("../../../../crates/core/src/sidebar_states.json", import.meta.url), "utf8")) as Case[];
+  assert.ok(cases.length >= 20);
+  for (const [index, each] of cases.entries()) {
+    const activity = activityOf(each, `case-${index}`);
+    const row = rowActivity(activity);
+    const settled = each.settled ?? undefined;
+    assert.equal(tabState(row, !!each.quotaWait, settled), each.expect, each.name);
+    const status = sessionStatus(row, each.quotaWait ? { resetsAtMs: null } : null, settled ? { state: settled } : undefined, stoppedOf(activity));
+    assert.equal(status?.state ?? null, each.status, `${each.name}: its words`);
+    if (each.reason) assert.equal(status?.reason, each.reason, `${each.name}: its reason`);
   }
 });
 
 test("a session's state comes with the reason its row names", () => {
   const reset = new Date(2026, 9, 18, 14, 5).getTime();
-  assert.deepEqual(sessionStatus({ ...quiet, running: true, phase: "watchingCi", workers: 2 }, null, undefined), { state: "working", reason: "watching CI" });
   // How many workers it runs is never its reason: workers show in the session, not its row or tab.
   assert.deepEqual(sessionStatus({ ...quiet, running: true, workers: 2 }, null, undefined), { state: "working", reason: null });
   assert.deepEqual(sessionStatus({ ...quiet, running: true }, null, undefined), { state: "working", reason: null });
@@ -30,7 +69,7 @@ test("a session's state comes with the reason its row names", () => {
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "approval" }, null, undefined), { state: "needsYou", reason: "approval" });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "input" }, null, undefined), { state: "needsYou", reason: "question" });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "failed" }, null, undefined), { state: "failed", reason: null });
-  assert.deepEqual(sessionStatus({ ...quiet, running: true, phase: "merging" }, null, { state: "ready" }), { state: "merging", reason: null });
+  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "signIn" }, null, undefined), { state: "needsYou", reason: "sign-in" });
   assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "open", proof: true }), { state: "prOpen", reason: "proof attached" });
   assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "closed" }), { state: "ready", reason: null });
   assert.deepEqual(sessionStatus(quiet, null, { state: "merged", proof: true }), { state: "merged", reason: null });
@@ -75,9 +114,9 @@ test("a request that settles ready marks its session ready, a merge merged, and 
 });
 
 test("a failed turn needs the user until the next one runs", () => {
-  const failed = fromSnapshot({ conversationId: "s", run: "idle", tasks: [], approvals: [], questions: [], phases: [], failed: true });
+  const failed = fromSnapshot({ conversationId: "s", run: "idle", tasks: [], approvals: [], questions: [], failed: true });
   assert.equal(rowActivity(failed).awaiting, "failed");
-  assert.equal(rowActivity({ ...failed, run: "running" }).awaiting, null);
+  assert.equal(rowActivity({ ...failed, turnOpen: true }).awaiting, null);
 });
 
 const session = (extra: Partial<Conversation> = {}): Conversation => ({
@@ -98,7 +137,6 @@ test("sidebar marks follow live work, errors and unread activity independently o
   assert.deepEqual(sidebarIndicators(quiet, false, false), { working: false, error: false, unread: false });
   assert.deepEqual(sidebarIndicators(quiet, false, true), { working: false, error: false, unread: true });
   assert.deepEqual(sidebarIndicators({ ...quiet, running: true }, false, true), { working: true, error: false, unread: false });
-  assert.deepEqual(sidebarIndicators({ ...quiet, phase: "merging" }, false, true), { working: true, error: false, unread: false });
   assert.deepEqual(sidebarIndicators(quiet, true, true), { working: true, error: false, unread: false });
   assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "approval" }, false, false), { working: false, error: false, unread: false });
   assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "approval", running: true }, false, true), { working: true, error: false, unread: false });

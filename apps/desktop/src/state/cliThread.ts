@@ -161,7 +161,7 @@ function flushNews(): void {
   const ended = new Set<string>();
   for (const news of batch) {
     const id = news.conversationId;
-    if (news.turnEnded) ended.add(id);
+    if (news.ended) ended.add(id);
     const read = reads.get(id);
     if (read) {
       read.heard.push(...news.entries);

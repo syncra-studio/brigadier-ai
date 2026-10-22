@@ -85,7 +85,7 @@ test("a thread is read once, follows the stream, and is read again when its turn
     };
     answer = done;
     held = true;
-    applyThreadNews({ conversationId: "conv", entries: [], turnEnded: true });
+    applyThreadNews({ conversationId: "conv", entries: [], ended: "done" });
     await settle();
     applyThreadNews({ conversationId: "conv", entries: [at({ type: "message", itemId: "u2", role: "user", text: "Next" }, 5)] });
     applyThreadNews({ conversationId: "conv", entries: [at({ type: "messageDelta", itemId: "m2", text: "Sure" }, 6)] });

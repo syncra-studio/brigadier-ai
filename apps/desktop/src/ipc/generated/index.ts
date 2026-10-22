@@ -422,7 +422,6 @@ export type { SendOutcome } from "./SendOutcome";
 export type { ServerFrame } from "./ServerFrame";
 export type { SessionFolderUsage } from "./SessionFolderUsage";
 export type { SessionHeadline } from "./SessionHeadline";
-export type { SessionPhase } from "./SessionPhase";
 export type { SettingChange } from "./SettingChange";
 export type { Settings } from "./Settings";
 export type { SettledTab } from "./SettledTab";
