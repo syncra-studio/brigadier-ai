@@ -1566,8 +1566,16 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     assert!(b.merged, "{b:#?}");
     assert_eq!(b.ahead, 0);
 
-    // The rows came as thread news too, the prompt included.
-    while let Ok(item) = news.try_recv() {
+    // The rows came as thread news too, the prompt included, ending with none working (news
+    // is debounced: the last may come after the turn settled).
+    while !sent
+        .last()
+        .is_some_and(|rows| rows.iter().all(|row| !row.working))
+    {
+        let item = tokio::time::timeout(std::time::Duration::from_secs(20), news.recv())
+            .await
+            .expect("the finished rows as news")
+            .unwrap();
         if let Some(rows) = item.workers {
             sent.push(rows);
         }
@@ -1575,11 +1583,6 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     assert!(
         sent.iter()
             .any(|rows| rows.iter().any(|row| !row.waiting.is_empty())),
-        "{sent:#?}"
-    );
-    assert!(
-        sent.last()
-            .is_some_and(|rows| rows.iter().all(|row| !row.working)),
         "{sent:#?}"
     );
     // Never sidebar rows.
