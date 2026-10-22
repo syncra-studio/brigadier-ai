@@ -95,9 +95,9 @@ test("an overnight run is the session's one Job card in every state, with Start,
   assert.deepEqual(columns.planning.line, ["active:Write the plan"]);
   assert.deepEqual(columns.planning.detail, ["Writing the plan"]);
 
-  // A merged run gives the card back to the session's own work: what happens now, no fixed phases.
+  // A merged run leaves no card: the session's own work, with no plan and no button, has none.
   assert.equal(columns.change.run, null);
-  assert.equal(columns.change.title, "Working");
+  assert.equal(columns.change.title, null);
 
   // The job's tab: each phase's scope and "done when" before the start; the report once over,
   // with Merge.

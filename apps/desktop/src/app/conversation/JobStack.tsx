@@ -41,11 +41,11 @@ function useWaits(conversationId: string): Wait[] {
 }
 
 /**
- * The session's Job card: what is happening right now (J1), gone when nothing runs and nothing
- * waits on the user (J4), and while the session only works with nothing more to say: the bare
- * Working is the tab's and the sidebar's spinner. An overnight run, in every state of the run, or a plan of several steps
- * adds its phase bar under the same live words and buttons. Then what the session waits for at a
- * set time: cards of their own, under the context card or in its place while it is hidden.
+ * The session's Job card, only for a job of several steps: an overnight run, in every state of
+ * the run, or a plan, its phase bar under what is happening right now (J1). Outside them it shows
+ * only while a button is needed (Open CI, Cancel a held merge, Merge anyway): the session's state
+ * alone is the tab's and the sidebar's. Then what the session waits for at a set time: cards of
+ * their own, under the context card or in its place while it is hidden.
  */
 export function JobStack({ conversationId }: { conversationId: string }) {
   const job = useSessionJobs(conversationId)?.current ?? null;
@@ -69,7 +69,7 @@ export function JobStack({ conversationId }: { conversationId: string }) {
           onEdit={() => revealOvernight(run.run.id)}
         />
       ) : (
-        ((live && !live.plain) || plan) && <JobCard conversationId={conversationId} live={live} plan={plan} nowMs={nowMs} onOpen={open} />
+        (plan || (live && live.actions.length > 0)) && <JobCard conversationId={conversationId} live={live} plan={plan} nowMs={nowMs} onOpen={open} />
       )}
       {waits.map((wait) => (
         <WaitCard key={wait.key} title={wait.title} reason={wait.reason} atMs={wait.atMs} nowMs={nowMs} />

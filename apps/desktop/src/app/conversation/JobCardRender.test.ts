@@ -18,7 +18,7 @@ type Seen = {
   schedule: string | null;
 };
 
-test("the Job card says what is happening right now, from the board's events, and is gone when nothing runs or waits", { timeout: 60000 }, async (t) => {
+test("the Job card shows only for a plan or a button, saying what is happening right now from the board's events", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "job-card.html", "job-card-result", 30000, { reducedMotion: true })) as Record<string, Seen> & {
     sent: string[];
     tab: { steps: string[]; current: (string | null)[]; findings: number };
@@ -28,23 +28,17 @@ test("the Job card says what is happening right now, from the board's events, an
     return { tone, headline, detail, buttons };
   };
 
-  // Idle: no Job card, the context card only (J4).
-  assert.deepEqual(seen["idle"]!.cards, ["context"]);
-  // The thread at work with nothing more to say: no Job card, the tab's spinner says it.
-  assert.deepEqual(seen["working"]!.cards, ["context"]);
+  // No Job card for the session's state alone, outside a plan or an overnight run: idle, at work,
+  // checks, reviews, merges, waiting on the user, failures and outcomes.
+  for (const id of [
+    "idle", "working", "checksRunning", "checksFailed", "checksPassed", "reviewRunning", "reviewFindings", "reviewClean",
+    "merging", "merged", "mergedUnchecked", "mergeRefusedFirm", "mergeRefusedOld", "mergedAnyway", "waitingAnswer",
+    "waitingApproval", "workerFailed", "devServer", "stopped", "nextMessage",
+  ]) {
+    assert.deepEqual(seen[id]!.cards, ["context"], `${id} has no Job card`);
+  }
 
-  // Checks (run_checks): running with the command at work, failed with what failed, passed on the commit.
-  assert.deepEqual(card("checksRunning"), { tone: "running", headline: "Running checks · 3 of 5", detail: ["Now: desktop tests"], buttons: [] });
-  assert.deepEqual(card("checksFailed"), { tone: "failed", headline: "Checks failed", detail: ["pnpm test: 2 tests failed"], buttons: [] });
-  assert.equal(seen["checksFailed"]!.spinning, false);
-  assert.deepEqual(card("checksPassed"), { tone: "done", headline: "Checks passed on 4e1c49e", detail: ["5 of 5 passed"], buttons: [] });
-
-  // Review (request_review): who reviews, then what came back.
-  assert.deepEqual(card("reviewRunning"), { tone: "running", headline: "Codex is reviewing", detail: ["The changes up to 4e1c49e"], buttons: [] });
-  assert.deepEqual(card("reviewFindings"), { tone: "done", headline: "Review found 3 issues", detail: ["From Codex’s review of 4e1c49e"], buttons: [] });
-  assert.equal(seen["reviewClean"]!.headline, "Review found nothing to fix");
-
-  // CI and the held merge left the composer rail: they are the card's, buttons included (R2).
+  // Only a button keeps it: CI's Open CI, the held merge's Cancel, and Merge anyway for a refusal the user can waive.
   assert.deepEqual(card("ciChecking"), { tone: "running", headline: "Checking CI · 3 of 5 jobs done", detail: ["main · 4e1c49e9"], buttons: ["Open CI"] });
   assert.deepEqual(card("ciFailed"), { tone: "failed", headline: "CI failed · test", detail: ["main · 4e1c49e9"], buttons: ["Open CI"] });
   assert.deepEqual(card("heldMerge"), {
@@ -53,14 +47,6 @@ test("the Job card says what is happening right now, from the board's events, an
     detail: ["Into main once they’re done, as you asked"],
     buttons: ["Cancel"],
   });
-  assert.ok(seen.sent.includes("cancelMerge"), `Cancel cancels the held merge: ${seen.sent.join(", ")}`);
-  assert.ok(seen.sent.includes("open https://github.com/o/r/actions/runs/test"), `Open CI opens the failed run: ${seen.sent.join(", ")}`);
-
-  // Merge: merging, then merged, saying checks passed only when they passed on the merged commit.
-  assert.deepEqual(card("merging"), { tone: "running", headline: "Merging into main", detail: ["Checks passed on head111"], buttons: [] });
-  assert.deepEqual(card("merged"), { tone: "merged", headline: "Merged into main · checks passed", detail: ["4e1c49e · 4 commits"], buttons: [] });
-  assert.equal(seen["mergedUnchecked"]!.headline, "Merged into main");
-  // The merge rule refused it: the card says why, and only a refusal the user can waive offers Merge anyway.
   assert.deepEqual(card("mergeRefused"), {
     tone: "waiting",
     headline: "Can’t merge yet",
@@ -68,28 +54,11 @@ test("the Job card says what is happening right now, from the board's events, an
     buttons: ["Merge anyway"],
   });
   assert.equal(seen["mergeRefused"]!.timer, false);
+  assert.ok(seen.sent.includes("cancelMerge"), `Cancel cancels the held merge: ${seen.sent.join(", ")}`);
+  assert.ok(seen.sent.includes("open https://github.com/o/r/actions/runs/test"), `Open CI opens the failed run: ${seen.sent.join(", ")}`);
   assert.ok(seen.sent.includes("mergeSession anyway=true"), `Merge anyway merges without the checks: ${seen.sent.join(", ")}`);
-  assert.deepEqual(card("mergeRefusedFirm").buttons, []);
-  assert.equal(seen["mergeRefusedFirm"]!.headline, "Can’t merge yet");
-  assert.deepEqual(seen["mergeRefusedOld"]!.cards, ["context"]);
-  // After Merge anyway it never claims the checks passed.
-  assert.equal(seen["mergedAnyway"]!.headline, "Merged into main · checks skipped");
 
-  // Waiting on you: the card points at the card below, never copies its words or buttons (R3).
-  assert.deepEqual(card("waitingAnswer"), { tone: "waiting", headline: "Waiting for your answer below", detail: [], buttons: [] });
-  assert.doesNotMatch(seen["waitingAnswer"]!.text, /Build the page/);
-  assert.equal(seen["waitingAnswer"]!.timer, false);
-  assert.deepEqual(card("waitingApproval"), { tone: "waiting", headline: "Waiting for your approval below", detail: [], buttons: [] });
-
-  // Failures in the work itself.
-  assert.deepEqual(card("workerFailed"), { tone: "failed", headline: "A worker failed", detail: ["The registry tests failed"], buttons: [] });
-  assert.deepEqual(card("devServer"), { tone: "failed", headline: "The dev server stopped", detail: ["Port 1420 is already in use"], buttons: [] });
-
-  // A finished outcome stays until the next message; then the card is gone.
-  assert.deepEqual(card("stopped"), { tone: "stopped", headline: "Stopped", detail: ["You stopped it"], buttons: [] });
-  assert.deepEqual(seen["nextMessage"]!.cards, ["context"]);
-
-  // The thread's headline wins, its detail under it; the held merge's Cancel stays reachable.
+  // The thread's headline wins, its detail under it, while the held merge's Cancel keeps the card.
   assert.deepEqual(card("headline"), {
     tone: "running",
     headline: "Investigating the dev server",

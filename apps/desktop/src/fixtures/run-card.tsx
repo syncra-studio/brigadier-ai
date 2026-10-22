@@ -191,7 +191,7 @@ const restricted = overnightRun("restricted", {
 });
 const bare = overnightRun("bare", { phases: [], directives: { ...proposed.directives, deadline: { type: "untilDone" } } });
 const planning = overnightRun("planning", { phases: [], state: "running", startedAtMs: NOW - 10 * MIN, windDownAtMs: null });
-// A run merged earlier: the session's own work after it has the card back.
+// A run merged earlier: it leaves no card for the session's own work after it.
 const merged = overnightRun("merged", {
   ...over(6 * HOUR, { type: "done" }),
   verifiedCommit: "def5678abc",
