@@ -29,6 +29,8 @@ tools/         full-checks.sh, the live smoke, dev-app helpers, the A/B harness
 docs/          design plans and evidence (see docs/README.md)
 ```
 
+The report-only [continuity battery](../tools/continuity-battery/README.md) measures Claude recall across forced rebirth seams: `tools/continuity-battery/run.sh`.
+
 ## Requirements
 
 - Rust 1.98.1 (pinned in `rust-toolchain.toml`; rustup installs it on first use)
