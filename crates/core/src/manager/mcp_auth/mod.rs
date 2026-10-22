@@ -178,7 +178,7 @@ impl McpAuth {
     }
 
     /// Tests: the Keychain the stores are read through.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn set_keychain(&self, keychain: Arc<dyn Keychain>) {
         *lock(&self.keychain) = keychain;
     }
