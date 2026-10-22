@@ -132,13 +132,19 @@ pub(crate) fn view(
     }
     let running = live.is_some_and(|live| live.open);
     if let Some(live) = live {
-        // Once the turn ended its file holds it: what the stream said keeps only items the
-        // file may still lack, which meet the file's by id. What has no id of its own (an
-        // error) would show twice.
+        // Once the turn ended its file holds it: what the stream said adds only items the
+        // file still lacks (by id), so the thread reads as it will after a restart. What has
+        // no id of its own (an error) would show twice.
+        let held: std::collections::HashSet<&str> = entries
+            .iter()
+            .filter_map(|entry| session_file::item_id(&entry.event))
+            .collect();
         let more = live
             .entries
             .iter()
-            .filter(|entry| running || session_file::item_id(&entry.event).is_some())
+            .filter(|entry| {
+                running || session_file::item_id(&entry.event).is_some_and(|id| !held.contains(id))
+            })
             .cloned()
             .collect();
         entries = session_file::merge(entries, more);

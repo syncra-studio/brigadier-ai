@@ -5,6 +5,7 @@ import type { LeadStep } from "@/app/conversation/activity/group";
 import { FileCounts } from "@/app/conversation/activity/FileCounts";
 import { FileLink } from "@/app/conversation/activity/FileLink";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { keptInFull } from "@/app/conversation/activity/leadStepDetail";
 import { leadAction, useLeadItems } from "@/app/conversation/activity/StepDetail";
 import { basename, type StepWords, type ToolStep } from "@/app/conversation/activity/words";
 import type { FileChange, FileChangeKind, FileStat, ItemStatus } from "@/ipc/generated";
@@ -100,7 +101,7 @@ export function EditedFileRows({ step, files, conversationId }: { step: LeadStep
       status={kind.status}
       startedAtMs={step.atMs}
       diffs={new Map(
-        conversationId && kind.logSeq !== undefined
+        conversationId && keptInFull(kind)
           ? files.map((file) => [file.path, <FileDiff key={file.path} conversationId={conversationId} requestId={step.requestId ?? null} kind={kind} path={file.path} />])
           : [],
       )}

@@ -20,4 +20,8 @@ firstLaunch: boolean,
 /**
  * Multiplier applied to timing budgets (1 locally, higher on shared CI runners).
  */
-budgetTolerance: number, };
+budgetTolerance: number, 
+/**
+ * The thread is drawn from the CLI's own session file (`BRIGADIER_CLI_THREAD=1`, S9).
+ */
+cliThread?: boolean, };

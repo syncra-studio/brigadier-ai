@@ -154,6 +154,7 @@ fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
     FileEntry {
         event: event.expect("an event"),
         at_ms: Some(at),
+        updated_at_ms: None,
         parent: None,
         steer: false,
         images: Vec::new(),

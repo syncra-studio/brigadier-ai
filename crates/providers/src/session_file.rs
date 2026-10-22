@@ -19,6 +19,11 @@ pub struct FileEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub at_ms: Option<i64>,
+    /// When the CLI last said something of it (ms since the epoch): a call's end, a message's
+    /// newest words. None when it said all of it at once (`at_ms`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub updated_at_ms: Option<i64>,
     /// The subagent call it was made in (Claude's `Agent` tool call); none in the session's
     /// own thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,6 +44,7 @@ impl FileEntry {
         Self {
             event,
             at_ms,
+            updated_at_ms: None,
             parent: None,
             steer: false,
             images: Vec::new(),
@@ -105,12 +111,17 @@ pub fn merge(mut entries: Vec<FileEntry>, more: Vec<FileEntry>) -> Vec<FileEntry
                 ) = (&mut earlier.event, &entry.event)
                 {
                     output.get_or_insert_with(String::new).push_str(text);
+                    earlier.updated_at_ms = entry.at_ms.max(earlier.updated_at_ms);
                     continue;
                 }
                 keep_input(&earlier.event, &mut entry.event);
                 if entry.images.is_empty() {
                     entry.images = std::mem::take(&mut earlier.images);
                 }
+                entry.updated_at_ms = entry
+                    .updated_at_ms
+                    .or(entry.at_ms)
+                    .max(earlier.updated_at_ms);
                 entry.at_ms = earlier.at_ms.or(entry.at_ms);
                 entry.steer |= earlier.steer;
                 entry.parent = entry.parent.take().or(earlier.parent.take());
@@ -376,6 +387,9 @@ mod tests {
             ProviderEvent::Command { output: Some(output), .. } if output == "one\n"
         ));
         assert_eq!(merged[2].at_ms, Some(4));
+        // Each item says when it was last heard of: the command's output, the message's words.
+        assert_eq!(merged[1].updated_at_ms, Some(3));
+        assert_eq!(merged[2].updated_at_ms, Some(5));
     }
 
     /// One line for an entry: what it is, then its first words.

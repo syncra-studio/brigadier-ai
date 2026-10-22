@@ -11,6 +11,11 @@ export type FileEntry = { event: ProviderEvent,
  */
 atMs?: number, 
 /**
+ * When the CLI last said something of it (ms since the epoch): a call's end, a message's
+ * newest words. None when it said all of it at once (`at_ms`).
+ */
+updatedAtMs?: number, 
+/**
  * The subagent call it was made in (Claude's `Agent` tool call); none in the session's
  * own thread.
  */

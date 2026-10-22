@@ -13,6 +13,7 @@ import { Check } from "@/components/icons";
 import type { ItemStatus } from "@/ipc/generated";
 import { ansiRuns, stripAnsi } from "@/lib/ansi";
 import { cn } from "@/lib/utils";
+import { cliThreadOn, useCliCallItems } from "@/state/cliThread";
 import { useCallItems } from "@/state/threadItems";
 
 /**
@@ -280,8 +281,13 @@ export function callStood(kind: ToolStep): string {
   return `${kind.status}|${kind.outputBytes ?? ""}|${kind.endedAtMs ?? ""}|${kind.logSeq ?? ""}`;
 }
 
-/** A lead's call's items, read from the thread's calls when its row opens and again as it moves on. */
+/**
+ * A lead's call's items, read from the thread's calls when its row opens and again as it moves on;
+ * in a thread drawn from the CLI's session file, folded from the call's own item there.
+ */
 export function useLeadItems(conversationId: string, requestId: string | null, kind: ToolStep) {
-  return useCallItems(conversationId, requestId, kind.turn ?? null, kind.itemId, callStood(kind));
+  const cli = useCliCallItems(cliThreadOn() ? conversationId : null, kind.itemId);
+  const kept = useCallItems(conversationId, cli ? null : requestId, kind.turn ?? null, kind.itemId, callStood(kind));
+  return cli ?? kept;
 }
 

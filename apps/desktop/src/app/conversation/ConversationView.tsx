@@ -41,6 +41,7 @@ import {
   shownBranch,
   type ThreadNode,
 } from "@/app/conversation/blocks";
+import { cliThreadTree } from "@/app/conversation/cliBlocks";
 import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
 import {
   type ComposerTarget,
@@ -72,6 +73,7 @@ import type {
   Mention,
   ModelChoice,
   Rating,
+  ThreadView,
 } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
@@ -97,6 +99,7 @@ import {
 import { toast } from "@/state/toasts";
 import { takeBackgroundSend } from "@/state/backgroundSend";
 import { useBoard } from "@/state/board";
+import { readSessionImageBlob, sessionImageOf, useCliThreadOn, useThreadView } from "@/state/cliThread";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
@@ -369,6 +372,7 @@ function textOf(message: AppendMessage): string {
 const unfolded = new Set<string>();
 
 const NO_PENDING: PendingMessage[] = [];
+const EMPTY_VIEW: ThreadView = { entries: [], turns: [] };
 const NO_RATINGS: Partial<Record<string, Rating>> = {};
 
 const EMPTY_DIGEST: BoardDigest & { head: string | null } = {
@@ -484,17 +488,22 @@ export function ConversationView({
   }, [conversationId, thread.items, thread.fullText]);
 
   const session = conversation?.kind === "session" || resolved.kind === "session";
+  // With `BRIGADIER_CLI_THREAD=1` the thread is the CLI's own (S9), read from its session file.
+  const cliThread = useCliThreadOn();
+  const cliView = useThreadView(conversationId, cliThread);
   const full = useMemo(
     () =>
-      buildThread(
-        thread.items,
-        thread.fullText,
-        thread.hasMore,
-        digest ?? EMPTY_DIGEST,
-        pending,
-        session ? "edits" : "all",
-      ),
-    [thread.items, thread.fullText, thread.hasMore, digest, pending, session],
+      cliThread && conversationId
+        ? cliThreadTree(cliView ?? EMPTY_VIEW, conversationId, thread.items, thread.fullText, pending, digest?.requests ?? {})
+        : buildThread(
+            thread.items,
+            thread.fullText,
+            thread.hasMore,
+            digest ?? EMPTY_DIGEST,
+            pending,
+            session ? "edits" : "all",
+          ),
+    [cliThread, cliView, conversationId, thread.items, thread.fullText, thread.hasMore, digest, pending, session],
   );
   // A long thread shows its newest turns; the older ones wait behind "N earlier messages", until
   // shown (then for the app's run, so the thread reopens where it was left).
@@ -513,7 +522,8 @@ export function ConversationView({
   );
   // An older page that failed to load offers Try again, in the conversation it failed in.
   const [olderFailedIn, setOlderFailedIn] = useState<string | null>(null);
-  const hasMore = thread.hasMore;
+  // The CLI's thread is read whole: no older pages.
+  const hasMore = thread.hasMore && !cliThread;
   const oldest = thread.items[0]?.seq ?? null;
   // Find's search of the older pages, from the oldest message of the branch shown.
   const leaf = useMemo(() => (hasMore ? (shownBranch(thread.items, digest?.head ?? null, hasMore)[0]?.id ?? null) : null), [thread.items, digest?.head, hasMore]);
@@ -622,9 +632,13 @@ export function ConversationView({
   // oxlint-disable-next-line react-hooks/exhaustive-deps, react/memo-dependencies
   const attachments = useMemo(() => new BlobAttachmentAdapter(), [conversationId]);
   const reader = useMemo<AttachmentReader>(() => ({
-    read: readAttachment,
+    // A user message of the CLI's thread carries its images in the session file.
+    read: (ref) => {
+      const image = sessionImageOf(ref);
+      return image && conversationId ? readSessionImageBlob(conversationId, image) : readAttachment(ref);
+    },
     composerRef: (id) => attachments.refOf(id),
-  }), [attachments]);
+  }), [attachments, conversationId]);
   const [mentions] = useState(() => new MentionMemory());
   const [pulled] = useState(() => new PulledSlot());
   const draftTarget = resolved.target;
@@ -782,7 +796,7 @@ export function ConversationView({
       setError(null);
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
-    isLoading: thread.loading && thread.items.length === 0,
+    isLoading: cliThread ? conversationId !== null && cliView === null : thread.loading && thread.items.length === 0,
     isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,

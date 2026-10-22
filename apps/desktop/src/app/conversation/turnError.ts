@@ -17,7 +17,7 @@ const NETWORK = /network|connection|disconnected|\beconn\w*|enetunreach|enotfoun
 const API = /api error|\b[45]\d\d\b|overloaded|server error|bad gateway|service unavailable|invalid_request|authentication_error/i;
 
 /** The daemon's words for a turn that was running when Brigadier quit (`INTERRUPTED_BY_QUIT`). */
-const INTERRUPTED = "Brigadier quit while this was running.";
+export const INTERRUPTED = "Brigadier quit while this was running.";
 /** …and for one still starting, whose message the thread never had (`INTERRUPTED_BEFORE_START`). */
 const INTERRUPTED_BEFORE_START = "Brigadier quit before this started.";
 

@@ -12,6 +12,7 @@ import {
   toggleSettings,
 } from "@/state/actions";
 import { applyActivityEvents, loadActivity } from "@/state/activity";
+import { applyThreadNews, resyncThreadViews } from "@/state/cliThread";
 import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, forgetKeptBoards, sideBoardIds, useBoard } from "@/state/board";
@@ -80,7 +81,7 @@ async function resync() {
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates(), loadConnect()]);
   const log = useBoard.getState().orchestrator;
   if (log) void openOrchestratorLog(log.conversationId);
-  await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks()]);
+  await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks(), resyncThreadViews(shown)]);
 }
 
 /** Whether the daemon has answered yet: startup marks the first time. */
@@ -147,6 +148,9 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "storageClean":
       emitCleanProgress(message.progress);
+      break;
+    case "threadNews":
+      applyThreadNews(message.news);
       break;
     case "workspaceChanged":
       emitWorkspaceChanged(message.target);

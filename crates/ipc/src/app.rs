@@ -58,6 +58,10 @@ pub enum BridgeEvent {
     WorkspaceChanged {
         target: brigadier_core::WorkspaceTarget,
     },
+    /// What a CLI's live stream added to a conversation's thread (S9).
+    ThreadNews {
+        news: brigadier_core::thread_view::ThreadNews,
+    },
     /// What the right sidebar's search with `id` found next, or that it ended.
     Search {
         id: u32,
@@ -423,6 +427,10 @@ pub struct AppInfo {
     pub first_launch: bool,
     /// Multiplier applied to timing budgets (1 locally, higher on shared CI runners).
     pub budget_tolerance: f64,
+    /// The thread is drawn from the CLI's own session file (`BRIGADIER_CLI_THREAD=1`, S9).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub cli_thread: bool,
 }
 
 /// What the webview measured during the smoke check.

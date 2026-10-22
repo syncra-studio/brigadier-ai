@@ -1,0 +1,232 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem } from "@/app/conversation/cliBlocks";
+import { INTERRUPTED } from "@/app/conversation/turnError";
+import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, UserRequest } from "@/ipc/generated";
+
+const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
+const user = (itemId: string, text: string, atMs: number, more: Partial<FileEntry> = {}) =>
+  at({ type: "message", itemId, role: "user", text }, atMs, more);
+const tool = (itemId: string, name: string, input: string | null, status: "inProgress" | "completed" | "failed", output: string | null = null): ProviderEvent => ({
+  type: "toolCall",
+  itemId,
+  name,
+  input,
+  status,
+  output,
+});
+const turn = (userMessage: string, startedAtMs: number, endedAtMs: number | null, end: ThreadTurn["end"], error: string | null = null): ThreadTurn => ({
+  userMessage,
+  startedAtMs,
+  endedAtMs,
+  end,
+  error,
+});
+
+/** A thread with a turn of each ending: done, stopped, failed, interrupted, and one running. */
+const view: ThreadView = {
+  entries: [
+    user("u1", "Fix the test", 1000),
+    at({ type: "reasoning", itemId: "r1", text: "Looking at the test first." }, 1100),
+    at(tool("t1", "Read", '{"file_path":"/repo/src/a.ts"}', "completed", "1\tcode"), 1200, { updatedAtMs: 3500 }),
+    at({ type: "command", itemId: "c1", command: "/bin/zsh -lc 'pnpm test'", cwd: null, status: "completed", exitCode: 0, output: "ok", durationMs: 2000 }, 1300),
+    // Brigadier's plumbing: no row.
+    at(tool("t2", "ToolSearch", '{"query":"select:Read"}', "completed"), 1350),
+    at(tool("agent", "Agent", '{"description":"Look around","prompt":"…"}', "completed", "Found it."), 1400),
+    // The subagent's own work: under its Agent row, not drawn.
+    at({ type: "command", itemId: "sub-c", command: "ls", cwd: null, status: "completed", exitCode: 0, output: "a", durationMs: 5 }, 1450, { parent: "agent" }),
+    user("s1", "Also check the docs", 1500, { steer: true }),
+    at({ type: "fileChanges", itemId: "f1", changes: [{ path: "src/a.ts", kind: "update", diff: "-old\n+new\n+more" }], status: "completed" }, 1600),
+    at({ type: "message", itemId: "a1", role: "assistant", text: "Fixed: the test passes." }, 1700),
+
+    user("u2", "Run the slow one", 5000),
+    at({ type: "command", itemId: "c2", command: "sleep 100", cwd: null, status: "failed", exitCode: null, output: null, durationMs: null }, 5100, { updatedAtMs: 6000 }),
+
+    user("u3", "Try the API", 7000),
+    at({ type: "error", error: { kind: "other", message: "API Error: 500", willRetry: false, limit: null, code: null } }, 7400),
+
+    user("u4", "Build it", 8000),
+    at(tool("b1", "Bash", '{"command":"cargo build"}', "inProgress"), 8100),
+
+    user("u5", "What next?", 9000),
+    at({ type: "reasoningDelta", itemId: "r5", text: "Weighing it" }, 9100, { updatedAtMs: 9150 }),
+    at({ type: "messageDelta", itemId: "m5", text: "Checking the plan", phase: "commentary" }, 9200),
+  ],
+  turns: [
+    turn("u1", 1000, 4000, "done"),
+    turn("u2", 5000, 6000, "stopped"),
+    turn("u3", 7000, 7500, "failed", "API Error: 500"),
+    turn("u4", 8000, 8200, "interrupted"),
+    turn("u5", 9000, null, null),
+  ],
+};
+
+test("a thread's turns from its CLI's file are the thread's blocks, one per turn", () => {
+  const blocks = cliBlocks(view, "conv");
+  assert.deepEqual(blocks.map((block) => [block.key, block.user?.kind === "message" ? block.user.text : null, block.state, block.error]), [
+    ["u1", "Fix the test", "done", null],
+    ["u2", "Run the slow one", "stopped", null],
+    ["u3", "Try the API", "failed", "API Error: 500"],
+    ["u4", "Build it", "failed", INTERRUPTED],
+    ["u5", "What next?", "working", null],
+  ]);
+
+  const [done, stopped, failed, interrupted, running] = blocks;
+  assert.ok(done && stopped && failed && interrupted && running);
+  // "Worked for …" runs from the CLI's start of the turn to its end.
+  assert.deepEqual([done.startedAtMs, done.endedAtMs, done.worked], [1000, 4000, [{ fromMs: 1000, toMs: 4000 }]]);
+  assert.deepEqual(done.user?.kind === "message" && done.user.message, {
+    id: "u1",
+    conversationId: "conv",
+    seq: 1,
+    role: "user",
+    text: "Fix the test",
+    blob: null,
+    createdAtMs: 1000,
+    attachments: [],
+    mentions: [],
+    model: null,
+    requestId: "u1",
+    parentId: null,
+  } satisfies Message);
+  assert.deepEqual(done.thinking, [
+    { itemId: "r1", requestId: "u1", text: "Looking at the test first.", position: 1, startedAtMs: 1100, updatedAtMs: 1100, throughPosition: 1, complete: true },
+  ]);
+  assert.deepEqual(done.texts, [{ messageId: "a1", position: 9, text: "Fixed: the test passes.", model: null, update: false, atMs: 1700 }]);
+  assert.deepEqual(
+    done.steers.map((steer) => [steer.text, steer.position, steer.message.createdAtMs]),
+    [["Also check the docs", 7, 1500]],
+  );
+  // Rows in the words the engine gives the live stream's calls; the plumbing and the subagent's own work are not rows.
+  assert.deepEqual(done.orchestratorSteps, [
+    {
+      kind: { type: "tool", itemId: "t1", name: "Read", detail: "/repo/src/a.ts", status: "completed", throughPosition: 0, endedAtMs: 3500, item: "tool" },
+      position: 2,
+      atMs: 1200,
+      requestId: "u1",
+    },
+    {
+      kind: { type: "tool", itemId: "c1", name: "shell", detail: "pnpm test", status: "completed", throughPosition: 0, endedAtMs: 3300, exit: 0, item: "command" },
+      position: 3,
+      atMs: 1300,
+      requestId: "u1",
+    },
+    {
+      kind: { type: "tool", itemId: "agent", name: "Agent", detail: null, status: "completed", throughPosition: 0, endedAtMs: 1400, item: "tool" },
+      position: 5,
+      atMs: 1400,
+      requestId: "u1",
+    },
+    {
+      kind: {
+        type: "tool",
+        itemId: "f1",
+        name: "apply_patch",
+        detail: "src/a.ts",
+        status: "completed",
+        throughPosition: 0,
+        endedAtMs: 1600,
+        item: "files",
+        files: [{ path: "src/a.ts", insertions: 2, deletions: 1, binary: false, change: "update" }],
+      },
+      position: 8,
+      atMs: 1600,
+      requestId: "u1",
+    },
+  ]);
+  for (const block of blocks) assert.deepEqual([block.cards, block.tasks, block.rows, block.waitingFor, block.waited], [[], [], [], [], []]);
+
+  // The user's Stop: a call it ended reads stopped.
+  assert.deepEqual(stopped.orchestratorSteps.map((step) => step.kind), [
+    { type: "tool", itemId: "c2", name: "shell", detail: "sleep 100", status: "failed", stopped: true, throughPosition: 0, endedAtMs: 6000, item: "command" },
+  ]);
+  assert.deepEqual(stopped.worked, [{ fromMs: 5000, toMs: 6000 }]);
+  // The error is the turn's, not a row of its own.
+  assert.deepEqual(failed.orchestratorSteps, []);
+  // A call the CLI never finished runs no clock.
+  assert.deepEqual(interrupted.orchestratorSteps.map((step) => step.kind), [
+    { type: "tool", itemId: "b1", name: "Bash", detail: "cargo build", status: "inProgress", throughPosition: 0, item: "command" },
+  ]);
+
+  // The running turn works on, its time open, its reasoning still coming and its line between steps streaming.
+  assert.deepEqual([running.endedAtMs, running.worked], [null, [{ fromMs: 9000, toMs: null }]]);
+  assert.deepEqual(running.thinking.map((segment) => [segment.text, segment.complete, segment.updatedAtMs]), [["Weighing it", false, 9150]]);
+  assert.deepEqual(running.texts, [{ messageId: "m5", position: 18, text: "Checking the plan", model: null, update: false, commentary: true, atMs: 9200 }]);
+});
+
+test("a turn the stream started, not read again yet, works", () => {
+  const blocks = cliBlocks({ entries: [...view.entries.slice(0, 10), user("u9", "Next", 9900)], turns: view.turns.slice(0, 1) }, "conv");
+  assert.deepEqual(blocks.map((block) => [block.key, block.state, block.startedAtMs, block.endedAtMs]), [
+    ["u1", "done", 1000, 4000],
+    ["u9", "working", 9900, null],
+  ]);
+});
+
+test("a compaction in a turn shows in it, and images in the user's message are its attachments", () => {
+  const image = { file: "/s.jsonl", line: 3, index: 0, mime: "image/png" };
+  const blocks = cliBlocks(
+    {
+      entries: [
+        user("u1", "Look at this", 1000, { images: [image] }),
+        at({ type: "compactionEnded", automatic: true, tokensBefore: 100, tokensAfter: 10, error: null }, 1500),
+      ],
+      turns: [turn("u1", 1000, 2000, "done")],
+    },
+    "conv",
+  );
+  const [block] = blocks;
+  assert.deepEqual(block?.compactions, [{ id: "compaction:1", inTurn: true, automatic: true, state: "done", error: null, position: 1, startedAtMs: 1500, endedAtMs: 1500 }]);
+  assert.deepEqual(block?.user?.kind === "message" && block.user.message.attachments.map((ref) => [ref.name, ref.mime]), [["Image", "image/png"]]);
+});
+
+const stored = (id: string, createdAtMs: number): Message => ({
+  id,
+  conversationId: "conv",
+  seq: 1,
+  role: "user",
+  text: `stored ${id}`,
+  blob: null,
+  createdAtMs,
+  attachments: [],
+  mentions: [],
+  model: null,
+  requestId: id,
+  parentId: null,
+});
+const request = (id: string, state: UserRequest["state"]) => ({ id, state, startedAtMs: 0, endedAtMs: 9999 }) as UserRequest;
+
+test("the tree chains the turns, then the messages on their way", () => {
+  const tree = cliThreadTree(
+    { entries: view.entries.slice(0, 10), turns: view.turns.slice(0, 1) },
+    "conv",
+    // The CLI has the first; the second never reached it; the third is on its way; the fourth ended before it.
+    [stored("m1", 900), stored("m2", 2000), stored("m3", 2100), stored("m4", 2200)],
+    {},
+    [{ localId: "local-1", conversationId: "conv", text: "Sending", createdAtMs: 2300, attachments: [] }],
+    { m2: request("m2", { type: "failed", error: "The CLI did not start." }), m3: request("m3", { type: "working" }), m4: request("m4", { type: "done" }) },
+  );
+  assert.deepEqual(tree.nodes.map((node) => [node.id, node.parentId, node.kind, node.block.state]), [
+    ["u1", null, "user", "done"],
+    ["request:u1", "u1", "block", "done"],
+    ["m2", "request:u1", "user", "failed"],
+    ["request:m2", "m2", "block", "failed"],
+    ["m3", "request:m2", "user", "working"],
+    ["request:m3", "m3", "block", "working"],
+    ["local-1", "request:m3", "user", "working"],
+    ["request:local-1", "local-1", "block", "working"],
+  ]);
+  assert.equal(tree.headId, "request:local-1");
+});
+
+test("a call's kind, detail and exit read as the engine's", () => {
+  assert.equal(toolItem("mcp__brigadier__run", null), "command");
+  assert.equal(toolItem("Read", '{"file_path":"shot.PNG"}'), "image");
+  assert.equal(toolItem("WebFetch", null), "web");
+  assert.equal(toolItem("Write", null), "files");
+  assert.equal(stepDetail('{"action":"findInPage","pattern":"lts","url":"https://nodejs.org"}'), "'lts' in https://nodejs.org");
+  assert.equal(stepDetail('{"description":"x"}'), null);
+  assert.equal(exitOf("Exit code 2\nboom"), 2);
+  assert.equal(exitOf('[{"type":"text","text":"[exit 1] failed"}]'), 1);
+  assert.equal(exitOf("fine"), undefined);
+});
