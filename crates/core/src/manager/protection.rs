@@ -478,6 +478,7 @@ mod tests {
                 );
             }
         }
+        #[cfg(unix)]
         if let Some(temp) = super::super::workers::temp_dir_in_tmp() {
             assert_eq!(super::super::workers::test_data_root(), temp);
         }
