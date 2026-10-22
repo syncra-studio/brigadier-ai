@@ -170,6 +170,12 @@ fn translate(mut value: Value, subagent: bool) -> Line {
                     steer: false,
                 };
             }
+            // A background task's end that the CLI took as a turn of its own: its notice, not
+            // the user's message (its resume view shows no prompt for it, and the live stream
+            // echoes none).
+            if value.pointer("/origin/kind").and_then(Value::as_str) == Some("task-notification") {
+                return Line::Skip;
+            }
             let text = content.map(text_of).unwrap_or_default();
             if text.starts_with(INTERRUPTED) {
                 return Line::Interrupted;
