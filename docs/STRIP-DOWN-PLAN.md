@@ -23,6 +23,8 @@
 > Amended again with three take-aways of `research/T3CODE-WORKTREES.md` (§2, §4, §6): the session's environment
 > and base branch are recorded (S7, S13), a turn's diff leaves out what a merge brought in (S11), and cleanup
 > recognises merged, empty and idle worktrees (S20).
+> Amended again with §9, "Excel at what we keep" (the user's 10-22 strategy, one run per kept capability), and
+> the user's Q8 on workers' permission prompts (§8, item 14; S13).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -118,7 +120,8 @@ Brigadier enforces none of this; the `/brigade` skill guides it. Nothing lands o
 **Workers are read-only to the user (G19.Q6).** The user can open a worker from the rail and read its thread.
 There is no worker composer. The parent reports what a worker needs: Waiting on you lists the worker's real
 pending prompts and questions. The user answers in the parent, and the parent relays the answer with
-`brigadier send`. An `@worker` mention in the parent's composer is only a routing hint to the parent. A second
+`brigadier send`. A worker's permission prompt is answered the same way, with `brigadier send <worker>
+--allow|--deny` (Q8). An `@worker` mention in the parent's composer is only a routing hint to the parent. A second
 composer would duplicate the parent and complicate the UI.
 
 **Model choice is advice, not a gate (G18).** The thread picks provider, model and effort itself, through the
@@ -758,8 +761,8 @@ and `run`.
   |---|---|
   | `brigadier sessions` | List the project's sidebar sessions: title, state from CLI events, branch, +/−. Workers are not in it. This is "read anything"; `brigadier show <id>` gives a session or worker in full. |
   | `brigadier workers` | List the calling session's own workers: title, agent, model, state from the worker's own CLI events, branch, +/−. |
-  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
-  | `brigadier send <id> <text>` | To one of the caller's own workers, queued mid-turn, like `dlg send`. This is how the parent relays the user's answers (G19.Q6). |
+  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` (default: the parent's level, Q8) and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
+  | `brigadier send <id> <text>\|--allow\|--deny` | To one of the caller's own workers, queued mid-turn, like `dlg send`. This is how the parent relays the user's answers (G19.Q6). `--allow` or `--deny` answers the worker's open CLI permission prompt through the CLI's own permission protocol, never key presses (Q8). The prompt reaches the parent as a `brigadier wait` "needs input" event, and until it is answered it shows under Waiting on you in the parent. |
   | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
   | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen, of any session or worker. |
   | `brigadier close <id>` | Closes one of the caller's own workers. |
@@ -794,6 +797,9 @@ and `run`.
     has no row for them.
   - A flow test: `brigadier start` with no `--base` and no `--worktree\|--local` makes a new worktree whose
     branch starts at the parent's current branch, and the worker's record and `gh-merge-base` name that branch.
+  - A flow test: a worker started with no `--permission` runs at the parent's level; its permission prompt
+    reaches the parent as a "needs input" event, shows under Waiting on you, and `brigadier send <id> --allow`
+    continues the worker's turn.
   - A call without a valid session token is refused, and so is `send` or `close` on another session's worker.
   - A live dev check on each provider: the thread starts a Codex worker through `brigadier start` that writes
     a file and reports.
@@ -1044,7 +1050,8 @@ worse than today's rebirth.
   reseed code. With `rebirth.rs` gone, its last-consumer leftovers go in the same step (§4 table):
   `decisions.rs`, `constraints.rs`, `keep_note_decisions`, the `orch:<id>` log, `export.rs` and the Brain's
   event-store sync.
-  - A usage limit stops the turn and shows "Resumes at"; it never restarts quietly.
+  - A usage limit stops the turn and shows "Resumes at"; it never restarts quietly. **Pending Q11 (§9):** if the
+    user says yes, the turn continues visibly at the reset (MA5) instead of staying stopped.
   - Sessions open at upgrade are archived.
 - **Done when:** `git grep -n 'rebirth\|briefing\|BRIGADIER_REBIRTH_TOKENS\|OrchestratorLogged'` finds only
   docs, and the S22 tests pass with no flag.
@@ -1082,6 +1089,9 @@ S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12
 after S10:  S17 → S18 → S19 → S20      (∥ Stage 3; S17 rebases after S16)
 after S8:  S21 (∥ anything)
 after S18 + S21:  S22 → S23 → S24 → S25 → S26 → S27
+any time:  MA1, X1 (bounded Codex tasks, §9)
+after Stage 2, one run per capability (§9):  O1–O5 with S13–S15 · MA2–MA7 with S13–S14 and S23
+                                             L1–L7 with S18–S27 · BR1–BR8 after S13 · X2–X9 after X1
 ```
 
 ## 5. Benchmarks never gate
@@ -1204,11 +1214,233 @@ search the record (`brigadier brain search`, `brigadier brain read`) and quote w
       servers. Under G17 these stay as the user set them, and come back only with measured evidence on our own
       tasks. POCOCK §3.5's depth limit on `brigadier start` is not built in either: Brigadier enforces nothing
       of its own (G18); a user who wants one writes it into the rules file.
-14. **A worker's CLI permission prompt under read-only workers (G19.Q6).** A question can be relayed in words
-    with `brigadier send`. A permission prompt needs allow or deny, and a queued message doesn't answer it.
-    S13 settles how the parent answers one: either `brigadier send` answers the worker's open prompt when one is
-    pending, or workers start at Accept edits or Full access so that prompts are rare. The user is asked before
-    S13 builds it.
+14. **A worker's CLI permission prompt under read-only workers (G19.Q6). Resolved by Q8 (user, 10-22).** A
+    question can be relayed in words with `brigadier send`; a permission prompt needs allow or deny. So:
+    - A worker inherits its parent's permission level. `brigadier start --permission` overrides it.
+    - A worker's open CLI permission prompt reaches the parent as a `brigadier wait` "needs input" event. The
+      parent answers it with `brigadier send <worker> --allow|--deny`, deciding itself or relaying the user's
+      answer, through the CLI's own permission protocol.
+    - Until it is answered, it shows under Waiting on you in the parent. S13 builds it.
 15. **Seen in T3 Code and not taken** (`research/T3CODE-WORKTREES.md` §4, §6): PR-watch wakeups, because
     Brigadier pushes nothing (G1), and confirmations before pushing to the default branch, because permission
     modes belong to the CLI (G5). The thread may poll its PR with `gh` or a background task.
+
+## 9. Excel at what we keep
+
+The user's strategy (10-22): fewer capabilities, each the best of its kind.
+Brigadier keeps five: orchestration, model advice and accounts, browser and previews, skills and MCP, and long
+sessions with token economy. Each has a measurable bar against the best rival today, and a bench proves it.
+
+**How §9 runs.**
+- **After Stage 2.** Parity first: S1–S12 make "a plain CLI" true. Then one run per capability. A step marked
+  "into Sn" is built inside that step and adds to its done-when; orchestration, model advice and long sessions
+  fold into Stages 3–4 this way. Browser and skills/MCP are runs of their own, after S13.
+- **Two may start earlier,** as bounded Codex tasks: MA1 (the three Claude limit signals we miss) and X1 (the
+  plugin-folder checks). Neither touches the strip-down's files.
+- **Benchmarks report and never gate (§5).** Each bar is a nightly report; a regression becomes a GitHub issue.
+- **Evidence:** run `20261022-0805-take-over-5-sessions`, `research/EXCEL-<capability>.md` (orchestration,
+  model-accounts, browser, skills-mcp, long-sessions): §3 design, §4 steps, §5 risks. Not restated here.
+- **Not copied, for every capability:** Superset is Elastic License 2.0: ideas only, never its code, text,
+  proxy URLs or hosted service. bb, T3 Code and Orca are MIT: designs, not code (a ported snippet carries its
+  notice). No Claude Code docs text. No rival's feature names or UI words in the product ("Design Mode",
+  "Auto-verify"), and no rival named in the UI or in marketing.
+
+### 9.1 Orchestration
+
+- **Best rival today:** Orca ships the most complete worker loop: start with model and effort, typed waits, and a
+  liveness verdict per worker. It sits behind an experimental switch. No rival merges a worker's work back in
+  git (`EXCEL-orchestration.md` §1–§2).
+- **Our bar:**
+  - **Nothing stuck.** The doc's 10 injected faults (prompt, question, error, kill, silent command, seam, idle
+    parent…) reach the parent ≤ 2 s after the CLI event; none is lost across an app restart or a parent seam.
+  - **Lands.** On a two-worker task (one Claude, one Codex, one shared registry file), ≥ 9 of 10 runs land in
+    the parent and then the chosen base, with green checks and no human touch. Every real conflict shows as
+    `merge: conflicts` before the merge. 0 uncommitted user files are overwritten.
+  - **One skill** of ≤ 150 lines; a user edit survives an app update. **No worker protocol:** a brief with no
+    Brigadier text still yields `turn_end` and `needs_input`. **Visible:** a state word changes ≤ 1 s after its
+    CLI event, "Merged" ≤ 5 s after the merge.
+- **Steps:**
+  1. **O1** (into S13): `wait` events `turn_end`, `needs_input`, `failed`, `interrupted`, `gone`, `limit`,
+     `fresh_context`, `quiet` (20 min with no CLI event, naming what runs); a durable per-parent queue with
+     cursors (`record/worker-events.jsonl`); idle-parent delivery (Q9). Files: `crates/cli`, a new
+     `M/worker_events.rs` (replaces `peer_wait.rs`), provider taps. Done: 10 fault tests, none twice. Opus, M–L.
+  2. **O2** (into S13): `workers --json`/`show --json` add branch, base, ahead, behind, dirty, `merge` (clean /
+     conflicts / merged / behind, via `git merge-tree`) and "base checkout clean". Files: `crates/cli`,
+     `crates/git/src/repo.rs` (reuse `merge_tree`, `is_merged`). Done: scratch-repo tests per value. Codex, S–M.
+  3. **O3** (into S14): state words from events (Working, Needs you, Quiet 20m, Failed, Stopped, Limit until
+     HH:MM, Fresh context) and git (Done · not merged, Merged); archive's ask lists unmerged workers. Files:
+     `WorkersStrip.tsx`, `stripView.ts`, `WorkerList.tsx`. Done: app tests per state, timings live. Opus, S–M.
+  4. **O4** (into S15): the skill: fan out or not, a five-line brief (target, change, do-not-touch, files,
+     acceptance commands), wave, wait, integrate small and often, land on; ≤ 150 lines. A user copy at
+     `~/.brigadier/brigade/SKILL.md` overrides it ("Reset to shipped" in Settings). Done: skill tests + S15's live
+     run. Opus, S.
+  5. **O5** (after S15): the fault battery and the landing bench as a nightly report, in
+     `tools/bench/orchestration/`. Done when the first report has both numbers. Codex, M.
+- **Not copied:** a worker protocol of done, heartbeat and ask commands, report envelopes or decision gates.
+  That is the push-and-gate pattern the strip-down removes. Permission prompts are never answered with key
+  presses. Sessions never get `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`.
+
+### 9.2 Model advice and accounts
+
+- **Best rival today:** bb switches accounts inside a turn, with no CLI restart. T3 Code catches two Claude limit
+  forms we miss. No rival gives the agent one view of models, what's left and what fits
+  (`EXCEL-model-accounts.md` §2).
+- **Our bar:**
+  - **No lost work.** A replayed mid-turn limit keeps the CLI session id, re-runs 0 tool calls, and the turn
+    ends completed with no user action.
+  - **Dead time.** Limit event → first event on the new account: p50 ≤ 10 s, p95 ≤ 30 s (cache-write tokens
+    per switch reported). **Fresh:** every number in `brigadier models` is ≤ 60 s old; the call takes ≤ 200 ms.
+  - **Honest forecast.** Median error of "runs out at" on 5-hour windows ≤ 20 min, else "estimate rough".
+- **Steps:**
+  1. **MA1** (any time): detect `api_error_params.rate_limit_info`, `result` with `api_error_status: 429`, and
+     the gateway 503 "(reset after …)" text. Files: `P/claude/parse.rs`, fixtures. Done: each gives
+     `ErrorKind::UsageLimit` with the right `resets_at_ms`; old limit tests pass. Codex, S.
+  2. **MA2** (after S9): a switch line in `record/turns.jsonl` (from, to, kind, dead time, first call's cache
+     writes) and a "Usage limit on A · continued on B" divider. Files: `M/conversation.rs`, `routing/meter.rs`.
+     Done: a replay flow test keeps the session id, repeats no tool-use id and completes the turn. Opus, M.
+  3. **MA3** (into S13b): `models` adds `you`, pooled windows, runway, each CLI's reported models and efforts,
+     `fit` (ok / tight / out until HH:MM), `age_s`; text ≤ 25 lines; `forecast.rs`, `quota.rs` survive §3.6.
+     Done: schema, `fit` and timing tests; a live check matches Settings › Usage. Codex, M.
+  4. **MA4** (into S13): `brigadier start` answers with a receipt (requested vs effective model, effort,
+     account); `wait` adds `usage_limit` and `account_switched`. Done when a worker whose provider is out raises
+     `usage_limit` with `resets_at` and the other provider's fit (flow test). Codex, S.
+  5. **MA5** (into S14, S23; needs Q11): "Resumes at" continues the turn at the reset (random spread, ≤ 4 tries,
+     never for credit or spend limits; Continue now / Don't resume), replacing `wait_for_model` and the stand-in.
+     Done: continues once; Don't resume stays idle; a credit limit never schedules (app + flow tests). Opus, M.
+  6. **MA6** (after S14): amber account pill when `tight`, pooled bar in Settings › Usage, model · effort ·
+     account on worker cards; A/B pictures first. Done: app tests and the screenshot pair. Opus, S–M.
+  7. **MA7** (last): the rival bench and the forecast backtest as nightly reports, in `tools/bench/`. Done when
+     the first report is filed. Opus, M.
+- **Not copied:** no login proxy for the user's subscription traffic, no hidden CLI variables, no undocumented
+  web usage endpoints (usage only via the CLIs' own channels; never a credential), no "unlimited" claims.
+
+### 9.3 Browser and previews
+
+- **Best rival today:** Claude Code Desktop finds and starts dev servers itself and verifies UI changes by
+  default. Orca has the fullest scriptable browser: console, network, device emulation and trusted input
+  (`EXCEL-browser.md` §2).
+- **Our bar:**
+  - **Servers.** Every server a session or its workers start is listed ≤ 1 s after it listens, however it was
+    started. Attribution is 100% correct, and two sessions running `pnpm dev` at once don't collide.
+  - **Check.** One `brigadier browser check` reports console errors, exceptions and failed requests, with a
+    snapshot and a screenshot path: p50 < 1.5 s, ≤ 1.5k tokens. **Act:** 100% on a 20-case interaction bench.
+  - **Zero setup.** A fresh user and project run a dev server and `browser check` with no prompt, dialog,
+    download or file in the repo.
+- **Steps** (all after S13):
+  1. **BR1:** server discovery from the session's and its workers' process trees, `brigadier servers`, and
+     `BRIGADIER_PORT` (base of 10 free ports). Files: a new `crates/core/src/servers.rs`, `M/preview.rs`,
+     `crates/cli`, both provider launchers. Done: a fake CLI tree's background `http.server` (a worker's too) is
+     listed and attributed within 1 s; two sessions get disjoint bases. Opus, M.
+  2. **BR2:** a document-start script buffers console, errors, rejections and request outcomes;
+     `browser console|network`. Files: a new `src-tauri/src/browser_watch.js`, `browser.rs`. Done: the fixture's
+     error, 500, failed image and rejection reported in order, no duplicates after reload. Opus, M.
+  3. **BR3:** `brigadier browser check`, plus a help line and a skill line: "after a UI change, run it before
+     saying it works". Done: BR2's errors, snapshot and PNG path in one call, ≤ 1.5k tokens, p50 < 1.5 s. Opus, S.
+  4. **BR4:** the full verb set: wait, hover, select, press, scroll, drag, upload, dialog, viewport, appearance,
+     full and element screenshots, eval (agent tabs only), record. Done when every verb has a schema test, the
+     viewport changes `innerWidth`, and dark flips `prefers-color-scheme`. Opus, M.
+  5. **BR5:** a trusted-input spike, then the build: native events to the webview's window, never fronting it.
+     Done when the 20-case bench is at 100% with no focus steal. Opus, Codex review, M.
+  6. **BR6:** a Servers menu in the Browser (open, restart, stop) and "Point at it": a picked element goes to
+     the composer as an attachment (HTML, styles, crop, source file:line). A .pen board comes first. Done live:
+     the menu lists a CLI-started server, and a pick lands in the composer. Opus, M.
+  7. **BR7:** the bench and the rival runs, in `bench/browser/`, nightly. Done when our numbers and the rivals'
+     are recorded. Codex + Opus, S.
+  8. **BR8** (later): `brigadier sim` over `xcrun simctl`, with taps through computer use. Done when a sample
+     app boots, installs, launches, screenshots and takes a tap from the thread. Opus, M.
+- **Not copied:** no config file in the repo for servers or ports. No third-party browser binary, vendored or
+  downloaded. No driving of Claude in Chrome's bridge. Verification is a help line and a skill line, never an
+  injected "please verify" (G1). Our names are "check", "Servers" and "Point at it".
+
+### 9.4 Skills and MCP
+
+- **Best rival today:** Superset: one install puts an MCP and its skills into both CLIs, in app and terminal,
+  but only its curated plugins and only with an account (`EXCEL-skills-mcp.md` §2). Two holes of our own: extra
+  Claude accounts may not see the user's MCPs, and `codex mcp add` in a session doesn't stick (X1, X6).
+- **The mechanism:** the Library, `~/.brigadier/library/`, is a local plugin marketplace. Brigadier installs it
+  through each CLI's own `plugin` commands, so it is the CLIs' native config in the app and in a terminal (G17).
+- **Our bar:**
+  - **One action.** From paste to working in Claude *and* Codex: 1 click, plus one browser consent per CLI for
+    OAuth servers.
+  - **Everywhere.** The item shows in a Claude thread, a Codex thread, a worker, plain `claude` and `codex` in
+    a terminal, and a session on every extra account.
+  - **Native only.** Brigadier writes no byte of `~/.claude.json` or `config.toml` itself, and puts nothing in
+    `~/.claude/skills` or `~/.agents/skills`.
+  - **No drift.** After one "Use in both" pass, every item on this Mac is in both CLIs, with no duplicate copies.
+    **Next session:** an added item is there at the next session start, with no app restart.
+- **Steps:**
+  1. **X1** (any time): plugin-folder checks on the installed CLIs: `.mcp.json` variables on Codex, its
+     command-path rule, name clashes, OAuth for plugin servers, project scope, the two holes live. Done:
+     `research/SKILLS-MCP-PROBES.md` lists the commands run and what was seen. Codex, S.
+  2. **X2:** the Library and packer, in a new `crates/registry/src/library.rs`: item → plugin, content-hash
+     versions, sync through the CLIs' plugin commands. Done when a stub-home test adds a skill and an MCP and
+     both CLIs list them. Codex, M.
+  3. **X3:** the Add parser: both `mcp add` lines, `mcpServers` JSON, URL, folder, Git, skills.sh id. Done when
+     a table test per format passes. Codex, S.
+  4. **X4:** the Skills & MCP page: one list, a mark per CLI, one action per row, Add (power fields under
+     Advanced); .pen design first. Files: `D/app/settings/integrations/*`. Done: a render test of the fixture
+     setup shows the drift rows with "Use in both". Opus, M.
+  5. **X5:** each CLI's own `mcp login` in sequence; `brigadier secret headers` and `brigadier mcp run` from the
+     Keychain; `M/mcp_auth` and the worker-only translation go once X2 ships. Done: a local OAuth test server
+     signs in from one click in both stub CLIs. Opus, M.
+  6. **X6:** account and home parity (`P/accounts.rs`, `P/codex/home.rs`). Done: an account session gets the main
+     one's init `mcp_servers`; a `codex mcp add` in a session survives the next launch. Opus, M.
+  7. **X7:** `brigadier library list|add|remove|login --json`, on S13's CLI. Done: schema tests. Codex, S.
+  8. **X8:** Move to Library with Undo (the original goes only after both CLIs list the new one), and "Update
+     available" for items from Git or skills.sh. Done: move, undo and update tests on stub homes. Opus, S–M.
+  9. **X9:** the bench in throwaway homes (stdio MCP, OAuth HTTP MCP, multi-file skill) and a click-count sheet
+     for the rivals. Done: the first report. Codex, S.
+  - Order: X1; then X2 ∥ X3; X5 ∥ X6; X4 ∥ X8; X7; X9 last.
+- **Not copied:** no hosted proxy and no Brigadier account or cloud. No editing of the CLIs' config text. Never
+  touch claude.ai-synced skills, Codex's own system skills or the vendor marketplaces on the machine.
+
+### 9.5 Long sessions and token economy
+
+- **Best rival today:** none runs with compaction off. T3 Code has the best hand-off: it carries the original
+  request, the latest exchange and a token-budgeted verbatim slice, and works across providers
+  (`EXCEL-long-sessions.md` §2).
+- **Our bar:**
+  - **No compaction:** 0 in Claude sessions of any length (Codex's are counted, no bar). **Fewer tokens:**
+    price-weighted ≤ 0.95× the plain CLI on the long battery (past 400k), ≤ 1.01× on the short one (< 150k).
+  - **Recall** ≥ 90% of planted items across forced seams. **Cold return** at 250k ≤ 35% of a plain resume.
+    **Done:** each scripted task still passes its test command.
+- **Steps** (they extend S17–S27 and add no stage):
+  1. **L1** (into S18): `brigadier transcript search|read` over the lineage's CLI files, `tool-results/` and
+     rollouts included, no database copy. Files: `crates/brain/src/transcript*`, `crates/cli`. Done: fixture
+     tests of both formats; a live read returns a persisted large output verbatim. Codex, M.
+  2. **L2** (into S22): bootstrap order: map, ledger, note, the session's first user message and the latest
+     exchange verbatim, a newest-first tail of ≈15k tokens, one line per omitted range with its exact read
+     command. Done: a test asserts the order and that every omitted range's command works. Opus, S.
+  3. **L3** (into S24): a successor instead of a resume when the next request would be cold (TTL passed, account
+     switched, model changed) and the context is ≥ 100k. Files: `M/cold.rs`, the switch path, `knowledge.rs`.
+     Done: the cross-account cache probe written up; a test per trigger. Opus, S–M.
+  4. **L4** (into S21, S25): a token A/B arm, the same scripts in the plain CLI and Brigadier, both providers.
+     Done: the nightly artifact shows all five bars per provider; the first run is the baseline. Codex, M.
+  5. **L5** (into S23): a compaction counter in the weekly scan of real sessions. Done when the report lists
+     any compaction with its session id. Codex, S.
+  6. **L6** (into S26): the Codex 1M-window probe, and the divider on Codex's compacted events. Done when the
+     probe is written up and a recorded rollout shows the divider. Codex, S.
+  7. **L7** (S27, unchanged): the A/B of `bashOutputMaxChars` and the exact-read instructions. Opus, S.
+- **Not copied:** no rival's words for compaction or hand-off in the UI. Before the first nightly numbers, no
+  "fewer tokens" claim on the landing page.
+
+### 9.6 Open decisions and what waits on the user
+
+**OPEN (user):**
+- **Q9. Notify an idle parent when a worker finishes?** With the parent's turn ended and no `wait` running,
+  one batched message: "Worker *title*: finished · *excerpt*", a result of what the thread started (G1), never
+  twice. Recommended: **yes**; without it "nothing stuck" depends on the parent remembering to wait. (O1)
+- **Q10. A warm note before the cache expires?** A second push in one generation. Recommended: **no**, until
+  the battery shows notes pay off on cold seams. (L3)
+- **Q11. Resume visibly at the reset when every account is out?** The plain CLI waits and continues by itself at
+  the reset; a stop there does less than the plain CLI. Recommended: **yes** (MA5). It conflicts with S23's "a
+  usage limit stops the turn … never restarts quietly", which is marked pending Q11.
+- **Q12. The "carry on" note after an account switch?** It is engine-written text inside the user's own turn,
+  like the CLI's own auto-continue. Recommended: **yes**. (MA2)
+- **Q13. Ship `/brigade` into Codex through the shared plugin folder?** Then it also shows in plain terminal
+  sessions. Recommended: **yes**: the skill says it needs the app, so it acts only when `brigadier` is on
+  `PATH`. (X2; §8, item 7)
+
+**Waiting on you:**
+- A terms check of multi-account auto-switch before marketing it.
+- Bench sign-ins for Superset and Orca (the orchestration and model-advice benches need them).
