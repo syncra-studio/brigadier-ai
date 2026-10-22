@@ -28,12 +28,12 @@ test("the Job card shows only for a plan or an overnight run, saying what is hap
   };
 
   // No Job card outside a plan or an overnight run, whatever the session does: idle, at work,
-  // checks, reviews, CI, merges held, refused or done, waiting on the user, failures and outcomes,
+  // reviews, CI, merges held, refused or done, waiting on the user, failures and outcomes,
   // and the thread's own headline. Their buttons are the Background rows'.
   for (const id of [
-    "heldMerge", "mergeRefused", "ciFailed", "idle", "working", "checksRunning", "checksFailed", "checksPassed", "reviewRunning",
-    "reviewFindings", "reviewClean", "ciChecking", "merging", "merged", "mergedUnchecked", "mergeRefusedFirm", "mergeRefusedOld",
-    "mergedAnyway", "waitingAnswer", "waitingApproval", "workerFailed", "devServer", "stopped", "nextMessage", "headline",
+    "heldMerge", "mergeRefused", "ciFailed", "idle", "working", "reviewRunning", "reviewFindings", "reviewClean",
+    "ciChecking", "merging", "merged", "mergeRefusedFirm", "mergeRefusedOld", "mergedAnyway", "waitingAnswer", "waitingApproval",
+    "workerFailed", "devServer", "stopped", "headline",
   ]) {
     assert.deepEqual(seen[id]!.cards, ["context"], `${id} has no Job card`);
   }
@@ -79,7 +79,7 @@ test("the Job card shows only for a plan or an overnight run, saying what is hap
 
   assert.deepEqual(seen["scheduled"]!.cards, ["context", "schedule"]);
   assert.equal(seen["scheduled"]!.schedule, "Resumes at 4:00 AMin 2h 10mwhen the Claude limit resets");
-  assert.deepEqual(seen.tab.steps, ["Building", "Reviewing", "Checks failed", "Fixing", "Merging"]);
+  assert.deepEqual(seen.tab.steps, ["Building", "Reviewing", "CI failed", "Fixing", "Merging"]);
   assert.deepEqual(seen.tab.current, [null, null, null, "step", null]);
   assert.equal(seen.tab.findings, 3);
 });

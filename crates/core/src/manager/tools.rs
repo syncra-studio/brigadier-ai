@@ -610,11 +610,7 @@ impl SessionManager {
             OrchestratorCall::FinishSession(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 let consent = args.consent.as_deref().unwrap_or(&args.user_words);
-                let anyway = args.anyway.as_deref();
-                crate::heap(|| {
-                    self.finish_session_when(id, consent, args.message, args.when, anyway)
-                })
-                .await
+                crate::heap(|| self.finish_session_when(id, consent, args.message, args.when)).await
             }
             OrchestratorCall::StopMerge(args) => {
                 crate::heap(|| self.stop_merge(id, &args.why)).await
@@ -681,9 +677,6 @@ impl SessionManager {
             }
             OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
             OrchestratorCall::CleanUp => crate::heap(|| self.clean_up(id)).await,
-            OrchestratorCall::RunChecks(args) => {
-                crate::heap(|| self.run_checks_tool(id, args.rerun)).await
-            }
             OrchestratorCall::ReviewPlan(args) => {
                 crate::heap(|| self.review_thread_plan(id, args)).await
             }
@@ -721,9 +714,6 @@ impl SessionManager {
                 })
                 .await
             }
-            OrchestratorCall::RunCheck(args) => {
-                crate::heap(|| self.thread_run_check(id, args)).await
-            }
             OrchestratorCall::StartPreview(args) => {
                 crate::heap(|| self.start_preview(id, args)).await
             }
@@ -755,7 +745,7 @@ impl SessionManager {
                 let tasks = crate::heap(|| self.core.tasks(id)).await?;
                 let standing = match self.core.board(id).await {
                     Ok(board) => {
-                        super::integrated_checks::standing_lines(&board, crate::now_ms()).join("\n")
+                        super::background_runs::running_lines(&board, crate::now_ms()).join("\n")
                     }
                     Err(_) => String::new(),
                 };
@@ -1018,13 +1008,6 @@ impl SessionManager {
                 .await
                 .map(|(text, _)| text),
             WorkerCall::ProjectMap => self.project_map_tool(&conversation_id).await,
-            WorkerCall::RunCheck(args) => {
-                self.run_check_tool(&conversation_id, Some(&task_id), args)
-                    .await
-            }
-            WorkerCall::RunChecks(args) => {
-                crate::heap(|| self.worker_run_checks(&conversation_id, &task_id, args.rerun)).await
-            }
             WorkerCall::StartPreview(args) => {
                 crate::heap(|| self.start_worker_preview(&conversation_id, &task_id, args)).await
             }

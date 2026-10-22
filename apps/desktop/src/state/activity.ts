@@ -65,7 +65,6 @@ const TASK_PHASES: Partial<Record<TaskKind, SessionPhase>> = {
 };
 /** The thread's calls that put its conversation in a phase while they run. */
 const TOOL_PHASES: Readonly<Record<string, SessionPhase>> = {
-  run_check: "checking",
   finish_session: "merging",
 };
 /** Which phase a row names when several run, first first. */
@@ -267,20 +266,6 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
         `review:${event.review.id}`,
         event.review.state.type === "running" ? "reviewing" : undefined,
       );
-    case "integratedCheckUpdated":
-      return phased(
-        current,
-        `check:${event.check.id}`,
-        event.check.state.type === "running" ? "checking" : undefined,
-      );
-    case "backgroundRunUpdated":
-      return event.run.tool === "run_check"
-        ? phased(
-            current,
-            `run:${event.run.id}`,
-            event.run.state.type === "running" ? "checking" : undefined,
-          )
-        : current;
     case "orchestratorStepped":
       return stepped(current, event.step.kind);
     case "approvalUpdated":
@@ -313,10 +298,6 @@ function conversationOf({ stream, event }: EventEnvelope): string | null {
       return stream.startsWith("conversation:") ? stream.slice("conversation:".length) : null;
     case "reviewUpdated":
       return event.review.conversationId;
-    case "integratedCheckUpdated":
-      return event.check.conversationId;
-    case "backgroundRunUpdated":
-      return event.run.conversationId;
     case "runStateChanged":
       return event.conversationId;
     case "requestUpdated":

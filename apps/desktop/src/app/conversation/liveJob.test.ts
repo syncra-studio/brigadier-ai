@@ -3,21 +3,10 @@ import { test } from "node:test";
 
 import { type LiveInput, liveJob } from "@/app/conversation/liveJob";
 import type { ShownApproval } from "@/state/board";
-import type { CiRun, IntegratedCheck, IntegratedCheckState, OrchestratorStep, Preview, Question, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
+import type { CiRun, OrchestratorStep, Preview, Question, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
-
-/** A `run_checks` run: the thread's full checks unless `asked` says otherwise (null: one Brigadier started itself). */
-const check = (
-  n: number,
-  tip: string,
-  state: IntegratedCheckState,
-  startedAtMs = 100,
-  endedAtMs: number | null = null,
-  asked: { taskId: string | null; scope: "full" | "change" } | null = { taskId: null, scope: "full" },
-): IntegratedCheck =>
-  ({ id: `check-${n}`, conversationId: "c", repo: "/r", branch: "b", tip, state, dueAtMs: startedAtMs, startedAtMs, endedAtMs, requests: ["r1"], tasks: [], rerun: false, ...(asked ? { asked } : {}) }) as IntegratedCheck;
 
 const review = (id: string, startedAtMs: number, state: ReviewState, endedAtMs: number | null = null): ReviewRun =>
   ({ id, conversationId: "c", requestId: "r1", taskId: null, kind: "code", base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs, number: 1, items: [] }) as unknown as ReviewRun;
@@ -36,7 +25,7 @@ const question = (id: string, createdAtMs: number, kind: Question["kind"]["type"
 const byId = <T extends { id: string }>(items: T[]) => Object.fromEntries(items.map((item) => [item.id, item]));
 
 const input = (parts: Partial<LiveInput>): LiveInput => ({
-  tasks: {}, approvals: {}, questions: {}, reviews: {}, previews: {}, integratedChecks: {}, orchestratorSteps: [], requests: {},
+  tasks: {}, approvals: {}, questions: {}, reviews: {}, previews: {}, orchestratorSteps: [], requests: {},
   ...parts,
 });
 
@@ -61,33 +50,6 @@ test("with nothing running and nothing waiting there is no card; while the threa
   assert.equal(liveJob(input({ ...idle, tasks }))!.sinceMs, 20);
 });
 
-test("checks: running with the command at work, failed with what failed, passed on the commit", () => {
-  assert.deepEqual(words({ ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests", done: 0, total: 1 })]) }), [
-    "running",
-    "Running checks",
-    "Now: desktop tests",
-  ]);
-  assert.deepEqual(words({ ...idle, integratedChecks: byId([check(1, "4e1c49e999", { type: "failed", command: "pnpm test", status: "exit 1", output: null }, 100, 200)]) }), [
-    "failed",
-    "Checks failed",
-    "pnpm test: exit 1",
-  ]);
-  assert.deepEqual(words({ ...idle, integratedChecks: byId([check(1, "4e1c49e999", { type: "passed", commands: ["a", "b", "c", "d", "e"] }, 100, 200)]) }), [
-    "done",
-    "Checks passed on 4e1c49e",
-    "5 of 5 passed",
-  ]);
-  // run_checks counts its commands: the one at work is the third of five.
-  const counted: IntegratedCheckState = { type: "running", command: "desktop tests", done: 2, total: 5 };
-  assert.deepEqual(words({ ...working, integratedChecks: byId([check(1, "4e1c49e999", counted)]) })!.slice(0, 2), ["running", "Running checks · 3 of 5"]);
-  // A worker's own checks are its row's, not the card's.
-  const workers = byId([check(1, "4e1c49e999", counted, 100, null, { taskId: "t1", scope: "change" })]);
-  assert.deepEqual(words({ ...working, integratedChecks: workers })![1], "Working");
-  // Only the newest run counts: a pass after a failure is the outcome.
-  const both = byId([check(1, "aaa", { type: "failed", command: "x", status: "1", output: null }, 60, 70), check(2, "bbbbbbb1", { type: "passed", commands: ["a"] }, 80, 90)]);
-  assert.equal(words({ ...idle, integratedChecks: both })![1], "Checks passed on bbbbbbb");
-});
-
 test("review: who reviews while it runs, then what it found, or that it is clean", () => {
   assert.deepEqual(words({ ...working, reviews: byId([review("v1", 20, { type: "running" })]) }), ["running", "Codex is reviewing", "The changes up to 4e1c49e"]);
   assert.deepEqual(words({ ...idle, reviews: byId([review("v1", 60, { type: "findings", count: 3 }, 70)]) }), [
@@ -98,22 +60,11 @@ test("review: who reviews while it runs, then what it found, or that it is clean
   assert.deepEqual(words({ ...idle, reviews: byId([review("v1", 60, { type: "clean" }, 70)]) })![1], "Review found nothing to fix");
 });
 
-test("merge: merging, merged with checks passed only on the merged commit, never claiming a pass otherwise", () => {
-  const merged = (head: string) =>
-    step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head, mergeCommit: "4e1c49e000" } as OrchestratorStep["kind"]);
-  const passed = byId([check(1, "head111", { type: "passed", commands: ["a"] }, 60, 70)]);
-  assert.deepEqual(words({ ...idle, integratedChecks: passed, orchestratorSteps: [merged("head111")] }), [
-    "merged",
-    "Merged into main · checks passed",
-    "4e1c49e · 3 commits",
-  ]);
-  // Merged anyway, or with checks on another commit: no claim.
-  assert.equal(words({ ...idle, integratedChecks: passed, orchestratorSteps: [merged("other22")] })![1], "Merged into main");
-  // Nor a pass of checks Brigadier ran by itself, or of a worker's change only.
-  const unasked = byId([check(1, "head111", { type: "passed", commands: ["a"] }, 60, 70, null)]);
-  assert.equal(words({ ...idle, integratedChecks: unasked, orchestratorSteps: [merged("head111")] })![1], "Merged into main");
+test("merge: merging, then merged", () => {
+  const merged = step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "head111", mergeCommit: "4e1c49e000" } as OrchestratorStep["kind"]);
+  assert.deepEqual(words({ ...idle, orchestratorSteps: [merged] }), ["merged", "Merged into main", "4e1c49e · 3 commits"]);
   const requested = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {} } as unknown as OrchestratorStep["kind"]);
-  assert.deepEqual(words({ ...working, integratedChecks: passed, orchestratorSteps: [requested] }), ["running", "Merging into main", "Checks passed on head111"]);
+  assert.deepEqual(words({ ...working, orchestratorSteps: [requested] }), ["running", "Merging into main", "s into main"]);
   // A click with no outcome once its work is over (turned down, or stopped) merges nothing.
   assert.equal(words({ ...idle, orchestratorSteps: [requested] }), null);
   const stopped = { requests: byId([request("r1", 10, { type: "stopped" }, 70)]) };
@@ -121,22 +72,22 @@ test("merge: merging, merged with checks passed only on the merged commit, never
   // Nor while the user's next message runs.
   const next = { requests: byId([request("r1", 10, { type: "done" }, 70), request("r2", 100, { type: "working" })]) };
   assert.equal(words({ ...next, orchestratorSteps: [requested] })![1], "Working");
-  // Merged anyway: it says the checks were skipped, even with a pass on that commit from before.
+  // Merged anyway: it says the checks were skipped.
   const skipped = step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "head111", mergeCommit: "4e1c49e000", checksSkipped: true } as OrchestratorStep["kind"]);
-  assert.equal(words({ ...idle, integratedChecks: passed, orchestratorSteps: [skipped] })![1], "Merged into main · checks skipped");
+  assert.equal(words({ ...idle, orchestratorSteps: [skipped] })![1], "Merged into main · checks skipped");
   const anyway = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {}, anyway: true } as unknown as OrchestratorStep["kind"]);
-  assert.deepEqual(words({ ...working, integratedChecks: passed, orchestratorSteps: [anyway] }), ["running", "Merging into main", "Without the checks, as you said"]);
+  assert.deepEqual(words({ ...working, orchestratorSteps: [anyway] }), ["running", "Merging into main", "Without the checks, as you said"]);
 });
 
-/** The merge rule refused the merge at 30: no run_checks pass on its commit. */
+/** The merge rule refused the merge at 30. */
 const refused = (waivable: boolean, atMs = 30) => ({ reason: "The checks haven't run on 7d2a91f, the tip of s.", sha: "7d2a91f000", branch: "s", base: "main", waivable, atMs });
 
 test("a merge the merge rule refused: why, waiting on the user only when they can waive it", () => {
   const job = liveJob(input({ ...working, mergeRefused: refused(true) }))!;
   assert.deepEqual([job.tone, job.headline, job.detail], ["waiting", "Can’t merge yet", "The checks haven't run on 7d2a91f, the tip of s."]);
-  // It waits on the user before what runs: the checks the thread runs now don't hide it.
-  const running = byId([check(1, "7d2a91f000", { type: "running", command: "pnpm test", done: 0, total: 2 }, 40)]);
-  assert.equal(liveJob(input({ ...working, integratedChecks: running, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
+  // It waits on the user before what runs: a review at work now doesn't hide it.
+  const running = byId([review("v1", 40, { type: "running" })]);
+  assert.equal(liveJob(input({ ...working, reviews: running, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
   // One the user can’t waive: the words.
   const firm = liveJob(input({ ...working, mergeRefused: refused(false) }))!;
   assert.deepEqual([firm.headline, firm.tone], ["Can’t merge yet", "waiting"]);
@@ -169,7 +120,7 @@ test("the held merge and CI in words; CI's outcome stays until the next message"
 
 test("waiting on you points at the cards below, never copying them, and comes before anything else", () => {
   const questions = byId([question("q1", 40)]);
-  const busy = { ...working, questions, integratedChecks: byId([check(1, "abc", { type: "running", command: "x", done: 0, total: 1 })]) };
+  const busy = { ...working, questions, reviews: byId([review("v1", 20, { type: "running" })]) };
   assert.deepEqual(words(busy), ["waiting", "Waiting for your answer below", null]);
   assert.deepEqual(words({ ...working, questions: byId([question("q1", 40, "merge")]) })!.slice(0, 2), ["waiting", "Waiting for your yes below"]);
   const approvals = byId([{ id: "a1", state: { type: "pending" }, createdAtMs: 40, subject: { type: "cli" } } as unknown as ShownApproval]);
@@ -191,14 +142,14 @@ test("failures in the work: a worker that failed, a dev server that died; before
 });
 
 test("a finished outcome stays until the next message; what still runs stays whenever it began", () => {
-  const passed = byId([check(1, "abc", { type: "passed", commands: ["a"] }, 20, 40)]);
-  assert.equal(words({ ...idle, integratedChecks: passed })![1], "Checks passed on abc");
+  const clean = byId([review("v1", 20, { type: "clean" }, 40)]);
+  assert.equal(words({ ...idle, reviews: clean })![1], "Review found nothing to fix");
   const next = { requests: byId([request("r1", 10, { type: "done" }, 50), request("r2", 60, { type: "working" })]) };
-  assert.equal(words({ ...next, integratedChecks: passed })![1], "Working");
-  const running = byId([check(1, "abc", { type: "running", command: "x", done: 0, total: 1 }, 20)]);
-  assert.equal(words({ ...next, integratedChecks: running })![1], "Running checks");
+  assert.equal(words({ ...next, reviews: clean })![1], "Working");
+  const running = byId([review("v1", 20, { type: "running" })]);
+  assert.equal(words({ ...next, reviews: running })![1], "Codex is reviewing");
   // While the thread goes on, an outcome since the last message says more than Working.
-  assert.equal(words({ ...working, integratedChecks: passed })![1], "Checks passed on abc");
+  assert.equal(words({ ...working, reviews: clean })![1], "Review found nothing to fix");
   // Stopped: stays until the next message.
   assert.deepEqual(words({ requests: byId([request("r1", 10, { type: "stopped" }, 50)]) }), ["stopped", "Stopped", "You stopped it"]);
 });
@@ -210,8 +161,8 @@ test("the thread's headline wins until something that needs the user, or a failu
   const job = liveJob(input({ ...working, tasks, orchestratorSteps: [held], headline }))!;
   assert.deepEqual([job.tone, job.headline, job.detail], ["running", "Investigating the dev server", "Looking for what holds port 1420"]);
   // A failure after it: the failure shows.
-  const failed = byId([check(1, "abc", { type: "failed", command: "pnpm test", status: "exit 1", output: null }, 45, 50)]);
-  assert.equal(words({ ...working, headline, integratedChecks: failed })![1], "Checks failed");
+  const failed = byId([{ id: "t2", title: "Backend", state: "failed", error: "Tests failed", requestId: "r1", createdAtMs: 45, updatedAtMs: 50 } as unknown as Task]);
+  assert.equal(words({ ...working, headline, tasks: failed })![1], "A worker failed");
   // A question after it: the card points at it.
   assert.equal(words({ ...working, headline, questions: byId([question("q1", 60)]) })![1], "Waiting for your answer below");
   // Its outcome words once nothing runs: a tick, until the next message.

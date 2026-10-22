@@ -1,10 +1,9 @@
 //! What a claim's evidence still shows (BUILD-PLAN E1, Q38).
 //!
 //! - **Two routes, nothing else.** A claim's evidence is the lines of a file (`path:12-14`) or a
-//!   check's stored output (its `out-…` id, which every `run_check` result ends with), each with
-//!   the exact words they show. A review counts only through such evidence: a finding's
-//!   location, or a check output its text names. Passing checks or a clean review of other
-//!   work are no evidence for a claim.
+//!   command's stored output (its `out-…` id), each with the exact words they show. A review
+//!   counts only through such evidence: a finding's location, or an output its text names.
+//!   Passing checks or a clean review of other work are no evidence for a claim.
 //! - **Re-read on every use.** Whenever a claim is briefed or answered (a worker's brief,
 //!   `query_brain`, a rebirth briefing), its sources are read again: the file in the reader's
 //!   workspace, the output from the blob store. A quote that is still there makes the *source*
@@ -16,15 +15,14 @@
 //! `[evidence: path:12-14 `the words`]` or `[evidence: out-… `the words`]`; the thread's
 //! `remember` names them in `files`, `check` or `finding`, with the words in `quote`.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use brigadier_brain::{Source, SourceCheck};
-use brigadier_store::{BlobHash, StreamPage};
+use brigadier_store::BlobHash;
 
 use super::SessionManager;
-use crate::model::{ConversationId, DomainEvent, streams};
+use crate::model::ConversationId;
 
 /// How far a quote may have moved from the cited lines and still count: an edit above it
 /// shifts it a little.
@@ -33,19 +31,6 @@ const DRIFT_LINES: usize = 10;
 const READ_MAX: u64 = 4 * 1024 * 1024;
 /// The fewest characters a quote needs to be checked at all.
 const QUOTE_MIN: usize = 3;
-
-/// Pages of a conversation's check records read at a time.
-const EVENTS_PAGE: u32 = 2_000;
-
-/// A check run as recorded: what an `out-…` id it cites stands for.
-#[derive(Debug, Clone)]
-pub(crate) struct CheckRun {
-    pub command: String,
-    /// "exit 0", "exit 1", "timed out after 600 s".
-    pub status: String,
-    /// The git tree it ran on, uncommitted changes included.
-    pub tree: Option<String>,
-}
 
 /// A stored output's bytes, by content hash.
 type BlobReader = Arc<dyn Fn(&BlobHash) -> Option<Vec<u8>> + Send + Sync>;
@@ -397,55 +382,6 @@ impl SessionManager {
             }
         }
         missing
-    }
-
-    /// Every check run conversation `id` recorded, by the `out-…` id its result cites: the
-    /// latest record of each.
-    pub(crate) async fn check_runs(&self, id: &ConversationId) -> HashMap<String, CheckRun> {
-        let mut runs: HashMap<String, CheckRun> = HashMap::new();
-        let mut before = None;
-        loop {
-            let page = self
-                .core
-                .store()
-                .read_stream(
-                    streams::conversation(id),
-                    StreamPage {
-                        before,
-                        kinds: vec!["check.ran".into()],
-                        limit: EVENTS_PAGE,
-                    },
-                )
-                .await
-                .unwrap_or_default();
-            let Some(oldest) = page.last() else {
-                break;
-            };
-            before = Some(oldest.stream_seq);
-            let full = page.len() == EVENTS_PAGE as usize;
-            for stored in &page {
-                let Ok(DomainEvent::CheckRan {
-                    artifact: Some(alias),
-                    tree,
-                    command,
-                    status,
-                    ..
-                }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
-                else {
-                    continue;
-                };
-                // Newest first: an older record of the same output is superseded.
-                runs.entry(alias).or_insert(CheckRun {
-                    command,
-                    status,
-                    tree,
-                });
-            }
-            if !full {
-                break;
-            }
-        }
-        runs
     }
 
     /// `nodes` with each claim's sources re-read for a use in conversation `id`.

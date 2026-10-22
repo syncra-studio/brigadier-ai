@@ -522,28 +522,10 @@ impl SessionManager {
             ));
         }
         let tip = self.run_tip(&run).await?;
-        // A phase settled done should rest on the thread's run_checks passing at the run's tip
-        // (SESSION-FIXES-PLAN.md §11) and evidence for each criterion there. What's missing
-        // doesn't refuse the settle (#251): the thread hears it and the morning report marks it.
-        // Nothing starts the checks here.
+        // A phase settled done should rest on evidence for each criterion at the run's tip.
+        // What's missing doesn't refuse the settle (#251): the thread hears it and the morning
+        // report marks it.
         let mut unevidenced = Vec::new();
-        if args.outcome == StepOutcome::Done
-            && let Some(workspace) = run.workspace.as_ref()
-        {
-            let board = self.core.board(id).await?;
-            if super::super::integrated_checks::tip_checked_by_thread(
-                &board,
-                &workspace.branch,
-                &tip,
-            ) != super::super::integrated_checks::TipChecked::Passed
-            {
-                unevidenced.push(format!(
-                    "the session's full checks: no run_checks passed on `{}` at {}, so call run_checks first",
-                    workspace.branch,
-                    &tip[..tip.len().min(10)]
-                ));
-            }
-        }
         // Done only with evidence for every criterion at this tip and, with reviews on, its
         // review settled (BUILD-PLAN E2).
         let (evidence, review) = if args.outcome == StepOutcome::Done {
@@ -665,7 +647,7 @@ impl SessionManager {
             String::new()
         } else {
             format!(
-                "\nIt has no evidence at the run's tip ({}) for:\n{}\nThe morning report says so. To close a gap, run a check at the tip (run_check in your workspace, which is at the tip) and settle again with \"[met] p{}-c1: out-…\", or send the work back.",
+                "\nIt has no evidence at the run's tip ({}) for:\n{}\nThe morning report says so. To close a gap, quote the lines at the tip that show it (your workspace is at the tip) and settle again with \"[met] p{}-c1: path:12-14 `the words`\", or send the work back.",
                 &tip[..tip.len().min(10)],
                 unevidenced
                     .iter()
@@ -1026,7 +1008,7 @@ pub(crate) fn run_brief(run: &OvernightRun, words: &str, done: &[u32]) -> String
         ));
     }
     text.push_str(&format!("\n{}\n", directives_text(run)));
-    text.push_str("\nHow the run goes: give each phase's work to a lead with delegate_task and `phase: <its number>` (tiny edits you make yourself, committed on the run's branch). Land finished work with land_phase. Once a phase's whole scope and every \"done when\" are met and landed, settle it with settle_step (partial or blocked with what is left, when it can't be finished): done needs evidence for each criterion that holds at the run's tip, from its report or your own run_check at the tip in settle_step's done_when, and, with reviews on, its review ended and its findings recorded; the user's Merge takes the work up to the last phase settled done with every phase before it done. Phases that build on one left unfinished wait. When every selected phase is settled, or all that is left needs the user, call end_run. Nobody can answer before the morning: decide what the plan and the Rules settle (note_for_user, kind decided) and list what only the user can do (note_for_user, kind waiting).");
+    text.push_str("\nHow the run goes: give each phase's work to a lead with delegate_task and `phase: <its number>` (tiny edits you make yourself, committed on the run's branch). Land finished work with land_phase. Once a phase's whole scope and every \"done when\" are met and landed, settle it with settle_step (partial or blocked with what is left, when it can't be finished): done needs evidence for each criterion that holds at the run's tip, from its report or lines you quote at the tip in settle_step's done_when, and, with reviews on, its review ended and its findings recorded; the user's Merge takes the work up to the last phase settled done with every phase before it done. Phases that build on one left unfinished wait. When every selected phase is settled, or all that is left needs the user, call end_run. Nobody can answer before the morning: decide what the plan and the Rules settle (note_for_user, kind decided) and list what only the user can do (note_for_user, kind waiting).");
     text
 }
 

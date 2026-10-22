@@ -66,7 +66,6 @@ const REVIEWED: Record<string, FileReview> = { "public/index.html": "kept", "src
 
 const record = (open: number): MergeRecord => ({
   head: "a1b2c3d4",
-  checks: [{ command: "npm test", status: "exit 0", onHead: true }],
   reviews: [{ reviewer: "codex", model: null, from: "0000aaaa", to: "9999bbbb", state: { type: "findings", count: 2 }, fixed: 1, dismissed: 1 - open, open, onHead: true }],
   ci: null,
   proofs: 0,

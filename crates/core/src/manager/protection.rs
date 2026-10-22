@@ -119,10 +119,7 @@ impl SessionManager {
             })
             .unwrap_or_default();
         if full {
-            let mut own = vec![
-                scratch.to_owned(),
-                super::workers::session_temp_dir(id, super::workers::SessionTemp::Thread),
-            ];
+            let mut own = vec![scratch.to_owned(), super::workers::session_temp_dir(id)];
             own.extend(workspace.map(|workspace| workspace.path.clone()));
             add_full_access(&mut protection, &self.data_dir, &own);
         }
@@ -241,9 +238,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_full_access_threads_cleanup_touches_nothing_of_another_session() {
-        if crate::manager::flow::skip_inside_a_sandbox() {
-            return;
-        }
         let hex = || uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
         let dir = Temp(std::env::temp_dir().join(format!("brigadier-protect-{}", hex())));
         let repo = dir.0.join("repo");
@@ -400,9 +394,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_full_access_thread_on_the_users_checkout_cant_delete_another_sessions_branch() {
-        if crate::manager::flow::skip_inside_a_sandbox() {
-            return;
-        }
         let dir = Temp(std::env::temp_dir().join(format!(
             "brigadier-protect-local-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..12]

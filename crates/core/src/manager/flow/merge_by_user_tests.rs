@@ -48,13 +48,11 @@ async fn session(name: &str) -> (Flow, Log) {
                     return Reply::text("Ready to merge when you are.");
                 }
                 if turn.input.contains("[merge] The user clicked") {
-                    turn.call("run_checks", json!({})).await;
                     let reply = turn.call("finish_session", json!({})).await;
                     log(format!("finish_session: {} {}", reply.is_error, reply.text));
                     return Reply::text("Merged.");
                 }
                 if turn.input.contains("just merge it") {
-                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call("finish_session", json!({ "user_words": "just merge it" }))
                         .await;
@@ -151,17 +149,9 @@ async fn plant_merge_card(flow: &Flow, answer: Option<&str>) -> Question {
     question
 }
 
-/// Waits until the session's full checks have ended and the thread is idle again, its scratch
-/// swept: the checks run in the background (a merge no longer waits for them, #241), and a
-/// Close workspace during the sweep that follows a request is refused as working.
+/// Waits until the thread is idle again, its scratch swept: a Close workspace during the
+/// sweep that follows a request is refused as working.
 async fn quiet(flow: &Flow) -> crate::board::Board {
-    flow.until("the full checks to end", |board| {
-        board
-            .integrated_checks
-            .values()
-            .all(|check| check.state.is_final())
-    })
-    .await;
     let board = flow.settled().await;
     let conv = flow.manager.conv(&flow.conversation).unwrap();
     super::eventually_async("the thread to be idle, its scratch swept", || async {
@@ -551,7 +541,6 @@ async fn a_spent_click_never_falls_back_to_the_words_before_it() {
     std::fs::write(path.join("LATER.md"), "later\n").unwrap();
     git(&path, &["add", "LATER.md"]);
     git(&path, &["commit", "-qm", "Add later"]);
-    flow.checks_passed().await;
     let refused = flow
         .manager
         .finish_session(&flow.conversation, "merge it into main", None)
@@ -590,7 +579,6 @@ async fn a_card_answer_merges_when_the_thread_names_it() {
             .is_err()
     );
     let card = card.id.to_string();
-    flow.checks_passed().await;
     let merged_on = flow
         .manager
         .finish_session(&flow.conversation, &card, None)

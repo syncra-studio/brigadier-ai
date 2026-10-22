@@ -219,14 +219,12 @@ struct TaskLiveState {
     brain_calls: u32,
 }
 
-/// What a worker's tool calls that run commands (`run_check`) run with: its headless CLI's, or
-/// while it is open in the user's terminal, the terminal's.
+/// What a worker's tool calls that run commands (its previews) run with: its headless CLI's,
+/// or while it is open in the user's terminal, the terminal's.
 #[derive(Clone)]
 pub(crate) struct ToolAccess {
     pub provider: ProviderKind,
     pub access: Access,
-    /// The cleanup-ledger owner its commands are recorded under.
-    pub owner: String,
     /// Cancelled when the CLI or the terminal ends: its commands end with it.
     pub ended: CancellationToken,
 }
@@ -581,7 +579,6 @@ impl TaskLive {
             return Some(ToolAccess {
                 provider: cli.provider,
                 access: access.clone(),
-                owner: cli.owner.clone(),
                 ended: cli.ended.clone(),
             });
         }
@@ -1252,7 +1249,6 @@ impl SessionManager {
             report_version: None,
             deaths: Vec::new(),
             review_hold: None,
-            review_settled: false,
             live_look: extra.live_look,
             fresh_commit: extra.fresh_commit,
             integrations: extra.integrations,
@@ -5601,29 +5597,16 @@ pub(crate) fn test_data_dir(id: &TaskId) -> PathBuf {
     test_data_root().join(name)
 }
 
-/// Whose commands a session's own short temporary folder ([`session_temp_dir`]) is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionTemp {
-    /// The thread's CLI, its `run` commands and its checks.
-    Thread,
-    /// The session's full checks.
-    Checks,
-}
-
-/// The temporary folder of session `id`'s thread or full checks: short and free of spaces,
-/// under the system's temporary folder like a task's test data folder, never in the app's
-/// data folder, whose long path with spaces breaks what the commands make there (a Unix
-/// socket's path holds at most 104 bytes on macOS). Named like a task's test data folder
-/// (`brigadier-test-` and 8 letters or digits; the first, `t` or `k`, is never a task id's
-/// hex), so the sweeps, sandboxes and protections that know those know it.
-pub(crate) fn session_temp_dir(id: &ConversationId, role: SessionTemp) -> PathBuf {
-    let tag = match role {
-        SessionTemp::Thread => 't',
-        SessionTemp::Checks => 'k',
-    };
+/// The temporary folder of session `id`'s thread: short and free of spaces, under the
+/// system's temporary folder like a task's test data folder, never in the app's data folder,
+/// whose long path with spaces breaks what the commands make there (a Unix socket's path
+/// holds at most 104 bytes on macOS). Named like a task's test data folder (`brigadier-test-`
+/// and 8 letters or digits; the first, `t`, is never a task id's hex), so the sweeps,
+/// sandboxes and protections that know those know it.
+pub(crate) fn session_temp_dir(id: &ConversationId) -> PathBuf {
     let letters: Vec<char> = id.0.chars().filter(char::is_ascii_alphanumeric).collect();
     let tail: String = letters[letters.len().saturating_sub(7)..].iter().collect();
-    test_data_root().join(format!("brigadier-test-{tag}{tail:0>7}"))
+    test_data_root().join(format!("brigadier-test-t{tail:0>7}"))
 }
 
 /// The cleanup owner of a session thread's temporary folder ([`session_temp_dir`]).
@@ -6258,9 +6241,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn under_its_sandbox_a_writer_commits_on_its_branch_and_never_moves_another() {
-        if crate::manager::flow::skip_inside_a_sandbox() {
-            return;
-        }
         let dir =
             Temp(std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4())));
         let main = dir.join("main");

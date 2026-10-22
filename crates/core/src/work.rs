@@ -648,25 +648,11 @@ pub struct Preview {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub request_id: Option<String>,
-    /// A test run's counts, read from its output when it ended; none when its runner's
-    /// summary wasn't found.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub tests: Option<TestCounts>,
     /// A rendered PDF's page count, read from its file when it was ready and again when its
     /// render ended; none when it couldn't be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pages: Option<u32>,
-}
-
-/// How many tests a test run passed, failed and skipped, as its runner printed them.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct TestCounts {
-    pub passed: u32,
-    pub failed: u32,
-    pub skipped: u32,
 }
 
 /// What a proof is, which decides how it shows.
@@ -969,11 +955,6 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub review_hold: Option<String>,
-    /// Its review's part of the hold has settled; the hold lasts until a passing integrated
-    /// check covers its landing too (SESSION-FIXES-PLAN.md §11).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(skip)]
-    pub review_settled: bool,
     /// It looks at the integrated tree's own dev build, live, for the visible changes that
     /// landed: the one live check of the app, instead of one per worker (§11).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1647,8 +1628,6 @@ pub struct ReviewRun {
 pub struct MergeRecord {
     /// The commit whose code merged (the session branch's head).
     pub head: String,
-    /// The thread's checks (`run_check`) since the last merge, the latest run of each.
-    pub checks: Vec<MergeCheck>,
     /// The other vendor's code reviews since the last merge, oldest first.
     pub reviews: Vec<MergeReview>,
     /// The branch's last CI watch.
@@ -1661,17 +1640,6 @@ pub struct MergeRecord {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub first_auto: bool,
-}
-
-/// A `run_check` command, as it last ran.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeCheck {
-    pub command: String,
-    /// "exit 0", "exit 1", "timed out after 600 s".
-    pub status: String,
-    /// It ran on exactly the merged code (the head's files, committed or not then).
-    pub on_head: bool,
 }
 
 /// A review of the merged work: who reviewed which range, and how its findings were settled.
@@ -1762,111 +1730,7 @@ pub struct Finding {
     pub high: bool,
 }
 
-/// One run of the project's full checks on the integrated tree: a branch the session's work
-/// lands on, at its tip after landings (SESSION-FIXES-PLAN.md §11). Workers run only the checks
-/// of their own change; this runs once per tip, after landings settle, in a checkout of its
-/// own. Recorded from when it is due, so a restart neither loses nor repeats it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct IntegratedCheck {
-    /// `check-<n>`, its place among the conversation's.
-    pub id: String,
-    pub conversation_id: ConversationId,
-    /// The repository and branch checked: the session branch, or an overnight run's.
-    pub repo: String,
-    pub branch: String,
-    /// The commit checked; while due, the newest tip so far.
-    pub tip: String,
-    pub state: IntegratedCheckState,
-    /// When it became due, or the last landing moved its tip: it starts once landings settle.
-    pub due_at_ms: i64,
-    #[serde(default)]
-    pub started_at_ms: Option<i64>,
-    #[serde(default)]
-    pub ended_at_ms: Option<i64>,
-    /// The requests whose work it checks: one whose thread deferred its answer hears the verdict.
-    #[serde(default)]
-    pub requests: Vec<String>,
-    /// The landed tasks it covers that no passing check covered before, set when it starts:
-    /// a failure goes back to one of them.
-    #[serde(default)]
-    pub tasks: Vec<TaskId>,
-    /// Asked for again by the thread: kept results don't answer it.
-    #[serde(default)]
-    pub rerun: bool,
-    /// Who asked for it with `run_checks`, and what it checks. None on a run Brigadier started
-    /// by itself (before 10-21): such a run never counts for a merge.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub asked: Option<ChecksAsked>,
-    /// The thread's `run_checks` call went on before the verdict: the verdict is owed to it as
-    /// a message, whatever it did meanwhile, and is told again after a restart until a turn
-    /// took it (#513).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(skip)]
-    pub owed: bool,
-}
-
-/// Who called `run_checks`, and what its run checks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ChecksAsked {
-    /// The worker that asked; none for the thread.
-    pub task_id: Option<TaskId>,
-    pub scope: ChecksScope,
-}
-
-/// What a `run_checks` run checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum ChecksScope {
-    /// The project's full checks, builds included, on the session branch's commit (the
-    /// thread's).
-    Full,
-    /// The checks of the packages a worker's change touched, in its own checkout.
-    Change,
-}
-
-/// Where an integrated check stands.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum IntegratedCheckState {
-    /// Waiting for landings to settle, or for the run before it.
-    Due,
-    Running {
-        /// The command running now.
-        command: Option<String>,
-        /// How many of its commands ended so far, of `total` (0 of 0 while they are listed).
-        #[serde(default)]
-        done: u32,
-        #[serde(default)]
-        total: u32,
-    },
-    /// Every command passed.
-    Passed { commands: Vec<String> },
-    /// `command` failed: the code's problem until shown otherwise.
-    Failed {
-        command: String,
-        status: String,
-        /// Its whole output, for `read_artifact`.
-        output: Option<String>,
-    },
-    /// It couldn't run to its end (a restart, its checkout couldn't be made): no verdict on
-    /// the code, so its tip still counts as unchecked.
-    Interrupted { reason: String },
-}
-
-impl IntegratedCheckState {
-    pub fn is_final(&self) -> bool {
-        !matches!(self, Self::Due | Self::Running { .. })
-    }
-}
-
-/// A command of the thread's (`run`, `run_check`) still going after the time a tool call may
+/// A command of the thread's (`run`) still going after the time a tool call may
 /// hold the thread ([`crate::manager`]'s background runs): it goes on in the background, owned
 /// by the session rather than the thread's CLI, and its result comes to the thread as a
 /// message. Recorded from the moment it goes there, so a restart that cuts it off says so.
@@ -1879,7 +1743,7 @@ pub struct BackgroundRun {
     /// The request whose turn started it: it works until the result is read.
     #[serde(default)]
     pub request_id: Option<String>,
-    /// The tool that started it: `run` or `run_check`.
+    /// The tool that started it (`run`).
     pub tool: String,
     pub command: String,
     pub started_at_ms: i64,

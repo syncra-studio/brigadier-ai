@@ -135,8 +135,8 @@ const WRITES: readonly Task["kind"][] = ["implement", "merge"];
  * The held merge (SESSION-FIXES-PLAN.md Q3), while it is held: its latest `mergeHeld` row with
  * no merge, Cancel or stop since. It waits for the write tasks that ran when it was held, or
  * started since (a merge task after conflicts, #223), until each is final (the daemon's
- * `is_final`); reviews and the full checks don't hold it (#241, #242). When the thread asks
- * again on a merge card (the user wrote since their yes), it waits for that answer.
+ * `is_final`); reviews don't hold it (#241, #242). When the thread asks again on a merge card
+ * (the user wrote since their yes), it waits for that answer.
  */
 export function heldMerge(
   steps: readonly OrchestratorStep[],

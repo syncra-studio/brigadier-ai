@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { answeredHead, elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { BackgroundRun, IntegratedCheck, OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
+import type { BackgroundRun, OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, boardFromView, doingOf, emptyBoard, type ShownApproval, workerNote } from "@/state/board";
 
@@ -208,7 +208,7 @@ test("an integration's live line names its action, and a worker's progress note 
 });
 
 test("the thread's own tool steps show as their rows, never as Thinking or a worker", () => {
-  for (const name of ["Bash", "Read", "Edit", "mcp__brigadier__run", "mcp__brigadier__run_check", "mcp__brigadier__start_preview",
+  for (const name of ["Bash", "Read", "Edit", "mcp__brigadier__run", "mcp__brigadier__start_preview",
     "mcp__brigadier__preview_log", "mcp__brigadier__request_review", "shell", "apply_patch"]) {
     assert.deepEqual(threadStatus(input({ ...leading, orchestratorSteps: [call(name)] })), { head: null }, name);
   }
@@ -242,7 +242,7 @@ test("a turn resting on other sessions' replies says whom it waits for", () => {
   });
 });
 
-const run = (patch: Partial<BackgroundRun> = {}): BackgroundRun => ({ id: "run-1", conversationId: "c", requestId: "r1", tool: "run_check",
+const run = (patch: Partial<BackgroundRun> = {}): BackgroundRun => ({ id: "run-1", conversationId: "c", requestId: "r1", tool: "run",
   command: "cargo test -p brigadier-core --lib -- flow::background_tests", startedAtMs: 1_000, endedAtMs: null,
   state: { type: "running" }, ...patch });
 
@@ -256,29 +256,18 @@ test("a long run the request waits on says what runs and since when, rather than
   assert.deepEqual(head(input({ backgroundRuns: byId([run({ requestId: "r2" })]) })), { text: "Thinking", tone: "busy" });
   // While the thread itself works, its own line says what it does.
   assert.deepEqual(head(input({ ...leading, backgroundRuns: byId([run()]) })), { text: "Thinking", tone: "busy" });
-  // The session's full checks a request's answer waits on.
-  const check = { id: "check-1", conversationId: "c", repo: "/r", branch: "b", tip: "abc", state: { type: "running", command: "cargo test", done: 0, total: 1 },
-    dueAtMs: 500, startedAtMs: 2_000, endedAtMs: null, requests: ["r1"], tasks: [], rerun: false } as IntegratedCheck;
-  assert.deepEqual(head(input({ integratedChecks: byId([check]) })), { text: "Running the full checks", tone: "busy", sinceMs: 2_000, run: true });
-  // Due, they haven't started: never "Running" while the thread says they haven't run (#108).
-  assert.deepEqual(head(input({ integratedChecks: byId([{ ...check, state: { type: "due" }, startedAtMs: null }]) })),
-    { text: "Waiting to run the full checks", tone: "still", run: true });
-  assert.deepEqual(head(input({ integratedChecks: byId([{ ...check, state: { type: "passed", commands: [] } }]) })), { text: "Thinking", tone: "busy" });
 });
 
-test("an answered request whose full checks are only due says so under its answer", () => {
-  const check = { id: "check-1", conversationId: "c", repo: "/r", branch: "b", tip: "abc", state: { type: "due" },
-    dueAtMs: 500, startedAtMs: null, endedAtMs: null, requests: ["r1"], tasks: [], rerun: false } as IntegratedCheck;
-  const due = head(input({ integratedChecks: byId([check]) }));
+test("an answered request whose long run still goes says so under its answer", () => {
+  const running = head(input({ backgroundRuns: byId([run()]) }));
   // Still in the same working span: neither waiting nor reopened.
   const span = { waitingFor: [], waiting: false, reopened: false };
-  assert.deepEqual(answeredHead(due, span), { text: "Waiting to run the full checks", tone: "still", run: true });
-  assert.deepEqual(answeredHead(head(input({ backgroundRuns: byId([run()]) })), span)?.text, "Running cargo test -p brigadier-core --lib -- f…");
+  assert.deepEqual(answeredHead(running, span)?.text, "Running cargo test -p brigadier-core --lib -- f…");
   // What the thread merely does between its turns shows only once it waits or a late result reopened it.
   assert.equal(answeredHead({ text: "Thinking", tone: "busy" }, span), null);
   assert.deepEqual(answeredHead({ text: "Thinking", tone: "busy" }, { ...span, reopened: true }), { text: "Thinking", tone: "busy" });
   // The user first, then the sessions it waits on.
-  assert.deepEqual(answeredHead(due, { ...span, waitingFor: ["Docs"] }), { text: "Waiting for Docs to reply", tone: "still" });
+  assert.deepEqual(answeredHead(running, { ...span, waitingFor: ["Docs"] }), { text: "Waiting for Docs to reply", tone: "still" });
 });
 
 test("a run's elapsed time is short", () => {

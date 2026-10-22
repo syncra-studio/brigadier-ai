@@ -217,13 +217,10 @@ pub(crate) fn content_text(output: &str) -> std::borrow::Cow<'_, str> {
 
 /// Brigadier's own command tools, whose reply starts with how the command ended.
 pub(crate) fn own_run(name: &str) -> bool {
-    matches!(
-        bare_tool_name(name),
-        "run" | "run_unsandboxed" | "run_check"
-    )
+    matches!(bare_tool_name(name), "run" | "run_unsandboxed")
 }
 
-/// What a `run_check` (or `run`) reply says after its output, on lines of their own: the commit
+/// What a `run` reply says after its output, on lines of their own: the commit
 /// it made or didn't, a review it started. Empty when it says nothing more.
 fn reply_notes(reply: &str) -> &str {
     let is_note = |line: &str| {
@@ -427,7 +424,7 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// A long run_check reply shows its whole output with its header and what it said after
+    /// A long run reply shows its whole output with its header and what it said after
     /// the output: the commit it made, a review it started.
     #[test]
     fn a_digested_check_reply_keeps_its_header_and_notes_around_the_whole_output() {
@@ -448,7 +445,7 @@ mod tests {
             whole_reply(review, "one\ntwo\npassed\n"),
             "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\n\n[review running] Claude Code reviews your change for this request in the background."
         );
-        assert!(own_run("mcp__brigadier__run_check") && own_run("run") && !own_run("Bash"));
+        assert!(own_run("mcp__brigadier__run") && own_run("run") && !own_run("Bash"));
     }
 
     /// A Codex MCP reply that comes as a JSON content array (or the tool result holding one)

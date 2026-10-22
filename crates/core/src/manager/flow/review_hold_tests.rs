@@ -1,7 +1,7 @@
-//! A landed worker's session and branch are kept until a passing run_checks covers its landing
-//! (SESSION-FIXES-PLAN.md Q6.1, §11): review findings the thread asked for and keeps open go
-//! back to it as one fix, which resumes that session in its old worktree. Nothing reviews the
-//! landing or the fix by itself.
+//! A landed worker's session and branch are kept until the session merges, or its review
+//! findings settle (SESSION-FIXES-PLAN.md Q6.1): review findings the thread asked for and keeps
+//! open go back to it as one fix, which resumes that session in its old worktree. Nothing
+//! reviews or checks the landing or the fix by itself.
 
 use std::sync::{Arc, Mutex};
 
@@ -91,8 +91,8 @@ async fn delegate_notes(turn: &Turn) {
 }
 
 /// The session: a worker writes NOTES.md and lands; the thread asks for a review, which finds
-/// two things; it records both open (the first high) and sends them back as one fix, lands
-/// the fix and runs the full checks.
+/// two things; it records both open (the first high) and sends them back as one fix, and lands
+/// the fix.
 async fn fixed_once(name: &str, refuse_resume: bool) -> (Flow, Arc<Mutex<Seen>>) {
     let seen: Arc<Mutex<Seen>> = Arc::default();
     let (log, reviews_log) = (seen.clone(), seen.clone());
@@ -181,12 +181,6 @@ async fn fixed_once(name: &str, refuse_resume: bool) -> (Flow, Arc<Mutex<Seen>>)
                     if turn.input.contains("[report task-2") {
                         let reply = turn.call("land_phase", json!({"task": "task-2"})).await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        let checks = turn.call("run_checks", json!({})).await;
-                        assert!(
-                            checks.text.contains("[checks passed at "),
-                            "{}",
-                            checks.text
-                        );
                         return Reply::text("Fixed the notes.");
                     }
                     Reply::text("Noted.")
@@ -261,7 +255,7 @@ async fn findings_go_back_to_the_resumed_worker_and_its_fix_gets_no_review_by_it
     assert_eq!(board.tasks.len(), 2, "{:#?}", board.tasks.keys());
     assert_eq!(seen.reviews.len(), 1, "{:#?}", seen.reviews);
     assert_eq!(flow.board().await.reviews.len(), 1);
-    // The run_checks pass covered task-1's landing: its session files and branch are gone.
+    // The fix ended task-1's batch: its session files and branch are gone.
     let branch = first.workspace.as_ref().unwrap().branch.clone().unwrap();
     assert!(!branch_exists(&flow, &branch), "{branch}");
     assert!(
@@ -290,10 +284,10 @@ async fn a_fix_whose_session_cannot_be_resumed_starts_fresh_from_the_report() {
     flow.stop().await;
 }
 
-/// A landed worker's session and branch stay while nothing checked its landing, and go once
-/// the thread's run_checks pass covers it; nothing reviews the landing.
+/// A landed worker's session and branch stay while the session is open: the thread's own
+/// checks, plain commands, let go of nothing; nothing reviews the landing.
 #[tokio::test]
-async fn a_landing_is_kept_until_run_checks_passes_over_it() {
+async fn a_landing_is_kept_while_the_session_is_open() {
     let seen: Arc<Mutex<Seen>> = Arc::default();
     let log = seen.clone();
     let flow = Flow::start(
@@ -321,15 +315,6 @@ async fn a_landing_is_kept_until_run_checks_passes_over_it() {
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("Landed.");
                 }
-                if turn.input.contains("Check it.") {
-                    let checks = turn.call("run_checks", json!({})).await;
-                    assert!(
-                        checks.text.contains("[checks passed at "),
-                        "{}",
-                        checks.text
-                    );
-                    return Reply::text("The checks pass.");
-                }
                 Reply::text("Noted.")
             }
         }),
@@ -353,10 +338,12 @@ async fn a_landing_is_kept_until_run_checks_passes_over_it() {
     let branch = first.workspace.as_ref().unwrap().branch.clone().unwrap();
     assert!(branch_exists(&flow, &branch));
     flow.say("Check it.").await;
-    settled(&flow).await;
-    assert!(!branch_exists(&flow, &branch), "{branch}");
+    let board = flow.settled().await;
+    assert!(Flow::task(&board, 1).review_hold.is_some());
+    assert!(branch_exists(&flow, &branch), "{branch}");
     assert!(
-        flow.manager
+        !flow
+            .manager
             .runtime
             .ledger()
             .artifacts(&hold_owner(&first.id))
@@ -365,7 +352,7 @@ async fn a_landing_is_kept_until_run_checks_passes_over_it() {
     flow.stop().await;
 }
 
-/// The session's archive lets go of a landing still kept: nothing checked it.
+/// The session's archive lets go of a landing still kept.
 #[tokio::test]
 async fn archiving_the_session_settles_an_open_batch() {
     let seen: Arc<Mutex<Seen>> = Arc::default();

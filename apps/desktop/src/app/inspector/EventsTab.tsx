@@ -129,7 +129,8 @@ function summary(event: DomainEvent): string {
     case "reviewUpdated":
       return `${event.review.kind} review ${event.review.state.type}`;
     case "integratedCheckUpdated":
-      return `${event.check.id} ${event.check.state.type} at ${event.check.tip.slice(0, 10)}`;
+      // Only in old stored events: the checks it told of are gone.
+      return "";
     case "backgroundRunUpdated":
       return `${event.run.id} ${event.run.state.type}: ${event.run.command}`;
     case "headlineSet":

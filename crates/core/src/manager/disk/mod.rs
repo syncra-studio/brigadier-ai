@@ -2132,10 +2132,7 @@ impl Scanner<'_> {
             if !self.records.scratch_idle.contains(&conversation.id) {
                 continue;
             }
-            let tmp = super::workers::session_temp_dir(
-                &conversation.id,
-                super::workers::SessionTemp::Thread,
-            );
+            let tmp = super::workers::session_temp_dir(&conversation.id);
             let (owner, _) = super::lifecycle::conversation_owner(conversation);
             let temps = self
                 .records

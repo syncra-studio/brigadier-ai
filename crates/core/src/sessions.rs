@@ -1524,7 +1524,6 @@ impl Core {
             overnight: board.sorted_runs(),
             reviews: board.sorted_reviews(),
             previews: board.sorted_previews(),
-            integrated_checks: board.sorted_integrated_checks(),
             background_runs: board.sorted_background_runs(),
             headline: board.headline.clone(),
             merge_refused: board.merge_refused.clone(),

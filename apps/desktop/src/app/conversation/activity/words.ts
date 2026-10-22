@@ -10,7 +10,7 @@ import type { Approval, ItemStatus, OrchestratorStepKind, Task } from "@/ipc/gen
  */
 
 /** The kinds of work a group sums up, in the order of the plan's table. */
-export type WorkKind = "read" | "edit" | "run" | "code" | "web" | "memory" | "checks" | "preview" | "message" | "other";
+export type WorkKind = "read" | "edit" | "run" | "code" | "web" | "memory" | "preview" | "message" | "other";
 
 /** A call as both threads know it: the tool's name, its one-line detail and how it stands. */
 export type StepCall = { name: string; detail: string | null; status: ItemStatus };
@@ -121,7 +121,6 @@ const OTHER: Record<string, [doing: string, done: string]> = {
   record_nodes: ["Saving to project memory", "Saved to project memory"],
   ci_status: ["Checking CI", "Checked CI"],
   watch_ci: ["Watching CI", "Watched CI"],
-  rerun_checks: ["Running the checks again", "Ran the checks again"],
   clean_up: ["Cleaning up", "Cleaned up"],
   read_page: ["Reading a page", "Read a page"],
   write_page: ["Writing a page", "Wrote a page"],
@@ -212,16 +211,16 @@ const searchedCode = (pattern: string | null, path: string | null = null): StepW
 };
 
 /** A command, told as what it does: a read, a listing, a search, or a run of its first line. */
-function commandWords(raw: string, kind: "run" | "checks" = "run"): StepWords {
+function commandWords(raw: string): StepWords {
   const command = unwrapCommand(raw);
   const [head = command, ...rest] = command.trim().split("\n");
   const firstLine = rest.length > 0 ? `${head} …` : head;
   const words = wordsOf(command);
   const program = basename(words[0] ?? "");
   // Any other command has a terminal, also one that reaches the network (`curl … | python3`, `git fetch`).
-  const ran: StepWords = { kind, doing: `Running ${firstLine}`, done: `Ran ${firstLine}`, object: firstLine };
-  // A compound command, or a check, is told as what it runs.
-  if (kind === "checks" || /[;&|<>`$(]/.test(command.replace(/\s\|\|\s.*$/, ""))) return ran;
+  const ran: StepWords = { kind: "run", doing: `Running ${firstLine}`, done: `Ran ${firstLine}`, object: firstLine };
+  // A compound command is told as what it runs.
+  if (/[;&|<>`$(]/.test(command.replace(/\s\|\|\s.*$/, ""))) return ran;
   if (program === "date" && words.length === 1) {
     return { kind: "run", doing: "Checking the current date and time", done: "Checked the current date and time" };
   }
@@ -304,9 +303,6 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   }
   if (COMMANDS.has(short)) {
     return detail ? commandWords(detail) : { kind: "run", doing: "Running a command", done: "Ran a command" };
-  }
-  if (short === "run_check") {
-    return detail ? commandWords(detail, "checks") : { kind: "checks", doing: "Running checks", done: "Ran checks" };
   }
   if (CODE_SEARCH.has(short)) return searchedCode(detail);
   if (LISTINGS.has(short)) return listed(detail ? basename(detail) : null);
@@ -490,7 +486,7 @@ export function toolHasOwnResult(
  */
 export function stepLabel(words: StepWords, status: ItemStatus, _exit: number | null = null): string {
   if (status === "inProgress") return words.doing;
-  const command = words.kind === "run" || words.kind === "checks" || (words.kind === "web" && words.done.startsWith("Ran "));
+  const command = words.kind === "run" || (words.kind === "web" && words.done.startsWith("Ran "));
   if (status === "failed" && !command) return `${words.done} — failed`;
   return words.done;
 }
@@ -548,7 +544,6 @@ const LEADING: Record<Exclude<WorkKind, "other" | "code">, [one: string, many: s
   run: ["Ran a command", "Ran commands"],
   web: ["Searched the web", "Searched the web"],
   memory: ["Checked project memory", "Checked project memory"],
-  checks: ["Ran checks", "Ran checks"],
   preview: ["Started a preview", "Started a preview"],
   message: ["Messaged a session", "Messaged sessions"],
 };

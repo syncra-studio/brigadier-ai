@@ -3,7 +3,7 @@ import { Pause, Spinner } from "@/components/icons";
 
 /**
  * A row's icon for its state: a spinner while the process is on its way somewhere (building,
- * starting, a smoke test or a check of it) and while an event runs or waits (checks, a review, a
+ * starting, a smoke test or a check of it) and while an event runs or waits (a review, CI, a
  * merge), a steady green dot once a process is up, a pause sign while it is held. With less
  * motion, nothing spins or pulses.
  */

@@ -40,7 +40,7 @@ use brigadier_providers::Artifact;
 use brigadier_sandbox::removal;
 
 use super::conversation::ConvLive;
-use super::workers::{SessionTemp, session_temp_dir};
+use super::workers::session_temp_dir;
 use super::{SessionManager, blocking};
 use crate::Result;
 use crate::model::{ConversationId, ConversationKind, Lifecycle};
@@ -190,7 +190,7 @@ impl SessionManager {
         id: &ConversationId,
         left: Vec<(u32, Option<f64>)>,
     ) -> Result<Swept> {
-        let tmp = session_temp_dir(id, SessionTemp::Thread);
+        let tmp = session_temp_dir(id);
         let command_temps = self.claude_command_temps(id);
         let others = self.recorded_elsewhere(id);
         let platform = self.runtime.platform().clone();

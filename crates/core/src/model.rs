@@ -1465,9 +1465,6 @@ pub struct ConversationView {
     /// Its previews, oldest first.
     #[serde(default)]
     pub previews: Vec<crate::work::Preview>,
-    /// Its runs of the full checks on the integrated tree, oldest first.
-    #[serde(default)]
-    pub integrated_checks: Vec<crate::work::IntegratedCheck>,
     /// The thread's commands that went to the background, oldest first.
     #[serde(default)]
     pub background_runs: Vec<crate::work::BackgroundRun>,
@@ -2523,10 +2520,11 @@ pub enum DomainEvent {
     ReviewUpdated {
         review: crate::work::ReviewRun,
     },
-    /// A run of the full checks on the integrated tree became due, started or ended (full
-    /// snapshot).
+    /// An older Brigadier's run of the full checks became due, started or ended. Nothing
+    /// records it now; stored ones are read and skipped.
     IntegratedCheckUpdated {
-        check: crate::work::IntegratedCheck,
+        #[ts(type = "unknown")]
+        check: serde_json::Value,
     },
     /// The thread set the session's headline (`set_headline`), or it was cleared (none) by
     /// the user's next message.
@@ -2580,8 +2578,8 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         output: crate::work::StoredOutput,
     },
-    /// A `run_check` call ran its command, or answered from the check cache (THREAD-PLAN.md
-    /// Q8 lever 3, [`crate::manager::checks`]).
+    /// An older Brigadier's check tool ran its command, or answered from its check cache.
+    /// Nothing records it now; stored ones are read and skipped.
     CheckRan {
         conversation_id: ConversationId,
         /// The worker's task; none for the thread.

@@ -16,9 +16,8 @@
  * - `simulator`: an iOS simulator run on "iPhone 17" with a recording of it: Open brings Simulator forward.
  * - `pdf`: a rendered PDF whose render ended well, ready, "2 pages": Open opens the file in the system's viewer.
  * - `pdf-uncounted`: one whose page count couldn't be read: no count.
- * - `test-run`: a test run that passed, "15 passed", its own output's last five lines; Run again.
- * - `test-failed`: one that failed, "2 failed, 13 passed, 1 skipped".
- * - `test-uncounted`: one whose runner's summary wasn't found: "Passed".
+ * - `test-run`: a test run that passed, "Passed", its own output's last five lines; Run again.
+ * - `test-failed`: one that failed, "Failed".
  * - `turn`: a turn's previews, found as its end finds them: the page and the test run started
  *   while its request ran, the simulator its recording names and the run its request started,
  *   though it was started again later; not a run started after.
@@ -90,20 +89,18 @@ const preview = (id: string, port: number, state: PreviewState): Preview => ({
   id, conversationId: CHAT, name: "npm run dev", command: "npm run dev", workdir: "/w", workspace: "/w", pid: 1, state,
   startedAtMs: 0, endedAtMs: null, log: null, url: `http://localhost:${port}/`, kind: "web", building: false,
 });
-const other = (id: string, kind: Preview["kind"], target: string, state: PreviewState, startedAtMs: number, command = "xcrun simctl boot", tests?: Preview["tests"]): Preview => ({
+const other = (id: string, kind: Preview["kind"], target: string, state: PreviewState, startedAtMs: number, command = "xcrun simctl boot"): Preview => ({
   id, conversationId: CHAT, name: kind, command, workdir: "/w/app", workspace: "/w", pid: 1, state,
-  startedAtMs, endedAtMs: null, log: null, kind, target, building: false, ...(tests ? { tests } : {}),
+  startedAtMs, endedAtMs: null, log: null, kind, target, building: false,
 });
 const OTHERS = [
   other("preview-sim", "simulator", "iPhone 17", { type: "running" }, 500),
   // Its render ended well, as most do: the file is there.
   other("preview-pdf", "pdf", "out/invoice.pdf", { type: "exited", code: 0, status: "exit 0" }, 2000, "pandoc invoice.md -o out/invoice.pdf"),
-  other("preview-test", "test", "npm test", { type: "exited", code: 0, status: "exit 0" }, 3000, "npm test", { passed: 15, failed: 0, skipped: 0 }),
-  other("preview-failed", "test", "npm test", { type: "exited", code: 1, status: "exit 1" }, 3500, "npm test", { passed: 13, failed: 2, skipped: 1 }),
+  other("preview-test", "test", "npm test", { type: "exited", code: 0, status: "exit 0" }, 3000, "npm test"),
+  other("preview-failed", "test", "npm test", { type: "exited", code: 1, status: "exit 1" }, 3500, "npm test"),
   // Started after the turn's request ended: another turn's.
   other("preview-later", "test", "npm run e2e", { type: "exited", code: 0, status: "exit 0" }, 9000, "npm run e2e"),
-  // Its runner's summary wasn't found: Passed alone.
-  other("preview-uncounted", "test", "make check", { type: "exited", code: 0, status: "exit 0" }, 9500, "make check"),
   // The first turn's, started again (Run again) while the second ran: still the first's (#435).
   { ...other("preview-again", "test", "npm run lint", { type: "exited", code: 0, status: "exit 0" }, 7000, "npm run lint"), requestId: "turn-1" },
 ];
@@ -202,7 +199,6 @@ const CASES: { id: string; node: ReactNode }[] = [
   { id: "pdf-uncounted", node: <PreviewCard url={null} preview={OTHERS[1]!} steps={[]} session /> },
   { id: "test-run", node: <PreviewCard url={null} preview={OTHERS[2]!} steps={[]} session /> },
   { id: "test-failed", node: <PreviewCard url={null} preview={OTHERS[3]!} steps={[]} session /> },
-  { id: "test-uncounted", node: <PreviewCard url={null} preview={OTHERS[5]!} steps={[]} session /> },
   { id: "turn", node: <Turn request="turn-1" steps={SIM_PROOFS} /> },
   { id: "turn-said", node: <Turn request="turn-2" answer="Run `npm run dev`; it starts on http://localhost:5173." /> },
   { id: "turn-said-stopped", node: <Turn request="turn-2" answer="It was on http://localhost:3003/ earlier." /> },

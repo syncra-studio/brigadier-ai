@@ -44,7 +44,7 @@ export const CHEVRON =
 export const OPENS =
   "overflow-clip data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up motion-reduce:animate-none!";
 
-/** A row's icon by its kind of work: a terminal for commands and checks, a file for reads, a magnifier for searches. */
+/** A row's icon by its kind of work: a terminal for commands, a file for reads, a magnifier for searches. */
 export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
   read: File,
   edit: EditPencil,
@@ -52,7 +52,6 @@ export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
   code: MagnifyingGlassSmSearch,
   web: Globe,
   memory: Sparkle,
-  checks: Terminal,
   preview: PlayCircle,
   message: Chat,
   other: Tools,

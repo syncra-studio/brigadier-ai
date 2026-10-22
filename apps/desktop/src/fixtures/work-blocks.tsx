@@ -957,8 +957,8 @@ async function driveQueue(): Promise<object> {
 
 async function driveBackground(): Promise<object> {
   await settle(600);
-  // The thread's check outlasted its call: it went to the background, and the thread said so.
-  steps([...daemon.steps, tool("check", 1.3, "mcp__brigadier__run_check", "cargo test --workspace", "completed")]);
+  // The thread's command outlasted its call: it went to the background, and the thread said so.
+  steps([...daemon.steps, tool("check", 1.3, "mcp__brigadier__run", "cargo test --workspace", "completed")]);
   const said: Message = {
     id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: Date.now(), attachments: [], mentions: [],
     text: "The full Rust tests run in the background, about 15 minutes; I'll answer when they finish.", model: null,
@@ -967,7 +967,7 @@ async function driveBackground(): Promise<object> {
   daemon.messages = [...daemon.messages, said];
   useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
   const run: BackgroundRun = {
-    id: "run-1", conversationId: ID, requestId: "r1", tool: "run_check", command: "cargo test --workspace",
+    id: "run-1", conversationId: ID, requestId: "r1", tool: "run", command: "cargo test --workspace",
     startedAtMs: Date.now() - 6 * 60_000 - 5_000, endedAtMs: null, state: { type: "running" },
   };
   daemon.run = "idle";

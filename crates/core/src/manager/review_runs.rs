@@ -317,7 +317,7 @@ pub(crate) fn unverified(status: &FindingStatus) -> bool {
 /// record them.
 fn record_line(items: &[Finding]) -> String {
     format!(
-        "Its findings:\n{}\nA finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each that no run_check `fixes` records with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If you record any with record_findings and it isn't in your tool list, look it up in the same message as your first fix or check, not in a call of its own. If your answer is already written: {}",
+        "Its findings:\n{}\nA finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If you record any with record_findings and it isn't in your tool list, look it up in the same message as your first fix or check, not in a call of its own. If your answer is already written: {}",
         listed(items),
         super::prompts::LATE_EVENT
     )
@@ -450,7 +450,7 @@ impl Drop for ReplyWait<'_> {
             }
         };
         // Cancelled just as the review ended, its message skipped for this call: the thread
-        // hears it as a message after all (#332), as run_check's does (#193).
+        // hears it as a message after all (#332).
         if tell
             && let Some(review) = self.review.take()
             && let Some(manager) = self.manager.me.upgrade()
@@ -1563,11 +1563,11 @@ impl SessionManager {
         // audit M6, issue #33), left uncommitted unless the user asks.
         let local = self.local_checkout(&review.conversation_id).is_some();
         let fix_rule = if local {
-            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it. run_check's `fixes` (their ids) records them fixed when its check passes."
+            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it. Then record them fixed with record_findings, with how you checked it."
                 .to_owned()
         } else {
             format!(
-                "Commit a fix of yours, with nothing else in it, with run_check's `commit` and `fixes` (their ids; `high` names those that lose data or break a build or a security boundary): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check."
+                "Commit a fix of yours, with nothing else in it, with `--trailer \"{FIXES_TRAILER}: <their ids>\"`, then record them fixed with record_findings, with how you checked it."
             )
         };
         let text = match (review.kind, &review.state, text) {
@@ -1636,7 +1636,7 @@ impl SessionManager {
                 "[plan review {of} · could not run] The plan review could not run: {reason}. Judge the outline yourself."
             ),
             // A clean review of the thread's own changes is news only when its answer waits
-            // for it (BUILD-PLAN B2: `run_check` told it to).
+            // for it (BUILD-PLAN B2).
             (ReviewKind::Code, ReviewState::Clean, _)
                 if review.task_id.is_none() && self.answer_waits_for(review).await =>
             {
@@ -1651,7 +1651,7 @@ impl SessionManager {
     }
 
     async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>, filed: Option<String>) {
-        // A request_review or run_check call that waited on it said its outcome in its reply.
+        // A request_review call that waited on it said its outcome in its reply.
         if review.notify == ReviewFor::Orchestrator
             && self.reply_claims().stand_aside(&(
                 review.conversation_id.clone(),
@@ -1794,7 +1794,7 @@ impl SessionManager {
             }
     }
 
-    /// `run_check` tells the thread to wait for `review`, a review of its own change for its
+    /// The thread waits for `review`, a review of its own change for its
     /// running request: recorded on the review, under the lock its end is stored under, so
     /// the end sees it whenever it comes, and after a restart too. False when the review is
     /// no longer running.
@@ -1819,96 +1819,6 @@ impl SessionManager {
                 tracing::warn!(review = %running.id, error = %err, "could not record that the answer waits for a review");
                 false
             }
-        }
-    }
-
-    /// The ids in `run_check`'s `fixes` that are no finding of this session, checked before the
-    /// check runs: a commit made with an unknown id in its Fixes trailer can't be corrected by
-    /// running the check again, as nothing would be left to commit.
-    pub(crate) async fn unknown_findings(
-        &self,
-        conversation_id: &ConversationId,
-        fixes: &[String],
-    ) -> Result<Vec<String>> {
-        let board = self.core.board(conversation_id).await?;
-        Ok(fixes
-            .iter()
-            .filter(|id| {
-                !board
-                    .reviews
-                    .values()
-                    .any(|review| review.items.iter().any(|item| &item.id == *id))
-            })
-            .cloned()
-            .collect())
-    }
-
-    /// Marks the findings `high` of high severity, before `run_check` commits their fix.
-    pub(crate) async fn mark_high(
-        &self,
-        conversation_id: &ConversationId,
-        high: &[String],
-    ) -> Result<()> {
-        if high.is_empty() {
-            return Ok(());
-        }
-        let _held = self.reviews.lock().await;
-        let board = self.core.board(conversation_id).await?;
-        for review in board.reviews.values() {
-            if !review
-                .items
-                .iter()
-                .any(|item| high.contains(&item.id) && !item.high)
-            {
-                continue;
-            }
-            let mut review = review.clone();
-            for item in &mut review.items {
-                if high.contains(&item.id) {
-                    item.high = true;
-                }
-            }
-            self.store_review(&review).await?;
-        }
-        Ok(())
-    }
-
-    /// `run_check`'s `fixes` (BUILD-PLAN O4): the review findings the thread's check fixes,
-    /// recorded fixed and checked by that check (`command`, its output `alias`) when it passed
-    /// and, on a session branch, its commit was made; `not_fixed` says why not otherwise. Those
-    /// in `high` are marked high. What became of them, in one line.
-    pub(crate) async fn record_fixed_by_check(
-        &self,
-        conversation_id: &ConversationId,
-        fixes: &[String],
-        high: &[String],
-        not_fixed: Option<&str>,
-        command: &str,
-        alias: &str,
-    ) -> String {
-        let ids = fixes.join(", ");
-        if let Some(why) = not_fixed {
-            return format!("Not recorded fixed: {ids}, as {why}.");
-        }
-        let items = fixes
-            .iter()
-            .map(|id| crate::tools::FindingRecord {
-                id: id.clone(),
-                status: crate::tools::FindingVerdict::Fixed,
-                task: None,
-                checked: Some(format!(
-                    "`{command}` passed after the fix [evidence: {alias}]"
-                )),
-                why: None,
-                high: high.contains(id).then_some(true),
-            })
-            .collect();
-        match self
-            .record_findings(conversation_id, crate::tools::RecordFindings { items })
-            .await
-        {
-            Ok(reply) => reply,
-            Err(err) => format!("Findings not recorded: {err}"),
         }
     }
 

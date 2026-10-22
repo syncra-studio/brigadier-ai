@@ -734,9 +734,9 @@ async fn agent_files_go_only_with_proof_once_what_they_served_is_gone() {
 /// end from sweeping, is listed while its session is idle and swept from here.
 #[tokio::test]
 async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
-    use crate::manager::workers::{SessionTemp, session_temp_dir};
+    use crate::manager::workers::session_temp_dir;
     let (flow, _worktree, _branch) = session("disk-thread-scratch").await;
-    let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
+    let tmp = session_temp_dir(&flow.conversation);
     crate::manager::flow::scratch_sweep_over(&flow, &tmp).await;
     let (items, _) = scan(&flow, context()).await;
     assert!(

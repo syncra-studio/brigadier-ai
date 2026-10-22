@@ -413,8 +413,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
         "run" => ToolCall::Orchestrator(O::Run(arg(name, args))),
         "run_unsandboxed" => ToolCall::Orchestrator(O::RunUnsandboxed(arg(name, args))),
-        "run_check" if orchestrator => ToolCall::Orchestrator(O::RunCheck(arg(name, args))),
-        "run_check" => ToolCall::Worker(W::RunCheck(arg(name, args))),
         "start_preview" if orchestrator => ToolCall::Orchestrator(O::StartPreview(arg(name, args))),
         "stop_preview" if orchestrator => ToolCall::Orchestrator(O::StopPreview(arg(name, args))),
         "preview_log" if orchestrator => ToolCall::Orchestrator(O::PreviewLog(arg(name, args))),
@@ -423,8 +421,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "preview_log" => ToolCall::Worker(W::PreviewLog(arg(name, args))),
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "clean_up" => ToolCall::Orchestrator(O::CleanUp),
-        "run_checks" if orchestrator => ToolCall::Orchestrator(O::RunChecks(arg(name, args))),
-        "run_checks" => ToolCall::Worker(W::RunChecks(arg(name, args))),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         "list_sessions" => ToolCall::Orchestrator(O::ListSessions(arg(name, args))),
         "message_session" => ToolCall::Orchestrator(O::MessageSession(arg(name, args))),
@@ -1230,76 +1226,6 @@ async fn open_store(data: &Path) -> brigadier_store::Store {
     .unwrap()
 }
 
-/// The platform a test's daemon runs on, its data folder `data`. Inside a sandbox already (a
-/// session's full checks, a worker) macOS refuses the daemon's own sandboxes, as a Seatbelt
-/// profile can't nest: there its commands run as they are, held only by the sandbox around
-/// the tests, the way Linux's protection leaves them. What a sandbox denies is tested where
-/// one applies: see [`skip_inside_a_sandbox`].
-pub(crate) fn test_platform(data: &Path) -> Arc<dyn brigadier_sandbox::Platform> {
-    let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-        data_dir: Some(data.to_owned()),
-    })
-    .unwrap();
-    if brigadier_sandbox::confined() {
-        Arc::new(Nested(platform))
-    } else {
-        platform
-    }
-}
-
-/// Whether a test of what a sandbox allows and denies can't run here, as this process runs
-/// inside a sandbox already (a session's full checks) and macOS can't nest another; says so in
-/// the test's output. Such a test runs wherever the tests aren't sandboxed: CI, a terminal, a
-/// Full-access session's checks.
-pub(crate) fn skip_inside_a_sandbox() -> bool {
-    let skip = brigadier_sandbox::confined();
-    if skip {
-        eprintln!("skipped: this test applies a sandbox, which can't nest in the one it runs in");
-    }
-    skip
-}
-
-/// [`test_platform`] inside a sandbox: the native platform, its sandbox leaving every spec as
-/// it is.
-struct Nested(Arc<dyn brigadier_sandbox::Platform>);
-
-impl brigadier_sandbox::Platform for Nested {
-    fn name(&self) -> &'static str {
-        self.0.name()
-    }
-    fn paths(&self) -> &brigadier_sandbox::AppPaths {
-        self.0.paths()
-    }
-    fn private_fs(&self) -> &dyn brigadier_sandbox::PrivateFs {
-        self.0.private_fs()
-    }
-    fn processes(&self) -> &dyn brigadier_sandbox::Processes {
-        self.0.processes()
-    }
-    fn credentials(&self) -> &dyn brigadier_sandbox::CredentialStore {
-        self.0.credentials()
-    }
-    fn shell(&self) -> &dyn brigadier_sandbox::Shell {
-        self.0.shell()
-    }
-    fn sandbox(&self) -> &dyn brigadier_sandbox::Sandbox {
-        self
-    }
-    fn machine(&self) -> &dyn brigadier_sandbox::Machine {
-        self.0.machine()
-    }
-}
-
-impl brigadier_sandbox::Sandbox for Nested {
-    fn confine(
-        &self,
-        spec: brigadier_sandbox::SpawnSpec,
-        _policy: &brigadier_sandbox::SandboxPolicy,
-    ) -> brigadier_sandbox::Result<brigadier_sandbox::SpawnSpec> {
-        Ok(spec)
-    }
-}
-
 /// The manager on `store`, its CLIs running `script` (and `reviews` for one-shot reviews),
 /// once it has seen both CLIs' models.
 async fn boot(
@@ -1311,7 +1237,10 @@ async fn boot(
     behavior: &Arc<FakeBehavior>,
 ) -> (Arc<SessionManager>, Arc<Core>) {
     let data = data.to_owned();
-    let platform = test_platform(&data);
+    let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+        data_dir: Some(data.to_owned()),
+    })
+    .unwrap();
     let core = Core::load(store).await.unwrap();
     let spawner: Spawner = Arc::new(|task| {
         tokio::spawn(task);
@@ -2035,54 +1964,6 @@ impl Flow {
         }
     }
 
-    /// The thread's run_checks passed at the session branch's tip now, as if it had called it:
-    /// for tests of what a merge does once the merge rule lets it through, not of its checks.
-    pub async fn checks_passed(&self) {
-        self.checks_passed_in(&self.conversation).await;
-    }
-
-    /// [`Self::checks_passed`] in the session `id`.
-    pub async fn checks_passed_in(&self, id: &ConversationId) {
-        let Some(crate::model::Setup::Session {
-            repo,
-            environment: crate::model::Environment::NewWorktree { branch, .. },
-            ..
-        }) = self.core.conversation(id).unwrap().setup
-        else {
-            panic!("{id:?} has no session branch");
-        };
-        let tip = git(std::path::Path::new(&repo), &["rev-parse", &branch]);
-        let board = self.core.board(id).await.unwrap();
-        let check = crate::work::IntegratedCheck {
-            id: crate::manager::integrated_checks::next_check_id(&board),
-            conversation_id: id.clone(),
-            repo,
-            branch,
-            tip: tip.trim().to_owned(),
-            state: crate::work::IntegratedCheckState::Passed {
-                commands: Vec::new(),
-            },
-            due_at_ms: 0,
-            started_at_ms: Some(crate::now_ms()),
-            ended_at_ms: Some(crate::now_ms()),
-            requests: Vec::new(),
-            tasks: Vec::new(),
-            rerun: false,
-            asked: Some(crate::work::ChecksAsked {
-                task_id: None,
-                scope: crate::work::ChecksScope::Full,
-            }),
-            owed: false,
-        };
-        self.core
-            .record_conversation(
-                id,
-                vec![crate::model::DomainEvent::IntegratedCheckUpdated { check }],
-            )
-            .await
-            .unwrap();
-    }
-
     /// Waits until every request of the conversation is over.
     pub async fn settled(&self) -> Board {
         self.settled_in(&self.conversation).await
@@ -2209,15 +2090,11 @@ mod chat_images_tests;
 #[cfg(unix)]
 mod chat_thread_tests;
 #[cfg(unix)]
-mod checks_tests;
-#[cfg(unix)]
 mod claim_evidence_tests;
 #[cfg(unix)]
 mod clean_up_tests;
 #[cfg(unix)]
 mod cli_tests;
-#[cfg(unix)]
-mod commit_on_pass_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[cfg(unix)]
 mod computer_host_tests;
@@ -2233,8 +2110,6 @@ mod design_work_tests;
 mod ending_tests;
 #[cfg(unix)]
 mod engine_tests;
-#[cfg(unix)]
-mod evidence_tests;
 #[cfg(unix)]
 mod fusion_tests;
 #[cfg(unix)]
@@ -2262,9 +2137,6 @@ mod git_writing_tests;
 mod held_merge_tests;
 #[cfg(unix)]
 mod honesty_tests;
-#[cfg(all(test, unix))]
-#[cfg(unix)]
-mod integrated_checks_tests;
 #[cfg(unix)]
 mod integrations_tests;
 #[cfg(unix)]

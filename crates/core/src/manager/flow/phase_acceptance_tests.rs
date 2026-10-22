@@ -1,12 +1,11 @@
 //! An overnight phase settles done only with evidence per criterion at its tip (BUILD-PLAN E2,
 //! research A5(a)), with reviews on and with reviews off.
 //!
-//! The run's one phase has three criteria. Its lead's report meets the first with lines its
-//! file still shows and the second with a check that passed on the tree that lands, and names
-//! nothing for the third, which no suite covers. The thread's first settle cites a check it ran
-//! before the work landed: refused, the criterion isn't bound to the tip. Its own check at the
-//! tip then settles it. The settlement and the morning report carry each criterion's evidence,
-//! and the review's state: none asked for with reviews on, "No review was run" with them off.
+//! The run's one phase has three criteria. Its lead's report meets the first two with lines its
+//! file still shows, and names nothing for the third. The thread's first settle quotes words
+//! the tip doesn't show: the criterion isn't bound to the tip. Lines it quotes at the tip then
+//! settle it. The settlement and the morning report carry each criterion's evidence, and the
+//! review's state: none asked for with reviews on, "No review was run" with them off.
 
 use std::sync::{Arc, Mutex};
 
@@ -24,18 +23,8 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-/// The `out-…` id a check's reply ends with.
-fn cited(reply: &str) -> String {
-    reply
-        .rsplit_once("[evidence: ")
-        .map(|(_, cite)| cite.trim_end().trim_end_matches(']').to_owned())
-        .unwrap_or_else(|| panic!("no evidence reference: {reply}"))
-}
-
 #[derive(Default)]
 struct Seen {
-    /// The thread's check before the work landed.
-    early: Option<String>,
     /// Each settle_step reply, and whether it was refused.
     settles: Vec<(bool, String)>,
 }
@@ -72,20 +61,16 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
             let log = log.clone();
             async move {
                 if !turn.is_orchestrator() {
-                    turn.write("p1.txt", "phase 1\n");
+                    turn.write("p1.txt", "phase 1\ngreeting ok\n");
                     turn.git(&["add", "p1.txt"]);
                     turn.git(&["commit", "-qm", "Add p1.txt"]);
-                    let check = turn
-                        .call("run_check", json!({"command": "echo greeting ok"}))
-                        .await;
-                    assert!(!check.is_error, "{}", check.text);
                     let reply = turn
                         .call(
                             "submit_report",
                             json!({"summary": "Added p1.txt.", "changes": ["p1.txt"],
                             "done_when": [
                                 "[met] p1.txt exists: p1.txt:1 `phase 1`",
-                                format!("[met] The greeting check passes: {}", cited(&check.text)),
+                                "[met] The greeting check passes: p1.txt:2 `greeting ok`",
                             ]}),
                         )
                         .await;
@@ -94,12 +79,6 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
                 }
                 if turn.input.contains("[overnight] The run") && turn.input.contains("has started")
                 {
-                    // A check of its own before anything landed: on another tree than the tip's.
-                    let check = turn
-                        .call("run_check", json!({"command": "echo thread checked"}))
-                        .await;
-                    assert!(!check.is_error, "{}", check.text);
-                    log.lock().unwrap().early = Some(cited(&check.text));
                     let reply = turn
                         .call(
                             "delegate_task",
@@ -114,9 +93,6 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
                 if turn.input.contains("[report task-1") {
                     let landed = turn.call("land_phase", json!({"task": "task-1"})).await;
                     assert!(!landed.is_error, "{}", landed.text);
-                    let checks = turn.call("run_checks", json!({})).await;
-                    assert!(!checks.is_error, "{}", checks.text);
-                    let early = log.lock().unwrap().early.clone().unwrap();
                     let settle = |line: String| {
                         let turn = &turn;
                         async move {
@@ -129,16 +105,13 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
                             .await
                         }
                     };
-                    let gapped = settle(format!("[met] p1-c3: {early}")).await;
+                    // Words the tip doesn't show.
+                    let gapped = settle("[met] p1-c3: p1.txt:1 `phase one`".into()).await;
                     log.lock()
                         .unwrap()
                         .settles
                         .push((gapped.is_error, gapped.text));
-                    let check = turn
-                        .call("run_check", json!({"command": "echo thread checked"}))
-                        .await;
-                    assert!(!check.is_error, "{}", check.text);
-                    let settled = settle(format!("[met] p1-c3: {}", cited(&check.text))).await;
+                    let settled = settle("[met] p1-c3: p1.txt:2 `greeting ok`".into()).await;
                     log.lock()
                         .unwrap()
                         .settles
@@ -198,15 +171,14 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
 
     let settles = seen.lock().unwrap().settles.clone();
     assert_eq!(settles.len(), 2, "{settles:#?}");
-    // Evidence from another tree than the tip's refuses nothing (#251): the phase settles and
-    // the thread hears what it has no evidence for.
+    // Evidence the tip doesn't show refuses nothing (#251): the phase settles and the thread
+    // hears what it has no evidence for.
     let (refused, why) = &settles[0];
     assert!(!refused, "{why}");
     assert!(
         why.starts_with("Settled phase 1")
             && why.contains("It has no evidence at the run's tip")
-            && why.contains("p1-c3: [met] with no evidence that holds at the tip")
-            && why.contains("ran on another tree than the tip's"),
+            && why.contains("p1-c3: [met] with no evidence that holds at the tip"),
         "{why}"
     );
     // The two criteria the report met are not what kept it.
@@ -228,10 +200,8 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
     let evidence = settled.evidence.join("\n");
     for line in [
         "p1-c1: p1.txt:1 shows `phase 1` at the tip",
-        "p1-c2: out-",
-        "(`echo greeting ok`) passed on the tip's tree",
-        "p1-c3: out-",
-        "(`echo thread checked`) passed on the tip's tree",
+        "p1-c2: p1.txt:2 shows `greeting ok` at the tip",
+        "p1-c3: p1.txt:2 shows `greeting ok` at the tip",
     ] {
         assert!(evidence.contains(line), "{line}: {evidence}");
     }
@@ -253,7 +223,7 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
         report.contains("Evidence: p1-c1: p1.txt:1 shows `phase 1` at the tip"),
         "{report}"
     );
-    assert!(report.contains("Evidence: p1-c3: out-"), "{report}");
+    assert!(report.contains("Evidence: p1-c3: p1.txt:2"), "{report}");
     if !reviews {
         assert!(
             report.contains("No review was run: reviews are off."),

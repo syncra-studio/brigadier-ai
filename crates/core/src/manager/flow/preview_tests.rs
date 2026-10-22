@@ -538,7 +538,6 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     std::fs::write(worktree.join("page.html"), "<h1>Hi</h1>\n").unwrap();
     super::git(&worktree, &["add", "page.html"]);
     super::git(&worktree, &["commit", "-q", "-m", "Add the page"]);
-    flow.checks_passed().await;
     flow.say("Please merge.").await;
     flow.until("the merge", |board| {
         board
@@ -1729,15 +1728,6 @@ async fn test_runs_pdfs_and_simulators_are_previews_with_their_targets() {
             PreviewKind::Test,
             Some("echo '3 passed, 1 skipped in 0.01s'")
         )
-    );
-    // Its counts, from its runner's summary.
-    assert_eq!(
-        tests.tests,
-        Some(crate::work::TestCounts {
-            passed: 3,
-            failed: 0,
-            skipped: 1
-        })
     );
     assert!(
         matches!(tests.state, PreviewState::Exited { code: Some(0), .. }),

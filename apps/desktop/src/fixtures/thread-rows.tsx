@@ -49,7 +49,7 @@ import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
 const CHAT = "thread-rows";
-/** What a `run_check` with `commit` says after a check's output, as the Shell box shows it. */
+/** What a `run` that commits says after the command's output, as the Shell box shows it. */
 const COMMITTED = 'Committed 1a2b3c4 "Fix rounding": 1 file changed, 2 insertions(+) (src/round.js). Nothing is left uncommitted.';
 const ROOT = "/repo";
 const asked: string[] = [];

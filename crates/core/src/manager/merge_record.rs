@@ -1,40 +1,27 @@
 //! The merge record (WORKSPACES-PLAN.md phase 3): what was checked of the code a merge takes,
-//! each check with the commit it ran on, so the merge message shows a review of an older
-//! commit as stale and a check that never ran as missing. Read from what the session recorded
+//! each part with the commit it ran on, so the merge message shows a review of an older
+//! commit as stale and one that never ran as missing. Read from what the session recorded
 //! since its last merge; it never holds or gates a merge.
 
-use std::path::PathBuf;
-
-use super::{SessionManager, blocking, git_error};
+use super::SessionManager;
 use crate::board::Board;
 use crate::model::ConversationId;
 use crate::work::{
-    MergeCheck, MergeCi, MergeRecord, MergeReview, MergeVerifier, OrchestratorStepKind, ReviewKind,
-    WorkerRole,
+    MergeCi, MergeRecord, MergeReview, MergeVerifier, OrchestratorStepKind, ReviewKind, WorkerRole,
 };
 
 impl SessionManager {
-    /// The record of the merge of `head` from `branch` in `id`'s `checkout`. `auto`: it merged
+    /// The record of the merge of `head` from `branch` in `id`. `auto`: it merged
     /// on its own, and the record says so when it is the project's first such merge.
     pub(super) async fn merge_record(
         &self,
         id: &ConversationId,
-        checkout: &str,
         branch: &str,
         head: &str,
         auto: bool,
     ) -> Option<Box<MergeRecord>> {
         let board = self.core.board(id).await.ok()?;
-        let (git, path, commit) = (self.git.clone(), PathBuf::from(checkout), head.to_owned());
-        let head_tree = blocking(move || {
-            let repo = git.open(&path).map_err(git_error)?;
-            repo.resolve(&format!("{commit}^{{tree}}"))
-                .map_err(git_error)
-        })
-        .await
-        .ok()
-        .map(|tree| tree.0);
-        let mut record = record_of(&board, branch, head, head_tree.as_deref());
+        let mut record = record_of(&board, branch, head);
         if auto
             && let Some(project) = self
                 .core
@@ -55,29 +42,14 @@ impl SessionManager {
 }
 
 /// [`SessionManager::merge_record`] from the session's board: what it recorded since its
-/// last merge, read against `head` (whose files are `head_tree`).
-pub(super) fn record_of(
-    board: &Board,
-    branch: &str,
-    head: &str,
-    head_tree: Option<&str>,
-) -> MergeRecord {
+/// last merge, read against `head`.
+pub(super) fn record_of(board: &Board, branch: &str, head: &str) -> MergeRecord {
     let last = board
         .orchestrator_steps
         .iter()
         .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
         .max_by_key(|step| step.position);
     let (since, since_ms) = last.map_or((i64::MIN, i64::MIN), |step| (step.position, step.at_ms));
-    let checks = board
-        .thread_checks
-        .iter()
-        .filter(|check| check.position > since)
-        .map(|check| MergeCheck {
-            command: check.command.clone(),
-            status: check.status.clone(),
-            on_head: head_tree.is_some() && check.tree.as_deref() == head_tree,
-        })
-        .collect();
     let mut reviews: Vec<_> = board
         .reviews
         .values()
@@ -141,7 +113,6 @@ pub(super) fn record_of(
         });
     MergeRecord {
         head: head.to_owned(),
-        checks,
         reviews,
         ci,
         proofs,
@@ -153,7 +124,6 @@ pub(super) fn record_of(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::ThreadCheck;
     use crate::model::DomainEvent;
     use crate::work::{Finding, FindingStatus, OrchestratorStep, ReviewRun, ReviewState};
 
@@ -162,16 +132,6 @@ mod tests {
             request_id: None,
             kind,
             at_ms: position,
-            position,
-        }
-    }
-
-    fn check(command: &str, tree: &str, position: i64) -> ThreadCheck {
-        ThreadCheck {
-            command: command.into(),
-            workdir: String::new(),
-            tree: Some(tree.into()),
-            status: "exit 0".into(),
             position,
         }
     }
@@ -231,25 +191,19 @@ mod tests {
         }
     }
 
-    /// Each check names the commit it ran on: a review or CI of an older commit reads stale,
-    /// checks of the files the head has read current, and what ran before the last merge
-    /// doesn't count for this one.
+    /// Each part names the commit it ran on: a review or CI of an older commit reads stale,
+    /// and what ran before the last merge doesn't count for this one.
     #[test]
     fn a_merge_record_marks_what_ran_on_an_older_commit_and_leaves_out_the_last_merge() {
         let mut board = Board::default();
         assert_eq!(
-            record_of(&board, "work", "c2", Some("t2")),
+            record_of(&board, "work", "c2"),
             MergeRecord {
                 head: "c2".into(),
                 ..MergeRecord::default()
             },
             "nothing ran: every part is missing"
         );
-        board.thread_checks = vec![
-            check("cargo test", "t0", 1),
-            check("pnpm typecheck", "t1", 3),
-            check("pnpm test", "t2", 4),
-        ];
         board.orchestrator_steps = vec![
             ci("c0", 1),
             step(
@@ -291,15 +245,7 @@ mod tests {
         board
             .reviews
             .insert("r0".into(), review("r0", "c0", 1, Vec::new()));
-        let record = record_of(&board, "work", "c2", Some("t2"));
-        assert_eq!(
-            record
-                .checks
-                .iter()
-                .map(|check| (check.command.as_str(), check.on_head))
-                .collect::<Vec<_>>(),
-            [("pnpm typecheck", false), ("pnpm test", true)]
-        );
+        let record = record_of(&board, "work", "c2");
         assert_eq!(
             record.reviews.len(),
             1,
@@ -321,9 +267,8 @@ mod tests {
         );
         assert_eq!((record.proofs, record.verifier), (0, None));
         // Reviewed and checked up to the head: current.
-        let record = record_of(&board, "work", "c1", Some("t1"));
+        let record = record_of(&board, "work", "c1");
         assert!(record.reviews[0].on_head && record.ci.unwrap().on_head);
-        assert!(record.checks[0].on_head);
     }
 
     /// The thread settles a finding after the merge (its text reached it late): the stored
@@ -338,7 +283,7 @@ mod tests {
             },
             1,
         );
-        let record = record_of(&board, "work", "c2", Some("t2"));
+        let record = record_of(&board, "work", "c2");
         assert_eq!(record.reviews[0].open, 1);
         let merged = |record| OrchestratorStepKind::Merged {
             checks_skipped: false,

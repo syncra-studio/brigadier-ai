@@ -17,7 +17,6 @@ import type {
   Decision,
   DiffStat,
   EventEnvelope,
-  IntegratedCheck,
   MachineStep,
   MemoryChange,
   MergeRefused,
@@ -89,9 +88,7 @@ export type Board = {
   reviews: Record<string, ReviewRun>;
   /** The thread's previews (a dev server, the app it runs for the user), by id. */
   previews: Record<string, Preview>;
-  /** The runs of the session's full checks on its landed work, by id (SESSION-FIXES-PLAN.md §11). */
-  integratedChecks: Record<string, IntegratedCheck>;
-  /** The thread's run / run_check commands still going after a minute, owned by the session, by id. */
+  /** The thread's run commands still going after a minute, owned by the session, by id. */
   backgroundRuns: Record<string, BackgroundRun>;
   /** What the session is doing now, in the thread's words (set_headline); null once the user wrote since. */
   headline: SessionHeadline | null;
@@ -376,7 +373,6 @@ export function emptyBoard(conversationId: string): Board {
     plans: {},
     reviews: {},
     previews: {},
-    integratedChecks: {},
     backgroundRuns: {},
     headline: null,
     mergeRefused: null,
@@ -431,7 +427,6 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "questionUpdated",
   "planUpdated",
   "reviewUpdated",
-  "integratedCheckUpdated",
   "headlineSet",
   "mergeRefusalSet",
   "mcpServersUpdated",
@@ -498,8 +493,6 @@ export function boardFromView(
     reviews: byId(view.reviews ?? []),
     // A daemon from before previews sends none.
     previews: byId(view.previews ?? []),
-    // Nor one from before the full checks ran on the landed work.
-    integratedChecks: byId(view.integratedChecks ?? []),
     // Nor one from before the thread's long commands went to the background.
     backgroundRuns: byId(view.backgroundRuns ?? []),
     // Nor one from before the thread wrote a headline.
@@ -711,8 +704,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, plans: placed(board.plans, event.plan, envelope, board) };
     case "reviewUpdated":
       return { ...board, reviews: { ...board.reviews, [event.review.id]: event.review } };
-    case "integratedCheckUpdated":
-      return { ...board, integratedChecks: { ...board.integratedChecks, [event.check.id]: event.check } };
     case "backgroundRunUpdated":
       return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
     case "headlineSet":

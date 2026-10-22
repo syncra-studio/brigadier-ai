@@ -11,10 +11,10 @@ use crate::model::{
 };
 use crate::overnight::OvernightRun;
 use crate::work::{
-    Approval, BackgroundRunState, CardId, CardState, Compaction, ConversationActivity, Decision,
-    IntegratedCheckState, MessageQueue, OrchestratorStep, OrchestratorStepKind, Plan, PlanState,
-    Question, ReviewRun, ReviewState, RunState, SessionPhase, TabState, Task, TaskId, TaskKind,
-    TaskState, UserRequest, WaitingItem, WorkerStep,
+    Approval, CardId, CardState, Compaction, ConversationActivity, Decision, MessageQueue,
+    OrchestratorStep, OrchestratorStepKind, Plan, PlanState, Question, ReviewRun, ReviewState,
+    RunState, SessionPhase, TabState, Task, TaskId, TaskKind, TaskState, UserRequest, WaitingItem,
+    WorkerStep,
 };
 
 /// Notices kept per conversation.
@@ -138,20 +138,6 @@ pub(crate) struct CutOff {
     pub(crate) began: bool,
 }
 
-/// How many of the thread's check runs a board keeps.
-pub(crate) const THREAD_CHECKS_KEPT: usize = 20;
-
-/// One of the thread's `run_check` runs ([`Board::thread_checks`]).
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ThreadCheck {
-    pub(crate) command: String,
-    pub(crate) workdir: String,
-    /// The tree of the files it ran on, uncommitted changes included, when known.
-    pub(crate) tree: Option<String>,
-    pub(crate) status: String,
-    pub(crate) position: i64,
-}
-
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Board {
     pub(crate) tasks: HashMap<TaskId, Task>,
@@ -201,11 +187,6 @@ pub(crate) struct Board {
     pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
     /// Its one-shot reviews, by id.
     pub(crate) reviews: HashMap<String, ReviewRun>,
-    /// The thread's own `run_check` runs, the latest of each command and folder (at most
-    /// [`THREAD_CHECKS_KEPT`]): what a merge record reads.
-    pub(crate) thread_checks: Vec<ThreadCheck>,
-    /// Its runs of the full checks on the integrated tree, by id.
-    pub(crate) integrated_checks: HashMap<String, crate::work::IntegratedCheck>,
     /// The thread's commands that went to the background, by id.
     pub(crate) background_runs: HashMap<String, crate::work::BackgroundRun>,
     /// The thread's headline for the session now (`set_headline`).
@@ -484,16 +465,6 @@ impl Board {
             .values()
             .filter(|review| review.state == ReviewState::Running)
             .map(|review| (format!("review:{}", review.id), SessionPhase::Reviewing));
-        let checks = self
-            .integrated_checks
-            .values()
-            .filter(|check| matches!(check.state, IntegratedCheckState::Running { .. }))
-            .map(|check| (format!("check:{}", check.id), SessionPhase::Checking));
-        let runs = self
-            .background_runs
-            .values()
-            .filter(|run| run.tool == "run_check" && run.state == BackgroundRunState::Running)
-            .map(|run| (format!("run:{}", run.id), SessionPhase::Checking));
         let steps = self
             .orchestrator_steps
             .iter()
@@ -520,7 +491,6 @@ impl Board {
                     && step.position >= self.run_since =>
                 {
                     let phase = match name.rsplit("__").next().unwrap_or(name) {
-                        "run_check" => SessionPhase::Checking,
                         "finish_session" => SessionPhase::Merging,
                         _ => return None,
                     };
@@ -530,13 +500,7 @@ impl Board {
             });
         let merge = crate::manager::held_merge(self)
             .map(|asked_in| (format!("merge:{asked_in}"), SessionPhase::Merging));
-        let mut phases: Vec<_> = tasks
-            .chain(reviews)
-            .chain(checks)
-            .chain(runs)
-            .chain(steps)
-            .chain(merge)
-            .collect();
+        let mut phases: Vec<_> = tasks.chain(reviews).chain(steps).chain(merge).collect();
         phases.sort_by(|a, b| a.0.cmp(&b.0));
         phases
     }
@@ -598,10 +562,6 @@ impl Board {
                     }
                 }
                 self.reviews.insert(review.id.clone(), review.clone());
-            }
-            DomainEvent::IntegratedCheckUpdated { check } => {
-                self.integrated_checks
-                    .insert(check.id.clone(), check.clone());
             }
             DomainEvent::BackgroundRunUpdated { run } => {
                 self.background_runs.insert(run.id.clone(), run.clone());
@@ -683,27 +643,6 @@ impl Board {
             }
             DomainEvent::OutputStored { output, .. } => {
                 self.outputs.insert(output.alias.clone(), output.clone());
-            }
-            DomainEvent::CheckRan {
-                task_id: None,
-                tree,
-                command,
-                workdir,
-                status,
-                ..
-            } => {
-                self.thread_checks
-                    .retain(|check| check.command != *command || check.workdir != *workdir);
-                self.thread_checks.push(ThreadCheck {
-                    command: command.clone(),
-                    workdir: workdir.clone(),
-                    tree: tree.clone(),
-                    status: status.clone(),
-                    position: stream_seq,
-                });
-                if self.thread_checks.len() > THREAD_CHECKS_KEPT {
-                    self.thread_checks.remove(0);
-                }
             }
             DomainEvent::ThreadLooked {
                 reads, searches, ..
@@ -1151,13 +1090,6 @@ impl Board {
         reviews
     }
 
-    /// Its runs of the full checks on the integrated tree, oldest first (by number).
-    pub(crate) fn sorted_integrated_checks(&self) -> Vec<crate::work::IntegratedCheck> {
-        let mut checks: Vec<_> = self.integrated_checks.values().cloned().collect();
-        checks.sort_by_key(|check| crate::manager::integrated_check_number(&check.id));
-        checks
-    }
-
     /// The thread's background runs, oldest first (by number).
     pub(crate) fn sorted_background_runs(&self) -> Vec<crate::work::BackgroundRun> {
         let mut runs: Vec<_> = self.background_runs.values().cloned().collect();
@@ -1571,13 +1503,13 @@ mod tab_state_tests {
         }))
     }
 
-    fn run_check(status: &str) -> DomainEvent {
+    fn finish_session(status: &str) -> DomainEvent {
         event(serde_json::json!({
             "type": "orchestratorStepped",
             "step": {
                 "requestId": "r1", "atMs": 0, "position": 0,
                 "kind": {
-                    "type": "tool", "itemId": "check-1", "name": "mcp__brigadier__run_check",
+                    "type": "tool", "itemId": "merge-1", "name": "mcp__brigadier__finish_session",
                     "detail": null, "status": status, "throughPosition": 0,
                 },
             },
@@ -1991,16 +1923,16 @@ mod tab_state_tests {
         );
     }
 
-    /// #253: a run_check an earlier turn left marked running is no phase of a later turn of
+    /// #253: a finish_session an earlier turn left marked running is no phase of a later turn of
     /// the same request (a reconnect reads the board); the live turn's own call is.
     #[test]
     fn a_phase_comes_from_the_active_turn_only() {
         let mut board = Board::default();
         board.apply(&run("running"), 1);
-        board.apply(&run_check("inProgress"), 2);
+        board.apply(&finish_session("inProgress"), 2);
         assert_eq!(
             board.activity(&id()).unwrap().phases,
-            [("tool:check-1".to_owned(), SessionPhase::Checking)]
+            [("tool:merge-1".to_owned(), SessionPhase::Merging)]
         );
         board.apply(&run("idle"), 3);
         // A report starts another turn for the same request.

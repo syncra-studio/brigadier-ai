@@ -4,8 +4,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
-
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{
@@ -22,18 +20,16 @@ where
 
 /// A session told the instructions before this change, on the user's own checkout: it hears
 /// the note once, its edit stays uncommitted, and the commit the user then asks for has no
-/// trailer and is recorded as the thread's. Brigadier's own commit, the one that adds the
-/// trailer (`run_check`'s `commit`), commits nothing there, so the thread commits with git.
+/// trailer and is recorded as the thread's: the thread commits with git.
 #[tokio::test]
 async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_trailer() {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let checked: Arc<Mutex<Option<String>>> = Arc::default();
-    let (heard, check) = (inputs.clone(), checked.clone());
+    let heard = inputs.clone();
     let mut flow = Flow::start(
         "local-commit",
         Options::default(),
         script(move |turn| {
-            let (heard, check) = (heard.clone(), check.clone());
+            let heard = heard.clone();
             async move {
                 if !turn.is_orchestrator() {
                     return Reply::text("");
@@ -45,22 +41,12 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
                     return Reply::text("Fixed the typo.\nChanged 1 file, not committed.");
                 }
                 if turn.input.contains("Commit it.") {
-                    let reply = turn
-                        .call(
-                            "run_check",
-                            json!({"command": "true", "commit": "Fix the typo in the README"}),
-                        )
-                        .await;
-                    *check.lock().unwrap() = Some(reply.text);
-                    // Left uncommitted by Brigadier: the thread commits with git.
-                    if !git(&workspace, &["status", "--porcelain"]).is_empty() {
-                        commit_in_workspace(
-                            &turn,
-                            "README.md",
-                            "fixed\n",
-                            "Fix the typo in the README",
-                        );
-                    }
+                    commit_in_workspace(
+                        &turn,
+                        "README.md",
+                        "fixed\n",
+                        "Fix the typo in the README",
+                    );
                     return Reply::text("Committed.");
                 }
                 Reply::text("Fine.")
@@ -129,11 +115,6 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
     assert_eq!(git(&flow.repo, &["status", "--porcelain"]), "M README.md");
     flow.say("Commit it.").await;
     flow.settled().await;
-    let reply = checked.lock().unwrap().clone().unwrap();
-    assert!(
-        reply.contains("Not committed: this is the user's own checkout"),
-        "{reply}"
-    );
     // One commit, the thread's own, with no trailer.
     let tip = git(&flow.repo, &["rev-parse", "HEAD"]);
     assert_eq!(

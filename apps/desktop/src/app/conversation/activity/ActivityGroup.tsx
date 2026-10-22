@@ -52,7 +52,7 @@ function RunningFor({ startedAtMs }: { startedAtMs: number | undefined }) {
 
 /** What a step the user's Stop cut short says: "Stopped npm test after 4s", "Stopped reading a.ts". */
 export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, atMs: number | null): string {
-  const what = (words.kind === "run" || words.kind === "checks") && words.object
+  const what = words.kind === "run" && words.object
     ? words.object
     : words.doing.charAt(0).toLowerCase() + words.doing.slice(1);
   const ms = startedAtMs !== undefined && atMs !== null ? atMs - startedAtMs : 0;
@@ -87,7 +87,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
   const running = status === "inProgress" && !stopped;
   const inGroup = useContext(InGroup);
   // Inside an opened group, a running command says how long it has run; the group's own row names it.
-  const ticking = running && inGroup && (words.kind === "run" || words.kind === "checks");
+  const ticking = running && inGroup && words.kind === "run";
   return (
     // Its Shell box or diff spans the column, flush under the row.
     <ThreadActivity

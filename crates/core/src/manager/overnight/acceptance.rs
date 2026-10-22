@@ -5,10 +5,8 @@
 //!   exists, else its other workers' reports) and the thread's own `done_when` lines in
 //!   `settle_step`. A criterion nobody names, marked [not met] or [not checked] anywhere, or
 //!   [met] with no evidence that holds at the tip, keeps the phase from settling done.
-//! - **Bound to the accepted tip.** A check counts when it passed on the tip's own tree (its
-//!   whole input fingerprint starts with that tree, so nothing older can stand in for it), the
-//!   session's full checks when they passed at the tip, and quoted lines when the run's
-//!   worktree, which is at the tip, still shows their words.
+//! - **Bound to the accepted tip.** Quoted lines count when the run's worktree, which is at the
+//!   tip, still shows their words.
 //! - **The review.** With reviews on, the phase's reviews must have ended and their findings
 //!   been recorded; with reviews off, the settlement says no review was run.
 
@@ -19,10 +17,10 @@ use std::time::Duration;
 use brigadier_brain::Source;
 
 use super::super::SessionManager;
-use super::super::evidence::{met, names_criterion, output_ids, quoted_lines};
+use super::super::evidence::{met, names_criterion, quoted_lines};
 use crate::model::ConversationId;
 use crate::overnight::{OvernightPhase, OvernightRun};
-use crate::work::{FindingStatus, IntegratedCheckState, ReviewState, Task, WorkerRole};
+use crate::work::{FindingStatus, ReviewState, Task, WorkerRole};
 
 /// How long settling waits for a phase's review still running before it says so.
 const REVIEW_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 30 });
@@ -103,19 +101,6 @@ impl SessionManager {
             .workspace
             .as_ref()
             .map(|workspace| workspace.path.clone());
-        let tree = match &workspace {
-            Some(path) => tree_of(Path::new(path), tip),
-            None => None,
-        };
-        let checks = self.check_runs(id).await;
-        let full: HashSet<String> = board
-            .integrated_checks
-            .values()
-            .filter(|check| {
-                check.tip == tip && matches!(check.state, IntegratedCheckState::Passed { .. })
-            })
-            .map(|check| check.id.clone())
-            .collect();
         // A quoted file counts only as it is in the tip's commit.
         let reader = workspace.as_ref().map(|path| {
             self.sources_for(id, Some(Path::new(path)))
@@ -155,34 +140,6 @@ impl SessionManager {
             let mut found = None;
             'lines: for (_, line) in &held {
                 let rest = met(line).unwrap_or_default();
-                for alias in output_ids(rest) {
-                    match checks.get(&alias) {
-                        Some(run)
-                            if run.status == "exit 0" && run.tree.is_some() && run.tree == tree =>
-                        {
-                            found = Some(format!(
-                                "{alias} (`{}`) passed on the tip's tree",
-                                run.command
-                            ));
-                            break 'lines;
-                        }
-                        Some(run) if run.status != "exit 0" => {
-                            why_not.push(format!("{alias} ended {}", run.status));
-                        }
-                        Some(_) => {
-                            why_not.push(format!("{alias} ran on another tree than the tip's"))
-                        }
-                        None => why_not.push(format!("{alias} is no check of this session")),
-                    }
-                }
-                for word in rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
-                    if word.starts_with("check-") && full.contains(word) {
-                        found = Some(format!(
-                            "{word}, the session's full checks, passed at the tip"
-                        ));
-                        break 'lines;
-                    }
-                }
                 for (cite, quote) in quoted_lines(rest) {
                     let Some(reader) = &reader else {
                         why_not.push(format!("{cite} can't be read: the run has no checkout"));
@@ -407,20 +364,6 @@ fn status_of(line: &str) -> &'static str {
     } else {
         "no status"
     }
-}
-
-/// The git tree of commit `tip` in the repository at `dir`.
-fn tree_of(dir: &Path, tip: &str) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", &format!("{tip}^{{tree}}")])
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 #[cfg(test)]

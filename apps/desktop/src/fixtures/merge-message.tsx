@@ -39,11 +39,10 @@ internals.invoke = (command, args, options) => {
   return invoke(command, args, options);
 };
 
-// Tests ran on the merged commit; the review stopped one commit short of it; CI passed on it.
+// The review stopped one commit short of the merged commit; CI passed on it.
 const warn = params.has("warn");
 const RECORD: MergeRecord = {
   head: "a1b2c3d4",
-  checks: [{ command: "pnpm test", status: "exit 0", onHead: true }],
   reviews: [{ reviewer: "codex", model: "gpt-6", from: "0000aaaa", to: "9999bbbb", state: { type: "findings", count: 2 }, fixed: 1, dismissed: warn ? 0 : 1, open: warn ? 1 : 0, onHead: false }],
   ci: { sha: "a1b2c3d4", result: warn ? "failed" : "passed", onHead: true },
   proofs: 2,

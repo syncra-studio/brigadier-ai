@@ -23,7 +23,7 @@ test("a long output's digest header is its exit code, not output", () => {
   assert.equal(ownRunOutput("exit 1 [full output: read_artifact out-1, 900 lines, 40000 bytes]\nFAIL a.test.ts\n").exit, 1);
 });
 
-test("what run_check says after the output reads as notes in plain words", () => {
+test("what run says after the output reads as notes in plain words", () => {
   const committed = 'Committed 1a2b3c4 "Fix rounding" with your trailer: 2 files changed, 3 insertions(+) (src/a.ts, src/a.test.ts). Nothing is left uncommitted.';
   assert.deepEqual(ownRunOutput(`[exit 0]\nok\n${committed}`), {
     exit: 0,
@@ -67,28 +67,6 @@ test("a CLI Bash call's failed reply starts with its exit code, which is read, n
   assert.deepEqual(cliRunOutput("Exit code 127"), { exit: 127, output: "" });
   assert.deepEqual(cliRunOutput("ok\nExit code 1"), { exit: null, output: "ok\nExit code 1" });
   assert.deepEqual(cliRunOutput(null), { exit: null, output: null });
-});
-
-test("the evidence line a check's output ends with is the model's, not shown", () => {
-  assert.deepEqual(ownRunOutput("[exit 0]\nok\n[evidence: out-1a2b3c4d]"), { exit: 0, output: "ok\n", notes: [] });
-  assert.deepEqual(ownRunOutput("[exit 1]\nFAIL\n[evidence: out-1]\n"), { exit: 1, output: "FAIL\n", notes: [] });
-  assert.deepEqual(ownRunOutput("[exit 0]\n[evidence: out-1]"), { exit: 0, output: "", notes: [] });
-  const digest = "exit 0 [full output: read_artifact out-1, 90 lines, 4000 bytes]\n[the last 1 lines, 89 before them left out]\npassed\n[evidence: out-1]";
-  assert.deepEqual(ownRunOutput(digest), { exit: 0, output: "[the last 1 lines, 89 before them left out]\npassed\n", notes: [] });
-  const committed = 'Committed 1a2b3c4 "Fix rounding" with your trailer: 1 file changed (src/a.ts). Nothing is left uncommitted.';
-  const review = "[review running] Codex reviews your change for this request (1a2b..3c4d) in the background: it is over the review line, or you marked it risky. Don't give your final answer yet.";
-  assert.deepEqual(ownRunOutput(`[exit 0]\nok\n[evidence: out-2]\n${committed}\n\n${review}`), {
-    exit: 0,
-    output: "ok\n",
-    notes: ['Committed 1a2b3c4 "Fix rounding": 1 file changed (src/a.ts). Nothing is left uncommitted.', "Codex is reviewing this change."],
-  });
-  assert.deepEqual(ownRunOutput("[exit 1]\nFAIL\n[evidence: out-3]\nNot committed: the check didn't pass."), {
-    exit: 1,
-    output: "FAIL\n",
-    notes: ["Not committed: the check didn't pass."],
-  });
-  // The command's own line that cites one in passing stays output.
-  assert.deepEqual(ownRunOutput("[exit 0]\nsee [evidence: out-1] above\n"), { exit: 0, output: "see [evidence: out-1] above\n", notes: [] });
 });
 
 test("a Codex MCP reply that comes as a JSON content array reads as its text", () => {

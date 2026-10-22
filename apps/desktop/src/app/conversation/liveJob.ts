@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { ciPill, ciWatches, heldMerge, mergeWords, shortSha } from "@/app/conversation/activity/slotView";
 import { isRunRequest, isWorking } from "@/app/conversation/blocks";
 import { questionOpen } from "@/app/conversation/cards/questionRound";
-import type { IntegratedCheck, OrchestratorStep, ProviderKind } from "@/ipc/generated";
+import type { OrchestratorStep, ProviderKind } from "@/ipc/generated";
 import { type Board, liveRequest, useBoard } from "@/state/board";
 
 /**
@@ -34,7 +34,7 @@ export type LiveJob = {
 /** The board's parts it reads; `headline` is the thread's (`set_headline`), cleared by the user's next message. */
 export type LiveInput = Pick<
   Board,
-  "tasks" | "approvals" | "questions" | "reviews" | "previews" | "integratedChecks" | "orchestratorSteps" | "requests"
+  "tasks" | "approvals" | "questions" | "reviews" | "previews" | "orchestratorSteps" | "requests"
 > &
   Partial<Pick<Board, "headline" | "mergeRefused">>;
 
@@ -48,58 +48,6 @@ export const VENDORS: Record<ProviderKind, string> = { claude: "Claude", codex: 
 const short = (sha: string) => sha.slice(0, 7);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const firstLine = (text: string | null | undefined) => text?.split("\n").find((line) => line.trim())?.trim() || undefined;
-
-const checkNumber = (check: IntegratedCheck) => Number(check.id.replace(/^check-/, "")) || 0;
-
-/** The thread's checks, newest last: a worker's own are its row's, an overnight run's its card's. */
-export function sessionChecks(input: Pick<LiveInput, "integratedChecks">): IntegratedCheck[] {
-  return Object.values(input.integratedChecks)
-    .filter((check) => !check.requests.some(isRunRequest) && !check.asked?.taskId)
-    .toSorted((a, b) => checkNumber(a) - checkNumber(b));
-}
-
-/** Whether the thread's full checks (`run_checks`) passed on exactly `sha`: the only pass a merge counts. */
-function passedOn(checks: readonly IntegratedCheck[], sha: string | undefined): boolean {
-  if (!sha) return false;
-  return checks.some(
-    (check) => check.tip === sha && check.asked?.scope === "full" && check.state.type === "passed" && check.state.commands.length > 0,
-  );
-}
-
-function checkFacts(checks: readonly IntegratedCheck[]): Fact[] {
-  const latest = checks.at(-1);
-  if (!latest) return [];
-  const sinceMs = latest.startedAtMs ?? latest.dueAtMs;
-  const ended = { sinceMs, endedAtMs: latest.endedAtMs ?? undefined, atMs: latest.endedAtMs ?? sinceMs };
-  switch (latest.state.type) {
-    case "due":
-      return [{ kind: "running", rank: 2, tone: "running", headline: "Checks are next", detail: `They run on ${short(latest.tip)} once the work lands`, sinceMs: latest.dueAtMs, atMs: latest.dueAtMs }];
-    case "running": {
-      // run_checks counts its commands: "3 of 5" is the third at work; one alone needs no count.
-      const { done, total } = latest.state;
-      return [
-        {
-          kind: "running",
-          rank: 3,
-          tone: "running",
-          headline: total > 1 ? `Running checks · ${Math.min(total, done + 1)} of ${total}` : "Running checks",
-          detail: latest.state.command ? `Now: ${latest.state.command}` : `On ${short(latest.tip)}`,
-          sinceMs,
-          atMs: sinceMs,
-        },
-      ];
-    }
-    case "passed": {
-      const count = latest.state.commands.length;
-      if (count === 0) return [];
-      return [{ ...ended, kind: "done", rank: 0, tone: "done", headline: `Checks passed on ${short(latest.tip)}`, detail: `${count} of ${count} passed` }];
-    }
-    case "failed":
-      return [{ ...ended, kind: "failed", rank: 0, tone: "failed", headline: "Checks failed", detail: `${latest.state.command}: ${latest.state.status}` }];
-    case "interrupted":
-      return [{ ...ended, kind: "failed", rank: 0, tone: "failed", headline: "Checks couldn’t finish", detail: latest.state.reason }];
-  }
-}
 
 function reviewFacts(input: LiveInput): Fact[] {
   const reviews = Object.values(input.reviews)
@@ -159,7 +107,7 @@ function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
   return [];
 }
 
-function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since: number): Fact[] {
+function mergeFacts(input: LiveInput, since: number): Fact[] {
   const facts: Fact[] = [];
   const steps = input.orchestratorSteps.filter((step) => !isRunRequest(step.requestId));
   const held = heldMerge(steps, input.tasks, Object.values(input.questions));
@@ -178,38 +126,31 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
   const last = steps.findLast((step) => ["mergeRequested", "merged", "mergeCancelled", "mergeStopped"].includes(step.kind.type));
   const click = liveMergeClick(input, steps, since);
   if (click?.kind.type === "mergeRequested") {
-    const latest = checks.at(-1);
     facts.push({
       kind: "running",
       rank: 7,
       tone: "running",
       headline: `Merging into ${click.kind.base}`,
-      detail: click.kind.anyway
-        ? "Without the checks, as you said"
-        : latest && passedOn([latest], latest.tip)
-          ? `Checks passed on ${short(latest.tip)}`
-          : `${click.kind.branch} into ${click.kind.base}`,
+      detail: click.kind.anyway ? "Without the checks, as you said" : `${click.kind.branch} into ${click.kind.base}`,
       sinceMs: click.atMs,
       atMs: click.atMs,
     });
   }
   if (last?.kind.type === "merged") {
     const kind = last.kind;
-    const head = kind.head ?? kind.record?.head;
-    const sha = kind.mergeCommit ?? head;
+    const sha = kind.mergeCommit ?? kind.head ?? kind.record?.head;
     const detail = [sha && short(sha), kind.pr !== undefined && `#${kind.pr}`, plural(kind.commits, "commit")].filter(Boolean).join(" · ");
     facts.push({
       kind: "done",
       rank: 0,
       tone: "merged",
-      // Only checks that passed on the very commit that merged count: never claim a pass.
-      headline: `Merged into ${kind.base}${kind.checksSkipped ? " · checks skipped" : passedOn(checks, head) ? " · checks passed" : ""}`,
+      headline: `Merged into ${kind.base}${kind.checksSkipped ? " · checks skipped" : ""}`,
       detail,
       atMs: last.atMs,
     });
   }
-  // The merge rule refused the merge (no run_checks pass on its commit): the user decides,
-  // unless they wrote since, or a merge came after it.
+  // The merge rule refused the merge: the user decides, unless they wrote since, or a merge
+  // came after it.
   const refused = input.mergeRefused;
   const mergedSince = steps.some((step) => step.kind.type === "merged" && refused && step.atMs > refused.atMs);
   if (refused && refused.atMs >= since && !mergedSince) {
@@ -332,8 +273,7 @@ function latestOf(facts: readonly Fact[]): Fact | undefined {
 
 export function liveJob(input: LiveInput): LiveJob | null {
   const since = lastMessageAtMs(input);
-  const checks = sessionChecks(input);
-  const facts = [...waitingFacts(input), ...workFailures(input), ...checkFacts(checks), ...reviewFacts(input), ...ciFacts(input.orchestratorSteps), ...mergeFacts(input, checks, since), ...stopFacts(input)];
+  const facts = [...waitingFacts(input), ...workFailures(input), ...reviewFacts(input), ...ciFacts(input.orchestratorSteps), ...mergeFacts(input, since), ...stopFacts(input)];
   // The thread or a worker at work, with nothing more to say: Working, naming no worker (J3).
   const live = liveRequest(input);
   const workers = Object.values(input.tasks).filter((task) => isWorking(task) && !isRunRequest(task.requestId));

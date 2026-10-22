@@ -261,7 +261,6 @@ impl SessionManager {
                 work_cancel,
                 &owner,
                 manager.runtime.ledger(),
-                |_| {},
                 Some(output),
             )
             .await;
@@ -468,30 +467,15 @@ pub(crate) async fn run_command(
     owner: &str,
     ledger: &Arc<crate::ledger::CleanupLedger>,
 ) -> Result<Ran> {
-    run_command_then(platform, spec, timeout, ended, owner, ledger, |_| {}).await
-}
-
-/// Runs a command, telling `spawned` its pid before it is recorded in the cleanup ledger
-/// (where the machine watch finds it).
-pub(crate) async fn run_command_then(
-    platform: Arc<dyn Platform>,
-    spec: &brigadier_sandbox::SpawnSpec,
-    timeout: Duration,
-    ended: tokio_util::sync::CancellationToken,
-    owner: &str,
-    ledger: &Arc<crate::ledger::CleanupLedger>,
-    spawned: impl FnOnce(u32),
-) -> Result<Ran> {
-    run_command_streamed(platform, spec, timeout, ended, owner, ledger, spawned, None).await
+    run_command_streamed(platform, spec, timeout, ended, owner, ledger, None).await
 }
 
 /// A pipe chunk delivered into the thread's existing live output buffer.
 pub(super) type CommandOutput =
     Arc<dyn Fn(Vec<u8>) -> brigadier_providers::BoxFuture<'static, ()> + Send + Sync>;
 
-/// The command runner with an optional observer of its pipes, including checks that wait
-/// for a lease before they start. Reading and final output retention still use one runner.
-#[allow(clippy::too_many_arguments)]
+/// The command runner with an optional observer of its pipes. Reading and final output
+/// retention still use one runner.
 pub(super) async fn run_command_streamed(
     platform: Arc<dyn Platform>,
     spec: &brigadier_sandbox::SpawnSpec,
@@ -499,7 +483,6 @@ pub(super) async fn run_command_streamed(
     ended: tokio_util::sync::CancellationToken,
     owner: &str,
     ledger: &Arc<crate::ledger::CleanupLedger>,
-    spawned: impl FnOnce(u32),
     output: Option<CommandOutput>,
 ) -> Result<Ran> {
     let mut command = tokio::process::Command::from(platform.processes().piped_command(spec));
@@ -510,7 +493,6 @@ pub(super) async fn run_command_streamed(
     let pid = child
         .id()
         .ok_or_else(|| Error::Invalid("the command ended before it started".into()))?;
-    spawned(pid);
     let mut running = Running {
         platform: platform.clone(),
         pid,
@@ -750,9 +732,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_scoped_thread_commits_in_its_linked_worktree() {
-        if crate::manager::flow::skip_inside_a_sandbox() {
-            return;
-        }
         let root =
             Temp(std::env::temp_dir().join(format!("brigadier-commit-{}", uuid::Uuid::new_v4())));
         let (repo, worktree, scratch) = (root.join("repo"), root.join("ws"), root.join("orch"));

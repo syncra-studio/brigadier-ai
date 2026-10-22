@@ -22,7 +22,7 @@ type Look = {
 };
 type Seen = {
   error?: string;
-  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "pdf-uncounted" | "test-run" | "test-failed" | "test-uncounted", Look>;
+  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "pdf-uncounted" | "test-run" | "test-failed", Look>;
   turn: [string | null, string | null][];
   said: [string | null, string | null][][];
   later: [string | null, string | null][][];
@@ -76,14 +76,13 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   assert.deepEqual([cases["pdf-uncounted"].target, cases["pdf-uncounted"].pages], ["out/invoice.pdf", null]);
   const run = cases["test-run"];
   // Its own output counts as its log, as the design's Test run card has it.
-  assert.deepEqual([run.title, run.standing, run.target, run.count, run.buttons], ["Test run", "15 passed", "npm test", "1 log", ["Run again", "Fold the proofs"]]);
+  assert.deepEqual([run.title, run.standing, run.target, run.count, run.buttons], ["Test run", "Passed", "npm test", "1 log", ["Run again", "Fold the proofs"]]);
   assert.deepEqual(run.shell, [
     "$ npm test",
     "✓ rejects a title longer than 200 characters\n✓ accepts years 0000 to 0099\n✓ marks a past due date as overdue\n✓ a todo due today is not overdue\n15 passing (412ms)",
   ]);
-  // A test run's counts as its runner gave them; none found, Passed or Failed alone.
-  assert.deepEqual([cases["test-failed"].standing, cases["test-failed"].state], ["2 failed, 13 passed, 1 skipped", "stopped"]);
-  assert.deepEqual([cases["test-uncounted"].standing, cases["test-uncounted"].state], ["Passed", "running"]);
+  // A test run that ended: Passed or Failed.
+  assert.deepEqual([cases["test-failed"].standing, cases["test-failed"].state], ["Failed", "stopped"]);
   // A turn's previews: the page and the test runs and PDF started while its request ran, the
   // simulator its recording names, the run its request started though it ran again during a later
   // turn (#435), not the run started after it.

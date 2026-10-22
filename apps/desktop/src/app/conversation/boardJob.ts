@@ -5,20 +5,18 @@ import type { Job, JobStep, JobStepState } from "@/app/conversation/job";
 import type { JobStage } from "@/components/conversation/elements/job-progress";
 import { contextPlanId, contextPlanIds, latestPlanRequest, planStepStatus, stepStates } from "@/app/conversation/planProgress";
 import { batchReviews, type FindingRow, findingRows } from "@/app/conversation/reviewStatus";
-import type { IntegratedCheck, MergeRecord, OrchestratorStep, OrchestratorStepKind, Plan, ReviewRun, Task, TaskState } from "@/ipc/generated";
-import { formatDuration } from "@/lib/format";
+import type { MergeRecord, OrchestratorStep, OrchestratorStepKind, Plan, ReviewRun, Task, TaskState } from "@/ipc/generated";
 import { type Board, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 /**
  * The session's job read off its board (Q88): what its change went through since the last merge
- * (Building, Reviewing, Fixing, Checks, CI, Merging), or the phase at work of its plan. Each
- * step is one the board holds; while one is at work, the steps the session still goes through
- * follow it as pending (a review when reviews are on, the checks, the merge when it merges on
- * its own). Every earlier merge closes a job of its own, kept for the job's tab.
+ * (Building, Reviewing, Fixing, CI, Merging), or the phase at work of its plan. Each step is
+ * one the board holds; while one is at work, the steps the session still goes through follow it
+ * as pending (a review when reviews are on, the merge when it merges on its own). Every earlier merge closes a job of its own, kept for the job's tab.
  */
 
-export type JobStepId = "build" | "review" | "fix" | "checks" | "ci" | "merge";
+export type JobStepId = "build" | "review" | "fix" | "ci" | "merge";
 
 /** The board's facts about one step, for the job's tab: a review's findings, a merge's record. */
 export type JobFacts = {
@@ -35,7 +33,7 @@ export type BoardJob = Job & {
 };
 
 /** What a job is read from: the board's parts and the two settings that add steps to come. */
-export type JobInput = Pick<Board, "tasks" | "reviews" | "integratedChecks" | "orchestratorSteps" | "plans" | "requests" | "overnight"> & {
+export type JobInput = Pick<Board, "tasks" | "reviews" | "orchestratorSteps" | "plans" | "requests" | "overnight"> & {
   reviewWork: boolean;
   autoMerge: boolean;
 };
@@ -139,28 +137,6 @@ function settledWords(rows: readonly FindingRow[]): string | undefined {
   return words.filter(Boolean).join(", ") || undefined;
 }
 
-const checkNumber = (check: IntegratedCheck) => Number(check.id.replace(/^check-/, "")) || 0;
-
-function checksStep(checks: readonly IntegratedCheck[]): JobStep | null {
-  const latest = checks.toSorted((a, b) => checkNumber(b) - checkNumber(a))[0];
-  if (!latest) return null;
-  const startedAtMs = latest.startedAtMs ?? latest.dueAtMs;
-  const took = latest.endedAtMs !== null && latest.startedAtMs !== null ? ` in ${formatDuration(latest.endedAtMs - latest.startedAtMs)}` : "";
-  const step = { id: "checks", name: "Checks", startedAtMs, endedAtMs: latest.endedAtMs };
-  switch (latest.state.type) {
-    case "due":
-      return { ...step, state: "active" };
-    case "running":
-      return { ...step, state: "active", summary: latest.state.command ?? undefined };
-    case "passed":
-      return { ...step, state: "done", summary: latest.state.commands.length > 0 ? `Checks passed${took}` : "Nothing to check" };
-    case "failed":
-      return { ...step, state: "failed", failedLabel: "Checks failed", summary: `${latest.state.command}: ${latest.state.status}` };
-    case "interrupted":
-      return { ...step, state: "failed", failedLabel: "Checks couldn’t run", summary: latest.state.reason };
-  }
-}
-
 type CiWatch = Extract<OrchestratorStepKind, { type: "ciWatch" }>;
 
 function ciStep(watch: { kind: CiWatch; atMs: number } | undefined): JobStep | null {
@@ -196,8 +172,8 @@ function mergeStep(steps: readonly OrchestratorStep[], merged: { kind: Merged; a
   return null;
 }
 
-const ORDER: readonly JobStepId[] = ["build", "review", "fix", "checks", "ci", "merge"];
-const NAMES: Record<JobStepId, string> = { build: "Building", review: "Reviewing", fix: "Fixing", checks: "Checks", ci: "CI", merge: "Merging" };
+const ORDER: readonly JobStepId[] = ["build", "review", "fix", "ci", "merge"];
+const NAMES: Record<JobStepId, string> = { build: "Building", review: "Reviewing", fix: "Fixing", ci: "CI", merge: "Merging" };
 
 /** One job: the board's steps between `since` and `until`, closed by `merged` when one did. */
 function windowJob(
@@ -210,47 +186,41 @@ function windowJob(
   const inWindow = (atMs: number) => atMs >= since && atMs < until;
   const tasks = phase?.tasks ?? Object.values(input.tasks).filter((task) => builds(task) && !isRunRequest(task.requestId) && inWindow(task.createdAtMs));
   const reviews = batchReviews(Object.values(input.reviews), since, until).filter((review) => !isRunRequest(review.requestId));
-  const checks = Object.values(input.integratedChecks).filter((check) => inWindow(check.dueAtMs) && !check.requests.some(isRunRequest));
   const steps = input.orchestratorSteps.filter((step) => inWindow(step.atMs) && !isRunRequest(step.requestId));
   const watch = steps.flatMap((step) => (step.kind.type === "ciWatch" ? [{ kind: step.kind, atMs: step.atMs }] : [])).at(-1);
   const findings = findingRows(reviews);
 
-  // A build that starts once the reviews or checks have begun is a fix: the job never goes back
-  // to Building (#423).
-  const trouble = Math.min(
-    ...reviews.map((review) => review.startedAtMs),
-    ...checks.flatMap((check) => (check.startedAtMs !== null ? [check.startedAtMs] : [])),
-  );
+  // A build that starts once the reviews have begun is a fix: the job never goes back to
+  // Building (#423).
+  const trouble = Math.min(...reviews.map((review) => review.startedAtMs));
   const lead = phase?.tasks[0];
   const fixes = tasks.filter((task) => task !== lead && task.createdAtMs > trouble);
   const build = buildStep(tasks.filter((task) => !fixes.includes(task)), phase?.state ?? null);
   const fixing = fixes.some((task) => buildState(task.state) === "active" || buildState(task.state) === "pending");
   const review = reviewStep(reviews);
-  const check = checksStep(checks);
   const ci = ciStep(watch);
   const merge = mergeStep(steps, merged);
   const unrecorded = findings.filter((row) => row.status === "New").length;
-  const checkFailed = check?.state === "failed";
-  const live = fixing || [build, review, check, ci, merge].some((step) => step?.state === "active");
+  const live = fixing || [build, review, ci, merge].some((step) => step?.state === "active");
   const fix: JobStep | null =
-    findingCount(reviews) > 0 || checkFailed || fixes.length > 0
+    findingCount(reviews) > 0 || fixes.length > 0
       ? {
           id: "fix",
           name: "Fixing",
           // While a review still runs, its findings wait for it.
-          state: fixing || ((unrecorded > 0 || checkFailed) && live && review?.state !== "active") ? "active" : unrecorded > 0 || checkFailed ? "pending" : "done",
+          state: fixing || (unrecorded > 0 && live && review?.state !== "active") ? "active" : unrecorded > 0 ? "pending" : "done",
           count: unrecorded > 0 ? `${plural(unrecorded, "finding")} to go` : undefined,
           summary: unrecorded > 0 ? undefined : settledWords(findings),
         }
       : null;
   const real: Partial<Record<JobStepId, JobStep>> = Object.fromEntries(
-    ([["build", build], ["review", review], ["fix", fix], ["checks", check], ["ci", ci], ["merge", merge]] as const).filter(([, step]) => step !== null),
+    ([["build", build], ["review", review], ["fix", fix], ["ci", ci], ["merge", merge]] as const).filter(([, step]) => step !== null),
   );
-  // A job is the board's: a review, the checks or a worker's build. A question has none.
-  if (!real.build && !real.review && !real.checks && !real.merge) return null;
+  // A job is the board's: a review or a worker's build. A question has none.
+  if (!real.build && !real.review && !real.merge) return null;
   // While a step is at work, what the session still goes through comes after it.
   const furthest = Math.max(...ORDER.map((id, index) => (real[id] ? index : -1)));
-  const expected = new Set<JobStepId>([...(input.reviewWork ? (["review"] as const) : []), "checks", ...(input.autoMerge ? (["merge"] as const) : [])]);
+  const expected = new Set<JobStepId>([...(input.reviewWork ? (["review"] as const) : []), ...(input.autoMerge ? (["merge"] as const) : [])]);
   const listed: JobStep[] = ORDER.flatMap((id, index) => {
     const step = real[id];
     if (step) return [step];
@@ -265,7 +235,6 @@ function windowJob(
       Number.isFinite(atMs) ? atMs : since,
       ...tasks.map((task) => task.createdAtMs),
       ...reviews.map((item) => item.startedAtMs),
-      ...checks.map((item) => item.startedAtMs ?? item.dueAtMs),
       ...result.flatMap((step) => (step.startedAtMs == null ? [] : [step.startedAtMs])),
     ),
     facts: {
@@ -308,7 +277,7 @@ function currentPhase(
   const since = startOf(index) ?? (index > 0 ? (startOf(index - 1) ?? plan.decidedAtMs ?? plan.createdAtMs) : (plan.decidedAtMs ?? plan.createdAtMs));
   const task = plan.steps[index]?.taskId ? input.tasks[plan.steps[index]!.taskId!] : undefined;
   const status = statuses[index]!;
-  // The phase's lead builds until it reports; past that, its reviews and checks are at work.
+  // The phase's lead builds until it reports; past that, its reviews are at work.
   const state: JobStepState = task ? (buildState(task.state) === "stopped" ? "done" : (buildState(task.state) as JobStepState)) : status === "stopped" ? "done" : status;
   // The phase's other builds (its fixes): those since it started that no other phase leads.
   const leads = new Set(plan.steps.flatMap((step) => (step.taskId ? [step.taskId] : [])));

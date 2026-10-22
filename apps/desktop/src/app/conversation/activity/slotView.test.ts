@@ -106,7 +106,7 @@ test("the held merge counts the writers it still waits for", () => {
   assert.equal(mergeWords(running!), "Merging after 2 workers finish");
   // A reported task hasn't landed yet: it still counts.
   assert.equal(mergeWords(heldMerge(steps, tasks({ t1: "landed", t2: "reported" }))!), "Merging after 1 worker finishes");
-  // Reviews and the full checks don't hold a merge (#241, #242).
+  // Reviews don't hold a merge (#241, #242).
   assert.equal(mergeWords(heldMerge(steps, tasks({ t1: "landed", t2: "landed" }))!), "Merging…");
 });
 

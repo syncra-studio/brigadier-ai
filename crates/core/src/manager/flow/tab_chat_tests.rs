@@ -811,15 +811,6 @@ async fn a_tab_chat_leaves_no_canaries_in_logs_even_when_deletion_is_retried() {
     say(&flow, &chat, &text).await;
     let ids = natives(&log);
 
-    // The heat/build guard observes every CLI owner, including tab chats.
-    flow.manager
-        .machine_row(crate::machine::Row {
-            owner: format!("{}{id}", crate::ledger::TAB_CHAT_OWNER),
-            command: format!("{title}: {text}"),
-            note: crate::machine::builds::Note::Paused,
-        })
-        .await;
-
     let mut parser = brigadier_providers::codex::parse::Parser::live().with_private_logs(true);
     let malformed = serde_json::json!({
         "method": "thread/started",

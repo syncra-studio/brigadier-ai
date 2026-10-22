@@ -2,7 +2,7 @@ name: CI
 
 # Every push to main and every pull request: formatting, bindings, typecheck and lint, the app's
 # and the Rust workspace's tests, Linux and Windows clippy, and the Linux app's build and launch
-# smoke check, and a sample of the core tests in the full checks' macOS sandbox, in parallel jobs.
+# smoke check, in parallel jobs.
 # The macOS and Windows builds and their smoke checks run nightly (nightly.yml), which also runs
 # on release tags.
 #
@@ -223,30 +223,6 @@ jobs:
           cp --reflink=always /mnt/reflink/probe /mnt/reflink/probe-copy
           TMPDIR=/mnt/reflink cargo nextest run --locked --profile ci -p brigadier-core -p brigadier-sandbox --lib \
             -E 'test(/^manager::warm::/) | test(/^manager::flow::warm_session_tests::/) | test(/^clone::/)'
-
-  checks-sandbox:
-    name: Core tests in the full checks' sandbox (macOS)
-    # A session below Full access runs its full checks in Brigadier's macOS sandbox, which writes
-    # only the checkout and the session's own folders and can't hold another sandbox. A change
-    # that makes the core tests write elsewhere, or sandbox a command they start, fails every
-    # such session's run_checks (#493, #382): this test runs a sample of them that way.
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: checks-sandbox
-          save-if: ${{ github.event_name != 'pull_request' }}
-      - name: Sample of the core tests under run_checks' sandbox
-        run: |
-          git config --global user.name "Brigadier CI"
-          git config --global user.email ci@brigadier.invalid
-          cargo test --locked -p brigadier-core --lib -- \
-            manager::flow::integrated_checks_tests::the_core_tests_pass_in_the_full_checks_sandbox
 
   linux-app:
     name: Linux app, launch smoke check

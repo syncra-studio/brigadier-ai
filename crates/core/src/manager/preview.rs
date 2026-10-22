@@ -120,7 +120,7 @@ pub(crate) struct LivePreview {
     /// The log's size and alias at its last snapshot, so an unchanged log isn't stored again.
     snapshot: Mutex<Option<(u64, String)>>,
     /// The descendants suspended with it, including ones outside its group.
-    paused_members: Mutex<Vec<crate::machine::builds::Proc>>,
+    paused_members: Mutex<Vec<crate::machine::Proc>>,
     /// Held while its record is read and written back, so a log snapshot can't undo its end.
     updating: tokio::sync::Mutex<()>,
     /// Whether `start_preview` answered (that it is starting or running), and whether its end
@@ -301,7 +301,7 @@ impl SessionManager {
             .ok_or_else(|| Error::Invalid("the task has no folder yet".into()))?;
         let scratch = PathBuf::from(&workspace.scratch);
         let tree = workspace.worktree.as_ref().map(PathBuf::from);
-        let root = super::checks::cwd_grant(
+        let root = cwd_grant(
             access.provider,
             task.kind.writes(),
             tree.as_deref(),
@@ -635,7 +635,6 @@ impl SessionManager {
             building: false,
             env: given_env,
             target: target.clone(),
-            tests: None,
             pages: None,
             request_id,
         };
@@ -1148,17 +1147,6 @@ impl SessionManager {
                 None
             }
         };
-        // A test run's counts, from its runner's summary.
-        let tests = match live.kind {
-            PreviewKind::Test => {
-                let path = live.log.clone();
-                blocking(move || Ok(read_log(&path).0))
-                    .await
-                    .ok()
-                    .and_then(|bytes| super::test_counts::read(&String::from_utf8_lossy(&bytes)))
-            }
-            _ => None,
-        };
         // A rendered PDF's pages as its render left them.
         let pages = pdf_pages(live).await;
         let _updating = live.updating.lock().await;
@@ -1224,7 +1212,6 @@ impl SessionManager {
                 .await;
             }
             preview.url = known_url(preview.url, url);
-            preview.tests = tests;
             preview.pages = pages;
             preview.state = state;
             preview.building = false;
@@ -2078,7 +2065,23 @@ impl SessionManager {
     }
 }
 
-fn process_artifact(member: crate::machine::builds::Proc) -> Artifact {
+/// The folder a worker's access grants as its writable working directory when that isn't its
+/// checkout `tree` (see `launch_admitted`): a Codex worker that doesn't write works from its
+/// `scratch` folder, since Codex can't run in a read-only folder. A Claude worker's access is
+/// made for its checkout, and a writing Codex worker starts in it.
+fn cwd_grant(
+    provider: ProviderKind,
+    writes: bool,
+    tree: Option<&Path>,
+    scratch: &Path,
+) -> Option<PathBuf> {
+    match (tree, provider, writes) {
+        (Some(_), ProviderKind::Claude, _) | (Some(_), _, true) => None,
+        _ => Some(scratch.to_owned()),
+    }
+}
+
+fn process_artifact(member: crate::machine::Proc) -> Artifact {
     Artifact::Process {
         pid: member.pid,
         started_at_ms: Some(member.started_ms as f64),
@@ -2148,7 +2151,7 @@ fn group_alive(pid: u32) -> bool {
 fn terminate_group(
     platform: &dyn brigadier_sandbox::Platform,
     live: &LivePreview,
-) -> Vec<crate::machine::builds::Proc> {
+) -> Vec<crate::machine::Proc> {
     let pid = live.pid;
     #[cfg(unix)]
     {
@@ -2857,9 +2860,8 @@ mod tests {
             unix_sockets: Vec::new(),
         };
         let writable = |writes: bool| {
-            let root =
-                super::super::checks::cwd_grant(ProviderKind::Codex, writes, Some(tree), scratch)
-                    .unwrap_or_else(|| tree.to_owned());
+            let root = super::cwd_grant(ProviderKind::Codex, writes, Some(tree), scratch)
+                .unwrap_or_else(|| tree.to_owned());
             super::super::run::seatbelt_policy(&pinned_access(access.clone(), &root), &workdir)
                 .writable_roots
         };
@@ -3033,7 +3035,7 @@ while True:
         /// a process that still is the one it was, so a reused PID is left alone.
         struct Kill(
             Arc<dyn brigadier_sandbox::Platform>,
-            Vec<crate::machine::builds::Proc>,
+            Vec<crate::machine::Proc>,
         );
 
         impl Drop for Kill {
@@ -3205,7 +3207,7 @@ while True:
         let spec = flow.manager.runtime.cli_env().spec(Path::new("/bin/cat"));
         let mut child = platform.processes().piped_command(&spec).spawn().unwrap();
         let launchd = crate::machine::proc_of(&*platform, 1).unwrap();
-        let member = crate::machine::builds::Proc {
+        let member = crate::machine::Proc {
             started_ms: launchd.started_ms + 5_000,
             ..launchd
         };
@@ -3356,9 +3358,6 @@ while True:
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn macos_preview_uses_gui_seatbelt_and_tracks_its_private_temp() {
-        if crate::manager::flow::skip_inside_a_sandbox() {
-            return;
-        }
         use crate::manager::flow::{Flow, Options, Reply};
 
         let flow = Flow::start(

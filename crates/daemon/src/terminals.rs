@@ -862,25 +862,8 @@ mod tests {
         }
     }
 
-    /// Whether this process can't open a terminal: the sandbox around a session's full checks
-    /// refuses pseudo-terminals (#521), so these tests run where none is (CI, a terminal, a
-    /// Full-access session's checks); says so in the test's output.
-    fn no_terminal_here() -> bool {
-        let refused = brigadier_sandbox::confined()
-            && super::native_pty_system()
-                .openpty(super::PtySize::default())
-                .is_err();
-        if refused {
-            eprintln!("skipped: the sandbox this test runs in opens no terminal");
-        }
-        refused
-    }
-
     #[test]
     fn independent_sessions_reattach_and_close_with_their_conversation() {
-        if no_terminal_here() {
-            return;
-        }
         let terminals = Terminals::new();
         let cwd = std::env::temp_dir().display().to_string();
         let first = terminals
@@ -1023,9 +1006,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_shell_reads_idle_until_a_command_runs_in_front_of_it() {
-        if no_terminal_here() {
-            return;
-        }
         use brigadier_core::manager::TerminalHost;
 
         let terminals = Terminals::new();
@@ -1066,9 +1046,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn an_agents_tab_shell_is_opened_once_and_typed_into_only_for_its_conversation() {
-        if no_terminal_here() {
-            return;
-        }
         use brigadier_core::manager::TerminalHost;
 
         let terminals = Terminals::new();
@@ -1102,9 +1079,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn reattach_survives_a_removed_folder_but_new_shells_require_one() {
-        if no_terminal_here() {
-            return;
-        }
         let folder =
             Temp(std::env::temp_dir().join(format!("brig-removed-cwd-{}", std::process::id())));
         std::fs::create_dir_all(&*folder).unwrap();
@@ -1134,9 +1108,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_worker_terminal_runs_its_command_and_ends_with_its_tree() {
-        if no_terminal_here() {
-            return;
-        }
         use brigadier_core::manager::TerminalHost;
         use brigadier_providers::TerminalCommand;
         use std::time::Duration;
@@ -1243,9 +1214,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn cancelling_sign_in_again_stops_the_cli_without_a_new_stored_login() {
-        if no_terminal_here() {
-            return;
-        }
         // Even a new signed-in status cannot turn the account's unchanged old login into
         // completion of this attempt. A changed login also needs a fresh signed-in check.
         for (changed, checked_at, signed_in) in [
@@ -1279,9 +1247,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn closing_after_a_new_stored_login_lets_the_cli_finish_by_itself() {
-        if no_terminal_here() {
-            return;
-        }
         let (home, terminals, hosted, terminal) = account_sign_in_terminal().await;
         std::fs::write(home.join("auth.json"), "new stored login").unwrap();
         terminals
@@ -1316,9 +1281,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn daemon_shutdown_stops_a_lingering_account_sign_in() {
-        if no_terminal_here() {
-            return;
-        }
         let (home, terminals, hosted, terminal) = account_sign_in_terminal().await;
         std::fs::write(home.join("auth.json"), "new stored login").unwrap();
         terminals
@@ -1341,9 +1303,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn closing_a_worker_tab_ends_its_tree() {
-        if no_terminal_here() {
-            return;
-        }
         use brigadier_core::manager::TerminalHost;
         use brigadier_providers::TerminalCommand;
         use std::time::Duration;

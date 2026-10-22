@@ -13,7 +13,7 @@ import { type Board, RETRYING } from "@/state/board";
 export type StatusTone = "busy" | "still" | "needsYou";
 
 /**
- * `sinceMs`: a long run's start, its elapsed time said after the words ("Running the full checks · 6m").
+ * `sinceMs`: a long run's start, its elapsed time said after the words ("Running pnpm test · 6m").
  * `waitsOn`: what of the user's the turn waits on: an answer's line carries a checklist glyph, an
  * approval's shimmers fainter.
  * `run`: a long run the request works on until its result comes, said under its answer as well.
@@ -27,7 +27,7 @@ export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; wai
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "backgroundRuns" | "integratedChecks">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "backgroundRuns">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -61,30 +61,21 @@ export function commandWords(command: string): string {
 
 /**
  * A long run these requests wait on while the thread rests: a command of its own gone to the
- * background, else the session's full checks on its landed work, running or due. The request
- * works until its result comes, so the line says what runs and for how long rather than "Thinking".
+ * background. The request works until its result comes, so the line says what runs and for how
+ * long rather than "Thinking".
  */
 function runningHead({ board, requestIds }: StatusInput): StatusHead | null {
   const run = Object.values(board.backgroundRuns)
     .filter((each) => each.state.type === "running" && each.requestId !== null && requestIds.includes(each.requestId))
     .toSorted((a, b) => a.startedAtMs - b.startedAtMs)[0];
-  if (run) {
-    return { text: `Running ${commandWords(run.command)}`, tone: "busy", sinceMs: run.startedAtMs, run: true };
-  }
-  // Due ones haven't started (they wait for the work to settle), so they're never "Running":
-  // the thread, told they're due, says they haven't run.
-  const checks = Object.values(board.integratedChecks).filter((each) => each.requests.some((id) => requestIds.includes(id)));
-  const running = checks.find((each) => each.state.type === "running");
-  if (running) return { text: "Running the full checks", tone: "busy", sinceMs: running.startedAtMs ?? running.dueAtMs, run: true };
-  if (checks.some((each) => each.state.type === "due")) return { text: "Waiting to run the full checks", tone: "still", run: true };
-  return null;
+  return run ? { text: `Running ${commandWords(run.command)}`, tone: "busy", sinceMs: run.startedAtMs, run: true } : null;
 }
 
 /**
  * The line under an answer whose request still waits: what waits on the user first, else the
  * sessions whose replies it waits for (also while the answer streams), else a long run the
- * request works on until its result comes (the full checks only due as well, #178), else what
- * it waits on, or does once a late result reopened it.
+ * request works on until its result comes, else what it waits on, or does once a late result
+ * reopened it.
  */
 export function answeredHead(head: StatusHead | null, { waitingFor, waiting, reopened }:
   { waitingFor: readonly string[]; waiting: boolean; reopened: boolean }): StatusHead | null {

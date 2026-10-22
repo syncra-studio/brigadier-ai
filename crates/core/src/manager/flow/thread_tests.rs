@@ -88,10 +88,7 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         assert!(scratch.ends_with(format!("orch/{}", flow.conversation.0)));
         let env: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
         // Its temporary files go to its short folder under /tmp, never the data folder's.
-        let tmp = crate::manager::workers::session_temp_dir(
-            &flow.conversation,
-            crate::manager::workers::SessionTemp::Thread,
-        );
+        let tmp = crate::manager::workers::session_temp_dir(&flow.conversation);
         assert_eq!(env.get("TMPDIR").map(String::as_str), tmp.to_str());
         assert!(tmp.is_dir());
         for name in [
@@ -669,7 +666,6 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
                 );
                 turn.call("request_review", json!({"wait_seconds": 0}))
                     .await;
-                turn.call("run_checks", json!({})).await;
                 let reply = turn
                     .call("finish_session", json!({"user_words": "merge"}))
                     .await;
@@ -747,7 +743,6 @@ fn merging_thread(seen: Arc<Mutex<Vec<Seen>>>) -> Script {
                 return Reply::text("Notes added, ready to merge.");
             }
             if turn.input.contains("yes, merge it") {
-                turn.call("run_checks", json!({})).await;
                 let reply = turn
                     .call("finish_session", json!({"user_words": "yes, merge it"}))
                     .await;
@@ -1250,7 +1245,6 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
 type MergeReplies = Arc<Mutex<Vec<(String, bool)>>>;
 
 async fn finish(turn: &Turn, words: &str, replies: &MergeReplies) -> bool {
-    turn.call("run_checks", json!({})).await;
     let reply = turn
         .call("finish_session", json!({ "user_words": words }))
         .await;

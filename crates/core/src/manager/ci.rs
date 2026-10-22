@@ -1145,43 +1145,6 @@ impl super::SessionManager {
         })
     }
 
-    /// The open issues of `repo`'s GitHub repository, as number and title with body; none when
-    /// `gh` can't say within a few seconds (missing, signed out, not on GitHub).
-    pub(crate) async fn open_issues(&self, repo: &Path) -> Option<Vec<(u64, String)>> {
-        #[derive(serde::Deserialize)]
-        struct Issue {
-            number: u64,
-            title: String,
-            #[serde(default)]
-            body: String,
-        }
-        let gh = self.gh()?;
-        let args = [
-            "issue",
-            "list",
-            "--state",
-            "open",
-            "--limit",
-            "300",
-            "--json",
-            "number,title,body",
-        ];
-        let out = tokio::time::timeout(Duration::from_secs(10), gh.output_in(Some(repo), &args))
-            .await
-            .ok()?
-            .ok()?;
-        if !out.success() {
-            return None;
-        }
-        let issues: Vec<Issue> = serde_json::from_str(&out.stdout).ok()?;
-        Some(
-            issues
-                .into_iter()
-                .map(|issue| (issue.number, format!("{}\n{}", issue.title, issue.body)))
-                .collect(),
-        )
-    }
-
     /// The session's repository, the URL of the remote pushed to, and the full sha pushed.
     async fn ci_push(
         &self,

@@ -6,7 +6,6 @@ import type { Compaction } from "./Compaction";
 import type { ContextUsage } from "./ContextUsage";
 import type { Conversation } from "./Conversation";
 import type { Decision } from "./Decision";
-import type { IntegratedCheck } from "./IntegratedCheck";
 import type { MachineStep } from "./MachineStep";
 import type { MemoryChange } from "./MemoryChange";
 import type { MergeRefused } from "./MergeRefused";
@@ -106,10 +105,6 @@ reviews: Array<ReviewRun>,
  * Its previews, oldest first.
  */
 previews: Array<Preview>, 
-/**
- * Its runs of the full checks on the integrated tree, oldest first.
- */
-integratedChecks: Array<IntegratedCheck>, 
 /**
  * The thread's commands that went to the background, oldest first.
  */

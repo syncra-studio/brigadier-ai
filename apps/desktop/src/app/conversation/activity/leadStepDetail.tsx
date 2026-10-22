@@ -5,7 +5,7 @@ import { LeadItemDetail } from "@/app/conversation/activity/LeadItemDetail";
 import { LeadToolDetail } from "@/app/conversation/activity/LeadToolDetail";
 
 /** The kinds of work whose row opens while it runs: a command, to its Shell box as the output comes. */
-const OPEN_WHILE_RUNNING = new Set(["run", "checks"]);
+const OPEN_WHILE_RUNNING = new Set(["run"]);
 
 /** Whether a lead's step has a detail to open to; `kind` is its words' kind. */
 export function leadStepOpens(step: LeadStep, kind?: string): boolean {

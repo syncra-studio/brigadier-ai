@@ -1,7 +1,7 @@
 //! Honest successor seams (BUILD-PLAN D2.4, research A2): a worker that another model takes
 //! over after an error, or that a fresh session continues after a restart found its CLI's files
 //! gone, gets what a size hand-off gets: the streamed transcript with every whole output, the
-//! decisions, checks.md, and without a note the state of work built from the transcript and
+//! decisions, and without a note the state of work built from the transcript and
 //! marked unchecked. A restart whose CLI files are missing no longer stops the task.
 
 use std::path::{Path, PathBuf};
@@ -77,7 +77,6 @@ fn read_files(dir: &Path) -> Vec<(String, String)> {
         "transcript.md",
         "state.md",
         "note.md",
-        "checks.md",
         "decisions.md",
     ] {
         if let Ok(text) = std::fs::read_to_string(dir.join(name)) {
@@ -87,7 +86,7 @@ fn read_files(dir: &Path) -> Vec<(String, String)> {
     files
 }
 
-/// The thread delegates one scout. Its first session reads the planted detail, runs a check,
+/// The thread delegates one scout. Its first session reads the planted detail,
 /// says it is ready and waits (for a fault, or for the daemon to go); a successor's session
 /// (`marker` in its first message) records what it was given and reports.
 fn scout(
@@ -159,10 +158,6 @@ fn scout(
                 })),
             })
             .await;
-            let check = turn
-                .call("run_check", json!({"command": "echo checked"}))
-                .await;
-            assert!(!check.is_error, "{}", check.text);
             ready.notify_one();
             armed.notified().await;
             turn.emit(ProviderEvent::Notice {
@@ -219,16 +214,11 @@ async fn decide(flow: &Flow) {
 }
 
 /// What every successor seam must carry: the whole transcript with the planted output, the
-/// state of work marked unchecked (no note), checks.md and decisions.md, all named in its
+/// state of work marked unchecked (no note) and decisions.md, all named in its
 /// first message.
 fn assert_whole(successor: &Successor) {
     let input = &successor.input;
-    for name in [
-        "transcript.md (",
-        "state.md (",
-        "checks.md (",
-        "decisions.md (",
-    ] {
+    for name in ["transcript.md (", "state.md (", "decisions.md ("] {
         assert!(input.contains(name), "{name} in: {input}");
     }
     assert!(input.contains("transcript.md is complete."), "{input}");
@@ -242,8 +232,6 @@ fn assert_whole(successor: &Successor) {
     let state = successor.file("state.md").expect("state.md");
     assert!(state.contains("unchecked"), "{state}");
     assert!(state.contains("The last step it took:"), "{state}");
-    let checks = successor.file("checks.md").expect("checks.md");
-    assert!(checks.contains("echo checked"), "{checks}");
     let decisions = successor.file("decisions.md").expect("decisions.md");
     assert!(decisions.contains(DECIDED), "{decisions}");
     assert!(successor.file("note.md").is_none());

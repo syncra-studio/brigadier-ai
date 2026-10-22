@@ -405,15 +405,6 @@ pub(crate) fn peer_confined(socket: std::os::fd::BorrowedFd<'_>) -> bool {
     peer == 1 && own != 1
 }
 
-/// See [`crate::confined`].
-pub(crate) fn confined() -> bool {
-    // SAFETY: a plain query with a null operation and no variadic arguments, as documented for
-    // SANDBOX_FILTER_NONE; it reads nothing but its arguments.
-    #[allow(unsafe_code)]
-    let own = unsafe { sandbox_check(libc::getpid(), std::ptr::null(), SANDBOX_FILTER_NONE) };
-    own == 1
-}
-
 /// `ProcessInfo.thermalState` and the kernel's memory-pressure level.
 struct MacMachine;
 
@@ -940,31 +931,6 @@ mod tests {
         }
     }
 
-    /// Whether `test` can't run here because this process can't apply a Seatbelt profile: a
-    /// process already inside a macOS sandbox (an agent's sandboxed shell) is refused another
-    /// one. Says so on stderr; any other failure is left to the test to report.
-    fn nested_sandbox_refused(test: &str) -> bool {
-        static REFUSED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-        let refused = REFUSED.get_or_init(|| {
-            let probe = Command::new(SANDBOX_EXEC)
-                .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-                .output()
-                .ok()?;
-            let stderr = String::from_utf8_lossy(&probe.stderr).trim().to_owned();
-            (!probe.status.success() && stderr.contains("Operation not permitted"))
-                .then_some(stderr)
-        });
-        if let Some(stderr) = refused {
-            // Straight to stderr: the test harness keeps a passing test's `eprintln!` to itself.
-            let _ = writeln!(
-                std::io::stderr(),
-                "skipped {test}: this process runs inside a macOS sandbox, which can't apply \
-                 another one ({stderr}); run it from an unsandboxed shell"
-            );
-        }
-        refused.is_some()
-    }
-
     /// A child process, killed and reaped when dropped however the test ends: a stopped one
     /// left behind would never end on its own.
     struct Reaped(std::process::Child);
@@ -993,9 +959,6 @@ mod tests {
 
     #[test]
     fn seatbelt_denies_reading_a_denied_folder_and_reads_the_rest() {
-        if nested_sandbox_refused("seatbelt_denies_reading_a_denied_folder_and_reads_the_rest") {
-            return;
-        }
         let dir = Temp(std::env::temp_dir().join(format!("brig-deny-read-{}", std::process::id())));
         let secret = dir.join("run");
         std::fs::create_dir_all(&secret).unwrap();
@@ -1029,9 +992,6 @@ mod tests {
     /// whose temporary file goes in `TMPDIR`, a writable root, run in a session's sandbox.
     #[test]
     fn a_session_runs_ps_and_compiles_with_its_temp_folder() {
-        if nested_sandbox_refused("a_session_runs_ps_and_compiles_with_its_temp_folder") {
-            return;
-        }
         let dir = Temp(std::env::temp_dir().join(format!("brig-ps-cc-{}", std::process::id())));
         std::fs::create_dir_all(&*dir).unwrap();
         // A `.S` file is preprocessed into a temporary file before it is assembled.
@@ -1088,10 +1048,6 @@ mod tests {
 
     #[test]
     fn protection_denies_only_its_paths_and_gives_back_the_exceptions() {
-        if nested_sandbox_refused("protection_denies_only_its_paths_and_gives_back_the_exceptions")
-        {
-            return;
-        }
         let dir = Temp(std::env::temp_dir().join(format!("brig-protect-{}", std::process::id())));
         let refs = dir.join("refs/heads/brigadier");
         std::fs::create_dir_all(refs.join("aa")).unwrap();
@@ -1156,9 +1112,6 @@ mod tests {
     /// `.git` stay protected: the narrower rule wins, whichever comes first.
     #[test]
     fn a_protected_path_inside_an_exception_stays_protected() {
-        if nested_sandbox_refused("a_protected_path_inside_an_exception_stays_protected") {
-            return;
-        }
         let dir = Temp(std::env::temp_dir().join(format!("brig-inner-{}", std::process::id())));
         let refs = dir.join(".git/refs/heads/brigadier");
         std::fs::create_dir_all(refs.join("aa")).unwrap();
@@ -1213,11 +1166,6 @@ mod tests {
             assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
             return;
         }
-        if nested_sandbox_refused(
-            "a_command_without_the_network_uses_unix_sockets_only_in_its_writable_roots",
-        ) {
-            return;
-        }
         let dir =
             Temp(std::env::temp_dir().join(format!("brig-cmd-socket-{}", std::process::id())));
         let writable = dir.join("writable");
@@ -1269,9 +1217,6 @@ mod tests {
         const SOCKET_PROBE: &str = "BRIGADIER_PREVIEW_SOCKET_PROBE";
         if let Some(path) = std::env::var_os(SOCKET_PROBE) {
             let _listener = UnixListener::bind(path).unwrap();
-            return;
-        }
-        if nested_sandbox_refused("gui_preview_keeps_filesystem_and_network_confinement") {
             return;
         }
         let dir =
@@ -1476,9 +1421,6 @@ mod tests {
             let global = register(c"ai.brigadier.dev.register-probe", 0);
             println!("per-process {own}, global {global}");
             std::process::exit(if own == 0 && global != 0 { 0 } else { 1 });
-        }
-        if nested_sandbox_refused("a_gui_preview_registers_per_process_names_but_no_global_one") {
-            return;
         }
         let dir =
             Temp(std::env::temp_dir().join(format!("brig-preview-reg-{}", std::process::id())));

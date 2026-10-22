@@ -696,7 +696,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "questionUpdated":
     case "planUpdated":
     case "reviewUpdated":
-    case "integratedCheckUpdated":
     case "backgroundRunUpdated":
     case "headlineSet":
     case "mergeRefusalSet":
@@ -726,6 +725,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "agentConnectChanged":
     // Its desktop notification is the shell's; the Usage menu reads `accounts.warnings`.
     case "quotaWillBeLost":
+    // Only in old stored events: the checks it told of are gone.
+    case "integratedCheckUpdated":
       return slice;
   }
 }

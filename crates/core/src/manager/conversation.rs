@@ -93,13 +93,13 @@ fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
         task_id: None,
         text: format!(
             "[{what} stopped when your CLI ended, before it finished: no result came. If you \
-             still need it, run it again with run or run_check: a long command goes to the \
-             background on its own and its result comes back to you as a message.]"
+             still need it, run it again with run: a long command goes to the background on its \
+             own and its result comes back to you as a message.]"
         ),
     }
 }
-/// How long a blocking MCP call may take for the thread: its `run_check` (and a Codex
-/// thread's `run`) waits for its command (THREAD-PLAN.md Q4, Q8 lever 3), so the longest
+/// How long a blocking MCP call may take for the thread: a Codex thread's `run` waits for its
+/// command (THREAD-PLAN.md Q4), so the longest
 /// command timeout plus a minute, so a command that runs out its time is still reaped and its
 /// output stored before the call itself expires (the call's clock starts first).
 pub(super) const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs() + 60;
@@ -152,9 +152,6 @@ pub enum SendOutcome {
 /// The label of a clean review of the thread's own changes, told only when its request_review
 /// call went on before it ended: then it is owed, whatever the thread did meanwhile (#513).
 pub(crate) const CLEAN_REVIEW: &str = "review of your commits · clean";
-/// The start of the label of a pass whose run_checks call went on before it ended: owed to the
-/// thread whatever it did meanwhile, so never dropped as an optional pass is (#513).
-pub(crate) const OWED_PASS: &str = "run_checks passed ";
 
 /// Something for the orchestrator's next turn.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -168,12 +165,6 @@ pub(crate) struct Envelope {
 }
 
 impl Envelope {
-    /// An ordinary check pass only wakes a request whose turn still runs.
-    /// Passes that require more work use the ordinary decision label instead.
-    fn optional_check_pass(&self) -> bool {
-        self.kind == InjectionKind::Decision && self.label.starts_with("checks passed ")
-    }
-
     /// The message of another session's it carries.
     pub(crate) fn peer_message(&self) -> Option<&str> {
         (self.kind == InjectionKind::PeerMessage)
@@ -377,7 +368,7 @@ struct ConvState {
     /// Follow-ups that joined the working answer unjudged after [`DECIDING_WAIT`]: the
     /// thread's late judgment of one is answered so.
     joined_unjudged: Vec<String>,
-    /// The thread's commands running now (shell, `run`, `run_check`, a Codex shell item), by
+    /// The thread's commands running now (shell, `run`, a Codex shell item), by
     /// item, oldest first: what a message sent into the turn waits behind.
     holding: Vec<(String, HeldBy)>,
     /// Other sessions' messages for the running turn that came while a command of it ran:
@@ -2649,15 +2640,6 @@ impl SessionManager {
         {
             return None;
         }
-        // An ordinary pass wakes no turn: one whose turn still runs waits in the inbox, and
-        // that turn's answer drops it (#512).
-        if envelope.optional_check_pass()
-            && request
-                .as_ref()
-                .is_none_or(|request| state.request.as_ref() != Some(request))
-        {
-            return None;
-        }
         // Kept under the inbox's lock, so no take of it is kept before it.
         if keep {
             self.keep_queued(id, &envelope, request.as_deref(), None)
@@ -4677,8 +4659,6 @@ impl SessionManager {
                 let shell = crate::digest::is_shell_tool(name);
                 if shell {
                     conv.running_command(item_id, *status).await;
-                }
-                if shell || name == "run_check" {
                     let words = input
                         .as_deref()
                         .and_then(|input| serde_json::from_str::<serde_json::Value>(input).ok())
@@ -5204,15 +5184,6 @@ impl SessionManager {
                 && reborn.is_none()
             {
                 state.outcomes.insert(request.clone(), ended);
-            }
-            // A completed turn answers its request: a check pass that arrived during it settles
-            // with this answer. One its run_checks call owes the thread still comes (#513).
-            if status == TurnStatus::Completed
-                && let Some(request) = &served
-            {
-                state.inbox.retain(|(envelope, queued)| {
-                    queued.as_ref() != Some(request) || !envelope.optional_check_pass()
-                });
             }
             (
                 limited,

@@ -1,12 +1,11 @@
-//! The thread's commands that outlast a tool call (`run`, `run_check`).
+//! The thread's commands that outlast a tool call (`run`).
 //!
 //! A tool call holds the thread: while it runs, the thread can't sort a follow-up or read a
 //! message steered to it, and the user waits on a silent row. So a command of the thread's
 //! that is still going after [`FOREGROUND`] goes to the background: the call returns at once
 //! with its id, the command goes on, owned by the session rather than the thread's CLI (a
 //! closed or replaced CLI doesn't end it), and its result comes to the thread as a message in
-//! the request that started it, which works until then. The whole operation moves, waits
-//! included: a check waiting for the same check or for the build lease goes too.
+//! the request that started it, which works until then. The whole operation moves.
 //!
 //! - **Recorded** as a [`BackgroundRun`] when it goes to the background, so the request works
 //!   and the app shows it; a restart that cuts one off records it interrupted and tells the
@@ -58,6 +57,30 @@ fn run_name(name: Option<&str>) -> Option<String> {
 /// end with the session.
 pub(crate) fn background_owner(id: &ConversationId) -> String {
     format!("background:{id}")
+}
+
+/// A line for each of the thread's commands running in the background now (`list_tasks`).
+pub(crate) fn running_lines(board: &crate::board::Board, now_ms: i64) -> Vec<String> {
+    let mut runs: Vec<&BackgroundRun> = board
+        .background_runs
+        .values()
+        .filter(|run| run.state == BackgroundRunState::Running)
+        .collect();
+    runs.sort_by_key(|run| background_run_number(&run.id));
+    runs.into_iter()
+        .map(|run| {
+            let mins = (now_ms - run.started_at_ms).max(0) / 60_000;
+            let time = if mins == 0 {
+                "under a minute".to_owned()
+            } else {
+                format!("{mins} min")
+            };
+            format!(
+                "{} running in the background for {time}: {} `{}`.",
+                run.id, run.tool, run.command
+            )
+        })
+        .collect()
 }
 
 /// A command's work while its tool call holds it ([`SessionManager::in_foreground`]): dropped

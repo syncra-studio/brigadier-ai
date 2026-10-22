@@ -42,7 +42,7 @@ const worker = (item: ActionItem) => {
 };
 
 test("a tool keeps its words across provider namespaces and never shows them", () => {
-  for (const action of ["query_brain", "code_search", "Read", "Edit", "exec_command", "apply_patch", "run", "run_check", "WebSearch", "start_preview", "review_code", "request_review"]) {
+  for (const action of ["query_brain", "code_search", "Read", "Edit", "exec_command", "apply_patch", "run", "WebSearch", "start_preview", "review_code", "request_review"]) {
     for (const name of [action, `mcp__brigadier__${action}`, `functions.${action}`, `brigadier/${action}`]) {
       assert.equal(toolName(name), action);
       for (const status of ["completed", "inProgress", "failed", "declined"] as const) {
@@ -65,8 +65,6 @@ test("Brigadier's plumbing is never a row", () => {
 test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("Bash", "inProgress", "cargo test -p core"), "Running cargo test -p core");
   assert.equal(lead("mcp__brigadier__run", "completed", "pnpm test"), "Ran pnpm test");
-  assert.equal(lead("mcp__brigadier__run_check", "inProgress", "cargo test"), "Running cargo test");
-  assert.equal(lead("mcp__brigadier__run_check"), "Ran checks");
   assert.equal(lead("shell", "failed", "cargo build"), "Ran cargo build");
   // Moving into the worktree first is no part of what it runs.
   assert.equal(lead("shell", "completed", "cd /tmp/w/session-1 && python3 -m pytest -q"), "Ran python3 -m pytest -q");
@@ -117,7 +115,7 @@ test("a run sums up its kinds comma-joined, edits, reading, commands and the web
   assert.equal(summarize([words("Read", "a.ts"), words("Bash", "ls src"), words("Grep", "add"), words("Bash", "sleep 4")]), "Read files, ran a command");
   assert.equal(summarize([words("Bash", "node math.js"), words("apply_patch", "math.js")]), "Edited a file, ran a command");
   assert.equal(summarize([words("request_review"), words("Read", "a.ts")]), "Read files, asked for a review");
-  assert.equal(summarize([words("run_check", "pnpm test"), words("start_preview", "web")]), "Ran checks, started a preview");
+  assert.equal(summarize([words("Bash", "pnpm test"), words("start_preview", "web")]), "Ran a command, started a preview");
 });
 
 test("deduplication needs the matching authored result in this call's window", () => {

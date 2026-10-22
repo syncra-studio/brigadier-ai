@@ -11,11 +11,11 @@ use brigadier_core::tools::{
     OfferFeedback, OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog,
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
     RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RequestReview, RerunTask,
-    ReviewPlan, Role, RouteFollowUp, RunCheck, RunChecks, RunCommand, RunTools, RunUnsandboxed,
-    SaveMemory, SaveReport, SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession,
-    StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline,
-    SubmitReport, SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun,
-    ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    ReviewPlan, Role, RouteFollowUp, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SaveReport,
+    SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession, StartPreview,
+    StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
+    SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun, ToolCall,
+    WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -54,7 +54,7 @@ stays one implement task. `review`, `merge` and `verify` read and report.
 
 Apps: with computer use on, every worker can open an app on this Mac, look at it and use it; \
 you can't. A visible UI change, however small, is looked at live once on the landed work: \
-[checks passed …] asks for one task with `live_look`; workers use scripted UI checks, and a \
+once the full checks pass on it, delegate one task with `live_look`; workers use scripted UI checks, and a \
 mockup's final comparison is a live capture. A visible UI change that isn't a small fix: first ask_user \"Want a mockup \
 first?\" (Yes / Skip; say if part of it can't be faked). Yes: a task with `mockup`, then ask \
 only what its screenshots can't show; the user's marked notes go to that worker (message_worker \
@@ -257,7 +257,7 @@ const LAND_PHASE: &str = "Land a finished `implement` or `merge` task's commits 
 session's branch: the lead's task once its report is in, or a verifier you started for big or \
 risky work (its commits hold the lead's). Call it after reading the report. Brigadier commits \
 what was left uncommitted, leaves litter out, and fast-forwards the branch; no card, no review \
-and no checks start (request_review and run_checks are yours to call). If the branch moved \
+and no checks start (request_review and your checks are yours to run). If the branch moved \
 meanwhile, the commits are rebased onto it and land at once. Conflicts come back to you: \
 delegate a merge task.";
 
@@ -302,20 +302,6 @@ finished work left that nothing uses any more (finished tasks' worktrees, folder
 branches, ended reviews' checkouts), by Brigadier's own records, and says what went and what \
 stayed and why. Brigadier already cleans up after you; never delete branches, worktrees or temp \
 folders by hand.";
-
-const RUN_CHECKS: &str = "Run the project's full checks (tests, lints, builds) on the session \
-branch's commit now, in a checkout of their own. Commit first: uncommitted changes aren't in it. \
-Brigadier never runs them by itself: call it before every merge into main, which goes through \
-only once they passed on that exact commit. Its reply has the verdict and, on a failure, the \
-command and its output; past a minute they go on in the background and the result comes as a \
-[checks … at <commit>] message. A pass at the same commit answers at once; `rerun` runs them \
-again (a flaky test, the machine).";
-
-const WORKER_RUN_CHECKS: &str = "Run the checks your change calls for (those of the packages you \
-changed) in your checkout, and get the verdict: the commands that passed, or the one that \
-failed with its output. Call it before submit_report and fix what fails. The full suite of the \
-whole project is the thread's to run, once, after landing. `rerun` runs them again rather than \
-answering from earlier runs.";
 
 const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
 one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
@@ -400,7 +386,7 @@ showing it is left as it is.",
 const TERMINAL_RUN: &str = concat!(
     "Type a command in a terminal tab the user can watch and take over: a dev server they will \
 try, a sign-in, an interactive tool. Builds, tests and listings stay in your shell (run, \
-run_check). Left out, `terminal` is your own tab. It runs with the user's full rights, outside \
+your own shell). Left out, `terminal` is your own tab. It runs with the user's full rights, outside \
 the sandbox: below Full access the user says yes on a card first, and a terminal of the user's \
 is typed in only after they say yes, at any level. read_terminal reads what it printed.",
     app_data!()
@@ -466,21 +452,6 @@ read_artifact. A command still going after a minute goes on in the background: t
 returns its run-N id and the result comes as a message in this request; never wait for it or \
 run it again. Give a long one a short `name` for what it is for (\"Desktop build\"): the \
 session's Activities show it while it runs.";
-
-const RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
-checkout. One that already ran on the same files answers from the cache (`rerun` runs it again); \
-with no `command` it lists the checks your changes call for and runs nothing. A long passing \
-output comes back as its warnings and last lines, a failure over 8 KB as a digest of its errors, \
-each with where the whole output is. One still going after a minute goes on in the background: \
-the call returns its run-N id and the result comes as a message in this request. Give a long \
-one a short `name` for what it is for (\"Core tests\"): the session's Activities show it.";
-
-/// A worker's check always answers in the call, and its schema has no `name`.
-const WORKER_RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
-checkout. One that already ran on the same files answers from the cache (`rerun` runs it again); \
-with no `command` it lists the checks your changes call for and runs nothing. A long passing \
-output comes back as its warnings and last lines, a failure over 8 KB as a digest of its errors, \
-each with where the whole output is.";
 
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
 blocked (the network, files outside the workspace): it waits for approval first, decided on \
@@ -933,7 +904,6 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("clean_up", CLEAN_UP, no_arguments()),
-        tool("run_checks", RUN_CHECKS, input_schema::<RunChecks>()),
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
         tool("read_page", READ_PAGE, input_schema::<ReadPage>()),
         tool("write_page", WRITE_PAGE, input_schema::<WritePage>()),
@@ -945,7 +915,6 @@ fn orchestrator_tools() -> Vec<Tool> {
         ),
         tool("stop_preview", STOP_PREVIEW, input_schema::<StopPreview>()),
         tool("preview_log", PREVIEW_LOG, input_schema::<PreviewLog>()),
-        tool("run_check", RUN_CHECK, input_schema::<ThreadRunCheck>()),
         tool(
             "list_sessions",
             LIST_SESSIONS,
@@ -1008,8 +977,6 @@ fn worker_tools() -> Vec<Tool> {
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
-        tool("run_check", WORKER_RUN_CHECK, input_schema::<RunCheck>()),
-        tool("run_checks", WORKER_RUN_CHECKS, input_schema::<RunChecks>()),
         tool(
             "start_preview",
             WORKER_START_PREVIEW,
@@ -1065,8 +1032,6 @@ fn chat_tools() -> Vec<Tool> {
 /// `run` waits too (BUILD-PLAN O5): the thread's own shell keeps outputs up to 30 KB whole, and
 /// no bench run called it.
 pub const THREAD_ALWAYS_LOADED: &[&str] = &[
-    "run_check",
-    "run_checks",
     "read_artifact",
     "ask_user",
     "note_for_user",
@@ -1263,10 +1228,6 @@ pub enum ParseError {
 /// (BUILD-PLAN rule R).
 const RETIRED: &[(&str, &str)] = &[
     (
-        "rerun_checks",
-        "call run_checks with rerun true. Brigadier no longer runs the checks by itself: run_checks runs them, and a merge into main needs them passed on its commit.",
-    ),
-    (
         "review_candidate",
         "call request_review, with the same commit and wait_seconds.",
     ),
@@ -1362,7 +1323,6 @@ pub fn parse_call(
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
                 "clean_up" => OrchestratorCall::CleanUp,
-                "run_checks" => OrchestratorCall::RunChecks(args(name, arguments)?),
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 "read_page" => OrchestratorCall::ReadPage(args(name, arguments)?),
                 "write_page" => OrchestratorCall::WritePage(args(name, arguments)?),
@@ -1370,7 +1330,6 @@ pub fn parse_call(
                 "start_preview" => OrchestratorCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => OrchestratorCall::StopPreview(args(name, arguments)?),
                 "preview_log" => OrchestratorCall::PreviewLog(args(name, arguments)?),
-                "run_check" => OrchestratorCall::RunCheck(args(name, arguments)?),
                 "list_sessions" => OrchestratorCall::ListSessions(args(name, arguments)?),
                 "message_session" => OrchestratorCall::MessageSession(args(name, arguments)?),
                 "wait_for_replies" => OrchestratorCall::WaitForReplies(args(name, arguments)?),
@@ -1399,8 +1358,6 @@ pub fn parse_call(
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
                 "code_refs" => WorkerCall::CodeRefs(args::<CodeRefs>(name, arguments)?),
                 "project_map" => WorkerCall::ProjectMap,
-                "run_check" => WorkerCall::RunCheck(args::<RunCheck>(name, arguments)?),
-                "run_checks" => WorkerCall::RunChecks(args::<RunChecks>(name, arguments)?),
                 "start_preview" => WorkerCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => WorkerCall::StopPreview(args(name, arguments)?),
                 "preview_log" => WorkerCall::PreviewLog(args(name, arguments)?),
@@ -1614,7 +1571,7 @@ mod tests {
             "nor name a /tmp path",
             "`operate` uses apps on this Mac (over about five GUI steps)",
             "a job that changes code and shows in an app stays one implement task",
-            "[checks passed …] asks for one task with `live_look`",
+            "once the full checks pass on it, delegate one task with `live_look`",
             "first ask_user \"Want a mockup first?\" (Yes / Skip",
             "message_worker with their attachments",
             "land the mockup, then delegate with `matches_mockup`",
@@ -2254,7 +2211,7 @@ mod tests {
             parse_call(&chat, "save_report", report.as_object().cloned()),
             Ok(ToolCall::Chat(ChatCall::SaveReport(_)))
         ));
-        for name in ["land_phase", "run_check", "message_session", "remember"] {
+        for name in ["land_phase", "message_session", "remember"] {
             assert!(matches!(
                 parse_call(&chat, name, Some(JsonObject::new())),
                 Err(ParseError::UnknownTool(_))
@@ -2342,52 +2299,6 @@ mod tests {
                     if args.note.starts_with("Step 3 of 5")
             ));
             assert!(parse_call(&worker(checks), "note_progress", None).is_err());
-        }
-    }
-
-    #[test]
-    fn every_thread_and_worker_runs_checks() {
-        let check = serde_json::json!({
-            "command": "cargo test -p core",
-            "workdir": "crates/core",
-            "timeout": 120,
-            "rerun": true,
-        });
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
-            let thread = Role::Orchestrator {
-                conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
-            };
-            assert!(
-                tools_for(&thread)
-                    .iter()
-                    .any(|tool| tool.name == "run_check")
-            );
-            let Ok(ToolCall::Orchestrator(OrchestratorCall::RunCheck(args))) =
-                parse_call(&thread, "run_check", check.as_object().cloned())
-            else {
-                panic!("run_check parses for {run:?}");
-            };
-            assert_eq!(args.timeout_secs, Some(120));
-            assert!(args.rerun);
-            // run_check has no risky mark: Brigadier starts no review by itself.
-            let risky = serde_json::json!({"command": "true", "risky": "a migration"});
-            assert!(parse_call(&thread, "run_check", risky.as_object().cloned()).is_err());
-        }
-        for checks in [false, true] {
-            assert!(
-                tools_for(&worker(checks))
-                    .iter()
-                    .any(|tool| tool.name == "run_check")
-            );
-            assert!(matches!(
-                parse_call(&worker(checks), "run_check", None),
-                Ok(ToolCall::Worker(WorkerCall::RunCheck(RunCheck {
-                    command: None,
-                    rerun: false,
-                    ..
-                })))
-            ));
         }
     }
 
@@ -2525,42 +2436,6 @@ mod tests {
         }
         let late = serde_json::json!({ "note": "Adds NOTES.md." });
         assert!(parse_call(&thread, "propose_merge", late.as_object().cloned()).is_err());
-    }
-
-    /// rerun_checks is gone: run_checks takes its place, for the thread and for workers, and
-    /// a session that started before is told what to call instead (BUILD-PLAN rule R).
-    #[test]
-    fn run_checks_replaces_rerun_checks() {
-        let thread = Role::Orchestrator {
-            conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
-        };
-        for role in [thread.clone(), worker(false), worker(true)] {
-            let tools = tools_for(&role);
-            assert!(
-                tools.iter().any(|tool| tool.name == "run_checks"),
-                "{role:?}"
-            );
-            assert!(
-                tools.iter().all(|tool| tool.name != "rerun_checks"),
-                "{role:?}"
-            );
-        }
-        let rerun = serde_json::json!({ "rerun": true });
-        assert!(matches!(
-            parse_call(&thread, "run_checks", rerun.as_object().cloned()),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::RunChecks(args))) if args.rerun
-        ));
-        assert!(matches!(
-            parse_call(&worker(false), "run_checks", None),
-            Ok(ToolCall::Worker(WorkerCall::RunChecks(args))) if !args.rerun
-        ));
-        let late = parse_call(&thread, "rerun_checks", None).unwrap_err();
-        assert!(
-            late.to_string()
-                .starts_with("rerun_checks is gone: call run_checks with rerun true"),
-            "{late}"
-        );
     }
 
     /// review_candidate and review_code are gone: request_review takes both places, and a

@@ -93,20 +93,13 @@ export function isOtherPreview(preview: Preview): boolean {
   return preview.kind in KINDS;
 }
 
-/** An ended test run's counts as its runner gave them: "15 passed", "1 failed, 14 passed, 2 skipped". */
-function testCounts(record: Preview): string | null {
-  const { passed, failed: failing, skipped } = record.tests ?? { passed: 0, failed: 0, skipped: 0 };
-  const parts = [failing > 0 && `${failing} failed`, (passed > 0 || failing === 0) && `${passed} passed`, skipped > 0 && `${skipped} skipped`].filter(Boolean);
-  return passed + failing + skipped > 0 ? parts.join(", ") : null;
-}
-
-/** How a simulator, PDF or test run stands, in a word: a test run that ended well Passed (green), with its counts when its runner gave them. */
+/** How a simulator, PDF or test run stands, in a word: a test run that ended well Passed (green). */
 function kindStanding(record: Preview): { words: string; live: boolean } {
   const kind = KINDS[record.kind as keyof typeof KINDS];
   if (record.state.type === "running" || rendered(record)) return { words: kind.up, live: true };
   if (record.kind === "test" && record.state.type === "exited") {
     const passed = record.state.code === 0;
-    return { words: testCounts(record) ?? (passed ? "Passed" : "Failed"), live: passed };
+    return { words: passed ? "Passed" : "Failed", live: passed };
   }
   return standing(record);
 }

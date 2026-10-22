@@ -10,7 +10,7 @@ import { JobStack } from "@/app/conversation/JobStack";
 import { JobTimeline } from "@/app/side-panel/JobTab";
 import { SummaryRow, SummarySection } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
-import type { CiRun, IntegratedCheck, IntegratedCheckState, OrchestratorStep, Plan, Preview, Question, Request, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
+import type { CiRun, OrchestratorStep, Plan, Preview, Question, Request, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
 import { type Board, BoardStoreContext, emptyBoard, type ShownApproval } from "@/state/board";
 
 // Each column is the summary's column of cards (PinnedSummary's STACK) for a session of its own,
@@ -24,9 +24,6 @@ mockIPC((command, payload) => (command === "ipc_request" ? { method: (payload as
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
-/** The thread's run_checks run. */
-const check = (n: number, tip: string, state: IntegratedCheckState, startedAtMs: number, endedAtMs: number | null = null): IntegratedCheck =>
-  ({ id: `check-${n}`, conversationId: "c", repo: "/r", branch: "b", tip, state, dueAtMs: startedAtMs, startedAtMs, endedAtMs, requests: ["r1"], tasks: [], rerun: false, asked: { taskId: null, scope: "full" } }) as IntegratedCheck;
 const review = (state: ReviewState, startedAtMs: number, endedAtMs: number | null = null): ReviewRun =>
   ({ id: "v1", conversationId: "c", requestId: "r1", taskId: null, kind: "code", notify: { type: "orchestrator" }, base: "aaaaaaa000", tip: "4e1c49e999", author: "claude", reviewer: "codex", state, startedAtMs, endedAtMs, number: 1, items: [] }) as unknown as ReviewRun;
 const step = (atMs: number, kind: unknown): OrchestratorStep => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 });
@@ -41,10 +38,9 @@ const byId = <T extends { id: string }>(items: T[]) => Object.fromEntries(items.
 const working = { requests: byId([request("r1", T0, { type: "working" })]) };
 const ended = { requests: byId([request("r1", T0, { type: "done" }, NOW - MIN)]) };
 const held = step(T0 + 2 * MIN, { type: "mergeHeld", branch: "brigadier/s", base: "main", askedIn: "r1", consentedAtMs: T0 + 2 * MIN, condition: "workersFinish", waiting: ["t1"], tip: "abc" });
-const passedOn = (tip: string) => byId([check(1, tip, { type: "passed", commands: ["a", "b", "c", "d", "e"] }, T0 + 3 * MIN, T0 + 8 * MIN)]);
 const merged = (head: string) =>
   step(T0 + 9 * MIN, { type: "merged", branch: "brigadier/s", base: "main", commits: 4, askedIn: null, head, mergeCommit: "4e1c49e0001" });
-/** The merge rule refused the merge: no run_checks pass on its commit. */
+/** The merge rule refused the merge. */
 const refused = (waivable: boolean) => ({
   reason: "The checks haven't run on 7d2a91f, the tip of brigadier/s.",
   sha: "7d2a91f000",
@@ -71,16 +67,12 @@ const MOMENTS: Record<string, Partial<Board>> = {
   ciFailed: { ...ended, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "completed", "failure", 5, 5)], "failed")] },
   idle: ended,
   working: { ...working, tasks: byId([task("t1", "running")]) },
-  checksRunning: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "running", command: "desktop tests", done: 2, total: 5 }, T0 + 3 * MIN)]) },
-  checksFailed: { ...working, integratedChecks: byId([check(1, "4e1c49e999", { type: "failed", command: "pnpm test", status: "2 tests failed", output: null }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
-  checksPassed: { ...ended, integratedChecks: passedOn("4e1c49e999") },
   reviewRunning: { ...working, reviews: byId([review({ type: "running" }, T0 + 3 * MIN)]) },
   reviewFindings: { ...ended, reviews: byId([review({ type: "findings", count: 3 }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
   reviewClean: { ...ended, reviews: byId([review({ type: "clean" }, T0 + 3 * MIN, T0 + 6 * MIN)]) },
   ciChecking: { ...working, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "in_progress", "", 3, 5)])] },
-  merging: { ...working, integratedChecks: passedOn("head111"), orchestratorSteps: [step(T0 + 9 * MIN, { type: "mergeRequested", id: "m1", branch: "brigadier/s", base: "main", origin: {} })] },
-  merged: { ...ended, integratedChecks: passedOn("head111"), orchestratorSteps: [merged("head111")] },
-  mergedUnchecked: { ...ended, integratedChecks: passedOn("other22"), orchestratorSteps: [merged("head111")] },
+  merging: { ...working, orchestratorSteps: [step(T0 + 9 * MIN, { type: "mergeRequested", id: "m1", branch: "brigadier/s", base: "main", origin: {} })] },
+  merged: { ...ended, orchestratorSteps: [merged("head111")] },
   mergeRefusedFirm: { ...working, mergeRefused: refused(false) },
   // The user wrote since the refusal: it is theirs to raise again, not the card's.
   mergeRefusedOld: { requests: byId([request("r2", T0 + 5 * MIN, { type: "done" }, T0 + 6 * MIN)]), mergeRefused: refused(true) },
@@ -93,8 +85,6 @@ const MOMENTS: Record<string, Partial<Board>> = {
     previews: byId([{ id: "p1", name: "The dev server", state: { type: "exited", code: 1, status: "Port 1420 is already in use" }, startedAtMs: T0 + MIN, endedAtMs: T0 + 2 * MIN } as unknown as Preview]),
   },
   stopped: { requests: byId([request("r1", T0, { type: "stopped" }, NOW - 2 * MIN)]) },
-  // The user wrote since the checks passed: the outcome is gone with the turn.
-  nextMessage: { requests: byId([request("r1", T0, { type: "done" }, T0 + 9 * MIN), request("r2", T0 + 10 * MIN, { type: "done" }, T0 + 11 * MIN)]), integratedChecks: passedOn("4e1c49e999") },
   headline: {
     ...working,
     tasks: byId([task("t1", "running")]),
@@ -124,7 +114,6 @@ const MOMENTS: Record<string, Partial<Board>> = {
     ...ended,
     tasks: byId([task("t1", "done")]),
     plans: { p1: plan },
-    integratedChecks: byId([check(1, "4e1c49e999", { type: "failed", command: "pnpm test", status: "2 tests failed", output: null }, T0 + 3 * MIN, T0 + 6 * MIN)]),
     headline: { text: "The tests still fail", detail: "Next: ask you how to go on", failed: true, atMs: T0 + 7 * MIN },
   },
   // A refused merge in a plan: the card says so, Merge anyway is the Background row's.
@@ -170,7 +159,7 @@ const FAILED: Job = {
   steps: [
     { id: "build", name: "Building", state: "done", startedAtMs: NOW - 50 * MIN, summary: "Two workers built it" },
     { id: "review", name: "Reviewing", state: "done", startedAtMs: NOW - 20 * MIN, summary: "Review found 3 issues, all fixed" },
-    { id: "checks", name: "Checks", state: "failed", startedAtMs: NOW - 9 * MIN, summary: "2 tests failed in the desktop app" },
+    { id: "ci", name: "CI", state: "failed", failedLabel: "CI failed", startedAtMs: NOW - 9 * MIN, summary: "2 tests failed in the desktop app" },
     { id: "fix", name: "Fixing", state: "active", startedAtMs: NOW - 4 * MIN },
     { id: "merge", name: "Merging", state: "pending" },
   ],

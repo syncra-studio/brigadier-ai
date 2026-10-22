@@ -510,131 +510,6 @@ pub struct RunCommand {
     pub timeout_secs: Option<u64>,
 }
 
-/// `run_checks`: the thread's runs the project's full checks (builds included) on the session
-/// branch's commit; a worker's runs the checks its change calls for, in its own checkout.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RunChecks {
-    /// Run them again even where an earlier run's result would answer (a flaky test, the
-    /// machine).
-    #[serde(default)]
-    pub rerun: bool,
-}
-
-/// `run_check`: a check (tests, lint, typecheck, build) run in the caller's tree, its result
-/// kept per tree; without a command, the checks the tree's changes affect (THREAD-PLAN.md Q8
-/// lever 3). For workers and the thread alike.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RunCheck {
-    /// The check, as you would type it in a shell (`/bin/sh -c`). Leave it out to get the
-    /// checks your changes affect (nothing runs then).
-    #[serde(default)]
-    pub command: Option<String>,
-    /// The folder it runs in, relative to your checkout's root (the root by default).
-    #[serde(default)]
-    pub workdir: Option<String>,
-    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
-    #[serde(default, alias = "timeout")]
-    pub timeout_secs: Option<u64>,
-    /// Run it even when it already ran on the same files, and keep the new result.
-    #[serde(default)]
-    pub rerun: bool,
-    /// An integration, smoke or live check's inputs (paths from the root), so it can answer
-    /// from the cache; without them it always runs.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "Vec<String>")]
-    pub inputs: Vec<String>,
-    /// The thread's short name for it, from its `run_check`.
-    #[serde(default)]
-    #[schemars(skip)]
-    pub name: Option<String>,
-}
-
-/// The thread's `run_check`: a worker's, and the commit it asks for on a pass.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ThreadRunCheck {
-    /// The check, as you would type it in a shell (`/bin/sh -c`). Leave it out to get the
-    /// checks your changes affect (nothing runs then).
-    #[serde(default)]
-    pub command: Option<String>,
-    /// The folder it runs in, relative to your checkout's root (the root by default).
-    #[serde(default)]
-    pub workdir: Option<String>,
-    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
-    #[serde(default, alias = "timeout")]
-    pub timeout_secs: Option<u64>,
-    /// Run it even when it already ran on the same files, and keep the new result.
-    #[serde(default)]
-    pub rerun: bool,
-    /// An integration, smoke or live check's inputs (paths from the root), so it can answer
-    /// from the cache; without them it always runs.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "Vec<String>")]
-    pub inputs: Vec<String>,
-    /// A short name for what a long check is for ("Core tests"): the session's Activities show
-    /// it while it runs.
-    #[serde(default)]
-    pub name: Option<String>,
-    /// A commit message: when the check passes, all your changes are committed with it and
-    /// your trailer, in this same call; when it fails, nothing is. Not on the user's own
-    /// checkout.
-    #[serde(default)]
-    pub commit: Option<String>,
-    /// The review findings this change fixes, by id (`R1.2`), when it does nothing else: when
-    /// the check passes they are recorded fixed, checked by it, and its `commit` carries their
-    /// Fixes trailer.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "Vec<String>")]
-    pub fixes: Vec<String>,
-    /// Those of `fixes` of high severity (it loses data, breaks a build or a security
-    /// boundary).
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "Vec<String>")]
-    pub high: Vec<String>,
-}
-
-/// The parts of the thread's `run_check`: the check, the commit it asks for on a pass, the
-/// review findings that pass fixes and those of them that are high.
-pub struct ThreadCheckParts {
-    pub check: RunCheck,
-    pub commit: Option<String>,
-    pub fixes: Vec<String>,
-    pub high: Vec<String>,
-}
-
-impl ThreadRunCheck {
-    pub fn split(self) -> ThreadCheckParts {
-        ThreadCheckParts {
-            check: RunCheck {
-                command: self.command,
-                workdir: self.workdir,
-                timeout_secs: self.timeout_secs,
-                rerun: self.rerun,
-                inputs: self.inputs,
-                name: self.name,
-            },
-            commit: self
-                .commit
-                .map(|message| message.trim().to_owned())
-                .filter(|message| !message.is_empty()),
-            fixes: finding_ids(&self.fixes),
-            high: finding_ids(&self.high),
-        }
-    }
-}
-
-/// Finding ids as given, one per entry or several split by commas or spaces, uppercased.
-fn finding_ids(given: &[String]) -> Vec<String> {
-    given
-        .iter()
-        .flat_map(|ids| ids.split([',', ' ']))
-        .map(|id| id.trim().to_ascii_uppercase())
-        .filter(|id| !id.is_empty())
-        .collect()
-}
-
 /// `run_unsandboxed`: the same, outside the sandbox, once approved.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1039,12 +914,6 @@ pub struct FinishSession {
     /// holds it until they land.
     #[serde(default)]
     pub when: MergeWhen,
-    /// Only when the user said to merge without or despite the checks ("merge anyway"): the
-    /// id of that message or card answer, or their words quoted exactly. A merge into the base
-    /// needs run_checks passed on its commit; only the user can skip that, never your judgement.
-    /// Leave it out on [merge] after their "Merge anyway" click.
-    #[serde(default)]
-    pub anyway: Option<String>,
 }
 
 /// When `finish_session` merges (#243).
@@ -1409,14 +1278,12 @@ pub enum OrchestratorCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     CleanUp,
-    RunChecks(RunChecks),
     ReviewPlan(ReviewPlan),
     ReadPage(ReadPage),
     WritePage(WritePage),
     SaveReport(SaveReport),
     Run(RunCommand),
     RunUnsandboxed(RunUnsandboxed),
-    RunCheck(ThreadRunCheck),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
@@ -1469,14 +1336,12 @@ pub const THREAD_TOOLS: &[&str] = &[
     "code_refs",
     "project_map",
     "clean_up",
-    "run_checks",
     "review_plan",
     "read_page",
     "write_page",
     "save_report",
     "run",
     "run_unsandboxed",
-    "run_check",
     "start_preview",
     "stop_preview",
     "preview_log",
@@ -1556,14 +1421,12 @@ impl OrchestratorCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::CleanUp => "clean_up",
-            Self::RunChecks(_) => "run_checks",
             Self::ReviewPlan(_) => "review_plan",
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",
             Self::SaveReport(_) => "save_report",
             Self::Run(_) => "run",
             Self::RunUnsandboxed(_) => "run_unsandboxed",
-            Self::RunCheck(_) => "run_check",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",
@@ -1860,8 +1723,6 @@ pub enum WorkerCall {
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
-    RunCheck(RunCheck),
-    RunChecks(RunChecks),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
@@ -1880,8 +1741,6 @@ impl WorkerCall {
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
-            Self::RunCheck(_) => "run_check",
-            Self::RunChecks(_) => "run_checks",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",

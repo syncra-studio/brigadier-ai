@@ -6,8 +6,8 @@
  * row in each state (building, starting, running, paused, smoke testing, checking) and writes how
  * each one's icon and word look and move. With `ended=1` it runs processes, then ends them
  * (failed, finished, stopped) and writes that their rows left. With `events=1` it shows the
- * session's events while they run (the full checks, a review, the CI watch, a held merge, then a
- * merge at work, then refused), opens CI, cancels the merge, merges anyway, ends them, and
+ * session's events while they run (a review, the CI watch, a held merge, then a merge at work,
+ * then refused), opens CI, cancels the merge, merges anyway, ends them, and
  * writes what it saw.
  * Synthetic IPC; no daemon.
  */
@@ -20,7 +20,7 @@ import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, CiRun, Conversation, EventEnvelope, IntegratedCheck, OrchestratorStep, Preview, Request, ReviewRun, Task, UserRequest } from "@/ipc/generated";
+import type { BackgroundRun, CiRun, Conversation, EventEnvelope, OrchestratorStep, Preview, Request, ReviewRun, Task, UserRequest } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -43,7 +43,7 @@ const app: Preview = { id: "preview-2", conversationId: id, taskId: "task-2", na
   command: "pnpm tauri build --debug --bundles app --config /scratch/tauri.conf.json && \"/work/task-2/target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier-desktop\"",
   workdir: "/work/task-2", workspace: "/work/task-2", pid: 43, log: null,
   state: { type: "starting" }, building: true, startedAtMs: now - 4 * MIN, endedAtMs: null };
-const tests: BackgroundRun = { id: "run-1", conversationId: id, requestId: "r1", tool: "run_check", name: "core tests",
+const tests: BackgroundRun = { id: "run-1", conversationId: id, requestId: "r1", tool: "run", name: "core tests",
   command: "cargo test -p brigadier-core", startedAtMs: now - 2 * MIN, endedAtMs: null, state: { type: "running" } };
 const lint: BackgroundRun = { id: "run-2", conversationId: id, requestId: "r1", tool: "run", command: "pnpm lint --max-warnings 0 --cache --cache-location /scratch/lint",
   startedAtMs: now - 3 * MIN, endedAtMs: null, state: { type: "running" } };
@@ -238,13 +238,11 @@ async function driveEnded(): Promise<Record<string, unknown>> {
   return seen;
 }
 
-/** The session's own events at work: the full checks, a Codex review, a CI watch, a merge held for the worker. */
+/** The session's own events at work: a Codex review, a CI watch, a merge held for the worker. */
 const steps = (atMs: number, ...kinds: unknown[]): OrchestratorStep[] => kinds.map((kind) => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 }));
 const ciRun = { workflow: "test", url: "https://github.com/o/r/actions/runs/7", status: "in_progress", conclusion: "", jobsDone: 3, jobsTotal: 5 } as unknown as CiRun;
 const ciWatch = (result?: string) => ({ type: "ciWatch", repo: "o/r", branch: "main", sha: "4e1c49e99aa", waiting: false, runs: [ciRun], ...(result ? { result } : {}) });
 const held = { type: "mergeHeld", branch: "session", base: "main", askedIn: "r1", consentedAtMs: now - 2 * MIN, condition: { type: "workersDone" }, waiting: ["task-2"], tip: "abc" };
-const checks = (state: IntegratedCheck["state"]): Record<string, IntegratedCheck> => ({ "check-1": { id: "check-1", conversationId: id, repo: "/fixture", branch: "session", tip: "4e1c49e999",
-  state, dueAtMs: now - 6 * MIN, startedAtMs: now - 5 * MIN, endedAtMs: null, requests: ["r1"], tasks: [], rerun: false, asked: { taskId: null, scope: "full" } } });
 const codex = (state: ReviewRun["state"]): Record<string, ReviewRun> => ({ "review-1": { id: "review-1", conversationId: id, requestId: "r1", taskId: null, kind: "code", base: "aaaaaaa000",
   tip: "4e1c49e999", author: "claude", reviewer: "codex", reviewerModel: null, notify: { type: "orchestrator" }, state, startedAtMs: now - 4 * MIN, endedAtMs: null, items: [] } as unknown as ReviewRun });
 const working = { r1: { id: "r1", conversationId: id, preview: "", state: { type: "working" }, startedAtMs: now - 10 * MIN, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [] } as unknown as UserRequest };
@@ -253,7 +251,7 @@ const setBoard = (parts: Partial<NonNullable<ReturnType<typeof useBoard.getState
 async function driveEvents(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
-  setBoard({ requests: working, integratedChecks: checks({ type: "running", command: "pnpm test", done: 2, total: 5 }), reviews: codex({ type: "running" }),
+  setBoard({ requests: working, reviews: codex({ type: "running" }),
     orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - 2 * MIN, held)] });
   await frame();
   // `until=…` stops at a moment, for a screenshot: `running`, every event at work; `refused`, the refused merge.
@@ -275,18 +273,16 @@ async function driveEvents(): Promise<Record<string, unknown>> {
   action("merge", "Cancel")?.click();
   for (const end = Date.now() + 3000; Date.now() < end && calls.length < 2; ) await frame();
   seen.calls = calls.toSorted();
-  // The merge was cancelled, the checks passed, the review ended, CI gave its result: all gone.
-  setBoard({ integratedChecks: checks({ type: "passed", commands: ["a", "b", "c", "d", "e"] }), reviews: codex({ type: "clean" }),
+  // The merge was cancelled, the review ended, CI gave its result: all gone.
+  setBoard({ reviews: codex({ type: "clean" }),
     orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - 2 * MIN, held), ...steps(now - MIN, ciWatch("passed"), { type: "mergeCancelled", askedIn: "r1" })] });
   await frame();
   seen.ended = !section();
-  // The next checks are due, and the user's merge click is at work.
-  setBoard({ integratedChecks: { ...checks({ type: "due" }), "check-1": { ...checks({ type: "due" })["check-1"]!, dueAtMs: now } },
-    orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }) });
+  // The user's merge click is at work.
+  setBoard({ orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }) });
   await frame();
   seen.next = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
-  // The merge rule refused it: no checks passed on its commit. The row waits on the user, its
-  // Merge anyway in sight.
+  // The merge rule refused it. The row waits on the user, its Merge anyway in sight.
   setBoard({ mergeRefused: { reason: "The checks haven't run on abc1234.", sha: "abc1234000", branch: "session", base: "main", waivable: true, atMs: now - 30_000 } });
   await frame();
   seen.refused = read("merge");

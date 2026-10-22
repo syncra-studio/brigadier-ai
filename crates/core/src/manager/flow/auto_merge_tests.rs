@@ -514,7 +514,6 @@ async fn shipping(name: &str, auto_merge: bool) -> (Flow, Log) {
                     std::fs::write(workspace.join("NOTES.md"), format!("notes {n}\n")).unwrap();
                     git(workspace, &["add", "NOTES.md"]);
                     git(workspace, &["commit", "-q", "-m", "Add notes"]);
-                    turn.call("run_checks", json!({})).await;
                     let reply = turn.call("finish_session", json!({})).await;
                     said.lock()
                         .unwrap()
@@ -590,7 +589,7 @@ async fn the_first_merge_on_its_own_in_a_project_is_marked_once() {
     assert!(first.first_auto);
     assert_eq!(Some(first.head.clone()), head);
     // Nothing ran on it: the record shows each part missing.
-    assert!(first.checks.is_empty() && first.ci.is_none() && first.verifier.is_none());
+    assert!(first.ci.is_none() && first.verifier.is_none());
     let sibling = flow
         .manager
         .create_session_from(&flow.conversation, None)
@@ -659,7 +658,6 @@ async fn a_merge_held_on_its_own_needs_consent_once_the_switch_is_off() {
     let mut settings = flow.core.settings();
     settings.auto_merge = false;
     flow.core.update_settings(settings).await.unwrap();
-    flow.checks_passed().await;
     let refused = flow
         .manager
         .finish_session(&flow.conversation, "", None)
@@ -841,7 +839,6 @@ async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_l
             } else {
                 return Reply::text("Noted.");
             }
-            turn.call("run_checks", json!({})).await;
             let reply = turn.call("finish_session", json!({})).await;
             assert!(!reply.is_error, "{}", reply.text);
             Reply::text("Merged.")

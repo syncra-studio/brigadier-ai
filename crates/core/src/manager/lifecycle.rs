@@ -144,12 +144,6 @@ impl SessionManager {
             if conversation.quota_wait.is_some() && conversation.lifecycle != Lifecycle::Archived {
                 self.keep_conversation_wait(&conversation).await;
             }
-            // Its full checks the restart cut off, or that were due, are recorded interrupted:
-            // nothing runs again by itself.
-            if conversation.lifecycle != Lifecycle::Archived {
-                self.recover_integrated_checks(&conversation.id, "Brigadier quit", true)
-                    .await;
-            }
             // Its thread's background runs the restart cut off are told as such.
             self.recover_background_runs(&conversation.id).await;
             self.recover_change_records(&conversation.id).await;
@@ -889,7 +883,6 @@ impl SessionManager {
         // working ends with it.
         let _ = self.stop_previews(id, "its worktree was removed").await;
         self.stop_background_runs(id);
-        self.drop_check_checkout(id).await;
         // A request that just ended takes its last snapshot of the folder right after: it
         // runs before the folder goes.
         if !self
@@ -1030,9 +1023,7 @@ impl SessionManager {
         }
         // What landed workers kept for their reviews' findings goes too.
         self.settle_all_holds(id).await;
-        // Its full checks stop, and their checkout goes with the rest below.
-        self.end_integrated_checks(id).await;
-        // So do its thread's commands in the background.
+        // Its thread's commands in the background stop.
         self.stop_background_runs(id);
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
@@ -1042,7 +1033,8 @@ impl SessionManager {
             super::workers::thread_temp_owner(id),
             super::background_runs::background_owner(id),
             super::preview::preview_data_owner(id),
-            super::integrated_checks::checks_owner(id),
+            // The checkout an older Brigadier ran the session's full checks in.
+            format!("checks:{id}"),
         ];
         // Its previews' log folder.
         let previews = super::preview::preview_owner(id);
@@ -1227,10 +1219,6 @@ impl SessionManager {
             .await?;
         drop(admitting);
         self.open_fence(&id);
-        // A check the archive cut off, or one still due, is recorded interrupted: nothing runs
-        // again by itself.
-        self.recover_integrated_checks(&id, "The session was archived", false)
-            .await;
         Ok(restored)
     }
 

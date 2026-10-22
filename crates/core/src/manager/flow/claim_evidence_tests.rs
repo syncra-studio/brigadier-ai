@@ -48,7 +48,7 @@ const CONTRADICTION: &str = "Retries are set in retry.txt, not in the database";
 
 #[derive(Default)]
 struct Seen {
-    /// The worker's check's evidence reference.
+    /// The stored output of the worker's check, its evidence reference.
     output: Option<String>,
     /// The remember replies.
     kept: Vec<String>,
@@ -198,16 +198,7 @@ async fn claims_carry_their_evidence(reviews: bool) {
                         turn.write("retry.txt", FILE_TEXT);
                         turn.git(&["add", "retry.txt"]);
                         turn.git(&["commit", "-qm", "Add retries"]);
-                        let check = turn
-                            .call("run_check", json!({"command": format!("echo {CHECK_WORDS}")}))
-                            .await;
-                        assert!(!check.is_error, "{}", check.text);
-                        let output = check
-                            .text
-                            .rsplit_once("[evidence: ")
-                            .map(|(_, cite)| cite.trim_end().trim_end_matches(']').to_owned())
-                            .expect("the check's evidence reference");
-                        log.lock().unwrap().output = Some(output.clone());
+                        let output = log.lock().unwrap().output.clone().unwrap();
                         let reply = turn
                             .call(
                                 "submit_report",
@@ -246,6 +237,19 @@ async fn claims_carry_their_evidence(reviews: bool) {
         .unwrap()
         .brain
         .clone();
+    // A check's output the session kept, as a long command's is.
+    let (stored, _) = flow
+        .manager
+        .store_output(
+            &flow.conversation,
+            crate::work::OutputSource::Bash,
+            "exit 0",
+            format!("{CHECK_WORDS}\n").into_bytes(),
+            false,
+        )
+        .await
+        .unwrap();
+    seen.lock().unwrap().output = Some(stored.alias);
 
     flow.say("Add retries.").await;
     flow.until("task-1 to land", |board| {

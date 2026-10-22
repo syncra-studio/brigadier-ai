@@ -467,10 +467,6 @@ impl SessionManager {
                 last.push('\n');
                 last.push_str(&prompts::undecided_note(&undecided));
             }
-            if let Some(line) = super::integrated_checks::checking_line(&board, request) {
-                last.push('\n');
-                last.push_str(&line);
-            }
         }
         notes
     }

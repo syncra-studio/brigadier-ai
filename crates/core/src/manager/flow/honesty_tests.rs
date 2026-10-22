@@ -233,7 +233,7 @@ async fn a_request_over_on_a_line_said_mid_work_simply_ends() {
                     return Reply::text("");
                 }
                 let reply = turn
-                    .call("run_check", json!({ "command": "sleep 3; echo ok" }))
+                    .call("run", json!({ "command": "sleep 3; echo ok" }))
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
                 Reply::text("")

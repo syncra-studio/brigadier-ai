@@ -11,15 +11,11 @@
 //!   spec.md, progress.md and diff.patch as a fallback hand-off writes them, and transcript.md,
 //!   every message, command and tool call of the task in full, as Brigadier recorded them. The
 //!   fresh session gets the note and the last messages word for word, and searches the rest.
-//! - **No checks run twice.** checks.md lists each check whose latest run passed and the files
-//!   changed since the tree it passed on, so the fresh session reruns only the checks those
-//!   changes cover (SESSION-FIXES-PLAN.md Q6.4). Ignored files (`.env`) are outside the tree:
-//!   checks.md says so, and run_check's cache key still has them.
 //! - **Same model, same attempt.** It is not a reroute: the task keeps its model, attempt and
 //!   access. A limit or error hand-on still wins when both are due.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use brigadier_providers::{NoticeLevel, ProviderEvent, TurnInput};
@@ -375,7 +371,7 @@ impl SessionManager {
     /// Writes a successor's whole hand-off (BUILD-PLAN D2.4), the same for a size hand-off, a
     /// crash, a restart without the CLI's files and a move to another model: spec.md,
     /// progress.md and diff.patch ([`Self::write_handoff_files`]), the streamed transcript
-    /// with every kept output, checks.md, decisions.md, and `note` as note.md, or without one
+    /// with every kept output, decisions.md, and `note` as note.md, or without one
     /// state.md, the state of work built from the transcript and marked unchecked.
     pub(crate) async fn write_successor_files(
         &self,
@@ -386,7 +382,6 @@ impl SessionManager {
         self.keep_saved_files(&task.id).await;
         let (dir, has_diff) = self.write_handoff_files(task).await?;
         let export = self.export_handoff_transcript(task, &dir).await;
-        let checks = self.passed_checks(task).await;
         let decisions = self.decision_index_text(&task.conversation_id).await;
         let state = match &note {
             Some(_) => None,
@@ -408,10 +403,8 @@ impl SessionManager {
             export,
             has_note: note.is_some(),
             has_state: state.is_some(),
-            has_checks: !checks.is_empty(),
             has_decisions: !decisions.is_empty(),
         };
-        let checks = (!checks.is_empty()).then(|| checks_text(&checks));
         let decisions = (!decisions.is_empty()).then(|| {
             format!(
                 "# The session's decisions, oldest first\n\nReplaced ones are marked; the active \
@@ -422,7 +415,6 @@ impl SessionManager {
             let io = |err: std::io::Error| Error::Invalid(format!("writing the hand-off: {err}"));
             // Each file is this hand-off's, or gone: one an earlier hand-off left would mislead.
             for (name, text) in [
-                ("checks.md", checks),
                 ("note.md", note),
                 ("state.md", state),
                 ("decisions.md", decisions),
@@ -460,147 +452,6 @@ impl SessionManager {
         .ok()
         .flatten()
     }
-
-    /// The checks the task's workers ran whose latest result passed, newest first, each with
-    /// the files changed since the tree it passed on (`None` when git can't tell).
-    async fn passed_checks(&self, task: &Task) -> Vec<PassedCheck> {
-        let mut latest: Vec<(String, String, String, Option<String>)> = Vec::new();
-        let mut before = None;
-        loop {
-            let page = self
-                .core
-                .store()
-                .read_stream(
-                    streams::conversation(&task.conversation_id),
-                    StreamPage {
-                        before,
-                        kinds: vec!["check.ran".into()],
-                        limit: EVENTS_PAGE,
-                    },
-                )
-                .await
-                .unwrap_or_default();
-            let Some(oldest) = page.last() else {
-                break;
-            };
-            before = Some(oldest.stream_seq);
-            let full = page.len() == EVENTS_PAGE as usize;
-            for stored in &page {
-                let Ok(DomainEvent::CheckRan {
-                    task_id: Some(ran_for),
-                    tree,
-                    command,
-                    workdir,
-                    status,
-                    ..
-                }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
-                else {
-                    continue;
-                };
-                // Newest first: an older run of the same check is superseded.
-                if ran_for != task.id
-                    || latest
-                        .iter()
-                        .any(|(c, w, _, _)| *c == command && *w == workdir)
-                {
-                    continue;
-                }
-                latest.push((command, workdir, status, tree));
-            }
-            if !full {
-                break;
-            }
-        }
-        let passed: Vec<(String, String, String)> = latest
-            .into_iter()
-            .filter_map(|(command, workdir, status, tree)| {
-                (status == "exit 0").then_some((command, workdir, tree?))
-            })
-            .collect();
-        let worktree = task
-            .workspace
-            .as_ref()
-            .and_then(|workspace| workspace.worktree.clone());
-        let git = self.git.clone();
-        super::blocking(move || {
-            let worktree = worktree.and_then(|path| git.open_worktree(Path::new(&path)).ok());
-            Ok(passed
-                .into_iter()
-                .map(|(command, workdir, tree)| {
-                    let changed = worktree.as_ref().and_then(|worktree| {
-                        worktree
-                            .paths_changed_since(&brigadier_git::Oid(tree.clone()))
-                            .ok()
-                    });
-                    PassedCheck {
-                        command,
-                        workdir,
-                        tree,
-                        changed,
-                    }
-                })
-                .collect())
-        })
-        .await
-        .unwrap_or_default()
-    }
-}
-
-/// A check whose latest run passed, for the fresh session's `checks.md`.
-struct PassedCheck {
-    command: String,
-    /// Where it ran, relative to the repository's root ("" for the root).
-    workdir: String,
-    /// The git tree of the files it passed on.
-    tree: String,
-    /// The files changed since it passed; `None` when git can't tell.
-    changed: Option<Vec<String>>,
-}
-
-/// The paths of a changed list `checks.md` names before it sums up the rest.
-const CHANGED_SHOWN: usize = 30;
-
-/// `checks.md`: each check that passed, and what changed since.
-fn checks_text(checks: &[PassedCheck]) -> String {
-    let mut text = String::from(
-        "# Checks that passed\n\nEach check this task ran whose latest run passed (exit 0), \
-         newest first, with the files changed since the files it passed on. Rerun only a check \
-         whose changed files it covers; one with nothing changed passed on these same files, \
-         and run_check answers it from its cache. Git doesn't see ignored files such as .env: \
-         if one a check reads changed since, rerun it too.\n",
-    );
-    for check in checks {
-        let place = if check.workdir.is_empty() {
-            String::new()
-        } else {
-            format!(" (in `{}`)", check.workdir)
-        };
-        let _ = write!(
-            text,
-            "\n- `{}`{place}, passed on tree {}: ",
-            check.command,
-            &check.tree[..check.tree.len().min(12)]
-        );
-        match &check.changed {
-            None => text.push_str("git can't tell what changed since.\n"),
-            Some(changed) if changed.is_empty() => text.push_str("nothing changed since.\n"),
-            Some(changed) => {
-                let shown: Vec<String> = changed
-                    .iter()
-                    .take(CHANGED_SHOWN)
-                    .map(|path| format!("`{path}`"))
-                    .collect();
-                let more = changed.len().saturating_sub(CHANGED_SHOWN);
-                let more = if more > 0 {
-                    format!(" and {more} more")
-                } else {
-                    String::new()
-                };
-                let _ = writeln!(text, "changed since: {}{more}.", shown.join(", "));
-            }
-        }
-    }
-    text
 }
 
 /// Why a worker continues in a fresh session of the same model.
@@ -647,8 +498,6 @@ pub(crate) struct SuccessorFiles {
     pub has_note: bool,
     /// state.md is the state of work Brigadier built from the transcript (no note).
     pub has_state: bool,
-    /// checks.md lists the checks that passed.
-    pub has_checks: bool,
     /// decisions.md lists the session's decisions.
     pub has_decisions: bool,
 }
@@ -680,12 +529,6 @@ impl SuccessorFiles {
             text.push_str(
                 ", decisions.md (the session's decisions, replaced ones marked: the active ones \
                  still hold)",
-            );
-        }
-        if self.has_checks {
-            text.push_str(
-                ", checks.md (the checks that passed and the files changed since each one: rerun \
-                 only those the changes since cover, not the whole suite again)",
             );
         }
         if writes {
@@ -951,38 +794,6 @@ mod tests {
         ];
         events.reverse();
         assert_eq!(session_sizes(&events, false), (Some(61_000), Some(28_000)));
-    }
-
-    #[test]
-    fn the_handoff_lists_each_passed_check_with_what_changed_since() {
-        assert!(
-            wrap_up_prompt(210_000)
-                .contains("Checks that passed (each command and the commit it passed at)")
-        );
-        let check = |command: &str, workdir: &str, changed: Option<Vec<String>>| PassedCheck {
-            command: command.into(),
-            workdir: workdir.into(),
-            tree: "0123456789abcdef0123".into(),
-            changed,
-        };
-        let many: Vec<String> = (0..CHANGED_SHOWN + 2).map(|n| format!("f{n}.rs")).collect();
-        let text = checks_text(&[
-            check("cargo test", "", Some(Vec::new())),
-            check("pnpm test", "apps/desktop", None),
-            check("cargo clippy", "", Some(many)),
-        ]);
-        assert!(
-            text.contains(
-                "\n- `cargo test`, passed on tree 0123456789ab: nothing changed since.\n"
-            )
-        );
-        assert!(text.contains(
-            "\n- `pnpm test` (in `apps/desktop`), passed on tree 0123456789ab: git can't tell what \
-             changed since.\n"
-        ));
-        assert!(text.contains("`f29.rs` and 2 more.\n"), "{text}");
-        assert!(text.contains("if one a check reads changed since, rerun it too."));
-        assert!(!text.contains("`f30.rs`"));
     }
 
     fn notice(message: String) -> ProviderEvent {

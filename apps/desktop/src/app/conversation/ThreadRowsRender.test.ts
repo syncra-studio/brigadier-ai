@@ -65,7 +65,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // Cut short by the daemon: says so, and the marker isn't shown as output.
   assert.equal(seen["shell-clipped"].output, "head of the log");
   assert.equal(seen["shell-clipped"].clipped, "Only the start was kept: 12 KB more not shown");
-  // What run_check's commit made reads under the output, in plain words, and the box still ends "Success".
+  // What run's commit made reads under the output, in plain words, and the box still ends "Success".
   assert.deepEqual([seen["shell-note"].output, seen["shell-note"].notes, seen["shell-note"].ending], [
     "ok",
     ['Committed 1a2b3c4 "Fix rounding": 1 file changed, 2 insertions(+) (src/round.js). Nothing is left uncommitted.'],

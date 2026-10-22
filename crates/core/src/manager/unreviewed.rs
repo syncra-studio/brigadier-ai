@@ -21,39 +21,7 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, DomainEvent, Environment, Setup};
 use crate::work::UnreviewedRange;
 
-/// A thread check under way: the tree of the files it started on, which its commit and its
-/// fixes are measured against.
-pub(crate) struct CheckUnderWay {
-    tree: Option<String>,
-}
-
-impl CheckUnderWay {
-    /// The tree of the files the check started on, when git could tell.
-    pub(crate) fn tree(&self) -> Option<&str> {
-        self.tree.as_deref()
-    }
-}
-
 impl SessionManager {
-    /// The thread's `run_check` in the checkout at `tree` starts: the tree of its files then.
-    pub(crate) async fn thread_check_started(&self, tree: Option<&Path>) -> CheckUnderWay {
-        let files = match tree {
-            Some(tree) => {
-                let (git, tree) = (self.git.clone(), tree.to_owned());
-                blocking(move || {
-                    git.open_worktree(&tree)
-                        .and_then(|worktree| worktree.checkout_tree())
-                        .map_err(git_error)
-                })
-                .await
-                .ok()
-                .map(|tree| tree.0)
-            }
-            None => None,
-        };
-        CheckUnderWay { tree: files }
-    }
-
     /// The session's local checkout, when its thread works there: its repository and branch.
     pub(crate) fn local_checkout(
         &self,

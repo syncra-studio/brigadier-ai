@@ -1,9 +1,8 @@
-//! The thread's commands that outlast a tool call (`run`, `run_check`): past
+//! The thread's commands that outlast a tool call (`run`): past
 //! [`FOREGROUND`](crate::manager::background_runs::FOREGROUND) they go to the background, the
 //! thread may end its turn quiet, and the result still comes to it as a message in the same
-//! request, which works until then and settles on the thread's answer to it. The waits of a
-//! check go too; the user's Stop ends a run quietly; a restart that cut one off tells the
-//! thread.
+//! request, which works until then and settles on the thread's answer to it. The user's Stop
+//! ends a run quietly; a restart that cut one off tells the thread.
 
 use std::sync::{Arc, Mutex};
 
@@ -61,76 +60,8 @@ async fn answers(flow: &Flow) -> Vec<String> {
         .collect()
 }
 
-/// The 33fbb16e case: the thread starts a long check, ends its turn quiet, and the check's
-/// result still reaches it in the same request, which works until the thread answered it.
-#[tokio::test]
-async fn a_long_check_goes_to_the_background_and_its_result_comes_back_to_the_thread() {
-    let (inputs, replies): (Log, Log) = Default::default();
-    let flow = Flow::start(
-        "background-check",
-        Options::default(),
-        checking(
-            vec![("run_check", "sleep 4; echo done")],
-            inputs.clone(),
-            replies.clone(),
-        ),
-    )
-    .await;
-    flow.background_commands();
-    flow.say("Run the long check.").await;
-    // The board can show the run before the thread's script has kept the call's reply.
-    let board = flow
-        .until("the check to go to the background", |board| {
-            run_state(board, "run-1") == Some(BackgroundRunState::Running)
-                && !replies.lock().unwrap().is_empty()
-        })
-        .await;
-    // The turn ended quiet, yet the request works while its run does.
-    assert!(
-        board
-            .requests
-            .values()
-            .all(|request| request.state == RequestState::Working),
-        "{:?}",
-        board.requests
-    );
-    let replies_now = replies.lock().unwrap().clone();
-    assert!(
-        replies_now[0].starts_with("[run-1 still runs"),
-        "{replies_now:?}"
-    );
-
-    let board = flow.settled().await;
-    assert_eq!(
-        run_state(&board, "run-1"),
-        Some(BackgroundRunState::Finished {
-            status: "exit 0".into()
-        })
-    );
-    assert!(
-        board
-            .requests
-            .values()
-            .all(|request| request.state == RequestState::Done),
-        "{:?}",
-        board.requests
-    );
-    let inputs = inputs.lock().unwrap().clone();
-    let heard = inputs
-        .iter()
-        .find(|input| input.contains("[run-1 finished · run_check `sleep 4; echo done`]"))
-        .unwrap_or_else(|| panic!("no turn heard the result: {inputs:#?}"));
-    assert!(heard.contains("done"), "{heard}");
-    let answers = answers(&flow).await;
-    assert_eq!(
-        answers.last().map(String::as_str),
-        Some("The check passed."),
-        "{answers:?}"
-    );
-    flow.stop().await;
-}
-
-/// A `run` gone to the background tells its result the same way.
+/// A long `run` goes to the background, the thread ends its turn quiet, and the command's
+/// result still reaches it in the same request.
 #[tokio::test]
 async fn a_long_command_goes_to_the_background_and_its_result_comes_back_to_the_thread() {
     let (inputs, replies): (Log, Log) = Default::default();
@@ -176,7 +107,7 @@ async fn a_background_run_keeps_the_name_the_thread_gave_it() {
                 return Reply::text("Done.");
             }
             for (tool, name) in [
-                ("run_check", "  Core tests "),
+                ("run", "  Core tests "),
                 ("run", " "),
                 (
                     "run",
@@ -209,210 +140,6 @@ async fn a_background_run_keeps_the_name_the_thread_gave_it() {
             None,
             Some("The whole desktop app's debug build, bu…".to_owned()),
         ]
-    );
-    flow.stop().await;
-}
-
-/// The same check asked again while the first still runs waits for it in the background too,
-/// and answers from what the first kept.
-#[tokio::test]
-async fn a_check_waiting_for_the_same_check_goes_to_the_background_and_answers_from_its_result() {
-    let (inputs, replies): (Log, Log) = Default::default();
-    let gate = super::Scratch::new("background-same-check-release");
-    let started = gate.join("started");
-    let marker = gate.join("release");
-    let command = format!(
-        "touch '{}'; while [ ! -f '{}' ]; do sleep 0.05; done; echo once",
-        started.display().to_string().replace('\'', "'\\''"),
-        marker.display().to_string().replace('\'', "'\\''")
-    );
-    let flow = Flow::start(
-        "background-same-check",
-        Options::default(),
-        script({
-            let (inputs, replies) = (inputs.clone(), replies.clone());
-            move |turn| {
-                let (inputs, replies, command, started) = (
-                    inputs.clone(),
-                    replies.clone(),
-                    command.clone(),
-                    started.clone(),
-                );
-                async move {
-                    inputs.lock().unwrap().push(turn.input.clone());
-                    if turn.input.contains("finished · ") {
-                        return Reply::text("The check passed.");
-                    }
-                    for _ in 0..2 {
-                        let reply = turn.call("run_check", json!({ "command": command })).await;
-                        assert!(!reply.is_error, "run_check: {}", reply.text);
-                        replies.lock().unwrap().push(reply.text);
-                        // Preparing a check can outlast its foreground call. Ensure the
-                        // first owns the check before the second starts preparing it.
-                        super::eventually("the first check's command to start", || {
-                            started.exists()
-                        })
-                        .await;
-                    }
-                    Reply::text("")
-                }
-            }
-        }),
-    )
-    .await;
-    flow.background_commands();
-    flow.say("Check twice.").await;
-    // Keep the first check running until both calls have gone to the background, even if
-    // the test process stalls while its child keeps running.
-    flow.until("both checks to go to the background", |_| {
-        replies.lock().unwrap().len() == 2
-    })
-    .await;
-    std::fs::write(&marker, "").unwrap();
-    let board = flow.settled().await;
-    let replies = replies.lock().unwrap().clone();
-    assert!(replies[0].starts_with("[run-1 still runs"), "{replies:?}");
-    assert!(replies[1].starts_with("[run-2 still runs"), "{replies:?}");
-    for run in ["run-1", "run-2"] {
-        assert!(
-            matches!(
-                run_state(&board, run),
-                Some(BackgroundRunState::Finished { .. })
-            ),
-            "{run}: {:?}",
-            board.background_runs
-        );
-    }
-    let inputs = inputs.lock().unwrap().join("\n");
-    let second = inputs
-        .split("[run-2 finished")
-        .nth(1)
-        .unwrap_or_else(|| panic!("run-2's result never came: {inputs}"));
-    assert!(second.contains("[cached:"), "{second}");
-    flow.stop().await;
-}
-
-/// The user's Stop of a check waiting in the background for the same check ends it at once,
-/// not when the check it waits for ends.
-#[tokio::test]
-async fn the_users_stop_ends_a_check_waiting_for_the_same_check() {
-    let (inputs, replies): (Log, Log) = Default::default();
-    let flow = Flow::start(
-        "background-same-check-stop",
-        Options::default(),
-        checking(
-            vec![
-                ("run_check", "sleep 30; echo once"),
-                ("run_check", "sleep 30; echo once"),
-            ],
-            inputs.clone(),
-            replies.clone(),
-        ),
-    )
-    .await;
-    flow.background_commands();
-    flow.say("Check twice.").await;
-    flow.until("the second check to wait in the background", |board| {
-        run_state(board, "run-2") == Some(BackgroundRunState::Running)
-    })
-    .await;
-    flow.manager
-        .stop_background_run(flow.conversation.clone(), "run-2".into())
-        .await
-        .unwrap();
-    let board = flow
-        .until("the waiting check to stop", |board| {
-            run_state(board, "run-2") == Some(BackgroundRunState::Stopped)
-        })
-        .await;
-    assert_eq!(
-        run_state(&board, "run-1"),
-        Some(BackgroundRunState::Running),
-        "the waiting check stopped only once the first ended"
-    );
-    flow.manager
-        .interrupt(flow.conversation.clone())
-        .await
-        .unwrap();
-    flow.stop().await;
-}
-
-/// A heavy check waiting for another build's lease past the foreground goes to the
-/// background, and runs once the lease is free.
-#[tokio::test]
-async fn a_check_waiting_for_the_build_lease_goes_to_the_background() {
-    let (inputs, replies): (Log, Log) = Default::default();
-    let flow = Flow::start(
-        "background-lease",
-        Options::default(),
-        checking(
-            // Heavy by its words; the function stands in for the build tool.
-            vec![("run_check", "make() { echo built; }; make all")],
-            inputs.clone(),
-            replies.clone(),
-        ),
-    )
-    .await;
-    flow.background_commands();
-    let (held, now, _) = flow.manager.machine.ask_check("another-build", "make all");
-    assert!(now, "the lease was free");
-    flow.say("Build it.").await;
-    flow.until("the check to go to the background", |board| {
-        run_state(board, "run-1") == Some(BackgroundRunState::Running)
-    })
-    .await;
-    flow.manager.machine.end_check(held);
-    let board = flow.settled().await;
-    assert_eq!(
-        run_state(&board, "run-1"),
-        Some(BackgroundRunState::Finished {
-            status: "exit 0".into()
-        })
-    );
-    let inputs = inputs.lock().unwrap().join("\n");
-    assert!(
-        inputs.contains("[run-1 finished") && inputs.contains("built"),
-        "{inputs}"
-    );
-    flow.stop().await;
-}
-
-/// #245: the thread's heavy check doesn't queue behind the full checks holding the lease: it
-/// runs at once, in its call, and its reply says what the full checks run and the machine load.
-#[tokio::test]
-async fn the_threads_check_runs_beside_the_full_checks() {
-    let (inputs, replies): (Log, Log) = Default::default();
-    let flow = Flow::start(
-        "background-beside",
-        Options::default(),
-        checking(
-            vec![("run_check", "make() { echo built; }; make all")],
-            inputs.clone(),
-            replies.clone(),
-        ),
-    )
-    .await;
-    flow.background_commands();
-    let full = format!("checks:{}", flow.conversation);
-    let (held, now, _) = flow
-        .manager
-        .machine
-        .ask_check(&full, "cargo test --workspace");
-    assert!(now, "the lease was free");
-    flow.say("Build it.").await;
-    let board = flow.settled().await;
-    flow.manager.machine.end_check(held);
-    assert!(
-        board.background_runs.is_empty(),
-        "{:?}",
-        board.background_runs
-    );
-    let replies = replies.lock().unwrap().join("\n");
-    assert!(
-        replies.contains("built")
-            && replies
-                .contains("[beside the full checks] The full checks run `cargo test --workspace`"),
-        "{replies}"
     );
     flow.stop().await;
 }
@@ -700,7 +427,7 @@ async fn a_background_run_cut_off_by_a_restart_tells_the_thread() {
                     id: "run-1".into(),
                     conversation_id: flow.conversation.clone(),
                     request_id: request,
-                    tool: "run_check".into(),
+                    tool: "run".into(),
                     command: "cargo test".into(),
                     started_at_ms: crate::now_ms(),
                     ended_at_ms: None,

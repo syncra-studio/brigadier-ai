@@ -50,23 +50,27 @@ test("a CI watch has an idle session's row say Watching CI until it ends", () =>
   assert.equal(rowActivity(useActivity.getState().byConversation.c2).phase, null);
 });
 
-test("a review outranks checks, and the thread's run_check ends with its turn", () => {
+test("a review outranks a worker's checks, and the thread's finish_session ends with its turn", () => {
+  const verify = (state: string) =>
+    on("c3", { type: "taskUpdated", task: { id: "t1", conversationId: "c3", kind: "verify", state, title: "Verify" } });
+  const review = (type: string) =>
+    on("c3", { type: "reviewUpdated", review: { id: "rv1", conversationId: "c3", state: { type } } });
+  applyActivityEvents([verify("running")]);
+  assert.equal(phaseOf("c3"), "checking");
+  applyActivityEvents([review("running")]);
+  assert.equal(phaseOf("c3"), "reviewing");
+  applyActivityEvents([review("clean"), verify("done")]);
+  assert.equal(phaseOf("c3"), null);
   const tool = (status: string) =>
     on("c3", {
       type: "orchestratorStepped",
       step: {
         requestId: "r1", atMs: 0, position: 0,
-        kind: { type: "tool", itemId: "i1", name: "mcp__brigadier__run_check", detail: null, status, throughPosition: 0 },
+        kind: { type: "tool", itemId: "i1", name: "mcp__brigadier__finish_session", detail: null, status, throughPosition: 0 },
       },
     });
-  const review = (type: string) =>
-    on("c3", { type: "reviewUpdated", review: { id: "rv1", conversationId: "c3", state: { type } } });
   applyActivityEvents([on("c3", { type: "runStateChanged", conversationId: "c3", state: "running" }), tool("inProgress")]);
-  assert.equal(phaseOf("c3"), "checking");
-  applyActivityEvents([review("running")]);
-  assert.equal(phaseOf("c3"), "reviewing");
-  applyActivityEvents([review("clean")]);
-  assert.equal(phaseOf("c3"), "checking");
+  assert.equal(phaseOf("c3"), "merging");
   applyActivityEvents([on("c3", { type: "runStateChanged", conversationId: "c3", state: "idle" })]);
   assert.equal(phaseOf("c3"), null);
 });

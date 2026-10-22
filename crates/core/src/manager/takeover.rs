@@ -235,7 +235,7 @@ impl SessionManager {
             .await
         {
             Ok((terminal, tools, checkout)) => {
-                // Its tool calls (`run_check`) run with the terminal's access.
+                // Its tool calls (its previews) run with the terminal's access.
                 live.set_terminal_access(Some(tools)).await;
                 let terminal_id = terminal.id.clone();
                 let _ = self
@@ -340,7 +340,6 @@ impl SessionManager {
         let tools = ToolAccess {
             provider,
             access: session.access.clone(),
-            owner: task_owner(&task.id),
             ended: CancellationToken::new(),
         };
         // Claude finds the session from any folder (spike, check 4), so the terminal opens in

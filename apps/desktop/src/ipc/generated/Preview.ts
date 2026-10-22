@@ -3,7 +3,6 @@ import type { ConversationId } from "./ConversationId";
 import type { PreviewKind } from "./PreviewKind";
 import type { PreviewState } from "./PreviewState";
 import type { TaskId } from "./TaskId";
-import type { TestCounts } from "./TestCounts";
 
 /**
  * A process the thread or a worker started to show its work (a dev server, the app), owned by
@@ -65,11 +64,6 @@ building: boolean,
  * so its card stays on that turn; none when no turn ran.
  */
 requestId?: string, 
-/**
- * A test run's counts, read from its output when it ended; none when its runner's
- * summary wasn't found.
- */
-tests?: TestCounts, 
 /**
  * A rendered PDF's page count, read from its file when it was ready and again when its
  * render ended; none when it couldn't be read.

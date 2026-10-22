@@ -365,7 +365,6 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
                 .unwrap()
                 .push((turn.cwd.clone(), turn.input.clone()));
             if turn.input.contains("[merge] The user clicked") {
-                turn.call("run_checks", serde_json::json!({})).await;
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Merged.");
@@ -512,7 +511,6 @@ async fn the_board_lists_siblings_and_tells_no_overlap_or_merge() {
     flow.settled_in(&a).await;
     flow.say_to(&b, "Write gamma.").await;
     flow.settled_in(&b).await;
-    flow.checks_passed_in(&b).await;
     flow.manager
         .merge_session(&b, super::click(), false)
         .await
@@ -571,7 +569,6 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
                 .unwrap()
                 .push((turn.cwd.clone(), turn.input.clone()));
             if turn.input.contains("[merge] The user clicked") {
-                turn.call("run_checks", serde_json::json!({})).await;
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Merged.");
@@ -857,7 +854,6 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
     assert_eq!(heard(&inputs, &folder_b, "took their message"), 0);
 
     // B merges; a follow-up routed to it goes, with the fact attached.
-    flow.checks_passed_in(&b).await;
     flow.manager
         .merge_session(&b, super::click(), false)
         .await
@@ -979,7 +975,6 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         board_text.contains("\"state\": \"ready to merge\""),
         "{board_text}"
     );
-    flow.checks_passed_in(&a).await;
 
     flow.manager
         .merge_session(&a, super::click(), false)
@@ -1110,73 +1105,5 @@ async fn an_offered_session_starts_only_on_the_users_click() {
             .is_err(),
         "once only"
     );
-    flow.stop().await;
-}
-
-/// A tab whose request settled while the full checks it asked for still run reads working from
-/// the checking phase, with no quota wait, then ready once they pass (#346: the Working read right
-/// after `settled_in` was these checks, not a stray wait).
-#[tokio::test]
-async fn a_settled_tab_reads_working_while_its_full_checks_run_without_a_quota_wait() {
-    // The full checks wait while `hold-checks` is in the repository's git folder.
-    const HELD_CHECKS: &str = r#"#!/bin/sh
-common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
-while [ -f "$common/hold-checks" ]; do sleep 0.05; done
-"#;
-    let flow = Flow::start(
-        "sessions-checking",
-        Options {
-            files: vec![("tools/full-checks.sh", HELD_CHECKS)],
-            ..Options::default()
-        },
-        writing(None),
-    )
-    .await;
-    let a = flow.conversation.clone();
-    let state = |id: &ConversationId| {
-        let tab = flow.core.conversation(id).unwrap();
-        let manager = flow.manager.clone();
-        async move { manager.tab_state(&tab).await }
-    };
-    let hold = flow.repo.join(".git/hold-checks");
-    std::fs::write(&hold, "").unwrap();
-
-    flow.say_to(&a, "Write alpha.").await;
-    flow.settled_in(&a).await;
-    // The thread's run_checks, which holds its call a while and then goes on in the
-    // background.
-    let (manager, id) = (flow.manager.clone(), a.clone());
-    tokio::spawn(async move { manager.run_checks_tool(&id, false).await });
-    super::eventually_async("the full checks to run", || async {
-        let board = flow.core.board(&a).await.unwrap();
-        board.integrated_checks.values().any(|check| {
-            matches!(
-                check.state,
-                crate::work::IntegratedCheckState::Running { .. }
-            )
-        })
-    })
-    .await;
-    let tab = flow.core.conversation(&a).unwrap();
-    assert!(tab.quota_wait.is_none(), "{:?}", tab.quota_wait);
-    let board = flow.core.board(&a).await.unwrap();
-    assert_eq!(board.run, crate::work::RunState::Idle);
-    let activity = board.activity(&a).unwrap();
-    assert!(activity.tasks.is_empty(), "{:?}", activity.tasks);
-    assert!(
-        activity
-            .phases
-            .iter()
-            .all(|(_, phase)| *phase == crate::work::SessionPhase::Checking),
-        "{:?}",
-        activity.phases
-    );
-    assert_eq!(state(&a).await, Some(crate::work::TabState::Working));
-
-    std::fs::remove_file(&hold).unwrap();
-    super::eventually_async("the tab to read ready", || async {
-        state(&a).await == Some(crate::work::TabState::Ready)
-    })
-    .await;
     flow.stop().await;
 }

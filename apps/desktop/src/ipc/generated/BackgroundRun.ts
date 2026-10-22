@@ -3,7 +3,7 @@ import type { BackgroundRunState } from "./BackgroundRunState";
 import type { ConversationId } from "./ConversationId";
 
 /**
- * A command of the thread's (`run`, `run_check`) still going after the time a tool call may
+ * A command of the thread's (`run`) still going after the time a tool call may
  * hold the thread ([`crate::manager`]'s background runs): it goes on in the background, owned
  * by the session rather than the thread's CLI, and its result comes to the thread as a
  * message. Recorded from the moment it goes there, so a restart that cuts it off says so.
@@ -18,7 +18,7 @@ id: string, conversationId: ConversationId,
  */
 requestId: string | null, 
 /**
- * The tool that started it: `run` or `run_check`.
+ * The tool that started it (`run`).
  */
 tool: string, command: string, startedAtMs: number, endedAtMs: number | null, state: BackgroundRunState, 
 /**

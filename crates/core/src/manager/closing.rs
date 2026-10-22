@@ -184,9 +184,6 @@ impl SessionManager {
     /// Waits until no work of conversation `id` that passed its fence is still going (at most
     /// [`DRAIN_WAIT`]). Whether it all finished.
     pub(super) async fn drain(&self, id: &ConversationId) -> bool {
-        // Its full checks hold the fence for as long as they run, and nothing they make outlives
-        // the cleanup: they end now rather than be waited for (issue #343).
-        self.end_integrated_checks(id).await;
         #[cfg(test)]
         let wait = self
             .closing

@@ -112,10 +112,6 @@ async fn claims_reach_briefs_answers_and_rebirths_labelled_unverified() {
                         turn.write("NOTES.md", "notes\n");
                         turn.git(&["add", "NOTES.md"]);
                         turn.git(&["commit", "-qm", "Write the notes"]);
-                        let check = turn
-                            .call("run_check", json!({"command": "echo checked"}))
-                            .await;
-                        assert!(!check.is_error, "{}", check.text);
                         let review = turn.call("request_review", json!({})).await;
                         assert!(!review.is_error, "{}", review.text);
                         let reply = turn

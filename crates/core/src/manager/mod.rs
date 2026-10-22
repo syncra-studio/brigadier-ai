@@ -27,7 +27,6 @@ mod branch_names;
 mod branches;
 pub(crate) mod browser_tool;
 mod cards;
-mod checks;
 mod ci;
 mod clean_up;
 mod cli;
@@ -62,7 +61,6 @@ mod fusion;
 mod git_actions;
 mod inbox_store;
 mod instructions;
-mod integrated_checks;
 pub mod integrations;
 mod kept;
 #[cfg(all(test, unix))]
@@ -113,7 +111,6 @@ mod side_chat;
 mod sidecars;
 mod source_actions;
 mod takeover;
-mod test_counts;
 mod thread;
 mod thread_images;
 mod thread_items;
@@ -162,7 +159,6 @@ pub use closing::Turn;
 pub use conversation::SendOutcome;
 pub(crate) use conversation::interrupted_by_quit;
 pub use instructions::{COMMAND_PATHS_MAX, command_paths, lexical};
-pub(crate) use integrated_checks::integrated_check_number;
 pub(crate) use landing::held_merge;
 pub use mcp_auth::McpSignInStatus;
 pub use side_chat::BrowserPage;
@@ -225,8 +221,6 @@ pub struct SessionManager {
     ref_records: Arc<refcheck::RefRecords>,
     /// Each checkout's Git Output, for the Source panel ([`source_actions`]).
     source_output: source_actions::SourceOutput,
-    /// The sessions' full checks on the integrated tree ([`integrated_checks`]).
-    integrated: integrated_checks::IntegratedChecks,
     /// The thread's commands gone to the background ([`background_runs`]).
     background_runs: background_runs::BackgroundRuns,
     /// The previews running now ([`preview`]).
@@ -234,7 +228,7 @@ pub struct SessionManager {
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
-    /// The reviews a `request_review` or `run_check` call waits on, by session and range,
+    /// The reviews a `request_review` call waits on, by session and range,
     /// with how many calls wait: their replies carry the outcome, so no message of it is
     /// delivered (#137, #193), unless all of them were cancelled (#332).
     review_replies: Mutex<review_runs::ReplyClaims>,
@@ -389,7 +383,6 @@ impl SessionManager {
         let brains = brains::Brains::new(&data_dir);
         let machine = Arc::new(crate::machine::MachineWatch::new(
             runtime.platform().clone(),
-            data_dir.join("stopped-processes.json"),
         ));
         // A test's scripted session runs on a calm machine, whatever the host's heat or memory
         // pressure: a test that wants it strained says so.
@@ -460,7 +453,6 @@ impl SessionManager {
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),
             source_output: source_actions::SourceOutput::default(),
-            integrated: integrated_checks::IntegratedChecks::default(),
             background_runs: background_runs::BackgroundRuns::default(),
             previews: preview::Previews::default(),
             running_reviews: Mutex::default(),
@@ -563,8 +555,6 @@ impl SessionManager {
         self.research.stop.cancel();
         self.research.jobs.close();
         self.research.jobs.wait().await;
-        // What Brigadier stopped goes on before the CLIs above it close.
-        self.quit_machine_watch().await;
         let tasks: Vec<Arc<TaskLive>> = self.tasks_lock().values().cloned().collect();
         let convs: Vec<Arc<ConvLive>> = self.convs_lock().values().cloned().collect();
         let mut closing = tokio::task::JoinSet::new();

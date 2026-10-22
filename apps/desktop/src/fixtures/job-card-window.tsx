@@ -56,7 +56,7 @@ mockIPC((command, payload) => {
           plans: [], requests: [request], workerSteps: [], orchestratorSteps: steps, machineSteps: [], thinking: [],
           compactions: [], decisions: [], waiting: [], queue: { items: [], paused: false }, run: "idle",
           runRequest: null, head: null, ratings: {}, streaming: null, notices: [], memories: [], overnight: [],
-          reviews: [], previews: [], integratedChecks: [], backgroundRuns: [],
+          reviews: [], previews: [], backgroundRuns: [],
           // The thread's headline: outside a plan or an overnight run no card shows it.
           headline: { text: "Building the registry", detail: "Next: the Plugins and Skills page", failed: false, atMs: start + 4 * 60_000 },
         } as unknown as View,

@@ -93,7 +93,6 @@ impl SessionManager {
             cancel,
             owner,
             self.runtime.ledger(),
-            |_| {},
             Some(keep),
         )
         .await;

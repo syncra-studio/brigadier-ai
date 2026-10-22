@@ -1,12 +1,11 @@
-//! A landed worker stays resumable until a passing run of the session's full checks covers its
-//! landing (SESSION-FIXES-PLAN.md Q6.1, §11). At landing its CLI session files move to the
-//! ledger owner `review-hold:<task>` and its branch is kept, though merged; its worktree and
-//! scratch folder go as always. A failure of the checks, or review findings the thread records
-//! open, go back as one fix task (`role` fix, `subject` the landed task), which resumes that
-//! same session, model and account in a worktree made again at the old path, on the old branch
-//! moved up to the session's tip. The hold of an older landing (from when every landing got a
-//! review) also waits for that review's findings to settle: when it is clean or couldn't run,
-//! when the thread records none of its findings open, or when the fix task ends. Merging,
+//! A landed worker stays resumable until the session merges (SESSION-FIXES-PLAN.md Q6.1). At
+//! landing its CLI session files move to the ledger owner `review-hold:<task>` and its branch
+//! is kept, though merged; its worktree and scratch folder go as always. Review findings the
+//! thread records open go back as one fix task (`role` fix, `subject` the landed task), which
+//! resumes that same session, model and account in a worktree made again at the old path, on
+//! the old branch moved up to the session's tip. The hold of an older landing (from when every
+//! landing got a review) ends once that review's findings settle: when it is clean or couldn't
+//! run, when the thread records none of its findings open, or when the fix task ends. Merging,
 //! archiving or deleting the session ends every hold. Then the files go, and the branch with
 //! them while it is still merged.
 
@@ -82,8 +81,8 @@ pub(crate) fn workspace_line(
 }
 
 impl SessionManager {
-    /// At landing: keeps `task`'s CLI session files and its branch until a passing run of the
-    /// session's full checks covers its landing. False when it has no session files to keep.
+    /// At landing: keeps `task`'s CLI session files and its branch until the session merges.
+    /// False when it has no session files to keep.
     pub(crate) async fn hold_for_review(&self, task: &Task, target: &str) -> bool {
         if task.kind != TaskKind::Implement {
             return false;
@@ -111,16 +110,14 @@ impl SessionManager {
         let target = target.to_owned();
         self.update_task(&task.conversation_id, &task.id, |t| {
             t.review_hold = Some(target);
-            // No review of the landing starts: nothing of one is waited for.
-            t.review_settled = true;
         })
         .await
         .is_ok()
     }
 
     /// The review part of the batch of the landing at `tip` settles: each task it holds lets
-    /// go of its session and branch once a passing full check covers its landing too, except
-    /// one a fix still resumes (that one settles when its fix ends).
+    /// go of its session and branch, except one a fix still resumes (that one settles when its
+    /// fix ends).
     pub(crate) async fn settle_review_batch(&self, conversation_id: &ConversationId, tip: &str) {
         let Ok(board) = self.core.board(conversation_id).await else {
             return;
@@ -159,13 +156,7 @@ impl SessionManager {
             {
                 continue;
             }
-            if self.landing_checked(&task).await {
-                self.release_hold(&task).await;
-            } else if !task.review_settled {
-                let _ = self
-                    .update_task(&task.conversation_id, &task.id, |t| t.review_settled = true)
-                    .await;
-            }
+            self.release_hold(&task).await;
         }
     }
 

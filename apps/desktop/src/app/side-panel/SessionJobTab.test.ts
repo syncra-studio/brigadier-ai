@@ -31,7 +31,7 @@ const merged = (atMs: number): OrchestratorStep => ({
   requestId: null,
   kind: {
     type: "merged", branch: "brigadier/flow", base: "main", commits: 1, askedIn: "m1", mergeCommit: "1234567abc",
-    record: { head: "1234567abc", checks: [{ command: "pnpm test", status: "exit 0", onHead: true } as never], reviews: [], ci: null, proofs: 0, verifier: null },
+    record: { head: "1234567abc", reviews: [], ci: null, proofs: 0, verifier: null },
   },
   atMs,
   position: 0,

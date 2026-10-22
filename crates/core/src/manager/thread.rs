@@ -31,7 +31,7 @@ use brigadier_providers::{
 
 use super::conversation::{Cli, ConvLive};
 use super::escalation::Settled;
-use super::workers::{SessionTemp, session_temp_dir, thread_temp_owner};
+use super::workers::{session_temp_dir, thread_temp_owner};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
     ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
@@ -213,10 +213,7 @@ impl SessionManager {
         if level.unsandboxed {
             return (Access::Full, false);
         }
-        let mut writable_roots = vec![
-            scratch.to_owned(),
-            session_temp_dir(id, SessionTemp::Thread),
-        ];
+        let mut writable_roots = vec![scratch.to_owned(), session_temp_dir(id)];
         if let Some(workspace) = workspace {
             writable_roots.push(workspace.path.clone());
             if let Ok(repo) = self.git.open(&workspace.path) {
@@ -365,7 +362,7 @@ impl SessionManager {
     /// The thread's short temporary folder ([`session_temp_dir`]), made and recorded under
     /// its own owner, which goes with the session.
     pub(crate) async fn thread_temp(&self, id: &ConversationId) -> Result<PathBuf> {
-        let dir = session_temp_dir(id, SessionTemp::Thread);
+        let dir = session_temp_dir(id);
         self.prepare_owned_dir(&thread_temp_owner(id), &dir).await?;
         Ok(dir)
     }

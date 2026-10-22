@@ -17,7 +17,7 @@ import { openPanelTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
 
-/** One thing the session has going: a preview (the thread's or a worker's), a long command, or an event (checks, a review, CI, a merge). */
+/** One thing the session has going: a preview (the thread's or a worker's), a long command, or an event (a review, CI, a merge). */
 type Activity = BackgroundRow;
 
 /** A process or an event at work: its word shimmers. Paused, it rests. */
@@ -35,8 +35,8 @@ const label = (activity: Activity) =>
 
 /**
  * "Background": what the session has going in the background, one row per thing: the thread's
- * and the workers' previews, the thread's long commands, and its own events while they run (the
- * full checks, a review, the CI watch, a held merge or one at work), each with its state in a
+ * and the workers' previews, the thread's long commands, and its own events while they run (a
+ * review, the CI watch, a held merge or one at work), each with its state in a
  * word and an icon (a worker's copy of an app or a browser at it is a state of the app's row),
  * how long it has gone, and its button on hover: Stop on a process, Open CI on the CI watch,
  * Cancel on a held merge, and Merge anyway, always shown, on a merge refused for want of checks. A click on a web preview that is up opens its page in the browser
@@ -48,8 +48,8 @@ const label = (activity: Activity) =>
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const board = useBoard(useShallow((s) => {
     if (s.board?.conversationId !== conversationId) return null;
-    const { previews, backgroundRuns, tasks, questions, reviews, integratedChecks, orchestratorSteps, requests, mergeRefused } = s.board;
-    return { previews, backgroundRuns, tasks, questions, reviews, integratedChecks, orchestratorSteps, requests, mergeRefused };
+    const { previews, backgroundRuns, tasks, questions, reviews, orchestratorSteps, requests, mergeRefused } = s.board;
+    return { previews, backgroundRuns, tasks, questions, reviews, orchestratorSteps, requests, mergeRefused };
   }));
   const activities = board
     ? backgroundRows(Object.values(board.previews), Object.values(board.backgroundRuns), board.tasks, (task) => workerName(board.tasks, task), board)

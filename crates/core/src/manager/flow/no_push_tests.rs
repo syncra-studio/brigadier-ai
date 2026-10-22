@@ -80,7 +80,6 @@ async fn an_idle_thread_gets_no_turn_from_engine_events() {
     // Another session changes the same file and merges.
     flow.say_to(&b, "Share.").await;
     flow.settled_in(&b).await;
-    flow.checks_passed_in(&b).await;
     flow.manager
         .merge_session(&b, super::click(), false)
         .await

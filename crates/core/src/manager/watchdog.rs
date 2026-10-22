@@ -360,7 +360,7 @@ impl SessionManager {
         if task.state.is_final() {
             return;
         }
-        let watch = self.unheld(&task.id, &live.watch(now).await);
+        let watch = live.watch(now).await;
         let Some(verdict) = stall_verdict(
             task.state,
             task.quota_wait.is_some(),
@@ -401,7 +401,6 @@ impl SessionManager {
                     return;
                 };
                 let due = |current: &WorkerWatch| {
-                    let current = &self.unheld(&task.id, current);
                     still_due(
                         verdict,
                         seen,
@@ -456,7 +455,6 @@ impl SessionManager {
         let settled = live.settle.lock().await;
         let (state, quota_wait, card) = self.task_now(live).await?;
         let due = |current: &WorkerWatch| {
-            let current = &self.unheld(&live.id, current);
             // Judged at the round's time, as a report is: a CLI seen gone first by an earlier
             // look is as long gone as the round found it (#443).
             let verdict_now = stall_verdict(state, quota_wait, card, current, timing, now);
