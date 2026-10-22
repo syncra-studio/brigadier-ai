@@ -149,19 +149,16 @@ async fn archive_keeps_the_record_and_delete_removes_the_folder() {
     let flow = Flow::start(
         "session-dir-archive",
         Options::default(),
-        script(|turn| async move {
-            if turn.is_orchestrator() {
-                std::fs::write(turn.session_tmp().join("scratch.txt"), "x").unwrap();
-            }
-            Reply::text("Done.")
-        }),
+        script(|_| async { Reply::text("Done.") }),
     )
     .await;
     flow.say("Work.").await;
     flow.settled().await;
     let id = flow.conversation.clone();
     let dir = flow.manager.session_dir(&id);
-    assert!(dir.tmp().join("scratch.txt").exists());
+    // Left in tmp/ once the requests are over: the scratch sweep empties it then, in the
+    // background, so what a turn wrote there may be gone already.
+    std::fs::write(dir.tmp().join("scratch.txt"), "x").unwrap();
     assert!(dir.work().join(".git").is_file());
     flow.manager.archive(id.clone()).await.unwrap();
     flow.manager.cleanup_finished(&id).await;
