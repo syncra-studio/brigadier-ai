@@ -1,18 +1,19 @@
-//! Which agents and models the user lets Brigadier use, as Settings → Providers sets them:
+//! Picker visibility and preferences for the remaining legacy router (Settings → Providers).
+//! Explicit session and worker choices use only the user's model rules file.
 //!
 //! - An agent switched off ([`Settings::disabled_providers`]) and a model made unavailable
-//!   ([`Settings::hidden_models`]) are out of every picker and get no work at all, routed or
-//!   in the background. Conversations already running keep their model.
+//!   ([`Settings::hidden_models`]) are out of every picker and legacy automatic routing.
+//!   Conversations already running keep their model.
 //! - Whether the orchestrator may hand a model worker tasks is a `never` rule for the worker
 //!   kinds of work ([`worker_rule`]): a Chat's stand-in and an orchestrator are left alone.
 //! - A model seen after its agent's first list ([`Settings::known_models`]) starts with that
 //!   rule, so it gets no work until the user allows it; its agent's first list is taken as
 //!   known, so turning this on (or signing in) changes nothing for the models already there.
-//! - An older model ([`ModelInfo::legacy`]) starts unavailable, once
+//! - An older model ([`brigadier_providers::ModelInfo::legacy`]) starts unavailable, once
 //!   ([`Settings::older_models_off`]): the user turns on the ones they want, and that choice
 //!   stands. One the user's rules or orders already name stays as it is.
 
-use brigadier_providers::{ModelInfo, ProviderKind};
+use brigadier_providers::ProviderKind;
 use brigadier_router::{
     MergedModel, OverrideEffect, OverrideRule, OverrideTarget, ProviderState, TaskCategory,
 };
@@ -56,53 +57,6 @@ pub fn model_available(settings: &Settings, provider: ProviderKind, id: &str) ->
             .hidden_models
             .iter()
             .any(|model| model.provider == provider && model.id == id)
-}
-
-/// The listed model an id names, as the pickers read it: the model with that id, else the
-/// alias that resolves to it (`claude-opus-5-5` names `opus`); no id, or `default`, names the
-/// model marked default.
-fn listed<'a>(catalog: &'a [ModelInfo], id: Option<&str>) -> Option<&'a ModelInfo> {
-    let named = id.and_then(|id| {
-        catalog.iter().find(|model| model.id == id).or_else(|| {
-            catalog
-                .iter()
-                .find(|model| model.resolved.as_deref() == Some(id))
-        })
-    });
-    named.or_else(|| {
-        matches!(id, None | Some("default"))
-            .then(|| catalog.iter().find(|model| model.is_default))
-            .flatten()
-    })
-}
-
-/// Whether a new conversation may start on `choice` (or switch to it), with why not in plain
-/// words. `catalog` is its agent's model list: a concrete id or an alias is judged as the
-/// listed model it names, and a choice without a model as the agent's default one.
-pub fn check_choice(
-    settings: &Settings,
-    choice: &ModelChoice,
-    catalog: &[ModelInfo],
-) -> Result<(), String> {
-    let agent = choice.provider.label();
-    if !provider_on(settings, choice.provider) {
-        return Err(format!(
-            "{agent} is switched off. Turn it on in Settings › Providers."
-        ));
-    }
-    let id = choice.model.as_deref();
-    let model = listed(catalog, id);
-    let hidden = |id: &str| !model_available(settings, choice.provider, id);
-    if id.is_some_and(hidden) || model.is_some_and(|model| hidden(&model.id)) {
-        let name = model.map_or_else(
-            || id.unwrap_or("Its default model").to_owned(),
-            |model| model.display_name.clone(),
-        );
-        return Err(format!(
-            "{name} isn't available. Turn it on in Settings › Providers."
-        ));
-    }
-    Ok(())
 }
 
 /// How the id of a [`worker_rule`] Brigadier added for a model it just saw starts: the Routing
@@ -627,34 +581,8 @@ mod tests {
         assert!(migrate(&off).is_none());
     }
 
-    #[test]
-    fn a_new_conversation_needs_an_available_model() {
-        let settings = Settings {
-            disabled_providers: vec![ProviderKind::Codex],
-            hidden_models: vec![ModelRef {
-                provider: ProviderKind::Claude,
-                id: "haiku".into(),
-            }],
-            ..Settings::default()
-        };
-        let choice = |provider, model: Option<&str>| ModelChoice {
-            provider,
-            model: model.map(str::to_owned),
-            effort: None,
-            fast: None,
-            account: None,
-        };
-        let check = |provider, model| check_choice(&settings, &choice(provider, model), &[]);
-        assert!(check(ProviderKind::Claude, Some("opus")).is_ok());
-        assert!(check(ProviderKind::Claude, None).is_ok());
-        let hidden = check(ProviderKind::Claude, Some("haiku"));
-        assert!(hidden.is_err_and(|why| why.contains("haiku")));
-        let off = check(ProviderKind::Codex, None);
-        assert!(off.is_err_and(|why| why.contains("Codex is switched off")));
-    }
-
-    fn listed_model(id: &str, resolved: &str, is_default: bool) -> ModelInfo {
-        ModelInfo {
+    fn listed_model(id: &str, resolved: &str, is_default: bool) -> brigadier_providers::ModelInfo {
+        brigadier_providers::ModelInfo {
             id: id.into(),
             display_name: format!("Model {id}"),
             description: String::new(),
@@ -666,41 +594,6 @@ mod tests {
             fast: None,
             legacy: false,
         }
-    }
-
-    #[test]
-    fn a_choice_is_judged_as_the_listed_model_it_names() {
-        let settings = Settings {
-            hidden_models: vec![ModelRef {
-                provider: ProviderKind::Claude,
-                id: "opus".into(),
-            }],
-            ..Settings::default()
-        };
-        let catalog = [
-            listed_model("opus", "claude-opus-5-5", true),
-            listed_model("sonnet", "claude-sonnet-5-5", false),
-        ];
-        let check = |model: Option<&str>| {
-            check_choice(
-                &settings,
-                &ModelChoice {
-                    provider: ProviderKind::Claude,
-                    model: model.map(str::to_owned),
-                    effort: None,
-                    fast: None,
-                    account: None,
-                },
-                &catalog,
-            )
-        };
-        // The concrete id, `default` and no model at all all name the hidden `opus`.
-        let resolved = check(Some("claude-opus-5-5"));
-        assert!(resolved.is_err_and(|why| why.contains("Model opus")));
-        assert!(check(Some("default")).is_err());
-        assert!(check(None).is_err());
-        assert!(check(Some("claude-sonnet-5-5")).is_ok());
-        assert!(check(Some("sonnet")).is_ok());
     }
 
     #[test]
