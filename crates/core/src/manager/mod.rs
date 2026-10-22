@@ -69,6 +69,7 @@ mod kept_live_tests;
 mod landing;
 mod lifecycle;
 mod machine;
+mod mcp_auth;
 mod memory_guard;
 mod merge_consent;
 mod merge_record;
@@ -161,6 +162,7 @@ pub(crate) use conversation::interrupted_by_quit;
 pub use instructions::{COMMAND_PATHS_MAX, command_paths, lexical};
 pub(crate) use integrated_checks::integrated_check_number;
 pub(crate) use landing::held_merge;
+pub use mcp_auth::McpSignInStatus;
 pub use side_chat::BrowserPage;
 pub use takeover::{HostedTerminal, TerminalHost, TerminalSnapshot, WorkerTerminal};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
@@ -186,6 +188,8 @@ pub struct SessionManager {
     git: Git,
     data_dir: PathBuf,
     grants: Grants,
+    /// Sign-ins to remote MCP servers shared between the agents, and their proxy.
+    mcp_auth: Arc<mcp_auth::McpAuth>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
@@ -204,10 +208,6 @@ pub struct SessionManager {
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
     change_records: request_changes::ChangeRecords,
-    /// Where each session's thread's newest `run_check` stands: a review of its own changes
-    /// starts only on files a check passed on, never while one runs or on files one failed
-    /// on ([`unreviewed::ThreadCheck`], BUILD-PLAN C10).
-    thread_checks: std::sync::Mutex<HashMap<ConversationId, unreviewed::ThreadCheck>>,
     /// The context window each model last reported, by provider and the model asked for: a
     /// Claude session learns its own only when its first turn ends, and its overflow guard needs
     /// it before then (BUILD-PLAN D2.3, D2.3b).
@@ -435,6 +435,20 @@ impl SessionManager {
             data_dir,
             registry: std::sync::RwLock::new(registry),
             grants: Grants::default(),
+            mcp_auth: {
+                let me = me.clone();
+                Arc::new(mcp_auth::McpAuth::new(
+                    // Tests never touch the user's Keychain.
+                    #[cfg(not(test))]
+                    mcp_auth::system_keychain(),
+                    #[cfg(test)]
+                    Arc::new(mcp_auth::Memory::default()),
+                    Arc::new(move |grant: &str| {
+                        me.upgrade()
+                            .is_some_and(|manager| manager.grants.resolve(grant).is_some())
+                    }),
+                ))
+            },
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),
@@ -443,7 +457,6 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             change_records: request_changes::ChangeRecords::default(),
-            thread_checks: std::sync::Mutex::new(HashMap::new()),
             known_windows: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),

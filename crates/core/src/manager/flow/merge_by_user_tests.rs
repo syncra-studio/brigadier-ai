@@ -49,11 +49,13 @@ async fn session(name: &str) -> (Flow, Log) {
                     return Reply::text("Ready to merge when you are.");
                 }
                 if turn.input.contains("[merge] The user clicked") {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn.call("finish_session", json!({})).await;
                     log(format!("finish_session: {} {}", reply.is_error, reply.text));
                     return Reply::text("Merged.");
                 }
                 if turn.input.contains("just merge it") {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call("finish_session", json!({ "user_words": "just merge it" }))
                         .await;
@@ -445,7 +447,7 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     let request = flow.board().await.latest_request().unwrap().id.clone();
     let reply = flow
         .manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap();
     assert!(reply.contains("Merging"), "{reply}");
@@ -511,7 +513,7 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     // And with nothing left to merge, the button's request is refused.
     let nothing = flow
         .manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap_err()
         .to_string();
@@ -540,7 +542,7 @@ async fn a_spent_click_never_falls_back_to_the_words_before_it() {
     flow.say("Add notes. Then merge it into main.").await;
     flow.settled().await;
     flow.manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap();
     flow.until("the merge", |board| merged(board) == 1).await;
@@ -550,6 +552,7 @@ async fn a_spent_click_never_falls_back_to_the_words_before_it() {
     std::fs::write(path.join("LATER.md"), "later\n").unwrap();
     git(&path, &["add", "LATER.md"]);
     git(&path, &["commit", "-qm", "Add later"]);
+    flow.checks_passed().await;
     let refused = flow
         .manager
         .finish_session(&flow.conversation, "merge it into main", None)
@@ -588,6 +591,7 @@ async fn a_card_answer_merges_when_the_thread_names_it() {
             .is_err()
     );
     let card = card.id.to_string();
+    flow.checks_passed().await;
     let merged_on = flow
         .manager
         .finish_session(&flow.conversation, &card, None)
@@ -716,7 +720,7 @@ async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
     assert!(note.contains("there are no merge cards"), "{note}");
     assert_eq!(logged(&log, &note).len(), 1);
     flow.manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap();
     flow.until("the merge", |board| merged(board) == 1).await;

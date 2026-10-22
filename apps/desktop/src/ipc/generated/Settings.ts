@@ -10,6 +10,7 @@ import type { ModelRef } from "./ModelRef";
 import type { NotifyFinished } from "./NotifyFinished";
 import type { OverrideRule } from "./OverrideRule";
 import type { PermissionLevel } from "./PermissionLevel";
+import type { ProjectSwitches } from "./ProjectSwitches";
 import type { ProviderKind } from "./ProviderKind";
 import type { Ranking } from "./Ranking";
 
@@ -257,6 +258,23 @@ mcpServersOff: Array<string>,
  * [`Self::mcp_servers_off`].
  */
 skillsOff: Array<string>, 
+/**
+ * A project's exceptions to [`Self::mcp_servers_off`] and [`Self::skills_off`], one entry
+ * per project that has any. The project's threads and workers go by them.
+ */
+projectSwitches: Array<ProjectSwitches>, 
+/**
+ * Servers from a project's own config that the user uses in every project, by catalog id:
+ * workers of every other project get them too, by the switches above, while a project's
+ * own item otherwise stays in its project. Read only while that project's folder is
+ * trusted.
+ */
+serversEverywhere: Array<string>, 
+/**
+ * Skills from a project's own config used in every project, as
+ * [`Self::servers_everywhere`]. Apart from it: a project's server and skill can share an id.
+ */
+skillsEverywhere: Array<string>, 
 /**
  * The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
  * before it existed read as 0, so their conversions run.

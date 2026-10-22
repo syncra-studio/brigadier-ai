@@ -329,7 +329,9 @@ Each phase lists its **goal**, **deliverables**, **key design**, and **done when
 - Each worker keeps its agent's own servers; `delegate_task`'s `integrations` adds named servers from the other agent, Claude Desktop or Cursor, with per-server env aliases. HTTP servers and a stdio server's own folder in both adapters.
 - Every switched-on skill reaches every worker (a Brigadier plugin folder for Claude, an extra skill root for Codex); switched-off servers and skills are kept from threads and workers. The thread gets a short list of the servers a worker gets only when named.
 
-Not built: the Plugins and Skills screens in Settings, reusing a remote server's OAuth sign-in across agents (the catalog reports a per-agent sign-in state only), Claude and Codex plugins, local models, and the ACP adapter.
+- Sign-in reuse for remote MCP servers (`manager/mcp_auth/`, probes (j)): a server one agent is signed in to serves the other agent's workers through a local proxy on 127.0.0.1 that adds a fresh token to each request and writes renewed tokens back to the owning CLI's store under its own lock. When nothing can be reused, a sign-in in Brigadier (OAuth 2.1 with PKCE, kept in Brigadier's own Keychain item) serves every agent. The catalog gives each agent's sign-in state; the IPC calls start, follow, cancel, reopen and sign out of the sign-in in Brigadier and ask macOS again after a refusal.
+
+Not built: the UI for the sign-in states and the sign-in in Brigadier (it waits for its design), Claude and Codex plugins, local models, and the ACP adapter.
 
 **Deliverables**
 - **Unified registry:**

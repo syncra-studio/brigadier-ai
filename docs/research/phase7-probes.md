@@ -136,10 +136,62 @@ Codex:
   the new token to the same store before using it; tokens are saved again after each tool call.
   A 401 after that returns "Authentication required" and the call isn't replayed.
 
-Not confirmed: whether the two keys match for the same server (it depends on the JSON key order
-each hashes), and how Claude normalises the config folder before hashing it. Reusing a sign-in
-across agents therefore means reading one store and writing the refreshed token back to it under
-that CLI's own lock, which a follow-up task builds.
+The keys compared (`claude_key` and `codex_keys` in `crates/registry/src/sign_ins.rs`, checked
+against values computed apart with Node's `JSON.stringify` and Python's `json.dumps`): Claude
+hashes `JSON.stringify({type, url, headers: headers || {}})` with the headers as configured;
+Codex hashes `{"type":"http","url",...,"headers":{}}` with no headers, in an order that depends
+on how the binary was built (serde_json's `preserve_order`), so Brigadier tries both. For a
+server without headers the two keys match (`linear|638130d5ab3558f4` for
+`https://mcp.linear.app/mcp`); with headers they differ. So one server is matched across configs
+by its identity instead: the URL with its scheme and host in lower case, the default port and a
+trailing slash dropped (path and query kept), plus its headers other than `Authorization`
+(names in lower case, values exact). The same URL for another tenant header is another server.
+
+### What Brigadier does with sign-ins (built)
+
+`crates/core/src/manager/mcp_auth/` and `Catalog::sign_in` in the registry:
+
+- Catalog state per agent (`SignInState`): `native` (the agent's own entry, not known to lack a
+  sign-in), `reusableFrom {agent}` (another agent's stored sign-in, read and found usable: an
+  unexpired access token or a refresh token), `inBrigadier {sinceMs}`, `needed`, `unknown`
+  (not read yet), `notAllowed {agent}` (macOS refused the read) and `unsupported` (sign-ins can't
+  be read or kept on this system). Each server also carries `pendingSignIn` (a sign-in in
+  Brigadier waiting for the browser) and `copyKey` (a keyed hash of its transport with its values,
+  so two copies with other values are two rows; no value can be read from it).
+- A worker whose server is served by another store (or by its own config when its own sign-in
+  can't) reaches it through Brigadier's proxy on 127.0.0.1: one path per worker and server, which
+  takes only that worker's key, checked before the body is read. The proxy adds a fresh access
+  token to each request, renews it when it expires within 60 s or once after a 401, and replays
+  the request. Neither the key nor a token appears in an answer, a log, an event or a command
+  line; Codex's terminal resume names it only through `bearer_token_env_var`. Codex gets the
+  proxied entry under the server's own name (the thread's config wins over the user's); Claude,
+  which keeps its own entry over a given one of the same name, has its own denied and gets the
+  proxied one under a new name.
+- A renewal takes the owning CLI's own lock (`mcp-refresh-<key>.lock` or
+  `mcp-oauth-locks/<sha256(key)>.lock`), reads its store again (adopting a token the CLI renewed
+  meanwhile), refreshes with the client the store or Codex's `[mcp_servers.<name>.oauth]` config
+  gives, and writes the new tokens back to that store and backend (Codex's
+  `mcp_oauth_credentials_store` is honoured). Claude's item is held as a JSON value and written
+  back with only the entry's `accessToken`, `refreshToken` and `expiresAt` changed, then read
+  once more. A store that changed under it, a write that doesn't read back, or a refused refresh
+  token ends the reuse. Brigadier never creates or deletes an entry in another CLI's store.
+- Keychain: a read of Claude's item deserializes only the one `mcpOAuth` entry asked for and
+  wipes the bytes at once. Settings' polling never asks (a store that would ask reads as
+  `unknown`, and what was read stays known for 30 s); a worker that needs another agent's sign-in
+  may show macOS's prompt once. A refusal shows as `notAllowed` and is remembered, so nothing asks
+  again, until `askMcpSignInAgain` clears it and reads once more.
+- The sign-in in Brigadier (`signInMcpServer`, answering at once with an id; `getMcpSignIn`
+  for how it went): discovery from the server's `WWW-Authenticate` resource metadata, dynamic
+  client registration, PKCE, a loopback redirect and the default browser, for up to 5 minutes.
+  `cancelMcpSignIn` closes the listener and saves nothing, `reopenMcpSignIn` opens the page again
+  (its link never leaves the daemon), and `signOutMcpServer` deletes only Brigadier's own
+  credential. The result is kept in Brigadier's own Keychain item (service `Brigadier MCP
+  sign-ins`), keyed by the server's identity, and serves workers of every agent. Failures are
+  plain: "The server didn't accept the sign-in.", "Timed out after 5 minutes. Nothing was saved."
+- Off macOS: Claude's `.credentials.json` and Codex's file store are read; Codex's keyring and
+  Brigadier's own sign-in aren't, and a server nothing else serves shows `unsupported`.
+- Tests use an in-memory Keychain and a fake OAuth server on localhost; none reads the user's
+  Keychain or credential files.
 
 ## (k) Plugins' skills and servers (claude 2.1.306, codex-cli 0.163.0)
 

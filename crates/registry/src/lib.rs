@@ -20,12 +20,17 @@
 //! [`Catalog::skill_native`]. Values of a server's environment and headers are [`Secret`]s: only
 //! their names leave Brigadier's process, never their values.
 //!
+//! A remote server with no credentials in its config signs in with OAuth, which each CLI keeps in
+//! a store of its own: [`Catalog::sign_in`] says which stored sign-in can serve a session, from
+//! what a [`SignInStores`] reads ([`sign_ins`]).
+//!
 //! [`Registry`] keeps the user's part current with a file watcher; a project's part is read when
 //! asked for. Variables (`${VAR}` in Claude's configs, `${env:VAR}` in Cursor's) expand from
 //! [`Roots::vars`], the environment the CLIs themselves run with.
 
 mod plugins;
 mod servers;
+mod sign_ins;
 mod skills;
 mod watch;
 
@@ -35,6 +40,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub use plugins::Plugin;
+pub use sign_ins::{
+    Owner, Probe, SignInStores, Unread, claude_key, claude_lock_name, codex_keys, identity,
+    owner_agent, sha256_hex,
+};
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
@@ -241,6 +250,10 @@ pub struct Server {
     pub plugin: Option<Plugin>,
     /// The file it is configured in (a plugin's `.mcp.json` or manifest).
     pub file: PathBuf,
+    /// The OAuth client its config names (Codex's `[mcp_servers.<name>.oauth]`, Claude's
+    /// `oauth.clientId`), which renewing its sign-in needs: no CLI stores a configured secret
+    /// with the token.
+    pub oauth: Option<OAuthClient>,
 }
 
 impl Server {
@@ -252,6 +265,25 @@ impl Server {
             None => self.name.clone(),
         }
     }
+}
+
+/// A pre-registered OAuth client of a server's config.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OAuthClient {
+    pub client_id: Option<String>,
+    pub client_secret: Option<Secret>,
+}
+
+/// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CodexStore {
+    /// The Keychain, else `$CODEX_HOME/.credentials.json` (its default).
+    #[default]
+    Auto,
+    File,
+    Keyring,
+    /// A value Brigadier doesn't know: its sign-ins aren't read.
+    Other,
 }
 
 /// A server, or a whole config file, that couldn't be read: no session gets it.
@@ -280,10 +312,17 @@ pub enum SignIn {
     Native,
     /// The sign-in another agent stored can serve it (read, and written back when renewed).
     ReusableFrom(Agent),
-    /// No agent's stored sign-in can: one sign-in in Brigadier serves it to every agent.
+    /// Brigadier's own sign-in serves it, to every agent.
     InBrigadier,
-    /// Not known: nothing reads the agents' stored sign-ins yet.
+    /// No stored sign-in serves it: the user signs in once, in an agent or in Brigadier.
+    Needed,
+    /// Not known: a store couldn't be read without asking the user, or it failed.
     Unknown,
+    /// The agent's stored sign-in can't be reused: the system wasn't allowed to let Brigadier
+    /// read it.
+    NotAllowed(Agent),
+    /// Sign-ins to it can't be checked or kept on this system.
+    Unsupported,
 }
 
 /// A session, as far as what it finds by itself goes.
@@ -323,6 +362,8 @@ pub struct Catalog {
     /// The plugins of Claude Code and Codex that are on: the user's and, read for a project,
     /// the project's.
     pub plugins: Vec<Plugin>,
+    /// Where Codex keeps its MCP sign-ins.
+    pub codex_store: CodexStore,
 }
 
 impl Catalog {
@@ -351,6 +392,7 @@ impl Catalog {
                 .map(servers::codex_trusted)
                 .unwrap_or_default(),
             plugins: Vec::new(),
+            codex_store: codex.as_ref().map(servers::codex_store).unwrap_or_default(),
         };
         skills::add_user(&mut catalog.skills, roots);
         let mut plugins = plugins::claude(roots, None);
@@ -442,15 +484,68 @@ impl Catalog {
         skill.roots.iter().any(|root| root.native(session))
     }
 
-    /// How `session`'s agent is signed in to `server`; `None` for one that doesn't sign in.
-    pub fn sign_in(&self, server: &Server, session: &Session<'_>) -> Option<SignIn> {
-        server.signs_in.then(|| {
-            if self.server_native(server, session) {
-                SignIn::Native
-            } else {
-                SignIn::Unknown
+    /// How `session`'s agent is signed in to `server`, from what `stores` read; `None` for one
+    /// that doesn't sign in.
+    pub fn sign_in(
+        &self,
+        server: &Server,
+        session: &Session<'_>,
+        stores: &dyn SignInStores,
+    ) -> Option<SignIn> {
+        self.sign_in_from(server, session, stores)
+            .map(|(sign_in, _)| sign_in)
+    }
+
+    /// As [`Self::sign_in`], with the entry whose agent's stored sign-in serves it for
+    /// [`SignIn::ReusableFrom`]: the agent's own sign-in when it has the server and isn't known
+    /// to lack one, else the first usable one of an entry with its [`identity`] (Claude's and
+    /// Codex's keys are an entry's), else Brigadier's own.
+    pub fn sign_in_from<'a>(
+        &'a self,
+        server: &'a Server,
+        session: &Session<'_>,
+        stores: &dyn SignInStores,
+    ) -> Option<(SignIn, Option<&'a Server>)> {
+        if !server.signs_in {
+            return None;
+        }
+        let native = self.server_native(server, session);
+        if native && stores.probe(session.agent.into(), server) != Probe::Absent {
+            return Some((SignIn::Native, None));
+        }
+        let (mut refused, mut unknown, mut unsupported) = (None, false, false);
+        let mut note = |probe| match probe {
+            Probe::Unknown => unknown = true,
+            Probe::Unsupported => unsupported = true,
+            Probe::Usable | Probe::Absent | Probe::Refused => {}
+        };
+        for entry in sign_ins::same_server(&self.servers, server) {
+            let Some(agent) = owner_agent(entry.source) else {
+                continue;
+            };
+            if native && entry.id == server.id && agent == session.agent {
+                continue;
             }
-        })
+            match stores.probe(agent.into(), entry) {
+                Probe::Usable => return Some((SignIn::ReusableFrom(agent), Some(entry))),
+                Probe::Refused => refused = refused.or(Some(agent)),
+                probe => note(probe),
+            }
+        }
+        match stores.probe(Owner::Brigadier, server) {
+            Probe::Usable => return Some((SignIn::InBrigadier, None)),
+            probe => note(probe),
+        }
+        // What stands in the way of a reuse, the one the user can act on first.
+        Some((
+            match (refused, unknown, unsupported) {
+                (Some(agent), _, _) => SignIn::NotAllowed(agent),
+                (None, true, _) => SignIn::Unknown,
+                (None, false, true) => SignIn::Unsupported,
+                (None, false, false) => SignIn::Needed,
+            },
+            None,
+        ))
     }
 
     pub fn server(&self, id: &str) -> Option<&Server> {
@@ -548,6 +643,31 @@ impl Registry {
             catalog.add_project(&self.roots, project);
         }
         catalog
+    }
+
+    /// Adds to `catalog` the servers and skills of `project`'s own config whose ids
+    /// `keep_server` and `keep_skill` take, as found there: items of another project the user
+    /// uses in every project. Its unreadable entries are left out.
+    pub fn adopt(
+        &self,
+        catalog: &mut Catalog,
+        project: &Path,
+        keep_server: impl Fn(&str) -> bool,
+        keep_skill: impl Fn(&str) -> bool,
+    ) {
+        let servers = servers::project(&self.roots, project, &mut Vec::new());
+        for server in servers {
+            if keep_server(&server.id) && catalog.server(&server.id).is_none() {
+                catalog.servers.push(server);
+            }
+        }
+        let mut skills = Vec::new();
+        skills::add_project(&mut skills, project);
+        for skill in skills {
+            if keep_skill(&skill.id) && !catalog.skills.iter().any(|known| known.id == skill.id) {
+                skills::merge(&mut catalog.skills, skill);
+            }
+        }
     }
 
     /// Reads the user's configs again.

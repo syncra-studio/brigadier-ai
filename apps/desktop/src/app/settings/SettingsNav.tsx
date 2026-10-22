@@ -82,7 +82,7 @@ export function SettingsNav() {
                         <span className="truncate">{result.row?.label ?? result.page.label}</span>
                         {result.row && (
                           <span className="text-foreground/50 truncate text-xs">
-                            {result.page.label}{result.row.section ? ` › ${result.row.section}` : ""}
+                            {result.page.label}{result.row.section ? ` › ${result.row.section}` : ""}{result.row.detail ? ` · ${result.row.detail}` : ""}
                           </span>
                         )}
                       </span>

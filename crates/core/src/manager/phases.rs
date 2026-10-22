@@ -1,10 +1,9 @@
 //! A request's phases, as the delegator runs them: the orchestrator splits a big request into
 //! phases only when they must run one after another, each phase gets one lead, and a lead whose
 //! work is big writes an outline first. The orchestrator gets the outline at once and gives the
-//! go-ahead (the user gives it under "Ask for approval"); a plan review by the other vendor runs
-//! in the background meanwhile, and its findings may arrive after the go-ahead. A verifier is
-//! the orchestrator's call, for big or risky work. Nothing here rejects, re-reviews or counts
-//! rounds.
+//! go-ahead (the user gives it under "Ask for approval"); it judges the outline itself, and a
+//! plan review is its call (`review_plan`). A verifier is the orchestrator's call, for big or
+//! risky work. Nothing here rejects, re-reviews or counts rounds.
 
 use tokio::sync::oneshot;
 
@@ -543,14 +542,9 @@ impl SessionManager {
                 "Plan mode is on: the user decides. Put this outline before them as your plan with propose_plan (in the plan's shape, its Changes from the outline), then reply [quiet]. Their yes gives task-{} its go-ahead; build nothing before it.",
                 task.number
             )
-        } else if self.reviews_on() {
-            format!(
-                "Judge the outline against the brief and call approve_outline (task-{}) now, with corrections for anything it gets wrong (the brief wins any conflict; never reopen what is settled). A plan review by the other vendor runs in the background: its findings arrive as a [plan review …] message, maybe after the go-ahead. There are no review rounds.",
-                task.number
-            )
         } else {
             format!(
-                "Judge the outline against the brief and call approve_outline (task-{}) now, with corrections for anything it gets wrong (the brief wins any conflict; never reopen what is settled). Reviews are off: no plan review runs.",
+                "Judge the outline against the brief and call approve_outline (task-{}) now, with corrections for anything it gets wrong (the brief wins any conflict; never reopen what is settled).",
                 task.number
             )
         };
@@ -564,10 +558,6 @@ impl SessionManager {
             },
         )
         .await;
-        if !plan_mode {
-            let manager = self.arc();
-            self.spawn(async move { manager.review_plan(&task, &outline).await });
-        }
         Ok("Outline received. End your turn now: the go-ahead, with any corrections, arrives as your next message. Build nothing before it.".into())
     }
 

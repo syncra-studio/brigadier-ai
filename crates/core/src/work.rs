@@ -1762,7 +1762,7 @@ pub struct Finding {
     pub location: Option<String>,
     #[serde(default)]
     pub status: FindingStatus,
-    /// The thread marked it high severity: its fix gets one targeted re-check.
+    /// The thread marked it high severity.
     #[serde(default)]
     pub high: bool,
 }
@@ -1804,6 +1804,12 @@ pub struct IntegratedCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub asked: Option<ChecksAsked>,
+    /// The thread's `run_checks` call went on before the verdict: the verdict is owed to it as
+    /// a message, whatever it did meanwhile, and is told again after a restart until a turn
+    /// took it (#513).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub owed: bool,
 }
 
 /// Who called `run_checks`, and what its run checks.
@@ -1910,6 +1916,23 @@ pub struct SessionHeadline {
     pub at_ms: i64,
 }
 
+/// Why the session's last merge into its base was refused (the merge rule, thread-truth grill
+/// Q5): the run_checks it needs haven't passed on the branch's commit. It stays until a merge
+/// goes through or the user says to merge anyway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeRefused {
+    /// In plain words: "The checks haven't run on 1a2b3c4d5e."
+    pub reason: String,
+    /// The commit it would have merged.
+    pub sha: String,
+    pub branch: String,
+    pub base: String,
+    /// The user can merge it anyway ("Merge anyway": merge_session with anyway).
+    pub waivable: bool,
+    pub at_ms: i64,
+}
+
 /// Where a background run stands.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
@@ -1932,8 +1955,7 @@ pub enum BackgroundRunState {
 }
 
 /// The thread's own changes for a request that no review covered yet, taken together
-/// (BUILD-PLAN B2): one review of all of them starts once they cross the size line, or once
-/// the thread marks them risky, and the range starts again after what it covered.
+/// (BUILD-PLAN B2): a `request_review` covers them, and the range starts again after it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UnreviewedRange {
@@ -1952,14 +1974,6 @@ pub struct UnreviewedRange {
     /// On a local checkout, the snapshot of its files when the request started.
     #[serde(default)]
     pub start: Option<String>,
-    /// Why the thread marked them risky (`run_check`'s `risky`), when it did.
-    #[serde(default)]
-    pub risky: Option<String>,
-    /// In a worktree, `tip` is a snapshot of changes the thread hadn't committed yet when
-    /// `run_check` started their review: the commit that follows with the same files needs no
-    /// review of its own.
-    #[serde(default)]
-    pub snapshot: bool,
 }
 
 /// The base's upstream at a session's merge (#224): the merge isn't pushed to it.
@@ -2514,6 +2528,11 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         record: Option<Box<MergeRecord>>,
+        /// It merged without a passing run_checks on its commit, because the user said to merge
+        /// anyway ("Merge anyway", or their own words).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(as = "Option<bool>", optional)]
+        checks_skipped: bool,
     },
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.
@@ -2573,6 +2592,10 @@ pub enum OrchestratorStepKind {
         base: String,
         /// Who sent the click: the client and how.
         origin: AnswerOrigin,
+        /// It was "Merge anyway": the user skips the checks a merge into the base needs.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(as = "Option<bool>", optional)]
+        anyway: bool,
     },
     /// The user cancelled the held merge (the pill's Cancel): its consent is spent.
     MergeCancelled { asked_in: String },

@@ -62,6 +62,20 @@ test("the Job card says what is happening right now, from the board's events, an
   assert.deepEqual(card("merging"), { tone: "running", headline: "Merging into main", detail: ["Checks passed on head111"], buttons: [] });
   assert.deepEqual(card("merged"), { tone: "merged", headline: "Merged into main · checks passed", detail: ["4e1c49e · 4 commits"], buttons: [] });
   assert.equal(seen["mergedUnchecked"]!.headline, "Merged into main");
+  // The merge rule refused it: the card says why, and only a refusal the user can waive offers Merge anyway.
+  assert.deepEqual(card("mergeRefused"), {
+    tone: "waiting",
+    headline: "Can’t merge yet",
+    detail: ["The checks haven't run on 7d2a91f, the tip of brigadier/s."],
+    buttons: ["Merge anyway"],
+  });
+  assert.equal(seen["mergeRefused"]!.timer, false);
+  assert.ok(seen.sent.includes("mergeSession anyway=true"), `Merge anyway merges without the checks: ${seen.sent.join(", ")}`);
+  assert.deepEqual(card("mergeRefusedFirm").buttons, []);
+  assert.equal(seen["mergeRefusedFirm"]!.headline, "Can’t merge yet");
+  assert.deepEqual(seen["mergeRefusedOld"]!.cards, ["context"]);
+  // After Merge anyway it never claims the checks passed.
+  assert.equal(seen["mergedAnyway"]!.headline, "Merged into main · checks skipped");
 
   // Waiting on you: the card points at the card below, never copies its words or buttons (R3).
   assert.deepEqual(card("waitingAnswer"), { tone: "waiting", headline: "Waiting for your answer below", detail: [], buttons: [] });

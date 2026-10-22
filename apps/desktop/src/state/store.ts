@@ -245,6 +245,9 @@ export const useApp = create<AppState>()(() => ({
     browserAskDownloads: false,
     mcpServersOff: [],
     skillsOff: [],
+    projectSwitches: [],
+    serversEverywhere: [],
+    skillsEverywhere: [],
     settingsVersion: 1,
   },
   threads: {},
@@ -692,6 +695,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "integratedCheckUpdated":
     case "backgroundRunUpdated":
     case "headlineSet":
+    case "mergeRefusalSet":
     case "mcpServersUpdated":
     case "threadCommitsSeen":
     case "unreviewedChanged":

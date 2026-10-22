@@ -65,6 +65,8 @@ const START_WATCH: Duration = Duration::from_millis(1500);
 const READY_POLL: Duration = Duration::from_secs(1);
 /// How much of a starting preview's log end is read for a build under way.
 const BUILD_SCAN: u64 = 16 * 1024;
+/// The longest `preview_log` waits for a starting preview.
+const WAIT_MAX_SECS: u32 = 300;
 /// Lines `preview_log` shows by default, and at most.
 const TAIL_DEFAULT: u32 = 40;
 const TAIL_MAX: u32 = 400;
@@ -714,12 +716,24 @@ impl SessionManager {
         if ended_at_once {
             live.ended.cancelled().await;
             return self
-                .preview_log_for(id, Some(&preview_id), Some(START_TAIL), task.is_some())
+                .preview_log_for(
+                    id,
+                    Some(&preview_id),
+                    Some(START_TAIL),
+                    None,
+                    task.is_some(),
+                )
                 .await
                 .map(|log| format!("{preview_id} ended at once.\n{log}"));
         }
         let output = self
-            .preview_log_for(id, Some(&preview_id), Some(START_TAIL), task.is_some())
+            .preview_log_for(
+                id,
+                Some(&preview_id),
+                Some(START_TAIL),
+                None,
+                task.is_some(),
+            )
             .await
             .unwrap_or_default();
         let state = if live.ready.is_cancelled() {
@@ -727,7 +741,9 @@ impl SessionManager {
         } else {
             format!(
                 "is starting, not ready yet: it reads Starting until {}. Don't tell the user it \
-                 runs before preview_log says it is running",
+                 runs before preview_log says it is running. To wait for it, call preview_log \
+                 with wait_secs (up to 300), which answers the moment it runs or ends; never \
+                 sleep in a command for it",
                 waits_for(kind)
             )
         };
@@ -1309,6 +1325,7 @@ impl SessionManager {
         task: &TaskId,
         preview: Option<&str>,
         tail_lines: Option<u32>,
+        wait_secs: Option<u32>,
     ) -> Result<String> {
         let board = self.core.board(id).await?;
         let found = match preview.map(str::trim).filter(|wanted| !wanted.is_empty()) {
@@ -1322,19 +1339,22 @@ impl SessionManager {
                 None => return Ok("You have started no preview.".into()),
             },
         };
-        self.preview_log_for(id, Some(&found), tail_lines, true)
+        self.preview_log_for(id, Some(&found), tail_lines, wait_secs, true)
             .await
     }
 
     /// `preview_log`: the end of a preview's output (the latest preview's by default), with an
-    /// `out-<id>` reference to its whole log as it stands now.
+    /// `out-<id>` reference to its whole log as it stands now; after up to `wait_secs` for one
+    /// that is starting to run or end.
     pub(crate) async fn preview_log(
         &self,
         id: &ConversationId,
         preview: Option<&str>,
         tail_lines: Option<u32>,
+        wait_secs: Option<u32>,
     ) -> Result<String> {
-        self.preview_log_for(id, preview, tail_lines, false).await
+        self.preview_log_for(id, preview, tail_lines, wait_secs, false)
+            .await
     }
 
     /// [`Self::preview_log`], for a worker when `worker`: it has no `read_artifact`, so its
@@ -1344,10 +1364,11 @@ impl SessionManager {
         id: &ConversationId,
         preview: Option<&str>,
         tail_lines: Option<u32>,
+        wait_secs: Option<u32>,
         worker: bool,
     ) -> Result<String> {
         let board = self.core.board(id).await?;
-        let found = match preview.map(str::trim).filter(|wanted| !wanted.is_empty()) {
+        let mut found = match preview.map(str::trim).filter(|wanted| !wanted.is_empty()) {
             Some(wanted) => board.previews.get(wanted).cloned().ok_or_else(|| {
                 Error::Invalid(format!(
                     "there is no {wanted} in this session{}",
@@ -1359,6 +1380,24 @@ impl SessionManager {
                 None => return Ok("No preview has been started in this session.".into()),
             },
         };
+        // A wait for one that is starting (a build under way) ends the moment it runs or ends,
+        // so a caller never sleeps blind past it (#510).
+        if let Some(secs) = wait_secs.filter(|secs| *secs > 0)
+            && found.state == PreviewState::Starting
+            && let Some(live) = self.previews.get(id, &found.id)
+        {
+            let wait = Duration::from_secs(u64::from(secs.min(WAIT_MAX_SECS)));
+            let _ = tokio::time::timeout(wait, async {
+                tokio::select! {
+                    () = live.ready.cancelled() => {}
+                    () = live.ended.cancelled() => {}
+                }
+            })
+            .await;
+            if let Some(now) = self.core.board(id).await?.previews.get(&found.id) {
+                found = now.clone();
+            }
+        }
         let lines = tail_lines.unwrap_or(TAIL_DEFAULT).clamp(1, TAIL_MAX);
         let (bytes, alias) = match self.previews.get(id, &found.id) {
             Some(live) => {

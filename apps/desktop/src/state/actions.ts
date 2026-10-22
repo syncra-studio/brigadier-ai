@@ -1199,6 +1199,12 @@ export async function cancelMerge(conversationId: string): Promise<string> {
   return text;
 }
 
+/** "Merge anyway": merges the session into its base without the checks the merge rule wants. */
+export async function mergeAnyway(conversationId: string): Promise<string> {
+  const { text } = await request({ method: "mergeSession", conversationId, anyway: true });
+  return text;
+}
+
 /** "Close workspace": removes the session's own worktree; says what went and what stayed. */
 export async function closeWorkspace(conversationId: string): Promise<string> {
   const { text } = await request({ method: "closeWorkspace", conversationId });

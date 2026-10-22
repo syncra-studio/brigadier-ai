@@ -37,29 +37,17 @@ done
 # process can apply one before building the Swift bridges in apple-metal/apple-cf.
 # When a session's sandbox refuses it, keep that sandbox and skip only SwiftPM's.
 stand_ins=()
-swift_wrapper=""
 cleanup() {
-  if [ -n "$swift_wrapper" ]; then rm -rf -- "$swift_wrapper"; fi
   rm -f ${stand_ins[@]+"${stand_ins[@]}"}
 }
 trap cleanup EXIT
-if [ "$(uname)" = Darwin ] && ! /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true 2>/dev/null; then
+# The probe denies something: inside a sandbox that allows everything, an identical profile
+# still applies.
+if [ "$(uname)" = Darwin ] && ! /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny file-write* (literal "/private/var/empty/nested-probe"))' /usr/bin/true 2>/dev/null; then
   echo "+ SwiftPM uses the existing sandbox (--disable-sandbox)"
-  BRIGADIER_CHECKS_SWIFT="$(command -v swift)"
-  export BRIGADIER_CHECKS_SWIFT
-  mkdir -p "${CARGO_TARGET_DIR:-target}"
-  swift_wrapper="$(mktemp -d "${CARGO_TARGET_DIR:-$PWD/target}/full-checks-swift.XXXXXX")"
-  swift_wrapper="$(cd "$swift_wrapper" && pwd)"
-  cat > "$swift_wrapper/swift" <<'SWIFT'
-#!/bin/sh
-if [ "${1:-}" = build ]; then
-  shift
-  exec "$BRIGADIER_CHECKS_SWIFT" build --disable-sandbox "$@"
-fi
-exec "$BRIGADIER_CHECKS_SWIFT" "$@"
-SWIFT
-  chmod +x "$swift_wrapper/swift"
-  export PATH="$swift_wrapper:$PATH"
+  BRIGADIER_SWIFT="$(command -v swift)"
+  export BRIGADIER_SWIFT
+  export PATH="$PWD/tools/nested-swift:$PATH"
 fi
 
 nice_prefix=()

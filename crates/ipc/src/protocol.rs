@@ -908,9 +908,13 @@ pub enum Request {
         sent: bool,
     },
     /// The user clicked "Merge into main" on the side panel: the session branch merges into
-    /// its base on this click, once.
+    /// its base on this click, once. `anyway`: it was "Merge anyway", the user skipping the
+    /// checks a merge into the base needs (the card shows it on a refused merge).
     MergeSession {
         conversation_id: ConversationId,
+        #[serde(default)]
+        #[ts(optional, as = "Option<bool>")]
+        anyway: bool,
     },
     /// "Close workspace": removes the session's own worktree, its uncommitted changes kept as
     /// a commit on its branch first. The next change makes a fresh one in the same folder.
@@ -1229,6 +1233,40 @@ pub enum Request {
     /// machine name, with a project's own when `projectId` is given. Switching one off goes
     /// through [`Request::UpdateSettings`] (`mcpServersOff`, `skillsOff`).
     GetIntegrations {
+        project_id: Option<ProjectId>,
+    },
+    /// Signs in to the remote MCP server `serverId` (an id of [`Request::GetIntegrations`]'s
+    /// catalog, of `projectId`'s when given; a project the user doesn't trust is refused) once
+    /// in Brigadier, in the user's browser. Answers at once with the sign-in's id; how it went
+    /// comes from [`Request::GetMcpSignIn`]. The sign-in then serves every agent's workers.
+    SignInMcpServer {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
+    /// How sign-in `id` ([`Request::SignInMcpServer`]) went. Never carries a token.
+    GetMcpSignIn {
+        id: String,
+    },
+    /// Stops sign-in `id` while it waits for the browser: its callback listener closes,
+    /// nothing is saved, and [`Request::GetMcpSignIn`] reports it cancelled.
+    CancelMcpSignIn {
+        id: String,
+    },
+    /// Opens sign-in `id`'s page in the user's browser again, while it waits.
+    ReopenMcpSignIn {
+        id: String,
+    },
+    /// Deletes Brigadier's own sign-in to the server `serverId` (of `projectId`'s catalog when
+    /// given), if it has one. Claude Code's and Codex's own stores are never touched.
+    SignOutMcpServer {
+        server_id: String,
+        project_id: Option<ProjectId>,
+    },
+    /// Forgets that macOS refused to let Brigadier read another agent's sign-in for the
+    /// server `serverId` and reads it once more, so macOS asks again. The new state arrives
+    /// with the next [`Request::GetIntegrations`].
+    AskMcpSignInAgain {
+        server_id: String,
         project_id: Option<ProjectId>,
     },
     /// Adds an extra account of `provider` (a CLI home of its own) and opens the terminal
@@ -1943,6 +1981,16 @@ pub enum Response {
     GetIntegrations {
         integrations: brigadier_core::manager::integrations::IntegrationsView,
     },
+    SignInMcpServer {
+        id: String,
+    },
+    GetMcpSignIn {
+        status: brigadier_core::manager::McpSignInStatus,
+    },
+    CancelMcpSignIn,
+    ReopenMcpSignIn,
+    SignOutMcpServer,
+    AskMcpSignInAgain,
     AddAccount {
         account: AccountEntry,
         terminal: TerminalInfo,

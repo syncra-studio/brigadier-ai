@@ -19,6 +19,8 @@ import { copyFileSync, chmodSync, cpSync, mkdirSync, readFileSync, rmSync, write
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { canSandbox, nestedSwiftEnv } from "./nested-swift.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
 const binariesDir = resolve(here, "../src-tauri/binaries");
@@ -90,6 +92,13 @@ const helperDir = resolve(repoRoot, "helpers/computer-use");
 // The helper is its own workspace; its output lives beside the main build's.
 const helperTargetDir = join(targetDir, "computer-use");
 
+/** The environment the helper builds in: inside a sandbox, SwiftPM keeps it (nested-swift.mjs). */
+function helperEnv() {
+  if (canSandbox()) return process.env;
+  console.log("SwiftPM uses the existing sandbox (--disable-sandbox)");
+  return nestedSwiftEnv(repoRoot, process.env);
+}
+
 /** Builds the helper for `triple` and returns the path of the produced binary. */
 function buildHelper(triple) {
   const cargoArgs = ["build", "--locked", "-p", helperBin, "--bin", helperBin];
@@ -97,7 +106,7 @@ function buildHelper(triple) {
   cargoArgs.push("--target-dir", helperTargetDir);
   const crossTarget = triple !== host;
   if (crossTarget) cargoArgs.push("--target", triple);
-  execFileSync("cargo", cargoArgs, { cwd: helperDir, stdio: "inherit" });
+  execFileSync("cargo", cargoArgs, { cwd: helperDir, stdio: "inherit", env: helperEnv() });
   return join(helperTargetDir, crossTarget ? triple : "", profile, helperBin);
 }
 

@@ -614,7 +614,11 @@ impl SessionManager {
             OrchestratorCall::FinishSession(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 let consent = args.consent.as_deref().unwrap_or(&args.user_words);
-                crate::heap(|| self.finish_session_when(id, consent, args.message, args.when)).await
+                let anyway = args.anyway.as_deref();
+                crate::heap(|| {
+                    self.finish_session_when(id, consent, args.message, args.when, anyway)
+                })
+                .await
             }
             OrchestratorCall::StopMerge(args) => {
                 crate::heap(|| self.stop_merge(id, &args.why)).await
@@ -729,7 +733,10 @@ impl SessionManager {
                 crate::heap(|| self.stop_preview_tool(id, args.id.as_deref(), None)).await
             }
             OrchestratorCall::PreviewLog(args) => {
-                crate::heap(|| self.preview_log(id, args.id.as_deref(), args.tail_lines)).await
+                crate::heap(|| {
+                    self.preview_log(id, args.id.as_deref(), args.tail_lines, args.wait_secs)
+                })
+                .await
             }
             OrchestratorCall::ListSessions(args) => {
                 crate::heap(|| self.list_sessions(id, args.query.as_deref(), args.project)).await
@@ -1036,6 +1043,7 @@ impl SessionManager {
                         &task_id,
                         args.id.as_deref(),
                         args.tail_lines,
+                        args.wait_secs,
                     )
                 })
                 .await

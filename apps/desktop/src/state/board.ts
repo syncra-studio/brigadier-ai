@@ -20,6 +20,7 @@ import type {
   IntegratedCheck,
   MachineStep,
   MemoryChange,
+  MergeRefused,
   MessageQueue,
   Notice,
   OrchestratorLogEntry,
@@ -94,6 +95,8 @@ export type Board = {
   backgroundRuns: Record<string, BackgroundRun>;
   /** What the session is doing now, in the thread's words (set_headline); null once the user wrote since. */
   headline: SessionHeadline | null;
+  /** Why the last merge into the base was refused (the merge rule), while it stands; null once a merge went through or the user said to merge anyway. */
+  mergeRefused: MergeRefused | null;
   /** The ended previews and runs the user dismissed or restarted from the Background rows (Q94), by id. */
   backgroundCleared: string[];
   /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
@@ -376,6 +379,7 @@ export function emptyBoard(conversationId: string): Board {
     integratedChecks: {},
     backgroundRuns: {},
     headline: null,
+    mergeRefused: null,
     backgroundCleared: [],
     mcpServers: {},
     overnight: {},
@@ -429,6 +433,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "reviewUpdated",
   "integratedCheckUpdated",
   "headlineSet",
+  "mergeRefusalSet",
   "mcpServersUpdated",
   "previewUpdated",
   "previewsCleared",
@@ -499,6 +504,8 @@ export function boardFromView(
     backgroundRuns: byId(view.backgroundRuns ?? []),
     // Nor one from before the thread wrote a headline.
     headline: view.headline ?? null,
+    // Nor one from before the merge rule.
+    mergeRefused: view.mergeRefused ?? null,
     backgroundCleared: view.backgroundCleared ?? [],
     // Nor one from before agents told their MCP servers.
     mcpServers: Object.fromEntries((view.mcpServers ?? []).map((agent) => [mcpAgentKey(agent.taskId), agent])),
@@ -710,6 +717,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
     case "headlineSet":
       return { ...board, headline: event.headline };
+    case "mergeRefusalSet":
+      return { ...board, mergeRefused: event.refusal };
     case "mcpServersUpdated": {
       const key = mcpAgentKey(event.taskId);
       const { [key]: _gone, ...others } = board.mcpServers;

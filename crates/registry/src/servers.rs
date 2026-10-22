@@ -1,10 +1,15 @@
 //! Reading MCP servers from each agent's config.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
+use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 
-use crate::{Agent, Plugin, Problem, Roots, Secret, Server, Source, Transport, plugins, server_id};
+use crate::{
+    Agent, CodexStore, OAuthClient, Plugin, Problem, Roots, Secret, Server, Source, Transport,
+    plugins, server_id,
+};
 
 /// How a source writes variables in its values.
 #[derive(Clone, Copy)]
@@ -29,6 +34,8 @@ struct Origin<'a> {
     file: &'a Path,
     /// A Claude plugin's folder, which `${CLAUDE_PLUGIN_ROOT}` names.
     plugin_root: Option<&'a Path>,
+    /// `mcpServers` with its keys in written order.
+    written: Option<&'a Written>,
 }
 
 /// The user's servers: Claude Code's user and local scopes, Codex's, Claude Desktop's and
@@ -39,7 +46,9 @@ pub(crate) fn user(
     problems: &mut Vec<Problem>,
 ) -> Vec<Server> {
     let mut servers = Vec::new();
-    if let Some(claude) = read_json(&roots.claude_json, Source::ClaudeUser, None, problems) {
+    if let Some((claude, written)) =
+        read_json(&roots.claude_json, Source::ClaudeUser, None, problems)
+    {
         if let Some(own) = claude.get("mcpServers").and_then(Value::as_object) {
             servers.extend(json_servers(
                 own,
@@ -50,6 +59,7 @@ pub(crate) fn user(
                     variables: Variables::Claude,
                     file: &roots.claude_json,
                     plugin_root: None,
+                    written: written.get("mcpServers"),
                 },
                 roots,
                 problems,
@@ -74,6 +84,10 @@ pub(crate) fn user(
                     variables: Variables::Claude,
                     file: &roots.claude_json,
                     plugin_root: None,
+                    written: written
+                        .get("projects")
+                        .and_then(|projects| projects.get(&path.to_string_lossy()))
+                        .and_then(|project| project.get("mcpServers")),
                 },
                 roots,
                 problems,
@@ -92,7 +106,7 @@ pub(crate) fn user(
         ));
     }
     if let Some(file) = roots.desktop_config.as_deref()
-        && let Some(desktop) = read_json(file, Source::Desktop, None, problems)
+        && let Some((desktop, written)) = read_json(file, Source::Desktop, None, problems)
         && let Some(own) = desktop.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -104,13 +118,14 @@ pub(crate) fn user(
                 variables: Variables::None,
                 file,
                 plugin_root: None,
+                written: written.get("mcpServers"),
             },
             roots,
             problems,
         ));
     }
     let file = roots.cursor_dir.join("mcp.json");
-    if let Some(cursor) = read_json(&file, Source::CursorUser, None, problems)
+    if let Some((cursor, written)) = read_json(&file, Source::CursorUser, None, problems)
         && let Some(own) = cursor.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -122,6 +137,7 @@ pub(crate) fn user(
                 variables: Variables::Cursor,
                 file: &file,
                 plugin_root: None,
+                written: written.get("mcpServers"),
             },
             roots,
             problems,
@@ -134,7 +150,8 @@ pub(crate) fn user(
 pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>) -> Vec<Server> {
     let mut servers = Vec::new();
     let file = project.join(".mcp.json");
-    if let Some(config) = read_json(&file, Source::ClaudeProject, Some(project), problems)
+    if let Some((config, written)) =
+        read_json(&file, Source::ClaudeProject, Some(project), problems)
         && let Some(own) = config.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -146,6 +163,7 @@ pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>
                 variables: Variables::Claude,
                 file: &file,
                 plugin_root: None,
+                written: written.get("mcpServers"),
             },
             roots,
             problems,
@@ -153,7 +171,8 @@ pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>
     }
     servers.extend(codex_layers(roots, project, project, problems));
     let file = project.join(".cursor").join("mcp.json");
-    if let Some(config) = read_json(&file, Source::CursorProject, Some(project), problems)
+    if let Some((config, written)) =
+        read_json(&file, Source::CursorProject, Some(project), problems)
         && let Some(own) = config.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -165,6 +184,7 @@ pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>
                 variables: Variables::Cursor,
                 file: &file,
                 plugin_root: None,
+                written: written.get("mcpServers"),
             },
             roots,
             problems,
@@ -242,6 +262,19 @@ pub(crate) fn codex_trusted(config: &toml::Table) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Where Codex keeps MCP sign-ins (`mcp_oauth_credentials_store`, `auto` by default).
+pub(crate) fn codex_store(config: &toml::Table) -> CodexStore {
+    match config
+        .get("mcp_oauth_credentials_store")
+        .and_then(toml::Value::as_str)
+    {
+        None | Some("auto") => CodexStore::Auto,
+        Some("file") => CodexStore::File,
+        Some("keyring") => CodexStore::Keyring,
+        Some(_) => CodexStore::Other,
+    }
+}
+
 /// `mcpServers` of a JSON config (Claude Code, Claude Desktop, Cursor).
 fn json_servers(
     own: &Map<String, Value>,
@@ -285,12 +318,18 @@ fn json_servers(
                 );
                 continue;
             }
-            Transport::Http {
-                url,
-                headers: string_map(config.get("headers"))
-                    .map(|(header, value)| (header, Secret::new(expand(&value))))
-                    .collect(),
+            let mut headers: Vec<(String, Secret)> = string_map(config.get("headers"))
+                .map(|(header, value)| (header, Secret::new(expand(&value))))
+                .collect();
+            // Claude Code's sign-in key hashes them in the order they are written.
+            if let Some(written) = origin
+                .written
+                .and_then(|servers| servers.get(name))
+                .and_then(|server| server.get("headers"))
+            {
+                headers.sort_by_key(|(header, _)| written.position(header));
             }
+            Transport::Http { url, headers }
         } else if let Some(command) = config.get("command").and_then(Value::as_str) {
             if let Some(kind) = kind.filter(|kind| *kind != "stdio") {
                 problem(
@@ -324,13 +363,16 @@ fn json_servers(
             problem(name, None, "It has no command or url".into());
             continue;
         };
-        servers.push(server(
-            name,
-            origin.source,
-            origin.project,
-            origin.file,
-            transport,
-        ));
+        let mut server = server(name, origin.source, origin.project, origin.file, transport);
+        server.oauth = config
+            .get("oauth")
+            .and_then(|oauth| oauth.get("clientId"))
+            .and_then(Value::as_str)
+            .map(|id| OAuthClient {
+                client_id: Some(expand(id)),
+                client_secret: None,
+            });
+        servers.push(server);
     }
     servers
 }
@@ -439,13 +481,24 @@ fn toml_servers(
             ));
             continue;
         };
-        servers.push(server(
+        let mut server = server(
             name,
             source,
             layer.map(|(project, _)| project),
             file,
             transport,
-        ));
+        );
+        server.oauth = config
+            .get("oauth")
+            .and_then(toml::Value::as_table)
+            .map(|oauth| {
+                let text = |key: &str| oauth.get(key).and_then(toml::Value::as_str);
+                OAuthClient {
+                    client_id: text("client_id").map(str::to_owned),
+                    client_secret: text("client_secret").map(Secret::new),
+                }
+            });
+        servers.push(server);
     }
     servers
 }
@@ -468,6 +521,7 @@ fn server(
         signs_in,
         plugin: None,
         file: file.to_owned(),
+        oauth: None,
     }
 }
 
@@ -501,6 +555,7 @@ pub(crate) fn plugin(
                 variables: Variables::Claude,
                 file: &file,
                 plugin_root: Some(&plugin.root),
+                written: None,
             },
             roots,
             problems,
@@ -663,15 +718,23 @@ fn file_problem(
     }
 }
 
+/// A JSON config, and its objects' keys in written order when it has headers.
 fn read_json(
     path: &Path,
     source: Source,
     project: Option<&Path>,
     problems: &mut Vec<Problem>,
-) -> Option<Value> {
+) -> Option<(Value, Written)> {
     let text = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str(&text) {
-        Ok(value) => Some(value),
+        Ok(value) => {
+            let written = if text.contains("\"headers\"") {
+                serde_json::from_str(&text).unwrap_or_default()
+            } else {
+                Written::default()
+            };
+            Some((value, written))
+        }
         Err(error) => {
             tracing::warn!(path = %path.display(), %error, "unreadable MCP config");
             problems.push(file_problem(path, source, project, Some(error.line())));
@@ -704,5 +767,77 @@ fn read_toml(
             problems.push(file_problem(path, source, project, line));
             None
         }
+    }
+}
+
+/// A JSON value's objects with their keys in the order they are written (serde_json's `Map`
+/// sorts them). Arrays and scalars keep nothing.
+#[derive(Default)]
+struct Written(Vec<(String, Written)>);
+
+impl Written {
+    fn get(&self, key: &str) -> Option<&Written> {
+        self.0
+            .iter()
+            .find(|(own, _)| own == key)
+            .map(|(_, value)| value)
+    }
+
+    /// Where `key` is written first, as JavaScript keeps a repeated key.
+    fn position(&self, key: &str) -> Option<usize> {
+        self.0.iter().position(|(own, _)| own == key)
+    }
+}
+
+impl<'de> Deserialize<'de> for Written {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(WrittenVisitor)
+    }
+}
+
+struct WrittenVisitor;
+
+impl<'de> Visitor<'de> for WrittenVisitor {
+    type Value = Written;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("JSON")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Written, A::Error> {
+        let mut keys = Vec::new();
+        while let Some(key) = map.next_key::<String>()? {
+            keys.push((key, map.next_value()?));
+        }
+        Ok(Written(keys))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Written, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(Written::default())
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Written, E> {
+        Ok(Written::default())
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Written, E> {
+        Ok(Written::default())
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Written, E> {
+        Ok(Written::default())
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Written, E> {
+        Ok(Written::default())
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<Written, E> {
+        Ok(Written::default())
+    }
+
+    fn visit_unit<E>(self) -> Result<Written, E> {
+        Ok(Written::default())
     }
 }

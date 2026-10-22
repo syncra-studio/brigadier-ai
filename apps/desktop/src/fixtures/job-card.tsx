@@ -26,8 +26,8 @@ mockIPC((command, payload) => {
   if (command === "open_url") sent.push(`open ${(payload as { url: string }).url}`);
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  sent.push(req.method);
-  return req.method === "cancelMerge" ? { method: req.method, text: "Cancelled" } : { method: req.method };
+  sent.push(req.method === "mergeSession" ? `mergeSession anyway=${String(req.anyway)}` : req.method);
+  return req.method === "cancelMerge" || req.method === "mergeSession" ? { method: req.method, text: "Done" } : { method: req.method };
 });
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
@@ -52,6 +52,15 @@ const held = step(T0 + 2 * MIN, { type: "mergeHeld", branch: "brigadier/s", base
 const passedOn = (tip: string) => byId([check(1, tip, { type: "passed", commands: ["a", "b", "c", "d", "e"] }, T0 + 3 * MIN, T0 + 8 * MIN)]);
 const merged = (head: string) =>
   step(T0 + 9 * MIN, { type: "merged", branch: "brigadier/s", base: "main", commits: 4, askedIn: null, head, mergeCommit: "4e1c49e0001" });
+/** The merge rule refused the merge: no run_checks pass on its commit. */
+const refused = (waivable: boolean) => ({
+  reason: "The checks haven't run on 7d2a91f, the tip of brigadier/s.",
+  sha: "7d2a91f000",
+  branch: "brigadier/s",
+  base: "main",
+  waivable,
+  atMs: T0 + 4 * MIN,
+});
 const question: Question = { id: "q1", kind: { type: "orchestrator" }, answer: null, answeredAtMs: null, answers: [], createdAtMs: T0 + 5 * MIN, items: [{ question: "Build the page as drawn?", options: [] }] } as unknown as Question;
 const plan = {
   id: "p1", conversationId: "c", requestId: "r1", position: 0, title: "Settings", body: "# Settings", state: { type: "approved" }, createdAtMs: T0, decidedAtMs: T0,
@@ -66,6 +75,7 @@ const plan = {
 const MOMENTS: Record<string, Partial<Board>> = {
   // First: the page doesn't scroll (the app's root clips), and their buttons are clicked.
   heldMerge: { ...working, tasks: byId([task("t1", "running")]), orchestratorSteps: [held] },
+  mergeRefused: { ...working, mergeRefused: refused(true) },
   ciFailed: { ...ended, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "completed", "failure", 5, 5)], "failed")] },
   idle: ended,
   working: { ...working, tasks: byId([task("t1", "running")]) },
@@ -79,6 +89,10 @@ const MOMENTS: Record<string, Partial<Board>> = {
   merging: { ...working, integratedChecks: passedOn("head111"), orchestratorSteps: [step(T0 + 9 * MIN, { type: "mergeRequested", id: "m1", branch: "brigadier/s", base: "main", origin: {} })] },
   merged: { ...ended, integratedChecks: passedOn("head111"), orchestratorSteps: [merged("head111")] },
   mergedUnchecked: { ...ended, integratedChecks: passedOn("other22"), orchestratorSteps: [merged("head111")] },
+  mergeRefusedFirm: { ...working, mergeRefused: refused(false) },
+  // The user wrote since the refusal: it is theirs to raise again, not the card's.
+  mergeRefusedOld: { requests: byId([request("r2", T0 + 5 * MIN, { type: "done" }, T0 + 6 * MIN)]), mergeRefused: refused(true) },
+  mergedAnyway: { ...ended, orchestratorSteps: [step(T0 + 9 * MIN, { type: "merged", branch: "brigadier/s", base: "main", commits: 4, askedIn: null, head: "7d2a91f000", mergeCommit: "4e1c49e0001", checksSkipped: true })] },
   waitingAnswer: { ...working, questions: { q1: question } },
   waitingApproval: { ...working, approvals: { a1: { id: "a1", state: { type: "pending" }, createdAtMs: T0 + 5 * MIN, subject: { type: "cli" } } as unknown as ShownApproval } },
   workerFailed: { ...working, tasks: byId([task("t1", "failed", { error: "The registry tests failed" })]) },
@@ -183,7 +197,9 @@ function Fixture() {
           ];
         }),
       );
-      // The held merge's Cancel and CI's Open CI do what the rail's pills did.
+      // The held merge's Cancel and CI's Open CI do what the rail's pills did; Merge anyway merges without the checks.
+      const anyway = document.querySelector('[data-column="mergeRefused"] [data-slot="merge-anyway"]');
+      if (anyway) await fixtureClick(anyway);
       const cancel = document.querySelector('[data-column="heldMerge"] [data-slot="merge-cancel"]');
       if (cancel) await fixtureClick(cancel);
       const openCi = document.querySelector('[data-column="ciFailed"] [data-slot="job-open-ci"]');

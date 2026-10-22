@@ -11,7 +11,7 @@ import { Button } from "@/components/controls";
 import { ConfirmDialog } from "@/components/overlays";
 import { openUrl } from "@/ipc/client";
 import { cn } from "@/lib/utils";
-import { cancelMerge } from "@/state/actions";
+import { cancelMerge, mergeAnyway } from "@/state/actions";
 
 /**
  * A card of the summary's column beside the context card (Q88): the same surface, its own card.
@@ -57,35 +57,55 @@ function elapsedOf(live: LiveJob, nowMs: number): number | undefined {
 
 /**
  * The live job's buttons (R2): Open CI for the push CI checks, Cancel for the merge held until
- * workers finish. They were the composer rail's pills; now they are the card's.
+ * workers finish (they were the composer rail's pills; now they are the card's), and Merge
+ * anyway for a merge the merge rule refused.
  */
 export function LiveButtons({ conversationId, actions }: { conversationId: string; actions: readonly LiveAction[] }) {
-  const cancel = useAction();
+  const merge = useAction();
   if (actions.length === 0) return null;
   return (
     <>
-      {actions.map((action) =>
-        action.type === "openCi" ? (
-          <Button key={action.type} type="button" size="xs" variant="secondary" data-slot="job-open-ci" onClick={() => void openUrl(action.url).catch(() => {})}>
-            Open CI
-          </Button>
-        ) : (
-          <Button
-            key={action.type}
-            type="button"
-            size="xs"
-            variant="secondary"
-            data-slot="merge-cancel"
-            disabled={cancel.busy}
-            onClick={() => cancel.run(() => cancelMerge(conversationId))}
-          >
-            Cancel
-          </Button>
-        ),
-      )}
-      {cancel.error && (
+      {actions.map((action) => {
+        switch (action.type) {
+          case "openCi":
+            return (
+              <Button key={action.type} type="button" size="xs" variant="secondary" data-slot="job-open-ci" onClick={() => void openUrl(action.url).catch(() => {})}>
+                Open CI
+              </Button>
+            );
+          case "cancelMerge":
+            return (
+              <Button
+                key={action.type}
+                type="button"
+                size="xs"
+                variant="secondary"
+                data-slot="merge-cancel"
+                disabled={merge.busy}
+                onClick={() => merge.run(() => cancelMerge(conversationId))}
+              >
+                Cancel
+              </Button>
+            );
+          case "mergeAnyway":
+            return (
+              <Button
+                key={action.type}
+                type="button"
+                size="xs"
+                variant="secondary"
+                data-slot="merge-anyway"
+                disabled={merge.busy}
+                onClick={() => merge.run(() => mergeAnyway(conversationId))}
+              >
+                Merge anyway
+              </Button>
+            );
+        }
+      })}
+      {merge.error && (
         <p role="alert" className="text-destructive text-xs">
-          {cancel.error}
+          {merge.error}
         </p>
       )}
     </>

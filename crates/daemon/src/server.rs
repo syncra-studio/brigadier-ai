@@ -744,14 +744,17 @@ impl Session {
                     .map(|()| Response::AnswerQuestion)
                     .map_err(IpcError::from)
             }
-            Request::MergeSession { conversation_id } => {
+            Request::MergeSession {
+                conversation_id,
+                anyway,
+            } => {
                 let origin = brigadier_core::work::AnswerOrigin {
                     input: Some(brigadier_core::work::AnswerInput::Click),
                     client: self.client.name.clone(),
                     pid: self.client.pid,
                 };
                 let sessions = self.daemon.sessions.clone();
-                heap(|| sessions.merge_session(&conversation_id, origin))
+                heap(|| sessions.merge_session(&conversation_id, origin, anyway))
                     .await
                     .map(|text| Response::MergeSession { text })
                     .map_err(IpcError::from)
@@ -2622,6 +2625,50 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetIntegrations { project_id } => Response::GetIntegrations {
             integrations: daemon.sessions.integrations_view(project_id).await?,
         },
+        Request::SignInMcpServer {
+            server_id,
+            project_id,
+        } => Response::SignInMcpServer {
+            id: daemon
+                .sessions
+                .sign_in_mcp_server(
+                    &server_id,
+                    project_id,
+                    std::sync::Arc::new(crate::connect::open_in_browser),
+                )
+                .await?,
+        },
+        Request::GetMcpSignIn { id } => Response::GetMcpSignIn {
+            status: daemon.sessions.mcp_sign_in(&id)?,
+        },
+        Request::CancelMcpSignIn { id } => {
+            daemon.sessions.cancel_mcp_sign_in(&id)?;
+            Response::CancelMcpSignIn
+        }
+        Request::ReopenMcpSignIn { id } => {
+            daemon.sessions.reopen_mcp_sign_in(&id)?;
+            Response::ReopenMcpSignIn
+        }
+        Request::SignOutMcpServer {
+            server_id,
+            project_id,
+        } => {
+            daemon
+                .sessions
+                .sign_out_mcp_server(&server_id, project_id)
+                .await?;
+            Response::SignOutMcpServer
+        }
+        Request::AskMcpSignInAgain {
+            server_id,
+            project_id,
+        } => {
+            daemon
+                .sessions
+                .ask_mcp_sign_in_again(&server_id, project_id)
+                .await?;
+            Response::AskMcpSignInAgain
+        }
         Request::RemoveAccount { id } => Response::RemoveAccount {
             settings: Box::new(heap(|| daemon.sessions.remove_account(&id)).await?),
         },

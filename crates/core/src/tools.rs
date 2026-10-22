@@ -551,7 +551,7 @@ pub struct RunCheck {
     pub name: Option<String>,
 }
 
-/// The thread's `run_check`: a worker's, and its change's risk (BUILD-PLAN B2).
+/// The thread's `run_check`: a worker's, and the commit it asks for on a pass.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ThreadRunCheck {
@@ -577,11 +577,6 @@ pub struct ThreadRunCheck {
     /// it while it runs.
     #[serde(default)]
     pub name: Option<String>,
-    /// Why your change for this request is risky, when it is (persistence, security,
-    /// migrations, concurrency, deletion, public API): it then gets an other-vendor review
-    /// whatever its size.
-    #[serde(default)]
-    pub risky: Option<String>,
     /// A commit message: when the check passes, all your changes are committed with it and
     /// your trailer, in this same call; when it fails, nothing is. Not on the user's own
     /// checkout.
@@ -589,22 +584,21 @@ pub struct ThreadRunCheck {
     pub commit: Option<String>,
     /// The review findings this change fixes, by id (`R1.2`), when it does nothing else: when
     /// the check passes they are recorded fixed, checked by it, and its `commit` carries their
-    /// Fixes trailer, so it gets no review of its own.
+    /// Fixes trailer.
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub fixes: Vec<String>,
     /// Those of `fixes` of high severity (it loses data, breaks a build or a security
-    /// boundary): their fix gets one targeted re-check.
+    /// boundary).
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub high: Vec<String>,
 }
 
-/// The parts of the thread's `run_check`: the check, the risk it marks, the commit it asks
-/// for on a pass, the review findings that pass fixes and those of them that are high.
+/// The parts of the thread's `run_check`: the check, the commit it asks for on a pass, the
+/// review findings that pass fixes and those of them that are high.
 pub struct ThreadCheckParts {
     pub check: RunCheck,
-    pub risky: Option<String>,
     pub commit: Option<String>,
     pub fixes: Vec<String>,
     pub high: Vec<String>,
@@ -621,7 +615,6 @@ impl ThreadRunCheck {
                 inputs: self.inputs,
                 name: self.name,
             },
-            risky: self.risky,
             commit: self
                 .commit
                 .map(|message| message.trim().to_owned())
@@ -729,6 +722,11 @@ pub struct PreviewLog {
     /// How many of its last lines to show (default 40, at most 400).
     #[serde(default)]
     pub tail_lines: Option<u32>,
+    /// While it is starting (building), wait up to this many seconds (at most 300) for it to
+    /// run or end, then show its log. Wait this way, never with sleep in a command: the wait
+    /// ends the moment it runs.
+    #[serde(default)]
+    pub wait_secs: Option<u32>,
 }
 
 /// `query_brain`: ask the Project Brain.
@@ -1041,6 +1039,12 @@ pub struct FinishSession {
     /// holds it until they land.
     #[serde(default)]
     pub when: MergeWhen,
+    /// Only when the user said to merge without or despite the checks ("merge anyway"): the
+    /// id of that message or card answer, or their words quoted exactly. A merge into the base
+    /// needs run_checks passed on its commit; only the user can skip that, never your judgement.
+    /// Leave it out on [merge] after their "Merge anyway" click.
+    #[serde(default)]
+    pub anyway: Option<String>,
 }
 
 /// When `finish_session` merges (#243).
@@ -1180,8 +1184,7 @@ pub struct FindingRecord {
     /// Why, in your words, for the user: required to dismiss.
     #[serde(default)]
     pub why: Option<String>,
-    /// It is high severity (it loses data, breaks a build or a security boundary): its fix
-    /// gets one targeted re-check.
+    /// It is high severity (it loses data, breaks a build or a security boundary).
     #[serde(default)]
     pub high: Option<bool>,
 }

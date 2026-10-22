@@ -8,8 +8,8 @@ import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
  * row, never rows of their own.
  *
  * A row stays while it still needs the user (Q94): one of the thread's that failed stays until
- * its Restart, its dismiss or the thread starts the same process again; one that finished on its
- * own or was stopped leaves at once.
+ * its Restart, its dismiss or the thread starts the same process again (its command or its
+ * name); one that finished on its own or was stopped leaves at once.
  */
 
 export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "failed" | "finished";
@@ -67,6 +67,10 @@ export function runState(command: string): BackgroundState {
   if (/\b(build|compile|bundle|tsc)\b/i.test(words)) return "building";
   return "running";
 }
+
+/** Whether two of the thread's previews start the same process: the same kind, and the same command or name. */
+const sameProcess = (a: Preview, b: Preview) =>
+  a.kind === b.kind && (appCommand(a.command) === appCommand(b.command) || a.name === b.name);
 
 /** Whether `a` started after `b`. */
 const later = (a: { startedAtMs: number; id: string }, b: { startedAtMs: number; id: string }) =>
@@ -132,9 +136,9 @@ export function backgroundRows(
   for (const preview of previews) {
     const state = endedPreviewState(preview);
     if (preview.taskId || !stays(preview.id, state)) continue;
-    // The thread started the same process again: the new one is its row.
-    const key = `${preview.kind}:${appCommand(preview.command)}`;
-    if (previews.some((other) => !other.taskId && later(other, preview) && `${other.kind}:${appCommand(other.command)}` === key)) continue;
+    // The thread started the same process again, under the same command or name (a restart
+    // with other flags, #510): the new one is its row, and its end is the one that counts.
+    if (previews.some((other) => !other.taskId && later(other, preview) && sameProcess(other, preview))) continue;
     rows.push({ type: "preview", id: preview.id, startedAtMs: preview.startedAtMs, preview, state, worker: null, with: [] });
   }
   for (const run of runs) {

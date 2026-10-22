@@ -24,10 +24,10 @@ test("skills: drawn states, separate project switches, folders and Claude always
   assert.ok(catalog.tiles.includes("Open delegator"));
   assert.ok(catalog.tiles.includes("Open delegator in ~/Code/brigadier-ai"));
   assert.equal(catalog.switches.find((item) => item.label === "grilling")?.checked, "false");
-  assert.deepEqual(seen["grill-me"]!.sections, ["Folders", "Workers"]);
+  assert.deepEqual(seen["grill-me"]!.sections, ["Where it's used", "Folders", "Workers"]);
   assert.match(seen["grill-me"]!.text, /One skill, in 2 folders/);
   assert.match(seen["grill-me"]!.text, /Linked to ~\/.agents\/skills\/grill-me · Claude reads this folder/);
-  assert.match(seen.delegator!.text, /Another skill is called delegator too, in brigadier-ai/);
+  assert.match(seen.delegator!.text, /Another skill is called delegator too, in brigadier-ai\. They're two separate skills, each with its own switch, but Claude Code switches skills off by name: switching this one off hides both from Claude workers\./);
   assert.match(seen.delegator!.text, /Given by Brigadier/);
   assert.match(seen["claude-skills"]!.text, /Off for Codex workers · Claude workers still have it/);
   assert.match(seen["claude-skill"]!.text, /Claude: always on/);

@@ -581,9 +581,8 @@ struct Kept {
 }
 
 impl SessionManager {
-    /// The thread's `run_check`: its risky mark first, then the check itself, and once it has
-    /// ended its change's review when it is due (over the line, or marked risky) and the check
-    /// passed, its reply ending with the review that runs, if one does (BUILD-PLAN B2, C2, C10).
+    /// The thread's `run_check`: the check, and on a pass the commit it asks for (BUILD-PLAN
+    /// C9).
     pub(crate) async fn thread_run_check(
         &self,
         id: &ConversationId,
@@ -591,14 +590,10 @@ impl SessionManager {
     ) -> Result<String> {
         let crate::tools::ThreadCheckParts {
             check: args,
-            risky,
             commit,
             fixes,
             high,
         } = args.split();
-        if let Some(why) = &risky {
-            self.mark_risky(id, why).await;
-        }
         // On the user's own checkout the thread commits only when they ask, with git itself.
         let (commit, local) = match commit {
             Some(_) if self.local_checkout(id).is_some() => (None, true),
@@ -631,8 +626,7 @@ impl SessionManager {
     /// [`Self::run_check_tool`], then the thread's commit of everything it changed when the
     /// check passes (`commit`: its message), in the same call, even once it went to the
     /// background (BUILD-PLAN C9), with the review findings it fixes (`fixes`) recorded fixed
-    /// on that pass (O4); then, for the thread, the review its change is due, which only a pass
-    /// starts (C10).
+    /// on that pass (O4).
     async fn check_and_commit(
         &self,
         id: &ConversationId,
@@ -715,11 +709,8 @@ impl SessionManager {
         let cancel = caller.ended.clone();
         let (manager, words, conversation) = (self.arc(), command.clone(), id.clone());
         let tree = caller.tree.clone();
-        let hold = super::background_runs::review_hold(id);
         let work = async move {
-            let under_way = manager
-                .thread_check_started(&conversation, tree.as_deref())
-                .await;
+            let under_way = manager.thread_check_started(tree.as_deref()).await;
             let CheckDone {
                 status,
                 mut reply,
@@ -787,13 +778,6 @@ impl SessionManager {
                     )
                     .await;
                 reply = format!("{reply}\n{note}");
-            }
-            under_way.ended(passed);
-            if let Some(review) = manager
-                .review_before_answer(&conversation, hold.map(|until| (until, &caller.ended)))
-                .await
-            {
-                reply = format!("{reply}\n\n{review}");
             }
             Ok((status, reply))
         };
@@ -1623,6 +1607,10 @@ impl SessionManager {
         }
         let root = repo_root(&tree).unwrap_or_else(|| tree.clone());
         let tip = self.head_of(&tree).await.unwrap_or_default();
+        let requests = self.request_for(id, Some(task)).await.into_iter().collect();
+        // Its number is taken and recorded under the same lock as every other check's, so
+        // two runs never share one.
+        let records = self.integrated.records.lock().await;
         let board = self.core.board(id).await?;
         let branch = board
             .tasks
@@ -1645,16 +1633,18 @@ impl SessionManager {
             due_at_ms: now_ms(),
             started_at_ms: Some(now_ms()),
             ended_at_ms: None,
-            requests: self.request_for(id, Some(task)).await.into_iter().collect(),
+            requests,
             tasks: Vec::new(),
             rerun,
             asked: Some(crate::work::ChecksAsked {
                 task_id: Some(task.clone()),
                 scope: crate::work::ChecksScope::Change,
             }),
+            owed: false,
         };
         drop(board);
         self.store_check(&check).await;
+        drop(records);
         let mut passed: Vec<String> = Vec::new();
         let mut failure = None;
         for (command, workdir) in &commands {
@@ -1732,7 +1722,7 @@ impl SessionManager {
             String::new()
         } else {
             format!(
-                " Not covered here, for the thread's full checks after landing: {}.",
+                " Not covered here, for the thread's full checks (run_checks): {}.",
                 plan.left.join("; ")
             )
         };

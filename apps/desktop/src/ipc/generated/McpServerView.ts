@@ -38,6 +38,11 @@ file: string, transport: TransportView,
  */
 signIn: SignInView | null, 
 /**
+ * The sign-in in Brigadier to it waiting for the user, if one is: its id, as
+ * `SignInMcpServer` gave it.
+ */
+pendingSignIn: string | null, 
+/**
  * The agents whose workers in the project have it by themselves; any other gets it only
  * when a task names it.
  */
@@ -45,4 +50,10 @@ nativeTo: Array<ProviderKind>,
 /**
  * Switched off for Brigadier: no thread or worker gets it.
  */
-off: boolean, };
+off: boolean, 
+/**
+ * The same for two copies of one server (with the same name and project): a hash of its
+ * transport with its environment and header values, keyed afresh at each daemon start, so
+ * it tells no value.
+ */
+copyKey: string, };

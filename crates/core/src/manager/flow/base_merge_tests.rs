@@ -163,7 +163,7 @@ async fn conflicting_session(worker: Worker, sides: Sides) -> Flow {
                         commit_in_workspace(&turn, "README.md", "# Session\n", "Add notes");
                         commit_in_workspace(&turn, "notes-2.txt", "two\n", "Add notes two");
                         commit_in_workspace(&turn, "notes-3.txt", "three\n", "Add notes three");
-                        // Big enough for the review line (Q48): 150 lines of code; README.md is a doc.
+                        // 150 lines of code; README.md is a doc.
                         commit_in_workspace(
                             &turn,
                             "notes-4.txt",
@@ -249,6 +249,7 @@ fn session(flow: &Flow) -> (String, std::path::PathBuf) {
 
 async fn conflict(flow: &Flow, words: &str) {
     let before = git(&flow.repo, &["rev-parse", "main"]);
+    flow.checks_passed().await;
     let error = flow
         .manager
         .finish_session(&flow.conversation, words, None)
@@ -339,30 +340,12 @@ async fn resolve(flow: &Flow) -> String {
     let landed = task.landed.clone().unwrap();
     assert_merged(flow, &landed, &session_tip, &base_tip);
     assert_eq!(git(&flow.repo, &["rev-parse", &branch(flow)]), landed);
-    review_ended(flow, &landed).await;
+    flow.settled().await;
     landed
 }
 
-/// Waits for the review of the landing at `tip` to end: a held merge waits for it
-/// (SESSION-FIXES-PLAN.md Q3).
-async fn review_ended(flow: &Flow, tip: &str) {
-    // Every review, not only this tip's: a held merge waits while any review of the
-    // session's work runs, and a slow machine can still be running another.
-    flow.until("the landing's review to end", |board| {
-        board
-            .reviews
-            .values()
-            .any(|review| review.tip == tip && review.state != crate::work::ReviewState::Running)
-            && board
-                .reviews
-                .values()
-                .all(|review| review.state != crate::work::ReviewState::Running)
-    })
-    .await;
-    flow.settled().await;
-}
-
 async fn finish(flow: &Flow, words: &str) {
+    flow.checks_passed().await;
     let reply = flow
         .manager
         .finish_session(&flow.conversation, words, None)
@@ -378,6 +361,7 @@ async fn finish(flow: &Flow, words: &str) {
             .count(),
         1
     );
+    flow.checks_passed().await;
     assert!(
         flow.manager
             .finish_session(&flow.conversation, words, None)
@@ -441,6 +425,7 @@ async fn a_wait_during_conflict_preparation_is_left_to_the_thread() {
     *conv.merge_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
     let manager = flow.manager.clone();
     let id = flow.conversation.clone();
+    flow.checks_passed().await;
     let pending = tokio::spawn(async move { manager.finish_session(&id, "merge it", None).await });
     reached.notified().await;
     flow.say("wait!").await;
@@ -472,8 +457,9 @@ async fn an_unchanged_resolution_still_lands_two_parents() {
 #[tokio::test]
 async fn a_click_with_base_conflicts_resolves_and_finishes_on_the_click() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
+    flow.checks_passed().await;
     flow.manager
-        .merge_session(&flow.conversation, super::click())
+        .merge_session(&flow.conversation, super::click(), false)
         .await
         .unwrap();
     flow.settled().await;
@@ -509,7 +495,7 @@ async fn a_merge_with_markers_is_refused_and_lands_after_a_fix_on_top() {
     let merge = git(&flow.repo, &["rev-parse", &format!("{landed}^")]);
     assert_merged(&flow, &merge, &session_tip, &base_tip);
     assert_eq!(git(&flow.repo, &["rev-parse", &branch(&flow)]), landed);
-    review_ended(&flow, &landed).await;
+    flow.settled().await;
     // The fix on top is still the merge the held consent covers.
     finish(&flow, "merge it").await;
     assert_eq!(
@@ -596,7 +582,7 @@ async fn an_unrelated_merge_parent_after_the_consent_is_no_refusal() {
     let branch = branch(&flow);
     let session = git(&flow.repo, &["rev-parse", &branch]);
     // The session's work is under review: until it ends, the held merge waits for it instead.
-    review_ended(&flow, &session).await;
+    flow.settled().await;
     let common = git(&flow.repo, &["merge-base", &branch, "main"]);
     let tree = git(&flow.repo, &["rev-parse", &format!("{session}^{{tree}}")]);
     let unrelated = git(
@@ -625,6 +611,7 @@ async fn an_unrelated_merge_parent_after_the_consent_is_no_refusal() {
             &session,
         ],
     );
+    flow.checks_passed().await;
     let error = flow
         .manager
         .finish_session(&flow.conversation, "merge it", None)
@@ -676,9 +663,10 @@ async fn a_merge_whose_target_moved_goes_back_to_the_same_worker_and_lands_both(
         git(&flow.repo, &["show", &format!("{landed}:README.md")]),
         "# Session and Base, again"
     );
-    review_ended(&flow, &landed).await;
+    flow.settled().await;
     // The consent held over didn't cover the other work: the merge says it went in too, for
     // the thread to tell the user (#243).
+    flow.checks_passed().await;
     let merged = flow
         .manager
         .finish_session(&flow.conversation, "merge it", None)

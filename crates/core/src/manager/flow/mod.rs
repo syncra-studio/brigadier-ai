@@ -1917,12 +1917,6 @@ impl Flow {
         super::background_runs::let_background(&self.conversation);
     }
 
-    /// Has the thread's `run_check` wait for a running review of its change in its call, as
-    /// in the app: by default a test hears of it in a message.
-    pub fn wait_for_reviews(&self) {
-        super::background_runs::wait_for_reviews(&self.conversation);
-    }
-
     /// Waits until `done` holds for the conversation's board.
     pub async fn until(&self, what: &str, done: impl Fn(&Board) -> bool) -> Board {
         self.until_in(&self.conversation, what, done).await
@@ -1969,6 +1963,54 @@ impl Flow {
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// The thread's run_checks passed at the session branch's tip now, as if it had called it:
+    /// for tests of what a merge does once the merge rule lets it through, not of its checks.
+    pub async fn checks_passed(&self) {
+        self.checks_passed_in(&self.conversation).await;
+    }
+
+    /// [`Self::checks_passed`] in the session `id`.
+    pub async fn checks_passed_in(&self, id: &ConversationId) {
+        let Some(crate::model::Setup::Session {
+            repo,
+            environment: crate::model::Environment::NewWorktree { branch, .. },
+            ..
+        }) = self.core.conversation(id).unwrap().setup
+        else {
+            panic!("{id:?} has no session branch");
+        };
+        let tip = git(std::path::Path::new(&repo), &["rev-parse", &branch]);
+        let board = self.core.board(id).await.unwrap();
+        let check = crate::work::IntegratedCheck {
+            id: crate::manager::integrated_checks::next_check_id(&board),
+            conversation_id: id.clone(),
+            repo,
+            branch,
+            tip: tip.trim().to_owned(),
+            state: crate::work::IntegratedCheckState::Passed {
+                commands: Vec::new(),
+            },
+            due_at_ms: 0,
+            started_at_ms: Some(crate::now_ms()),
+            ended_at_ms: Some(crate::now_ms()),
+            requests: Vec::new(),
+            tasks: Vec::new(),
+            rerun: false,
+            asked: Some(crate::work::ChecksAsked {
+                task_id: None,
+                scope: crate::work::ChecksScope::Full,
+            }),
+            owed: false,
+        };
+        self.core
+            .record_conversation(
+                id,
+                vec![crate::model::DomainEvent::IntegratedCheckUpdated { check }],
+            )
+            .await
+            .unwrap();
     }
 
     /// Waits until every request of the conversation is over.
@@ -2240,8 +2282,6 @@ mod restart_waits_tests;
 mod resume_tests;
 #[cfg(unix)]
 mod review_hold_tests;
-#[cfg(unix)]
-mod review_on_pass_tests;
 #[cfg(unix)]
 mod review_picks_tests;
 #[cfg(unix)]

@@ -146,9 +146,11 @@ impl SessionManager {
             if conversation.quota_wait.is_some() && conversation.lifecycle != Lifecycle::Archived {
                 self.keep_conversation_wait(&conversation).await;
             }
-            // Its full checks the restart cut off, or that were due, run (§11).
+            // Its full checks the restart cut off, or that were due, are recorded interrupted:
+            // nothing runs again by itself.
             if conversation.lifecycle != Lifecycle::Archived {
-                self.recover_integrated_checks(&conversation.id).await;
+                self.recover_integrated_checks(&conversation.id, "Brigadier quit", true)
+                    .await;
             }
             // Its thread's background runs the restart cut off are told as such.
             self.recover_background_runs(&conversation.id).await;
@@ -1213,8 +1215,10 @@ impl SessionManager {
             .set_lifecycle(id.clone(), Lifecycle::Active)
             .await?;
         self.open_fence(&id);
-        // A check the archive cut off, or one still due, runs again (§11).
-        self.recover_integrated_checks(&id).await;
+        // A check the archive cut off, or one still due, is recorded interrupted: nothing runs
+        // again by itself.
+        self.recover_integrated_checks(&id, "The session was archived", false)
+            .await;
         Ok(restored)
     }
 

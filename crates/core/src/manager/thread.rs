@@ -595,10 +595,10 @@ impl SessionManager {
         }
     }
 
-    /// Looks for the thread's new commits on its workspace's branch, and starts their review.
-    /// `in_turn`: a turn runs (or just ended), so every new commit is the thread's; otherwise
-    /// only a range with a commit marked as the thread's is (the user's own commits between
-    /// turns are not).
+    /// Looks for the thread's new commits on its workspace's branch and records them: its
+    /// unreviewed range and self-edit metric read them; nothing starts. `in_turn`: a turn runs
+    /// (or just ended), so every new commit is the thread's; otherwise only a range with a
+    /// commit marked as the thread's is (the user's own commits between turns are not).
     pub(crate) async fn scan_thread_commits(&self, id: &ConversationId, in_turn: bool) {
         let Some(workspace) = self.recorded_workspace(id) else {
             return;
@@ -621,8 +621,8 @@ impl SessionManager {
     }
 
     /// A landing moved `branch` from `from` to `tip`. What the thread committed before it, up
-    /// to `from`, is looked at first (a turn that commits and then lands a worker); then the
-    /// record moves past the landing, which has its own review.
+    /// to `from`, is recorded first (a turn that commits and then lands a worker); then the
+    /// record moves past the landing.
     pub(crate) async fn thread_branch_landed(
         &self,
         id: &ConversationId,
@@ -636,8 +636,8 @@ impl SessionManager {
         self.scan_branch(id, repo, branch, Some(from.clone()), in_turn)
             .await;
         self.record_thread_tip(id, branch, tip, None).await;
-        // The landing has its own review: the thread's range goes on after it.
-        crate::heap(|| self.unreviewed_moved(id, branch, None, tip)).await;
+        // The landing isn't the thread's own change: its range starts again after it.
+        crate::heap(|| self.unreviewed_moved(id, branch, tip)).await;
     }
 
     /// Looks at `branch` from its recorded tip to `upto` (its tip now by default), with
@@ -685,58 +685,23 @@ impl SessionManager {
         })
         .await;
         // A local checkout's changes are measured from snapshots of its files, its commits
-        // included ([`SessionManager::local_changes`]).
+        // included ([`SessionManager::record_local_changes`]).
         let local = self
             .local_checkout(id)
             .is_some_and(|(_, local)| local == branch);
         match found {
             Ok(Some((tip, base))) => {
-                let theirs = base.is_some();
-                if let Some(base) = &base {
-                    let base = base.clone();
-                    // Commits that only fix review findings get no review of their own, and a
-                    // held merge's consent covers them (SESSION-FIXES-PLAN.md Q3.4, Q6.1).
-                    match self.thread_fixes(id, repo, &base, &tip).await {
-                        Some(fix) => {
-                            if fix.since_merge {
-                                self.move_held_merge(id, branch, &base, &tip).await;
-                            }
-                            self.recheck_thread_fix(
-                                id,
-                                base.clone(),
-                                tip.clone(),
-                                repo.to_owned(),
-                                &fix.fixed,
-                            )
-                            .await;
-                            if !local {
-                                crate::heap(|| {
-                                    self.unreviewed_moved(id, branch, Some(&base), &tip)
-                                })
+                if !local {
+                    match &base {
+                        Some(base) => {
+                            crate::heap(|| self.thread_commits_unreviewed(id, branch, base, &tip))
                                 .await;
-                            }
                         }
-                        // Measured with the request's other unreviewed changes: one review
-                        // once they are big enough or marked risky (BUILD-PLAN B2).
-                        None if !local => {
-                            crate::heap(|| {
-                                self.thread_commits_unreviewed(id, repo, branch, &base, &tip)
-                            })
-                            .await;
-                        }
-                        None => {}
+                        None => crate::heap(|| self.unreviewed_moved(id, branch, &tip)).await,
                     }
-                } else if !local {
-                    crate::heap(|| self.unreviewed_moved(id, branch, None, &tip)).await;
                 }
                 self.record_thread_tip(id, branch, &tip, base.as_ref())
                     .await;
-                // The thread's own commits make the session's full checks due, as a landing
-                // does (SESSION-FIXES-PLAN.md §11).
-                if theirs {
-                    let request = self.request_for(id, None).await;
-                    self.checks_due(id, repo, branch, &tip, request).await;
-                }
             }
             Ok(None) => {}
             Err(err) => {

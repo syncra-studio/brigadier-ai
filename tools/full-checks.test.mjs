@@ -1,7 +1,7 @@
 // Run with: node --test tools/full-checks.test.mjs
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -14,6 +14,7 @@ for (const [sandboxed, fail] of [[false, false], [true, false], [true, true]]) {
         mkdirSync(join(root, dir), { recursive: true });
       }
       cpSync(new URL("full-checks.sh", import.meta.url), join(root, "tools/full-checks.sh"));
+      cpSync(new URL("nested-swift", import.meta.url), join(root, "tools/nested-swift"), { recursive: true });
       writeFileSync(join(root, "node_modules/.modules.yaml"), "");
       const executable = (path, body) => {
         writeFileSync(join(root, path), `#!/bin/sh\n${body}\n`);
@@ -43,7 +44,6 @@ for (const [sandboxed, fail] of [[false, false], [true, false], [true, true]]) {
       const lines = readFileSync(env.SWIFT_LOG, "utf8").trim().split("\n");
       const build = (path) => ["build", ...(sandboxed ? ["--disable-sandbox"] : []), "--package-path", path];
       assert.deepEqual(lines, [...build("bridge with spaces"), "--version", ...(fail ? [] : [...build("helper with spaces"), ...build("helper with spaces")])]);
-      assert.equal(existsSync(join(root, "target")) && readdirSync(join(root, "target")).some((name) => name.startsWith("full-checks-swift.")), false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

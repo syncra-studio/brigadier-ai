@@ -78,8 +78,9 @@ async fn a_peers_merge_it_gives_no_consent_and_the_merge_asks_the_receivers_user
     }
     flow.settled().await;
     assert!(!on_main(&flow, "NOTES.md"), "a peer's words merged nothing");
+    flow.checks_passed().await;
     flow.manager
-        .merge_session(&flow.conversation, super::click())
+        .merge_session(&flow.conversation, super::click(), false)
         .await
         .unwrap();
     flow.until("the user's merge", |_| told.lock().unwrap().len() >= 3)

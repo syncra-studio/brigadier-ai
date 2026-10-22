@@ -114,6 +114,42 @@ test("merge: merging, merged with checks passed only on the merged commit, never
   assert.equal(words({ ...idle, integratedChecks: unasked, orchestratorSteps: [merged("head111")] })![1], "Merged into main");
   const requested = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {} } as unknown as OrchestratorStep["kind"]);
   assert.deepEqual(words({ ...working, integratedChecks: passed, orchestratorSteps: [requested] }), ["running", "Merging into main", "Checks passed on head111"]);
+  // A click with no outcome once its work is over (turned down, or stopped) merges nothing.
+  assert.equal(words({ ...idle, orchestratorSteps: [requested] }), null);
+  const stopped = { requests: byId([request("r1", 10, { type: "stopped" }, 70)]) };
+  assert.deepEqual(words({ ...stopped, orchestratorSteps: [requested] }), ["stopped", "Stopped", "You stopped it"]);
+  // Nor while the user's next message runs.
+  const next = { requests: byId([request("r1", 10, { type: "done" }, 70), request("r2", 100, { type: "working" })]) };
+  assert.equal(words({ ...next, orchestratorSteps: [requested] })![1], "Working");
+  // Merged anyway: it says the checks were skipped, even with a pass on that commit from before.
+  const skipped = step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "head111", mergeCommit: "4e1c49e000", checksSkipped: true } as OrchestratorStep["kind"]);
+  assert.equal(words({ ...idle, integratedChecks: passed, orchestratorSteps: [skipped] })![1], "Merged into main · checks skipped");
+  const anyway = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {}, anyway: true } as unknown as OrchestratorStep["kind"]);
+  assert.deepEqual(words({ ...working, integratedChecks: passed, orchestratorSteps: [anyway] }), ["running", "Merging into main", "Without the checks, as you said"]);
+});
+
+/** The merge rule refused the merge at 30: no run_checks pass on its commit. */
+const refused = (waivable: boolean, atMs = 30) => ({ reason: "The checks haven't run on 7d2a91f, the tip of s.", sha: "7d2a91f000", branch: "s", base: "main", waivable, atMs });
+
+test("a merge the merge rule refused: why, and Merge anyway only when the user can waive it", () => {
+  const job = liveJob(input({ ...working, mergeRefused: refused(true) }))!;
+  assert.deepEqual([job.tone, job.headline, job.detail], ["waiting", "Can’t merge yet", "The checks haven't run on 7d2a91f, the tip of s."]);
+  assert.deepEqual(job.actions, [{ type: "mergeAnyway" }]);
+  // It waits on the user before what runs: the checks the thread runs now don't hide it.
+  const running = byId([check(1, "7d2a91f000", { type: "running", command: "pnpm test", done: 0, total: 2 }, 40)]);
+  assert.equal(liveJob(input({ ...working, integratedChecks: running, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
+  // One the user can't waive: the words, no button.
+  const firm = liveJob(input({ ...working, mergeRefused: refused(false) }))!;
+  assert.deepEqual([firm.headline, firm.actions], ["Can’t merge yet", []]);
+  // Over once the user wrote since, or a merge went through after it.
+  assert.equal(liveJob(input({ requests: byId([request("r2", 40, { type: "done" }, 50)]), mergeRefused: refused(true) })), null);
+  const merged = step(60, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "7d2a91f000", mergeCommit: "4e1c49e000" } as OrchestratorStep["kind"]);
+  assert.equal(liveJob(input({ ...idle, orchestratorSteps: [merged], mergeRefused: refused(true) }))!.headline, "Merged into main");
+  // Newer than the thread's headline, it wins over it; its button stays either way.
+  const headline = { text: "Fixing the tests", detail: null, atMs: 20 };
+  assert.equal(liveJob(input({ ...working, headline, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
+  const later = liveJob(input({ ...working, headline: { ...headline, atMs: 40 }, mergeRefused: refused(true) }))!;
+  assert.deepEqual([later.headline, later.actions], ["Fixing the tests", [{ type: "mergeAnyway" }]]);
 });
 
 test("the held merge and CI are the card's now, their buttons with them; CI's outcome stays until the next message", () => {

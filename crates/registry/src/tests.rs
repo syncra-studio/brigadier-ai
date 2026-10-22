@@ -174,14 +174,17 @@ fn claude_user_and_local_scopes_expand_variables() {
     };
     // Claude has it, and signs in by itself; how Codex could is not known yet.
     assert_eq!(
-        catalog.sign_in(oauth, &session(Agent::Claude)),
+        catalog.sign_in(oauth, &session(Agent::Claude), &Unread),
         Some(SignIn::Native)
     );
     assert_eq!(
-        catalog.sign_in(oauth, &session(Agent::Codex)),
+        catalog.sign_in(oauth, &session(Agent::Codex), &Unread),
         Some(SignIn::Unknown)
     );
-    assert_eq!(catalog.sign_in(remote, &session(Agent::Codex)), None);
+    assert_eq!(
+        catalog.sign_in(remote, &session(Agent::Codex), &Unread),
+        None
+    );
 
     let local = catalog.find("local").expect("one server is named local");
     assert_eq!(local.source, Source::ClaudeLocal);
@@ -1331,4 +1334,241 @@ fn codex_plugins_enabled_disabled_and_versions() {
     assert_eq!(cwd, Some(docs.join(".").as_path()));
     assert!(catalog.server_native(server, &codex));
     assert!(!catalog.server_native(server, &claude));
+}
+
+/// Stored sign-ins by owner and entry id; any other is absent.
+#[derive(Default)]
+struct FakeStores(std::collections::HashMap<(Owner, String), Probe>);
+
+impl FakeStores {
+    fn with(mut self, owner: Owner, id: &str, probe: Probe) -> Self {
+        self.0.insert((owner, id.to_owned()), probe);
+        self
+    }
+}
+
+impl SignInStores for FakeStores {
+    fn probe(&self, owner: Owner, server: &Server) -> Probe {
+        self.0
+            .get(&(owner, server.id.clone()))
+            .copied()
+            .unwrap_or(Probe::Absent)
+    }
+}
+
+#[test]
+fn the_clis_keys_match_their_recipes() {
+    let server = |name: &str, url: &str, headers: &[(&str, &str)]| Server {
+        id: format!("claude:user:{name}"),
+        name: name.into(),
+        source: Source::ClaudeUser,
+        project: None,
+        transport: Transport::Http {
+            url: url.into(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), Secret::new(*v)))
+                .collect(),
+        },
+        signs_in: true,
+        plugin: None,
+        file: PathBuf::from("/home/.claude.json"),
+        oauth: None,
+    };
+    // Computed apart, with Node's `JSON.stringify` and Python's `json.dumps`.
+    let linear = server("linear", "https://mcp.linear.app/mcp", &[]);
+    assert_eq!(claude_key(&linear).unwrap(), "linear|638130d5ab3558f4");
+    assert_eq!(
+        codex_keys(&linear),
+        ["linear|638130d5ab3558f4", "linear|9436f96375b1259b"]
+    );
+    let tenant = server(
+        "t",
+        "https://x.example.com/mcp",
+        &[("X-Tenant", "a"), ("X-B", "é")],
+    );
+    assert_eq!(claude_key(&tenant).unwrap(), "t|2a07e50c2321bb58");
+    // Read from Claude's config, the headers keep the order they are written in.
+    let home = fixture("claude-key");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers": {"t": {"type": "http", "url": "https://x.example.com/mcp",
+                                 "headers": {"X-Tenant": "a", "X-B": "é"}}}}"#,
+    );
+    let catalog = Catalog::read(&roots(&home, &[]), None);
+    let read = catalog.server("claude:user:t").expect("the server");
+    assert_eq!(claude_key(read).unwrap(), "t|2a07e50c2321bb58");
+    assert_eq!(
+        claude_lock_name("linear|638130d5ab3558f4"),
+        "mcp-refresh-linear_638130d5ab3558f4.lock"
+    );
+    let stdio = Server {
+        transport: Transport::Stdio {
+            command: "x".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            cwd: None,
+            base: None,
+        },
+        ..linear
+    };
+    assert_eq!(claude_key(&stdio), None);
+    assert!(codex_keys(&stdio).is_empty());
+}
+
+#[test]
+fn identity_normalises_the_address_and_keeps_tenants_apart() {
+    let http = |url: &str, headers: &[(&str, &str)]| Transport::Http {
+        url: url.into(),
+        headers: headers
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), Secret::new(*v)))
+            .collect(),
+    };
+    let id = |url, headers| identity(&http(url, headers)).unwrap();
+    assert_eq!(
+        id("HTTPS://MCP.Example.com:443/mcp/", &[]),
+        id("https://mcp.example.com/mcp", &[])
+    );
+    assert_eq!(
+        id("http://h:80/x#frag", &[]),
+        id("http://h/x", &[("authorization", "Bearer t")])
+    );
+    // Paths, ports and queries stay distinct.
+    assert_ne!(id("https://h/a/mcp", &[]), id("https://h/b/mcp", &[]));
+    assert_ne!(id("https://h:8443/mcp", &[]), id("https://h/mcp", &[]));
+    assert_ne!(id("https://h/mcp?t=1", &[]), id("https://h/mcp?t=2", &[]));
+    // Header names fold case; values don't.
+    assert_eq!(
+        id("https://h/mcp", &[("X-Tenant", "a"), ("X-Other", "o")]),
+        id("https://h/mcp", &[("x-other", "o"), ("x-tenant", "a")])
+    );
+    assert_ne!(
+        id("https://h/mcp", &[("X-Tenant", "a")]),
+        id("https://h/mcp", &[("X-Tenant", "A")])
+    );
+    assert_ne!(
+        id("https://h/mcp", &[("X-Tenant", "a")]),
+        id("https://h/mcp", &[])
+    );
+}
+
+#[test]
+fn sign_in_reuses_another_agents_or_brigadiers_own() {
+    let home = fixture("sign-in");
+    let codex_home = home.join("codex-home");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers": {
+            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp"},
+            "acme": {"type": "http", "url": "https://t.example.com/mcp", "headers": {"X-Tenant": "acme"}}
+        }}"#,
+    );
+    write(
+        &codex_home.join("config.toml"),
+        r#"
+mcp_oauth_credentials_store = "file"
+
+[mcp_servers.lin]
+url = "https://MCP.linear.app/mcp/"
+
+[mcp_servers.globex]
+url = "https://t.example.com/mcp"
+http_headers = { "X-Tenant" = "globex" }
+
+[mcp_servers.globex.oauth]
+client_id = "cid"
+client_secret = "csecret"
+"#,
+    );
+    let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
+    let catalog = Catalog::read(&roots, None);
+    assert_eq!(catalog.codex_store, CodexStore::File);
+    let globex = catalog.server("codex:user:globex").unwrap();
+    let oauth = globex.oauth.as_ref().unwrap();
+    assert_eq!(oauth.client_id.as_deref(), Some("cid"));
+    assert_eq!(oauth.client_secret.as_ref().unwrap().expose(), "csecret");
+    let session = |agent| Session {
+        agent,
+        cwd: Path::new("/elsewhere"),
+        project: None,
+        in_checkout: false,
+    };
+    let (claude, codex) = (session(Agent::Claude), session(Agent::Codex));
+    let linear = catalog.server("claude:user:linear").unwrap();
+    let state = |stores: &FakeStores, server, session| catalog.sign_in(server, session, stores);
+
+    // Signed in only in Claude: Codex reuses it, from Claude's own entry.
+    let stores = FakeStores::default().with(Owner::Claude, "claude:user:linear", Probe::Usable);
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::Native));
+    assert_eq!(
+        state(&stores, linear, &codex),
+        Some(SignIn::ReusableFrom(Agent::Claude))
+    );
+    let (_, from) = catalog.sign_in_from(linear, &codex, &stores).unwrap();
+    assert_eq!(from.unwrap().id, "claude:user:linear");
+    // Codex's own entry of the same server (another name and spelling) reuses it too.
+    let lin = catalog.server("codex:user:lin").unwrap();
+    assert_eq!(
+        state(&stores, lin, &codex),
+        Some(SignIn::ReusableFrom(Agent::Claude))
+    );
+
+    // Signed in only in Codex: Claude, whose own entry has none, reuses Codex's.
+    let stores = FakeStores::default().with(Owner::Codex, "codex:user:lin", Probe::Usable);
+    assert_eq!(
+        state(&stores, linear, &claude),
+        Some(SignIn::ReusableFrom(Agent::Codex))
+    );
+    assert_eq!(state(&stores, lin, &codex), Some(SignIn::Native));
+
+    // Neither: Brigadier's own serves both; without it, a sign-in is needed.
+    let stores = FakeStores::default().with(Owner::Brigadier, "claude:user:linear", Probe::Usable);
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::InBrigadier));
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::InBrigadier));
+    let stores = FakeStores::default();
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::Needed));
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::Needed));
+
+    // A store that couldn't be read leaves it unknown, never reusable; the agent's own unknown
+    // sign-in counts as its own.
+    let stores = FakeStores::default().with(Owner::Claude, "claude:user:linear", Probe::Unknown);
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::Unknown));
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::Native));
+
+    // The same address for another tenant is another server.
+    let acme = catalog.server("claude:user:acme").unwrap();
+    let stores = FakeStores::default().with(Owner::Codex, "codex:user:globex", Probe::Usable);
+    assert_eq!(state(&stores, acme, &claude), Some(SignIn::Needed));
+    assert_eq!(state(&stores, acme, &codex), Some(SignIn::Needed));
+    assert_eq!(
+        state(&stores, globex, &claude),
+        Some(SignIn::ReusableFrom(Agent::Codex))
+    );
+
+    // The user didn't let Brigadier read Claude's store: that comes first, before what isn't
+    // known, and a usable sign-in elsewhere still serves.
+    let stores = FakeStores::default()
+        .with(Owner::Claude, "claude:user:linear", Probe::Refused)
+        .with(Owner::Brigadier, "claude:user:linear", Probe::Unknown);
+    assert_eq!(
+        state(&stores, linear, &codex),
+        Some(SignIn::NotAllowed(Agent::Claude))
+    );
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::Native));
+    let stores = stores.with(Owner::Codex, "codex:user:lin", Probe::Usable);
+    assert_eq!(state(&stores, linear, &claude), Some(SignIn::Native));
+    assert_eq!(state(&stores, lin, &codex), Some(SignIn::Native));
+    let stores = FakeStores::default()
+        .with(Owner::Claude, "claude:user:linear", Probe::Refused)
+        .with(Owner::Brigadier, "claude:user:linear", Probe::Usable);
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::InBrigadier));
+
+    // A system whose stores Brigadier can't read: unsupported, unless something is unknown.
+    let stores = FakeStores::default()
+        .with(Owner::Claude, "claude:user:linear", Probe::Unsupported)
+        .with(Owner::Brigadier, "claude:user:linear", Probe::Unsupported);
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::Unsupported));
+    let stores = stores.with(Owner::Codex, "codex:user:lin", Probe::Unknown);
+    assert_eq!(state(&stores, linear, &codex), Some(SignIn::Unknown));
 }

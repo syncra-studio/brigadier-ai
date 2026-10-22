@@ -462,6 +462,7 @@ impl SessionManager {
             id,
             requests.last().cloned(),
             crate::work::OrchestratorStepKind::Merged {
+                checks_skipped: false,
                 branch,
                 base,
                 commits,
