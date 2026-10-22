@@ -64,6 +64,30 @@ pub enum CliRequest {
     },
     /// Closes one of the caller's workers.
     Close { id: String },
+    /// One of the tools a session keeps: `action` with the tool's own arguments, as its
+    /// subcommand took them.
+    Tool {
+        tool: Tool,
+        action: String,
+        args: serde_json::Value,
+    },
+    /// A question on a card for the user, answered when they answer it.
+    Ask {
+        question: String,
+        /// Recommended first; none for a free answer.
+        options: Vec<String>,
+        title: Option<String>,
+    },
+}
+
+/// The kept tools behind `brigadier` (STRIP-DOWN-PLAN S13), by subcommand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Tool {
+    Preview,
+    Browser,
+    App,
+    Page,
 }
 
 /// `brigadier start`'s arguments.
@@ -122,8 +146,8 @@ pub enum Answer {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CliReply {
     /// The request's output: [`SessionsOutput`], [`WorkersOutput`], [`ShowOutput`],
-    /// [`ReadOutput`], [`StartOutput`], [`SendOutput`], [`WaitOutput`] or [`CloseOutput`], by
-    /// request.
+    /// [`ReadOutput`], [`StartOutput`], [`SendOutput`], [`WaitOutput`], [`CloseOutput`],
+    /// [`ToolOutput`] or [`AskOutput`], by request.
     Ok {
         output: serde_json::Value,
     },
@@ -600,4 +624,27 @@ pub struct CloseOutput {
     pub id: String,
     /// False when it had already ended.
     pub closed: bool,
+}
+
+/// `brigadier preview`, `browser`, `app` and `page`: what the tool answered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolOutput {
+    pub action: String,
+    pub text: String,
+    /// Screenshots, as `data:` URLs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
+    /// Where `--json`-less output saved them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved: Vec<String>,
+}
+
+/// `brigadier ask`: the user's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskOutput {
+    pub answer: String,
+    /// The chosen option's index (0 is the first), or none for an answer in their own words.
+    pub option: Option<u32>,
 }

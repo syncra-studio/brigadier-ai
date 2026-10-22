@@ -40,6 +40,8 @@ const ask: Question = {
 };
 // Answered by hand after a visit to Settings, which unmounts the card.
 const keep: Question = { ...ask, id: "keep" };
+// Answered in the user's own words, next to its options (`brigadier ask`, S13).
+const typed: Question = { ...ask, id: "typed" };
 // A merge card left lit and unanswered, apart from the one the other cases mount: an open card keeps what is lit.
 const mergeLeftLit: Question = { ...merge, id: "merge-left-lit" };
 // Closed with ×, and put aside with Esc.
@@ -54,7 +56,7 @@ useBoard.setState({
   board: {
     ...emptyBoard(conversationId),
     loaded: true,
-    questions: { merge, ask, keep, "merge-left-lit": mergeLeftLit, "close-ask": closeAsk, "close-merge": closeMerge, "escape-ask": escapeAsk },
+    questions: { merge, ask, keep, typed, "merge-left-lit": mergeLeftLit, "close-ask": closeAsk, "close-merge": closeMerge, "escape-ask": escapeAsk },
     plans: { document: plan("document", "Handle drive letters, then run the platform checks."), phases: plan("phases", null) },
   },
 });
@@ -186,6 +188,16 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     await mountCard(action);
     seen.litReopened = lit();
     seen.typedReopened = field().value;
+  }),
+  // A card with options takes an answer typed in its free-text row, sent as typed.
+  typed: await run(async () => {
+    await mountCard({ type: "question", id: "typed" });
+    await fixtureClick(field());
+    for (const letter of "Both") await key(letter);
+    const before = calls.length;
+    await key("Enter");
+    await until("the answer to go", sent(before));
+    await settle();
   }),
 } : {
   mountEnter: await run(async (seen) => {

@@ -497,7 +497,9 @@ impl SessionManager {
         // counts as carried, or a settle in between would end it (its card answered, nothing
         // queued) and open its time again with the answer's turn.
         // A merge card's answer starts no work: merge cards are retired (BUILD-PLAN A4).
-        let delivers = matches!(&question.kind, QuestionKind::Orchestrator);
+        // A card `brigadier ask` waits on answers it, not the thread.
+        let delivers =
+            matches!(&question.kind, QuestionKind::Orchestrator) && !self.cli_asks.waits(&card_id);
         if delivers {
             self.answering(&conversation_id, &card_id, question.request_id.clone())
                 .await;
@@ -545,17 +547,19 @@ impl SessionManager {
                         question.id
                     )
                 };
-                self.deliver_for(
-                    &conversation_id,
-                    Envelope {
-                        kind: InjectionKind::Decision,
-                        label: "user answer".into(),
-                        task_id: question.task_id.clone(),
-                        text,
-                    },
-                    question.request_id.clone(),
-                )
-                .await;
+                if delivers {
+                    self.deliver_for(
+                        &conversation_id,
+                        Envelope {
+                            kind: InjectionKind::Decision,
+                            label: "user answer".into(),
+                            task_id: question.task_id.clone(),
+                            text,
+                        },
+                        question.request_id.clone(),
+                    )
+                    .await;
+                }
             }
             QuestionKind::Merge { branch, base, .. } if let Some(typed) = typed => {
                 self.conv(&conversation_id)?

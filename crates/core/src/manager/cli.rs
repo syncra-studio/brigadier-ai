@@ -40,6 +40,8 @@ pub struct CliCaller {
     pub conversation_id: ConversationId,
     /// Set when a worker calls.
     pub task_id: Option<TaskId>,
+    /// The grant it called with: the kept tools run as the session's own calls of them.
+    pub grant: String,
 }
 
 /// What an id names.
@@ -321,6 +323,7 @@ impl SessionManager {
                 Some(CliCaller {
                     conversation_id,
                     task_id: None,
+                    grant: grant.to_owned(),
                 })
             }
             Role::Worker {
@@ -330,6 +333,7 @@ impl SessionManager {
             } if task_id.0 == session => Some(CliCaller {
                 conversation_id,
                 task_id: Some(task_id),
+                grant: grant.to_owned(),
             }),
             _ => None,
         }
@@ -359,6 +363,14 @@ impl SessionManager {
                 self.cli_wait(caller, &ids, timeout_secs).await
             }
             CliRequest::Close { id } => self.cli_close(caller, &id).await,
+            CliRequest::Tool { tool, action, args } => {
+                Ok(self.cli_tool(caller, tool, &action, args).await)
+            }
+            CliRequest::Ask {
+                question,
+                options,
+                title,
+            } => self.cli_ask(caller, question, options, title).await,
         };
         reply.unwrap_or_else(failed)
     }

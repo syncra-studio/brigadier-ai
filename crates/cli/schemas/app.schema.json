@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier app --json (planned)",
+  "title": "brigadier app --json",
   "type": "object",
   "required": [
     "action",
-    "result"
+    "text"
   ],
   "additionalProperties": false,
   "properties": {
@@ -18,8 +18,9 @@
         "close-tab"
       ]
     },
-    "result": {
-      "type": "object"
+    "text": {
+      "type": "string",
+      "description": "What the tool answered."
     }
   }
 }

@@ -32,6 +32,7 @@ mod cards;
 mod ci;
 mod clean_up;
 mod cli;
+mod cli_tools;
 mod close_tab;
 mod closing;
 mod codex_children;
@@ -186,6 +187,8 @@ pub struct SessionManager {
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// What plain workers' CLIs did that their sessions' `brigadier wait` hasn't taken yet.
     worker_events: plain_workers::WorkerEvents,
+    /// The cards a `brigadier ask` waits on: their answers go back to it, not into the thread.
+    cli_asks: cli_tools::CliAsks,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
@@ -421,6 +424,7 @@ impl SessionManager {
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             worker_events: Default::default(),
+            cli_asks: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
             local_checkouts: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),

@@ -1,43 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier page --json (planned)",
+  "title": "brigadier page --json",
   "type": "object",
   "required": [
-    "action"
+    "action",
+    "text"
   ],
   "additionalProperties": false,
   "properties": {
     "action": {
       "enum": [
-        "list",
         "read",
         "write"
       ]
     },
-    "pages": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "name",
-          "updatedAtMs"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "updatedAtMs": {
-            "type": "integer"
-          }
-        }
-      }
-    },
-    "name": {
-      "type": "string"
-    },
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "What the tool answered."
     }
   }
 }

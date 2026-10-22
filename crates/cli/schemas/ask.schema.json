@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier ask --json (planned)",
+  "title": "brigadier ask --json",
   "type": "object",
   "required": [
     "answer"

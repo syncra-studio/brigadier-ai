@@ -1,8 +1,10 @@
 //! The text output of each command (`--json` prints the reply's output as is).
 
+use base64::Engine as _;
+
 use crate::protocol::{
-    Answer, Changes, CloseOutput, Item, ItemKind, ReadOutput, SendOutput, SessionsOutput,
-    ShowOutput, StartOutput, WaitOutput, WorkerRow, WorkersOutput,
+    Answer, AskOutput, Changes, CloseOutput, Item, ItemKind, ReadOutput, SendOutput,
+    SessionsOutput, ShowOutput, StartOutput, ToolOutput, WaitOutput, WorkerRow, WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
@@ -307,4 +309,57 @@ pub fn close(output: &CloseOutput) -> String {
     } else {
         format!("{} had already ended.\n", output.id)
     }
+}
+
+/// `preview`, `browser`, `app` and `page`: the tool's answer, and where its screenshots went.
+pub fn tool(output: &ToolOutput) -> String {
+    let mut out = output.text.trim_end().to_owned();
+    out.push('\n');
+    for path in &output.saved {
+        out.push_str(&format!("Screenshot saved to {path}\n"));
+    }
+    out
+}
+
+/// Writes the output's screenshots to files, for text output: to `out` (numbered after the
+/// first), else to the session's temporary folder.
+pub fn saved_images(
+    mut output: ToolOutput,
+    out: Option<&std::path::Path>,
+) -> Result<ToolOutput, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    for (n, image) in std::mem::take(&mut output.images).iter().enumerate() {
+        let Some((head, data)) = image.split_once(";base64,") else {
+            return Err("a screenshot that isn't a data: URL".into());
+        };
+        let extension = match head.trim_start_matches("data:") {
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            _ => "png",
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|err| err.to_string())?;
+        let path = match out {
+            Some(path) if n == 0 => path.to_owned(),
+            Some(path) => {
+                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+                path.with_file_name(format!("{stem}-{}.{extension}", n + 1))
+            }
+            None => {
+                std::env::temp_dir().join(format!("brigadier-screenshot-{stamp}-{n}.{extension}"))
+            }
+        };
+        std::fs::write(&path, bytes)
+            .map_err(|err| format!("could not save the screenshot to {}: {err}", path.display()))?;
+        output.saved.push(path.display().to_string());
+    }
+    Ok(output)
+}
+
+/// `ask`: the user's answer, as they gave it.
+pub fn ask(output: &AskOutput) -> String {
+    format!("{}\n", output.answer.trim_end())
 }

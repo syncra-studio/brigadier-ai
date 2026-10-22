@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier preview --json (planned)",
+  "title": "brigadier preview --json",
   "type": "object",
   "required": [
     "action",
-    "name"
+    "text"
   ],
   "additionalProperties": false,
   "properties": {
@@ -15,25 +15,9 @@
         "log"
       ]
     },
-    "name": {
-      "type": "string"
-    },
-    "url": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "state": {
-      "enum": [
-        "starting",
-        "running",
-        "stopped",
-        "failed"
-      ]
-    },
-    "log": {
-      "type": "string"
+    "text": {
+      "type": "string",
+      "description": "What the tool answered."
     }
   }
 }

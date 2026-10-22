@@ -53,6 +53,27 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             return fail(ErrorCode::Usage, &message, json, stdout, stderr);
         }
     };
+    let mut args = args;
+    // `page write <page>` with no text, or `-`: the text comes from standard input.
+    if command.name == "page"
+        && args
+            .positionals
+            .get("action")
+            .and_then(|a| a.first())
+            .map(String::as_str)
+            == Some("write")
+    {
+        let words = args.positionals.entry("args").or_default();
+        if words.len() == 1 || words.get(1..) == Some(&["-".to_owned()][..]) {
+            let mut text = String::new();
+            if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text) {
+                let message = format!("could not read the page's text from standard input: {err}");
+                return fail(ErrorCode::Usage, &message, json, stdout, stderr);
+            }
+            words.truncate(1);
+            words.push(text);
+        }
+    }
     let request = match args::request(command, &args) {
         Ok(Some(request)) => request,
         Ok(None) => {
@@ -87,6 +108,15 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
         "send" => present(output, json, render::send),
         "wait" => present(output, json, render::wait),
         "close" => present(output, json, render::close),
+        "ask" => present(output, json, render::ask),
+        "preview" | "browser" | "app" | "page" if json => present(output, json, render::tool),
+        "preview" | "browser" | "app" | "page" => {
+            let out = args.flag("out").map(std::path::PathBuf::from);
+            serde_json::from_value::<protocol::ToolOutput>(output)
+                .map_err(|err| err.to_string())
+                .and_then(|output| render::saved_images(output, out.as_deref()))
+                .map(|output| render::tool(&output))
+        }
         other => Err(format!("no output for {other}")),
     };
     match rendered {

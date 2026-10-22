@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "brigadier browser --json (planned)",
+  "title": "brigadier browser --json",
   "type": "object",
   "required": [
     "action",
-    "tab"
+    "text"
   ],
   "additionalProperties": false,
   "properties": {
@@ -20,27 +20,16 @@
         "show"
       ]
     },
-    "tab": {
-      "type": "string"
-    },
-    "url": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "title": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "text": {
-      "type": "string"
-    },
-    "image": {
       "type": "string",
-      "description": "A screenshot, as a data: URL."
+      "description": "What the tool answered."
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Screenshots, as data: URLs."
     }
   }
 }

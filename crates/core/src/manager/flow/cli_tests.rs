@@ -41,6 +41,13 @@ async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         CliRequest::Send { .. } => "send",
         CliRequest::Wait { .. } => "wait",
         CliRequest::Close { .. } => "close",
+        CliRequest::Tool { tool, .. } => match tool {
+            brigadier_cli::protocol::Tool::Preview => "preview",
+            brigadier_cli::protocol::Tool::Browser => "browser",
+            brigadier_cli::protocol::Tool::App => "app",
+            brigadier_cli::protocol::Tool::Page => "page",
+        },
+        CliRequest::Ask { .. } => "ask",
     };
     let caller = turn
         .host
@@ -414,6 +421,7 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
     let caller = crate::manager::cli::CliCaller {
         conversation_id: flow.conversation.clone(),
         task_id: None,
+        grant: String::new(),
     };
     let read = |id: String, last, screen| {
         let (flow, caller) = (&flow, &caller);
@@ -983,5 +991,250 @@ async fn wait_hears_a_worker_gone_and_its_usage_limit() {
     // Nobody took either over.
     assert_eq!(board.tasks.len(), 2);
     assert!(board.tasks.values().all(|task| task.attempts.len() == 1));
+    flow.stop().await;
+}
+
+fn tool(tool: brigadier_cli::protocol::Tool, action: &str, args: Value) -> CliRequest {
+    CliRequest::Tool {
+        tool,
+        action: action.into(),
+        args,
+    }
+}
+
+/// STRIP-DOWN-PLAN S13: the tools a session keeps, behind `brigadier`, run as the caller's own
+/// calls of them: the thread's previews, app, browser and pages; `ask` waits for the user's
+/// answer on its card (free text taken next to its options) and the answer goes back to it
+/// alone. A worker keeps its previews, and doesn't ask the user or act in the app.
+#[tokio::test]
+async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
+    use brigadier_cli::protocol::Tool;
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                let keep = |name: &str, value: Value| {
+                    answers.lock().unwrap().insert(name.into(), value);
+                };
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if let Some(Role::Worker { .. }) = worker {
+                    keep(
+                        "worker preview log",
+                        brigadier(&turn, tool(Tool::Preview, "log", json!({}))).await,
+                    );
+                    keep(
+                        "worker app",
+                        brigadier(&turn, tool(Tool::App, "state", json!({}))).await,
+                    );
+                    keep(
+                        "worker ask",
+                        brigadier(
+                            &turn,
+                            CliRequest::Ask {
+                                question: "May I?".into(),
+                                options: Vec::new(),
+                                title: None,
+                            },
+                        )
+                        .await,
+                    );
+                    return Reply::text("Tried them.");
+                }
+                if !turn.input.contains("Use the tools.") {
+                    let mut answers = answers.lock().unwrap();
+                    let other = answers.get("other thread turns").and_then(Value::as_u64);
+                    answers.insert("other thread turns".into(), json!(other.unwrap_or(0) + 1));
+                    return Reply::text("Noted.");
+                }
+                keep(
+                    "preview start",
+                    brigadier(
+                        &turn,
+                        tool(
+                            Tool::Preview,
+                            "start",
+                            json!({"command": "echo ready; sleep 30", "name": "site",
+                                   "kind": "test"}),
+                        ),
+                    )
+                    .await,
+                );
+                keep(
+                    "preview log",
+                    brigadier(
+                        &turn,
+                        tool(
+                            Tool::Preview,
+                            "log",
+                            json!({"tail_lines": 5, "wait_secs": 5}),
+                        ),
+                    )
+                    .await,
+                );
+                keep(
+                    "app state",
+                    brigadier(&turn, tool(Tool::App, "state", json!({}))).await,
+                );
+                keep(
+                    "browser read",
+                    brigadier(
+                        &turn,
+                        tool(Tool::Browser, "read", json!({"tab": "browser:x"})),
+                    )
+                    .await,
+                );
+                keep(
+                    "page read",
+                    brigadier(&turn, tool(Tool::Page, "read", json!({"page_id": "nope"}))).await,
+                );
+                keep(
+                    "bad args",
+                    brigadier(&turn, tool(Tool::Page, "read", json!({"page": "nope"}))).await,
+                );
+                keep(
+                    "ask options",
+                    brigadier(
+                        &turn,
+                        CliRequest::Ask {
+                            question: "Ship it today?".into(),
+                            options: vec!["Yes".into(), "Not yet".into()],
+                            title: Some("Release".into()),
+                        },
+                    )
+                    .await,
+                );
+                keep(
+                    "ask free",
+                    brigadier(
+                        &turn,
+                        CliRequest::Ask {
+                            question: "Which colour?".into(),
+                            options: vec!["Red".into(), "Green".into()],
+                            title: None,
+                        },
+                    )
+                    .await,
+                );
+                let started =
+                    brigadier(&turn, CliRequest::Start(Box::new(start("Try the tools.")))).await;
+                let id = id_of(&started);
+                wait_for(&turn, &[&id], 1).await;
+                keep(
+                    "preview stop",
+                    brigadier(&turn, tool(Tool::Preview, "stop", json!({}))).await,
+                );
+                Reply::text("Used them.")
+            })
+        })
+    };
+    let flow = Flow::start("cli-tools", Options::default(), script).await;
+    flow.say("Use the tools.").await;
+    for answer in ["Yes", "Blue, please"] {
+        let board = flow
+            .until("a card", |board| {
+                board.questions.values().any(|question| question.is_open())
+            })
+            .await;
+        let card = board
+            .questions
+            .values()
+            .find(|question| question.is_open())
+            .unwrap()
+            .clone();
+        // Options as given, the recommended (first) one marked.
+        assert_eq!(
+            card.items[0].options[0].label,
+            if answer == "Yes" { "Yes" } else { "Red" }
+        );
+        assert_eq!(card.items[0].recommended, Some(0));
+        flow.manager
+            .answer_question(
+                flow.conversation.clone(),
+                card.id,
+                vec![answer.into()],
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    flow.until("it used them", |_| {
+        answers.lock().unwrap().contains_key("preview stop")
+    })
+    .await;
+    flow.settled().await;
+    let answers = answers.lock().unwrap().clone();
+
+    let text = |name: &str| {
+        answers[name]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_eq!(
+        answers["preview start"]["action"], "start",
+        "{:#}",
+        answers["preview start"]
+    );
+    assert!(
+        text("preview start").contains("preview-1"),
+        "{}",
+        text("preview start")
+    );
+    assert!(
+        text("preview log").contains("ready"),
+        "{}",
+        text("preview log")
+    );
+    assert_eq!(answers["preview stop"]["action"], "stop");
+    assert_eq!(answers["app state"]["action"], "state");
+    assert!(!text("app state").is_empty());
+    // With no app window, the browser tool says it can't be used, as before.
+    assert!(
+        answers["browser read"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("its browser can't be used"),
+        "{:#}",
+        answers["browser read"]
+    );
+    assert_eq!(answers["page read"]["error"]["code"], "failed");
+    assert_eq!(answers["bad args"]["error"]["code"], "usage");
+
+    // The answers came back to `ask`, the chosen option's index or none for own words, and
+    // never into the thread as a message.
+    assert_eq!(
+        answers["ask options"],
+        json!({"answer": "Yes", "option": 0})
+    );
+    assert_eq!(
+        answers["ask free"],
+        json!({"answer": "Blue, please", "option": null})
+    );
+    assert_eq!(answers.get("other thread turns"), None);
+    let messages = flow
+        .core
+        .list_messages(flow.conversation.clone(), None, 50)
+        .await
+        .unwrap()
+        .messages;
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.text.contains("[answer]")),
+        "{messages:#?}"
+    );
+
+    // A worker keeps its previews; the app and the user are its session's.
+    assert_eq!(
+        answers["worker preview log"]["action"], "log",
+        "{:#}",
+        answers["worker preview log"]
+    );
+    assert_eq!(answers["worker app"]["error"]["code"], "refused");
+    assert_eq!(answers["worker ask"]["error"]["code"], "refused");
     flow.stop().await;
 }

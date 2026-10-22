@@ -75,8 +75,8 @@ test("every question card takes Enter only on the focused card and lights nothin
   assert.deepEqual(escapeAsk!.calls, [{ method: "dismiss" }]);
 });
 
-test("a question card keeps the answer the user lit and the text typed after a visit to Settings", { timeout: 90000 }, async (t) => {
-  const { kept } = JSON.parse(await renderFixtureLive(t, "card-keys.html?case=kept", "card-keys-result", 60000)) as Record<string, Seen>;
+test("a question card keeps the answer the user lit and the text typed after a visit to Settings, and takes a typed answer next to its options", { timeout: 90000 }, async (t) => {
+  const { kept, typed } = JSON.parse(await renderFixtureLive(t, "card-keys.html?case=kept", "card-keys-result", 60000)) as Record<string, Seen>;
   assert.equal(kept!.error, undefined, `kept: ${kept!.error}`);
   assert.notDeepEqual(kept!.litBefore, kept!.litFresh, "↓ lights an answer");
   assert.deepEqual(kept!.litAfter, kept!.litBefore);
@@ -85,4 +85,6 @@ test("a question card keeps the answer the user lit and the text typed after a v
   assert.deepEqual(kept!.litReopened, kept!.litFresh, "a question answered elsewhere keeps nothing");
   assert.equal(kept!.typedReopened, "");
   assert.deepEqual(kept!.calls, []);
+  assert.equal(typed!.error, undefined, `typed: ${typed!.error}`);
+  assert.deepEqual(typed!.calls, [{ method: "answerQuestion", cardId: "typed", answers: ["Both"], input: "typed" }]);
 });

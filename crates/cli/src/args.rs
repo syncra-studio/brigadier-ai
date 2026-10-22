@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use crate::commands::{self, Arg, Command};
-use crate::protocol::{Agent, Answer, CliRequest, Permission, StartRequest};
+use serde_json::{Map, Value, json};
+
+use crate::protocol::{Agent, Answer, CliRequest, Permission, StartRequest, Tool};
 
 /// What the command line asks for.
 #[derive(Debug)]
@@ -35,7 +37,7 @@ impl Parsed {
             .map(String::as_str)
     }
 
-    fn flag(&self, name: &str) -> Option<&str> {
+    pub fn flag(&self, name: &str) -> Option<&str> {
         self.flags
             .get(name)
             .and_then(|values| values.first())
@@ -336,8 +338,222 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             timeout_secs: number("timeout")?,
         },
         "close" => CliRequest::Close { id: id() },
+        "ask" => {
+            let question = args.text("question");
+            if question.trim().is_empty() {
+                return Err(error("missing <question>".into()));
+            }
+            let options: Vec<String> = args
+                .all("option")
+                .into_iter()
+                .map(|option| option.trim().to_owned())
+                .filter(|option| !option.is_empty())
+                .collect();
+            if options.len() == 1 || options.len() > 4 {
+                return Err(error(
+                    "give 2 to 4 options, or none for a free answer".into(),
+                ));
+            }
+            CliRequest::Ask {
+                question,
+                options,
+                title: args.flag("title").map(str::to_owned),
+            }
+        }
+        "preview" | "browser" | "app" | "page" => tool_request(command, args)?,
         other => return Err(error(format!("{other} has no request yet"))),
     }))
+}
+
+/// The kept tools' subcommands: the action, with the tool's own arguments.
+fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageError> {
+    let error = |message: &str| UsageError {
+        message: message.to_owned(),
+        usage: command.usage(),
+    };
+    let action = args.one("action").unwrap_or_default().to_owned();
+    let words = args.words("args");
+    let text = words.join(" ");
+    let mut out = Map::new();
+    let mut put = |key: &str, value: Option<Value>| {
+        if let Some(value) = value {
+            out.insert(key.to_owned(), value);
+        }
+    };
+    let flag = |name: &str| args.flag(name).map(|value| json!(value));
+    let number = |name: &str| {
+        args.flag(name)
+            .and_then(|value| value.parse::<u32>().ok())
+            .map(|n| json!(n))
+    };
+    // The one word an action takes, when it takes one.
+    let one = |what: &str, required: bool| -> Result<Option<Value>, UsageError> {
+        match words.as_slice() {
+            [] if required => Err(error(&format!("missing <{what}>"))),
+            [] => Ok(None),
+            [word] => Ok(Some(json!(word))),
+            [_, extra, ..] => Err(error(&format!("unexpected argument {extra:?}"))),
+        }
+    };
+    let tool = match command.name {
+        "preview" => {
+            match action.as_str() {
+                "start" => {
+                    if text.trim().is_empty() {
+                        return Err(error("missing <command>"));
+                    }
+                    put("command", Some(json!(text)));
+                    put("name", flag("name"));
+                    put("kind", flag("kind"));
+                    put("workdir", flag("workdir"));
+                    put("target", flag("target"));
+                    put("purpose", flag("purpose"));
+                    let mut env = Map::new();
+                    for pair in args.all("env") {
+                        let Some((name, value)) = pair.split_once('=') else {
+                            return Err(error("--env takes NAME=VALUE"));
+                        };
+                        env.insert(name.to_owned(), json!(value));
+                    }
+                    put("env", (!env.is_empty()).then_some(Value::Object(env)));
+                }
+                "stop" => put("id", one("id", false)?),
+                _ => {
+                    put("id", one("id", false)?);
+                    put("tail_lines", number("tail"));
+                    put("wait_secs", number("wait"));
+                }
+            }
+            Tool::Preview
+        }
+        "browser" => {
+            if action != "open" {
+                let Some(tab) = args.flag("tab") else {
+                    return Err(error("--tab names the tab, as `open` printed it"));
+                };
+                put("tab", Some(json!(tab)));
+            }
+            let asks = args.flag("asks").map(|asks| json!(asks.replace('-', "_")));
+            match action.as_str() {
+                "open" => {
+                    put("url", one("url", true)?);
+                    put("keep", Some(json!(args.switch("keep"))));
+                }
+                "navigate" => match (one("url", false)?, args.flag("go")) {
+                    (Some(_), Some(_)) => return Err(error("a URL or --go, not both")),
+                    (None, None) => return Err(error("missing <url> (or --go)")),
+                    (url, go) => {
+                        put("url", url);
+                        put("go", go.map(|go| json!(go)));
+                    }
+                },
+                "click" => {
+                    put("target", one("ref", true)?);
+                    put("asks", asks);
+                }
+                "type" => {
+                    let Some((target, typed)) = words.split_first() else {
+                        return Err(error("missing <ref>"));
+                    };
+                    put("target", Some(json!(target)));
+                    put("text", Some(json!(typed.join(" "))));
+                    put("submit", Some(json!(args.switch("submit"))));
+                    put("asks", asks);
+                }
+                _ => {
+                    one("nothing", false)?.map_or(Ok(()), |extra| {
+                        Err(error(&format!("unexpected argument {extra}")))
+                    })?;
+                }
+            }
+            Tool::Browser
+        }
+        "app" => {
+            match action.as_str() {
+                "state" => {}
+                "read-terminal" => put("terminal", one("terminal", true)?),
+                "show-session" => put("id", one("id", true)?),
+                "close-tab" => put("tab", one("tab", true)?),
+                "terminal-run" => {
+                    if text.trim().is_empty() {
+                        return Err(error("missing <command>"));
+                    }
+                    put("command", Some(json!(text)));
+                    put("terminal", flag("terminal"));
+                    put("show", Some(json!(args.switch("show"))));
+                }
+                _ => {
+                    let Some((what, target)) = words.split_first() else {
+                        return Err(error(
+                            "missing <what>: file, diff, progress, output, url, worker, plan \
+                             or page",
+                        ));
+                    };
+                    let target = target.join(" ");
+                    let needs = |key: &str| -> Result<Value, UsageError> {
+                        match target.trim() {
+                            "" => Err(error(&format!("open {what}: missing <{key}>"))),
+                            value => Ok(json!(value)),
+                        }
+                    };
+                    let opened = match what.as_str() {
+                        "file" => {
+                            let mut file = json!({"kind": "file", "path": needs("path")?});
+                            if let Some(line) = number("line") {
+                                file["line"] = line;
+                            }
+                            file
+                        }
+                        "diff" => match target.trim() {
+                            "last-turn" | "branch" | "uncommitted" => {
+                                json!({"kind": "diff", "scope": target.trim().replace('-', "_")})
+                            }
+                            _ => {
+                                return Err(error("open diff: last-turn, branch or uncommitted"));
+                            }
+                        },
+                        "progress" => json!({"kind": "progress"}),
+                        "output" => json!({"kind": "output", "id": needs("id")?}),
+                        "url" => json!({"kind": "url", "url": needs("url")?}),
+                        "worker" => json!({"kind": "worker", "task": needs("id")?}),
+                        "plan" => json!({"kind": "plan", "id": needs("id")?}),
+                        "page" => json!({"kind": "page", "id": needs("id")?}),
+                        other => {
+                            return Err(error(&format!(
+                                "open: {other:?} is not one of: file, diff, progress, output, \
+                                 url, worker, plan, page"
+                            )));
+                        }
+                    };
+                    put("target", Some(opened));
+                    put("show", Some(json!(args.switch("show"))));
+                }
+            }
+            Tool::App
+        }
+        _ => {
+            let Some((page, body)) = words.split_first() else {
+                return Err(error("missing <page>"));
+            };
+            put("page_id", Some(json!(page)));
+            if action == "write" {
+                let Some(revision) = args.flag("revision") else {
+                    return Err(error("--revision: the revision `read` printed"));
+                };
+                put("base_revision", Some(json!(revision)));
+                put("body", Some(json!(body.join(" "))));
+                put("title", flag("title"));
+            } else if let Some(extra) = body.first() {
+                return Err(error(&format!("unexpected argument {extra:?}")));
+            }
+            Tool::Page
+        }
+    };
+    Ok(CliRequest::Tool {
+        tool,
+        action,
+        args: Value::Object(out),
+    })
 }
 
 #[cfg(test)]
@@ -491,21 +707,117 @@ mod tests {
 
     #[test]
     fn commands_not_built_yet_parse_but_send_nothing() {
-        for words in [
-            &["preview", "start", "pnpm", "dev", "--name", "web"][..],
-            &["browser", "open", "https://example.com"],
-            &["ask", "--option", "Yes", "--option", "No", "Ship it?"],
-            &["app", "state"],
-            &["page", "list"],
-            &["models", "--json"],
-        ] {
-            let Invocation::Run { command, args, .. } = parse(words.iter().copied()).unwrap()
-            else {
-                panic!("{words:?} did not parse");
-            };
-            assert!(!command.available, "{words:?}");
-            assert_eq!(request(command, &args).unwrap(), None, "{words:?}");
+        let Invocation::Run { command, args, .. } = parse(["models", "--json"]).unwrap() else {
+            panic!("models did not parse");
+        };
+        assert!(!command.available);
+        assert_eq!(request(command, &args).unwrap(), None);
+    }
+
+    fn tool(words: &[&str]) -> (Tool, String, Value) {
+        match run(words).0 {
+            CliRequest::Tool { tool, action, args } => (tool, action, args),
+            other => panic!("not a tool: {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_kept_tools_parse_into_their_tools_arguments() {
+        assert_eq!(
+            tool(&[
+                "preview",
+                "start",
+                "--name",
+                "web",
+                "--env",
+                "PORT=3000",
+                "--purpose",
+                "user",
+                "pnpm",
+                "dev",
+            ]),
+            (
+                Tool::Preview,
+                "start".into(),
+                json!({"command": "pnpm dev", "name": "web", "env": {"PORT": "3000"},
+                       "purpose": "user"})
+            )
+        );
+        assert_eq!(
+            tool(&["preview", "log", "preview-2", "--tail", "9", "--wait", "30"]).2,
+            json!({"id": "preview-2", "tail_lines": 9, "wait_secs": 30})
+        );
+        assert_eq!(tool(&["preview", "stop"]).2, json!({}));
+        assert_eq!(
+            tool(&["browser", "open", "https://example.com"]).2,
+            json!({"url": "https://example.com", "keep": false})
+        );
+        assert_eq!(
+            tool(&["browser", "navigate", "--tab", "t", "--go", "back"]).2,
+            json!({"tab": "t", "go": "back"})
+        );
+        assert_eq!(
+            tool(&[
+                "browser", "type", "--tab", "t", "e7", "hello", "there", "--submit", "--asks",
+                "sign-in"
+            ])
+            .2,
+            json!({"tab": "t", "target": "e7", "text": "hello there", "submit": true,
+                   "asks": "sign_in"})
+        );
+        assert_eq!(
+            tool(&["browser", "screenshot", "--tab", "t", "--out", "/x.png"]).2,
+            json!({"tab": "t"})
+        );
+        assert_eq!(
+            tool(&["app", "state"]),
+            (Tool::App, "state".into(), json!({}))
+        );
+        assert_eq!(
+            tool(&["app", "open", "file", "src/a.rs", "--line", "4", "--show"]).2,
+            json!({"target": {"kind": "file", "path": "src/a.rs", "line": 4}, "show": true})
+        );
+        assert_eq!(
+            tool(&["app", "open", "diff", "last-turn"]).2,
+            json!({"target": {"kind": "diff", "scope": "last_turn"}, "show": false})
+        );
+        assert_eq!(
+            tool(&[
+                "app",
+                "terminal-run",
+                "--terminal",
+                "terminal-2",
+                "make",
+                "test"
+            ])
+            .2,
+            json!({"command": "make test", "terminal": "terminal-2", "show": false})
+        );
+        assert_eq!(
+            tool(&["page", "write", "p1", "--revision", "r3", "New", "text."]),
+            (
+                Tool::Page,
+                "write".into(),
+                json!({"page_id": "p1", "base_revision": "r3", "body": "New text."})
+            )
+        );
+        assert_eq!(
+            run(&["ask", "--option", "Yes", "--option", "No", "Ship", "it?"]).0,
+            CliRequest::Ask {
+                question: "Ship it?".into(),
+                options: vec!["Yes".into(), "No".into()],
+                title: None
+            }
+        );
+        assert!(fails(&["browser", "read"]).contains("--tab names the tab"));
+        assert!(fails(&["browser", "navigate", "--tab", "t"]).contains("missing <url>"));
+        assert!(fails(&["preview", "start"]).contains("missing <command>"));
+        assert!(fails(&["preview", "stop", "a", "b"]).contains("unexpected argument"));
+        assert!(fails(&["app", "open", "diff", "all"]).contains("last-turn, branch"));
+        assert!(fails(&["app", "open", "tab"]).contains("is not one of"));
+        assert!(fails(&["page", "write", "p1", "text"]).contains("--revision"));
+        assert!(fails(&["page", "list"]).contains("not one of"));
+        assert!(fails(&["ask", "--option", "Only", "Go?"]).contains("2 to 4 options"));
     }
 
     #[test]

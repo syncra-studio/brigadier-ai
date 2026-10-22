@@ -12,6 +12,7 @@ name = "brigadier"
 path = "src/main.rs"
 
 [dependencies]
+base64.workspace = true
 brigadier-sandbox.workspace = true
 interprocess = "2.4.4"
 serde.workspace = true

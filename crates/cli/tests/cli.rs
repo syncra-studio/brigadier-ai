@@ -320,6 +320,26 @@ fn sample(request: &CliRequest) -> CliReply {
             id: id.clone(),
             closed: true,
         }),
+        CliRequest::Tool { action, .. } if action == "screenshot" => CliReply::ok(&ToolOutput {
+            action: action.clone(),
+            text: "The tab browser:agent-1 at https://example.com.".into(),
+            // A 1-byte "PNG".
+            images: vec!["data:image/png;base64,AA==".into()],
+            saved: Vec::new(),
+        }),
+        CliRequest::Tool { tool, action, args } => CliReply::ok(&ToolOutput {
+            action: action.clone(),
+            text: format!("{tool:?} {action}: {args}"),
+            images: Vec::new(),
+            saved: Vec::new(),
+        }),
+        CliRequest::Ask { options, .. } => CliReply::ok(&AskOutput {
+            answer: options
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "In my words".into()),
+            option: (!options.is_empty()).then_some(0),
+        }),
     }
 }
 
@@ -410,6 +430,50 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["wait", "--json"],
         &["wait", "a1b2", "--timeout", "1", "--json"],
         &["close", "a1b2", "--json"],
+        &["preview", "start", "--name", "web", "--json", "pnpm", "dev"],
+        &["preview", "log", "preview-1", "--tail", "5", "--json"],
+        &["preview", "stop", "--json"],
+        &["browser", "open", "https://example.com", "--keep", "--json"],
+        &[
+            "browser",
+            "screenshot",
+            "--tab",
+            "browser:agent-1",
+            "--json",
+        ],
+        &[
+            "browser",
+            "click",
+            "--tab",
+            "browser:agent-1",
+            "e12",
+            "--json",
+        ],
+        &[
+            "ask", "--option", "Yes", "--option", "No", "--json", "Ship it?",
+        ],
+        &["ask", "--json", "What", "name?"],
+        &["app", "state", "--json"],
+        &[
+            "app",
+            "open",
+            "file",
+            "src/main.rs",
+            "--line",
+            "3",
+            "--json",
+        ],
+        &["page", "read", "page-1", "--json"],
+        &[
+            "page",
+            "write",
+            "page-1",
+            "--revision",
+            "r1",
+            "--json",
+            "New",
+            "text.",
+        ],
     ];
     let daemon = stand_in_daemon(&dir.0, read_calls.len() + 1, sample);
     for words in read_calls {
@@ -427,14 +491,6 @@ fn every_subcommands_json_output_fits_its_schema() {
     // call the daemon.
     for command in COMMANDS.iter().filter(|c| !c.available) {
         let mut words = vec![command.name];
-        words.extend(match command.name {
-            "ask" => &["do it"][..],
-            "preview" => &["log"],
-            "browser" => &["read"],
-            "app" => &["state"],
-            "page" => &["list"],
-            _ => &[],
-        });
         words.push("--json");
         let output = brigadier(None, Some(GRANT), &words);
         assert_eq!(output.status.code(), Some(4), "{words:?}");
@@ -446,7 +502,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 7, sample);
+    let daemon = stand_in_daemon(&dir.0, 9, sample);
     let sessions = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["sessions"]));
     assert!(sessions.starts_with("brigadier-ai\nID"), "{sessions}");
     assert!(sessions.contains("Strip-down (this session)"), "{sessions}");
@@ -481,6 +537,31 @@ fn text_output_reads_well() {
     assert_eq!(send, "Denied what e5f6 asked.\n");
     let close = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["close", "a1b2"]));
     assert_eq!(close, "Closed a1b2.\n");
+    // A screenshot is saved where `--out` says, and the text says where.
+    let shot = dir.0.join("shot.png");
+    let shown = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &[
+            "browser",
+            "screenshot",
+            "--tab",
+            "browser:agent-1",
+            "--out",
+            shot.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(std::fs::read(&shot).unwrap(), [0]);
+    assert!(
+        shown.ends_with(&format!("Screenshot saved to {}\n", shot.display())),
+        "{shown}"
+    );
+    let asked = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &["ask", "--option", "Yes", "--option", "No", "Ship", "it?"],
+    ));
+    assert_eq!(asked, "Yes\n");
     daemon.join().unwrap();
 }
 

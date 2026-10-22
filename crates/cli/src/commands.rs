@@ -253,8 +253,10 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "preview",
         summary: "Start, stop or read a preview the user can watch.",
-        details: "`start <command…>` runs a dev server, app or test run as a preview; `stop \
-                  <name>` ends it; `log <name>` reads its output.",
+        details: "`start <command…>` runs a dev server, app, simulator, PDF or test run as a \
+                  preview the user sees (run in the foreground, no trailing `&`); `stop \
+                  [<id>]` ends one, or every running one; `log [<id>]` reads the end of its \
+                  output, the latest one's by default. Ids look like `preview-1`.",
         args: &[
             action(&["start", "stop", "log"], "What to do."),
             flag("name", "NAME", "start: a short name the user sees."),
@@ -262,28 +264,55 @@ pub const COMMANDS: &[Command] = &[
                 "kind",
                 "KIND",
                 &["web", "app", "simulator", "pdf", "test"],
-                "start: what it shows.",
+                "start: what it shows; read from the command by default.",
             ),
             flag(
                 "workdir",
                 "DIR",
-                "start: the folder it runs in, in the checkout.",
+                "start: the folder it runs in, relative to the checkout.",
             ),
-            flag("tail", "N", "log: the last N lines."),
+            flag(
+                "target",
+                "TEXT",
+                "start: the simulator's device or the PDF's path, when the command doesn't say.",
+            ),
+            Arg::Flag {
+                long: "env",
+                value: Some("NAME=VALUE"),
+                help: "start: an environment variable for it.",
+                choices: &[],
+                repeat: true,
+            },
+            choice(
+                "purpose",
+                "WHY",
+                &["proof", "user"],
+                "start: `user` when the user asked to see it (a merge leaves it running); \
+                 `proof` by default.",
+            ),
+            flag("tail", "N", "log: the last N lines (40 by default)."),
+            flag(
+                "wait",
+                "SECONDS",
+                "log: while it is starting, wait up to this long for it to run or end.",
+            ),
             rest(
                 "args",
-                "start: the command; stop and log: the preview's name.",
+                "start: the command; stop and log: the preview's id.",
                 false,
             ),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/preview.schema.json"),
     },
     Command {
         name: "browser",
         summary: "Drive Brigadier's browser.",
-        details: "`open <url>`, `navigate <url>`, `read`, `click <target>`, `type <text>`, \
-                  `screenshot`, `close`, `show`.",
+        details: "`open <url>` opens a tab and prints its id; `navigate <url>`, `read`, \
+                  `click <ref>`, `type <ref> <text…>`, `screenshot`, `close` and `show` act \
+                  on the tab `--tab` names. `read` lists the page's controls by ref (`e12`). \
+                  Set `--asks` when a click or typing pays, sends something in the user's name \
+                  or signs in: the user is asked first.",
         args: &[
             action(
                 &[
@@ -298,21 +327,44 @@ pub const COMMANDS: &[Command] = &[
                 ],
                 "What to do.",
             ),
-            flag(
-                "tab",
-                "TAB",
-                "The tab, as `open` named it; the latest by default.",
+            flag("tab", "TAB", "The tab, as `open` printed it."),
+            switch(
+                "keep",
+                "open: the page is for the user, so the tab stays open.",
             ),
-            rest("args", "The action's URL, target or text.", false),
+            choice(
+                "go",
+                "STEP",
+                &["back", "forward", "reload"],
+                "navigate: instead of a URL.",
+            ),
+            switch("submit", "type: press Enter after typing."),
+            choice(
+                "asks",
+                "WHAT",
+                &["pay", "send", "sign-in"],
+                "click and type: what it does that asks the user first.",
+            ),
+            flag(
+                "out",
+                "FILE",
+                "screenshot: where to save it; the session's temporary folder by default.",
+            ),
+            rest(
+                "args",
+                "The URL, the control's ref, and the text to type.",
+                false,
+            ),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/browser.schema.json"),
     },
     Command {
         name: "ask",
         summary: "Ask the user on a card and wait for the answer.",
-        details: "The card always takes a free-text answer next to any options. Give the \
-                  recommended option first, so \"yes\" takes it.",
+        details: "The card always takes a free-text answer next to any options. Give 2 to 4 \
+                  options or none, the recommended one first, so \"yes\" takes it. Waits \
+                  until the user answers; run it in the background for a long wait.",
         args: &[
             Arg::Flag {
                 long: "option",
@@ -321,16 +373,25 @@ pub const COMMANDS: &[Command] = &[
                 choices: &[],
                 repeat: true,
             },
+            flag(
+                "title",
+                "TEXT",
+                "A few words over the card (\"Round 2 · Budget\").",
+            ),
             rest("question", "The question.", true),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/ask.schema.json"),
     },
     Command {
         name: "app",
         summary: "Read and act in the Brigadier app.",
-        details: "`state` lists the app's tabs and terminals; `read-terminal`, `open`, \
-                  `terminal-run`, `show-session` and `close-tab` act on them.",
+        details: "`state` lists this session's tabs and terminals; `read-terminal \
+                  <terminal>` reads one; `open <what> [<target>]` shows the user `file \
+                  <path>`, `diff last-turn|branch|uncommitted`, `progress`, `output <id>`, \
+                  `url <url>`, `worker <id>`, `plan <id>` or `page <id>`; `terminal-run \
+                  <command…>` types a command in a terminal tab; `show-session <id>` shows \
+                  another session; `close-tab <tab>` closes a tab.",
         args: &[
             action(
                 &[
@@ -343,20 +404,35 @@ pub const COMMANDS: &[Command] = &[
                 ],
                 "What to do.",
             ),
+            flag("line", "N", "open file: the line to show."),
+            flag(
+                "terminal",
+                "TERMINAL",
+                "terminal-run: one of the session's terminals; your own by default.",
+            ),
+            switch(
+                "show",
+                "open and terminal-run: the user asked to see it, so it comes to the front.",
+            ),
             rest("args", "The action's target.", false),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/app.schema.json"),
     },
     Command {
         name: "page",
-        summary: "List, read and write the user's pages.",
-        details: "`list`, `read <page>`, `write <page> <text…>`.",
+        summary: "Read and write the page the user's message came from.",
+        details: "`read <page>` prints the page and its revision; `write <page> --revision \
+                  <rev> <text…>` replaces its text (Markdown, without its title), refused if \
+                  it changed since that revision. With no text, or `-`, the text comes from \
+                  standard input. The page's id is in the `[page …]` note on the message.",
         args: &[
-            action(&["list", "read", "write"], "What to do."),
+            action(&["read", "write"], "What to do."),
+            flag("revision", "REV", "write: the revision `read` printed."),
+            flag("title", "TEXT", "write: a new title."),
             rest("args", "The page, and the text to write.", false),
         ],
-        available: false,
+        available: true,
         schema: include_str!("../schemas/page.schema.json"),
     },
     Command {

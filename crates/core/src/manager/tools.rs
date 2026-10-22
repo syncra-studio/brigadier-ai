@@ -1517,7 +1517,7 @@ const ROUND_MAX: usize = 6;
 const OPTIONS_MAX: usize = 4;
 
 /// An `ask_user` round as the card's questions, or why it can't be asked as it is.
-fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec<QuestionItem>> {
+pub(super) fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec<QuestionItem>> {
     if questions.is_empty() || questions.len() > ROUND_MAX {
         return Err(Error::Invalid(format!(
             "ask_user takes 1 to {ROUND_MAX} questions in one round; ask the rest in the next round."
