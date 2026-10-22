@@ -10,8 +10,8 @@ use brigadier_core::tools::{
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, RecordNodes, Remember,
     ReportRef, RequestApproval, RerunTask, Role, RouteFollowUp, SaveMemory, SaveReport,
     SearchTranscript, SetHeadline, SettleStep, StartVerifier, StopWorker, StoreOutput,
-    SubmitOutline, SubmitReport, SuggestSetting, TabChatCall, TabTools, ToolCall, WorkerCall,
-    WritePage, WriteTabFile,
+    SubmitOutline, SubmitReport, SuggestSetting, THREAD_TOOLS, TabChatCall, TabTools, ToolCall,
+    WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -347,9 +347,14 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     static TAB_FILE: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
         // A note fork lists the thread's tools, whose calls the host refuses.
-        Role::Orchestrator { .. } | Role::NoteFork { .. } => {
-            ORCHESTRATOR.get_or_init(|| loading(orchestrator_tools()))
-        }
+        Role::Orchestrator { .. } | Role::NoteFork { .. } => ORCHESTRATOR.get_or_init(|| {
+            loading(
+                orchestrator_tools()
+                    .into_iter()
+                    .filter(|tool| THREAD_TOOLS.contains(&tool.name.as_ref()))
+                    .collect(),
+            )
+        }),
         Role::Worker { checks: false, .. } => WORKER.get_or_init(worker_tools),
         Role::Worker { checks: true, .. } => CHECKER.get_or_init(|| {
             worker_tools()
@@ -539,7 +544,6 @@ fn chat_tools() -> Vec<Tool> {
 /// Claude thread finds the rest with its tool search when it needs one, which keeps every
 /// call's fixed start near plain Claude Code's. Codex reads no such mark and loads them all.
 pub const THREAD_ALWAYS_LOADED: &[&str] = &[
-    "read_artifact",
     "note_for_user",
     "set_headline",
     "query_brain",
@@ -727,49 +731,12 @@ pub fn parse_call(
     let arguments = Value::Object(arguments);
     let unknown = || ParseError::UnknownTool(name.to_owned());
     match role {
-        Role::Orchestrator { .. } | Role::NoteFork { .. } => {
-            let call = match name {
-                "delegate_task" => OrchestratorCall::DelegateTask(args(name, arguments)?),
-                "message_worker" => OrchestratorCall::MessageWorker(args(name, arguments)?),
-                "answer_worker" => OrchestratorCall::AnswerWorker(args(name, arguments)?),
-                "route_follow_up" => OrchestratorCall::RouteFollowUp(args(name, arguments)?),
-                "stop_worker" => OrchestratorCall::StopWorker(args(name, arguments)?),
-                "rerun_task" => OrchestratorCall::RerunTask(args(name, arguments)?),
-                "read_report" => OrchestratorCall::ReadReport(args(name, arguments)?),
-                "read_artifact" => OrchestratorCall::ReadArtifact(args(name, arguments)?),
-                "store_output" => OrchestratorCall::StoreOutput(args(name, arguments)?),
-                "query_brain" => OrchestratorCall::QueryBrain(args(name, arguments)?),
-                "remember" => OrchestratorCall::Remember(args(name, arguments)?),
-                "search_transcript" => {
-                    OrchestratorCall::SearchTranscript(args::<SearchTranscript>(name, arguments)?)
-                }
-                "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
-                "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
-                "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
-                "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
-                "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
-                "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
-                "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
-                "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
-                "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
-                "ci_status" => OrchestratorCall::CiStatus(args(name, arguments)?),
-                "watch_ci" => OrchestratorCall::WatchCi(args(name, arguments)?),
-                "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
-                "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
-                "set_headline" => OrchestratorCall::SetHeadline(args(name, arguments)?),
-                "list_tasks" => OrchestratorCall::ListTasks,
-                "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
-                "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
-                "propose_overnight" => OrchestratorCall::ProposeOvernight(args(name, arguments)?),
-                "code_search" => OrchestratorCall::CodeSearch(args(name, arguments)?),
-                "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
-                "project_map" => OrchestratorCall::ProjectMap,
-                "clean_up" => OrchestratorCall::CleanUp,
-                "save_report" => OrchestratorCall::SaveReport(args(name, arguments)?),
-                _ => return Err(unknown()),
-            };
-            Ok(ToolCall::Orchestrator(call))
+        // Workers and merges are `brigadier` and git's now (S15): the thread calls only its
+        // listed tools.
+        Role::Orchestrator { .. } | Role::NoteFork { .. } if THREAD_TOOLS.contains(&name) => {
+            thread_call(name, arguments)
         }
+        Role::Orchestrator { .. } | Role::NoteFork { .. } => Err(unknown()),
         Role::Worker { checks, .. } => {
             let call = match name {
                 // Its name before #66, which a worker that started on it may still call.
@@ -799,21 +766,15 @@ pub fn parse_call(
             };
             Ok(ToolCall::Job(call))
         }
-        Role::Chat { conversation_id } => match name {
+        Role::Chat { .. } => match name {
             "save_memory" => Ok(ToolCall::Chat(ChatCall::SaveMemory(args::<SaveMemory>(
                 name, arguments,
             )?))),
             "save_report" => Ok(ToolCall::Chat(ChatCall::SaveReport(args::<SaveReport>(
                 name, arguments,
             )?))),
-            // The thread's own tools, read as the thread's are.
-            _ if CHAT_THREAD_TOOLS.contains(&name) => parse_call(
-                &Role::Orchestrator {
-                    conversation_id: conversation_id.clone(),
-                },
-                name,
-                arguments.as_object().cloned(),
-            ),
+            // The thread's worker and card tools, read as the thread's were.
+            _ if CHAT_THREAD_TOOLS.contains(&name) => thread_call(name, arguments),
             _ => Err(unknown()),
         },
         Role::TabChat { tools, .. } => {
@@ -830,6 +791,52 @@ pub fn parse_call(
         }
         Role::OutputHook { .. } | Role::StopHook { .. } => Err(unknown()),
     }
+}
+
+/// A call of the thread's tool `name`, a Chat's worker and card tools included.
+fn thread_call(name: &str, arguments: Value) -> Result<ToolCall, ParseError> {
+    let unknown = || ParseError::UnknownTool(name.to_owned());
+    let call = match name {
+        "delegate_task" => OrchestratorCall::DelegateTask(args(name, arguments)?),
+        "message_worker" => OrchestratorCall::MessageWorker(args(name, arguments)?),
+        "answer_worker" => OrchestratorCall::AnswerWorker(args(name, arguments)?),
+        "route_follow_up" => OrchestratorCall::RouteFollowUp(args(name, arguments)?),
+        "stop_worker" => OrchestratorCall::StopWorker(args(name, arguments)?),
+        "rerun_task" => OrchestratorCall::RerunTask(args(name, arguments)?),
+        "read_report" => OrchestratorCall::ReadReport(args(name, arguments)?),
+        "read_artifact" => OrchestratorCall::ReadArtifact(args(name, arguments)?),
+        "store_output" => OrchestratorCall::StoreOutput(args(name, arguments)?),
+        "query_brain" => OrchestratorCall::QueryBrain(args(name, arguments)?),
+        "remember" => OrchestratorCall::Remember(args(name, arguments)?),
+        "search_transcript" => {
+            OrchestratorCall::SearchTranscript(args::<SearchTranscript>(name, arguments)?)
+        }
+        "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
+        "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
+        "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
+        "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
+        "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
+        "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
+        "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
+        "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
+        "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
+        "ci_status" => OrchestratorCall::CiStatus(args(name, arguments)?),
+        "watch_ci" => OrchestratorCall::WatchCi(args(name, arguments)?),
+        "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
+        "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
+        "set_headline" => OrchestratorCall::SetHeadline(args(name, arguments)?),
+        "list_tasks" => OrchestratorCall::ListTasks,
+        "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
+        "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
+        "propose_overnight" => OrchestratorCall::ProposeOvernight(args(name, arguments)?),
+        "code_search" => OrchestratorCall::CodeSearch(args(name, arguments)?),
+        "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
+        "project_map" => OrchestratorCall::ProjectMap,
+        "clean_up" => OrchestratorCall::CleanUp,
+        "save_report" => OrchestratorCall::SaveReport(args(name, arguments)?),
+        _ => return Err(unknown()),
+    };
+    Ok(ToolCall::Orchestrator(call))
 }
 
 fn args<T: DeserializeOwned>(tool: &str, arguments: Value) -> Result<T, ParseError> {
@@ -902,35 +909,6 @@ mod tests {
         assert!(bytes < 6_100, "delegate_task is {bytes} bytes");
     }
 
-    /// #444: route_follow_up offers separate work (a different goal, files the running request
-    /// leaves alone) as a session of its own, however small; "wait" is only for a request that
-    /// has to come after this work. Its schema's routes say the same.
-    #[test]
-    fn route_follow_up_offers_separate_work_as_a_session_of_its_own() {
-        let thread = Role::Orchestrator {
-            conversation_id: brigadier_core::model::ConversationId("c1".into()),
-        };
-        let tool = tools_for(&thread)
-            .iter()
-            .find(|tool| tool.name == "route_follow_up")
-            .unwrap();
-        let description = tool.description.as_deref().unwrap();
-        for words in [
-            "\"new_session\": separate work, with a different goal that leaves the files this request is changing alone",
-            "however small",
-            "\"wait\": a request of its own that has to come after this work (it builds on its result or changes the same files)",
-        ] {
-            assert!(description.contains(words), "{words}: {description}");
-        }
-        assert!(!description.contains("could run apart"), "{description}");
-        let schema = serde_json::to_string(&*tool.input_schema).unwrap();
-        assert!(
-            schema.contains("Separate work, with a different goal that leaves the files this request is changing"),
-            "{schema}"
-        );
-        assert!(schema.contains("has to come after this work"), "{schema}");
-    }
-
     /// A thread's everyday tools load up front and the rest wait behind Claude Code's tool
     /// search, the same marks on every listing (the cached prefix stays the same); a worker's
     /// tools carry no mark (BUILD-PLAN C2).
@@ -958,16 +936,16 @@ mod tests {
             let mut want = expected.clone();
             want.sort_unstable();
             assert_eq!(sorted, want);
-            assert!(loaded.len() * 4 < tools.len(), "most wait: {}", tools.len());
-            let delegate = tools
+            assert!(loaded.len() * 3 < tools.len(), "most wait: {}", tools.len());
+            let report = tools
                 .iter()
-                .find(|tool| tool.name == "delegate_task")
+                .find(|tool| tool.name == "save_report")
                 .unwrap();
             assert_eq!(
-                delegate.meta.as_ref().unwrap().0["anthropic/searchHint"],
-                "start a worker, delegate, parallel jobs"
+                report.meta.as_ref().unwrap().0["anthropic/searchHint"],
+                "full report, research, long findings, page"
             );
-            let listed = serde_json::to_value(delegate).unwrap();
+            let listed = serde_json::to_value(report).unwrap();
             assert!(
                 listed["_meta"]["anthropic/searchHint"].is_string(),
                 "{listed}"
@@ -1065,31 +1043,6 @@ mod tests {
         assert!(names.contains(&"start_verifier".to_owned()));
     }
 
-    /// finish_session merges when the thread judges the user asked: it asks for no consent,
-    /// holds nothing and names no review.
-    #[test]
-    fn finish_session_merges_with_no_consent_hold_or_review() {
-        let tools = orchestrator_tools();
-        let finish = tools
-            .iter()
-            .find(|tool| tool.name == "finish_session")
-            .unwrap();
-        let description = finish.description.as_deref().unwrap();
-        assert!(description.contains("when the user asked for the merge"));
-        for gone in ["consent", "held", "review", "anyway"] {
-            assert!(!description.contains(gone), "{gone}: {description}");
-        }
-        let thread = Role::Orchestrator {
-            conversation_id: brigadier_core::model::ConversationId("c1".into()),
-        };
-        let old = serde_json::json!({ "user_words": "merge it" });
-        assert!(parse_call(&thread, "finish_session", old.as_object().cloned()).is_err());
-        assert!(matches!(
-            parse_call(&thread, "finish_session", None),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::FinishSession(_)))
-        ));
-    }
-
     #[test]
     fn the_thread_searches_the_code_index() {
         let thread = Role::Orchestrator {
@@ -1099,15 +1052,19 @@ mod tests {
             .iter()
             .map(|tool| tool.name.to_string())
             .collect();
+        for name in ["code_search", "code_refs", "project_map"] {
+            assert!(names.contains(&name.to_owned()), "{name}");
+        }
+        // Workers and merges are `brigadier` and git's (S15): the engine's tools for them are
+        // gone from the thread.
         for name in [
-            "code_search",
-            "code_refs",
-            "project_map",
             "delegate_task",
             "land_phase",
             "finish_session",
+            "approve_outline",
         ] {
-            assert!(names.contains(&name.to_owned()), "{name}");
+            assert!(!names.contains(&name.to_owned()), "{name}");
+            assert!(parse_call(&thread, name, None).is_err(), "{name}");
         }
         let mut arguments = JsonObject::new();
         arguments.insert("query".into(), Value::String("ConvLive".into()));
@@ -1125,7 +1082,8 @@ mod tests {
     /// requires it, and a call without it is refused.
     #[test]
     fn delegate_task_needs_an_effort() {
-        let thread = Role::Orchestrator {
+        // A Chat's, until S16b: the thread's went in S15.
+        let thread = Role::Chat {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
         };
         let delegate = tools_for(&thread)
@@ -1479,7 +1437,8 @@ mod tests {
     /// `stop_worker` takes a required one-line reason, which the thread's "Stopped" row shows.
     #[test]
     fn stop_worker_needs_a_reason() {
-        let thread = Role::Orchestrator {
+        // A Chat's, until S16b: the thread's went in S15.
+        let thread = Role::Chat {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
         };
         let tool = tools_for(&thread)

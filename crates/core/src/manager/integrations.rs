@@ -1001,70 +1001,6 @@ fn link(target: &Path, at: &Path) -> std::io::Result<()> {
     };
 }
 
-/// The thread's short list of the servers a worker gets only when named: every switched-on
-/// server that isn't native to both Claude and Codex workers in `project`, by name with the
-/// agents that have it. Empty when there are none.
-pub(crate) fn thread_section(
-    catalog: &Catalog,
-    project: Option<&Path>,
-    switches: &Switches<'_>,
-) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    let mut seen = HashSet::new();
-    for server in &catalog.servers {
-        if switches.server_off(&server.id) || RESERVED.contains(&server.name.as_str()) {
-            continue;
-        }
-        let native = server_native_to(catalog, server, project);
-        if native.len() == 2 || !seen.insert(server.name.clone()) {
-            continue;
-        }
-        // Agents that have a same-named copy of it count too; a different server of the name
-        // is given by its id.
-        let same: Vec<&Server> = catalog
-            .servers
-            .iter()
-            .filter(|other| other.name == server.name && !switches.server_off(&other.id))
-            .collect();
-        let differs = same.iter().any(|other| other.transport != server.transport);
-        let mut agents: Vec<&str> = Vec::new();
-        for other in &same {
-            for provider in server_native_to(catalog, other, project) {
-                let label = match provider {
-                    ProviderKind::Claude => "Claude",
-                    ProviderKind::Codex => "Codex",
-                };
-                if !agents.contains(&label) {
-                    agents.push(label);
-                }
-            }
-        }
-        if agents.len() == 2 && !differs {
-            continue;
-        }
-        if differs {
-            for other in &same {
-                lines.push(format!("- `{}`: {}", other.id, other.source.label()));
-            }
-        } else if agents.is_empty() {
-            lines.push(format!(
-                "- {}: neither ({})",
-                server.name,
-                server.source.label()
-            ));
-        } else {
-            lines.push(format!("- {}: {}", server.name, agents.join(", ")));
-        }
-    }
-    if lines.is_empty() {
-        return String::new();
-    }
-    format!(
-        "MCP servers a worker gets only when its task names them (delegate_task's `integrations`, by name or by the id given): each worker already has its own agent's, and the skills of every agent. Name only what the task needs: Codex loads every tool of each server it gets. A server only one agent has, by name and the agents that have it:\n{}",
-        lines.join("\n")
-    )
-}
-
 /// `registry`'s catalog for sessions in `repo`, with the items of the projects at `others` that
 /// the user uses in every project. A skill switched off by `switches` isn't taken, so it can't
 /// stand in for a switched-on copy of it from another project. A Claude local-scope server is
@@ -1533,29 +1469,6 @@ impl SessionManager {
                 in_checkout: true,
             };
             Ok(lean_switched_off(&catalog, &session, &keep))
-        })
-        .await
-        .unwrap_or_default()
-    }
-
-    /// The thread's list of servers a worker gets only when named ([`thread_section`]).
-    pub(crate) async fn thread_integrations(&self, conversation: &ConversationId) -> String {
-        let (registry, settings, repo) = (
-            self.registry(),
-            self.core.settings(),
-            self.trusted_repo(conversation),
-        );
-        let (project, others) = (
-            self.session_project(conversation),
-            self.everywhere_repos(&settings, repo.as_deref()),
-        );
-        super::blocking(move || {
-            let switches = Switches {
-                settings: &settings,
-                project: project.as_ref(),
-            };
-            let catalog = catalog_for(&registry, repo.as_deref(), &others, &switches);
-            Ok(thread_section(&catalog, repo.as_deref(), &switches))
         })
         .await
         .unwrap_or_default()

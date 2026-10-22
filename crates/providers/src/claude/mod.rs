@@ -90,11 +90,12 @@ SendMessage,TaskStop,Monitor,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlan
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
 /// A thread's built-in tools ([`ToolSet::Thread`]): Claude Code's own sub-agents (`Agent`, which
 /// its init event lists as `Task`) and background-task control (`Monitor`, `TaskStop`) are on, as
-/// in a plain CLI (STRIP-DOWN-PLAN S3). Tool search stays (BUILD-PLAN C2): Brigadier marks its
+/// in a plain CLI (STRIP-DOWN-PLAN S3), and so is `Skill`, which reads the skills it is given, the
+/// brigade skill among them (S15). Tool search stays (BUILD-PLAN C2): Brigadier marks its
 /// everyday tools to load from the start, and the rest wait behind the search until the thread
 /// needs one.
 const THREAD_TOOLS: &str =
-    "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop";
+    "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop,Skill";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// A Brain job's built-in tools ([`ToolSet::Reader`]).
@@ -3297,7 +3298,7 @@ for line in sys.stdin:
         assert_eq!(
             flag("--tools").as_deref(),
             Some(
-                "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop"
+                "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop,Skill"
             )
         );
         assert_eq!(flag("--disallowedTools"), None, "{args:?}");

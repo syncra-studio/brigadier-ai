@@ -13,7 +13,7 @@ Everything goes through `brigadier` (`brigadier <command> --help` for details; `
 |---|---|
 | `brigadier models` | Before each start: which provider, model and effort fits, what's left on each account, the user's rules. |
 | `brigadier start "<brief>" --title T [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--permission P] [--lean]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
-| `brigadier wait [<id>…] [--timeout S]` | Block until a worker event: turn ended (with its last message), needs input, gone, usage limit, fresh context. Run long waits in the background and end your turn; you are woken when it returns. |
+| `brigadier wait [<id>…] [--timeout S]` | Block until a worker event: turn ended (with its last message), needs input, gone, usage limit, fresh context. Workers send you nothing on their own: this is how you hear from them. |
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one when its work is in. |
@@ -41,14 +41,14 @@ Every brief has these, in plain words:
 2. **Change:** what to build or fix, and the decisions already made (quote the user's words when they matter).
 3. **Do not touch:** files, areas or behaviour that must stay.
 4. **Files:** the exact files or names it owns. Two workers never share a file.
-5. **Acceptance:** the exact commands that must pass, and "commit, then say done with the commit ids".
+5. **Acceptance:** the exact commands that must pass; "commit, merge into my branch (below), then say done with the commit ids".
 
 Add "Ask me (your parent) if something blocks you; don't guess on scope." The worker sees no Brigadier protocol; it is a plain session.
 
 ## Waves
 
 1. Start the wave (≤ 3 workers unless the user said more).
-2. `brigadier wait` in the background; end your turn. Handle each event as it comes:
+2. Wait right after starting them; never end your turn with workers running and no wait on them. In Claude Code run `brigadier wait` as a background command and end your turn: you are woken when it returns. In Codex run it in the foreground. Each event returns the wait; handle it, then wait again until every worker's work is in:
    - **turn ended:** read the last message. If done: check its claims yourself (`git log`, run its acceptance commands). If it asks something: answer it if the plan and the user's words settle it, else ask the user once and relay with `brigadier send`.
    - **needs input** (a permission prompt): allow it with `brigadier send <id> --allow` if it is inside the brief and harmless. Otherwise ask the user, or deny and send a note.
    - **usage limit:** let it wait for the reset, or close it and restart its rest on the other provider.
@@ -59,7 +59,7 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope." The wo
 
 ## Integrate small and often
 
-- A worker merges each finished step into your branch, not one big merge at the end. Tell it to: "when your checks pass, rebase on <your branch>, merge, report the commit".
+- A worker merges each finished step into your branch itself, not one big merge at the end. Your branch is checked out in your workspace, so the brief says where, with the real path and names filled in: "When your checks pass, merge your branch into mine: `git -C <my workspace> merge --no-edit <your branch>` (if mine moved and it conflicts, rebase on it first). Report the merge commit." Don't edit your workspace while a worker may be merging into it.
 - You decide merge or rebase and resolve conflicts. Ask the worker for help when it knows the change better.
 - In a Local checkout, commit your own edits before you integrate a worker.
 - After integrating, run the checks on the integrated tree yourself. Then land on what the user chose: the New worktree's base branch, or the Local checkout's branch. A PR instead is fine when the user prefers it.

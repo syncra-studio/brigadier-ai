@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn a_call_whose_arguments_miss_the_schema_is_counted_and_others_are_not() {
         let host = Counting::default();
-        let thread = Role::Orchestrator {
+        let thread = Role::Chat {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
         };
         let bad = serde_json::json!({"task": "task-2"}).as_object().cloned();

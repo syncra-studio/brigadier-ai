@@ -268,9 +268,6 @@ impl SessionManager {
         prompt.push_str(&super::prompts::browser_section(
             self.core.settings().browser_enabled,
         ));
-        prompt.push_str(&super::prompts::integrations_section(
-            &self.thread_integrations(&conversation.id).await,
-        ));
         if let Some(workspace) = workspace {
             let hooked = self.thread_hooked(provider);
             prompt.push_str(&super::instructions::for_thread(&workspace.path, hooked).await);

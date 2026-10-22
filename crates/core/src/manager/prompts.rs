@@ -273,7 +273,6 @@ How to work:
 - Run your change's checks (tests, lint, typecheck, build) in your shell before your final answer. Before a merge, run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output. Never background a command with `&` or nohup. Run dev servers and apps with `brigadier preview start`.
 - {own_commits}
 - For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none.
-- A big job (many parts, several workers, or hours of work): start_verifier at the end (fresh: true sees only request, constraints, done_when, commit; own work too).
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. The user's answers on cards and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with `brigadier ask` (never a question in your text). Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
@@ -282,7 +281,7 @@ How to work:
 - {APP_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once; when they ask you to report something to its developers, call it with asked true.
 - {HEADLINE_RULE}
-- Tools return at once; never wait or poll: reports, questions and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
+- Brigadier's tools return at once: what they start reports back later as a message from Brigadier. Your workers don't report: you wait on them with `brigadier wait` (the brigade skill says how).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
@@ -291,7 +290,7 @@ How to talk to the user:
 - {LEAD}
 - While work runs, write one line only for: a failure of what you started (what failed, its key error line, what you do about it); and work the user didn't ask for, before it starts.
 - When the request is done (work, a question or an error explained alike), write one final answer, shaped as below: what changed and what to know and, when a review ran, what it found and what you fixed, in a sentence. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). A site or app the user can try stays running (`brigadier preview start`), with its local URL in your final answer (http://localhost:5173). Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (`brigadier ask`, propose_plan), never in text.
-- Fix a known defect in a deliverable yourself, with no card (write a fixed copy; store a worker's with store_output and link it as outputs/<name>, else link its full path), or send it back, before you answer.
+- Fix a known defect in a deliverable yourself, with no card (write a fixed copy and link its full path), or send it back, before you answer.
 - {LATE_EVENT} {REVISED_ANSWER} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that request: answer about it briefly.{voice}
 
@@ -400,7 +399,7 @@ pub(crate) const NO_PROMISED_FILES: &str = no_promised_files!();
 pub(crate) const COMPUTER_ROUTING: &str = "\n- On this Mac workers can open apps, look at them and use them with the computer tools; you can't. Before you say a preview or dev app runs, check its process or have a worker look.";
 /// When the thread offers a mockup before a visible UI change, and how the mockup goes from
 /// the user's yes to the side-by-side (SESSION-FIXES-PLAN.md Q10).
-const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first `brigadier ask` \"Want a mockup first?\" (Yes / Skip); delegate_task says how a mockup goes.";
+const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first `brigadier ask` \"Want a mockup first?\" (Yes / Skip). A mockup is a static preview of the screen from the real components with fake data, shown as screenshots before the change is built.";
 
 /// How the thread interviews the user: rounds of question cards over a tree of decisions.
 const GRILLING: &str = concat!("\n- ", grilling_rule!());
@@ -674,16 +673,6 @@ pub(crate) fn git_writing(settings: &Settings) -> Option<String> {
 /// The instructions' part about git writing, after the rest; empty while it says nothing.
 pub(crate) fn git_writing_section(settings: &Settings) -> String {
     git_writing(settings).map_or_else(String::new, |text| format!("\n\n{text}"))
-}
-
-/// The instructions' list of servers a worker gets only when named; nothing while there are
-/// none.
-pub(crate) fn integrations_section(list: &str) -> String {
-    if list.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{list}")
-    }
 }
 
 /// For a Codex worker that writes, while the user leaves AI co-authors out of commits (Claude
@@ -1836,6 +1825,11 @@ mod environment_tests {
         assert!(text.contains(BRIGADE));
         assert!(!text.contains("several delegate_task calls in one message"));
         assert!(!text.contains("you or the Brain found"));
+        // Its workers send nothing on their own: it waits on them (S15 live run 2 ended its
+        // turn on "never wait or poll").
+        assert!(!text.contains("delegate_task"));
+        assert!(!text.contains("never wait or poll"));
+        assert!(text.contains("you wait on them with `brigadier wait`"));
     }
 
     /// Bug 7: a Claude thread's instructions name each Brigadier tool as Claude calls it, and
@@ -1860,7 +1854,6 @@ mod environment_tests {
                 assert!(claude.contains(
                     "with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch"
                 ));
-                assert!(claude.contains("mcp__brigadier__delegate_task says how a mockup goes"));
                 // Both run commands in their CLI's own shell, at every level.
                 assert!(claude.contains("Use your own CLI shell"));
                 assert!(codex.contains("Use your own CLI shell"));
@@ -1870,7 +1863,6 @@ mod environment_tests {
                     assert!(!text.contains("sandbox"), "{permission}");
                 }
                 assert!(claude.contains("keep it with mcp__brigadier__remember citing"));
-                assert!(codex.contains("; delegate_task says how a mockup goes"));
                 assert!(!codex.contains("mcp__brigadier__"));
                 assert!(!claude.contains("@run") && !claude.contains("@remember"));
                 // No tool with an underscore is named bare in Claude's.
@@ -2024,14 +2016,9 @@ mod environment_tests {
                     assert!(prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell"));
                     assert!(!prompt.contains("Reviews by the other vendor scale with risk"));
                     assert!(!prompt.contains("risky mark"));
-                    assert!(
-                        prompt
-                            .contains("A big job (many parts, several workers, or hours of work)")
-                    );
+                    assert!(!prompt.contains("start_verifier"));
                     assert!(!prompt.contains("Each landing and commit of yours queues"));
                     for name in [
-                        "delegate_task",
-                        "start_verifier",
                         "query_brain",
                         "remember",
                         "code_search",
@@ -2106,7 +2093,7 @@ mod environment_tests {
             // A6: a known defect is fixed with no card; a worker's fixed copy is kept as its
             // task's output (#27), any other linked by its full path.
             assert!(text.contains("Fix a known defect in a deliverable yourself, with no card"));
-            assert!(text.contains("else link its full path"));
+            assert!(text.contains("(write a fixed copy and link its full path)"));
             assert!(!text.contains("`### Details`, shown folded"));
             assert!(text.contains("(work, a question or an error explained alike)"));
             // Q87: a site the user can try comes with its local URL, which the app makes a card.
@@ -2319,23 +2306,6 @@ mod environment_tests {
         assert!(prompt.contains(
             "Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked"
         ));
-    }
-
-    /// A corrected copy of a worker's deliverable is kept as its task's output (issue #27).
-    #[test]
-    fn a_thread_keeps_its_corrected_copy_of_a_deliverable_with_store_output() {
-        let prompt = thread(
-            &session("full"),
-            None,
-            &[],
-            None,
-            None,
-            ProviderKind::Codex,
-            true,
-        );
-        assert!(
-            prompt.contains("store a worker's with store_output and link it as outputs/<name>")
-        );
     }
 
     /// B4: "Start workers on its own" picks the thread's rule before workers start.
@@ -3059,8 +3029,7 @@ mod environment_tests {
     fn the_threads_instructions_offer_a_mockup_before_a_visible_ui_change() {
         assert!(MOCKUPS.contains("A visible UI change that isn't a small fix"));
         assert!(MOCKUPS.contains("`brigadier ask` \"Want a mockup first?\" (Yes / Skip"));
-        // How a mockup goes is delegate_task's to say (BUILD-PLAN C1; the catalog's tests).
-        assert!(MOCKUPS.contains("delegate_task says how a mockup goes"));
+        assert!(MOCKUPS.contains("static preview of the screen from the real components"));
     }
 
     #[test]
