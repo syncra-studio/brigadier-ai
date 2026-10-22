@@ -341,10 +341,27 @@ async fn with_the_browser_off_or_no_window_open_a_call_says_so() {
     assert!(reply.is_error);
     assert!(reply.text.contains("window isn't open"), "{}", reply.text);
 
+    // Where agents can't drive the browser, a call says so and never reaches the window.
+    *flow.manager.agents_browse_here.lock().unwrap() = Some(false);
+    let heard = window(&flow);
+    let reply = flow
+        .manager
+        .browser_tool(flow.conversation.clone(), None, read())
+        .await;
+    assert!(reply.is_error);
+    assert!(
+        reply
+            .text
+            .contains("can't use the built-in browser on this computer"),
+        "{}",
+        reply.text
+    );
+    assert!(heard.lock().unwrap().is_empty());
+    *flow.manager.agents_browse_here.lock().unwrap() = Some(true);
+
     let mut settings = flow.core.settings();
     settings.browser_enabled = false;
     flow.core.update_settings(settings).await.unwrap();
-    let heard = window(&flow);
     let reply = flow
         .manager
         .browser_tool(flow.conversation.clone(), None, read())

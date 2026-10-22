@@ -457,7 +457,12 @@ impl SessionManager {
     /// Whether the thread and its workers may use the browser: the built-in browser is on,
     /// and agents can drive it on this platform (macOS for now).
     pub(crate) fn browser_tools_on(&self) -> bool {
-        agents_browse(self.core.settings().browser_enabled)
+        let on = self.core.settings().browser_enabled;
+        #[cfg(test)]
+        if let Some(here) = *self.agents_browse_here.lock().unwrap() {
+            return here && on;
+        }
+        agents_browse(on)
     }
 
     /// A browser tool's call from the thread (`task_id` none) or one of its workers.

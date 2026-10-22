@@ -228,6 +228,10 @@ pub struct SessionManager {
     /// A stand-in `curl` for tests (Send feedback's reads of GitHub's public API).
     #[cfg(test)]
     pub(crate) curl_override: Mutex<Option<PathBuf>>,
+    /// Tests: whether agents may drive the browser here, whatever this platform allows (the
+    /// flow tests' window is a stand-in on every platform).
+    #[cfg(test)]
+    pub(crate) agents_browse_here: std::sync::Mutex<Option<bool>>,
     /// Held while a task is read, changed and recorded (`update_task`), so two writers can't
     /// each write back a copy that lacks the other's change.
     task_writes: tokio::sync::Mutex<()>,
@@ -436,6 +440,8 @@ impl SessionManager {
             gh_override: Mutex::default(),
             #[cfg(test)]
             curl_override: Mutex::default(),
+            #[cfg(test)]
+            agents_browse_here: std::sync::Mutex::default(),
             feedback_sign_in: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),

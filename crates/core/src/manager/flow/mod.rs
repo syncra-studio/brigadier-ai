@@ -1385,6 +1385,8 @@ async fn boot(
     )
     .await
     .unwrap();
+    // The tests' window answers browser calls on every platform, not only where agents browse.
+    *manager.agents_browse_here.lock().unwrap() = Some(true);
     host.set(Arc::downgrade(&manager)).ok();
     // The router picks only among models it has seen.
     let mut checked = runtime.provider_checks();
