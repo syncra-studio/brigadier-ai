@@ -106,7 +106,7 @@ pub struct Parser {
     /// Messages written to Claude that it has not taken yet (echoed back).
     unechoed: u32,
     /// An error was already reported for the running turn.
-    turn_error: bool,
+    turn_error: Option<ErrorKind>,
     turn_started_ms: Option<i64>,
     /// `/compact` was written and Claude has not started compacting yet.
     compact_asked: bool,
@@ -378,12 +378,17 @@ impl Parser {
 
     fn assistant(&mut self, value: &Value, out: &mut Vec<Output>) {
         let message = value.get("message").cloned().unwrap_or(Value::Null);
-        if let Some(code) = str_of(value, "error") {
+        if let Some(code) = str_of(value, "error").or_else(|| {
+            (value
+                .pointer("/api_error_params/rate_limit_info/status")
+                .and_then(Value::as_str)
+                == Some("rejected"))
+            .then_some("rate_limit")
+        }) {
             let text = content_text(&message);
-            self.turn_error = true;
-            out.push(Output::Event(ProviderEvent::Error {
-                error: self.classify(code, text),
-            }));
+            let error = self.api_error(value, code, text, out);
+            self.turn_error = Some(error.kind);
+            out.push(Output::Event(ProviderEvent::Error { error }));
             return;
         }
         // Why a compaction failed, said again as a reply: already reported with it.
@@ -1070,7 +1075,7 @@ impl Parser {
             return;
         }
         self.turn_active = true;
-        self.turn_error = false;
+        self.turn_error = None;
         self.interrupting = false;
         self.turn_started_ms = Some(now_ms());
         out.push(Output::Event(ProviderEvent::TurnStarted { turn_id: None }));
@@ -1089,7 +1094,8 @@ impl Parser {
 
     fn result(&mut self, value: &Value, out: &mut Vec<Output>) {
         let subtype = str_of(value, "subtype").unwrap_or("success");
-        let is_error = value.get("is_error").and_then(Value::as_bool) == Some(true);
+        let is_error = value.get("is_error").and_then(Value::as_bool) == Some(true)
+            || value.get("api_error_status").and_then(Value::as_i64) == Some(429);
         let interrupted = std::mem::take(&mut self.interrupting);
         // A message steered in too late for this step is still to come: Claude answers it in
         // a turn of its own right after, which carries on this one.
@@ -1160,7 +1166,7 @@ impl Parser {
         } else {
             TurnStatus::Failed
         };
-        if status == TurnStatus::Failed && !std::mem::take(&mut self.turn_error) {
+        if status == TurnStatus::Failed {
             let text = str_of(value, "result")
                 .map(str::to_owned)
                 .or_else(|| {
@@ -1177,9 +1183,14 @@ impl Parser {
                 "success" => "unknown",
                 other => other,
             };
-            out.push(Output::Event(ProviderEvent::Error {
-                error: self.classify(code, text),
-            }));
+            let error = self.api_error(value, code, text, out);
+            // The result can identify a usage limit that its earlier assistant error did not.
+            if self.turn_error.is_none()
+                || (error.kind == ErrorKind::UsageLimit
+                    && self.turn_error != Some(ErrorKind::UsageLimit))
+            {
+                out.push(Output::Event(ProviderEvent::Error { error }));
+            }
         }
         let duration_ms = value
             .get("duration_ms")
@@ -1189,7 +1200,7 @@ impl Parser {
                     .take()
                     .map(|started| now_ms() - started)
             });
-        self.turn_error = false;
+        self.turn_error = None;
         out.push(Output::Event(ProviderEvent::TurnCompleted {
             turn_id: None,
             status,
@@ -1210,7 +1221,7 @@ impl Parser {
         let resets_at_ms = info
             .get("resetsAt")
             .and_then(Value::as_i64)
-            .map(|s| s * 1000);
+            .and_then(|s| s.checked_mul(1000));
 
         if let Some(windows) = info.get("unifiedWindows").and_then(Value::as_object) {
             self.quota = windows
@@ -1228,7 +1239,7 @@ impl Parser {
                         window
                             .get("resetsAt")
                             .and_then(Value::as_i64)
-                            .map(|s| s * 1000),
+                            .and_then(|s| s.checked_mul(1000)),
                     )
                 })
                 .collect();
@@ -1352,19 +1363,54 @@ impl Parser {
         }
     }
 
+    /// API errors can repeat the rate-limit object even when no standalone event was sent.
+    fn api_error(
+        &mut self,
+        value: &Value,
+        code: &str,
+        message: String,
+        out: &mut Vec<Output>,
+    ) -> ProviderError {
+        let rejected = value
+            .pointer("/api_error_params/rate_limit_info/status")
+            .and_then(Value::as_str)
+            == Some("rejected");
+        if let Some(params) = value.get("api_error_params") {
+            self.rate_limit(params, out);
+        }
+        let mut error = self.classify(code, message);
+        if rejected || value.get("api_error_status").and_then(Value::as_i64) == Some(429) {
+            error.kind = ErrorKind::UsageLimit;
+            error.limit = Some(self.limit_hit());
+        }
+        error
+    }
+
+    fn limit_hit(&self) -> LimitHit {
+        LimitHit {
+            window: self.limit.window.clone(),
+            resets_at_ms: self.limit.resets_at_ms,
+            kind: LimitKind::UsageWindow,
+        }
+    }
+
     /// Classifies a Claude error code (the assistant `error` field, `api_retry.error`, a
     /// `result` subtype) together with the latest rate-limit state.
     fn classify(&self, code: &str, message: String) -> ProviderError {
         let lower = message.to_lowercase();
+        let gateway_reset = gateway_reset_at_ms(&message, now_ms());
         let (kind, limit) = match code {
-            "rate_limit" if self.limit.rejected || lower.contains("hit your") => (
+            _ if gateway_reset.is_some() => (
                 ErrorKind::UsageLimit,
                 Some(LimitHit {
-                    window: self.limit.window.clone(),
-                    resets_at_ms: self.limit.resets_at_ms,
+                    window: None,
+                    resets_at_ms: gateway_reset,
                     kind: LimitKind::UsageWindow,
                 }),
             ),
+            "rate_limit" if self.limit.rejected || lower.contains("hit your") => {
+                (ErrorKind::UsageLimit, Some(self.limit_hit()))
+            }
             "rate_limit" => (ErrorKind::RateLimit, None),
             "overloaded" => (ErrorKind::Overloaded, None),
             "authentication_failed" | "oauth_org_not_allowed" => (ErrorKind::Auth, None),
@@ -1392,6 +1438,36 @@ impl Parser {
             code: Some(code.to_owned()),
         }
     }
+}
+
+/// A gateway's 503 can carry the upstream 429 and its remaining wait in the error text.
+fn gateway_reset_at_ms(message: &str, observed_at_ms: i64) -> Option<i64> {
+    let wrapped = message.strip_prefix("API Error: 503 [")?;
+    let (gateway, body) = wrapped.split_once("] [429]: ")?;
+    if gateway.is_empty() || gateway.contains(['\r', '\n']) {
+        return None;
+    }
+    let (body, wait) = body.rsplit_once(" (reset after ")?;
+    let (wait, _) = wait.split_once(')')?;
+    let error: Value = serde_json::from_str(body).ok()?;
+    if error.pointer("/error/type").and_then(Value::as_str) != Some("rate_limit_error") {
+        return None;
+    }
+    let mut remaining = wait;
+    let mut wait_ms = 0_i64;
+    for (unit, scale) in [('h', 3_600_000), ('m', 60_000), ('s', 1_000)] {
+        if let Some((count, rest)) = remaining.split_once(unit) {
+            if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            wait_ms = wait_ms.checked_add(count.parse::<i64>().ok()?.checked_mul(scale)?)?;
+            remaining = rest.trim_start();
+        }
+    }
+    if !remaining.is_empty() || wait_ms == 0 {
+        return None;
+    }
+    observed_at_ms.checked_add(wait_ms)
 }
 
 enum ToolKind {
@@ -1868,6 +1944,272 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // Derived failure cases use recorded envelopes and rate-limit data; the error fields
+    // exercise signals that are not present in the successful session recordings.
+    const API_ERROR_LIMIT: &str = include_str!("../../fixtures/claude-api-error-limit.jsonl");
+    const RESULT_LIMIT: &str = include_str!("../../fixtures/claude-result-limit.jsonl");
+    const GATEWAY_LIMIT: &str = include_str!("../../fixtures/claude-gateway-limit.jsonl");
+
+    fn errors(outputs: Vec<Output>) -> Vec<ProviderError> {
+        outputs
+            .into_iter()
+            .filter_map(|output| match output {
+                Output::Event(ProviderEvent::Error { error }) => Some(error),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn fixture_value(fixture: &str) -> Value {
+        serde_json::from_str(fixture.lines().last().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn api_error_params_reports_the_rejected_window_without_a_standalone_event() {
+        let mut parser = Parser::live();
+        let outputs = parser.feed(API_ERROR_LIMIT);
+        assert!(outputs.iter().any(|output| matches!(
+            output,
+            Output::Event(ProviderEvent::RateLimits { quota })
+                if quota.limit.as_ref().is_some_and(|limit|
+                    limit.window.as_deref() == Some("five_hour")
+                        && limit.resets_at_ms == Some(1_790_223_600_000))
+        )));
+        let error = errors(outputs).pop().unwrap();
+        assert_eq!(error.kind, ErrorKind::UsageLimit);
+        assert_eq!(
+            error.limit,
+            Some(LimitHit {
+                window: Some("five_hour".to_owned()),
+                resets_at_ms: Some(1_790_223_600_000),
+                kind: LimitKind::UsageWindow,
+            })
+        );
+        assert_eq!(error.code.as_deref(), Some("rate_limit"));
+        assert!(!error.will_retry);
+
+        // The structured rejection is authoritative even with a generic error code.
+        let mut value = fixture_value(API_ERROR_LIMIT);
+        value["error"] = json!("unknown");
+        value["api_error_params"]["rate_limit_info"]["rateLimitType"] = json!("seven_day_opus");
+        let outputs = Parser::live().feed(&value.to_string());
+        assert!(outputs.iter().any(|output| matches!(
+            output, Output::Event(ProviderEvent::RateLimits { quota }) if quota.limit.is_none()
+        )));
+        let error = errors(outputs).pop().unwrap();
+        assert_eq!(error.kind, ErrorKind::UsageLimit);
+        assert_eq!(
+            error.limit.unwrap().window.as_deref(),
+            Some("seven_day_opus")
+        );
+        assert_eq!(error.code.as_deref(), Some("unknown"));
+
+        value.as_object_mut().unwrap().remove("error");
+        assert_eq!(
+            errors(Parser::live().feed(&value.to_string()))[0].kind,
+            ErrorKind::UsageLimit
+        );
+    }
+
+    #[test]
+    fn api_error_params_allowed_and_missing_resets_are_not_invented() {
+        let mut value = fixture_value(API_ERROR_LIMIT);
+        for status in ["allowed", "allowed_warning"] {
+            value["api_error_params"]["rate_limit_info"]["status"] = json!(status);
+            let error = errors(Parser::live().feed(&value.to_string()))
+                .pop()
+                .unwrap();
+            assert_eq!(error.kind, ErrorKind::RateLimit);
+            assert_eq!(error.limit, None);
+        }
+        value["api_error_params"]["rate_limit_info"]["status"] = json!("rejected");
+        for reset in [Value::Null, json!("unknown"), json!(i64::MAX)] {
+            value["api_error_params"]["rate_limit_info"]["resetsAt"] = reset;
+            let error = errors(Parser::live().feed(&value.to_string()))
+                .pop()
+                .unwrap();
+            assert_eq!(error.kind, ErrorKind::UsageLimit);
+            assert_eq!(error.limit.unwrap().resets_at_ms, None);
+        }
+    }
+
+    #[test]
+    fn result_429_uses_the_reported_reset_and_fails_the_turn() {
+        let mut parser = Parser::live();
+        let outputs = RESULT_LIMIT
+            .lines()
+            .flat_map(|line| parser.feed(line))
+            .collect::<Vec<_>>();
+        assert!(outputs.iter().any(|output| matches!(
+            output,
+            Output::Event(ProviderEvent::TurnCompleted {
+                status: TurnStatus::Failed,
+                ..
+            })
+        )));
+        let error = errors(outputs).pop().unwrap();
+        assert_eq!(error.kind, ErrorKind::UsageLimit);
+        assert_eq!(
+            error.limit,
+            Some(LimitHit {
+                window: Some("seven_day".to_owned()),
+                resets_at_ms: Some(1_791_853_200_000),
+                kind: LimitKind::UsageWindow,
+            })
+        );
+
+        // A 429 alone supplies no reset timestamp. It is still an error if the flag is absent.
+        let mut result = fixture_value(RESULT_LIMIT);
+        result.as_object_mut().unwrap().remove("is_error");
+        let outputs = Parser::live().feed(&result.to_string());
+        assert!(outputs.iter().any(|output| matches!(
+            output,
+            Output::Event(ProviderEvent::TurnCompleted {
+                status: TurnStatus::Failed,
+                ..
+            })
+        )));
+        let error = errors(outputs).pop().unwrap();
+        assert_eq!(error.kind, ErrorKind::UsageLimit);
+        assert_eq!(error.limit.unwrap().resets_at_ms, None);
+
+        result["api_error_status"] = Value::Null;
+        let outputs = Parser::live().feed(&result.to_string());
+        assert!(outputs.iter().any(|output| matches!(
+            output,
+            Output::Event(ProviderEvent::TurnCompleted {
+                status: TurnStatus::Completed,
+                ..
+            })
+        )));
+        assert!(errors(outputs).is_empty());
+    }
+
+    #[test]
+    fn result_limit_is_not_hidden_by_an_earlier_generic_error_or_repeated() {
+        for fixture in [RESULT_LIMIT, GATEWAY_LIMIT] {
+            let mut parser = Parser::live();
+            let mut assistant = fixture_value(API_ERROR_LIMIT);
+            assistant
+                .as_object_mut()
+                .unwrap()
+                .remove("api_error_params");
+            assistant["error"] = json!("server_error");
+            assert_eq!(
+                errors(parser.feed(&assistant.to_string()))[0].kind,
+                ErrorKind::Server
+            );
+            let result = fixture_value(fixture);
+            assert_eq!(
+                errors(parser.feed(&result.to_string()))[0].kind,
+                ErrorKind::UsageLimit
+            );
+
+            let mut parser = Parser::live();
+            assert_eq!(
+                errors(parser.feed(API_ERROR_LIMIT))[0].kind,
+                ErrorKind::UsageLimit
+            );
+            assert!(errors(parser.feed(&result.to_string())).is_empty());
+        }
+    }
+
+    #[test]
+    fn gateway_503_reports_the_upstream_429_reset_after_duration() {
+        let result = fixture_value(GATEWAY_LIMIT);
+        let text = result["result"].as_str().unwrap();
+        let observed = 1_790_000_000_000;
+        assert_eq!(
+            gateway_reset_at_ms(text, observed),
+            Some(observed + 3_720_000)
+        );
+        let before = now_ms();
+        let error = errors(Parser::live().feed(GATEWAY_LIMIT)).pop().unwrap();
+        let after = now_ms();
+        assert_eq!(error.kind, ErrorKind::UsageLimit);
+        let limit = error.limit.unwrap();
+        assert_eq!(limit.kind, LimitKind::UsageWindow);
+        assert_eq!(limit.window, None);
+        assert!((before + 3_720_000..=after + 3_720_000).contains(&limit.resets_at_ms.unwrap()));
+        assert_eq!(error.message, text);
+
+        for (duration, wait_ms) in [
+            ("2h", 7_200_000),
+            ("2m", 120_000),
+            ("3s", 3_000),
+            ("1h 2m 3s", 3_723_000),
+            ("1h2m3s", 3_723_000),
+        ] {
+            assert_eq!(
+                gateway_reset_at_ms(&text.replace("1h2m", duration), observed),
+                Some(observed + wait_ms)
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_503_and_invalid_gateway_waits_are_not_usage_limits() {
+        let mut result = fixture_value(GATEWAY_LIMIT);
+        result["subtype"] = json!("error_during_execution");
+        let text = result["result"].as_str().unwrap().to_owned();
+        let invalid = [
+            text.replace("[429]", "[500]"),
+            text.replace("rate_limit_error", "api_error"),
+            text.replace("1h2m", "0s"),
+            text.replace("1h2m", "soon"),
+            text.replace("1h2m", "-1h"),
+            text.replace("1h2m", "1.5h"),
+            text.replace("1h2m", "1m2h"),
+            text.replace("1h2m", "9223372036854775807h"),
+            text.replace("1h2m", "1m trailing"),
+            text.replace("(reset after 1h2m)", "(reset after 1h2m"),
+            "API Error: 503 service unavailable (reset after 1h2m)".to_owned(),
+        ];
+        for text in invalid {
+            result["result"] = json!(text);
+            let error = errors(Parser::live().feed(&result.to_string()))
+                .pop()
+                .unwrap();
+            assert_eq!(error.kind, ErrorKind::Server, "{text}");
+            assert_eq!(error.limit, None, "{text}");
+        }
+        assert_eq!(gateway_reset_at_ms(&text, i64::MAX), None);
+    }
+
+    #[test]
+    fn standalone_usage_limit_and_throttle_classifications_still_work() {
+        let mut parser = Parser::live();
+        let outputs = crate::simulate::usage_limit(ProviderKind::Claude)
+            .iter()
+            .flat_map(|line| parser.feed(line))
+            .collect::<Vec<_>>();
+        let reported = errors(outputs);
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].kind, ErrorKind::UsageLimit);
+        assert!(reported[0].limit.as_ref().unwrap().resets_at_ms.is_some());
+
+        let mut assistant = fixture_value(API_ERROR_LIMIT);
+        assistant
+            .as_object_mut()
+            .unwrap()
+            .remove("api_error_params");
+        let mut parser = Parser::live();
+        assert_eq!(
+            errors(parser.feed(&assistant.to_string()))[0].kind,
+            ErrorKind::RateLimit
+        );
+        for (code, kind) in [
+            ("overloaded", ErrorKind::Overloaded),
+            ("billing_error", ErrorKind::Billing),
+            ("authentication_failed", ErrorKind::Auth),
+        ] {
+            assistant["error"] = json!(code);
+            let mut parser = Parser::live();
+            parser.feed(API_ERROR_LIMIT);
+            assert_eq!(errors(parser.feed(&assistant.to_string()))[0].kind, kind);
+        }
+    }
 
     #[test]
     fn file_and_network_approvals_keep_their_session_scopes() {
