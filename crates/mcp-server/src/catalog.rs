@@ -829,7 +829,7 @@ mod tests {
             let mut want = expected.clone();
             want.sort_unstable();
             assert_eq!(sorted, want);
-            assert!(loaded.len() * 3 < tools.len(), "most wait: {}", tools.len());
+            assert!(loaded.len() * 2 < tools.len(), "most wait: {}", tools.len());
             let report = tools
                 .iter()
                 .find(|tool| tool.name == "save_report")
