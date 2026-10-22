@@ -7,7 +7,7 @@ use brigadier_providers::{ProviderEvent, Role, TurnStatus};
 use super::SessionManager;
 use super::conversation::ConvLive;
 use super::session_dir::read_lineage;
-use crate::model::ConversationId;
+use crate::model::{ContextUsage, ConversationId};
 use crate::thread_view::{self, CliTurn, LiveTurn, ThreadNews, ThreadView, TurnEnd, TurnRecord};
 use crate::work::ConversationActivity;
 use crate::{Error, Result, now_ms};
@@ -33,6 +33,7 @@ impl SessionManager {
         let mut news = Vec::new();
         let mut ended = None;
         let mut opened = false;
+        let mut context = None;
         let mut noted = None;
         {
             let mut threads = self.cli_threads.lock().unwrap();
@@ -97,6 +98,15 @@ impl SessionManager {
                 Some(ProviderEvent::Exited { .. }) | None if live.open => {
                     ended = Some(TurnEnd::Interrupted);
                 }
+                Some(ProviderEvent::ContextSize {
+                    used_tokens,
+                    window_tokens,
+                }) => {
+                    context = Some(ContextUsage {
+                        used_tokens: *used_tokens,
+                        window_tokens: *window_tokens,
+                    });
+                }
                 Some(event) if shown_live(event) => news.push(entry(Some(event.clone()), at)),
                 _ => {}
             }
@@ -125,12 +135,13 @@ impl SessionManager {
                 }
             }
         }
-        if !news.is_empty() || opened || ended.is_some() {
+        if !news.is_empty() || opened || ended.is_some() || context.is_some() {
             let _ = self.thread_news.send(ThreadNews {
                 conversation_id: conv.id.clone(),
                 entries: news,
                 opened,
                 ended,
+                context,
             });
         }
     }
@@ -221,6 +232,7 @@ fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
         parent: None,
         steer: false,
         images: Vec::new(),
+        phase: None,
     }
 }
 

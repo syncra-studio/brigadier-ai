@@ -4,6 +4,7 @@
  * whose one request is over; IPC is mocked and records what the composer sends. It drives the
  * real keys (`fixtureInput`) and writes what it saw as JSON into `<pre id="composer-polish-result">`.
  */
+import "@/fixtures/cliView";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -12,7 +13,7 @@ import { ConversationView } from "@/app/conversation/ConversationView";
 import { FolderDropZone } from "@/app/shell/FolderDropZone";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
-import type { Conversation, ConversationView as View, Message, Request, RunState, UserRequest } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, Message, Question, Request, RunState, UserRequest } from "@/ipc/generated";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { select } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -298,9 +299,12 @@ async function workingCase(seen: Record<string, unknown>) {
     const { r2: _joined, ...requests } = board.requests;
     return { board: { ...board, requests } };
   });
-  useBoard.setState(({ board }) =>
-    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "waiting" }, worked: [{ fromMs: at, toMs: at + 60_000 }], waited: [{ fromMs: at + 60_000, toMs: null }] } } } } : {},
-  );
+  // Its question card waits for the user's answer.
+  const asked: Question = {
+    id: "q1", conversationId: id, taskId: null, requestId: "r1", position: 99, kind: { type: "orchestrator" }, text: "Which one?",
+    options: ["A", "B"], recommended: 0, items: [], answer: null, answers: [], createdAtMs: Date.now(), answeredAtMs: null,
+  };
+  useBoard.setState(({ board }) => (board ? { board: { ...board, questions: { q1: asked } } } : {}));
   await until("the usual words", () => placeholder() === seen.idle, 3000).catch(() => {});
   // Then a second more, past the next tick.
   await sleep(1100);

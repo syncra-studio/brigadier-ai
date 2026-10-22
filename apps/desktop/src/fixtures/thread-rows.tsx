@@ -24,6 +24,7 @@
  *   its exact path when the list is cut short), anything else stays code.
  * - An answer's web links: a globe until the daemon has the site's icon, and when it has none.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -38,13 +39,10 @@ import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { ArtifactDialog } from "@/app/side-panel/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { CompactionRow } from "@/app/conversation/CompactionRow";
-import { ChangesCard } from "@/app/conversation/ChangesCard";
-import { ViewContext } from "@/app/conversation/viewContext";
 import { TurnBoundary, ImagePreview, MessageAttachments, MarkdownBlock, AttachmentReaderContext } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
 import type { AttachmentRef, Conversation, OrchestratorStep, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
-import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -58,12 +56,6 @@ const bigPatch = Array.from({ length: 6 }, (_, file) =>
   `diff --git a/src/f${file}.ts b/src/f${file}.ts\n--- a/src/f${file}.ts\n+++ b/src/f${file}.ts\n@@ -0,0 +1,40 @@\n` + Array.from({ length: 40 }, (_line, line) => `+export const v${line} = ${line};\n`).join(""),
 ).join("");
 const siteAsks: string[] = [];
-const reviewAsks: string[] = [];
-/** The turn's patch, as the Review diff gives it: five files. */
-const TURN_FILES = ["README.md", "src/math.js", "src/strings.js", "src/a.js", "src/b.js"];
-/** What a worker landed straight onto the branch, with no stats of its own: the Review diff counts it. */
-const DIRECT_FILES = ["src/export.ts", "test/export.test.ts"];
-const turnPatch = TURN_FILES.map((path) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@\n-old ${path}\n+new ${path}\n`).join("");
 const NODE_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/eL9GtQAAAABJRU5ErkJggg==";
 let letIconsCome = () => {};
 const iconsCome = new Promise<void>((resolve) => (letIconsCome = resolve));
@@ -74,12 +66,6 @@ mockIPC((command, payload) => {
   if (req.method === "resolveFileLink") {
     asked.push(req.path);
     return { method: req.method, exists: req.path === `${ROOT}/src/made-later.ts`, stored: null };
-  }
-  if (req.method === "getReviewDiff") {
-    reviewAsks.push(JSON.stringify(req.scope));
-    const paths = req.scope.type === "lastTurn" && req.scope.requestId === "direct" ? DIRECT_FILES : TURN_FILES;
-    const files = paths.map((path) => ({ path, from: null, status: "modified", insertions: 2, deletions: 1, binary: false }));
-    return { method: req.method, review: { patch: turnPatch, files, insertions: 2 * paths.length, deletions: paths.length } };
   }
   if (req.method === "readArtifact") return { method: req.method, text: { text: bigPatch, offset: 0, totalBytes: bigPatch.length, binary: false } };
   if (req.method === "siteIcon") {
@@ -100,21 +86,7 @@ useApp.setState((state) => ({
   settings: state.settings,
 }));
 
-const landed = (id: string, requestId: string, number: number, files: string[] | null) => ({
-  id, requestId, number, title: "", landed: "abc", state: "landed",
-  candidate: files && { diffStat: { files: files.map((path) => ({ path, insertions: 1, deletions: 1, binary: false })), insertions: files.length, deletions: files.length } },
-});
-useBoard.setState({
-  board: {
-    ...emptyBoard(CHAT), loaded: true,
-    tasks: {
-      t1: landed("t1", "many", 1, TURN_FILES), t2: landed("t2", "one", 2, ["scripts/run.mjs"]), t3: landed("t3", "direct", 3, null),
-      // A message steered into a turn takes over the worker it speaks to: the turn counts both.
-      t4: landed("t4", "work", 4, ["src/invoice.ts"]), t5: landed("t5", "steer", 5, ["src/export.ts"]),
-    },
-  } as unknown as ReturnType<typeof emptyBoard>,
-});
-const view = { selection: { type: "conversation" as const, id: CHAT }, conversation: { id: CHAT } as Conversation, embedded: false };
+useBoard.setState({ board: { ...emptyBoard(CHAT), loaded: true } });
 
 const patch = "--- a/src/math.js\n+++ b/src/math.js\n@@ -1,4 +1,4 @@\n export function round(value) {\n-  return Math.round(value * 100) / 100;\n+  return Math.round((value + Number.EPSILON) * 100) / 100;\n }\n \n@@ -20,2 +20,3 @@\n const a = 1;\n+const b = 2;\n const c = 3;\n";
 const links = "See [the release](https://nodejs.org/en/about) and [its schedule](https://nodejs.org/en/about/previous-releases), [a page](https://none.example/x) and [the dev server](http://localhost:3000). Write to [the team](mailto:team@example.com).";
@@ -307,20 +279,6 @@ function Page() {
             diffs={new Map()}
           />
         </Case>
-        <ViewContext.Provider value={view}>
-          <Case id="turn-diff-many">
-            <ChangesCard requestIds={["many"]} />
-          </Case>
-          <Case id="turn-diff-one">
-            <ChangesCard requestIds={["one"]} />
-          </Case>
-          <Case id="turn-diff-direct">
-            <ChangesCard requestIds={["direct"]} />
-          </Case>
-          <Case id="turn-diff-steered">
-            <ChangesCard requestIds={["work", "steer"]} />
-          </Case>
-        </ViewContext.Provider>
         <Case id="diff-patch">
           <InlineDiff path="src/math.js" diff={patch} />
         </Case>
@@ -450,29 +408,6 @@ async function measure(): Promise<object> {
   out.editRow = { closed: editClosed, open: text(editRow) };
   // A Codex rename reads as one: "Renamed old.rs to new.rs", a move keeping its name "Moved a.rs".
   out.renameRows = all("[data-slot=edited-file]", at("rename-rows")).map((row) => text(one("[role=button]", row) ?? row));
-  // The turn's diff card: several files, the first three listed; one file, named in the title, no list.
-  const card = (id: string) => ({
-    title: text(one("[data-slot=turn-diff-title]", at(id))),
-    counts: text(one("[data-slot=turn-diff-counts]", at(id))),
-    buttons: all("button", at(id)).filter((button) => !button.closest("[data-slot=turn-diff-file]") && button.getAttribute("data-slot") !== "turn-diff-more").map((button) => button.getAttribute("aria-label") ?? text(button)),
-    files: all("[data-slot=turn-diff-file]", at(id)).map((row) => [text(one("[data-slot=turn-diff-dir]", row)), text(one("[data-slot=turn-diff-name]", row))]),
-    more: text(one("[data-slot=turn-diff-more]", at(id))),
-  });
-  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=turn-diff-title]", at("turn-diff-direct")); ) await frame();
-  const many = card("turn-diff-many");
-  one<HTMLButtonElement>("[data-slot=turn-diff-more]", at("turn-diff-many"))?.click();
-  await wait(100);
-  const all5 = card("turn-diff-many");
-  // A row opens that file's diff in a tab: its part of the turn's change.
-  one<HTMLButtonElement>("[data-slot=turn-diff-file] button", at("turn-diff-many"))?.click();
-  await wait(100);
-  const opened = sessionTabs(CHAT).tabs.find((tab) => tab.id === sessionTabs(CHAT).active);
-  out.turnDiff = {
-    many, all: { files: all5.files.length, more: all5.more }, one: card("turn-diff-one"),
-    opened: opened?.kind === "review" ? opened.target : null,
-    direct: card("turn-diff-direct"), steered: card("turn-diff-steered"),
-    asks: [...reviewAsks],
-  };
   // The diff engine draws in its own shadow root.
   const inside = (id: string, selector: string) =>
     all("diffs-container", at(id)).flatMap((host) => (host.shadowRoot ? [...host.shadowRoot.querySelectorAll<HTMLElement>(selector)] : []));

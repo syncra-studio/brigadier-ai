@@ -37,6 +37,11 @@ pub struct FileEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<FileImage>>", optional)]
     pub images: Vec<FileImage>,
+    /// What a reply is, when the file says: a line between the turn's steps, or its final
+    /// answer (Codex's `phase`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub phase: Option<crate::model::TextPhase>,
 }
 
 impl FileEntry {
@@ -48,6 +53,7 @@ impl FileEntry {
             parent: None,
             steer: false,
             images: Vec::new(),
+            phase: None,
         }
     }
 }
@@ -255,6 +261,7 @@ pub(crate) fn shown(event: &ProviderEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Role, TextPhase};
 
     /// A session file's items, one line each (`BRIGADIER_SESSION_FILE=claude:<path>` or
     /// `codex:<path>`): for comparing a real session with its CLI's own resume view.
@@ -330,6 +337,26 @@ mod tests {
     fn a_codex_rollout_reads_as_its_thread() {
         let entries = reads_as_expected(ProviderKind::Codex, "codex-rollout");
         assert!(entries.iter().all(|entry| entry.at_ms.is_some()));
+        // A reply keeps what Codex calls it: the turn's final answer, or a line between steps.
+        let answers = entries
+            .iter()
+            .filter(|entry| entry.phase == Some(TextPhase::Answer))
+            .count();
+        let lines = std::fs::read_to_string(fixture("codex-rollout.jsonl")).unwrap();
+        assert_eq!(answers, lines.matches(r#""phase":"final_answer""#).count());
+        assert!(answers > 0);
+        assert!(
+            entries
+                .iter()
+                .filter(|entry| entry.phase.is_some())
+                .all(|entry| matches!(
+                    &entry.event,
+                    ProviderEvent::Message {
+                        role: Role::Assistant,
+                        ..
+                    }
+                ))
+        );
     }
 
     /// The stream extends what the file holds: an item it already has changes in place, and

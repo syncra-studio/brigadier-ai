@@ -14,7 +14,8 @@ import { useApp } from "@/state/store";
 export const LoadEarlier: FC = () => {
   const { selection } = useContext(ViewContext);
   const conversationId = selection.type === "conversation" ? selection.id : "";
-  const hasMore = useApp((s) => s.threads[conversationId]?.hasMore ?? false);
+  // The CLI's thread is read whole: older pages come only where the history says so.
+  const hasMore = useContext(ThreadHistoryContext)?.hasMore ?? false;
   const loading = useApp((s) => s.threads[conversationId]?.loading ?? false);
   const earlier = useContext(ThreadHistoryContext);
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);

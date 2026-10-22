@@ -1,4 +1,4 @@
-import type { Notice, UserRequest } from "@/ipc/generated";
+import type { Notice, ThreadTurn } from "@/ipc/generated";
 
 /**
  * A failed turn in plain words. The thread says what happened in one calm line; the error's own
@@ -43,14 +43,9 @@ export function describeTurnError(raw: string, provider = "Claude"): { summary: 
   return { summary: "This turn stopped because of an error." };
 }
 
-/** The error of the conversation's newest failed request, which its turn shows in the thread. */
-export function newestFailedError(requests: Readonly<Record<string, UserRequest>>): string | null {
-  let newest: UserRequest | null = null;
-  for (const request of Object.values(requests)) {
-    if (request.state.type !== "failed") continue;
-    if (!newest || request.startedAtMs > newest.startedAtMs) newest = request;
-  }
-  return newest?.state.type === "failed" ? newest.state.error : null;
+/** The error of the conversation's newest failed turn, as its CLI's turns say it: its turn shows it in the thread. */
+export function newestFailedError(turns: readonly Pick<ThreadTurn, "end" | "error">[]): string | null {
+  return turns.findLast((turn) => turn.end === "failed" || turn.end === "interrupted")?.error ?? null;
 }
 
 /**

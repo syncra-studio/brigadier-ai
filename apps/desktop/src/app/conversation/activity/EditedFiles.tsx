@@ -50,10 +50,8 @@ export function editedFiles(step: LeadStep): FileStat[] | null {
 }
 
 /** One file's diff, read from its call: the change its CLI applied, with its lines numbered. */
-function FileDiff({ conversationId, requestId, kind, path }: { conversationId: string; requestId: string | null; kind: ToolStep; path: string }) {
-  const { items, error } = useLeadItems(conversationId, requestId, kind);
-  if (error && !items) return <p className="text-destructive text-xs">{error}</p>;
-  if (!items) return <span className="shimmer text-xs">Loading</span>;
+function FileDiff({ conversationId, kind, path }: { conversationId: string; kind: ToolStep; path: string }) {
+  const { items } = useLeadItems(conversationId, kind);
   const item = leadAction(items, kind);
   const changes = item?.kind === "files" ? item.changes.filter((change) => (change.movedTo ?? change.path) === path && change.diff) : [];
   if (changes.length === 0) return <InlineDiff path={path} diff={null} />;
@@ -102,7 +100,7 @@ export function EditedFileRows({ step, files, conversationId }: { step: LeadStep
       startedAtMs={step.atMs}
       diffs={new Map(
         conversationId && keptInFull(kind)
-          ? files.map((file) => [file.path, <FileDiff key={file.path} conversationId={conversationId} requestId={step.requestId ?? null} kind={kind} path={file.path} />])
+          ? files.map((file) => [file.path, <FileDiff key={file.path} conversationId={conversationId} kind={kind} path={file.path} />])
           : [],
       )}
     />

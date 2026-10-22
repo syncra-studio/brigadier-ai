@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { describeTurnError, interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
-import type { Notice, UserRequest } from "@/ipc/generated";
+import type { Notice } from "@/ipc/generated";
 
 const summary = (raw: string, provider?: string) => describeTurnError(raw, provider).summary;
 
@@ -37,18 +37,15 @@ test("the line never repeats the raw error", () => {
   }
 });
 
-const request = (id: string, startedAtMs: number, state: UserRequest["state"]) =>
-  ({ id, startedAtMs, state }) as unknown as UserRequest;
-
-test("the newest failed request's error is the one the thread shows", () => {
-  assert.equal(newestFailedError({}), null);
-  assert.equal(newestFailedError({ r1: request("r1", 1, { type: "done" }) }), null);
+test("the newest failed turn's error is the one the thread shows", () => {
+  assert.equal(newestFailedError([]), null);
+  assert.equal(newestFailedError([{ end: "done", error: null }]), null);
   assert.equal(
-    newestFailedError({
-      r1: request("r1", 1, { type: "failed", error: "old" }),
-      r3: request("r3", 3, { type: "done" }),
-      r2: request("r2", 2, { type: "failed", error: "new" }),
-    }),
+    newestFailedError([
+      { end: "failed", error: "old" },
+      { end: "interrupted", error: "new" },
+      { end: "done", error: null },
+    ]),
     "new",
   );
 });

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 
 import { request } from "@/ipc/client";
-import { cliEntry, cliThreadOn, readSessionImage } from "@/state/cliThread";
+import { cliEntry, readSessionImage } from "@/state/cliThread";
 
 /**
- * Images the thread looked at or made, read from the daemon once each (`readThreadImage`), as
- * data URLs its rows' thumbnails and the image viewer show. A thread drawn from the CLI's session
- * file reads an image its item carries from that file (`readSessionFileImage`).
+ * Images the thread looked at or made, read from the daemon once each, as data URLs its rows'
+ * thumbnails and the image viewer show: an image its item carries in the CLI's session file from
+ * that file (`readSessionFileImage`), one on disk at the path its item names (`readThreadImage`).
  */
 
 /** The images kept at once; the oldest read goes first. */
@@ -18,7 +18,7 @@ function load(conversationId: string, itemId: string): Promise<string> {
   const key = `${conversationId}|${itemId}`;
   const known = read.get(key);
   if (known) return known;
-  const image = cliThreadOn() ? cliEntry(conversationId, itemId)?.images?.[0] : undefined;
+  const image = cliEntry(conversationId, itemId)?.images?.[0];
   const promise = image
     ? readSessionImage(conversationId, image)
     : request({ method: "readThreadImage", conversationId, itemId }).then(({ data, mime }) => `data:${mime};base64,${data}`);

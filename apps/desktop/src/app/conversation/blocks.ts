@@ -1,4 +1,4 @@
-import { isPlumbing, toolHasOwnResult, toolName } from "@/app/conversation/activity/words";
+import { toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
 import { decisionWords } from "@/app/conversation/rowWords";
 import type {
@@ -20,14 +20,11 @@ import type {
   RequestState,
   Task,
   ThinkingSegment,
-  UserRequest,
   WorkerStep,
   WorkerStepKind,
   WorkSpan,
 } from "@/ipc/generated";
 import { SEPARATOR_GAP_MS } from "@/lib/format";
-import type { Board } from "@/state/board";
-import { shownIdOf } from "@/state/shownIds";
 import type { PendingMessage } from "@/state/store";
 
 /**
@@ -213,33 +210,23 @@ export type Block = {
   error: string | null;
   startedAtMs: number;
   endedAtMs: number | null;
-  /** When its requests worked (open while one does), for "Worked for …". */
+  /** When its turn worked, by its CLI's timestamps (open while it does), for "Worked for …". */
   worked: WorkSpan[];
-  /** When its requests waited for the answer to their question cards, for "waited for you …". */
-  waited: WorkSpan[];
-  /** It waits only for quota, not for the user. */
-  quotaWait: boolean;
-  /** It waits for the answer to its own question card (and maybe quota). */
+  /** It waits for the answer to its own question card. */
   cardWait: boolean;
-  /** The sessions whose replies it waits for: it rests "Waiting for ‹title›". */
-  waitingFor: string[];
 };
 
-/** The parts of the board the blocks depend on (not worker activity or transcripts). */
+/** The parts of the board a thread's turns show beside the CLI's items (`boardItems`). */
 export type BoardDigest = {
   tasks: Readonly<Record<string, Task>>;
   workerSteps?: readonly WorkerStep[];
   approvals: Readonly<Record<string, Approval>>;
   questions: Readonly<Record<string, Question>>;
   plans: Readonly<Record<string, Plan>>;
-  requests: Readonly<Record<string, UserRequest>>;
   orchestratorSteps: readonly OrchestratorStep[];
-  thinking?: readonly ThinkingSegment[];
   machineSteps: readonly MachineStep[];
   decisions: readonly Decision[];
   compactions: Readonly<Record<string, Compaction>>;
-  runRequest: string | null;
-  streaming: Board["streaming"];
   /** Messages to and from other sessions, by message id. */
   peerMessages?: Readonly<Record<string, PeerMessage>>;
 };
@@ -254,40 +241,6 @@ const WORKING: ReadonlySet<Task["state"]> = new Set([
 
 const FINAL: ReadonlySet<Task["state"]> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
 
-
-/**
- * When a request worked. One stored before its spans were kept worked from its start to its
- * end; a span still open on a request that is over ends with it.
- */
-export function requestSpans(request: UserRequest): WorkSpan[] {
-  const over = !isLive(request.state.type);
-  // Older records (stored boards, an older daemon) have no spans at all.
-  const stored: readonly WorkSpan[] | undefined = request.worked;
-  const spans = stored?.length ? stored : [{ fromMs: request.startedAtMs, toMs: request.endedAtMs }];
-  return spans.map((span) => (span.toMs === null && over && request.endedAtMs !== null ? { ...span, toMs: request.endedAtMs } : span));
-}
-
-/**
- * When a turn worked, as its work header times it: its newest request and each request that one
- * was steered into. A follow-up that joined the running turn has a request of its own, started
- * as it joined, and the turn's time still runs from its first message (#446).
- */
-export function turnSpans(requests: Readonly<Record<string, UserRequest>>, newest: string): WorkSpan[] {
-  const spans: WorkSpan[] = [];
-  const seen = new Set<string>();
-  for (let id: string | null = newest; id !== null && !seen.has(id); id = requests[id]?.steeredInto ?? null) {
-    seen.add(id);
-    const request = requests[id];
-    if (request) spans.push(...requestSpans(request));
-  }
-  return spans;
-}
-
-/** When a request waited for the answer to its question cards; a span still open on a request that is over ends with it. */
-export function requestWaits(request: UserRequest): WorkSpan[] {
-  const over = !isLive(request.state.type);
-  return (request.waited ?? []).map((span) => (span.toMs === null && over && request.endedAtMs !== null ? { ...span, toMs: request.endedAtMs } : span));
-}
 
 /** How long the spans worked in all, overlaps counted once; an open span works until `now`. */
 export function workedMs(spans: readonly WorkSpan[], now: number): number {
@@ -311,26 +264,6 @@ export function stoppedAtMs(spans: readonly WorkSpan[]): number | null {
   return stops.length ? Math.max(...stops) : null;
 }
 
-/**
- * Whether a request waits only for the user's answer to its own question card: its waited span is
- * open (BUILD-PLAN A9). An older daemon kept its work span open instead.
- */
-export function requestWaitsOnCard(request: UserRequest): boolean {
-  if (request.state.type !== "waiting" || request.quotaWait) return false;
-  const waited = request.waited ?? [];
-  // Older records (stored boards, an older daemon) have no spans at all.
-  const stored: readonly WorkSpan[] | undefined = request.worked;
-  return waited.length > 0 ? waited.at(-1)?.toMs === null : stored?.at(-1)?.toMs === null;
-}
-
-/** How long a turn waited for the answers to its question cards; an open wait runs until `now`. */
-export function waitedTime(meta: { waited: readonly WorkSpan[] }, now: number, answerAtMs?: number): number {
-  const spans = answerAtMs === undefined ? meta.waited : meta.waited
-    .filter((span) => span.fromMs < answerAtMs)
-    .map((span) => ({ ...span, toMs: Math.min(span.toMs ?? answerAtMs, answerAtMs) }));
-  return workedMs(spans, answerAtMs === undefined ? now : Math.min(now, answerAtMs));
-}
-
 /** Whether a waiting turn waits only for the answer to its question card: it still reads as working. */
 export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boolean {
   return meta.state === "waiting" && meta.cardWait;
@@ -343,7 +276,7 @@ export function waitsOnCard(meta: { state: BlockState; cardWait: boolean }): boo
  * gives its card waits).
  */
 export function turnTime(
-  meta: { state: BlockState; worked: readonly WorkSpan[]; quotaWait: boolean; cardWait: boolean; endedAtMs: number | null },
+  meta: { state: BlockState; worked: readonly WorkSpan[]; cardWait: boolean; endedAtMs: number | null },
   now: number,
   /** When its final answer started: it worked until then, whatever came after. */
   answerAtMs?: number,
@@ -355,7 +288,7 @@ export function turnTime(
       .map((span) => ({ ...span, toMs: until(span.toMs ?? answerAtMs) }));
     return workedMs(spans, until(now));
   }
-  if (meta.state === "waiting" && !meta.quotaWait && !waitsOnCard(meta)) {
+  if (meta.state === "waiting" && !waitsOnCard(meta)) {
     return Math.max(0, now - (stoppedAtMs(meta.worked) ?? meta.endedAtMs ?? now));
   }
   return workedMs(meta.worked, now);
@@ -418,69 +351,30 @@ function keepPlan(plan: Plan): boolean {
   }
 }
 
-type Placed =
-  | { kind: "message"; position: number; message: Message; text: string }
-  | { kind: "card"; position: number; requestId: string | null; card: BlockCard; atMs?: number }
-  | { kind: "thinking"; position: number; requestId: string | null; segment: ThinkingSegment; atMs: number }
-  | { kind: "task"; position: number; requestId: string | null; id: string }
-  | { kind: "row"; position: number; requestId: string | null; row: BlockRow; atMs: number }
-  | {
-      kind: "orchestrator";
-      position: number;
-      requestId: string | null;
-      step: BlockOrchestratorStep;
-      atMs: number;
-    }
-  | {
-      kind: "compaction";
-      position: number;
-      requestId: string | null;
-      after: string | null;
-      compaction: BlockCompaction;
-      atMs: number;
-    };
-
-function createdAt(board: BoardDigest, item: Exclude<Placed, { kind: "message" }>): number {
-  if (item.kind === "task") return board.tasks[item.id]?.createdAtMs ?? 0;
-  if (item.kind === "row" || item.kind === "orchestrator" || item.kind === "compaction" || item.kind === "thinking") return item.atMs;
-  if (item.atMs !== undefined) return item.atMs;
-  const { type, id } = item.card;
-  const card =
-    type === "task"
-      ? board.tasks[id]
-      : type === "approval" || type === "outline"
-        ? board.approvals[id]
-        : type === "question"
-          ? board.questions[id]
-          : type === "plan"
-            ? board.plans[id]
-            : undefined;
-  return card?.createdAtMs ?? 0;
-}
+/**
+ * Something of Brigadier's own a turn shows beside its CLI's items (`cliBlocks`): a card, a
+ * worker, a worker's row, a row of its own (a merge, a message to another session, the
+ * machine, a decision), or a compaction. Each names the request it belongs to, and when it
+ * began, which places it among the CLI's items.
+ */
+export type BoardItem =
+  | { kind: "card"; requestId: string | null; card: BlockCard; atMs: number }
+  | { kind: "task"; requestId: string | null; id: string; atMs: number }
+  | { kind: "row"; requestId: string | null; row: BlockRow; atMs: number }
+  | { kind: "orchestrator"; requestId: string | null; step: BlockOrchestratorStep; atMs: number }
+  | { kind: "compaction"; requestId: string | null; after: string | null; compaction: BlockCompaction; atMs: number };
 
 /**
- * Groups the messages of a branch, the board's cards and the pending sends into blocks, oldest
- * first. Items of a request whose user message is on an older, unloaded page wait for it;
- * items of a request on another branch are not shown.
+ * What the board holds that the CLI's session file doesn't, as items of the thread's turns, in
+ * the order they came. The CLI's own calls are its file's: none of them comes from here.
  */
-export function buildBlocks(
-  messages: readonly Message[],
-  fullText: Readonly<Record<string, string>>,
-  hasMore: boolean,
-  board: BoardDigest,
-  pending: readonly PendingMessage[],
-): Block[] {
-  const placed: Placed[] = messages.map((message) => ({
-    kind: "message",
-    position: message.seq,
-    message,
-    text: fullText[message.id] ?? message.text,
-  }));
+export function boardItems(board: BoardDigest): BoardItem[] {
+  const items: (BoardItem & { position: number })[] = [];
   for (const task of Object.values(board.tasks)) {
-    placed.push({ kind: "task", position: task.position, requestId: task.requestId, id: task.id });
+    items.push({ kind: "task", position: task.position, requestId: task.requestId, id: task.id, atMs: task.createdAtMs });
     // Old conversations without lifecycle events still have a quiet start line.
     if (!(board.workerSteps ?? []).some((step) => step.taskId === task.id && step.kind === "started")) {
-      placed.push({ kind: "row", position: task.position, requestId: task.requestId,
+      items.push({ kind: "row", position: task.position, requestId: task.requestId,
         row: { type: "task", taskId: task.id, kind: "started", position: task.position },
         atMs: task.createdAtMs });
     }
@@ -492,61 +386,21 @@ export function buildBlocks(
   for (const step of board.workerSteps ?? []) {
     if (!board.tasks[step.taskId] || ["updated", "landed"].includes(step.kind)) continue;
     if (step.kind === "stopped" && stoppedByLead.has(step.taskId)) continue;
-    placed.push({ kind: "row", position: step.position, requestId: step.requestId,
+    items.push({ kind: "row", position: step.position, requestId: step.requestId,
       row: { type: "task", taskId: step.taskId, kind: step.kind, position: step.position },
       atMs: step.atMs });
   }
-  for (const segment of board.thinking ?? []) {
-    if (!segment.text.trim()) continue;
-    placed.push({ kind: "thinking", position: segment.position, requestId: segment.requestId,
-      segment, atMs: segment.startedAtMs });
-  }
-  const authoredResults = [
-    ...board.orchestratorSteps.filter((step) => step.kind.type === "tool" || (!ON_TASK_ROW.has(step.kind.type) && step.kind.type !== "feedbackAnswered" && step.kind.type !== "sessionOfferTaken" && !isRunRequest(step.requestId))),
-    ...board.decisions.filter(judgementCall).map((decision) => ({
-      requestId: decision.requestId, position: decision.position, kind: { type: "decided" },
-    })),
-  ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
+    // The CLI's calls are in its file.
+    if (step.kind.type === "tool") continue;
     // The user's answer to a feedback or session offer shows on the offer itself.
     if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken") continue;
     // An old record's suggestion of Full access, from when Brigadier had a sandbox of its own: not shown.
     if (step.kind.type === "fullAccessSuggested") continue;
-    // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
-    if (step.kind.type === "tool" && toolName(step.kind.name) === "propose_plan") {
-      const written = Object.values(board.plans).some(
-        (plan) => !!plan.body && plan.requestId === step.requestId && plan.position > step.position,
-      );
-      if (step.kind.status === "inProgress" && !written) {
-        placed.push({
-          kind: "card",
-          position: step.position,
-          requestId: step.requestId,
-          card: { type: "writingPlan", id: `writing:${step.position}`, position: step.position, keep: true },
-          atMs: step.atMs,
-        });
-      }
-      continue;
-    }
-    // A wait for replies is part of the row of the messages it waits for.
-    if (step.kind.type === "tool" && toolName(step.kind.name) === "wait_for_replies") {
-      const wait = { itemId: step.kind.itemId, status: step.kind.status, requestId: step.requestId };
-      placed.push({
-        kind: "orchestrator",
-        position: step.position,
-        requestId: step.requestId,
-        step: { kind: { type: "peerSent", messageIds: [], waits: [wait] }, position: step.position, ...(step.atMs !== undefined && { atMs: step.atMs }) },
-        atMs: step.atMs,
-      });
-      continue;
-    }
-    // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
-    if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
     // A run's own steps show as its phases, but a refused message, a usage limit's reset or
     // switch and a proof the thread attached have no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
-    if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
-    placed.push({
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
+    items.push({
       kind: "orchestrator",
       position: step.position,
       requestId: step.requestId,
@@ -557,19 +411,18 @@ export function buildBlocks(
   // A message to another session is a row of the work that sent it, from its record. The answer
   // Brigadier sent back for this session is its turn's answer itself: no row.
   for (const peer of Object.values(board.peerMessages ?? {})) {
-    if (!peer.outgoing || peer.automatic) continue;
-    const atMs = peer.sentAtMs ?? board.requests[peer.requestId ?? ""]?.startedAtMs ?? 0;
-    placed.push({
+    if (!peer.outgoing || peer.automatic || peer.sentAtMs == null) continue;
+    items.push({
       kind: "orchestrator",
       position: peer.position,
       requestId: peer.requestId,
-      step: { kind: { type: "peerSent", messageIds: [peer.messageId], waits: [] }, position: peer.position, atMs },
-      atMs,
+      step: { kind: { type: "peerSent", messageIds: [peer.messageId], waits: [] }, position: peer.position, atMs: peer.sentAtMs },
+      atMs: peer.sentAtMs,
     });
   }
   for (const step of board.machineSteps) {
     if (step.taskId !== null) continue;
-    placed.push({
+    items.push({
       kind: "orchestrator",
       position: step.position,
       requestId: step.requestId,
@@ -582,7 +435,7 @@ export function buildBlocks(
   }
   for (const decision of board.decisions) {
     if (!judgementCall(decision)) continue;
-    placed.push({
+    items.push({
       kind: "orchestrator",
       position: decision.position,
       requestId: decision.requestId,
@@ -594,7 +447,7 @@ export function buildBlocks(
     });
   }
   for (const compaction of Object.values(board.compactions)) {
-    placed.push({
+    items.push({
       kind: "compaction",
       position: compaction.position,
       requestId: compaction.requestId,
@@ -615,17 +468,18 @@ export function buildBlocks(
   // Approvals wait in the composer's place and leave nothing in the thread once answered. A
   // question card is a row of the work, which folds with it once the request is done.
   for (const question of Object.values(board.questions)) {
-    placed.push({
+    items.push({
       kind: "card",
       position: question.position,
       requestId: question.requestId,
       card: { type: "question", id: question.id, position: question.position, keep: false },
+      atMs: question.createdAtMs,
     });
   }
   // A plan the user reads as a document (one proposed with a body, or a lead's outline) stays
   // in the thread in any state, where it was proposed; a request's newest one stays in view, and
   // the revisions it replaced fold into the work.
-  const documents: Placed[] = [];
+  const documents: (BoardItem & { position: number })[] = [];
   for (const plan of Object.values(board.plans)) {
     if (!plan.body) continue;
     documents.push({
@@ -633,6 +487,7 @@ export function buildBlocks(
       position: plan.position,
       requestId: plan.requestId,
       card: { type: "plan", id: plan.id, position: plan.position, keep: false },
+      atMs: plan.createdAtMs,
     });
   }
   for (const approval of Object.values(board.approvals)) {
@@ -642,6 +497,7 @@ export function buildBlocks(
       position: approval.position,
       requestId: approval.requestId,
       card: { type: "outline", id: approval.id, position: approval.position, keep: false },
+      atMs: approval.createdAtMs,
     });
   }
   const newest = new Map<string | null, BlockCard>();
@@ -651,355 +507,22 @@ export function buildBlocks(
     if (!shown || shown.position < item.card.position) newest.set(item.requestId, item.card);
   }
   for (const card of newest.values()) card.keep = true;
-  placed.push(...documents);
+  items.push(...documents);
   for (const plan of Object.values(board.plans)) {
     if (plan.body) continue;
     // A session's plan of phases alone lives in the side panel and the composer's phase pill;
     // only one that waits on a decision shows in the thread. A superseded plan no longer
     // shows; a plan of an overnight run's request keeps its row.
     if (plan.state.type === "superseded" || (!isRunRequest(plan.requestId) && !keepPlan(plan))) continue;
-    placed.push({
+    items.push({
       kind: "card",
       position: plan.position,
       requestId: plan.requestId,
       card: { type: "plan", id: plan.id, position: plan.position, keep: keepPlan(plan) },
+      atMs: plan.createdAtMs,
     });
   }
-  placed.sort((a, b) => a.position - b.position);
-  // Work from before a request was answered again belongs to its earlier attempt.
-  const current = placed.filter(
-    (item) =>
-      item.kind === "message" ||
-      item.requestId === null ||
-      createdAt(board, item) >= (board.requests[item.requestId]?.startedAtMs ?? 0),
-  );
-
-  const oldest = messages[0]?.seq ?? Number.POSITIVE_INFINITY;
-  const blocks = new Map<string, Block>();
-  const order: string[] = [];
-  const open = (key: string, startedAtMs: number): Block => {
-    let block = blocks.get(key);
-    if (!block) {
-      const request = board.requests[key];
-      block = {
-        key,
-        user: null,
-        texts: [],
-        cards: [],
-        tasks: [],
-        rows: [],
-        orchestratorSteps: [],
-        thinking: [],
-        steers: [],
-        compactions: [],
-        requestIds: [key],
-        state: request?.state.type ?? "done",
-        error: request?.state.type === "failed" ? request.state.error : null,
-        startedAtMs: request?.startedAtMs ?? startedAtMs,
-        endedAtMs: request?.endedAtMs ?? null,
-        worked: request ? requestSpans(request) : [{ fromMs: startedAtMs, toMs: null }],
-        waited: request ? requestWaits(request) : [],
-        quotaWait: !!request?.quotaWait,
-        cardWait: !!request && requestWaitsOnCard(request),
-        waitingFor: request?.waitingFor ?? [],
-      };
-      blocks.set(key, block);
-      order.push(key);
-    }
-    return block;
-  };
-
-  for (const request of Object.values(board.requests)) {
-    if (request.id.startsWith("run-") && !request.id.endsWith("-report"))
-      open(request.id, request.startedAtMs);
-  }
-
-  // Items from before requests existed belong to the user message before them.
-  let latest: string | null = null;
-  // The block each message of the branch shows in.
-  const blockOf = new Map<string, string>();
-  // A request whose reply came after a newer request: its work from the reply on shows in the
-  // reply's own block, by request id.
-  const continued = new Map<string, string>();
-  const blockKey = (requestId: string): string => continued.get(requestId) ?? requestId;
-  // The replies Brigadier sent for this session, by the answer each carries.
-  const answered = new Map<string, string[]>();
-  for (const peer of Object.values(board.peerMessages ?? {})) {
-    if (peer.outgoing && peer.automatic && peer.answerId) answered.set(peer.answerId, [...(answered.get(peer.answerId) ?? []), peer.messageId]);
-  }
-  for (const item of current) {
-    // Anything older than the loaded page waits until that page loads.
-    if (hasMore && item.position < oldest) continue;
-    if (item.kind === "message") {
-      const { message } = item;
-      if (message.role === "user") {
-        const key = message.requestId ?? message.id;
-        latest = key;
-        blockOf.set(message.id, key);
-        open(key, message.createdAtMs).user = { kind: "message", message, text: item.text };
-        continue;
-      }
-      if (message.role === "peer") {
-        const request = message.requestId ?? message.id;
-        // Another session's message that opened a request of its own stands where the user's would.
-        if (request === message.id) {
-          latest = request;
-          blockOf.set(message.id, request);
-          open(request, message.createdAtMs).user = { kind: "peer", message, text: item.text, earlier: false };
-          continue;
-        }
-        // A reply a wait of the turn took is that call's result: the thread's answer says it.
-        if (heldForWait(board.peerMessages?.[message.id])) continue;
-        // A reply, filed under the request that asked: a block inside its turn, or, after a
-        // newer request, a turn of its own.
-        const key = blockKey(request);
-        const block = blocks.get(key);
-        if (!block) continue;
-        if (latest === key) {
-          blockOf.set(message.id, key);
-          block.steers.push({ message, text: item.text, position: item.position });
-          continue;
-        }
-        const next = continueRequest(block, board.requests[request], `${request}~${message.id}`, message, item.text);
-        blocks.set(next.key, next);
-        order.push(next.key);
-        blockOf.set(message.id, next.key);
-        // A reply after the user's Stop starts no turn: nothing of the request follows it.
-        if (next.state !== "done" || next.worked.length > 0) {
-          continued.set(request, next.key);
-          latest = next.key;
-        }
-        continue;
-      }
-      if (message.role === "system") continue;
-      const key = message.requestId ? blockKey(message.requestId) : (latest ?? `orphan:${message.id}`);
-      // A request whose message is on an older page, or on a branch not shown.
-      if (message.requestId && !blocks.has(key) &&
-        !(key.startsWith("run-") && board.requests[key])) continue;
-      blockOf.set(message.id, key);
-      const anchors = answered.get(message.id);
-      open(key, message.createdAtMs).texts.push({
-        messageId: message.id,
-        position: item.position,
-        text: item.text,
-        model: message.model,
-        update: isUpdate(item.text),
-        ...(anchors && { anchors }),
-        ...(message.answerAtMs !== undefined && { answerAtMs: message.answerAtMs }),
-        atMs: message.createdAtMs,
-      });
-      continue;
-    }
-    // A compaction between turns follows the answer it came after, on that branch only.
-    const key =
-      item.kind === "compaction" && item.requestId === null && item.after !== null
-        ? (blockOf.get(item.after) ?? null)
-        : item.requestId
-          ? blockKey(item.requestId)
-          : latest;
-    if (key === null) continue;
-    if (item.requestId && !blocks.has(key)) continue;
-    const block = open(key, 0);
-    if (item.kind === "task") block.tasks.push(item.id);
-    else if (item.kind === "row") block.rows.push(item.row);
-    else if (item.kind === "orchestrator") block.orchestratorSteps.push(item.step);
-    else if (item.kind === "thinking") block.thinking.push(item.segment);
-    else if (item.kind === "compaction") block.compactions.push(item.compaction);
-    else block.cards.push(item.card);
-  }
-
-  // What streams belongs to the turn's request.
-  const streaming = board.streaming;
-  if (streaming && !messages.some((message) => message.id === streaming.messageId)) {
-    const key = streaming.requestId ? blockKey(streaming.requestId) : latest;
-    const block = key !== null ? blocks.get(key) : undefined;
-    block?.texts.push({
-      messageId: streaming.messageId,
-      position: Number.POSITIVE_INFINITY,
-      text: streaming.text,
-      model: null,
-      update: isUpdate(streaming.text),
-      ...(streaming.phase === "answer" && { answerAtMs: streaming.startedAtMs }),
-      ...(streaming.phase === "commentary" && { commentary: true }),
-      atMs: streaming.startedAtMs,
-    });
-  }
-
-  // Synthetic phase requests have no user anchor. Interleave them by their recorded start,
-  // so preparing them before the event walk cannot put a phase above the user's brief.
-  const chronological = order.some((key) => key.startsWith("run-"))
-    ? order.toSorted((a, b) => {
-        const first = blocks.get(a)!;
-        const second = blocks.get(b)!;
-        return blockTime(first) - blockTime(second);
-      })
-    : order;
-  const result = joinSteered(
-    chronological.map((key) => blocks.get(key) as Block),
-    board.requests,
-  );
-  // Sent but not yet stored: the bubble, and a block that works on it.
-  for (const entry of pending) {
-    result.push({
-      key: entry.localId,
-      user: { kind: "pending", pending: entry },
-      texts: [],
-      cards: [],
-      tasks: [],
-      rows: [],
-      orchestratorSteps: [],
-      thinking: [],
-      steers: [],
-      compactions: [],
-      requestIds: [entry.localId],
-      state: "working",
-      error: null,
-      startedAtMs: entry.createdAtMs,
-      endedAtMs: null,
-      worked: [{ fromMs: entry.createdAtMs, toMs: null }],
-      waited: [],
-      quotaWait: false,
-      cardWait: false,
-      waitingFor: [],
-    });
-  }
-  return result;
-}
-
-function blockTime(block: Block): number {
-  return anchorMessage(block)?.createdAtMs ?? block.startedAtMs;
-}
-
-/** The parts of `spans` from `fromMs` on (`after`), or before it. */
-function cutSpans(spans: readonly WorkSpan[], atMs: number, after: boolean): WorkSpan[] {
-  return spans.flatMap((span): WorkSpan[] => {
-    const to = span.toMs ?? Number.POSITIVE_INFINITY;
-    if (after) {
-      if (to <= atMs) return [];
-      return [{ fromMs: Math.max(span.fromMs, atMs), toMs: span.toMs }];
-    }
-    if (span.fromMs >= atMs) return [];
-    return [{ fromMs: span.fromMs, toMs: Math.min(to, atMs) }];
-  });
-}
-
-/**
- * A reply to an earlier request that came after a newer one: a block of its own where it came,
- * which carries on the request from there ("Reply from ‹title› · to your earlier message"),
- * while the earlier block reads as done when it came. A request that had ended before the reply
- * came (the user's Stop, a failure, its overnight run's end) keeps its state: the reply shows,
- * and no turn follows it.
- */
-function continueRequest(earlier: Block, request: UserRequest | undefined, key: string, message: Message, text: string): Block {
-  const atMs = message.createdAtMs;
-  const anchor: PeerAnchor = { kind: "peer", message, text, earlier: true };
-  const base: Block = {
-    key,
-    user: anchor,
-    texts: [],
-    cards: [],
-    tasks: [],
-    rows: [],
-    orchestratorSteps: [],
-    thinking: [],
-    steers: [],
-    compactions: [],
-    requestIds: [...earlier.requestIds],
-    state: "done",
-    error: null,
-    startedAtMs: atMs,
-    endedAtMs: atMs,
-    worked: [],
-    waited: [],
-    quotaWait: false,
-    cardWait: false,
-    waitingFor: [],
-  };
-  const final = request?.state.type === "done" || request?.state.type === "stopped" || request?.state.type === "failed";
-  // One that went on from the reply and ended after it carries on here, however it ended.
-  const over = !request || (final && (request.endedAtMs === null || request.endedAtMs <= atMs));
-  if (over) return base;
-  const worked = cutSpans(earlier.worked, atMs, true);
-  const waited = cutSpans(earlier.waited, atMs, true);
-  Object.assign(earlier, {
-    state: "done",
-    error: null,
-    endedAtMs: atMs,
-    worked: cutSpans(earlier.worked, atMs, false),
-    waited: cutSpans(earlier.waited, atMs, false),
-    quotaWait: false,
-    cardWait: false,
-    waitingFor: [],
-  } satisfies Partial<Block>);
-  return {
-    ...base,
-    state: request.state.type,
-    error: request.state.type === "failed" ? request.state.error : null,
-    endedAtMs: request.endedAtMs,
-    worked: worked.length > 0 ? worked : [{ fromMs: atMs, toMs: request.endedAtMs }],
-    waited,
-    quotaWait: request.quotaWait,
-    cardWait: requestWaitsOnCard(request),
-    waitingFor: request.waitingFor ?? [],
-  };
-}
-
-/**
- * A request steered into the running turn of the block just before it joins that block: its
- * message becomes a bubble inside the block, its work follows, and the header still times the
- * whole turn.
- */
-function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[] {
-  const joined: Block[] = [];
-  for (const block of blocks) {
-    const into = requests[block.key]?.steeredInto;
-    const previous = joined.at(-1);
-    if (!into || !previous?.requestIds.includes(into) || (block.user?.kind !== "message" && block.user?.kind !== "peer")) {
-      joined.push(block);
-      continue;
-    }
-    const texts = [...previous.texts, ...block.texts];
-    // The bubble shows after the reply that was streaming when it was sent.
-    const after = texts.find((text) => text.messageId === requests[block.key]?.steeredAfter);
-    const live = [previous.state, block.state].filter(isLive);
-    const state = live.length > 0 ? (live.includes("working") ? "working" : "waiting") : block.state;
-    joined[joined.length - 1] = {
-      ...previous,
-      texts: texts.toSorted((a, b) => a.position - b.position),
-      cards: [...previous.cards, ...block.cards],
-      tasks: [...previous.tasks, ...block.tasks],
-      rows: [...previous.rows, ...block.rows],
-      orchestratorSteps: [...previous.orchestratorSteps, ...block.orchestratorSteps],
-      thinking: [...previous.thinking, ...block.thinking],
-      compactions: [...previous.compactions, ...block.compactions],
-      steers: [
-        ...previous.steers,
-        {
-          message: block.user.message,
-          text: block.user.text,
-          position: Math.max(block.user.message.seq, after ? after.position + 0.5 : 0),
-        },
-        ...block.steers,
-      ],
-      requestIds: [...previous.requestIds, ...block.requestIds],
-      waitingFor: [...new Set([...previous.waitingFor, ...block.waitingFor])],
-      state,
-      error: state === block.state ? block.error : null,
-      // The turn's time runs from its first message, the follow-ups' work counted with it.
-      startedAtMs: Math.min(previous.startedAtMs, block.startedAtMs),
-      worked: [...previous.worked, ...block.worked],
-      waited: [...previous.waited, ...block.waited],
-      quotaWait: state === "waiting" && [previous, block].every((part) => part.state !== "waiting" || part.quotaWait),
-      // Waiting on a card while no part waits for the user otherwise.
-      cardWait:
-        state === "waiting" &&
-        [previous, block].every((part) => part.state !== "waiting" || part.quotaWait || part.cardWait) &&
-        [previous, block].some((part) => part.state === "waiting" && part.cardWait),
-      endedAtMs:
-        live.length > 0 ? null : Math.max(previous.endedAtMs ?? 0, block.endedAtMs ?? 0) || null,
-    };
-  }
-  return joined;
+  return items.sort((a, b) => a.position - b.position).map(({ position: _position, ...item }) => item);
 }
 
 /** What a block's work is made of, as its message metadata carries it. */
@@ -1316,188 +839,4 @@ export function foldTurns(tree: ThreadTree, keep: number): { tree: ThreadTree; h
   };
   const nodes = tree.nodes.filter(stays).map((node) => (node.id === first.id ? { ...node, parentId: null } : node));
   return { tree: { nodes, headId: tree.headId }, hidden };
-}
-
-/**
- * The parent of `messages[at]` on its branch: its own, or (for messages from before branches
- * existed) the message before it. `null` at the start of the conversation; `undefined` when
- * the message before it is on an older page.
- */
-function parentOf(messages: readonly Message[], at: number, hasMore: boolean): string | null | undefined {
-  const { parentId } = messages[at] as Message;
-  if (parentId !== null) return parentId === "" ? null : parentId;
-  if (at > 0) return (messages[at - 1] as Message).id;
-  return hasMore ? undefined : null;
-}
-
-/**
- * A node's sort order, never before its parent's: a message sent while the request before it
- * had not answered yet (queued or steered in) is older than that answer. The sort is stable
- * and parents are pushed first, so a tie keeps the parent ahead.
- */
-function under(parent: { order: number } | null, order: number): number {
-  return parent ? Math.max(order, parent.order) : order;
-}
-
-/**
- * The branch the thread shows, oldest first: back from `head` (else the last message) as far
- * as the loaded pages go.
- */
-export function shownBranch(messages: readonly Message[], head: string | null, hasMore: boolean): Message[] {
-  const index = new Map(messages.map((message, at) => [message.id, at]));
-  const path: Message[] = [];
-  let at = index.get(head ?? "") ?? (messages.length > 0 ? messages.length - 1 : undefined);
-  while (at !== undefined) {
-    path.push(messages[at] as Message);
-    const parent = parentOf(messages, at, hasMore);
-    const next = parent == null ? undefined : index.get(parent);
-    at = next !== undefined && next < at ? next : undefined;
-  }
-  return path.toReversed();
-}
-
-/**
- * The thread as assistant-ui's message tree. The branch that ends at `head` becomes blocks
- * with everything its requests did; with `branches` (a Chat), each message the user or the
- * model replaced on that branch comes along with everything that followed it, so the branch picker
- * can move between them.
- */
-export function buildThread(
-  messages: readonly Message[],
-  fullText: Readonly<Record<string, string>>,
-  hasMore: boolean,
-  board: BoardDigest & { head: string | null },
-  pending: readonly PendingMessage[],
-  /**
-   * Which other versions the tree carries for the branch picker: a Chat's edits and other
-   * answers (`all`), or only a session's edits (`edits`), whose answers keep their work.
-   */
-  branches: "all" | "edits",
-): ThreadTree {
-  const index = new Map(messages.map((message, at) => [message.id, at]));
-  const children = new Map<string | null, Message[]>();
-  messages.forEach((message, at) => {
-    const parent = parentOf(messages, at, hasMore);
-    if (parent === undefined) return;
-    const siblings = children.get(parent);
-    if (siblings) siblings.push(message);
-    else children.set(parent, [message]);
-  });
-
-  const path = shownBranch(messages, board.head, hasMore);
-
-  // Each node sorts by its oldest message, so siblings number oldest first ("1/2" is the
-  // original) and every parent comes before its children.
-  const nodes: { node: ThreadNode; order: number }[] = [];
-  const nodeOf = new Map<string, { id: string; order: number }>();
-  // A block keeps its id whichever branch is shown: a request's first answer is
-  // `request:R`, a later one (answered again) is named after its first reply. A message sent
-  // from here keeps the id it had while pending, and so does its block (see `shownIdOf`).
-  const blockId = (block: Block, first: string | undefined): string => {
-    const oldest = children.get(block.key)?.find((child) => child.role === "assistant")?.id;
-    const key = shownIdOf(block.key);
-    if (first === undefined) return oldest === undefined ? `request:${key}` : `request:${key}:next`;
-    return oldest === undefined || first === oldest ? `request:${key}` : `request:${key}:${first}`;
-  };
-  const place = (
-    blocks: readonly Block[],
-    parent: { id: string; order: number } | null,
-  ): { id: string; order: number } | null => {
-    for (const block of blocks) {
-      if (block.user) {
-        const message = anchorMessage(block);
-        const id = message
-          ? shownIdOf(message.id)
-          : block.user.kind === "pending"
-            ? block.user.pending.localId
-            : block.key;
-        const order = under(parent, message?.seq ?? Number.POSITIVE_INFINITY);
-        nodes.push({ node: { id, parentId: parent?.id ?? null, kind: "user", block, head: message?.id ?? null }, order });
-        if (message) nodeOf.set(message.id, { id, order });
-        parent = { id, order };
-      }
-      if (!blockShows(block)) continue;
-      const stored = block.texts.filter((text) => index.has(text.messageId));
-      const id = blockId(block, stored[0]?.messageId);
-      const order = under(parent, stored[0]?.position ?? (parent ? parent.order + 0.5 : 0));
-      nodes.push({
-        node: {
-          id,
-          parentId: parent?.id ?? null,
-          kind: "block",
-          block,
-          head: stored.at(-1)?.messageId ?? anchorMessage(block)?.id ?? null,
-        },
-        order,
-      });
-      for (const text of stored) nodeOf.set(text.messageId, { id, order });
-      parent = { id, order };
-    }
-    return parent;
-  };
-  const headId = place(buildBlocks(path, fullText, hasMore, board, pending), null)?.id ?? null;
-
-  const quiet: BoardDigest =
-    branches === "all"
-      ? { ...EMPTY_WORK, requests: board.requests }
-      : { ...board, runRequest: null, streaming: null };
-  // Every other version comes along with its whole subtree, not only its newest continuation:
-  // a node that left the tree when another version was shown would come back last, and
-  // assistant-ui would then number it after its younger siblings.
-  const placed = new Set(path.map((message) => message.id));
-  const branchOff = (line: readonly Message[]) => {
-    for (const message of line) {
-      if (branches === "edits" && message.role !== "user") continue;
-      const parent = parentOf(messages, index.get(message.id) as number, hasMore);
-      if (parent === undefined) continue;
-      const parentNode = parent === null ? null : nodeOf.get(parent);
-      if (parentNode === undefined) continue;
-      const siblings = (children.get(parent) ?? []).filter(
-        (other) => !placed.has(other.id) && other.role === message.role,
-      );
-      for (const sibling of siblings) {
-        if (placed.has(sibling.id)) continue;
-        // The replaced message and its newest continuation; older ones branch off it in turn.
-        const chain = [sibling];
-        for (let kids = children.get(sibling.id); kids?.length; kids = children.get(chain.at(-1)?.id ?? "")) {
-          chain.push(kids.at(-1) as Message);
-        }
-        for (const link of chain) placed.add(link.id);
-        // Another answer groups under its user message, which the tree already has.
-        const user = sibling.role === "assistant" && parent !== null ? messages[index.get(parent) as number] : undefined;
-        const blocks = buildBlocks(user ? [user, ...chain] : chain, fullText, false, quiet, []).map((block) =>
-          settled(user && block.user?.kind === "message" && block.user.message.id === user.id ? { ...block, user: null } : block, chain),
-        );
-        place(blocks, parentNode);
-        branchOff(chain);
-      }
-    }
-  };
-  branchOff(path);
-  return { nodes: nodes.toSorted((a, b) => a.order - b.order).map(({ node }) => node), headId };
-}
-
-const EMPTY_WORK: BoardDigest = {
-  tasks: {},
-  approvals: {},
-  questions: {},
-  plans: {},
-  requests: {},
-  orchestratorSteps: [],
-  machineSteps: [],
-  decisions: [],
-  compactions: {},
-  runRequest: null,
-  streaming: null,
-};
-
-/** A block on a branch the thread does not show: finished, timed by its own replies. */
-function settled(block: Block, chain: readonly Message[]): Block {
-  const times = chain
-    .filter((message) => block.texts.some((text) => text.messageId === message.id))
-    .map((message) => message.createdAtMs);
-  const user = anchorMessage(block)?.createdAtMs;
-  const start = user ?? times[0] ?? block.startedAtMs;
-  const end = times.at(-1) ?? start;
-  return { ...block, state: "done", error: null, startedAtMs: start, endedAtMs: end, worked: [{ fromMs: start, toMs: end }], waited: [], quotaWait: false, cardWait: false };
 }

@@ -7,6 +7,7 @@
  * again as it was, the dot while the hidden chat works or has news, and New chat. It writes
  * what it saw to `<pre id="tab-chat-result">`.
  */
+import "@/fixtures/cliView";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

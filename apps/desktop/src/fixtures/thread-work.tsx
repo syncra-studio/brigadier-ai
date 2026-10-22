@@ -4,7 +4,7 @@
  * page holds still. IPC is mocked, no daemon. The result goes to `<pre id="thread-work-result">`;
  * `stop=1` holds the page for a screenshot, `case=<id>` shows one case with its rows opened.
  *
- * - A running own `run` in an open live group: "Running command for 3s", opening to its Shell
+ * - A running command in an open live group: "Running command for 3s", opening to its Shell
  *   box, which follows the output as the row hears more of it.
  * - A running Codex command, its output streamed, the same way.
  * - A finished command that printed more than 8 KiB: the whole output, read with the request's
@@ -40,6 +40,7 @@ import { TooltipProvider } from "@/components/overlays";
 import type { BackgroundRun, Conversation, OrchestratorStepKind, ProviderEvent, RawEntry, Request, UserRequest } from "@/ipc/generated";
 import { sessionTabs } from "@/state/sessionTabs";
 import { emptyBoard, useBoard } from "@/state/board";
+import { applyThreadNews, mergeEntries, useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -57,14 +58,14 @@ const NEW_DIFF = "@@ -0,0 +1,3 @@\n+export const one = 1;\n+export const two = 2
 const OLD_DIFF = "@@ -1,4 +0,0 @@\n-a\n-b\n-c\n-d\n";
 const SVG = (fill: string) => btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" fill="${fill}"/></svg>`);
 
-const asked = { items: 0, images: [] as string[], runs: [] as string[], undo: [] as string[], opened: [] as string[] };
+const asked = { images: [] as string[], runs: [] as string[], undo: [] as string[], opened: [] as string[] };
 
 const entry = (streamSeq: number, event: ProviderEvent): RawEntry => ({ streamSeq, atMs: now, event });
 
-/** The request's calls, as `listThreadItems` reads them now. */
+/** The request's calls, as the thread's view holds them. */
 function threadItems(): RawEntry[] {
   return [
-    entry(10, { type: "toolCall", itemId: "own-run", name: "mcp__brigadier__run", input: '{"command":"npm run build"}', status: "inProgress", output: null }),
+    entry(10, { type: "command", itemId: "own-run", command: "npm run build", cwd: ROOT, status: "inProgress", exitCode: null, output: null, durationMs: null }),
     entry(10, { type: "commandOutputDelta", itemId: "own-run", text: ownPrinted }),
     entry(11, { type: "command", itemId: "codex-run", command: "/bin/zsh -lc 'cargo test'", cwd: ROOT, status: "inProgress", exitCode: null, output: null, durationMs: null }),
     entry(11, { type: "commandOutputDelta", itemId: "codex-run", text: codexPrinted }),
@@ -86,9 +87,6 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
-    case "listThreadItems":
-      asked.items += 1;
-      return { method: req.method, page: { entries: threadItems(), next: null } };
     case "readThreadImage":
       asked.images.push(req.itemId);
       if (req.itemId === "view-gone") return Promise.reject(new Error("This image is no longer there"));
@@ -132,6 +130,11 @@ const run = (id: string, itemId: string, state: BackgroundRun["state"]): Backgro
   endedAtMs: state.type === "running" ? null : now, state, itemId,
 });
 
+// The thread's view: the request's calls, each merged the way the stream says them.
+useCliThread.setState({
+  views: { [CHAT]: { entries: mergeEntries([], threadItems().map(({ atMs, event }) => ({ event, atMs }))), turns: [] } },
+});
+
 useBoard.setState({
   board: {
     ...emptyBoard(CHAT), loaded: true,
@@ -163,7 +166,7 @@ const tool = (position: number, kind: Partial<Tool> & Pick<Tool, "itemId" | "nam
 });
 
 const readStep = tool(1, { itemId: "read", name: "Read", detail: `${ROOT}/src/math.js`, item: "tool", endedAtMs: now });
-const ownRun = (bytes: number) => tool(10, { itemId: "own-run", name: "mcp__brigadier__run", detail: "npm run build", status: "inProgress", item: "command", outputBytes: bytes }, now - 3200);
+const ownRun = (bytes: number) => tool(10, { itemId: "own-run", name: "shell", detail: "npm run build", status: "inProgress", item: "command", outputBytes: bytes }, now - 3200);
 const codexRun = (bytes: number) => tool(11, { itemId: "codex-run", name: "shell", detail: "/bin/zsh -lc 'cargo test'", status: "inProgress", item: "command", outputBytes: bytes }, now - 3200);
 const bigRun = tool(12, { itemId: "big", name: "shell", detail: "cat build.log", item: "command", exit: 0, endedAtMs: now, fullOutput: "out-1" }, now - 1200);
 const editStep = tool(13, {
@@ -327,12 +330,19 @@ async function measure(): Promise<object> {
   const outputs = () => all("[data-slot=shell-output]", at("live-group")).map((box) => text(box));
   const commands = () => all("[data-slot=shell-command]", at("live-group")).map((box) => text(box));
   out.liveFirst = { outputs: outputs(), commands: commands(), endings: all("[data-slot=shell-ending]", at("live-group")).length };
-  const readsBefore = asked.items;
   ownPrinted += "compiling 2/3\ncompiling 3/3\n";
   codexPrinted += "test b ... ok\n";
+  // The stream says the more each command printed.
+  applyThreadNews({
+    conversationId: CHAT,
+    entries: [
+      { event: { type: "commandOutputDelta", itemId: "own-run", text: "compiling 2/3\ncompiling 3/3\n" }, atMs: now },
+      { event: { type: "commandOutputDelta", itemId: "codex-run", text: "test b ... ok\n" }, atMs: now },
+    ],
+  });
   grow(40);
   await until(() => outputs().every((output) => (output ?? "").includes("3/3") || (output ?? "").includes("test b")));
-  out.liveLater = { outputs: outputs(), readAgain: asked.items > readsBefore };
+  out.liveLater = { outputs: outputs() };
 
   // A finished command's whole output, past 8 KiB.
   one<HTMLElement>("[role=button]", at("big"))?.click();

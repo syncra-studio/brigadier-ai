@@ -150,9 +150,6 @@ if (!("__TAURI_INTERNALS__" in window)) {
         return { method: req.method, terminal: { id: req.sessionId ?? "bottom", cwd: "/workspace", shell: "/bin/zsh", scrollback: "" } };
       case "listMessages":
         return { method: req.method, page: { items: [], hasMore: false } };
-      // A step's full call, as its row opens to: a command gives its line from the step itself.
-      case "getThreadItem":
-        return { method: req.method, item: { input: null, output: "a1b2c3d Example change\nf4e5d6c Example fix", exit: 0, ms: 1200 } };
       default:
         return { method: req.method };
     }

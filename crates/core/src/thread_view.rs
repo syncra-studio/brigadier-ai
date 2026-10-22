@@ -4,9 +4,7 @@
 //! that turn. The files hold no turn ends of their own (Claude's only says the user's Stop),
 //! so Brigadier writes the least the files lack, from the live stream, to
 //! `record/turns.jsonl`: per turn its user message's id, how it ended, the error and when.
-//! Nothing else of the conversation is copied.
-//!
-//! Shown in the app when `BRIGADIER_CLI_THREAD=1`.
+//! Nothing else of the conversation is copied. The app draws the thread from it alone (S10).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -87,6 +85,10 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ended: Option<TurnEnd>,
+    /// How full its model's context is, as its CLI just said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub context: Option<crate::model::ContextUsage>,
 }
 
 /// Where a conversation's CLI turn stands, as the sidebar reads it: open now, or how its last

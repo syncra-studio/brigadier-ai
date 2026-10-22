@@ -34,6 +34,7 @@
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
  * then clicks through it, to `<pre id="preview-card-result">` (PreviewCardRender.test.ts).
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";

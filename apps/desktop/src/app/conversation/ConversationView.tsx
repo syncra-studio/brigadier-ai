@@ -21,8 +21,7 @@ import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/Pin
 import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { PastedTextPane } from "@/app/side-panel/PastedTextPane";
 import { WorkerDiffs } from "@/app/side-panel/WorkerSummary";
-import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
-import { interruptedByQuit } from "@/app/conversation/turnError";
+import { reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { foldedEntries } from "@/app/conversation/railHistory";
 import { useSidePanel } from "@/app/side-panel/SidePanel";
@@ -33,12 +32,10 @@ import { sendLane } from "@/app/conversation/composerKeys";
 import {
   type Block,
   type BoardDigest,
-  buildThread,
   foldTurns,
   type PeerOf,
   peerOf,
   SHOWN_TURNS,
-  shownBranch,
   type ThreadNode,
 } from "@/app/conversation/blocks";
 import { cliThreadTree } from "@/app/conversation/cliBlocks";
@@ -85,7 +82,6 @@ import {
   loadFullText,
   rateMessage,
   readAttachment,
-  searchEarlier,
   moveQueued,
   regenerate,
   restoreQueued,
@@ -98,8 +94,9 @@ import {
 } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { takeBackgroundSend } from "@/state/backgroundSend";
+import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
-import { readSessionImageBlob, sessionImageOf, useCliThreadOn, useThreadView } from "@/state/cliThread";
+import { readSessionImageBlob, sessionImageOf, useThreadView } from "@/state/cliThread";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
@@ -218,8 +215,6 @@ function signature(
     block.startedAtMs,
     block.endedAtMs,
     block.worked,
-    block.waited,
-    block.quotaWait,
     block.cardWait,
     block.texts.map((text) => [text.messageId, text.position, text.model, text.anchors, text.answerAtMs, text.commentary]),
     block.cards,
@@ -230,7 +225,6 @@ function signature(
     block.compactions,
     block.steers.map((steer) => [steer.message.id, steer.text]),
     block.requestIds,
-    block.waitingFor,
     picked,
     session,
   ]);
@@ -256,10 +250,12 @@ function useItems(
       seen.add(node.id);
       const { block } = node;
       const entry = cache.get(node.id);
+      // The request it answers: its user message's.
+      const requestId = block.requestIds[0] ?? block.key;
       // A block that joined steered requests answers the last of them, not its own message.
       const rework =
         block.user?.kind === "message" &&
-        canRework(block.key) &&
+        canRework(requestId) &&
         (node.kind === "user" || block.steers.length === 0);
       if (node.kind === "user") {
         if (
@@ -321,15 +317,12 @@ function useItems(
           startedAtMs: block.startedAtMs,
           endedAtMs: block.endedAtMs,
           worked: block.worked,
-          waited: block.waited,
-          quotaWait: block.quotaWait,
           cardWait: block.cardWait,
           picked,
           session,
           rework,
-          requestId: block.key,
+          requestId,
           requestIds: block.requestIds,
-          waitingFor: block.waitingFor,
           answerId,
           forkId,
         };
@@ -375,19 +368,15 @@ const NO_PENDING: PendingMessage[] = [];
 const EMPTY_VIEW: ThreadView = { entries: [], turns: [] };
 const NO_RATINGS: Partial<Record<string, Rating>> = {};
 
-const EMPTY_DIGEST: BoardDigest & { head: string | null } = {
+const EMPTY_DIGEST: BoardDigest = {
   tasks: {},
   approvals: {},
   questions: {},
   plans: {},
-  requests: {},
   orchestratorSteps: [],
   machineSteps: [],
   decisions: [],
   compactions: {},
-  runRequest: null,
-  streaming: null,
-  head: null,
 };
 
 /** The open conversation's workers, for @-mentions. */
@@ -443,7 +432,7 @@ export function ConversationView({
     ),
   );
   const digest = useBoard(
-    useShallow((s): (BoardDigest & { head: string | null }) | null =>
+    useShallow((s): BoardDigest | null =>
       s.board?.conversationId === conversationId
         ? {
             tasks: s.board.tasks,
@@ -451,16 +440,11 @@ export function ConversationView({
             approvals: s.board.approvals,
             questions: s.board.questions,
             plans: s.board.plans,
-            requests: s.board.requests,
             orchestratorSteps: s.board.orchestratorSteps,
-            thinking: s.board.thinking,
             machineSteps: s.board.machineSteps,
             decisions: s.board.decisions,
             compactions: s.board.compactions,
-            runRequest: s.board.runRequest,
-            streaming: s.board.streaming,
             peerMessages: s.board.peerMessages,
-            head: s.board.head,
           }
         : null,
     ),
@@ -468,6 +452,7 @@ export function ConversationView({
   const run = useBoard((s) =>
     s.board?.conversationId === conversationId ? s.board.run : "idle",
   );
+  const runError = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.runError : null));
   const queueItems = useBoard((s) =>
     s.board?.conversationId === conversationId ? s.board.queue.items : null,
   );
@@ -488,22 +473,14 @@ export function ConversationView({
   }, [conversationId, thread.items, thread.fullText]);
 
   const session = conversation?.kind === "session" || resolved.kind === "session";
-  // With `BRIGADIER_CLI_THREAD=1` the thread is the CLI's own (S9), read from its session file.
-  const cliThread = useCliThreadOn();
-  const cliView = useThreadView(conversationId, cliThread);
+  // The thread is the CLI's own, read from its session file (S9, S10).
+  const cliView = useThreadView(conversationId);
   const full = useMemo(
     () =>
-      cliThread && conversationId
-        ? cliThreadTree(cliView ?? EMPTY_VIEW, conversationId, thread.items, thread.fullText, pending, digest?.requests ?? {})
-        : buildThread(
-            thread.items,
-            thread.fullText,
-            thread.hasMore,
-            digest ?? EMPTY_DIGEST,
-            pending,
-            session ? "edits" : "all",
-          ),
-    [cliThread, cliView, conversationId, thread.items, thread.fullText, thread.hasMore, digest, pending, session],
+      conversationId
+        ? cliThreadTree(cliView ?? EMPTY_VIEW, conversationId, thread.items, thread.fullText, pending, digest ?? EMPTY_DIGEST, { state: run, error: runError })
+        : cliThreadTree(EMPTY_VIEW, "", [], {}, pending, EMPTY_DIGEST, { state: run, error: runError }),
+    [cliView, conversationId, thread.items, thread.fullText, digest, pending, run, runError],
   );
   // A long thread shows its newest turns; the older ones wait behind "N earlier messages", until
   // shown (then for the app's run, so the thread reopens where it was left).
@@ -523,14 +500,9 @@ export function ConversationView({
   // An older page that failed to load offers Try again, in the conversation it failed in.
   const [olderFailedIn, setOlderFailedIn] = useState<string | null>(null);
   // The CLI's thread is read whole: no older pages.
-  const hasMore = thread.hasMore && !cliThread;
+  const hasMore = false;
   const oldest = thread.items[0]?.seq ?? null;
-  // Find's search of the older pages, from the oldest message of the branch shown.
-  const leaf = useMemo(() => (hasMore ? (shownBranch(thread.items, digest?.head ?? null, hasMore)[0]?.id ?? null) : null), [thread.items, digest?.head, hasMore]);
-  const searchOlder = useMemo(
-    () => (conversationId !== null && leaf !== null ? (query: string, limit: number) => searchEarlier(conversationId, leaf, query, limit) : null),
-    [conversationId, leaf],
-  );
+  const searchOlder = null;
   const earlier = useMemo<ThreadHistory>(
     () => ({
       hidden: folded.hidden,
@@ -580,24 +552,15 @@ export function ConversationView({
   const reworkable = useBoard((s) =>
     s.board?.conversationId === conversationId && s.board ? reworkableRequest(s.board) : null,
   );
-  // The newest answer works on while only what Brigadier owes it runs (a CI watch, a held
-  // merge, a review its thread waits for): Stop ends that too.
-  const answerWorking = useBoard(
-    (s) =>
-      s.board?.conversationId === conversationId &&
-      !!s.board &&
-      latestRequest(s.board)?.state.type === "working",
-  );
-  // The user stopped the latest request, or Brigadier quit while it ran, and nothing runs for
-  // it: the send button resumes it.
-  const stopped = useBoard((s) => {
-    if (s.board?.conversationId !== conversationId || !s.board) return false;
-    const state = latestRequest(s.board)?.state;
-    return state?.type === "stopped" || (state?.type === "failed" && interruptedByQuit(state.error));
-  });
+  // The CLI's turn is open: Stop ends it.
+  const answerWorking = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false));
+  // The user stopped the CLI's last turn, or it was cut off (Brigadier quit while it ran), and
+  // nothing runs: the send button resumes it.
+  const lastEnd = cliView?.turns.at(-1)?.end ?? null;
+  const stopped = lastEnd === "stopped" || lastEnd === "interrupted";
   // Not while the orchestrator's turn for the request runs (the composer can stop it); a
   // request whose workers still run can be redone.
-  const runRequest = digest?.runRequest ?? null;
+  const runRequest = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.runRequest : null));
   const canRework = useCallback(
     (requestId: string) =>
       session ? requestId === reworkable && !(running && runRequest === requestId) : !running,
@@ -796,7 +759,7 @@ export function ConversationView({
       setError(null);
       await regenerate(conversationId, storedIdOf(parentId)).catch(fail);
     },
-    isLoading: cliThread ? conversationId !== null && cliView === null : thread.loading && thread.items.length === 0,
+    isLoading: conversationId !== null && cliView === null,
     isRunning: running || waitingForQuota || answerWorking || Object.values(digest?.tasks ?? {}).some((task) => ["queued", "starting", "running", "blocked", "paused", "landing", "readyToLand"].includes(task.state)),
     isDisabled: archived,
     isSendDisabled: conversation === null && resolved.problem !== null,

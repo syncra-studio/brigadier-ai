@@ -478,7 +478,7 @@ impl SessionManager {
     /// its start, when given), oldest first, after the row at board position `after`: each
     /// call's newest event from where its row points, its whole output when it is stored, a
     /// running command's output so far. Calls from before their rows pointed at the log are
-    /// left out (`getThreadItem` still opens them).
+    /// left out.
     pub async fn thread_items(
         &self,
         id: &ConversationId,

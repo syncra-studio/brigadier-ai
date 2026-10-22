@@ -48,7 +48,6 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
     sendScrolledUp: { top: number; after: number; button: boolean };
     newChat: { userTop: number | null; top: number };
     capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button };
-    peerExchange: { stages: { stage: string; userTop: number; status: string | null; rows: string[] }[]; tops: number[] };
     working: { distance: number; rows: number };
   };
   assert.equal(seen.error, undefined);
@@ -181,22 +180,6 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   // its bottom.
   near(seen.newChat.userTop, 68, "first message of a new chat");
   assert.equal(seen.newChat.top, 0);
-  // A sent turn that messages another session and waits for its reply: its row goes from sending
-  // straight to waiting, with no line in between, and the user's message never moves.
-  assert.deepEqual(seen.peerExchange.stages.map(({ stage, status, rows }) => [stage, status, rows.at(-1) ?? null]), [
-    ["starting", "Starting", null],
-    ["running", "Thinking", null],
-    ["call", "Sending a message", null],
-    ["recorded", null, "Sending message to A long session"],
-    ["delivered", null, "Sending message to A long session"],
-    ["sent", null, "Sending message to A long session"],
-    ["waiting", null, "Waiting for A long session to reply"],
-    ["waited", "Thinking", "Sent message to A long session, waited; no reply yet"],
-    ["again", null, "Sending message to A long session"],
-    // A retry stalling the turn still says so.
-    ["retrying", "Reconnecting", "Sending message to A long session"],
-  ]);
-  assert.equal(seen.peerExchange.tops.length, 1, `the user's message moved: ${seen.peerExchange.tops.join(", ")}`);
   assert.equal(seen.working.distance, 0);
   assert.ok(seen.working.rows >= 2);
 });

@@ -20,6 +20,7 @@ import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import { revealPlan, useSummary } from "@/app/conversation/summaryState";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
+import "@/fixtures/cliView";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type {
   Approval,

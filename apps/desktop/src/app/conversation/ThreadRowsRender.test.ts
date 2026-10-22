@@ -44,9 +44,6 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     toolRaw: string | null;
     compaction: (string | null)[];
     sentImages: [string | null, string | null, boolean][];
-    turnDiff: Record<"many" | "one" | "direct" | "steered", { title: string | null; counts: string | null; buttons: (string | null)[]; files: (string | null)[][]; more: string | null }> & {
-      all: { files: number; more: string | null }; opened: { name: string | null; counts: string | null }; asks: string[];
-    };
     user: { strong: string[]; em: string[]; breaks: number; paragraphs: number; code: string[]; text: string; image: string[] };
   } & Record<"diff-patch" | "diff-edit" | "diff-empty" | "diff-missing", {
     name: string | null; counts: string | null; numbers: string[]; kinds: string[]; gaps: string[]; marks: string[]; empty: string | null; coloured: boolean;
@@ -126,25 +123,6 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual(seen.editRow, { closed: "Edited math.js", open: "Edited math.js" });
   // A Codex rename is a rename row, not "Edited new.rs +0 −0".
   assert.deepEqual(seen.renameRows, ["Renamed old.rs to new.rs +0 −0", "Moved a.rs +0 −0"]);
-  // The turn's Changes card: "Edited 5 files +5 −5", Discard and the fold; the first three
-  // files, a folder dim before each name; then all five, and a row opens that file's diff in a tab.
-  const { turnDiff } = seen;
-  assert.deepEqual([turnDiff.many.title, turnDiff.many.counts, turnDiff.many.buttons], ["Edited 5 files", "+5 −5", ["Discard", "Fold the files"]]);
-  assert.deepEqual(turnDiff.many.files, [["", "README.md"], ["src/", "math.js"], ["src/", "strings.js"]]);
-  assert.equal(turnDiff.many.more, "Show 2 more files");
-  assert.deepEqual(turnDiff.all, { files: 5, more: "Show less" });
-  assert.deepEqual(turnDiff.opened, { type: "lastTurn", requestId: "many", path: "README.md", staged: false });
-  // A worker that landed with no stats of its own is counted from the Review diff, asked once.
-  assert.deepEqual([turnDiff.direct.title, turnDiff.direct.counts, turnDiff.direct.files], ["Edited 2 files", "+4 −2", [["src/", "export.ts"], ["test/", "export.test.ts"]]]);
-  assert.deepEqual(turnDiff.asks, [JSON.stringify({ type: "lastTurn", requestId: "direct" })]);
-  // A turn a message was steered into counts what both its requests landed.
-  assert.deepEqual([turnDiff.steered.title, turnDiff.steered.counts], ["Edited 2 files", "+2 −2"]);
-  // Discard only where it can take the turn back whole: not across two requests, nor for a
-  // landing with no candidate.
-  assert.deepEqual(turnDiff.steered.buttons, ["Fold the files"]);
-  assert.deepEqual(turnDiff.direct.buttons, ["Fold the files"]);
-  // One file: its name is the title, and its row lists it.
-  assert.deepEqual([turnDiff.one.title, turnDiff.one.files.length, turnDiff.one.more], ["Edited run.mjs", 1, null]);
   assert.equal(seen["diff-missing"].empty, "Diff too large to preview");
   // Inline code naming a checkout file is a chip: from the list, or asked by its exact path
   // because the list was cut short; other code stays code, and a missing file is no chip.

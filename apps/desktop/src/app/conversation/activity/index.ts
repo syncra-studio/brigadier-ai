@@ -9,7 +9,6 @@ export * from "./FileLink";
 export * from "./Glyphs";
 export * from "./GroupStepList";
 export * from "./LeadItemDetail";
-export * from "./LeadToolDetail";
 export * from "./MachineRow";
 export * from "./MergedRow";
 export * from "./Moment";

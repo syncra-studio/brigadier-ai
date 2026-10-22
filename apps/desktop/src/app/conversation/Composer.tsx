@@ -3,7 +3,6 @@ import {
   type FC,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -43,12 +42,13 @@ import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
 import { PausedSendDialog } from "@/app/conversation/PausedSend";
 import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
-import { requestWaitsOnCard, turnSpans, workedMs } from "@/app/conversation/blocks";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
 import { ModelSelector } from "@/components/shared";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { liveRequest, useBoard } from "@/state/board";
+import { useActivity } from "@/state/activity";
+import { useBoard } from "@/state/board";
+import { useThreadView } from "@/state/cliThread";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { folderTrust } from "@/state/trust";
 
@@ -223,39 +223,36 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
 };
 
 /**
- * "Working for 2m 5s" while the conversation's request works, from its first second on, ticking
- * each second; null otherwise, and while it only waits for the user's answer to its question card
- * (#366): nothing works then. It times the turn as its work header does, the follow-ups that
- * joined it counted with it (#446).
+ * "Working for 2m 5s" while the conversation's CLI turn is open, from its first second on,
+ * ticking each second; null otherwise, and while it only waits for the user's answer to its
+ * question card (#366): nothing works then. The turn's start is its CLI's own timestamp.
  */
 function useWorkingFor(conversationId: string | null): string | null {
-  const newest = useBoard((s) => {
+  const view = useThreadView(conversationId);
+  const open = useActivity((s) => (conversationId ? (s.byConversation[conversationId]?.turnOpen ?? false) : false));
+  const asking = useBoard((s) => {
     const board = s.board;
-    if (!conversationId || board?.conversationId !== conversationId) return null;
-    const live = liveRequest(board);
-    if (!live || requestWaitsOnCard(live.live)) return null;
-    return live.newest;
+    if (!conversationId || board?.conversationId !== conversationId) return false;
+    return Object.values(board.questions).some((question) => question.answer === null);
   });
-  const requests = useBoard((s) => s.board?.requests);
-  const spans = useMemo(() => (newest && requests ? turnSpans(requests, newest) : null), [newest, requests]);
-  // Which turn it times, as it started: a request answered again starts over.
-  const turn = spans ? `${newest}@${Math.min(...spans.map((span) => span.fromMs))}` : null;
-  // The time, read as a request starts working (or the composer opens on one), then on each whole
-  // second of its work; none shows until it was read for this turn.
-  const [clock, setClock] = useState<{ from: string | null; now: number }>(() => ({ from: turn, now: Date.now() }));
+  const last = view?.turns.at(-1);
+  const from = open && !asking && last && last.end === null ? last.startedAtMs : null;
+  // The time, read as a turn starts (or the composer opens on one), then on each whole second of
+  // it; none shows until it was read for this turn.
+  const [clock, setClock] = useState<{ from: number | null; now: number }>(() => ({ from, now: Date.now() }));
   useEffect(() => {
-    if (!spans) return;
+    if (from === null) return;
     let timer = 0;
     const tick = () => {
       const now = Date.now();
-      setClock({ from: turn, now });
-      timer = window.setTimeout(tick, 1000 - (workedMs(spans, now) % 1000));
+      setClock({ from, now });
+      timer = window.setTimeout(tick, 1000 - (Math.max(0, now - from) % 1000));
     };
     timer = window.setTimeout(tick, 0);
     return () => window.clearTimeout(timer);
-  }, [spans, turn]);
-  if (!spans || clock.from !== turn) return null;
-  const elapsed = workedMs(spans, clock.now);
+  }, [from]);
+  if (from === null || clock.from !== from) return null;
+  const elapsed = clock.now - from;
   if (elapsed < 1000) return null;
   return `Working for ${formatDuration(elapsed)}`;
 }

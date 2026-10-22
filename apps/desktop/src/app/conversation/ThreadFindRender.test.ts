@@ -210,39 +210,3 @@ test("Find counts a match only in a closed work group inside opened work, and En
   // Closed: the group gone to stays open, and nothing is kept for Find any more.
   assert.deepEqual(seen.closed, { group: "true", kept: false });
 });
-
-test("Find counts matches in pages not loaded without loading them; a step to one loads down to it and goes there", { timeout: 180000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=older", "thread-find-result", 150000)) as {
-    error?: string;
-    kiwi: { label: string | null; active: string | null; turn: number; loads: number };
-    back: { first: string | null; label: string | null; active: string | null; turn: number; place: Place; loads: number };
-    quokka: { first: string | null; label: string | null; active: string | null; shown: boolean; loads: number };
-    entered: { label: string | null; active: string | null; turn: number; place: Place; loads: number };
-  };
-  assert.equal(seen.error, undefined);
-  // One kiwi loaded, one in a page not loaded: both counted, the loaded one gone to, nothing loaded.
-  assert.deepEqual(seen.kiwi, { label: "2 / 2 results", active: "kiwi", turn: 46, loads: 0 });
-  // ⇧Enter: the page holding the other loads, and it is gone to, centred.
-  assert.equal(seen.back.label, "1 / 2 results");
-  assert.equal(seen.back.active, "kiwi");
-  assert.equal(seen.back.turn, 18);
-  assert.equal(seen.back.loads, 1);
-  shownCentred(seen.back.place, "older kiwi");
-  // A word only in the oldest page: counted, nothing loaded or marked while typing.
-  assert.deepEqual(seen.quokka, { first: seen.quokka.first, label: "1 / 1 result", active: null, shown: false, loads: 1 });
-  // Enter: the pages down to it load, and it is gone to, centred.
-  assert.equal(seen.entered.label, "1 / 1 result");
-  assert.equal(seen.entered.active, "quokka");
-  assert.equal(seen.entered.turn, 4);
-  assert.equal(seen.entered.loads, 4);
-  shownCentred(seen.entered.place, "quokka");
-});
-
-test("Find stepping back into an older page keeps the counted match past 250 results", { timeout: 180000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=older-capped", "thread-find-result", 150000));
-  assert.equal(seen.error, undefined);
-  assert.deepEqual(seen.before, { label: "11 / 250+ results", turn: 21, occurrence: 1, loads: 0, size: 240 }, JSON.stringify(seen));
-  assert.deepEqual(seen.back, { label: "10 / 250+ results", turn: 20, occurrence: 60, loads: 1, size: 250 });
-  assert.deepEqual(seen.previous, { label: "9 / 250+ results", turn: 20, occurrence: 59, loads: 1, size: 250 });
-  assert.deepEqual(seen.next, seen.back);
-});

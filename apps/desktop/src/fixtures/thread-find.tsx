@@ -14,6 +14,7 @@
  * `?drive=1` runs the checks the find test reads and writes them to `<pre id="thread-find-result">`;
  * `window.threadFind` holds the steps for a browser probe.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";

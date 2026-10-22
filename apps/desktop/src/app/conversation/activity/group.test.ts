@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { type Activity, groupActivity, type Sorted, thinkingLabel, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
-import { type BlockOrchestratorStep, blockSequence, buildBlocks, type SequenceEntry } from "@/app/conversation/blocks";
+import { type BlockOrchestratorStep, blockSequence, type SequenceEntry } from "@/app/conversation/blocks";
+import { cliBlocks } from "@/app/conversation/cliBlocks";
 import type { ThreadEntry } from "@/components/conversation/transcript/activity";
 import type { TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { answerWords, questionAnswers, questionRound, questionRowWords } from "@/app/conversation/cards/questionRound";
+import { fixtureView } from "@/fixtures/cliView";
 import type { EventEnvelope, Message, Question, UserRequest } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
@@ -83,7 +85,7 @@ function t1Turns() {
     board = applyToBoard(board, envelope);
     if (envelope.event.type === "messageAppended") messages.push({ ...envelope.event.message, seq: envelope.streamSeq });
   }
-  return buildBlocks(messages, {}, false, board, []).map((block) => turnActivity(blockSequence({ ...block, steers: [] })));
+  return cliBlocks(fixtureView(messages, board), recorded.conversationId, board).map((block) => turnActivity(blockSequence({ ...block, steers: [] })));
 }
 
 test("T1's unfolded turn: one row per run of work, and no thought rows", () => {
@@ -199,7 +201,7 @@ test("an interview is one block: two answered rounds and a steer, each round a r
     },
     questions: { q1: first, q2: second },
   };
-  const blocks = buildBlocks([userOf("grill", 1), userOf("steer", 3)], {}, false, board, []);
+  const blocks = cliBlocks(fixtureView([userOf("grill", 1), userOf("steer", 3)], board), "c", board);
   assert.equal(blocks.length, 1);
   const [block] = blocks;
   assert.ok(block);

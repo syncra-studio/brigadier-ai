@@ -15,6 +15,7 @@
  * `<pre id="research-answer-result">` (ResearchAnswerRender.test.ts reads it). Without it the
  * page holds the answer still, for a screenshot.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 

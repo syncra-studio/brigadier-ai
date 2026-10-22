@@ -1,5 +1,14 @@
 import { isPlumbing, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
-import { type Block, type BlockState, blockShows, isLive, isUpdate, type ThreadNode, type ThreadTree } from "@/app/conversation/blocks";
+import {
+  type Block,
+  type BoardDigest,
+  type BlockState,
+  blockShows,
+  boardItems,
+  isUpdate,
+  type ThreadNode,
+  type ThreadTree,
+} from "@/app/conversation/blocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import type {
   FileChange,
@@ -8,21 +17,20 @@ import type {
   FileStat,
   Message,
   ThreadItemKind,
+  RunState,
   ThreadTurn,
   ThreadView,
-  UserRequest,
 } from "@/ipc/generated";
 import { sessionImageRef } from "@/state/cliThread";
+import { shownIdOf } from "@/state/shownIds";
 import type { PendingMessage } from "@/state/store";
 
 /**
- * The thread drawn from the CLI's own session file (S9): the engine's `ThreadView` as the same
- * blocks Brigadier's own records give (`buildBlocks`), one per turn, so the thread looks exactly
- * as it does. A turn is the user's message up to the CLI's end of it; its replies, reasoning and
- * calls are the CLI's items in the CLI's order, and its time runs by the CLI's timestamps.
- *
- * What the session file doesn't hold (workers, cards, messages between sessions, waits) is not
- * drawn here: it comes back from the CLI in later steps.
+ * The thread, drawn from the CLI's own session file (S9, S10): the engine's `ThreadView` as
+ * blocks, one per turn. A turn is the user's message up to the CLI's end of it; its replies,
+ * reasoning and calls are the CLI's items in the CLI's order, and its time runs by the CLI's
+ * timestamps. What Brigadier keeps of its own (cards, workers, their rows) shows in the turn of
+ * the request it belongs to, among the CLI's items by time.
  */
 
 /** A tool's own name, without its MCP server's prefix (`mcp__brigadier__run` → `run`). */
@@ -170,7 +178,8 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
       return {
         type: "tool",
         itemId: event.itemId,
-        name,
+        // As the CLI named it: an MCP call's server is part of its words ("Used Linear").
+        name: event.name,
         detail: stepDetail(event.input),
         status: event.status,
         ...(stopped && event.status === "failed" && { stopped: true }),
@@ -246,10 +255,10 @@ export function turnState(turn: Pick<ThreadTurn, "end" | "error">): { state: Blo
   }
 }
 
-/** The user's message of a turn (or a steer) as the thread's message record. */
-function userMessage(conversationId: string, entry: FileEntry, itemId: string, text: string, seq: number): Message {
+/** The user's message of a turn (or a steer) as the thread's message record: Brigadier's, by its request, when the turn names it. */
+function userMessage(conversationId: string, entry: FileEntry, id: string, text: string, seq: number): Message {
   return {
-    id: itemId,
+    id,
     conversationId,
     seq,
     role: "user",
@@ -259,12 +268,12 @@ function userMessage(conversationId: string, entry: FileEntry, itemId: string, t
     attachments: (entry.images ?? []).map(sessionImageRef),
     mentions: [],
     model: null,
-    requestId: itemId,
+    requestId: id,
     parentId: null,
   };
 }
 
-function emptyBlock(key: string, startedAtMs: number): Block {
+function emptyBlock(key: string, startedAtMs: number, requestIds: readonly string[] = []): Block {
   return {
     key,
     user: null,
@@ -276,16 +285,13 @@ function emptyBlock(key: string, startedAtMs: number): Block {
     thinking: [],
     steers: [],
     compactions: [],
-    requestIds: [key],
+    requestIds: requestIds.length > 0 ? [...requestIds] : [key],
     state: "working",
     error: null,
     startedAtMs,
     endedAtMs: null,
     worked: [{ fromMs: startedAtMs, toMs: null }],
-    waited: [],
-    quotaWait: false,
     cardWait: false,
-    waitingFor: [],
   };
 }
 
@@ -311,43 +317,104 @@ function settle(block: Block, turn: ThreadTurn | undefined): void {
 }
 
 /**
- * A thread's turns as blocks, oldest first. A subagent's own items (`parent`) are not drawn:
- * the thread shows its Agent call's row, as it does for a Claude subagent's work.
+ * Brigadier's own items in the turns: each in the turn that carried its request (or, a request
+ * no turn names, the turn it came in), after the CLI's items from before it.
  */
-export function cliBlocks(view: ThreadView, conversationId: string): Block[] {
+function place(blocks: readonly Block[], times: readonly (readonly [number, number])[][], board: BoardDigest): void {
+  const byRequest = new Map<string, number>();
+  blocks.forEach((block, index) => {
+    for (const id of block.requestIds) byRequest.set(id, index);
+  });
+  const taken = new Map<string, number>();
+  for (const item of boardItems(board)) {
+    const named = item.requestId === null ? undefined : byRequest.get(item.requestId);
+    const index = named ?? blocks.findLastIndex((block) => block.startedAtMs <= item.atMs);
+    const block = blocks[index];
+    const known = times[index];
+    if (!block || !known) continue;
+    const before = known.filter(([, atMs]) => atMs <= item.atMs);
+    const after = (before.at(-1) ?? known[0] ?? [0])[0];
+    // Items between the same two of the CLI's keep the board's order.
+    const slot = `${index}:${after}`;
+    const nth = taken.get(slot) ?? 0;
+    taken.set(slot, nth + 1);
+    const position = after + 0.5 + nth / 1000;
+    switch (item.kind) {
+      case "task":
+        block.tasks.push(item.id);
+        break;
+      case "row":
+        block.rows.push({ ...item.row, position });
+        break;
+      case "orchestrator":
+        block.orchestratorSteps.push({ ...item.step, position });
+        break;
+      case "compaction":
+        block.compactions.push({ ...item.compaction, position });
+        break;
+      case "card":
+        block.cards.push({ ...item.card, position });
+        // It waits for the answer to its own question card.
+        if (item.card.type === "question" && board.questions[item.card.id]?.answer === null) block.cardWait = true;
+        break;
+    }
+  }
+  // "Writing plan" stands in for a plan only until the plan itself arrives.
+  for (const block of blocks) {
+    if (block.cards.some((card) => card.type === "plan")) block.cards = block.cards.filter((card) => card.type !== "writingPlan");
+  }
+}
+
+/**
+ * A thread's turns as blocks, oldest first, with Brigadier's own items placed in them
+ * (`board`). A subagent's own items (`parent`) are not drawn: the thread shows its Agent call's
+ * row, as it does for a Claude subagent's work.
+ */
+export function cliBlocks(view: ThreadView, conversationId: string, board?: BoardDigest): Block[] {
   const blocks: Block[] = [];
+  // Each block's CLI items, by position and time.
+  const times: [number, number][][] = [];
   let block: Block | null = null;
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
     const { event } = entry;
     if (startsTurn(entry) && event.type === "message") {
       if (block) settle(block, view.turns[blocks.length - 1]);
-      block = emptyBlock(event.itemId, entry.atMs ?? 0);
-      block.user = { kind: "message", message: userMessage(conversationId, entry, event.itemId, event.text, position + 1), text: event.text };
+      const requests = view.turns[blocks.length]?.requests ?? [];
+      const atMs = entry.atMs ?? 0;
+      block = emptyBlock(event.itemId, atMs, requests);
+      const message = userMessage(conversationId, entry, requests[0] ?? event.itemId, event.text, position + 1);
+      block.user = { kind: "message", message, text: event.text };
       blocks.push(block);
+      times.push([[position, atMs]]);
       return;
     }
     // Anything before the first user message belongs to no turn.
     if (!block) return;
     const current: Block = block;
+    if (entry.atMs !== undefined) times.at(-1)?.push([position, entry.atMs]);
     const ended = view.turns[blocks.length - 1]?.end ?? null;
     switch (event.type) {
       case "message":
       case "messageDelta": {
         if (event.type === "message" && event.role === "user") {
-          const message = userMessage(conversationId, entry, event.itemId, event.text, position + 1);
+          // A steer answers its own request, the next the turn names.
+          const id = current.requestIds[current.steers.length + 1] ?? event.itemId;
+          const message = userMessage(conversationId, entry, id, event.text, position + 1);
           current.steers.push({ message, text: event.text, position });
           return;
         }
         if (event.type === "message" && event.role !== "assistant") return;
+        // What the reply is, as the stream said it, else as the file keeps it (Codex's `phase`).
+        const phase = (event.type === "messageDelta" ? event.phase : undefined) ?? entry.phase;
         current.texts.push({
           messageId: event.itemId,
           position,
           text: event.text,
           model: null,
           update: isUpdate(event.text),
-          ...(event.type === "messageDelta" && event.phase === "answer" && entry.atMs !== undefined && { answerAtMs: entry.atMs }),
-          ...(event.type === "messageDelta" && event.phase === "commentary" && { commentary: true }),
+          ...(phase === "answer" && entry.atMs !== undefined && { answerAtMs: entry.atMs }),
+          ...(phase === "commentary" && { commentary: true }),
           ...(entry.atMs !== undefined && { atMs: entry.atMs }),
         });
         return;
@@ -383,33 +450,42 @@ export function cliBlocks(view: ThreadView, conversationId: string): Block[] {
         return;
       }
       default: {
+        // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
+        if (event.type === "toolCall" && bare(event.name) === "propose_plan" && event.status === "inProgress") {
+          current.cards.push({ type: "writingPlan", id: `writing:${position}`, position, keep: true });
+          return;
+        }
         const kind = toolStep(entry, ended === "stopped");
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }
     }
   });
   if (block) settle(block, view.turns[blocks.length - 1]);
+  if (board) place(blocks, times, board);
   return blocks;
 }
 
+/** How a message on its way reads: working while its turn starts, failed when the CLI never took it. */
+type RunNow = { state: RunState; error: string | null };
+
 /** A block of a message sent but not in the CLI's file yet: the bubble, and a block that works on it. */
-function onItsWay(key: string, user: Block["user"], startedAtMs: number, request?: UserRequest): Block {
+function onItsWay(key: string, user: Block["user"], startedAtMs: number, run: RunNow): Block {
   const block = { ...emptyBlock(key, startedAtMs), user };
-  if (!request || isLive(request.state.type)) return block;
-  // It never reached the CLI: its request says how it ended.
+  if (run.state !== "failed") return block;
+  // It never reached the CLI: the run says why.
   return {
     ...block,
-    state: request.state.type,
-    error: request.state.type === "failed" ? request.state.error : null,
-    endedAtMs: request.endedAtMs,
-    worked: [{ fromMs: startedAtMs, toMs: request.endedAtMs }],
+    state: "failed",
+    error: run.error ?? "The CLI did not take the message.",
+    endedAtMs: startedAtMs,
+    worked: [{ fromMs: startedAtMs, toMs: startedAtMs }],
   };
 }
 
 /**
  * The thread as assistant-ui's message tree: the CLI's turns, one after another, then the
- * messages still on their way: sent but not stored (`pending`), and stored but not yet in the
- * CLI's file (a user message newer than the newest it has, whose request runs or failed).
+ * messages still on their way: sent but not stored (`pending`), and stored but in no turn of
+ * the CLI's yet (a user message newer than the newest the CLI has, that no turn carried).
  */
 export function cliThreadTree(
   view: ThreadView,
@@ -417,27 +493,40 @@ export function cliThreadTree(
   stored: readonly Message[],
   fullText: Readonly<Record<string, string>>,
   pending: readonly PendingMessage[],
-  requests: Readonly<Record<string, UserRequest>>,
+  board: BoardDigest,
+  run: RunNow,
 ): ThreadTree {
-  const blocks = cliBlocks(view, conversationId);
+  const blocks = cliBlocks(view, conversationId, board);
+  // The user's own messages as Brigadier keeps them, by their request: a turn that names one
+  // shows it as it was sent, its pasted chips, mentions and attachments with it.
+  const own = new Map(stored.flatMap((message) => (message.role === "user" ? [[message.requestId ?? message.id, message] as const] : [])));
+  const asSent = (message: Message, text: string): { message: Message; text: string } => {
+    const kept = own.get(message.id);
+    return kept ? { message: kept, text: fullText[kept.id] ?? kept.text } : { message, text };
+  };
+  for (const block of blocks) {
+    if (block.user?.kind === "message") block.user = { kind: "message", ...asSent(block.user.message, block.user.text) };
+    block.steers = block.steers.map((steer) => ({ ...steer, ...asSent(steer.message, steer.text) }));
+  }
+  const carried = new Set(view.turns.flatMap((turn) => turn.requests));
   const heard = Math.max(
     0,
     ...view.entries.flatMap((entry) => (entry.event.type === "message" && entry.event.role === "user" && !entry.parent ? [entry.atMs ?? 0] : [])),
   );
   for (const message of stored) {
-    if (message.role !== "user" || message.createdAtMs <= heard) continue;
-    const request = requests[message.requestId ?? message.id];
-    if (request && request.state.type !== "failed" && !isLive(request.state.type)) continue;
+    if (message.role !== "user" || message.createdAtMs <= heard || carried.has(message.requestId ?? message.id)) continue;
     const text = fullText[message.id] ?? message.text;
-    blocks.push(onItsWay(message.id, { kind: "message", message, text }, message.createdAtMs, request));
+    blocks.push(onItsWay(message.id, { kind: "message", message, text }, message.createdAtMs, run));
   }
-  for (const entry of pending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs));
+  for (const entry of pending) blocks.push(onItsWay(entry.localId, { kind: "pending", pending: entry }, entry.createdAtMs, { state: "running", error: null }));
 
   const nodes: ThreadNode[] = [];
   let parent: string | null = null;
   for (const block of blocks) {
     if (block.user) {
-      const id = block.user.kind === "pending" ? block.user.pending.localId : block.key;
+      // A message sent from here keeps the id it showed under while pending (`shownIdOf`), so
+      // its bubble isn't mounted afresh when it is stored and its turn is placed once it shows.
+      const id = block.user.kind === "pending" ? block.user.pending.localId : shownIdOf(block.user.message.id);
       nodes.push({ id, parentId: parent, kind: "user", block, head: null });
       parent = id;
     }

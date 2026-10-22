@@ -1,16 +1,16 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: the rail of the
- * user's messages beside the thread (message-rail.tsx), ⌥↑ / ⌥↓, and older pages loading at the
- * top, in the app's own conversation view on synthetic conversations. Requests are answered here
- * and never reach a daemon.
+ * user's messages beside the thread (message-rail.tsx) and ⌥↑ / ⌥↓, in the app's own
+ * conversation view on synthetic conversations. Requests are answered here and never reach a
+ * daemon.
  * - `long`: a chat of 80 turns. Opening it brings the newest 40 (the older 10 of them folded
- *   behind "N earlier messages"); older pages come 20 turns at a time, `LOAD_MS` late, and the
- *   next one fails while `failNext` is set.
+ *   behind "N earlier messages").
  * - `short`: a chat of 3 turns.
  *
  * `?drive=1` runs the checks the rail test reads and writes them to `<pre id="message-rail-result">`;
  * `window.messageRail` holds the steps for a browser probe.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -25,9 +25,8 @@ import { applyEvents, useApp } from "@/state/store";
 
 const LOAD_MS = 300;
 const TURNS = 80;
-/** Turns the first load brings, and each older page. */
+/** Turns the first load brings. */
 const FIRST_TURNS = 40;
-const PAGE_TURNS = 20;
 /** Narrow enough that the room beside the column is under 48px. */
 const NARROW_PX = 780;
 const start = Date.now() - 86_400_000;
@@ -82,8 +81,6 @@ function view(id: string): View {
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
 let pending = 0;
-let failNext = false;
-let pages = 0;
 let sequence = 1000;
 
 mockIPC(async (command, payload) => {
@@ -102,18 +99,6 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
     case "getConversation":
       await wait(LOAD_MS);
       return { method: req.method, view: view(req.id) };
-    case "listMessages": {
-      await wait(LOAD_MS);
-      if (failNext) {
-        failNext = false;
-        throw new Error("The daemon could not read the conversation.");
-      }
-      pages++;
-      const before = req.before ?? Number.POSITIVE_INFINITY;
-      const older = (stored[req.conversationId] ?? []).filter((message) => message.seq < before);
-      const page = older.slice(Math.max(0, older.length - PAGE_TURNS * 2));
-      return { method: req.method, page: { messages: page, hasMore: page.length < older.length } };
-    }
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
     case "getRunDiff":
@@ -201,20 +186,6 @@ async function settle(ms: number): Promise<void> {
 }
 
 /** Waits a frame at a time until `check` holds, up to 10s; whether it did. */
-/**
- * Watches for `selector` from now on, however briefly it shows (a spinner while a page loads can
- * come and go between two frames on a runner that draws few): `seen` holds its first sighting.
- */
-function watchFor(selector: string): { seen: () => Element | null; stop: () => void } {
-  const sighting = () => (document.querySelector(selector)?.cloneNode(true) as Element | undefined) ?? null;
-  let first = sighting();
-  const observer = new MutationObserver(() => {
-    first ??= sighting();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-  return { seen: () => first, stop: () => observer.disconnect() };
-}
-
 async function until(check: () => boolean): Promise<boolean> {
   const end = performance.now() + 10_000;
   while (!check()) {
@@ -383,61 +354,6 @@ const steps = {
     await clickTo(first);
     const step = await stepTo("ArrowUp", ids[at - 1]!);
     return { first, at, target: ids[at - 1], ...step, folded: $('[data-slot="earlier-turns"]') !== null, markers: markers().length };
-  },
-  /**
-   * ⌥↑ from the oldest message loaded: the next older page loads (a spinner meanwhile) and its
-   * newest message lands. Landing there puts the top in view, which loads the page by itself:
-   * that load fails here, so the page ⌥↑ asks for is its own.
-   */
-  async intoUnloaded() {
-    const oldest = markerIds()[0]!;
-    failNext = true;
-    await clickTo(oldest);
-    const autoFailed = await until(() => $('[data-slot="earlier-failed"]') !== null);
-    await settle(50);
-    const pagesBefore = pages;
-    viewport().focus();
-    const watch = watchFor('[data-slot="earlier-loading"]');
-    altArrow(viewport(), "ArrowUp");
-    const spinner = await until(() => watch.seen() !== null);
-    watch.stop();
-    const loading = watch.seen();
-    const spinnerSeen = loading
-      ? { role: loading.getAttribute("role"), text: loading.textContent, classes: loading.className, svg: loading.querySelector("svg") !== null }
-      : null;
-    const target = `long-u${Number(oldest.replace("long-u", "")) - 1}`;
-    const landed = await until(() => landings(target) > 0);
-    await settle(100);
-    return { oldest, target, autoFailed, spinner, spinnerSeen, landed, offset: offsetOf(target), pages: pages - pagesBefore, markers: markers().length };
-  },
-  /** Scrolled to the top, the next page loads by itself; when it fails, Try again loads it, the view staying put. */
-  async atTop() {
-    failNext = true;
-    const pagesBefore = pages;
-    const watch = watchFor('[data-slot="earlier-loading"]');
-    viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
-    viewport().scrollTop = 0;
-    const spinner = await until(() => watch.seen() !== null);
-    watch.stop();
-    const failed = await until(() => $('[data-slot="earlier-failed"]') !== null);
-    await settle(100);
-    const failure = { text: $('[data-slot="earlier-failed"]')?.textContent ?? null, pages: pages - pagesBefore };
-    const anchor = userRows()[0]!.dataset["messageId"]!;
-    const before = offsetOf(anchor);
-    const retry = [...document.querySelectorAll<HTMLButtonElement>('[data-slot="earlier-failed"] button')].find((button) => button.textContent === "Try again")!;
-    retry.click();
-    const loaded = await until(() => userRows()[0]!.dataset["messageId"] !== anchor);
-    await settle(200);
-    return {
-      spinner, failed, failure, anchor, before, after: offsetOf(anchor), loaded, pages: pages - pagesBefore,
-      first: userRows()[0]!.dataset["messageId"], more: $('[data-slot="earlier-load"], [data-slot="earlier-loading"], [data-slot="earlier-failed"]') !== null,
-      markers: markers().length,
-      listScrolls: (() => {
-        const list = rail()?.querySelector("ol");
-        return list ? list.scrollHeight > list.clientHeight : null;
-      })(),
-      faded: rail()?.querySelector("ol")?.classList.contains("scroll-edge-fade") ?? null,
-    };
   },
   /** Three messages: no rail. */
   /** A new turn whose answer is taller than the view, scrolled to its end: its message is the current one. */

@@ -15,7 +15,7 @@ import { applyActivityEvents, applyActivityNews, loadActivity } from "@/state/ac
 import { applyThreadNews, resyncThreadViews } from "@/state/cliThread";
 import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
-import { applyBoardEvents, forgetKeptBoards, sideBoardIds, useBoard } from "@/state/board";
+import { applyBoardEvents, applyBoardNews, forgetKeptBoards, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
 import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
@@ -152,6 +152,7 @@ function onBridgeEvent(message: BridgeEvent) {
     case "threadNews":
       applyThreadNews(message.news);
       applyActivityNews(message.news);
+      applyBoardNews(message.news);
       break;
     case "workspaceChanged":
       emitWorkspaceChanged(message.target);

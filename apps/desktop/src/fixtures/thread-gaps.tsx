@@ -11,6 +11,7 @@
  * - `scene=moments`: the turn moved to a stand-in at its limit and back: each a divider in the
  *   turn, in view with its work folded, and no card above the composer (#506).
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 

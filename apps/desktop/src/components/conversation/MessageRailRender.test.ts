@@ -16,7 +16,7 @@ function landsAtTop(step: Landing, label: string): void {
   near(step.offset, 24, `${label} under the view's top`);
 }
 
-test("the rail beside the thread marks the user's messages, jumps to them, and pages older history in", { timeout: 180000 }, async (t) => {
+test("the rail beside the thread marks the user's messages and jumps to them", { timeout: 180000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "message-rail.html?drive=1", "message-rail-result", 150000)) as {
     error?: string;
     opened: {
@@ -30,14 +30,6 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
     scrub: { offset: number | null; flashed: boolean };
     narrow: { narrow: { rail: boolean; gutter: number }; wide: boolean };
     intoFolded: Landing & { first: string; at: number; target: string; folded: boolean; markers: number };
-    intoUnloaded: Landing & {
-      oldest: string; target: string; autoFailed: boolean; spinner: boolean; spinnerSeen: { role: string | null; text: string | null; classes: string; svg: boolean } | null;
-      pages: number; markers: number;
-    };
-    atTop: {
-      spinner: boolean; failed: boolean; failure: { text: string | null; pages: number }; anchor: string; before: number | null; after: number | null;
-      loaded: boolean; pages: number; first: string; more: boolean; markers: number; listScrolls: boolean | null; faded: boolean | null;
-    };
     longAnswer: { messagesShown: number; current: string[]; inView: string[] };
     short: { rail: boolean; rows: number };
   };
@@ -104,36 +96,6 @@ test("the rail beside the thread marks the user's messages, jumps to them, and p
   landsAtTop(intoFolded, "⌥↑ into the folded turns");
   assert.equal(intoFolded.folded, false);
   assert.equal(intoFolded.markers, 40);
-
-  // ⌥↑ from the oldest message loaded: a page loads, a spinner meanwhile, and its newest lands.
-  const { intoUnloaded } = seen;
-  assert.deepEqual([intoUnloaded.oldest, intoUnloaded.target], ["long-u40", "long-u39"]);
-  assert.equal(intoUnloaded.autoFailed, true, "the page loading by itself at the top failed, as asked");
-  assert.equal(intoUnloaded.spinner, true);
-  assert.equal(intoUnloaded.spinnerSeen?.role, "status");
-  assert.equal(intoUnloaded.spinnerSeen?.text, "Loading older messages…");
-  assert.equal(intoUnloaded.spinnerSeen?.svg, true);
-  assert.match(intoUnloaded.spinnerSeen?.classes ?? "", /\bflex\b.*\bjustify-center\b.*\bpy-4\b/);
-  landsAtTop(intoUnloaded, "⌥↑ into an older page");
-  assert.equal(intoUnloaded.pages, 1);
-  assert.equal(intoUnloaded.markers, 60);
-
-  // Scrolled to the top the next page loads by itself; it fails, Try again loads it, and the
-  // view stays put.
-  const { atTop } = seen;
-  assert.equal(atTop.spinner, true);
-  assert.equal(atTop.failed, true);
-  assert.deepEqual(atTop.failure, { text: "Couldn't load older messagesTry again", pages: 0 });
-  assert.equal(atTop.loaded, true);
-  assert.equal(atTop.anchor, "long-u20");
-  near(atTop.after, atTop.before ?? Number.NaN, "the anchor row after the page loads");
-  assert.equal(atTop.pages, 1);
-  assert.equal(atTop.first, "long-u0");
-  assert.equal(atTop.more, false);
-  assert.equal(atTop.markers, 80);
-  // 80 markers reach past the list's 640px: it scrolls, its ends fading.
-  assert.equal(atTop.listScrolls, true);
-  assert.equal(atTop.faded, true);
 
   // Only a long answer in view, its message scrolled away above: that message is the current one.
   assert.deepEqual(seen.longAnswer, { messagesShown: 0, current: ["long-tall-u"], inView: ["long-tall-u"] });

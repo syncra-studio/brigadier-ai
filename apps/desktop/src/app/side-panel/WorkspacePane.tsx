@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils";
 import { browserFocus } from "@/ipc/client";
 import { CHAT_TAB, openFileTab, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
-import { useBoard, useCheckoutChanges } from "@/state/board";
+import { useCheckoutChanges } from "@/state/board";
+import { useCliThread } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 import { onWorkspaceChanged, prefetchWorkspace, readSource, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
 
@@ -53,9 +54,11 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
   // nothing watches the checkout: what the board says changed it reads Source again.
   const source = useCachedEntry(checkout)?.source;
   const moved = useCheckoutChanges(conversationId ?? "");
-  const edited = useBoard((s) => s.board && s.board.conversationId === conversationId
-    ? Object.values(s.board.requests).map((entry) => `${entry.id}:${entry.state.type}:${entry.changes ? JSON.stringify(entry.changes.stat) : ""}`).join()
-    : "");
+  // A CLI turn that starts or ends may have changed it.
+  const edited = useCliThread((s) => {
+    const turns = conversationId ? s.views[conversationId]?.turns : undefined;
+    return turns ? `${turns.length}:${turns.at(-1)?.end ?? ""}` : "";
+  });
   const closed = enabled && !open && target?.type === "conversation" ? target : null;
   const reread = useCallback(() => {
     if (closed) readSource(closed).catch(() => undefined);

@@ -8,6 +8,7 @@ import { ExclamationMarkCircle, Info, Warning, X } from "@/components/icons";
 import type { Notice } from "@/ipc/generated";
 import { loadConversation } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useThreadView } from "@/state/cliThread";
 import { useApp } from "@/state/store";
 
 const NO_NOTICES: Notice[] = [];
@@ -26,9 +27,8 @@ export const Notices: FC<{ conversationId: string }> = ({ conversationId }) => {
       : null,
   );
   // What the newest failed turn already says in the thread is never said again here.
-  const turnError = useBoard((s) =>
-    s.board?.conversationId === conversationId ? newestFailedError(s.board.requests) : null,
-  );
+  const turns = useThreadView(conversationId)?.turns;
+  const turnError = useMemo(() => (turns ? newestFailedError(turns) : null), [turns]);
   const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set());
   const shown = useMemo(
     () => withoutTurnError(notices, turnError).filter((notice) => !dismissed.has(notice.atMs)).slice(-3),

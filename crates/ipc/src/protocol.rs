@@ -26,9 +26,8 @@ use brigadier_core::{
     ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
     RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
     SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
-    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    TaskId, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity,
+    UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -722,14 +721,14 @@ pub enum Request {
         #[ts(optional)]
         hunks: Option<Vec<String>>,
     },
-    /// An image the thread looked at or made (its tool step's `itemId`), as base64 with its
-    /// media type: only an image a step of this conversation names.
+    /// An image the thread looked at or made (its item's `itemId`), as base64 with its media
+    /// type: only an image an item of this conversation's CLI thread names, or its proof.
     ReadThreadImage {
         conversation_id: ConversationId,
         item_id: String,
     },
-    /// The thread as its CLI keeps it (S9, behind `BRIGADIER_CLI_THREAD`): its CLI session
-    /// files' items, the live stream's after them, and its turns. `threadNews` frames extend it.
+    /// The thread as its CLI keeps it (S9, S10): its CLI session files' items, the live
+    /// stream's after them, and its turns. `threadNews` frames extend it.
     ThreadView {
         conversation_id: ConversationId,
     },
@@ -1029,23 +1028,6 @@ pub enum Request {
     ListOrchestratorLog {
         conversation_id: ConversationId,
         before: Option<i64>,
-        limit: u32,
-    },
-    /// A thread row's tool call or command in full (`itemId`, the provider's item id): its
-    /// input, output, exit code and duration. All `null` when the log holds no such item.
-    GetThreadItem {
-        conversation_id: ConversationId,
-        item_id: String,
-    },
-    /// A page of the thread's own tool calls in one request, as the transcript items a
-    /// worker's fold into: each call's newest event (a running command's output so far after
-    /// it), with its whole output when it is stored. `turn` keeps only one turn's (the
-    /// `turn` its rows name); `after` is the page's `next`.
-    ListThreadItems {
-        conversation_id: ConversationId,
-        request_id: String,
-        turn: Option<i64>,
-        after: Option<i64>,
         limit: u32,
     },
     /// A session thread's metrics (Inspector): its own commits and its context per request.
@@ -1863,12 +1845,6 @@ pub enum Response {
     },
     ListOrchestratorLog {
         page: OrchestratorPage,
-    },
-    GetThreadItem {
-        item: ThreadItem,
-    },
-    ListThreadItems {
-        page: ThreadItemsPage,
     },
     GetThreadMetrics {
         metrics: ThreadMetrics,

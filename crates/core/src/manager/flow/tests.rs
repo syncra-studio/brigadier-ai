@@ -2222,7 +2222,6 @@ async fn a_finished_tool_step_says_when_it_ended_and_how_it_exited_and_opens_in_
     assert!(stored.len() < full.len());
     // What the reply says after the output stays with it (a run_check's commit, say).
     let note = "Committed 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.rs). Nothing is left uncommitted.";
-    let header = stored.lines().next().unwrap().to_owned();
     *digest.lock().unwrap() = format!("{stored}\n{note}");
     flow.say("Run the tests").await;
     let board = flow.settled().await;
@@ -2251,38 +2250,6 @@ async fn a_finished_tool_step_says_when_it_ended_and_how_it_exited_and_opens_in_
         }
     }
 
-    let command = flow
-        .core
-        .thread_item(&flow.conversation, "cmd-1")
-        .await
-        .unwrap();
-    assert_eq!(
-        command,
-        crate::model::ThreadItem {
-            input: Some("pnpm test".into()),
-            output: Some("1 failed".into()),
-            exit: Some(1),
-            ms: Some(41_000),
-        }
-    );
-    let run = flow
-        .core
-        .thread_item(&flow.conversation, "run-1")
-        .await
-        .unwrap();
-    assert_eq!(
-        run.input.as_deref(),
-        Some(json!({"command": "cargo test"}).to_string().as_str())
-    );
-    assert_eq!(run.output, Some(format!("{header}\n{full}\n{note}")));
-    assert_eq!(run.exit, Some(2));
-    assert!(run.ms.is_some_and(|ms| ms >= 0));
-    let missing = flow
-        .core
-        .thread_item(&flow.conversation, "no-such-item")
-        .await
-        .unwrap();
-    assert_eq!(missing, crate::model::ThreadItem::default());
     flow.stop().await;
 }
 

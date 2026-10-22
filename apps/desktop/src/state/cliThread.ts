@@ -4,24 +4,14 @@ import { create } from "zustand";
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
 import type { AttachmentRef, FileEntry, FileImage, ProviderEvent, ThreadNews, ThreadView } from "@/ipc/generated";
-import { useApp } from "@/state/store";
 
 /**
  * The thread as the CLI keeps it (S9): per conversation, the engine's `threadView` (its CLI's own
  * session files and the running turn's items), read when the thread opens and extended by the
  * live stream's `threadNews`, item by item, the way the engine merges them
- * (`session_file::merge`). A turn's end reads the view again: only the engine knows how it ended.
- * Shown when the app runs with `BRIGADIER_CLI_THREAD=1`.
+ * (`session_file::merge`). A turn's start and end read the view again: only the engine knows its
+ * turns, and how each ended.
  */
-
-/** Whether the thread is drawn from the CLI's own session file. */
-export function cliThreadOn(): boolean {
-  return useApp.getState().info?.cliThread === true;
-}
-
-export function useCliThreadOn(): boolean {
-  return useApp((s) => s.info?.cliThread === true);
-}
 
 export const useCliThread = create<{ views: Readonly<Record<string, ThreadView>> }>(() => ({ views: {} }));
 
@@ -158,10 +148,10 @@ function flushNews(): void {
   queued = [];
   const { views } = useCliThread.getState();
   const next: Record<string, ThreadView> = {};
-  const ended = new Set<string>();
+  const turned = new Set<string>();
   for (const news of batch) {
     const id = news.conversationId;
-    if (news.ended) ended.add(id);
+    if (news.opened || news.ended) turned.add(id);
     const read = reads.get(id);
     if (read) {
       read.heard.push(...news.entries);
@@ -173,7 +163,7 @@ function flushNews(): void {
     next[id] = { ...view, entries: mergeEntries(view.entries, news.entries) };
   }
   if (Object.keys(next).length > 0) useCliThread.setState((state) => ({ views: { ...state.views, ...next } }));
-  for (const id of ended) if (reads.has(id) || useCliThread.getState().views[id]) void loadThreadView(id);
+  for (const id of turned) if (reads.has(id) || useCliThread.getState().views[id]) void loadThreadView(id);
 }
 
 /** What a CLI's live stream added to a conversation's thread (`threadNews`). */
@@ -189,16 +179,15 @@ export function applyThreadNews(news: ThreadNews): void {
 export function resyncThreadViews(shown: readonly string[]): Promise<void> {
   const { views } = useCliThread.getState();
   useCliThread.setState({ views: Object.fromEntries(shown.flatMap((id) => (views[id] ? [[id, views[id]] as const] : []))) });
-  if (!cliThreadOn()) return Promise.resolve();
   return Promise.all(shown.map((id) => loadThreadView(id))).then(() => {});
 }
 
-/** A conversation's thread, read when first asked for; `null` until read, or with `on` false. */
-export function useThreadView(conversationId: string | null, on: boolean): ThreadView | null {
-  const view = useCliThread((s) => (on && conversationId ? (s.views[conversationId] ?? null) : null));
+/** A conversation's thread, read when first asked for; `null` until read. */
+export function useThreadView(conversationId: string | null): ThreadView | null {
+  const view = useCliThread((s) => (conversationId ? (s.views[conversationId] ?? null) : null));
   useEffect(() => {
-    if (on && conversationId && !useCliThread.getState().views[conversationId]) void loadThreadView(conversationId);
-  }, [on, conversationId]);
+    if (conversationId && !useCliThread.getState().views[conversationId]) void loadThreadView(conversationId);
+  }, [conversationId]);
   return view;
 }
 

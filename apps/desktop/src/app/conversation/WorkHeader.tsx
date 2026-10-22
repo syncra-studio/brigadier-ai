@@ -1,6 +1,6 @@
 import type { FC } from "react";
 
-import { isLive, turnTime, waitedTime, waitsOnCard } from "@/app/conversation/blocks";
+import { isLive, turnTime, waitsOnCard } from "@/app/conversation/blocks";
 import type { PhaseView } from "@/app/conversation/phaseView";
 import { headerLabel, phaseLabel, useElapsed, useTicking } from "@/app/conversation/requestTime";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
@@ -22,8 +22,6 @@ export const WorkHeader: FC<{
   foldable: boolean;
   /** Its messages wait for quota, and no worker of it runs meanwhile. */
   quota: boolean;
-  /** The sessions whose replies it waits for, by title. */
-  waitingFor: readonly string[];
   /** Its final answer streams or stands while the request still runs: its work is over. */
   answering: boolean;
   /** When its final answer started, where its time stops. */
@@ -32,19 +30,18 @@ export const WorkHeader: FC<{
   /** Its calls the user denied: "{n} denied actions" on the right, which shows the first. */
   denied: number;
   onDenied: () => void;
-}> = ({ meta, phase, open, foldable, quota, waitingFor, answering, answerAtMs, onToggle, denied, onDenied }) => {
+}> = ({ meta, phase, open, foldable, quota, answering, answerAtMs, onToggle, denied, onDenied }) => {
   const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
   const now = useTicking(!phase && isLive(meta.state));
   const elapsed = phase ? phaseElapsed : turnTime(meta, now, answerAtMs);
-  const waited = waitedTime(meta, now, answerAtMs);
-  // Waiting on its own question card, the turn still reads as working, with the wait beside it.
+  // Waiting on its own question card, the turn still reads as working.
   const onCard = !answering && waitsOnCard(meta);
   const state = answering ? "done" : onCard ? "working" : meta.state;
   const interrupted = useAuiState((s) => {
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error" && interruptedByQuit(String(status.error ?? ""));
   });
-  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota || meta.quotaWait, waitingFor, waited, onCard, interrupted);
+  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota, interrupted);
   const text = (
     <span
       data-slot="request-work-label"

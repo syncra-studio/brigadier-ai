@@ -12,7 +12,6 @@ import {
   blockFinished,
   type BoardDigest,
   blockSequence,
-  buildBlocks,
   endsWithPlan,
   foldsAway,
   foldTurns,
@@ -21,16 +20,31 @@ import {
   judgementCall,
   peerOf,
   reopenedSince,
-  shownBranch,
   type SequenceEntry,
   type ThreadNode,
   updateIndices,
   withoutUpdateMark,
 } from "@/app/conversation/blocks";
+import { cliBlocks } from "@/app/conversation/cliBlocks";
 import { splitReport } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
-import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, PeerMessage, Plan, Task, UserRequest, WorkerStep } from "@/ipc/generated";
-import { applyToBoard, emptyBoard } from "@/state/board";
+import { fixtureView } from "@/fixtures/cliView";
+import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, PeerMessage, Plan, StreamingMessage, Task, UserRequest, WorkerStep } from "@/ipc/generated";
+import { applyToBoard, type Board, emptyBoard } from "@/state/board";
+
+/**
+ * The thread's blocks as the CLI's session file would draw them: the stored messages and the
+ * board's tool steps as its `ThreadView`, with the requests and the streaming reply that shape
+ * its turns, and the board's own items placed in them.
+ */
+function blocksOf(
+  messages: readonly Message[],
+  digest: BoardDigest,
+  more: { requests?: Readonly<Record<string, UserRequest>>; streaming?: StreamingMessage | null } = {},
+): Block[] {
+  const view = fixtureView(messages, { ...digest, requests: more.requests ?? {}, streaming: more.streaming ?? null, thinking: [] } as unknown as Board);
+  return cliBlocks(view, "c", digest);
+}
 
 // The board of the first real overnight run (2026-10-03), from its stored events
 // (scripts/extract-board-fixture.mjs), in the shape a run has now: one request for the whole run,
@@ -42,14 +56,12 @@ const board: BoardDigest = {
   approvals: {},
   questions: {},
   plans: night.plans as unknown as Record<string, Plan>,
-  requests: night.requests as unknown as Record<string, UserRequest>,
   orchestratorSteps: night.orchestratorSteps as unknown as OrchestratorStep[],
   machineSteps: [],
   decisions: night.decisions as unknown as Decision[],
   compactions: {},
-  runRequest: null,
-  streaming: null,
 };
+const requests = night.requests as unknown as Record<string, UserRequest>;
 const messages = night.messages as unknown as Message[];
 const byNumber = (number: number): Task => {
   const task = Object.values(tasks).find((candidate) => candidate.number === number);
@@ -57,10 +69,11 @@ const byNumber = (number: number): Task => {
   return task;
 };
 
-function blockOf(key: string): Block {
-  const block = buildBlocks(messages, {}, false, board, []).find((candidate) => candidate.key === key);
-  assert.ok(block, key);
-  return block;
+/** The night's one turn: the user's /overnight message, which the run's work went on from. */
+function runBlock(): Block {
+  const blocks = blocksOf(messages, board, { requests });
+  assert.equal(blocks.length, 1);
+  return blocks[0]!;
 }
 
 /** The block as its message metadata carries it. */
@@ -77,8 +90,12 @@ function sequence(block: Block) {
 
 const RUN_REQUEST = "run-09cc7d53-g1";
 
+/** A request record for a test's own user message, as its turn ended. */
+const requestOf = (id: string, startedAtMs: number, state: UserRequest["state"] = { type: "done" }): Record<string, UserRequest> =>
+  ({ [id]: { ...requests[RUN_REQUEST]!, id, startedAtMs, endedAtMs: startedAtMs, state } });
+
 test("all workers of the run's phases remain visible in its one block, including reviews and verifiers", () => {
-  const block = blockOf(RUN_REQUEST);
+  const block = runBlock();
   const ids = sequence(block).flatMap((entry) => entry.kind === "row" ? entry.row.taskIds ?? [entry.row.taskId] : []);
   const expected = Object.values(tasks).filter((task) => task.requestId === RUN_REQUEST).map((task) => task.id);
   assert.equal(expected.length, 44);
@@ -87,12 +104,12 @@ test("all workers of the run's phases remain visible in its one block, including
 });
 
 test("an older task's or plan's checker has its own openable lifecycle row", () => {
-  const rows = buildBlocks(messages, {}, false, board, []).flatMap((block) => block.rows);
+  const rows = blocksOf(messages, board, { requests }).flatMap((block) => block.rows);
   assert.deepEqual(new Set(rows.map((row) => row.taskId)), new Set(Object.keys(tasks)));
 });
 
 test("a decision never folds into a summary of reads", () => {
-  for (const block of buildBlocks(messages, {}, false, board, [])) {
+  for (const block of blocksOf(messages, board, { requests })) {
     for (const entry of sequence(block)) {
       if (entry.kind !== "orchestrator" || entry.steps.length < 2) continue;
       assert.ok(entry.steps.every((step) => step.kind.type !== "decided"));
@@ -100,12 +117,10 @@ test("a decision never folds into a summary of reads", () => {
   }
 });
 
-test("a revised plan shows once, as its newest revision", () => {
-  const plans = blockOf(RUN_REQUEST).cards.filter((card) => card.type === "plan");
-  assert.deepEqual(
-    plans.map((card) => card.id),
-    ["01a0ff89-d905-7753-bb7f-b310c324a8f6"],
-  );
+test("a revised plan shows as its newest revision, never as the one it superseded", () => {
+  const plans = runBlock().cards.filter((card) => card.type === "plan").map((card) => card.id);
+  assert.ok(plans.includes("01a0ff89-d905-7753-bb7f-b310c324a8f6"));
+  assert.ok(!plans.includes("01a0ff87-8cf8-718a-82fb-39e32231ffa6"));
 });
 
 test("an older task's row counts every check it had", () => {
@@ -190,11 +205,13 @@ function normalSession() {
     steps: [],
   };
   const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Fix the three causes" };
+  // Only Phase 2's records: the CLI's one turn here would take Phase 1's (no turn names its run) by time.
+  const ofRequest = <T extends { requestId: string | null }>(records: Record<string, T>) =>
+    Object.fromEntries(Object.entries(records).filter(([, record]) => record.requestId === request));
   const normal: BoardDigest = {
     ...board,
-    tasks: normalTasks,
-    plans: normalPlans,
-    requests: { [request]: { ...board.requests[RUN_REQUEST]!, id: request, startedAtMs: began, state: { type: "done" } } },
+    tasks: ofRequest(normalTasks),
+    plans: ofRequest(normalPlans),
     orchestratorSteps: board.orchestratorSteps
       .filter((step) => ofPhase(step.requestId, step.atMs))
       .map((step) => ({ ...step, requestId: request })),
@@ -202,7 +219,7 @@ function normalSession() {
       .filter((decision) => ofPhase(decision.requestId, decision.atMs))
       .map((decision) => ({ ...decision, requestId: request })),
   };
-  const block = buildBlocks([user], {}, false, normal, []).find((candidate) => candidate.key === request);
+  const block = blocksOf([user], normal, { requests: requestOf(request, began) }).find((candidate) => candidate.key === request);
   assert.ok(block);
   return { block, normalTasks, held };
 }
@@ -247,12 +264,11 @@ test("machine rows show in their request's block, each on its own line", () => {
     ...board,
     tasks: {},
     plans: {},
-    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
     orchestratorSteps: [],
     decisions: [],
     machineSteps: [step("waitingToCool", 1, null), step("paused", 2, "cargo test"), step("resumed", 3, "cargo test"), step("waitingToCool", 4, "cargo test", "memory")],
   };
-  const block = buildBlocks([user], {}, false, digest, []).find((candidate) => candidate.key === request);
+  const block = blocksOf([user], digest, { requests: requestOf(request, user.createdAtMs) }).find((candidate) => candidate.key === request);
   assert.ok(block);
   const rows = sequence(block).flatMap((entry) =>
     entry.kind === "orchestrator"
@@ -270,7 +286,7 @@ test("machine rows show in their request's block, each on its own line", () => {
 test("a plan shows as its document: writing it, then the newest revision in view and the plan as the answer", () => {
   const request = "plan-request";
   const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Add a --version flag" };
-  const opening = { ...messages[0]!, id: "opening", seq: 321, role: "assistant" as const, requestId: request, parentId: request, text: "I'll look at the CLI first." };
+  const opening = { ...messages[0]!, id: "opening", seq: 321, createdAtMs: messages[0]!.createdAtMs + 1, role: "assistant" as const, requestId: request, parentId: request, text: "I'll look at the CLI first." };
   const writing: OrchestratorStep = {
     requestId: request,
     position: 400,
@@ -293,31 +309,31 @@ test("a plan shows as its document: writing it, then the newest revision in view
     ...board,
     tasks: {},
     plans: Object.fromEntries(plans.map((p) => [p.id, p])),
-    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
     orchestratorSteps: steps,
     decisions: [],
   });
+  const done = requestOf(request, user.createdAtMs);
   const cardsOf = (d: BoardDigest) => {
-    const block = buildBlocks([user, opening], {}, false, d, []).find((candidate) => candidate.key === request);
+    const block = blocksOf([user, opening], d, { requests: done }).find((candidate) => candidate.key === request);
     assert.ok(block);
     return { block, cards: block.cards.map((card) => [card.type, card.id, card.keep]) };
   };
   // While the call runs: "Writing plan", and nothing yet the answer.
-  assert.deepEqual(cardsOf(digest([], [writing])).cards, [["writingPlan", "writing:400", true]]);
-  // The plan arrived before its call reported done: the plan alone.
-  assert.deepEqual(cardsOf(digest([plan("p1", 401, { type: "proposed" })], [writing])).cards, [["plan", "p1", true]]);
+  assert.deepEqual(cardsOf(digest([], [writing])).cards, [["writingPlan", "writing:2", true]]);
   // Sent back and proposed again: the newest stays in view, the older folds; the plan is the answer.
-  const done = { ...writing, kind: { ...writing.kind, status: "completed" as const } };
+  const wrote = { ...writing, kind: { ...writing.kind, status: "completed" as const } };
   const { block, cards } = cardsOf(
-    digest([plan("p1", 401, { type: "rejected", message: "smaller" }), plan("p2", 405, { type: "proposed" })], [done]),
+    digest([plan("p1", 401, { type: "rejected", message: "smaller" }), plan("p2", 405, { type: "proposed" })], [wrote]),
   );
   assert.deepEqual(cards, [["plan", "p1", false], ["plan", "p2", true]]);
   assert.ok(endsWithPlan(sequence(block)));
   // Once a reply comes after it (the work it started), that reply is the answer again.
-  const after = { ...opening, id: "after", seq: 500, text: "Done." };
-  const later = buildBlocks([user, opening, after], {}, false, digest([plan("p2", 405, { type: "approved", by: "user" })], [done]), []).find((b) => b.key === request);
+  const after = { ...opening, id: "after", seq: 500, createdAtMs: user.createdAtMs + 500, text: "Done." };
+  const later = blocksOf([user, opening, after], digest([plan("p2", 405, { type: "approved", by: "user" })], [wrote]), { requests: done }).find((b) => b.key === request);
   assert.ok(later);
   assert.ok(!endsWithPlan(sequence(later)));
+  // The plan arrived before its call reported done: the plan alone.
+  assert.deepEqual(cardsOf(digest([plan("p1", 401, { type: "proposed" })], [writing])).cards, [["plan", "p1", true]]);
 });
 
 test("a late event's update line shows under the answer, never as a new answer", () => {
@@ -333,11 +349,11 @@ test("a late event's update line shows under the answer, never as a new answer",
     ...board,
     tasks: {},
     plans: {},
-    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
     orchestratorSteps: [],
     decisions: [],
   };
-  const block = buildBlocks([user, opening, ending, update, bold], {}, false, digest, []).find((candidate) => candidate.key === request);
+  const done = { requests: requestOf(request, user.createdAtMs) };
+  const block = blocksOf([user, opening, ending, update, bold], digest, done).find((candidate) => candidate.key === request);
   assert.ok(block);
   assert.deepEqual(block.texts.map((text) => text.update), [false, false, true, true]);
   // The ending stays the answer; both update lines show under it, in order, and don't fold.
@@ -350,7 +366,7 @@ test("a late event's update line shows under the answer, never as a new answer",
   assert.ok(sequence(block).some((entry) => entry.kind === "text" && entry.index === 0 && foldsAway(entry, answer)));
   // An ending written again is still the answer, the first one folded.
   const again = reply("again", 640, "The Configuration page is in, with the review's fixes. Merge it?");
-  const rewritten = buildBlocks([user, opening, ending, update, again], {}, false, digest, []).find((candidate) => candidate.key === request)!;
+  const rewritten = blocksOf([user, opening, ending, update, again], digest, done).find((candidate) => candidate.key === request)!;
   assert.equal(rewritten.texts[answerIndex(rewritten.texts, true)!]!.messageId, "again");
   assert.deepEqual(updateIndices(rewritten.texts, answerIndex(rewritten.texts, true)), []);
   // Words that only mention an update aren't one; a block of update lines alone answers with its last.
@@ -371,11 +387,11 @@ test("an ending that opens with Update: is the answer, not an update line under 
     ...board,
     tasks: {},
     plans: {},
-    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
     orchestratorSteps: [],
     decisions: [],
   };
-  const block = buildBlocks([user, opening, ending], {}, false, digest, []).find((candidate) => candidate.key === request)!;
+  const done = { requests: requestOf(request, user.createdAtMs) };
+  const block = blocksOf([user, opening, ending], digest, done).find((candidate) => candidate.key === request)!;
   assert.deepEqual(block.texts.map((text) => text.update), [false, false]);
   const answer = answerIndex(block.texts, true);
   assert.equal(block.texts[answer!]!.messageId, "ending");
@@ -401,33 +417,35 @@ test("a working request shows a reply written after its work in place: only a do
   const reply = (id: string, seq: number, text: string) =>
     ({ ...messages[0]!, id, seq, role: "assistant" as const, requestId: request, parentId: request, text });
   const landed: Task = { ...byNumber(1), id: "one", requestId: request, position: 601, state: "landed" };
-  const digest = (state: UserRequest["state"], streaming: string | null): BoardDigest => ({
+  const digest: BoardDigest = {
     ...board,
     plans: {},
     decisions: [],
     tasks: { one: landed },
-    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state } },
     orchestratorSteps: [
       { requestId: request, atMs: 603, position: 603, kind: { type: "landed", taskIds: ["one"], commits: 1, branch: "b", head: "h" } },
     ],
+  };
+  const turn = (state: UserRequest["state"], streaming: string | null) => ({
+    requests: requestOf(request, user.createdAtMs, state),
     streaming: streaming === null ? null : { messageId: "live", text: streaming, requestId: request, startedAtMs: 0 },
   });
-  const requestBlock = (said: Message[], d: BoardDigest) => {
-    const found = buildBlocks([user, ...said], {}, false, d, []).find((candidate) => candidate.key === request);
+  const requestBlock = (said: Message[], more: ReturnType<typeof turn>) => {
+    const found = blocksOf([user, ...said], digest, more).find((candidate) => candidate.key === request);
     assert.ok(found);
     return found;
   };
   // The thread writes a line after the landing, its worker over, while the merge it holds waits for a review.
-  const streaming = requestBlock([], digest({ type: "working" }, "Diff looks right."));
-  assert.equal(streaming.texts.at(-1)?.position, Number.POSITIVE_INFINITY);
+  const streaming = requestBlock([], turn({ type: "working" }, "Diff looks right."));
+  assert.deepEqual(streaming.texts.map((text) => text.messageId), ["live"]);
   assert.equal(blockFinished(streaming.state), false);
   assert.equal(answerIndex(streaming.texts, blockFinished(streaming.state)), null);
   // Its turn ended and the request works on (a held merge): the line is no answer.
   const said = reply("said", 604, "Diff looks right.");
-  const between = requestBlock([said], digest({ type: "working" }, null));
+  const between = requestBlock([said], turn({ type: "working" }, null));
   assert.equal(answerIndex(between.texts, blockFinished(between.state)), null);
   // Done at its real ending: the last reply is the answer, and the line folds into the work.
-  const done = requestBlock([said, reply("ending", 620, "Merged the note into main.")], digest({ type: "done" }, null));
+  const done = requestBlock([said, reply("ending", 620, "Merged the note into main.")], turn({ type: "done" }, null));
   const answer = answerIndex(done.texts, blockFinished(done.state));
   assert.equal(done.texts[answer!]!.text, "Merged the note into main.");
   assert.ok(sequence(done).some((entry) => entry.kind === "text" && entry.index === 0 && foldsAway(entry, answer)));
@@ -452,7 +470,7 @@ test("a run's report shows, and copies, as its message was written", () => {
   const id = run.reportMessageId ?? "";
   const stored = messages.find((message) => message.id === id)?.text ?? "";
   assert.ok(stored.startsWith("**Faster, leaner overnight runs**"));
-  const shown = buildBlocks(messages, {}, false, board, [])
+  const shown = blocksOf(messages, board, { requests })
     .flatMap((block) => block.texts)
     .find((text) => text.messageId === id);
   assert.equal(shown?.text, stored);
@@ -470,12 +488,12 @@ test("workers started together are one row, which says they finished once they a
     { taskId: "one", requestId: "life", kind: "landed", position: 6, atMs: 50 },
   ];
   const rows = (workerSteps: WorkerStep[]) => {
-    const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two }, orchestratorSteps: [], requests: {}, workerSteps };
-    return sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
+    const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two }, orchestratorSteps: [], workerSteps };
+    return sequence(blocksOf([user], replay)[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
   };
   const all = rows(steps);
   assert.equal(all.length, 1);
-  assert.deepEqual([all[0]?.taskIds, all[0]?.kind, all[0]?.position, all[0]?.wave], [["one", "two"], "finished", 2, true]);
+  assert.deepEqual([all[0]?.taskIds, all[0]?.kind, all[0]?.wave], [["one", "two"], "finished", true]);
   // One of them finished so far: the start's row stands, and the finish has its own.
   const half = rows(steps.slice(0, 3));
   assert.deepEqual(half.map((row) => [row.kind, row.taskIds ?? [row.taskId]]), [["started", ["one", "two"]], ["finished", ["two"]]]);
@@ -487,7 +505,7 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const one = { ...byNumber(1), id: "one", requestId: "team", position: 2 };
   const two = { ...byNumber(1), id: "two", requestId: "team", position: 3 };
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two }, requests: {},
+  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two },
     orchestratorSteps: [
       teamStep(4, { type: "created", taskId: "one" }),
       teamStep(5, { type: "messaged", taskId: "one", text: "Use the new table." }),
@@ -501,7 +519,7 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
       { taskId: "two", requestId: "team", kind: "started", position: 3, atMs: 20 },
       { taskId: "two", requestId: "team", kind: "stopped", position: 9, atMs: 30 },
     ] };
-  const shown = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) =>
+  const shown = sequence(blocksOf([user], replay)[0]!).flatMap((entry) =>
     entry.kind === "row" ? [`row:${entry.row.kind}`] : entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind.type) : []);
   assert.deepEqual(shown, ["row:started", "messaged", "answered", "stopped", "landed"]);
 });
@@ -509,12 +527,12 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
 test("the lead's suggested setting shows as its card, and its tool call doesn't", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const change = { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser." } as const;
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, requests: {}, workerSteps: [],
+  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
       teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__suggest_setting", detail: null, status: "completed", throughPosition: 0 }),
       teamStep(3, change),
     ] };
-  const entries = sequence(buildBlocks([user], {}, false, replay, [])[0]!);
+  const entries = sequence(blocksOf([user], replay)[0]!);
   const shown = entries.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
   assert.deepEqual(shown, [change]);
   const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
@@ -523,12 +541,12 @@ test("the lead's suggested setting shows as its card, and its tool call doesn't"
 
 test("an old record's suggestion of Full access and its tool call show nothing", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, requests: {}, workerSteps: [],
+  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
       teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__suggest_full_access", detail: null, status: "completed", throughPosition: 0 }),
       teamStep(3, { type: "fullAccessSuggested", reason: "Installing Homebrew writes outside the project." }),
     ] };
-  const shown = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) =>
+  const shown = sequence(blocksOf([user], replay)[0]!).flatMap((entry) =>
     entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
   assert.deepEqual(shown, []);
 });
@@ -536,13 +554,13 @@ test("an old record's suggestion of Full access and its tool call show nothing",
 test("the lead's feedback offer stays in view as its card; its tool call and the user's answer show no row", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const offer = { type: "feedbackOffered", id: "f1", kind: "bug", title: "Stop leaves the tab spinning", body: "After Stop the tab spins." } as const;
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, requests: {}, workerSteps: [],
+  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
       teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__offer_feedback", detail: null, status: "completed", throughPosition: 0 }),
       teamStep(3, offer),
       teamStep(4, { type: "feedbackAnswered", id: "f1", sent: false }),
     ] };
-  const entries = sequence(buildBlocks([user], {}, false, replay, [])[0]!);
+  const entries = sequence(blocksOf([user], replay)[0]!);
   const shown = entries.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
   assert.deepEqual(shown, [offer]);
   const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
@@ -597,7 +615,7 @@ function grillBlocks(events: readonly EventEnvelope[]) {
     replayed = applyToBoard(replayed, envelope);
     if (envelope.event.type === "messageAppended") said.push({ ...envelope.event.message, seq: envelope.streamSeq });
   }
-  return { board: replayed, blocks: buildBlocks(said, {}, false, replayed, []) };
+  return { board: replayed, blocks: cliBlocks(fixtureView(said, replayed), grill.conversationId, replayed) };
 }
 
 test("a request whose ending was written again shows only the newest, the first in its fold", () => {
@@ -623,7 +641,7 @@ test("a request whose ending was written again shows only the newest, the first 
   assert.ok(sequence(last).some((entry) => entry.kind === "text" && entry.index === first && foldsAway(entry, answer)));
   // As recorded, the items kept it waiting: nothing was the answer, and nothing folded.
   const before = grillBlocks(grill.events);
-  assert.equal(before.blocks.at(-1)?.state, "waiting");
+  assert.equal(blockFinished(before.blocks.at(-1)!.state), false);
   assert.equal(Object.keys(before.board.waiting).length, 2);
   assert.equal(answerIndex(before.blocks.at(-1)!.texts, false), null);
 });
@@ -648,16 +666,6 @@ test("an answer with a Details section shows its head and folds the rest", () =>
 const branchMessage = (id: string, parentId: string | null, role: Message["role"]): Message =>
   ({ id, conversationId: "c", seq: 0, role, text: id, blob: null, createdAtMs: 0, attachments: [], mentions: [], model: null, requestId: null, parentId });
 
-test("the branch shown runs back from its head by parent, so another branch's newer message isn't on it", () => {
-  // "edited" replaced "asked", and the thread shows the first branch again.
-  const edited = [branchMessage("asked", null, "user"), branchMessage("answer", "asked", "assistant"), branchMessage("edited", "", "user"), branchMessage("answer 2", "edited", "assistant")];
-  assert.deepEqual(shownBranch(edited, "answer", false).map((entry) => entry.id), ["asked", "answer"]);
-  assert.deepEqual(shownBranch(edited, null, false).map((entry) => entry.id), ["edited", "answer 2"]);
-  // Messages from before branches follow the one before them.
-  const old = [branchMessage("a", null, "user"), branchMessage("b", null, "assistant")];
-  assert.deepEqual(shownBranch(old, null, false).map((entry) => entry.id), ["a", "b"]);
-});
-
 // ---- Messages between sessions (SESSION-MESSAGING-PLAN.md §6) ------------------------------------
 
 /** A message at `seq` of a session's stream, `seq` seconds in. */
@@ -674,17 +682,19 @@ const record = (messageId: string, position: number, requestId: string, state: P
   messageId, outgoing, peer: "docs", requestId, state, text: messageId, blob: null,
   sentAtMs: position * 1000, settled: false, position, automatic: false,
 });
-const peerDigest = (requests: UserRequest[], peerMessages: PeerMessage[] = [], orchestratorSteps: OrchestratorStep[] = []): BoardDigest => ({
-  tasks: {}, approvals: {}, questions: {}, plans: {}, decisions: [], machineSteps: [], compactions: {},
-  runRequest: null, streaming: null, orchestratorSteps,
-  requests: Object.fromEntries(requests.map((request) => [request.id, request])),
+const peerDigest = (peerMessages: PeerMessage[] = [], orchestratorSteps: OrchestratorStep[] = []): BoardDigest => ({
+  tasks: {}, approvals: {}, questions: {}, plans: {}, decisions: [], machineSteps: [], compactions: {}, orchestratorSteps,
   peerMessages: Object.fromEntries(peerMessages.map((peer) => [peer.messageId, peer])),
 });
+const requestsOf = (...records: UserRequest[]) => ({ requests: Object.fromEntries(records.map((request) => [request.id, request])) });
 const keyed = (blocks: Block[], key: string): Block => {
   const block = blocks.find((candidate) => candidate.key === key);
   assert.ok(block, key);
   return block;
 };
+/** An overnight run's turn: the user's message it went on from, then the run's replies. */
+const runThread = [said("u1", 1, "user", "u1"), said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")];
+const runRequests = requestsOf(peerRequest("u1", 1), peerRequest("run-1", 1));
 
 test("a session's sent messages are rows of the turn that sent them, in every state, with a refused send's step", () => {
   const states: PeerMessage["state"][] = [
@@ -695,7 +705,7 @@ test("a session's sent messages are rows of the turn that sent them, in every st
   // Another session's received record is no row: its message shows in the thread.
   const incoming = record("in", 30, "a1", { type: "seen" }, false);
   const refusal: OrchestratorStep = { requestId: "a1", atMs: 20_000, position: 20, kind: { type: "messageRefused", title: "Billing", reason: "Billing is archived." } };
-  const blocks = buildBlocks([said("a1", 1, "user", "a1")], {}, false, peerDigest([peerRequest("a1", 1)], [...sent, incoming], [refusal]), []);
+  const blocks = blocksOf([said("a1", 1, "user", "a1")], peerDigest([...sent, incoming], [refusal]), requestsOf(peerRequest("a1", 1)));
   const steps = keyed(blocks, "a1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageIds.join(" ") : step.kind.type);
   assert.deepEqual(steps, ["m0", "m1", "m2", "m3", "m4", "m5", "m6", "messageRefused"]);
 });
@@ -703,168 +713,55 @@ test("a session's sent messages are rows of the turn that sent them, in every st
 test("an overnight run's refused message keeps its row, as its sent ones do", () => {
   const refusal: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "messageRefused", title: "Billing", reason: "Billing is archived." } };
   const sent = record("m1", 4, "run-1", { type: "delivered" });
-  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [sent], [refusal]), []);
-  const steps = keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageIds.join(" ") : step.kind.type);
+  const blocks = blocksOf(runThread, peerDigest([sent], [refusal]), runRequests);
+  const steps = keyed(blocks, "u1").orchestratorSteps.map((step) => step.kind.type === "peerSent" ? step.kind.messageIds.join(" ") : step.kind.type);
   assert.deepEqual(steps, ["messageRefused", "m1"]);
 });
 
 test("an overnight run's usage limit reset keeps its divider (issue 128)", () => {
   const resumed: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "quotaResumed", provider: "claude" } };
-  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [], [resumed]), []);
-  assert.deepEqual(keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type), ["quotaResumed"]);
+  const blocks = blocksOf(runThread, peerDigest([], [resumed]), runRequests);
+  assert.deepEqual(keyed(blocks, "u1").orchestratorSteps.map((step) => step.kind.type), ["quotaResumed"]);
 });
 
 test("an overnight run's attached proof reaches its merge message", () => {
   const proof: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "proof", id: "proof-1", name: "shot.png", mime: "image/png" } };
-  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [], [proof]), []);
-  assert.deepEqual(keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type), ["proof"]);
+  const blocks = blocksOf(runThread, peerDigest([], [proof]), runRequests);
+  assert.deepEqual(keyed(blocks, "u1").orchestratorSteps.map((step) => step.kind.type), ["proof"]);
 });
 
-test("another session's message opens its request's turn where the user's message would stand", () => {
-  const blocks = buildBlocks([fromPeer("m1", 1, "m1"), said("m1-answer", 3, "assistant", "m1")], {}, false, peerDigest([peerRequest("m1", 1, { fromPeer: "api" })]), []);
-  const block = keyed(blocks, "m1");
-  assert.equal(block.user?.kind, "peer");
-  assert.equal(block.user?.kind === "peer" && block.user.earlier, false);
-  assert.equal(anchorMessage(block)?.id, "m1");
-  assert.deepEqual(peerOf(anchorMessage(block)!), { messageId: "m1", from: "api", reply: false, earlier: false });
-  assert.deepEqual(block.texts.map((text) => text.messageId), ["m1-answer"]);
-  // The user's own message is no peer's.
+test("another session's message names its sender; the user's own message is no peer's", () => {
+  assert.deepEqual(peerOf(fromPeer("m1", 1, "m1")), { messageId: "m1", from: "api", reply: false, earlier: false });
+  assert.deepEqual(peerOf(fromPeer("r1", 5, "a1", "q1"), true), { messageId: "r1", from: "api", reply: true, earlier: true });
   assert.equal(peerOf(said("u", 1, "user", "u")), undefined);
+  // A turn's message is the user's.
+  const [turn] = blocksOf([said("u", 1, "user", "u")], peerDigest(), requestsOf(peerRequest("u", 1)));
+  assert.equal(anchorMessage(turn!)?.id, "u");
 });
 
-test("a reply to the turn still in view sits inside it; one after a newer request carries its request on in a turn of its own", () => {
-  const asked = said("a1", 1, "user", "a1");
-  const reply = fromPeer("r1", 5, "a1", "q1");
-  // Inside the turn that asked.
-  const inTurn = buildBlocks([asked, reply, said("a1-answer", 6, "assistant", "a1")], {}, false, peerDigest([peerRequest("a1", 1)]), []);
-  assert.equal(inTurn.length, 1);
-  assert.deepEqual(inTurn[0]!.steers.map((steer) => steer.message.id), ["r1"]);
-  assert.deepEqual(peerOf(reply), { messageId: "r1", from: "api", reply: true, earlier: false });
-  assert.deepEqual(inTurn[0]!.texts.map((text) => text.messageId), ["a1-answer"]);
-
-  // After a newer request: the earlier turn rests done when the reply came, and the request goes
-  // on in the reply's own turn, "to your earlier message".
-  const later = [asked, said("a1-said", 2, "assistant", "a1"), said("a2", 3, "user", "a2"), said("a2-answer", 4, "assistant", "a2"), reply, said("a1-answer", 6, "assistant", "a1")];
-  const requests = [peerRequest("a1", 1, { endedAtMs: 6000, waitingFor: [] }), peerRequest("a2", 3, { endedAtMs: 4000, worked: [{ fromMs: 3000, toMs: 4000 }] })];
-  const blocks = buildBlocks(later, {}, false, peerDigest(requests), []);
-  assert.deepEqual(blocks.map((block) => block.key), ["a1", "a2", "a1~r1"]);
-  const [earlier, , carried] = blocks;
-  assert.equal(earlier!.state, "done");
-  assert.equal(earlier!.endedAtMs, 5000);
-  assert.deepEqual(earlier!.worked, [{ fromMs: 1000, toMs: 5000 }]);
-  assert.deepEqual(earlier!.texts.map((text) => text.messageId), ["a1-said"]);
-  assert.equal(carried!.user?.kind === "peer" && carried!.user.earlier, true);
-  assert.deepEqual(peerOf(anchorMessage(carried!)!, true), { messageId: "r1", from: "api", reply: true, earlier: true });
-  assert.deepEqual(carried!.texts.map((text) => text.messageId), ["a1-answer"]);
-  assert.deepEqual(carried!.worked, [{ fromMs: 5000, toMs: 6000 }]);
-});
-
-test("a reply to a request the user stopped shows, and no turn follows it: the request keeps its state", () => {
-  const thread = [said("a1", 1, "user", "a1"), said("a2", 3, "user", "a2"), fromPeer("r1", 5, "a1", "q1"), said("a2-answer", 6, "assistant", "a2")];
-  const requests = [
-    peerRequest("a1", 1, { state: { type: "stopped" }, endedAtMs: 2000, worked: [{ fromMs: 1000, toMs: 2000 }] }),
-    peerRequest("a2", 3, { state: { type: "working" } }),
-  ];
-  const blocks = buildBlocks(thread, {}, false, peerDigest(requests), []);
-  assert.deepEqual(blocks.map((block) => block.key), ["a1", "a2", "a1~r1"]);
-  assert.equal(blocks[0]!.state, "stopped");
-  assert.equal(blocks[0]!.endedAtMs, 2000);
-  assert.equal(blocks[2]!.state, "done");
-  assert.deepEqual(blocks[2]!.worked, []);
-  // The newer request's answer stays its own: nothing was carried on.
-  assert.deepEqual(blocks[1]!.texts.map((text) => text.messageId), ["a2-answer"]);
-});
-
-test("a reply after its request ended starts no turn, however it ended; one it carried on keeps how that turn ended", () => {
-  const thread = [said("a1", 1, "user", "a1"), said("a2", 3, "user", "a2"), said("a2-answer", 4, "assistant", "a2"), fromPeer("r1", 5, "a1", "q1")];
-  // Done before the reply came (its overnight run ended): the reply shows on its own.
-  const ended = buildBlocks(thread, {}, false, peerDigest([
-    peerRequest("a1", 1, { endedAtMs: 2000, worked: [{ fromMs: 1000, toMs: 2000 }] }),
-    peerRequest("a2", 3, { endedAtMs: 4000, worked: [{ fromMs: 3000, toMs: 4000 }] }),
-  ]), []);
-  assert.deepEqual(ended.map((block) => block.key), ["a1", "a2", "a1~r1"]);
-  assert.equal(ended[0]!.endedAtMs, 2000);
-  assert.deepEqual(ended[0]!.worked, [{ fromMs: 1000, toMs: 2000 }]);
-  assert.equal(ended[2]!.state, "done");
-  assert.deepEqual(ended[2]!.worked, []);
-
-  // Carried on from the reply, then stopped or failed: the reply's turn holds that work and ending.
-  for (const state of [{ type: "stopped" }, { type: "failed", error: "The model is gone." }] as UserRequest["state"][]) {
-    const blocks = buildBlocks([...thread, said("a1-answer", 6, "assistant", "a1")], {}, false, peerDigest([
-      peerRequest("a1", 1, { state, endedAtMs: 7000, worked: [{ fromMs: 1000, toMs: 2000 }, { fromMs: 5000, toMs: 7000 }] }),
-      peerRequest("a2", 3, { endedAtMs: 4000, worked: [{ fromMs: 3000, toMs: 4000 }] }),
-    ]), []);
-    assert.deepEqual(blocks.map((block) => block.key), ["a1", "a2", "a1~r1"], state.type);
-    assert.equal(blocks[0]!.state, "done");
-    assert.equal(blocks[2]!.state, state.type);
-    assert.deepEqual(blocks[2]!.worked, [{ fromMs: 5000, toMs: 7000 }]);
-    assert.deepEqual(blocks[2]!.texts.map((text) => text.messageId), ["a1-answer"]);
-  }
-});
-
-test("another session's message steered into a running turn joins it, as the user's would", () => {
-  const thread = [said("d2", 1, "user", "d2"), said("d2-said", 2, "assistant", "d2"), fromPeer("m3", 3, "m3"), said("m3-answer", 4, "assistant", "m3")];
-  const requests = [peerRequest("d2", 1, { state: { type: "working" } }), peerRequest("m3", 3, { steeredInto: "d2", steeredAfter: "d2-said", fromPeer: "api" })];
-  const blocks = buildBlocks(thread, {}, false, peerDigest(requests), []);
+test("a message steered into a running turn joins it, its request with the turn's", () => {
+  const thread = [said("d2", 1, "user", "d2"), said("d2-said", 2, "assistant", "d2"), said("m3", 3, "user", "m3"), said("m3-answer", 4, "assistant", "m3")];
+  const requests = requestsOf(peerRequest("d2", 1, { state: { type: "working" } }), peerRequest("m3", 3, { state: { type: "working" }, steeredInto: "d2", steeredAfter: "d2-said" }));
+  const blocks = blocksOf(thread, peerDigest(), requests);
   assert.equal(blocks.length, 1);
   const [turn] = blocks;
   assert.deepEqual(turn!.requestIds, ["d2", "m3"]);
-  assert.deepEqual(turn!.steers.map((steer) => [steer.message.id, steer.message.role]), [["m3", "peer"]]);
+  assert.deepEqual(turn!.steers.map((steer) => [steer.message.id, steer.message.role]), [["m3", "user"]]);
   assert.equal(turn!.state, "working");
 });
 
-test("a turn waiting for other sessions' replies names them, a steered one's too", () => {
-  const thread = [said("d1", 1, "user", "d1"), said("d1-said", 2, "assistant", "d1"), said("d3", 3, "user", "d3")];
-  const requests = [
-    peerRequest("d1", 1, { state: { type: "waiting" }, waitingFor: ["api"], worked: [{ fromMs: 1000, toMs: 2000 }] }),
-    peerRequest("d3", 3, { steeredInto: "d1", waitingFor: ["notes", "api"] }),
-  ];
-  const [turn] = buildBlocks(thread, {}, false, peerDigest(requests), []);
-  assert.deepEqual(turn!.waitingFor, ["api", "notes"]);
-});
-
-test("a wait for replies is part of the messages' row, and the answer Brigadier sent back for this session is no row", () => {
-  const wait: OrchestratorStep = {
-    requestId: "a1", atMs: 5000, position: 5,
-    kind: { type: "tool", itemId: "w1", name: "mcp__brigadier__wait_for_replies", detail: null, status: "inProgress", throughPosition: 5 },
-  };
-  const sent = record("m1", 4, "a1", { type: "seen" });
-  // The reply this session's answer carried to a session that asked it.
-  const automatic = { ...record("auto", 6, "a1", { type: "delivered" }), automatic: true, answerId: "a1-answer" };
-  const blocks = buildBlocks([said("a1", 1, "user", "a1")], {}, false, peerDigest([peerRequest("a1", 1)], [sent, automatic], [wait]), []);
-  const steps = keyed(blocks, "a1").orchestratorSteps.map((step) => step.kind);
-  assert.deepEqual(steps, [
-    { type: "peerSent", messageIds: ["m1"], waits: [] },
-    { type: "peerSent", messageIds: [], waits: [{ itemId: "w1", status: "inProgress", requestId: "a1" }] },
-  ]);
-});
-
-/** A reply to `m1`, and where it stands with a wait. */
-const replyHeld = (hold?: PeerMessage["hold"]) => ({ ...record("r1", 5, "a1", { type: "seen" }, false), ...(hold && { hold }) });
-/** The reply Brigadier sent another session, carrying `q1-answer`. */
-const sentBack = (id: string) => ({ ...record(id, 4, "q1", { type: "delivered" }), automatic: true, answerId: "q1-answer" });
-
-test("a reply a wait took is that call's result, not a message of the thread; a returned one shows as ever", () => {
-  const thread = [said("a1", 1, "user", "a1"), fromPeer("r1", 5, "a1", "m1"), said("a1-answer", 6, "assistant", "a1")];
-  for (const hold of [{ type: "handed" }, { type: "taken", itemId: "w1" }] as PeerMessage["hold"][]) {
-    const [turn] = buildBlocks(thread, {}, false, peerDigest([peerRequest("a1", 1)], [replyHeld(hold)]), []);
-    assert.deepEqual(turn!.steers, [], String(hold?.type));
-    assert.deepEqual(turn!.texts.map((text) => text.messageId), ["a1-answer"]);
+test("a reply a wait took or was handed is held for it; a returned one is not", () => {
+  const reply = record("r1", 5, "a1", { type: "seen" }, false);
+  for (const hold of [{ type: "handed" }, { type: "taken", itemId: "w1" }] as NonNullable<PeerMessage["hold"]>[]) {
+    assert.equal(heldForWait({ ...reply, hold }), true, hold.type);
   }
-  for (const hold of [undefined, { type: "returned" }] as PeerMessage["hold"][]) {
-    const [turn] = buildBlocks(thread, {}, false, peerDigest([peerRequest("a1", 1)], [replyHeld(hold)]), []);
-    assert.deepEqual(turn!.steers.map((steer) => steer.message.id), ["r1"], hold?.type ?? "none");
-  }
+  assert.equal(heldForWait({ ...reply, hold: { type: "returned" } }), false);
+  assert.equal(heldForWait(reply), false);
   assert.equal(heldForWait(undefined), false);
 });
 
-test("an answer Brigadier sent back to the sessions that asked carries their replies' ids, for a jump to land on it", () => {
-  const thread = [fromPeer("q1", 1, "q1"), said("q1-answer", 3, "assistant", "q1")];
-  const [turn] = buildBlocks(thread, {}, false, peerDigest([peerRequest("q1", 1, { fromPeer: "api" })], [sentBack("auto1"), sentBack("auto2")]), []);
-  assert.deepEqual(turn!.texts.map((text) => [text.messageId, text.anchors]), [["q1-answer", ["auto1", "auto2"]]]);
-  assert.deepEqual(turn!.orchestratorSteps, []);
-  // The block's sequence keeps them on its text.
-  const entries = blockSequence({ texts: turn!.texts, cards: [], steers: [], compactions: [], orchestratorSteps: [], rows: [] });
+test("a block's sequence keeps the anchors on its text", () => {
+  const entries = blockSequence({ texts: [{ position: 1, anchors: ["auto1", "auto2"] }], cards: [], steers: [], compactions: [], orchestratorSteps: [], rows: [] });
   assert.deepEqual(entries.map((entry) => entry.kind === "text" && entry.anchors), [["auto1", "auto2"]]);
 });
 
@@ -943,8 +840,8 @@ test("where a usage limit reset, its divider stands in for the time line, never 
 
 test("a limit or switch of an overnight run keeps its divider, and a finished turn keeps it in view (issue 506)", () => {
   const moment: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "moment", text: "Claude Code is available again; continuing with it." } };
-  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [], [moment]), []);
-  const block = keyed(blocks, "run-1");
+  const blocks = blocksOf(runThread, peerDigest([], [moment]), runRequests);
+  const block = keyed(blocks, "u1");
   assert.deepEqual(block.orchestratorSteps.map((step) => step.kind.type), ["moment"]);
   const kept = sequence(block).filter((entry) => entry.kind === "orchestrator" && !foldsAway(entry, 1));
   assert.equal(kept.length, 1, "never folded away");

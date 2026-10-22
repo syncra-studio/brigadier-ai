@@ -9,6 +9,7 @@
  *   that row opens to each call with what it was given (#101). Two calls of another tool stay
  *   two rows.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 

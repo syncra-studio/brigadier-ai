@@ -7,7 +7,9 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::model::{FileChange, FileChangeKind, ItemStatus, ProviderEvent, Role, TurnStatus};
+use crate::model::{
+    FileChange, FileChangeKind, ItemStatus, ProviderEvent, Role, TextPhase, TurnStatus,
+};
 use crate::session_file::{FileEntry, shown};
 
 /// The thread the rollout at `path` holds.
@@ -27,6 +29,7 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
         let Some(payload) = value.get("payload") else {
             continue;
         };
+        let mut phase = None;
         let event = match str_of(payload, "type") {
             Some("task_started") => {
                 turn = Some(false);
@@ -60,6 +63,11 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
                 let Some(event) = item_event(item) else {
                     continue;
                 };
+                phase = match str_of(item, "phase") {
+                    Some("final_answer") => Some(TextPhase::Answer),
+                    Some("commentary") => Some(TextPhase::Commentary),
+                    _ => None,
+                };
                 event
             }
             _ => continue,
@@ -80,6 +88,7 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
         }
         entries.push(FileEntry {
             steer,
+            phase,
             ..FileEntry::new(event, at_ms)
         });
     }

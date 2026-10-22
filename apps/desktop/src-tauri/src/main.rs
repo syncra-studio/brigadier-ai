@@ -50,8 +50,6 @@ use crate::launcher::Launcher;
 
 /// Environment variable carrying the timing tolerance (shared with the daemon).
 const TOLERANCE_ENV: &str = "BRIGADIER_BUDGET_TOLERANCE";
-/// Draws the thread from the CLI's own session file (S9).
-const CLI_THREAD_ENV: &str = "BRIGADIER_CLI_THREAD";
 /// The installed app's identity, and the one debug builds take instead (`tauri.dev.conf.json`).
 const RELEASE_IDENTIFIER: &str = "ai.brigadier.app";
 const DEBUG_IDENTIFIER: &str = "ai.brigadier.dev";
@@ -683,7 +681,6 @@ fn main() {
         smoke,
         first_launch,
         budget_tolerance,
-        cli_thread: std::env::var_os(CLI_THREAD_ENV).is_some_and(|value| value == "1"),
     };
     // The daemon applies the same tolerance to its stall threshold.
     let daemon_env = std::env::var(TOLERANCE_ENV)

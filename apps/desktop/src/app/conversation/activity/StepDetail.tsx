@@ -13,8 +13,7 @@ import { Check } from "@/components/icons";
 import type { ItemStatus } from "@/ipc/generated";
 import { ansiRuns, stripAnsi } from "@/lib/ansi";
 import { cn } from "@/lib/utils";
-import { cliThreadOn, useCliCallItems } from "@/state/cliThread";
-import { useCallItems } from "@/state/threadItems";
+import { useCliCallItems } from "@/state/cliThread";
 
 /**
  * What a step of the thread opens to (THREAD-UX-PLAN.md §3.2), the same for the lead's row and a
@@ -276,18 +275,8 @@ export function leadAction(items: readonly TranscriptItem[], kind: ToolStep): Ac
   return found && (found.kind === "tool" || found.kind === "command" || found.kind === "files" || found.kind === "image") ? found : null;
 }
 
-/** How a lead's call stands, as its items are read again when it changes: its end, or more output. */
-export function callStood(kind: ToolStep): string {
-  return `${kind.status}|${kind.outputBytes ?? ""}|${kind.endedAtMs ?? ""}|${kind.logSeq ?? ""}`;
-}
-
-/**
- * A lead's call's items, read from the thread's calls when its row opens and again as it moves on;
- * in a thread drawn from the CLI's session file, folded from the call's own item there.
- */
-export function useLeadItems(conversationId: string, requestId: string | null, kind: ToolStep) {
-  const cli = useCliCallItems(cliThreadOn() ? conversationId : null, kind.itemId);
-  const kept = useCallItems(conversationId, cli ? null : requestId, kind.turn ?? null, kind.itemId, callStood(kind));
-  return cli ?? kept;
+/** A lead's call's items, folded from the call's own item in the CLI's thread as it moves on. */
+export function useLeadItems(conversationId: string, kind: ToolStep): { items: readonly TranscriptItem[]; error: null } {
+  return useCliCallItems(conversationId, kind.itemId) ?? { items: [], error: null };
 }
 

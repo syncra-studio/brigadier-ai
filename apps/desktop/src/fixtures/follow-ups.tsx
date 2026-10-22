@@ -5,6 +5,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 
 import type { EventEnvelope, Message, MovedMessage, QueuedMessage, Request, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";
+import { applyActivityNews } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, emptyThread, useApp } from "@/state/store";
 
@@ -29,6 +30,8 @@ mockIPC((command, payload) => {
 });
 useApp.setState({ threads: { [id]: emptyThread }, pending: [], summaryShown: { [id]: false } });
 useBoard.setState({ board: emptyBoard(id) });
+// The session rests: its CLI's turn is over.
+applyActivityNews({ conversationId: id, entries: [], ended: "done" });
 
 let seq = 0;
 function apply(events: EventEnvelope["event"][]) {

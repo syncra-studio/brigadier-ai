@@ -6,6 +6,7 @@
  * each send carries, the editor the chip opens and the chip in the sent message. What it saw
  * goes as JSON into `<pre id="paste-chip-result">`.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
@@ -295,6 +296,9 @@ async function drive() {
     // The earlier message shows its pasted text's chip where it was pasted; it opens read only.
     const bubble = () => [...document.querySelectorAll("[data-slot=inline-paste]")].find((chip) => !field()!.contains(chip));
     await until("the chip in the sent message", () => bubble() !== undefined);
+    // The thread ends with the turns sent above: the earlier message is scrolled to first.
+    bubble()!.scrollIntoView({ block: "center" });
+    await sleep(100);
     await fixtureClick(bubble()!.querySelector("button")!);
     await until("the read-only editor", () => shown()?.querySelector("h1")?.textContent === "Notes");
     seen.bubble = {

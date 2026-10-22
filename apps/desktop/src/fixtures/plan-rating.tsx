@@ -7,6 +7,7 @@
  * - A plan has the answer's thumbs button: Good plan / Bad plan; once rated, Clear rating (#127).
  * - A rated answer's Feedback menu has Clear rating too.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 

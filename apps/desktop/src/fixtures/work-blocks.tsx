@@ -5,8 +5,7 @@
  *
  * - `drive=turn`: a Chat's turn reads a file and runs the tests; then it thinks, a question waits
  *   on the user, a command runs, a line between steps streams, the final answer streams, is
- *   stored, the request rests waiting for another session's reply, it is done, and the board is
- *   read again from the daemon.
+ *   stored, it is done, and the board is read again from the daemon.
  * - `drive=steer`: a message steered in while a command runs.
  * - `drive=queue` (`kind=session` for a session): a queued message's ⋯ menu, and turning
  *   queueing off from it.
@@ -28,6 +27,7 @@
  * The result goes to `<pre id="work-blocks-result">`. `stop=running|answering|done|steer|menu` holds the
  * page at that moment instead, for a screenshot.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
@@ -60,7 +60,6 @@ import { useApp } from "@/state/store";
 const query = new URLSearchParams(location.search);
 const drive = query.get("drive") ?? "turn";
 const ID = "work-blocks";
-const PEER = "work-blocks-peer";
 const SIDE = "work-blocks-side";
 const session = query.get("kind") === "session";
 const begun = Date.now() - 30_000;
@@ -80,7 +79,6 @@ function conversation(id: string, title: string, kind: "chat" | "session"): Conv
 
 const conversations: Record<string, Conversation> = {
   [ID]: conversation(ID, "Fix the rounding", session ? "session" : "chat"),
-  [PEER]: conversation(PEER, "Billing", "session"),
 };
 
 const user = (id: string, seq: number, text: string, atMs: number): Message => ({
@@ -347,8 +345,6 @@ async function driveTurn(): Promise<object> {
   out.commentaryAtOnce = text(one("[data-commentary]", turn() ?? document));
   await settle();
   out.commentary = seen();
-  // A peer reply stays outstanding while the final answer streams.
-  request("r1", { waitingFor: [PEER] });
   // The final answer starts: the work folds at once, the time stops there. The fold is timed from
   // the first frame that shows the answer starting, by the frames' own clock: a slow machine
   // takes its time drawing that frame, which is not the fold's. What it took past its 150ms close
@@ -380,7 +376,7 @@ async function driveTurn(): Promise<object> {
   change(() => ({ streaming: { messageId: "a1", text: answerText, requestId: "r1", phase: "answer", startedAtMs: answerAtMs } }));
   await settle();
   out.answeringLater = seen();
-  // A question for the user while it streams: that wins over the wait for the other session.
+  // A question for the user while it streams: its line shows under the answer.
   change(() => ({ questions: { ask: question } }));
   await settle();
   out.answeringAsked = seen();
@@ -397,14 +393,10 @@ async function driveTurn(): Promise<object> {
   change(() => ({ streaming: null, head: "a1" }));
   await settle();
   out.stored = seen();
-  // The turn ends waiting for another session's reply: that line stays, under the answer.
+  // The turn ends: the request is done.
   daemon.run = "idle";
   change(() => ({ run: "idle", runRequest: null }));
-  request("r1", { state: { type: "waiting" }, waitingFor: [PEER], worked: [{ fromMs: begun, toMs: Date.now() }] });
-  await settle();
-  out.waiting = seen();
-  // The reply came: the request is done.
-  request("r1", { state: { type: "done" }, endedAtMs: Date.now(), waitingFor: [] });
+  request("r1", { state: { type: "done" }, endedAtMs: Date.now() });
   await settle();
   out.done = seen();
   await hold("done");
@@ -929,7 +921,9 @@ async function driveImplement(): Promise<object> {
   // Approved: the same request works on.
   change(() => ({ run: "running", runRequest: "r1", plans: { plan: { ...plan, state: { type: "approved" } } as unknown as Plan } }));
   request("r1", { state: { type: "working" }, endedAtMs: null, worked: [{ fromMs: begun, toMs: begun + 10_000 }, { fromMs: Date.now(), toMs: null }] });
-  steps([...daemon.steps, tool("impl-read", 3.1, "Read", "/repo/src/cli.ts", "completed"), tool("impl-edit", 3.2, "apply_patch", "/repo/src/cli.ts", "inProgress")]);
+  // Its new steps come now, after the plan.
+  const now = (step: OrchestratorStep): OrchestratorStep => ({ ...step, atMs: Date.now() });
+  steps([...daemon.steps, now(tool("impl-read", 3.1, "Read", "/repo/src/cli.ts", "completed")), now(tool("impl-edit", 3.2, "apply_patch", "/repo/src/cli.ts", "inProgress"))]);
   await settle();
   const block = turn() ?? document.body;
   const card = one("[data-slot=plan-card], [data-card=plan], [data-slot=action-card]", block);

@@ -36,6 +36,7 @@ import type {
   StreamingMessage,
   ThinkingSegment,
   Task,
+  ThreadNews,
   UserRequest,
   Rating,
   RebirthThresholds,
@@ -307,20 +308,7 @@ export function disposeSideBoard(store: BoardStore): void {
   keepBoard(store.getState().board);
 }
 
-/** The board showing `conversationId`, the open one's or a side chat's, if any does. */
-/**
- * The newest request, while the answer the thread shows for it still works or waits (it, or a
- * request it was steered into, has a turn, a worker or a card going), as the daemon judges it:
- * what a session's user sends now waits in the queue while the orchestrator sorts it.
- */
-export function workingRequest(board: Board): string | null {
-  return liveRequest(board)?.newest ?? null;
-}
-
-/**
- * The newest request's id and the request of its steer chain that still works or waits, if any
- * (see [`workingRequest`]).
- */
+/** The newest request's id and the request of its steer chain that still works or waits, if any. */
 export function liveRequest(board: Pick<Board, "requests">): { newest: string; live: UserRequest } | null {
   const requests = Object.values(board.requests);
   const latest = requests.reduce<UserRequest | null>(
@@ -652,21 +640,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
           : { messageId: event.messageId, text: event.text, requestId: board.runRequest, startedAtMs: atMs, ...(phase && { phase }) };
       return { ...board, streaming };
     }
-    case "orchestratorLogged": {
-      if (event.entry.type !== "provider") return board;
-      const provided = event.entry.event;
-      if (provided.type === "contextSize") {
-        return {
-          ...board,
-          context: {
-            usedTokens: provided.usedTokens,
-            windowTokens: provided.windowTokens ?? board.context?.windowTokens ?? null,
-          },
-        };
-      }
-      const doing = doingOf(provided, board.doing);
-      return doing === board.doing ? board : { ...board, doing };
-    }
     case "runStateChanged":
       return {
         ...board,
@@ -954,10 +927,9 @@ export function applyBoardEvents(envelopes: readonly EventEnvelope[]): void {
   }
 }
 
-/** Whether an event is the board's: its conversation's, its own log's, or one of its tasks'. */
+/** Whether an event is the board's: its conversation's, or one of its tasks'. */
 function boardStream(board: Board, stream: string): boolean {
-  // The conversation's own log says what its model is doing right now.
-  if (stream === `conversation:${board.conversationId}` || stream === `orch:${board.conversationId}`) return true;
+  if (stream === `conversation:${board.conversationId}`) return true;
   return stream.startsWith("task:") && !!board.tasks[stream.slice("task:".length)];
 }
 
@@ -979,14 +951,30 @@ function applyToStore(store: BoardStore, envelopes: readonly EventEnvelope[]): v
     const { stream } = envelope;
     if (nextBoard && boardStream(nextBoard, stream)) {
       nextBoard = applyToBoard(nextBoard, envelope);
-      // The open conversation's own log feeds its board and the Inspector's log alike.
-      if (stream !== `orch:${nextBoard.conversationId}`) continue;
+      continue;
     }
     if (nextLog && stream === orchestratorStream) nextLog = applyToLog(nextLog, envelope);
   }
   if (nextBoard !== board || nextLog !== orchestrator) {
     store.setState({ board: nextBoard, orchestrator: nextLog });
   }
+}
+
+/**
+ * What a CLI's live stream says of its conversation (`threadNews`), on its boards: how full its
+ * model's context is, and what it is doing now.
+ */
+export function applyBoardNews(news: ThreadNews): void {
+  if (!boardOf(news.conversationId) && !keptBoards.has(news.conversationId)) return;
+  updateBoard(news.conversationId, (board) => {
+    let doing = board.doing;
+    for (const entry of news.entries) doing = doingOf(entry.event, doing);
+    if (news.ended) doing = null;
+    const context = news.context
+      ? { usedTokens: news.context.usedTokens, windowTokens: news.context.windowTokens ?? board.context?.windowTokens ?? null }
+      : board.context;
+    return doing === board.doing && context === board.context ? board : { ...board, doing, context };
+  });
 }
 
 /** Updates every board of the given conversation (the open one's, a side chat's, a kept one). */

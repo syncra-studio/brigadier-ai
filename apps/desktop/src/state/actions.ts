@@ -31,7 +31,6 @@ import type {
   RestoreOutcome,
   Setup,
   SetupRequest,
-  ThreadItem,
   UnlandedBranch,
 } from "@/ipc/generated";
 import { saveSummaryShown } from "@/lib/pinnedSummary";
@@ -41,9 +40,9 @@ import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { addStop, dropStop, dropTurnStops, keepStopping, type Stop, useStopping } from "@/state/stopping";
 import { realActivity, onRealActivity } from "@/state/activity";
+import { useCliThread } from "@/state/cliThread";
 import { workerDone, workerStoppable } from "@/app/conversation/workerPresentation";
 import {
-  type Board,
   boardHeld,
   boardOf,
   collectBoardEvents,
@@ -55,7 +54,6 @@ import {
   updateBoard,
   useBoard,
   WORKER_ENTRIES,
-  workingRequest,
   type WorkerTranscript,
 } from "@/state/board";
 import {
@@ -415,7 +413,6 @@ export function closeSession(id: string): void {
 export const CLOSED_STILL_RUNNING = "Still running. Reopen it from the sidebar.";
 
 /** How many older pages a jump reads at most before it shows what it has. */
-const REVEAL_PAGES = 50;
 
 /** Resolves once `ready` holds, checked as the app's stores change; false after `withinMs`. */
 function storesReach(ready: () => boolean, withinMs: number): Promise<boolean> {
@@ -440,24 +437,7 @@ function storesReach(ready: () => boolean, withinMs: number): Promise<boolean> {
   });
 }
 
-/**
- * The messages a thread must hold for `messageId` to show: a received one itself, and the
- * message of each request its block stands for, up the turns it was steered into; and its
- * place in the stream, which a loaded page must reach.
- */
-function revealNeeds(board: Board, messageId: string): { ids: string[]; position: number | null } {
-  const record = board.peerMessages[messageId];
-  const ids = new Set(record?.outgoing ? [] : [messageId]);
-  const visited = new Set<string>();
-  for (let asked = record?.requestId ?? null; asked && !visited.has(asked); asked = board.requests[asked]?.steeredInto ?? null) {
-    visited.add(asked);
-    // A run's turns are no message of the thread.
-    if (!asked.startsWith("run-")) ids.add(asked);
-  }
-  return { ids: [...ids], position: record?.position ?? null };
-}
-
-/** Loads what `messageId` needs into `id`'s thread, then asks the thread to show it. */
+/** Asks `id`'s thread to show `messageId` once it is loaded: the CLI's thread is read whole. */
 async function revealMessage(id: string, messageId: string): Promise<void> {
   const loaded = () => {
     const board = useBoard.getState().board;
@@ -465,18 +445,6 @@ async function revealMessage(id: string, messageId: string): Promise<void> {
     return board?.conversationId === id && board.loaded && !!thread && !thread.loading;
   };
   if (!(await storesReach(loaded, 10_000))) return;
-  for (let page = 0; page < REVEAL_PAGES; page += 1) {
-    const board = useBoard.getState().board;
-    const thread = useApp.getState().threads[id];
-    if (!board || board.conversationId !== id || !thread) return;
-    const { ids, position } = revealNeeds(board, messageId);
-    const held = new Set(thread.items.map((message) => message.id));
-    const oldest = thread.items[0]?.seq ?? Number.POSITIVE_INFINITY;
-    const missing = ids.some((need) => !held.has(need)) || (position !== null && oldest > position);
-    if (!missing || !thread.hasMore) break;
-    await loadEarlier(id);
-    if (!(await storesReach(() => !useApp.getState().threads[id]?.loading, 10_000))) return;
-  }
   startReveal(id, messageId);
 }
 
@@ -669,12 +637,13 @@ export async function send(
   const prepared = prepareTabChatSend(conversationId);
   if (prepared) await prepared;
   const board = boardOf(conversationId);
-  // A send still under way, or one whose turn the board doesn't show yet: the daemon is busy
-  // with it, so this one waits too.
-  const starting = board !== null && turnStarting(conversationId, board);
+  // A send still under way, or one whose turn the CLI's thread doesn't show yet: the daemon is
+  // busy with it, so this one waits too.
+  const starting = board !== null && turnStarting(conversationId);
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const session = useApp.getState().conversations[conversationId]?.kind === "session";
-  const working = session && board !== null && (workingRequest(board) !== null || starting);
+  // A session's message waits in the queue while its CLI's turn is open.
+  const working = session && board !== null && (!!realActivity(conversationId)?.turnOpen || starting);
   const steer = lane === "steer";
   const queue = board?.queue ?? null;
   // Asked to queue with no slot: last.
@@ -758,24 +727,21 @@ export async function send(
   }
 }
 
-/** How long after the daemon took a message its turn may still be missing from the board. */
+/** How long after the daemon took a message its turn may still be missing from the CLI's thread. */
 const TURN_SHOWS_MS = 30_000;
 
 /**
- * Whether a turn is starting that the board doesn't show yet: a send to the conversation is
- * still under way, or the daemon took a message lately whose request hasn't reached the board.
- * Its events can come seconds after the send's answer while the connection is busy.
+ * Whether a turn is starting that the CLI's thread doesn't show yet: a send to the conversation
+ * is still under way, or the daemon took a message lately that no turn of the CLI's carried.
+ * Its news can come seconds after the send's answer while the connection is busy.
  */
-function turnStarting(conversationId: string, board: Board): boolean {
+function turnStarting(conversationId: string): boolean {
   const { pending, threads } = useApp.getState();
   if (pending.some((entry) => entry.conversationId === conversationId)) return true;
+  const carried = new Set(useCliThread.getState().views[conversationId]?.turns.flatMap((turn) => turn.requests) ?? []);
   const since = Date.now() - TURN_SHOWS_MS;
   return (threads[conversationId]?.items ?? []).some(
-    (message) =>
-      message.role === "user" &&
-      message.createdAtMs >= since &&
-      !!message.requestId &&
-      !board.requests[message.requestId],
+    (message) => message.role === "user" && message.createdAtMs >= since && !!message.requestId && !carried.has(message.requestId),
   );
 }
 
@@ -1714,15 +1680,6 @@ export async function removeProject(
 }
 
 // ----- orchestrator log (Inspector) ------------------------------------------------------
-
-/**
- * A thread row's tool call or command in full (`itemId`, the provider's item id): its input,
- * output (whole, when the model got a digest), exit code and duration; all `null` when unknown.
- */
-export async function getThreadItem(conversationId: string, itemId: string): Promise<ThreadItem> {
-  const { item } = await request({ method: "getThreadItem", conversationId, itemId });
-  return item;
-}
 
 /** Orchestrator log entries fetched per page. */
 const ORCHESTRATOR_PAGE = 1_000;

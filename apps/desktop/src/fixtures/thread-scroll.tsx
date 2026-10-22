@@ -11,6 +11,7 @@
  * `<pre id="thread-scroll-result">` (`&only=<step>` runs one of them); `window.threadScroll`
  * holds the steps for a browser probe.
  */
+import "@/fixtures/cliView";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -728,89 +729,6 @@ const steps = {
     $("#thread-scroll-main")!.style.paddingBottom = "";
     await settle(200);
     return { atBottom, button: above };
-  },
-  /**
-   * A sent turn that messages another session and waits for its reply, its events in the order
-   * the daemon sends them: the user's message holds still while the live rows change.
-   */
-  async peerExchange() {
-    await open("other");
-    await userScroll(max());
-    await send({ text: "Ask the other chat what 6 + 7 is and tell me.", attachments: [], mentions: [] });
-    await settle(600);
-    const conversationId = "other";
-    const requestId = stored[conversationId]!.at(-1)!.requestId!;
-    const user = rows().findLast((row) => row.dataset["role"] === "user")!;
-    const userTop = () => round(user.getBoundingClientRect().top - viewTop());
-    const tops: number[] = [];
-    let on = true;
-    const tick = () => {
-      if (!on) return;
-      tops.push(userTop());
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-    const stages: { stage: string; userTop: number; status: string | null; rows: string[] }[] = [];
-    let seq = 0;
-    const emit = async (stage: string, ...events: object[]) => {
-      for (const event of events) {
-        const envelope = { seq: sequence++, stream: conversationId, streamSeq: 5000 + seq++, atMs: Date.now(), event } as unknown as EventEnvelope;
-        useBoard.setState(({ board }) => (board ? { board: applyToBoard(board, envelope) } : {}));
-      }
-      await frame();
-      await frame();
-      stages.push({
-        stage,
-        userTop: userTop(),
-        status: [...document.querySelectorAll('[data-slot="thread-status"]')].at(-1)?.textContent ?? null,
-        rows: [...document.querySelectorAll("[data-slot=peer-words]")].map((row) => row.textContent ?? ""),
-      });
-    };
-    const logged = (name: string, itemId: string, status: string) => ({
-      type: "orchestratorLogged", conversationId,
-      entry: { type: "provider", provider: "claude", event: { type: "toolCall", itemId, name, input: null, status, output: null } },
-    });
-    const stepped = (name: string, itemId: string, status: string, request = requestId) => ({
-      type: "orchestratorStepped",
-      step: { requestId: request, atMs: Date.now(), position: 0, kind: { type: "tool", itemId, name, detail: null, status, throughPosition: 0 } },
-    });
-    const asked = { id: requestId, conversationId, preview: "", state: { type: "working" }, startedAtMs: Date.now(), endedAtMs: null,
-      steeredInto: null, steeredAfter: null, undo: null, worked: [{ fromMs: Date.now(), toMs: null }], quotaWait: false };
-    await emit("starting", { type: "requestUpdated", request: asked }, { type: "runStateChanged", conversationId, state: "starting", error: null, requestId });
-    await emit("running", { type: "runStateChanged", conversationId, state: "running", error: null, requestId });
-    await emit("call", logged("mcp__brigadier__message_session", "send-1", "inProgress"), stepped("mcp__brigadier__message_session", "send-1", "inProgress"));
-    await emit("recorded", {
-      type: "peerMessageSent", messageId: "peer-1", to: "long", text: "What is 6 + 7?", blob: null, replyTo: null, chainId: "chain-1", hop: 1,
-      requestId, turnInputId: null, state: { type: "pending" }, sentAtMs: Date.now(), automatic: false, answerId: null,
-    });
-    await emit("delivered", { type: "peerMessageState", messageId: "peer-1", state: { type: "delivered" }, sentAtMs: null });
-    await emit("sent", logged("mcp__brigadier__message_session", "send-1", "completed"), stepped("mcp__brigadier__message_session", "send-1", "completed"));
-    await emit("waiting", logged("mcp__brigadier__wait_for_replies", "wait-1", "inProgress"), stepped("mcp__brigadier__wait_for_replies", "wait-1", "inProgress"));
-    await emit("waited", logged("mcp__brigadier__wait_for_replies", "wait-1", "completed"), stepped("mcp__brigadier__wait_for_replies", "wait-1", "completed"));
-    on = false;
-    stopStreaming(conversationId, "other-peer-answer", "6 + 7 is 13.", requestId);
-    await emit("answered", { type: "requestUpdated", request: { ...asked, state: { type: "done" }, endedAtMs: Date.now() } });
-    stages.pop();
-    await settle(200);
-    // A new turn sends, then the provider retries before anything follows: the retry still shows.
-    await send({ text: "Ask it 7 + 8 too.", attachments: [], mentions: [] });
-    await settle(600);
-    const again = stored[conversationId]!.at(-1)!.requestId!;
-    await emit("again", { type: "requestUpdated", request: { ...asked, id: again } },
-      { type: "runStateChanged", conversationId, state: "running", error: null, requestId: again },
-      logged("mcp__brigadier__message_session", "send-2", "inProgress"),
-      stepped("mcp__brigadier__message_session", "send-2", "inProgress", again),
-      { type: "peerMessageSent", messageId: "peer-2", to: "long", text: "What is 7 + 8?", blob: null, replyTo: null, chainId: "chain-2", hop: 1,
-        requestId: again, turnInputId: null, state: { type: "delivered" }, sentAtMs: Date.now(), automatic: false, answerId: null },
-      stepped("mcp__brigadier__message_session", "send-2", "completed", again),
-      logged("mcp__brigadier__message_session", "send-2", "completed"));
-    await emit("retrying", {
-      type: "orchestratorLogged", conversationId,
-      entry: { type: "provider", provider: "claude", event: { type: "error", error: { kind: "network", message: "reset", willRetry: true, limit: null, code: null } } },
-    });
-    stopStreaming(conversationId, "other-peer-again", "7 + 8 is 15.", again);
-    await settle(200);
-    return { stages, tops: [...new Set(tops)] };
   },
   /** An existing conversation never opened, whose one turn still runs: the bottom. */
   async working() {

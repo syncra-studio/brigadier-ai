@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { waitingWords } from "@/app/conversation/activity/peerWords";
 import type { BlockState } from "@/app/conversation/blocks";
 import type { PhaseView } from "@/app/conversation/phaseView";
 import { formatDuration } from "@/lib/format";
@@ -22,23 +21,19 @@ export function useElapsed(from: number, to: number | null, live: boolean): numb
   return Math.max(0, (live || to === null ? now : to) - from);
 }
 
-/**
- * `waited`: how long it waited for the answers to its question cards, shown apart from the work
- * (BUILD-PLAN A9); `onCard`: a card waits for the user now.
- */
-export function headerLabel(state: BlockState, elapsed: number, quota = false, waitingFor: readonly string[] = [], waited = 0, onCard = false, interrupted = false): string {
+/** A turn's header: how long it worked, and how it ended. */
+export function headerLabel(state: BlockState, elapsed: number, quota = false, interrupted = false): string {
   const time = formatDuration(elapsed);
   switch (state) {
     case "working": {
       if (quota) return `Waiting for quota · ${time}`;
-      const work = elapsed < 1000 ? "Working" : `Working for ${time}`;
-      return onCard ? `${work} · waiting for you ${formatDuration(waited)}` : work;
+      return elapsed < 1000 ? "Working" : `Working for ${time}`;
     }
     case "waiting":
       if (quota) return `Waiting for quota · ${time}`;
-      return waitingFor.length > 0 ? `${waitingWords(waitingFor)} · ${time}` : `Waiting for you · ${time}`;
+      return `Waiting for you · ${time}`;
     case "done":
-      return waited >= 1000 ? `Worked ${time} · waited for you ${formatDuration(waited)}` : `Worked for ${time}`;
+      return `Worked for ${time}`;
     case "stopped":
       return `You stopped after ${time}`;
     // Said calmly: the error row under the turn tells what happened.

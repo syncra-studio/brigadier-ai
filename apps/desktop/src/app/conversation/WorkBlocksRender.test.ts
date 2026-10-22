@@ -21,7 +21,7 @@ test("a turn whose answer starts while the window is hidden folds its work at on
 });
 
 test("a turn has one live line, folds the moment its final answer starts, and keeps that time through the end and a reload", { timeout: 120000 }, async (t) => {
-  const seen = await drive<Record<"thinking" | "thought" | "question" | "approval" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "waiting" | "done" | "reloaded", Seen> & {
+  const seen = await drive<Record<"thinking" | "thought" | "question" | "approval" | "running" | "justEnded" | "ended" | "commentary" | "answering" | "answeringLater" | "answeringAsked" | "stored" | "done" | "reloaded", Seen> & {
     foldFirst: string; foldMs: number; foldLate: number; actions: string[]; firstHeader: string | null; commentaryAtOnce: string | null;
     announcedAnswering: string | null; announcedDone: string | null; time: { text: string | null; opacity: string | null }; html: string | null;
   }>(t, "drive=turn");
@@ -66,24 +66,13 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   assert.ok(seen.foldMs >= 0 && seen.foldLate <= 2, `folded in ${seen.foldMs} ms, ${seen.foldLate} frames past its close`);
   const header = seen.answering.header;
   assert.match(header ?? "", /^Worked for \d+s$/);
-  for (const state of [seen.answering, seen.answeringLater, seen.stored, seen.waiting, seen.done, seen.reloaded]) {
+  for (const state of [seen.answering, seen.answeringLater, seen.stored, seen.done, seen.reloaded]) {
     // Folded, the answer outside the work, the time stopped where the answer started.
     assert.deepEqual([state.fold, state.answerInWork, state.header], ["gone", false, header]);
     assert.notEqual(state.answer, null);
   }
-  for (const state of [seen.answering, seen.answeringLater, seen.stored]) {
-    assert.deepEqual(
-      [state.status, state.statusAfterAnswer, state.statusInWork],
-      ["Waiting for Billing to reply", true, false],
-    );
-  }
   assert.equal(seen.answeringAsked.status, "Waiting for your answer");
   assert.equal(seen.stored.answer, "Fixed the rounding: round now rounds half-up, and the tests pass.");
-  // Answered but waiting for another session's reply: that line stays, under the answer, outside the work.
-  assert.deepEqual(
-    [seen.waiting.status, seen.waiting.statusAfterAnswer, seen.waiting.statusInWork],
-    ["Waiting for Billing to reply", true, false],
-  );
   assert.equal(seen.done.status, null);
   assert.deepEqual(seen.actions, ["Copy response", "Read aloud", "Feedback", "Try again", "Fork chat from here"]);
   // The latest answer's time shows without a hover.
@@ -218,14 +207,6 @@ test("a check gone to the background keeps its request working, says what runs a
   // The result's answer settles it: no live line, no row, the answer outside the folded work.
   assert.deepEqual([seen.done.status, seen.done.row, seen.done.answer], [null, null, "The full Rust tests pass: 812 tests, no failures."]);
   assert.match(seen.done.header ?? "", /^Worked for/);
-});
-
-test("the header shows the work and the wait for the user apart: Worked 15s · waited for you 15s", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ asking: Seen; done: Seen; noWait: Seen }>(t, "drive=timer");
-  // Waiting on its card: the work so far, and the wait beside it, ticking.
-  assert.match(seen.asking.header ?? "", /^Working for 10s · waiting for you \d+s$/);
-  assert.equal(seen.done.header, "Worked 15s · waited for you 15s");
-  assert.equal(seen.noWait.header, "Worked for 15s");
 });
 
 test("a finished answer's file chip holds still while a later turn works: never drawn again as plain code", { timeout: 120000 }, async (t) => {

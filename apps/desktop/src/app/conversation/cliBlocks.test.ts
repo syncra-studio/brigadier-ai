@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView, UserRequest } from "@/ipc/generated";
+import type { BoardDigest } from "@/app/conversation/blocks";
+import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
 const user = (itemId: string, text: string, atMs: number, more: Partial<FileEntry> = {}) =>
@@ -136,7 +137,7 @@ test("a thread's turns from its CLI's file are the thread's blocks, one per turn
       requestId: "u1",
     },
   ]);
-  for (const block of blocks) assert.deepEqual([block.cards, block.tasks, block.rows, block.waitingFor, block.waited], [[], [], [], [], []]);
+  for (const block of blocks) assert.deepEqual([block.cards, block.tasks, block.rows], [[], [], []]);
 
   // The user's Stop: a call it ended reads stopped.
   assert.deepEqual(stopped.orchestratorSteps.map((step) => step.kind), [
@@ -195,29 +196,77 @@ const stored = (id: string, createdAtMs: number): Message => ({
   requestId: id,
   parentId: null,
 });
-const request = (id: string, state: UserRequest["state"]) => ({ id, state, startedAtMs: 0, endedAtMs: 9999 }) as UserRequest;
+const NO_BOARD: BoardDigest = { tasks: {}, approvals: {}, questions: {}, plans: {}, orchestratorSteps: [], machineSteps: [], decisions: [], compactions: {} };
 
 test("the tree chains the turns, then the messages on their way", () => {
-  const tree = cliThreadTree(
-    { entries: view.entries.slice(0, 10), turns: view.turns.slice(0, 1) },
-    "conv",
-    // The CLI has the first; the second never reached it; the third is on its way; the fourth ended before it.
-    [stored("m1", 900), stored("m2", 2000), stored("m3", 2100), stored("m4", 2200)],
-    {},
-    [{ localId: "local-1", conversationId: "conv", text: "Sending", createdAtMs: 2300, attachments: [] }],
-    { m2: request("m2", { type: "failed", error: "The CLI did not start." }), m3: request("m3", { type: "working" }), m4: request("m4", { type: "done" }) },
-  );
+  const first = { entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["m0"] }] };
+  // The CLI has the turn of m0, and m1 is older than what it heard; m2 is on its way, and so is the one being sent.
+  const storedNow = [stored("m0", 900), stored("m1", 950), stored("m2", 2000)];
+  const pending = [{ localId: "local-1", conversationId: "conv", text: "Sending", createdAtMs: 2300, attachments: [] }];
+  const tree = cliThreadTree(first, "conv", storedNow, {}, pending, NO_BOARD, { state: "running", error: null });
   assert.deepEqual(tree.nodes.map((node) => [node.id, node.parentId, node.kind, node.block.state]), [
-    ["u1", null, "user", "done"],
-    ["request:u1", "u1", "block", "done"],
-    ["m2", "request:u1", "user", "failed"],
-    ["request:m2", "m2", "block", "failed"],
-    ["m3", "request:m2", "user", "working"],
-    ["request:m3", "m3", "block", "working"],
-    ["local-1", "request:m3", "user", "working"],
+    ["m0", null, "user", "done"],
+    ["request:u1", "m0", "block", "done"],
+    ["m2", "request:u1", "user", "working"],
+    ["request:m2", "m2", "block", "working"],
+    ["local-1", "request:m2", "user", "working"],
     ["request:local-1", "local-1", "block", "working"],
   ]);
   assert.equal(tree.headId, "request:local-1");
+  // The turn's user message shows as Brigadier kept it when sent.
+  const kept = tree.nodes[0]?.block.user;
+  assert.deepEqual(kept?.kind === "message" && [kept.message.id, kept.text], ["m0", "stored m0"]);
+  // A run that failed never took it: it reads failed, with the run's words.
+  const failed = cliThreadTree(first, "conv", storedNow, {}, [], NO_BOARD, { state: "failed", error: "The CLI did not start." });
+  assert.deepEqual(failed.nodes.slice(2).map((node) => [node.id, node.block.state, node.block.error]), [
+    ["m2", "failed", "The CLI did not start."],
+    ["request:m2", "failed", "The CLI did not start."],
+  ]);
+});
+
+test("a turn's user message and its steers take the Brigadier requests the turn names", () => {
+  const blocks = cliBlocks({ entries: view.entries.slice(0, 10), turns: [{ ...turn("u1", 1000, 4000, "done"), requests: ["r1", "r2"] }] }, "conv");
+  const [block] = blocks;
+  assert.ok(block);
+  assert.deepEqual(block.requestIds, ["r1", "r2"]);
+  assert.equal(block.user?.kind === "message" && block.user.message.id, "r1");
+  assert.deepEqual(block.steers.map((steer) => steer.message.id), ["r2"]);
+});
+
+test("Brigadier's own items go into the turn of their request, else by time, after the CLI's items before them", () => {
+  const two: ThreadView = {
+    entries: [user("u1", "One", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Done one." }, 1500), user("u2", "Two", 5000), at({ type: "message", itemId: "a2", role: "assistant", text: "Done two." }, 5500)],
+    turns: [{ ...turn("u1", 1000, 2000, "done"), requests: ["r1"] }, { ...turn("u2", 5000, 6000, "done"), requests: ["r2"] }],
+  };
+  const decision = (requestId: string | null, atMs: number) =>
+    ({ requestId, atMs, position: 0, kind: { type: "decided", what: `at ${atMs}`, why: "" } }) as unknown as BoardDigest["orchestratorSteps"][number];
+  // r1's step came late, at 5200, yet it is r1's; the one of no request goes by its time.
+  const blocks = cliBlocks(two, "conv", { ...NO_BOARD, orchestratorSteps: [decision("r1", 5200), decision(null, 5600), decision(null, 1200)] });
+  assert.deepEqual(
+    blocks.map((block) => block.orchestratorSteps.map((step) => [step.kind.type === "decided" ? step.kind.what : step.kind.type, step.position])),
+    [
+      [["at 5200", 1.5], ["at 1200", 0.5]],
+      [["at 5600", 3.5]],
+    ],
+  );
+});
+
+test("a reply the file calls the final answer is the turn's answer from its time; a line between steps is commentary", () => {
+  const [block] = cliBlocks(
+    {
+      entries: [
+        user("u1", "Go", 1000),
+        at({ type: "message", itemId: "c1", role: "assistant", text: "Looking." }, 1100, { phase: "commentary" }),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Done." }, 1900, { phase: "answer" }),
+      ],
+      turns: [turn("u1", 1000, 2000, "done")],
+    },
+    "conv",
+  );
+  assert.deepEqual(block?.texts.map((text) => [text.messageId, text.commentary ?? false, text.answerAtMs ?? null]), [
+    ["c1", true, null],
+    ["a1", false, 1900],
+  ]);
 });
 
 test("a call's kind, detail and exit read as the engine's", () => {

@@ -53,7 +53,6 @@ import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ip
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useRevealing } from "@/state/reveal";
-import { useApp } from "@/state/store";
 
 /** What an assistant block carries in its message metadata (`custom.block`). */
 export type BlockMeta = {
@@ -85,12 +84,8 @@ export type BlockMeta = {
   state: BlockState;
   startedAtMs: number;
   endedAtMs: number | null;
-  /** When its requests worked, for "Worked for …". */
+  /** When its turn worked, for "Worked for …". */
   worked: WorkSpan[];
-  /** When its requests waited for the answers to their question cards, for "waited for you …". */
-  waited: WorkSpan[];
-  /** It waits only for quota, not for the user. */
-  quotaWait: boolean;
   /** It waits for the answer to its own question card, so it still reads as working. */
   cardWait: boolean;
   /** The model the user picked, to flag a fallback. */
@@ -101,8 +96,6 @@ export type BlockMeta = {
   rework: boolean;
   /** The request this block answers (the id of its user message). */
   requestId: string;
-  /** The sessions whose replies it rests waiting for. */
-  waitingFor: string[];
   /** It and the requests steered into it. */
   requestIds: string[];
   /** The message the user rates: the block's answer, not an update line under it. */
@@ -170,8 +163,6 @@ export const RequestBlock: FC = () => {
     const board = s.board;
     return !!board && (board.run === "running" || board.run === "starting") && !!board.runRequest && !!requestIds?.includes(board.runRequest);
   });
-  // The sessions it waits for, by title (one deleted meanwhile is no longer waited for).
-  const waitingFor = useApp(useShallow((s) => (meta?.waitingFor ?? []).flatMap((id) => s.conversations[id]?.title ?? [])));
   // Its cards load before its work can open, so they are there the moment it does.
   const hasCards = (meta?.cards.length ?? 0) > 0;
   useEffect(() => {
@@ -228,7 +219,6 @@ export const RequestBlock: FC = () => {
     thinkingLive: !!liveThought,
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
     quotaWait,
-    waitingFor,
   };
 
   return (
@@ -259,7 +249,6 @@ export const RequestBlock: FC = () => {
             open={open}
             foldable={foldable}
             quota={quotaWait !== null && meta.state === "working" && !workersActive}
-            waitingFor={waitingFor}
             answering={answering !== null}
             answerAtMs={answerAtMs}
             onToggle={() => fold.set(!open)}

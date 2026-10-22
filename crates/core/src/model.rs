@@ -1625,22 +1625,10 @@ pub struct OrchestratorLogEntry {
     pub entry: OrchestratorEntry,
 }
 
-/// A thread's tool call or command in full, as its row opens to: what it was given, what it
-/// returned (the whole stored output when the model got a digest), how a command exited and
-/// how long it took. Nothing is set when the log holds no such item.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadItem {
-    pub input: Option<String>,
-    pub output: Option<String>,
-    pub exit: Option<i32>,
-    pub ms: Option<i64>,
-}
-
 /// A page of a thread's own tool calls in one request (or one of its turns), oldest first:
 /// each call's newest event, as a worker's transcript holds it, with its whole output when it
 /// is stored (a digest's or a clipped command's), and a running command's output so far.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadItemsPage {
     pub entries: Vec<RawEntry>,

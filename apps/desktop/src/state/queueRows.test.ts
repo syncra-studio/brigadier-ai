@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-import type { Conversation, EventEnvelope, Message, QueuedMessage, SendOutcome, UserRequest } from "@/ipc/generated";
+import type { Conversation, EventEnvelope, Message, QueuedMessage, SendOutcome } from "@/ipc/generated";
 import { send } from "@/state/actions";
+import { applyActivityNews } from "@/state/activity";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { queueRows } from "@/state/queueRows";
 import { applyEvents, emptyThread, useApp } from "@/state/store";
@@ -13,7 +14,6 @@ const text = "Also add CSV.";
 const item: QueuedMessage = { id: "queued", text, attachments: [], mentions: [], queuedAtMs: 20, editedAtMs: null, deciding: true };
 const other: QueuedMessage = { ...item, id: "other", text: "And the docs.", deciding: false };
 const message: Message = { id: "sent", conversationId: id, seq: 3, role: "user", text, attachments: [], mentions: [], createdAtMs: 30, blob: null, model: null, requestId: "sent", parentId: null };
-const working = { id: "first", conversationId: id, preview: "Build the export", state: { type: "working" }, startedAtMs: 10 } as UserRequest;
 let reply: (outcome: SendOutcome) => void;
 let refuse: (error: unknown) => void;
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -26,7 +26,9 @@ beforeEach(() => {
     pending: [],
     threads: { [id]: emptyThread },
   });
-  useBoard.setState({ board: { ...emptyBoard(id), requests: { first: working } } });
+  useBoard.setState({ board: emptyBoard(id) });
+  // The session works: its CLI's turn is open.
+  applyActivityNews({ conversationId: id, entries: [], opened: true });
   mockIPC(() => new Promise((resolve, reject) => {
     reply = (outcome) => resolve({ method: "sendMessage", outcome });
     refuse = reject;
@@ -124,6 +126,7 @@ test("a send while the last one's turn hasn't reached the board yet waits in the
 
 test("a send while the last one is still under way waits in the rail", async () => {
   useBoard.setState({ board: emptyBoard(id) });
+  applyActivityNews({ conversationId: id, entries: [], ended: "done" });
   const firstSend = send({ text: "Build the export", attachments: [], mentions: [] });
   assert.equal(inThread(), 1);
   const replyFirst = reply;
@@ -136,6 +139,7 @@ test("a send while the last one is still under way waits in the rail", async () 
 
 test("an idle session's message still goes straight to the thread", async () => {
   useBoard.setState({ board: emptyBoard(id) });
+  applyActivityNews({ conversationId: id, entries: [], ended: "done" });
   const old = { ...message, id: "old", requestId: "old", createdAtMs: Date.now() - 60_000 };
   useApp.setState({ threads: { [id]: { ...emptyThread, items: [old] } } });
   const sent = send({ text, attachments: [], mentions: [] });

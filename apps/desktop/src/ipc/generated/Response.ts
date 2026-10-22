@@ -76,8 +76,6 @@ import type { StorageReport } from "./StorageReport";
 import type { StoredCopy } from "./StoredCopy";
 import type { TaskId } from "./TaskId";
 import type { TerminalInfo } from "./TerminalInfo";
-import type { ThreadItem } from "./ThreadItem";
-import type { ThreadItemsPage } from "./ThreadItemsPage";
 import type { ThreadMetrics } from "./ThreadMetrics";
 import type { ThreadView } from "./ThreadView";
 import type { TurnRevert } from "./TurnRevert";
@@ -170,7 +168,7 @@ diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifica
 /**
  * The tasks stopped, oldest first.
  */
-taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadItem", item: ThreadItem, } | { "method": "listThreadItems", page: ThreadItemsPage, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
+taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
 /**
  * The copy to open.
  */

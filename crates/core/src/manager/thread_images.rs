@@ -1,15 +1,24 @@
-//! Images are opened only through the image step that named them in this conversation, and a
-//! proof (a screenshot or recording the thread attached, `attach_proof`) through its step.
+//! Images are opened only through the item of the CLI's thread that named them in this
+//! conversation, and a proof (a screenshot or recording the thread attached, `attach_proof`)
+//! through its step.
 
 use std::path::{Path, PathBuf};
 
 use brigadier_providers::{ItemStatus, ProviderEvent};
-use brigadier_store::StreamPage;
 
 use super::{SessionManager, blocking};
-use crate::model::{ConversationId, DomainEvent, streams};
-use crate::work::{OrchestratorEntry, OrchestratorStepKind, ProofKind, ThreadItemKind};
+use crate::model::ConversationId;
+use crate::work::{OrchestratorStepKind, ProofKind, ThreadItemKind};
 use crate::{Error, Result};
+
+/// The file name, without its extension, of the copy kept of generated image `item_id`.
+fn kept_name(item_id: &str) -> String {
+    item_id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 fn image_io(err: std::io::Error) -> Error {
     Error::Invalid(err.to_string())
@@ -84,12 +93,9 @@ impl SessionManager {
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("png");
-            let name = item_id
-                .as_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            let target = self.thread_images_dir(id).join(format!("{name}.{ext}"));
+            let target = self
+                .thread_images_dir(id)
+                .join(format!("{}.{ext}", kept_name(item_id)));
             let retained = blocking(move || {
                 if std::fs::metadata(&source).map_err(image_io)?.len() > MAX_IMAGE {
                     return Err(Error::Invalid("This image is over 11 MB".into()));
@@ -108,6 +114,16 @@ impl SessionManager {
             }
         }
         event
+    }
+
+    /// The copy kept of generated image `item` ([`Self::retain_thread_image`]), if there is one.
+    fn kept_image(&self, id: &ConversationId, item: &str) -> Option<PathBuf> {
+        let name = kept_name(item);
+        std::fs::read_dir(self.thread_images_dir(id))
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(name.as_str()))
     }
 
     pub(super) async fn image_row(
@@ -281,8 +297,9 @@ impl SessionManager {
         ))
     }
 
-    /// Returns the image named by an image row of this conversation, or a proof the thread
-    /// attached, bounded before and during read.
+    /// Returns the image an item of this conversation's CLI thread names (its own image, or a
+    /// `view_image` or `Read` of one), or a proof the thread attached, bounded before and
+    /// during read.
     pub async fn read_thread_image(
         &self,
         id: &ConversationId,
@@ -299,65 +316,24 @@ impl SessionManager {
         if let Some(file) = proof {
             return read_bounded(PathBuf::from(file)).await;
         }
-        let row = board
-            .orchestrator_steps
+        // An image the CLI looked at or made, at the path its item names.
+        let view = self.thread_view(id)?;
+        let entry = view
+            .entries
             .iter()
-            .find_map(|step| match &step.kind {
-                OrchestratorStepKind::Tool {
-                    item_id,
-                    item: Some(ThreadItemKind::Image),
-                    log_seq: Some(log_seq),
-                    ..
-                } if item_id == item => Some(*log_seq),
-                _ => None,
-            })
+            .find(|entry| brigadier_providers::session_file::item_id(&entry.event) == Some(item))
             .ok_or_else(|| {
                 Error::Invalid("This item is not an image of this conversation".into())
             })?;
-        let stored = self
-            .core
-            .store()
-            .read_stream(
-                streams::orchestrator(id),
-                StreamPage {
-                    before: Some(row + 1),
-                    limit: 1,
-                    kinds: vec!["orchestrator.logged".into()],
-                },
-            )
-            .await?;
-        let event = stored
-            .iter()
-            .find(|stored| stored.stream_seq == row)
-            .and_then(|stored| crate::sessions::decode(stored).ok());
-        let path = match event {
-            Some(DomainEvent::OrchestratorLogged {
-                entry:
-                    OrchestratorEntry::Provider {
-                        event:
-                            ProviderEvent::Image {
-                                item_id,
-                                path: Some(path),
-                                ..
-                            },
-                        ..
-                    },
-                ..
-            }) if item_id == item => Some(path),
-            Some(DomainEvent::OrchestratorLogged {
-                entry:
-                    OrchestratorEntry::Provider {
-                        event:
-                            ProviderEvent::ToolCall {
-                                item_id,
-                                name,
-                                input,
-                                ..
-                            },
-                        ..
-                    },
-                ..
-            }) if item_id == item => super::thread_items::image_path(&name, input.as_deref()),
+        let path = match &entry.event {
+            // The copy Brigadier kept outlasts the CLI's own file.
+            ProviderEvent::Image { path, .. } => self
+                .kept_image(id, item)
+                .map(|kept| kept.to_string_lossy().into_owned())
+                .or_else(|| path.clone()),
+            ProviderEvent::ToolCall { name, input, .. } => {
+                super::thread_items::image_path(name, input.as_deref())
+            }
             _ => None,
         }
         .ok_or_else(|| Error::Invalid("This image is no longer there".into()))?;

@@ -34,7 +34,7 @@ test("the thread's own work reads like the reference thread: running commands st
   const live = seen as unknown as {
     liveChildren: string[];
     liveFirst: { outputs: string[]; commands: string[]; endings: number };
-    liveLater: { outputs: string[]; readAgain: boolean };
+    liveLater: { outputs: string[] };
   };
   // An open live group: the read is done, the running commands tick ("Running command for 3s").
   assert.equal(live.liveChildren[0], "Read math.js");
@@ -44,7 +44,6 @@ test("the thread's own work reads like the reference thread: running commands st
   assert.deepEqual(live.liveFirst.outputs, ["compiling 1/3", "test a ... ok"]);
   assert.equal(live.liveFirst.endings, 0);
   // More output: the boxes follow it, read again.
-  assert.equal(live.liveLater.readAgain, true);
   assert.deepEqual(live.liveLater.outputs, ["compiling 1/3 compiling 2/3 compiling 3/3", "test a ... ok test b ... ok"]);
 
   // A finished command's whole output past 8 KiB, not an excerpt.
