@@ -1,3 +1,4 @@
+import { useIntegrations } from "@/app/settings/integrations/adapter";
 import { useState } from "react";
 
 import {
@@ -23,6 +24,8 @@ function openResult({ page, row }: SettingsSearchResult) {
  * The sidebar panel while Settings is open: its title, a search field, then its pages in their groups. Typing replaces the pages with the settings found, each with its page's name.
  */
 export function SettingsNav() {
+  // Catalog changes also refresh the integrations found by Settings search.
+  useIntegrations((state) => state.snapshot);
   const current = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [query, setQuery] = useState("");
   // The result Enter opens; the arrow keys move it.
@@ -67,7 +70,7 @@ export function SettingsNav() {
               {results.map((result, index) => {
                 const Icon = result.page.icon;
                 return (
-                  <li key={`${result.page.id}:${result.row?.label ?? ""}`}>
+                  <li key={`${result.page.id}:${result.row?.target ?? ""}:${result.row?.label ?? ""}`}>
                     <NavRow
                       data-active={index === active}
                       className="h-auto items-start py-2.5"
@@ -79,7 +82,7 @@ export function SettingsNav() {
                         <span className="truncate">{result.row?.label ?? result.page.label}</span>
                         {result.row && (
                           <span className="text-foreground/50 truncate text-xs">
-                            {result.page.label}
+                            {result.page.label}{result.row.section ? ` › ${result.row.section}` : ""}{result.row.detail ? ` · ${result.row.detail}` : ""}
                           </span>
                         )}
                       </span>

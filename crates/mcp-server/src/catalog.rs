@@ -1223,6 +1223,10 @@ const DELEGATE_TASK_FIELDS: &[(&str, &str)] = &[
         "live_look",
         "True for the one task that looks at the landed visible changes live in the session tip's dev app; it changes nothing.",
     ),
+    (
+        "integrations",
+        "Extra MCP servers it needs, by name from your list.",
+    ),
 ];
 
 /// [`DelegateTask`]'s schema with [`DELEGATE_TASK_FIELDS`]' descriptions.
@@ -1515,7 +1519,7 @@ mod tests {
         assert!(DELEGATE_TASK.contains("A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) in both briefs."));
         let bytes =
             serde_json::to_string(&Value::Object(schema)).unwrap().len() + DELEGATE_TASK.len();
-        assert!(bytes < 6_000, "delegate_task is {bytes} bytes");
+        assert!(bytes < 6_100, "delegate_task is {bytes} bytes");
     }
 
     /// #444: route_follow_up offers separate work (a different goal, files the running request

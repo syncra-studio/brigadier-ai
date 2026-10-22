@@ -1353,6 +1353,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "",
         worker: "From now on, call request_review only when your task asks for a review or your change is large or risky; otherwise report once your checks pass and your evidence is in.",
     },
+    Revision {
+        number: INTEGRATIONS_REVISION,
+        thread: "From now on, every worker has its own agent's MCP servers and the skills of all the user's agents, and delegate_task takes `integrations`: the MCP servers a worker gets besides its own agent's, by name from the list an [integrations] note or your instructions give. Name only what the task needs.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1533,6 +1538,7 @@ const REVIEWS_OFF_LABEL: &str = "reviews off";
 const GIT_WRITING_LABEL: &str = "git writing";
 const BROWSER_ON_LABEL: &str = "browser on";
 const BROWSER_OFF_LABEL: &str = "browser off";
+const INTEGRATIONS_LABEL: &str = "integrations";
 
 /// What the thread does while the user has reviews off; it replaces what its instructions say
 /// about reviews (Settings' "Review the work").
@@ -1678,6 +1684,9 @@ pub(crate) struct Current {
     /// Whether it has `save_report` (a thread or a Chat; a tab chat hasn't): what its notes say
     /// about a research answer's report, and whether a Chat has a thread's tools.
     pub reports: bool,
+    /// The MCP servers a worker gets only when its task names them
+    /// ([`super::integrations::thread_section`]); empty: none.
+    pub integrations: String,
 }
 
 /// Rules the thread's instructions leave out until they apply, sent in a note with the first
@@ -1948,6 +1957,10 @@ pub(crate) const NO_AUTO_PIPELINE_REVISION: u32 = 128;
 /// A worker asks for its own review only when its task asks or its change is large or risky
 /// (thread-truth grill Q2).
 pub(crate) const WORKER_REVIEW_REVISION: u32 = 129;
+/// Workers share the agents' MCP servers and skills (PLAN.md §6 Phase 7): a task names the
+/// servers a worker gets besides its own agent's (`integrations`), from the list the thread's
+/// instructions and `[integrations]` notes give.
+pub(crate) const INTEGRATIONS_REVISION: u32 = 130;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2004,6 +2017,7 @@ impl Current {
             due: Vec::new(),
             provider: ProviderKind::Claude,
             reports: true,
+            integrations: String::new(),
         }
     }
 
@@ -2035,6 +2049,7 @@ impl Current {
             due: Vec::new(),
             provider: ProviderKind::Claude,
             reports: true,
+            integrations: String::new(),
         }
     }
 
@@ -2064,6 +2079,7 @@ impl Current {
             git_writing: session.then(|| git_writing_fingerprint(self.git_writing.as_deref())),
             browser: session.then_some(self.browser),
             auto_merge: session.then_some(self.auto_merge),
+            integrations: session.then(|| integrations_fingerprint(&self.integrations)),
             first_use: None,
             next_message: Some(true),
         }
@@ -2397,6 +2413,18 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 },
             });
         }
+        // Instructions from before the list never had one.
+        let integrations = integrations_fingerprint(&now.integrations);
+        if told.integrations.as_deref().unwrap_or("") != integrations {
+            notes.push(Note {
+                text: integrations_note(&now.integrations),
+                label: INTEGRATIONS_LABEL,
+                told: Told {
+                    integrations: Some(integrations),
+                    ..Told::default()
+                },
+            });
+        }
         let run = now.run_fingerprint();
         let told_run = told.run.as_deref();
         match &now.run {
@@ -2529,6 +2557,9 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
         told.git_writing.clone_from(&older.git_writing);
     }
     told.browser = told.browser.or(older.browser);
+    if told.integrations.is_none() {
+        told.integrations.clone_from(&older.integrations);
+    }
     told.auto_merge = told.auto_merge.or(older.auto_merge);
     told.next_message = told.next_message.or(older.next_message);
     if let Some(older) = &older.first_use {
@@ -2724,6 +2755,36 @@ pub(crate) fn git_writing_note(writing: Option<&str>) -> String {
 /// [`git_writing`]'s fingerprint, as [`Told`] keeps it: empty while it says nothing.
 pub(crate) fn git_writing_fingerprint(writing: Option<&str>) -> String {
     writing.map_or_else(String::new, |text| fingerprint(&[text]))
+}
+
+/// The fingerprint of the thread's list of servers to name, as [`Told`] keeps it; empty, as
+/// `None` counts too, while there are none.
+pub(crate) fn integrations_fingerprint(list: &str) -> String {
+    if list.is_empty() {
+        String::new()
+    } else {
+        fingerprint(&[list])
+    }
+}
+
+/// The instructions' list of servers a worker gets only when named; nothing while there are
+/// none.
+pub(crate) fn integrations_section(list: &str) -> String {
+    if list.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{list}")
+    }
+}
+
+/// Tells a running thread the list of servers to name changed (one added, switched off or
+/// gone): its CLI keeps the instructions it started with.
+pub(crate) fn integrations_note(list: &str) -> String {
+    if list.is_empty() {
+        "[integrations] No MCP server needs naming in delegate_task's `integrations` now: each one left is every worker's own, or switched off. This replaces any earlier list. Don't mention this note.".to_owned()
+    } else {
+        format!("[integrations] {list}\nThis replaces any earlier list. Don't mention this note.")
+    }
 }
 
 /// For a Codex worker that writes, while the user leaves AI co-authors out of commits (Claude

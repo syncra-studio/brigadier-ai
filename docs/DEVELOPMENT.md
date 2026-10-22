@@ -233,6 +233,24 @@ stop and close raw sessions, answer their approval requests, simulate a usage-li
 replay recordings. Recordings are scrubbed of personal data as they are written. The fixtures
 in `crates/providers/fixtures/` ship with the app.
 
+## The MCP and skill registry
+
+`crates/registry` reads every MCP server and skill on the machine into one catalog: Claude
+Code's, Codex's (a trusted project's layers included), Claude Desktop's and Cursor's servers,
+and the skills in `~/.agents/skills`, `~/.claude/skills`, `$CODEX_HOME/skills` and a trusted
+project's `.claude/skills` and `.agents/skills`. It only reads those configs, and a watcher
+refreshes it. Ids are source-qualified (`claude:user:railway`, `codex:project:<path>:x`,
+`desktop:pencil`). Whether an agent has a server or skill by itself is decided per session
+(agent, project) by `Catalog::server_native` and `Catalog::skill_native`.
+
+`crates/core/src/manager/integrations.rs` uses it: a worker keeps its agent's own servers and
+gets the ones its task's `integrations` name; every worker gets the switched-on skills its agent
+doesn't find by itself. Settings' `mcpServersOff` and `skillsOff` switch a catalog id off for
+every thread and worker. A switch takes effect at each session's next start or resume, not in
+a running one. Env and header values go only into the CLI's environment under an alias; the
+catalog, IPC, logs and events carry their names. `docs/research/phase7-probes.md` records the
+CLI behaviour this rests on.
+
 ## Development-only switches
 
 None of these exist in a release build.

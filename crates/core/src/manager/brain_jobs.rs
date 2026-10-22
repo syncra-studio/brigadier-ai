@@ -557,6 +557,7 @@ impl SessionManager {
             mcp_servers: vec![self.brigadier_server(grant.clone(), JOB_TOOL_TIMEOUT_SECS, true)],
             tools: ToolSet::Reader,
             skill_plugins: Vec::new(),
+            switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
             env: vec![("TMPDIR".into(), scratch.to_string_lossy().into_owned())],

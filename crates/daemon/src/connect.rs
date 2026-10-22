@@ -547,7 +547,7 @@ impl Ops {
 /// Opens `link` in the user's browser with their account's home, whatever `HOME` Brigadier
 /// itself runs with: a browser started with another home can't find its keychain.
 #[cfg(unix)]
-fn open_in_browser(link: &str) {
+pub(crate) fn open_in_browser(link: &str) {
     let opener = if cfg!(target_os = "macos") {
         "/usr/bin/open"
     } else {
@@ -572,7 +572,7 @@ fn open_in_browser(link: &str) {
 /// Opens the sign-in page in the user's normal Windows browser. Passing it as an argument
 /// keeps the URL out of a command shell (OAuth links contain `&` and percent escapes).
 #[cfg(windows)]
-fn open_in_browser(link: &str) {
+pub(crate) fn open_in_browser(link: &str) {
     let mut command = std::process::Command::new("rundll32.exe");
     command
         .arg("url.dll,FileProtocolHandler")

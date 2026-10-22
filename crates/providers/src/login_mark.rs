@@ -145,7 +145,7 @@ fn keychain_stamp(_service: &str, _account: &str) -> Option<String> {
 
 /// Claude Code's Keychain service for the config dir `config`; `None` when the name can't be
 /// worked out here (a path that isn't plain ASCII would need Unicode normalising first).
-fn claude_keychain_service(env: &CliEnv, config: &Path) -> Option<String> {
+pub fn claude_keychain_service(env: &CliEnv, config: &Path) -> Option<String> {
     let oauth = if env
         .var("CLAUDE_CODE_CUSTOM_OAUTH_URL")
         .is_some_and(|url| !url.is_empty())
@@ -184,7 +184,7 @@ fn short_hash(path: &OsStr) -> Option<String> {
 }
 
 /// Claude Code's Keychain account: `$USER` when it is a plain name, else its fixed fallback.
-fn claude_keychain_account(user: Option<&OsStr>) -> String {
+pub fn claude_keychain_account(user: Option<&OsStr>) -> String {
     let plain = |name: &&str| {
         !name.is_empty()
             && name

@@ -1640,6 +1640,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         mcp_servers: Vec::new(),
         tools: ToolSet::Default,
         skill_plugins: Vec::new(),
+        switched_off: Default::default(),
         add_dirs: Vec::new(),
         project: None,
         env: Vec::new(),

@@ -988,6 +988,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fresh_commit: Option<String>,
+    /// The catalog ids of the MCP servers it gets besides its agent's own (`delegate_task`'s
+    /// `integrations`; `manager::integrations`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub integrations: Vec<String>,
     /// What it took from and gave to the project's Brain (SESSION-FIXES-PLAN.md Q6.6).
     #[serde(default)]
     pub brain: BrainUse,
@@ -3856,6 +3861,10 @@ pub struct Told {
     /// no instructions said so before the switch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_merge: Option<bool>,
+    /// The fingerprint of the list of MCP servers a worker gets only when named
+    /// (`manager::integrations`); empty, as `None` counts too, while there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<String>,
     /// The rules sent in a note when they first apply (BUILD-PLAN C1) that this CLI session
     /// has had: `workers`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

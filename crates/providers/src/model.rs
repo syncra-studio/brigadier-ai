@@ -1197,12 +1197,30 @@ impl ToolSet {
     }
 }
 
-/// An MCP server a session gets, launched by the CLI over stdio.
+/// How a session reaches an MCP server.
+#[derive(Debug, Clone, PartialEq)]
+pub enum McpTransport {
+    /// A process the CLI starts, speaking over its stdio, with [`McpServer::env`] in its
+    /// environment.
+    Stdio {
+        command: PathBuf,
+        args: Vec<String>,
+        /// The folder it starts in; `None`: the session's.
+        cwd: Option<PathBuf>,
+    },
+    /// Streamable HTTP. Each [`McpServer::env`] entry is a header: its name and value.
+    Http { url: String },
+}
+
+/// An MCP server a session gets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpServer {
     pub name: String,
-    pub command: PathBuf,
-    pub args: Vec<String>,
+    pub transport: McpTransport,
+    /// Its values by name: a stdio server's environment, an HTTP server's headers. They may be
+    /// secrets, so they never go on a command line: Claude reads each from its environment
+    /// under an alias of the server's own (two servers may give one name different values),
+    /// and Codex gets them in the thread's config.
     pub env: Vec<(String, String)>,
     /// Its tools may run for this long (a worker's blocking question waits for an answer).
     pub tool_timeout_secs: Option<u64>,
@@ -1216,6 +1234,30 @@ pub struct McpServer {
     /// (Codex: `mcp_servers.<id>.tools.<tool>.approval_mode = "prompt"`): a thread's command
     /// that leaves its sandbox.
     pub prompt_tools: Vec<String>,
+}
+
+/// The MCP servers and skills of the user's own setup a session goes without
+/// (docs/research/phase7-probes.md): Claude denies a server's tools (`mcp__<name>`) and turns a
+/// skill off by name (`skillOverrides`); Codex disables a server
+/// (`mcp_servers.<name>.enabled=false`) and a skill by its file (`skills.config`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SwitchedOff {
+    /// Names of servers the agent loads by itself.
+    pub servers: Vec<String>,
+    /// Claude: names of skills it finds by itself.
+    pub skill_names: Vec<String>,
+    /// Codex: the `SKILL.md` of each skill it finds by itself.
+    pub skill_files: Vec<PathBuf>,
+    /// Codex: the user's own `skills.config` entries, kept beside [`Self::skill_files`]: the
+    /// override replaces the whole list.
+    pub codex_skill_config: Vec<serde_json::Value>,
+}
+
+impl SwitchedOff {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.servers.is_empty() && self.skill_names.is_empty() && self.skill_files.is_empty()
+    }
 }
 
 /// A command Claude runs after each of a thread's `Bash` calls, with the call's event on its
@@ -1267,6 +1309,9 @@ pub struct SessionSpec {
     /// `.claude-plugin/plugin.json`). Claude loads each with `--plugin-dir`; Codex adds each
     /// one's `skills` folder as an extra skills root. The user's own skills are unaffected.
     pub skill_plugins: Vec<PathBuf>,
+    /// What of the user's own setup a thread or worker goes without ([`ToolSet::user_setup`]):
+    /// what they switched off for Brigadier.
+    pub switched_off: SwitchedOff,
     /// Extra environment for the CLI and everything it starts (the process tag, TMPDIR).
     pub env: Vec<(String, String)>,
     /// Variables taken out of the CLI's environment, and so out of everything it starts (an
