@@ -539,6 +539,7 @@ async fn the_board_lists_siblings_and_tells_no_overlap_or_merge() {
 #[derive(Default)]
 struct Routing {
     args: std::sync::Mutex<serde_json::Value>,
+    follow_up: std::sync::Mutex<String>,
     results: std::sync::Mutex<Vec<String>>,
     gate: tokio::sync::Notify,
 }
@@ -588,7 +589,16 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
             }
             turn.emit(bash(brigadier_providers::ItemStatus::InProgress))
                 .await;
-            let block = turn.steered().await.unwrap_or_default();
+            // An earlier follow-up that joined on its own may have left its steer unread:
+            // route the one this turn is for.
+            let text = routing.follow_up.lock().unwrap().clone();
+            let mut block = String::new();
+            while let Some(next) = turn.steered().await {
+                if next.contains("[follow-up ") && next.contains(&text) {
+                    block = next;
+                    break;
+                }
+            }
             let id = block
                 .split("[follow-up ")
                 .nth(1)
@@ -623,6 +633,7 @@ impl Routing {
         args: serde_json::Value,
     ) -> String {
         *self.args.lock().unwrap() = args;
+        *self.follow_up.lock().unwrap() = follow_up.to_owned();
         let before = self.results.lock().unwrap().len();
         flow.say_to(tab, "Run the tests.").await;
         flow.until_in(tab, "the command to run", |board| {
