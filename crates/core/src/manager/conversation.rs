@@ -6381,6 +6381,12 @@ pub(crate) fn browser_tab_note(tab: &str, title: &str, url: &str) -> String {
     )
 }
 
+/// Whether a wait for a limit of `kind` resumes on its own: a usage window resets; a spend
+/// control or credits never does (MA5).
+fn resumes_on_its_own(kind: Option<brigadier_providers::LimitKind>) -> bool {
+    kind.is_none_or(|kind| kind == brigadier_providers::LimitKind::UsageWindow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6594,10 +6600,4 @@ mod tests {
             WriteCause::EffortChange
         );
     }
-}
-
-/// Whether a wait for a limit of `kind` resumes on its own: a usage window resets; a spend
-/// control or credits never does (MA5).
-fn resumes_on_its_own(kind: Option<brigadier_providers::LimitKind>) -> bool {
-    kind.is_none_or(|kind| kind == brigadier_providers::LimitKind::UsageWindow)
 }

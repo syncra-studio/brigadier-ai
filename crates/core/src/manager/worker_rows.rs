@@ -446,18 +446,21 @@ impl SessionManager {
             .is_some_and(|rows| !rows.is_empty())
     }
 
-    /// Forgets the live state of workers no session lists any more.
-    pub(crate) fn forget_worker_rows(&self, tasks: &HashSet<TaskId>) {
-        self.worker_rows
-            .cli
+    /// Forgets the live state of a deleted session's workers.
+    pub(crate) fn forget_worker_rows(&self, conv: &ConversationId, tasks: &[Task]) {
+        let tasks: HashSet<&TaskId> = tasks.iter().map(|task| &task.id).collect();
+        let rows = &self.worker_rows;
+        rows.cli
             .lock()
             .unwrap()
             .retain(|task, _| !tasks.contains(task));
-        self.worker_rows
-            .git
+        rows.git
             .lock()
             .unwrap()
             .retain(|task, _| !tasks.contains(task));
+        rows.due.lock().unwrap().remove(conv);
+        rows.git_read_ms.lock().unwrap().remove(conv);
+        rows.sent.lock().unwrap().remove(conv);
     }
 }
 

@@ -1377,6 +1377,7 @@ impl SessionManager {
         self.close_runs(runs, false).await;
         let runs = self.release_conversation_runs(&id).await;
         let tasks = self.core.tasks(&id).await.unwrap_or_default();
+        self.forget_worker_rows(&id, &tasks);
         // A repository that is gone (moved or removed by the user) has no branches left to
         // delete.
         if delete_branches
