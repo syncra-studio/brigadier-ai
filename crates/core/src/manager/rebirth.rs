@@ -302,11 +302,22 @@ pub(crate) fn note_fork_spec(thread: &SessionSpec, native_id: String, grant: &st
             server
         })
         .collect();
+    // It runs no command, so it has no use for the thread's `brigadier` grant.
+    let env = thread
+        .env
+        .iter()
+        .filter(|(name, _)| {
+            name != brigadier_cli::protocol::SESSION_ENV
+                && name != brigadier_cli::protocol::GRANT_ENV
+        })
+        .cloned()
+        .collect();
     SessionSpec {
         origin: Origin::Fork { native_id },
         ephemeral: true,
         access: Access::ReadOnly,
         mcp_servers,
+        env,
         record_to: None,
         redactor: super::secrets::redactor(vec![grant.to_owned()]),
         // The thread's live CLI works in the same folder (a fork finds its session by folder):

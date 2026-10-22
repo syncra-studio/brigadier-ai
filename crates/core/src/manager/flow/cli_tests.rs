@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use brigadier_cli::protocol::{CliCall, CliReply, CliRequest, PROTOCOL};
+use brigadier_cli::protocol::{CliCall, CliReply, CliRequest, GRANT_ENV, PROTOCOL, SESSION_ENV};
 use brigadier_providers::ProviderKind;
 use serde_json::{Value, json};
 
@@ -21,9 +21,14 @@ fn short(id: &str) -> String {
     id[id.len() - 8..].to_owned()
 }
 
-/// Runs `brigadier <request>` as the turn's session (its id and grant), and checks the answer
-/// against the command's schema; an error answer comes back as `{"error": …}`.
-async fn brigadier(turn: &Turn, session: &str, request: CliRequest) -> Value {
+/// Runs `brigadier <request>` as a command of the turn would: as the session and with the grant
+/// its CLI's environment names. Checks the answer against the command's schema; an error answer
+/// comes back as `{"error": …}`.
+async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
+    let session = turn.env(SESSION_ENV).expect("the CLI knows its session");
+    let grant = turn
+        .env(GRANT_ENV)
+        .expect("the CLI has its session's grant");
     let command = match &request {
         CliRequest::Sessions => "sessions",
         CliRequest::Workers => "workers",
@@ -32,7 +37,7 @@ async fn brigadier(turn: &Turn, session: &str, request: CliRequest) -> Value {
     };
     let caller = turn
         .host
-        .cli_caller(session, &turn.grant)
+        .cli_caller(session, grant)
         .expect("the session's own grant is accepted");
     let call = CliCall {
         protocol: PROTOCOL,
@@ -57,6 +62,19 @@ async fn brigadier(turn: &Turn, session: &str, request: CliRequest) -> Value {
     value
 }
 
+/// What a command in the turn finds of `brigadier`'s environment: who calls, the grant, the
+/// data folder and the first folder on `PATH`.
+fn seen_env(turn: &Turn) -> Value {
+    let path = turn.env("PATH").unwrap_or_default();
+    json!({
+        "session": turn.env(SESSION_ENV),
+        "grant": turn.env(GRANT_ENV),
+        "data dir": turn.env(brigadier_sandbox::DATA_DIR_ENV),
+        "first on path": std::env::split_paths(path).next(),
+        "grant is the turn's": turn.env(GRANT_ENV) == Some(turn.grant.as_str()),
+    })
+}
+
 /// Each thread starts one worker when asked; the main session's thread looks around with
 /// `brigadier` when asked; each worker calls `brigadier` as itself, then reports.
 fn looking(answers: Answers) -> Script {
@@ -67,14 +85,14 @@ fn looking(answers: Answers) -> Script {
                 answers.lock().unwrap().insert(name.into(), value);
             };
             if let Some(Role::Worker { task_id, .. }) = turn.host.grants().resolve(&turn.grant) {
-                let me = task_id.0.clone();
+                keep(&format!("worker env {}", task_id.0), seen_env(&turn));
                 keep(
                     "worker sessions",
-                    brigadier(&turn, &me, CliRequest::Sessions).await,
+                    brigadier(&turn, CliRequest::Sessions).await,
                 );
                 keep(
                     "worker workers",
-                    brigadier(&turn, &me, CliRequest::Workers).await,
+                    brigadier(&turn, CliRequest::Workers).await,
                 );
                 let reply = turn
                     .call("submit_report", json!({"summary": "Three lines."}))
@@ -99,8 +117,9 @@ fn looking(answers: Answers) -> Script {
                 return Reply::text("Started a worker.");
             }
             if turn.input.contains("Look around.") {
-                let sessions = brigadier(&turn, &me, CliRequest::Sessions).await;
-                let workers = brigadier(&turn, &me, CliRequest::Workers).await;
+                keep("thread env", seen_env(&turn));
+                let sessions = brigadier(&turn, CliRequest::Sessions).await;
+                let workers = brigadier(&turn, CliRequest::Workers).await;
                 let worker = workers["workers"][0]["id"].as_str().unwrap().to_owned();
                 let other = sessions["sessions"]
                     .as_array()
@@ -118,31 +137,31 @@ fn looking(answers: Answers) -> Script {
                 };
                 keep(
                     "show worker",
-                    brigadier(&turn, &me, CliRequest::Show { id: worker.clone() }).await,
+                    brigadier(&turn, CliRequest::Show { id: worker.clone() }).await,
                 );
                 keep(
                     "read worker",
-                    brigadier(&turn, &me, read(&worker, None, false)).await,
+                    brigadier(&turn, read(&worker, None, false)).await,
                 );
                 keep(
                     "read worker last",
-                    brigadier(&turn, &me, read(&worker, Some(3), false)).await,
+                    brigadier(&turn, read(&worker, Some(3), false)).await,
                 );
                 keep(
                     "read worker screen",
-                    brigadier(&turn, &me, read(&worker, None, true)).await,
+                    brigadier(&turn, read(&worker, None, true)).await,
                 );
                 keep(
                     "show other",
-                    brigadier(&turn, &me, CliRequest::Show { id: other.clone() }).await,
+                    brigadier(&turn, CliRequest::Show { id: other.clone() }).await,
                 );
                 keep(
                     "read other",
-                    brigadier(&turn, &me, read(&other, None, false)).await,
+                    brigadier(&turn, read(&other, None, false)).await,
                 );
                 keep(
                     "read me screen",
-                    brigadier(&turn, &me, read(&short(&me), None, true)).await,
+                    brigadier(&turn, read(&short(&me), None, true)).await,
                 );
                 let elsewhere = answers.lock().unwrap()["elsewhere"]
                     .as_str()
@@ -150,7 +169,7 @@ fn looking(answers: Answers) -> Script {
                     .to_owned();
                 keep(
                     "show elsewhere",
-                    brigadier(&turn, &me, CliRequest::Show { id: elsewhere }).await,
+                    brigadier(&turn, CliRequest::Show { id: elsewhere }).await,
                 );
                 // The session's grant names this session only.
                 assert_eq!(turn.host.cli_caller(&me, "brg_not_a_grant"), None);
@@ -199,6 +218,25 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
 
     let mine = Flow::task(&flow.board_of(&flow.conversation).await, 1).clone();
     let theirs = Flow::task(&flow.board_of(&docs).await, 1).clone();
+
+    // Every thread and worker CLI is started knowing who it is for `brigadier`, with its own
+    // live grant, the (non-default) data folder and `brigadier`'s folder first on `PATH`.
+    let bin = flow.manager.config.daemon_exe.parent().unwrap().to_owned();
+    let data = flow.manager.data_dir.clone();
+    assert_eq!(
+        answers["thread env"],
+        json!({"session": flow.conversation.0, "grant is the turn's": true,
+               "data dir": data, "first on path": bin,
+               "grant": answers["thread env"]["grant"]})
+    );
+    for task in [&mine, &theirs] {
+        let seen = &answers[&format!("worker env {}", task.id.0)];
+        assert_eq!(
+            seen,
+            &json!({"session": task.id.0, "grant is the turn's": true,
+                    "data dir": data, "first on path": bin, "grant": seen["grant"]})
+        );
+    }
 
     // `sessions`: this project's two sidebar sessions, this one marked, no worker, nothing of
     // the other project.

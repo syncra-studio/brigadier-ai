@@ -3167,6 +3167,8 @@ impl SessionManager {
             .clone()
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
+        // What its CLI gets for `brigadier`: a thread's and a Chat's, never a tab chat's.
+        let mut cli_env = Vec::new();
         let mut launch = None;
         let mut output_hook = None;
         let mut thread = false;
@@ -3197,6 +3199,7 @@ impl SessionManager {
                     },
                 );
                 grant_values.push(grant.clone());
+                cli_env = self.cli_env(&conv.id.0, &grant);
                 let server = self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false);
                 if self.thread_hooked(choice.provider) {
                     let hook_grant = self.grants.issue(
@@ -3255,6 +3258,7 @@ impl SessionManager {
                     },
                 );
                 grant_values.push(grant.clone());
+                cli_env = self.cli_env(&conv.id.0, &grant);
                 (
                     fallback.unwrap_or(model),
                     prompts::chat(&memories),
@@ -3347,7 +3351,10 @@ impl SessionManager {
             env: tmp
                 .as_deref()
                 .map(SessionManager::thread_env)
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into_iter()
+                .chain(cli_env)
+                .collect(),
             unset_env: Vec::new(),
             low_priority: false,
             record_to: None,

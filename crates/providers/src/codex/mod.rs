@@ -1420,6 +1420,7 @@ async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<
         }
     }
     config.insert("mcp_servers".into(), Value::Object(servers));
+    shell_sees_brigadier(&mut config, &effective, spec);
     if !spec.auto_compact {
         // Codex clamps the limit to 90% of the model's window.
         config.insert(
@@ -1443,6 +1444,44 @@ async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<
         );
     }
     Ok(config)
+}
+
+/// The session's `BRIGADIER_*` variables (who calls `brigadier`, its grant, the data folder) in
+/// the commands Codex runs, whatever the user's `shell_environment_policy` inherits: added to
+/// its `set`, on top of the policy Codex already merged (the override replaces the whole
+/// table). `PATH` is inherited as is, so Codex's own additions to it stay.
+fn shell_sees_brigadier(config: &mut Map<String, Value>, effective: &Value, spec: &SessionSpec) {
+    let ours: Vec<&(String, String)> = spec
+        .env
+        .iter()
+        .filter(|(name, _)| name.starts_with("BRIGADIER_"))
+        .collect();
+    if ours.is_empty() {
+        return;
+    }
+    let mut policy = config
+        .remove("shell_environment_policy")
+        .or_else(|| {
+            effective
+                .pointer("/config/shell_environment_policy")
+                .cloned()
+        })
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    remove_unset_options(&mut policy);
+    let set = policy
+        .as_object_mut()
+        .expect("an object")
+        .entry("set")
+        .or_insert_with(|| json!({}));
+    if !set.is_object() {
+        *set = json!({});
+    }
+    let set = set.as_object_mut().expect("an object");
+    for (name, value) in ours {
+        set.insert(name.clone(), Value::String(value.clone()));
+    }
+    config.insert("shell_environment_policy".into(), policy);
 }
 
 /// Loaded project layers only: Codex itself decides whether the project is trusted.
@@ -2727,6 +2766,56 @@ mod tests {
         read["layers"][0]["disabledReason"] = json!("untrusted");
         assert!(project_options(&read).is_empty());
         assert!(project_options(&json!({})).is_empty());
+    }
+
+    /// A command Codex runs sees the session's `BRIGADIER_*` variables whatever the user's
+    /// policy inherits: they join its `set`, the rest of the policy kept, `PATH` untouched.
+    #[test]
+    fn commands_see_brigadiers_variables_under_the_users_shell_policy() {
+        let mut session = spec(ToolSet::Thread, None);
+        session.env = vec![
+            ("TMPDIR".into(), "/t".into()),
+            ("PATH".into(), "/app/bin:/usr/bin".into()),
+            ("BRIGADIER_SESSION".into(), "s-1".into()),
+            ("BRIGADIER_SESSION_GRANT".into(), "brg_1".into()),
+        ];
+        let effective = json!({ "config": { "shell_environment_policy": {
+            "inherit": "core", "set": { "MINE": "kept" }, "exclude": ["X*"],
+            "include_only": null
+        } } });
+        let mut config = Map::new();
+        shell_sees_brigadier(&mut config, &effective, &session);
+        assert_eq!(
+            config["shell_environment_policy"],
+            json!({ "inherit": "core", "exclude": ["X*"], "set": {
+                "MINE": "kept", "BRIGADIER_SESSION": "s-1", "BRIGADIER_SESSION_GRANT": "brg_1"
+            } })
+        );
+        // A project's merged policy is the one added to; with none at all, only `set`.
+        let mut config = Map::new();
+        config.insert(
+            "shell_environment_policy".into(),
+            json!({ "inherit": "all" }),
+        );
+        shell_sees_brigadier(&mut config, &json!({}), &session);
+        assert_eq!(
+            config["shell_environment_policy"]["set"]["BRIGADIER_SESSION"],
+            "s-1"
+        );
+        assert_eq!(config["shell_environment_policy"]["inherit"], "all");
+        let mut config = Map::new();
+        shell_sees_brigadier(&mut config, &json!({}), &session);
+        assert_eq!(
+            config["shell_environment_policy"],
+            json!({ "set": { "BRIGADIER_SESSION": "s-1", "BRIGADIER_SESSION_GRANT": "brg_1" } })
+        );
+        // A session without them leaves the user's policy alone.
+        session
+            .env
+            .retain(|(name, _)| !name.starts_with("BRIGADIER_"));
+        let mut config = Map::new();
+        shell_sees_brigadier(&mut config, &effective, &session);
+        assert!(config.is_empty());
     }
 
     #[test]

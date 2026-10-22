@@ -1680,7 +1680,8 @@ impl SessionManager {
             secret_values.push(grant.clone());
             self.stop_hook_command(grant)
         });
-        let env = worker_env(&workspace.scratch);
+        let mut env = worker_env(&workspace.scratch);
+        env.extend(self.cli_env(&task.id.0, &worker_grant));
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
         // Its own branch is the only ref it moves; the branch its work lands on is the engine's.

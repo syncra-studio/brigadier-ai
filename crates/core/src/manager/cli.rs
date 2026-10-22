@@ -281,6 +281,32 @@ fn failed(err: impl std::fmt::Display) -> CliReply {
 }
 
 impl SessionManager {
+    /// What a thread's, Chat's or worker's CLI gets so `brigadier` (and every command it runs)
+    /// knows who calls and finds the daemon: the session's id and live `grant`, the data folder
+    /// when it isn't the installed app's, and the folder `brigadier` ships in first on `PATH`.
+    /// The grant stays in the environment, never on a command line.
+    pub(crate) fn cli_env(&self, session: &str, grant: &str) -> Vec<(String, String)> {
+        let mut env = vec![
+            (cli::SESSION_ENV.to_owned(), session.to_owned()),
+            (cli::GRANT_ENV.to_owned(), grant.to_owned()),
+        ];
+        if brigadier_sandbox::default_data_dir().ok().as_deref() != Some(self.data_dir.as_path()) {
+            env.push((
+                brigadier_sandbox::DATA_DIR_ENV.to_owned(),
+                self.data_dir.to_string_lossy().into_owned(),
+            ));
+        }
+        if let Some(bin) = self.config.daemon_exe.parent() {
+            let rest = self.runtime.cli_env().var("PATH");
+            let dirs = std::iter::once(bin.to_owned())
+                .chain(rest.into_iter().flat_map(std::env::split_paths));
+            if let Ok(path) = std::env::join_paths(dirs) {
+                env.push(("PATH".to_owned(), path.to_string_lossy().into_owned()));
+            }
+        }
+        env
+    }
+
     /// Who a `brigadier` call comes from, when `grant` is the live grant of the session it
     /// names: a thread's or Chat's (`session` is its conversation's id) or a worker's
     /// (`session` is its task's id). `None` refuses the call.

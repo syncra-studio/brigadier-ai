@@ -2354,8 +2354,20 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
         flow.manager.grants().resolve(&grant).is_none(),
         "revoked once the fork ended"
     );
+    // It runs no command: it has no `brigadier` session or grant, and keeps the rest.
+    let calls = |spec: &SessionSpec| {
+        spec.env
+            .iter()
+            .filter(|(name, _)| {
+                name == brigadier_cli::protocol::SESSION_ENV
+                    || name == brigadier_cli::protocol::GRANT_ENV
+            })
+            .count()
+    };
+    assert_eq!((calls(&thread), calls(&fork)), (2, 0));
     // Everything else is the thread's.
     let unchanged = SessionSpec {
+        env: thread.env.clone(),
         origin: thread.origin.clone(),
         ephemeral: thread.ephemeral,
         access: thread.access,
@@ -2369,6 +2381,7 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
         ..fork.clone()
     };
     assert_eq!(format!("{unchanged:?}"), format!("{thread:?}"));
+    assert!(fork.env.iter().all(|var| thread.env.contains(var)));
     assert_eq!(fork.tools, ToolSet::Thread);
     flow.stop().await;
 }

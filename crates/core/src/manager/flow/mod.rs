@@ -61,6 +61,8 @@ pub(crate) struct Turn {
     /// Its CLI session's transcript ([`transcribe`]).
     transcript: PathBuf,
     grant: String,
+    /// What its CLI was started with on top of the user's environment, as its commands see it.
+    env: Vec<(String, String)>,
     host: Arc<SessionManager>,
     events: mpsc::Sender<ProviderEvent>,
     answers: Answers,
@@ -135,6 +137,15 @@ impl Reply {
 pub(crate) type Script = Arc<dyn Fn(Turn) -> BoxFuture<'static, Reply> + Send + Sync>;
 
 impl Turn {
+    /// A variable of the CLI's environment that Brigadier set, as a command in the turn reads it.
+    pub fn env(&self, name: &str) -> Option<&str> {
+        self.env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
     pub fn is_orchestrator(&self) -> bool {
         self.prompt
             .contains(crate::manager::prompts::THREAD_OPENING)
@@ -740,6 +751,7 @@ impl Provider for FakeCli {
                 cwd: spec.cwd.clone(),
                 add_dirs: spec.add_dirs.clone(),
                 grant,
+                env: spec.env.clone(),
                 script,
                 host: self.host.clone(),
                 events: Mutex::new(Some(tx)),
@@ -887,6 +899,7 @@ struct FakeSession {
     cwd: PathBuf,
     add_dirs: Vec<PathBuf>,
     grant: String,
+    env: Vec<(String, String)>,
     script: Script,
     host: Arc<OnceLock<Weak<SessionManager>>>,
     events: Mutex<Option<mpsc::Sender<ProviderEvent>>>,
@@ -987,6 +1000,7 @@ impl ProviderSession for FakeSession {
                 native_id: self.native_id.clone(),
                 transcript: self.transcript.clone(),
                 grant: self.grant.clone(),
+                env: self.env.clone(),
                 host,
                 events: tx.clone(),
                 answers: self.answers.clone(),
