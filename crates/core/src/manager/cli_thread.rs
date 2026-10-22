@@ -38,6 +38,7 @@ impl SessionManager {
         let mut context = None;
         let mut noted = None;
         let mut background = None;
+        let mut mcp = None;
         let mut read_output = false;
         {
             let mut threads = self.cli_threads.lock().unwrap();
@@ -48,12 +49,28 @@ impl SessionManager {
                     read_output = !live.reading_output && reads_output(&live.background);
                     live.reading_output |= read_output;
                 }
+                Some(ProviderEvent::McpServers { servers, .. }) => {
+                    live.mcp.clone_from(servers);
+                    mcp = Some(live.mcp.clone());
+                }
+                Some(ProviderEvent::McpServerChanged { server }) => {
+                    match live.mcp.iter_mut().find(|held| held.name == server.name) {
+                        Some(held) => *held = server.clone(),
+                        None => live.mcp.push(server.clone()),
+                    }
+                    mcp = Some(live.mcp.clone());
+                }
                 // The CLI's background tasks end with it.
                 Some(ProviderEvent::Exited { .. }) | None if !live.background.is_empty() => {
                     live.background.clear();
                     background = Some(Vec::new());
                 }
                 _ => {}
+            }
+            // So do its MCP servers.
+            if matches!(event, Some(ProviderEvent::Exited { .. }) | None) && !live.mcp.is_empty() {
+                live.mcp.clear();
+                mcp = Some(Vec::new());
             }
             match event {
                 Some(ProviderEvent::TurnStarted { .. }) => {
@@ -63,6 +80,7 @@ impl SessionManager {
                             open: true,
                             awaiting_user: true,
                             background: std::mem::take(&mut live.background),
+                            mcp: std::mem::take(&mut live.mcp),
                             reading_output: live.reading_output,
                             ..LiveTurn::default()
                         };
@@ -79,6 +97,7 @@ impl SessionManager {
                         *live = LiveTurn {
                             open: true,
                             background: std::mem::take(&mut live.background),
+                            mcp: std::mem::take(&mut live.mcp),
                             reading_output: live.reading_output,
                             ..LiveTurn::default()
                         };
@@ -95,6 +114,7 @@ impl SessionManager {
                             error: None,
                             ended_at_ms: None,
                             requests: live.requests.clone(),
+                            limit: None,
                         });
                     }
                     let entry = FileEntry {
@@ -105,6 +125,9 @@ impl SessionManager {
                 }
                 Some(ProviderEvent::Error { error }) if live.open => {
                     live.error = Some(error.message.clone());
+                    if let Some(limit) = thread_view::limit_of(error) {
+                        live.limit = Some(limit);
+                    }
                     news.push(entry(event.cloned(), at));
                 }
                 Some(ProviderEvent::TurnCompleted { status, .. }) if live.open => {
@@ -145,6 +168,7 @@ impl SessionManager {
                     error: live.error.take(),
                     ended_at_ms: Some(at),
                     requests: live.requests.clone(),
+                    limit: live.limit.take(),
                 });
             }
             if let Some(record) = &noted
@@ -161,6 +185,7 @@ impl SessionManager {
             || ended.is_some()
             || context.is_some()
             || background.is_some()
+            || mcp.is_some()
         {
             let _ = self.thread_news.send(ThreadNews {
                 conversation_id: conv.id.clone(),
@@ -169,7 +194,17 @@ impl SessionManager {
                 ended,
                 context,
                 background,
+                mcp,
+                workers: None,
             });
+        }
+        // A command of the session may merge a worker's branch, or move its own.
+        if matches!(
+            event,
+            Some(ProviderEvent::Command { status, .. }) if *status != brigadier_providers::ItemStatus::InProgress
+        ) && self.has_worker_rows(&conv.id)
+        {
+            self.workers_changed(&conv.id, true);
         }
         if read_output {
             let manager = self.arc();
@@ -227,6 +262,8 @@ impl SessionManager {
                     ended: None,
                     context: None,
                     background: Some(background),
+                    mcp: None,
+                    workers: None,
                 });
             }
         }
@@ -260,6 +297,13 @@ impl SessionManager {
             })
             .collect();
         self.core.activity(&turns).await
+    }
+
+    /// Conversation `id`'s thread as its CLI keeps it, with its workers' rows.
+    pub async fn thread_view_with_workers(&self, id: &ConversationId) -> Result<ThreadView> {
+        let mut view = self.thread_view(id)?;
+        view.workers = self.worker_rows_of(id, false).await?;
+        Ok(view)
     }
 
     /// Conversation `id`'s thread as its CLI keeps it.

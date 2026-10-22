@@ -904,6 +904,7 @@ impl SessionManager {
         if task.state != was {
             self.settle_requests(conversation_id).await;
         }
+        self.workers_changed(conversation_id, false);
         Ok(Some(task))
     }
 
@@ -1140,6 +1141,7 @@ impl SessionManager {
                         request: None,
                         first_reset_ms: None,
                         account: None,
+                        limit_kind: None,
                     };
                     (route, Some(wait))
                 }
@@ -2897,6 +2899,7 @@ impl SessionManager {
                     // never stored.
                     Some(event @ (ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. })) => {
                         live.note_event(&cli, &event).await;
+                        self.note_worker_cli(&live.conversation_id, &live.id, &event);
                     }
                     // Kept on the conversation's board while the CLI runs, never in its log.
                     Some(ProviderEvent::McpServers { servers, at_start }) => {
@@ -2910,11 +2913,13 @@ impl SessionManager {
                     Some(ProviderEvent::Looked { .. }) => {}
                     Some(event) if is_delta(&event) => {
                         live.note_event(&cli, &event).await;
+                        self.note_worker_cli(&live.conversation_id, &live.id, &event);
                         merge_delta(&mut deltas, event);
                         deadline.get_or_insert_with(|| tokio::time::Instant::now() + DELTA_WINDOW);
                     }
                     Some(mut event) => {
                         live.note_event(&cli, &event).await;
+                        self.note_worker_cli(&live.conversation_id, &live.id, &event);
                         deadline = None;
                         self.record_worker_events(&live.id, std::mem::take(&mut deltas)).await;
                         // A CLI that starts (again) tells its MCP servers anew.
@@ -3069,11 +3074,28 @@ impl SessionManager {
             ProviderEvent::SessionStarted {
                 native_id,
                 cli_version,
+                file,
                 ..
             } => {
                 cli.meter.session_started(cli_version.as_deref());
                 self.note_native_session(&live.conversation_id, &live.id, native_id)
                     .await;
+                // Its thread is its CLI's own file, as a session's is (S14).
+                if let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await {
+                    let record = self
+                        .session_dir(&live.conversation_id)
+                        .worker(&task)
+                        .join("record");
+                    let entry = super::session_dir::LineageEntry {
+                        provider: cli.provider,
+                        session_id: native_id.clone(),
+                        file: file.clone(),
+                        started_at: now_ms(),
+                    };
+                    if let Err(err) = super::session_dir::note_lineage_at(record, entry).await {
+                        tracing::warn!(task = %live.id, error = %err, "could not note the worker's CLI session");
+                    }
+                }
             }
             ProviderEvent::Message {
                 role: brigadier_providers::Role::Assistant,

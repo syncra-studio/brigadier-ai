@@ -366,6 +366,8 @@ struct ConvState {
     waited_request: Option<String>,
     /// The account that hit the limit the messages wait for (#277).
     waited_account: Option<crate::accounts::AccountRef>,
+    /// The kind of limit it waits for: a spend control or credits never resumes on its own.
+    waited_limit: Option<brigadier_providers::LimitKind>,
     /// The orchestrator's last model request, for knowing when its prompt cache expires
     /// (recovered from the orchestrator log when absent, as after a restart).
     cache: Option<CacheMark>,
@@ -3956,6 +3958,9 @@ impl SessionManager {
         provider: ProviderKind,
         update: McpUpdate,
     ) {
+        if task.is_some() {
+            self.workers_changed(id, false);
+        }
         let task = task.map(|task| task.0.as_str());
         if let Err(err) = self
             .core
@@ -4875,7 +4880,7 @@ impl SessionManager {
                     // Its own model's reset frees the messages too.
                     if let Some(waiting) = with_own_reset(waiting, &cli.model, &limit) {
                         let waits = self
-                            .wait_for_model(conv, cli, waiting, carried, served)
+                            .wait_for_model(conv, cli, waiting, carried, served, limit.kind)
                             .await;
                         self.set_run(&conv.id, RunState::Idle, None).await;
                         self.settle_requests(&conv.id).await;
@@ -5294,6 +5299,7 @@ impl SessionManager {
         waiting: brigadier_router::Waiting,
         carried: Vec<Message>,
         served: Option<String>,
+        limit: brigadier_providers::LimitKind,
     ) -> bool {
         let from = &cli.model;
         let first = {
@@ -5304,6 +5310,7 @@ impl SessionManager {
             }
             state.waited_model = Some(from.clone());
             state.waited_account = Some(cli.account.clone());
+            state.waited_limit = Some(limit);
             if served.is_some() {
                 state.waited_request = served.clone();
             }
@@ -5346,7 +5353,7 @@ impl SessionManager {
             .conversation(&conv.id)
             .ok()
             .and_then(|conversation| conversation.quota_wait);
-        let (messages, model, request, account) = {
+        let (messages, model, request, account, limit_kind) = {
             let state = conv.state.lock().await;
             let messages = state
                 .pending
@@ -5358,6 +5365,7 @@ impl SessionManager {
                 state.waited_model.clone(),
                 state.waited_request.clone(),
                 state.waited_account.clone(),
+                state.waited_limit,
             )
         };
         let wait = QuotaWait {
@@ -5374,6 +5382,7 @@ impl SessionManager {
                 .as_ref()
                 .and_then(|known| known.first_reset_ms)
                 .or(waiting.resets_at_ms),
+            limit_kind: limit_kind.or_else(|| known.as_ref().and_then(|known| known.limit_kind)),
         };
         let unchanged = known.as_ref() == Some(&wait);
         if !unchanged
@@ -5389,6 +5398,10 @@ impl SessionManager {
             state.wait_timer += 1;
             state.wait_timer
         };
+        // A spend control or credits waits for the user's Continue now alone (MA5).
+        if !resumes_on_its_own(wait.limit_kind) {
+            return;
+        }
         let delay = super::fallback::retry_delay(wait.resets_at_ms);
         let (manager, conv) = (self.arc(), conv.clone());
         self.spawn(async move {
@@ -5412,7 +5425,7 @@ impl SessionManager {
             let _retrying = conv.retry.lock().await;
             let (waited, waited_request, waited_account) = {
                 let state = conv.state.lock().await;
-                if !state.waiting {
+                if !state.waiting || !resumes_on_its_own(state.waited_limit) {
                     return;
                 }
                 (
@@ -5538,6 +5551,7 @@ impl SessionManager {
             state.waited_model = None;
             state.waited_request = None;
             state.waited_account = None;
+            state.waited_limit = None;
             // Any timer still set has nothing to do.
             state.wait_timer += 1;
         }
@@ -5548,6 +5562,33 @@ impl SessionManager {
         if recorded && let Err(err) = self.core.set_conversation_wait(&conv.id, None).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not end the wait"; conversation = %conv.id, error = %err);
         }
+    }
+
+    /// The user's Continue now on a conversation whose messages wait for a limit: they go now,
+    /// on the model they waited for, whatever the limit (MA5).
+    pub async fn continue_waiting(&self, id: &ConversationId) -> Result<()> {
+        let Some(conv) = self.convs_lock().get(id).cloned() else {
+            return Err(Error::NotFound(format!("a waiting turn of {id}")));
+        };
+        let _retrying = conv.retry.lock().await;
+        if !conv.state.lock().await.waiting {
+            return Ok(());
+        }
+        self.stop_waiting(&conv).await;
+        self.kick(&conv);
+        Ok(())
+    }
+
+    /// The user's Don't resume: the conversation's waiting messages stay in its thread and
+    /// never go on their own; it is idle (MA5).
+    pub async fn dont_resume(&self, id: &ConversationId) -> Result<()> {
+        let Some(conv) = self.convs_lock().get(id).cloned() else {
+            return Ok(());
+        };
+        self.drop_waiting(&conv).await;
+        self.set_run(&conv.id, RunState::Idle, None).await;
+        self.settle_requests(&conv.id).await;
+        Ok(())
     }
 
     /// The conversation's waiting messages are dropped: it is archived.
@@ -5611,6 +5652,7 @@ impl SessionManager {
             state.waited_model = wait.model.clone();
             state.waited_request = wait.request.clone();
             state.waited_account = wait.account.clone();
+            state.waited_limit = wait.limit_kind;
         }
         let waiting = brigadier_router::Waiting {
             reason: wait.reason,
@@ -6552,4 +6594,10 @@ mod tests {
             WriteCause::EffortChange
         );
     }
+}
+
+/// Whether a wait for a limit of `kind` resumes on its own: a usage window resets; a spend
+/// control or credits never does (MA5).
+fn resumes_on_its_own(kind: Option<brigadier_providers::LimitKind>) -> bool {
+    kind.is_none_or(|kind| kind == brigadier_providers::LimitKind::UsageWindow)
 }

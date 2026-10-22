@@ -1,0 +1,571 @@
+//! A session's own workers as their CLIs and git show them (STRIP-DOWN-PLAN S14, G19): the
+//! rows its Workers row, its rail and its worker cards read, sent with its thread
+//! ([`ThreadView::workers`], [`ThreadNews::workers`]) as Background is.
+//!
+//! - What a worker's CLI does (its turn open or how it ended, a usage limit, a compaction, when
+//!   it last said anything) is followed from its events, live only.
+//! - What it waits on the user for is its CLI's open permission prompts and questions and its
+//!   MCP servers that want a sign-in.
+//! - Its +/−, commits ahead and whether it merged are git's, against its session's branch
+//!   (G21): read again at most every [`GIT_EVERY_MS`], and right away when a turn of the
+//!   worker or a command of the session ends.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use brigadier_providers::{LimitHit, McpStatus, ProviderEvent, Role, TurnStatus};
+
+use super::{SessionManager, blocking};
+use crate::model::ConversationId;
+use crate::thread_view::{self, ThreadNews, TurnEnd, WorkerRow, WorkerWait, WorkerWaitKind};
+use crate::work::{ApprovalSubject, CardState, DiffStat, Task, TaskId, TaskState};
+use crate::{Result, now_ms};
+
+/// How long changes gather before a session's rows are sent again.
+const SETTLE_MS: u64 = 250;
+/// The least time between two git reads of a session's workers, unless one is due at once.
+pub(crate) const GIT_EVERY_MS: i64 = 2_000;
+/// How stale a row's `last_event_at_ms` may grow before it is sent again for that alone: the
+/// app counts a worker quiet after 20 minutes of nothing.
+const EVENT_STALE_MS: i64 = 60_000;
+
+/// What a worker's CLI did, as far as its rows tell.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct WorkerCli {
+    pub open: bool,
+    pub last_end: Option<TurnEnd>,
+    pub last_event_ms: Option<i64>,
+    /// `last_event_ms` as last sent.
+    sent_event_ms: Option<i64>,
+    pub limit: Option<LimitHit>,
+    pub fresh_context: bool,
+    /// The open turn had an error the CLI won't retry.
+    errored: bool,
+}
+
+/// What git says of a worker's work against its session's branch.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct WorkerGit {
+    pub diff: Option<DiffStat>,
+    pub ahead: u32,
+    pub merged: bool,
+}
+
+/// The rows' live state: per worker, its CLI and its git; per session, what is due.
+#[derive(Default)]
+pub(crate) struct WorkerRows {
+    cli: std::sync::Mutex<HashMap<TaskId, WorkerCli>>,
+    git: std::sync::Mutex<HashMap<TaskId, WorkerGit>>,
+    /// Sessions whose rows are to be sent, and whether git is to be read for them at once.
+    due: std::sync::Mutex<HashMap<ConversationId, bool>>,
+    /// When each session's workers were last read in git.
+    git_read_ms: std::sync::Mutex<HashMap<ConversationId, i64>>,
+    /// Each session's rows as last sent.
+    sent: std::sync::Mutex<HashMap<ConversationId, Vec<WorkerRow>>>,
+}
+
+/// Follows `event` of a worker's CLI into `cli`; whether its rows changed.
+pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> bool {
+    let before = cli.clone();
+    cli.last_event_ms = Some(at);
+    match event {
+        ProviderEvent::TurnStarted { .. } => {
+            if !cli.open {
+                cli.open = true;
+                cli.fresh_context = false;
+                cli.limit = None;
+                cli.errored = false;
+            }
+        }
+        ProviderEvent::Message {
+            role: Role::User, ..
+        } if !cli.open => {
+            cli.open = true;
+            cli.fresh_context = false;
+            cli.limit = None;
+            cli.errored = false;
+        }
+        ProviderEvent::Error { error } if !error.will_retry => {
+            cli.errored = true;
+            if let Some(limit) = thread_view::limit_of(error) {
+                cli.limit = Some(limit);
+            }
+        }
+        ProviderEvent::CompactionStarted { .. } => cli.fresh_context = true,
+        ProviderEvent::TurnCompleted { status, .. } if cli.open => {
+            cli.open = false;
+            cli.last_end = Some(match status {
+                TurnStatus::Completed if cli.errored => TurnEnd::Failed,
+                TurnStatus::Completed => TurnEnd::Done,
+                TurnStatus::Interrupted => TurnEnd::Stopped,
+                TurnStatus::Failed => TurnEnd::Failed,
+            });
+        }
+        ProviderEvent::Exited { .. } if cli.open => {
+            cli.open = false;
+            cli.last_end = Some(TurnEnd::Interrupted);
+        }
+        _ => {}
+    }
+    let mut now = cli.clone();
+    now.last_event_ms = before.last_event_ms;
+    let changed = now != before
+        || cli
+            .sent_event_ms
+            .is_none_or(|sent| at.saturating_sub(sent) >= EVENT_STALE_MS);
+    if changed {
+        cli.sent_event_ms = Some(at);
+    }
+    changed
+}
+
+/// A worker's row from its task (its link to the session, its title and model, its branch),
+/// its CLI and its git.
+pub(crate) fn row(
+    task: &Task,
+    cli: Option<&WorkerCli>,
+    git: Option<&WorkerGit>,
+    waiting: Vec<WorkerWait>,
+    mcp: Vec<brigadier_providers::McpServerState>,
+    base: Option<String>,
+) -> WorkerRow {
+    let gone = task.state.is_final() || task.plain.as_ref().is_some_and(|plain| plain.closed);
+    let cli = cli.cloned().unwrap_or_default();
+    // A worker no CLI event was heard of since a restart: how its task ended.
+    let last_end = cli.last_end.or(match task.state {
+        TaskState::Failed => Some(TurnEnd::Failed),
+        TaskState::Stopped | TaskState::Rejected => Some(TurnEnd::Stopped),
+        state if state.is_final() => Some(TurnEnd::Done),
+        TaskState::Reported => Some(TurnEnd::Done),
+        _ => None,
+    });
+    let git = git.cloned().unwrap_or_default();
+    WorkerRow {
+        id: task.id.clone(),
+        number: task.number,
+        title: task.title.clone(),
+        agent: task.route.choice.provider,
+        model: task.route.choice.model.clone(),
+        started_at_ms: task.created_at_ms,
+        working: cli.open && !gone,
+        last_end,
+        gone,
+        last_event_at_ms: cli.last_event_ms,
+        limit: cli.limit.filter(|_| !gone),
+        fresh_context: cli.fresh_context && cli.open,
+        waiting: if gone { Vec::new() } else { waiting },
+        mcp,
+        branch: task.workspace.as_ref().and_then(|w| w.branch.clone()),
+        base,
+        diff: git.diff,
+        ahead: git.ahead,
+        merged: git.merged,
+    }
+}
+
+impl SessionManager {
+    /// Follows an event of worker `task`'s CLI (of session `conversation`) into its row.
+    pub(super) fn note_worker_cli(
+        &self,
+        conversation: &ConversationId,
+        task: &TaskId,
+        event: &ProviderEvent,
+    ) {
+        let changed = {
+            let mut held = self.worker_rows.cli.lock().unwrap();
+            follow(held.entry(task.clone()).or_default(), event, now_ms())
+        };
+        let git_now = matches!(
+            event,
+            ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. }
+        );
+        let git_soon = matches!(
+            event,
+            ProviderEvent::Command { status, .. } | ProviderEvent::ToolCall { status, .. }
+                if *status != brigadier_providers::ItemStatus::InProgress
+        ) || matches!(event, ProviderEvent::FileChanges { .. });
+        if changed || git_now || git_soon {
+            self.workers_changed(conversation, git_now);
+        }
+    }
+
+    /// Session `conversation`'s worker rows are to be sent again, soon; `git_now`: with git
+    /// read again whatever its last read.
+    pub(crate) fn workers_changed(&self, conversation: &ConversationId, git_now: bool) {
+        let first = {
+            let mut due = self.worker_rows.due.lock().unwrap();
+            let first = !due.contains_key(conversation);
+            *due.entry(conversation.clone()).or_default() |= git_now;
+            first
+        };
+        if !first {
+            return;
+        }
+        let (manager, id) = (self.arc(), conversation.clone());
+        self.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(SETTLE_MS)).await;
+            let git_now = manager
+                .worker_rows
+                .due
+                .lock()
+                .unwrap()
+                .remove(&id)
+                .unwrap_or_default();
+            match manager.worker_rows_of(&id, git_now).await {
+                Ok(rows) => manager.send_worker_rows(&id, rows),
+                Err(err) => tracing::debug!(conversation = %id, error = %err, "no worker rows"),
+            }
+        });
+    }
+
+    fn send_worker_rows(&self, id: &ConversationId, rows: Vec<WorkerRow>) {
+        {
+            let mut sent = self.worker_rows.sent.lock().unwrap();
+            if sent.get(id).is_some_and(|held| *held == rows)
+                || (rows.is_empty() && !sent.contains_key(id))
+            {
+                return;
+            }
+            sent.insert(id.clone(), rows.clone());
+        }
+        let _ = self.thread_news.send(ThreadNews {
+            conversation_id: id.clone(),
+            entries: Vec::new(),
+            opened: false,
+            ended: None,
+            context: None,
+            background: None,
+            mcp: None,
+            workers: Some(rows),
+        });
+    }
+
+    /// Session `id`'s worker rows now, newest first. `git_now`: git is read again whatever
+    /// its last read; else only when that is older than [`GIT_EVERY_MS`].
+    pub(crate) async fn worker_rows_of(
+        &self,
+        id: &ConversationId,
+        git_now: bool,
+    ) -> Result<Vec<WorkerRow>> {
+        let board = self.core.board(id).await?;
+        if board.tasks.is_empty() {
+            return Ok(Vec::new());
+        }
+        let parent_branch = self.changes_checkout(id).and_then(|(_, branch)| branch);
+        let read_git = git_now || {
+            let last = self
+                .worker_rows
+                .git_read_ms
+                .lock()
+                .unwrap()
+                .get(id)
+                .copied();
+            last.is_none_or(|last| now_ms().saturating_sub(last) >= GIT_EVERY_MS)
+        };
+        if read_git {
+            self.worker_rows
+                .git_read_ms
+                .lock()
+                .unwrap()
+                .insert(id.clone(), now_ms());
+            self.read_workers_git(&board.tasks, parent_branch.clone())
+                .await;
+        }
+        let mut waiting: HashMap<&TaskId, Vec<WorkerWait>> = HashMap::new();
+        let mut approvals: Vec<_> = board.approvals.values().collect();
+        approvals.sort_by_key(|card| card.position);
+        for card in approvals {
+            if let (Some(task), CardState::Pending, ApprovalSubject::Cli { request }) =
+                (&card.task_id, &card.state, &card.subject)
+            {
+                waiting.entry(task).or_default().push(WorkerWait {
+                    kind: WorkerWaitKind::Permission,
+                    what: request
+                        .command
+                        .clone()
+                        .unwrap_or_else(|| request.tool.clone()),
+                    card: Some(card.id.clone()),
+                });
+            }
+        }
+        let mut questions: Vec<_> = board.questions.values().collect();
+        questions.sort_by_key(|card| card.position);
+        for card in questions {
+            if let Some(task) = &card.task_id
+                && card.answer.is_none()
+                && card.answered_at_ms.is_none()
+            {
+                waiting.entry(task).or_default().push(WorkerWait {
+                    kind: WorkerWaitKind::Question,
+                    what: card.text.lines().next().unwrap_or_default().to_owned(),
+                    card: Some(card.id.clone()),
+                });
+            }
+        }
+        let cli = self.worker_rows.cli.lock().unwrap().clone();
+        let git = self.worker_rows.git.lock().unwrap().clone();
+        let mut tasks: Vec<&Task> = board.tasks.values().collect();
+        tasks.sort_by_key(|task| std::cmp::Reverse(task.created_at_ms));
+        Ok(tasks
+            .into_iter()
+            .map(|task| {
+                let mcp = board
+                    .mcp_servers
+                    .get(&Some(task.id.0.clone()))
+                    .map(|(_, agent)| agent.servers.clone())
+                    .unwrap_or_default();
+                let mut waits = waiting.remove(&task.id).unwrap_or_default();
+                waits.extend(
+                    mcp.iter()
+                        .filter(|server| server.status == McpStatus::NeedsAuth)
+                        .map(|server| WorkerWait {
+                            kind: WorkerWaitKind::SignIn,
+                            what: server.name.clone(),
+                            card: None,
+                        }),
+                );
+                let base = task
+                    .plain
+                    .as_ref()
+                    .and_then(|plain| plain.base.clone())
+                    .or_else(|| parent_branch.clone());
+                row(task, cli.get(&task.id), git.get(&task.id), waits, mcp, base)
+            })
+            .collect())
+    }
+
+    /// Reads each worker's work against session branch `parent` in git: its +/− (what it
+    /// changed, committed or not), its commits ahead and whether they all merged.
+    async fn read_workers_git(&self, tasks: &HashMap<TaskId, Task>, parent: Option<String>) {
+        let Some(parent) = parent else {
+            return;
+        };
+        let checkouts: Vec<(TaskId, PathBuf, Option<String>, Option<String>)> = tasks
+            .values()
+            .filter(|task| !task.state.is_final() || task.plain.is_some())
+            .filter_map(|task| {
+                let workspace = task.workspace.as_ref()?;
+                Some((
+                    task.id.clone(),
+                    PathBuf::from(workspace.worktree.as_ref()?),
+                    workspace.branch.clone(),
+                    workspace.base.clone(),
+                ))
+            })
+            .collect();
+        if checkouts.is_empty() {
+            return;
+        }
+        let git = self.git.clone();
+        let read = blocking(move || {
+            Ok(checkouts
+                .into_iter()
+                .map(|(task, path, branch, start)| {
+                    let Ok(repo) = git.open(&path) else {
+                        return (task, None);
+                    };
+                    let diff = repo
+                        .worker_diff(&parent)
+                        .ok()
+                        .map(|stat| super::landing::diff_stat_of(&stat));
+                    let (ahead, merged) = branch
+                        .as_deref()
+                        .and_then(|branch| {
+                            let tip = repo.branch_tip(branch).ok()??;
+                            let into = repo.branch_tip(&parent).ok()??;
+                            let ahead = repo.count_commits(&into, &tip).unwrap_or(0);
+                            let moved = start.as_deref().is_none_or(|start| start != tip.0);
+                            let merged = moved && repo.ancestor(&tip, &into).unwrap_or(false);
+                            Some((ahead, merged))
+                        })
+                        .unwrap_or_default();
+                    (
+                        task,
+                        Some(WorkerGit {
+                            diff,
+                            ahead,
+                            merged,
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>())
+        })
+        .await
+        .unwrap_or_default();
+        let mut held = self.worker_rows.git.lock().unwrap();
+        for (task, git) in read {
+            // A worktree being set up or removed keeps its last read.
+            if let Some(git) = git {
+                held.insert(task, git);
+            }
+        }
+    }
+
+    /// Worker `task` of session `id`'s thread, as its CLI keeps it: its CLI session files, read
+    /// back (S14, G19.Q6: read-only).
+    pub async fn worker_thread(
+        &self,
+        id: &ConversationId,
+        task: &TaskId,
+    ) -> Result<crate::thread_view::ThreadView> {
+        let task = self.task_by_id(id, task).await?;
+        let record = self.session_dir(id).worker(&task).join("record");
+        let files = super::session_dir::read_lineage(&record)
+            .into_iter()
+            .filter_map(|session| {
+                let file = session.file?;
+                Some(
+                    self.session_files
+                        .read(session.provider, std::path::Path::new(&file)),
+                )
+            })
+            .collect();
+        // Its turn that is open reads as running, not cut off.
+        let open = self
+            .worker_rows
+            .cli
+            .lock()
+            .unwrap()
+            .get(&task.id)
+            .is_some_and(|cli| cli.open);
+        let live = open.then(|| thread_view::LiveTurn {
+            open: true,
+            ..Default::default()
+        });
+        Ok(thread_view::view(files, live.as_ref(), &[]))
+    }
+
+    /// Whether session `id` has had worker rows sent.
+    pub(crate) fn has_worker_rows(&self, id: &ConversationId) -> bool {
+        self.worker_rows
+            .sent
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|rows| !rows.is_empty())
+    }
+
+    /// Forgets the live state of workers no session lists any more.
+    pub(crate) fn forget_worker_rows(&self, tasks: &HashSet<TaskId>) {
+        self.worker_rows
+            .cli
+            .lock()
+            .unwrap()
+            .retain(|task, _| !tasks.contains(task));
+        self.worker_rows
+            .git
+            .lock()
+            .unwrap()
+            .retain(|task, _| !tasks.contains(task));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use brigadier_providers::{ErrorKind, LimitKind, ProviderError};
+
+    fn error(kind: ErrorKind, limit: Option<LimitHit>) -> ProviderEvent {
+        ProviderEvent::Error {
+            error: ProviderError {
+                kind,
+                message: "stopped".into(),
+                will_retry: false,
+                limit,
+                code: None,
+            },
+        }
+    }
+
+    fn turn_end(status: TurnStatus) -> ProviderEvent {
+        ProviderEvent::TurnCompleted {
+            status,
+            usage: None,
+            duration_ms: None,
+            turn_id: None,
+        }
+    }
+
+    #[test]
+    fn a_turn_opens_and_ends_as_its_cli_says() {
+        let mut cli = WorkerCli::default();
+        assert!(follow(
+            &mut cli,
+            &ProviderEvent::TurnStarted { turn_id: None },
+            1
+        ));
+        assert!(cli.open);
+        assert!(follow(&mut cli, &turn_end(TurnStatus::Completed), 2));
+        assert_eq!((cli.open, cli.last_end), (false, Some(TurnEnd::Done)));
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 3);
+        follow(&mut cli, &turn_end(TurnStatus::Interrupted), 4);
+        assert_eq!(cli.last_end, Some(TurnEnd::Stopped));
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 5);
+        follow(&mut cli, &error(ErrorKind::Overloaded, None), 6);
+        follow(&mut cli, &turn_end(TurnStatus::Completed), 7);
+        assert_eq!(cli.last_end, Some(TurnEnd::Failed));
+    }
+
+    #[test]
+    fn a_limit_and_a_compaction_hold_until_the_next_turn() {
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        follow(
+            &mut cli,
+            &ProviderEvent::CompactionStarted { automatic: true },
+            2,
+        );
+        assert!(cli.fresh_context);
+        let limit = LimitHit {
+            window: Some("five_hour".into()),
+            resets_at_ms: Some(9_000),
+            kind: LimitKind::UsageWindow,
+        };
+        follow(
+            &mut cli,
+            &error(ErrorKind::UsageLimit, Some(limit.clone())),
+            3,
+        );
+        follow(&mut cli, &turn_end(TurnStatus::Failed), 4);
+        assert_eq!(cli.limit, Some(limit));
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 5);
+        assert_eq!((cli.limit.clone(), cli.fresh_context), (None, false));
+    }
+
+    #[test]
+    fn a_cli_that_ends_mid_turn_reads_interrupted() {
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 1);
+        follow(
+            &mut cli,
+            &ProviderEvent::Exited {
+                code: Some(1),
+                signal: None,
+                stderr_tail: None,
+            },
+            2,
+        );
+        assert_eq!(
+            (cli.open, cli.last_end),
+            (false, Some(TurnEnd::Interrupted))
+        );
+    }
+
+    #[test]
+    fn chatter_is_sent_again_only_once_it_went_stale() {
+        let mut cli = WorkerCli::default();
+        follow(
+            &mut cli,
+            &ProviderEvent::TurnStarted { turn_id: None },
+            1_000,
+        );
+        let progress = ProviderEvent::Notice {
+            level: brigadier_providers::NoticeLevel::Info,
+            message: "…".into(),
+        };
+        assert!(!follow(&mut cli, &progress, 2_000));
+        assert!(follow(&mut cli, &progress, 1_000 + EVENT_STALE_MS));
+        assert_eq!(cli.last_event_ms, Some(1_000 + EVENT_STALE_MS));
+    }
+}

@@ -855,6 +855,7 @@ mod tests {
                     request: None,
                     first_reset_ms: None,
                     account: None,
+                    limit_kind: None,
                 })
             });
             board.tasks.insert(task.id.clone(), task);

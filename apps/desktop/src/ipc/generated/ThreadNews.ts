@@ -3,7 +3,9 @@ import type { BackgroundTask } from "./BackgroundTask";
 import type { ContextUsage } from "./ContextUsage";
 import type { ConversationId } from "./ConversationId";
 import type { FileEntry } from "./FileEntry";
+import type { McpServerState } from "./McpServerState";
 import type { TurnEnd } from "./TurnEnd";
+import type { WorkerRow } from "./WorkerRow";
 
 /**
  * What the live stream added for a conversation, sent as it comes.
@@ -24,4 +26,12 @@ context?: ContextUsage,
 /**
  * Its CLI's background tasks, all of them, when one changed.
  */
-background?: Array<BackgroundTask>, };
+background?: Array<BackgroundTask>, 
+/**
+ * Its CLI's MCP servers, all of them, when one changed.
+ */
+mcp?: Array<McpServerState>, 
+/**
+ * Its workers, all of them, when one changed.
+ */
+workers?: Array<WorkerRow>, };

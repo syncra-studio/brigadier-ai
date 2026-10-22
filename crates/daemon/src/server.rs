@@ -1496,6 +1496,8 @@ fn read_beside(request: &Request) -> bool {
             | Request::ListProjectFiles { .. }
             | Request::ListSourceBranches { .. }
             | Request::GetThreadMetrics { .. }
+            | Request::ThreadView { .. }
+            | Request::WorkerThread { .. }
     )
 }
 
@@ -2076,7 +2078,21 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             output: sessions.background_task_output(&conversation_id, &task_id)?,
         },
         Request::ThreadView { conversation_id } => Response::ThreadView {
-            view: sessions.thread_view(&conversation_id)?,
+            view: sessions.thread_view_with_workers(&conversation_id).await?,
+        },
+        Request::ContinueWaiting { conversation_id } => {
+            sessions.continue_waiting(&conversation_id).await?;
+            Response::ContinueWaiting
+        }
+        Request::DontResume { conversation_id } => {
+            sessions.dont_resume(&conversation_id).await?;
+            Response::DontResume
+        }
+        Request::WorkerThread {
+            conversation_id,
+            task_id,
+        } => Response::WorkerThread {
+            view: sessions.worker_thread(&conversation_id, &task_id).await?,
         },
         Request::ReadSessionFileImage {
             conversation_id,

@@ -120,6 +120,26 @@ pub(crate) struct LineageEntry {
     pub started_at: i64,
 }
 
+/// Adds a CLI session start to the `lineage.json` in `record`: a session's or a worker's.
+pub(crate) async fn note_lineage_at(record: PathBuf, entry: LineageEntry) -> Result<()> {
+    blocking(move || {
+        let mut lineage = read_lineage(&record);
+        match lineage
+            .iter_mut()
+            .find(|known| known.provider == entry.provider && known.session_id == entry.session_id)
+        {
+            Some(known) if known.file.is_some() || entry.file.is_none() => return Ok(()),
+            Some(known) => known.file = entry.file,
+            None => lineage.push(entry),
+        }
+        std::fs::create_dir_all(&record).map_err(|err| Error::Invalid(err.to_string()))?;
+        let text = serde_json::to_string_pretty(&lineage)
+            .map_err(|err| Error::Invalid(err.to_string()))?;
+        write_atomic(&record.join("lineage.json"), text.as_bytes())
+    })
+    .await
+}
+
 /// `record/lineage.json`'s sessions; none when it is missing or unreadable.
 pub(crate) fn read_lineage(record: &Path) -> Vec<LineageEntry> {
     std::fs::read(record.join("lineage.json"))
@@ -140,21 +160,7 @@ impl SessionManager {
         private: bool,
     ) {
         let record = self.session_dir(id).record();
-        let written = blocking(move || {
-            let mut lineage = read_lineage(&record);
-            match lineage.iter_mut().find(|known| {
-                known.provider == entry.provider && known.session_id == entry.session_id
-            }) {
-                Some(known) if known.file.is_some() || entry.file.is_none() => return Ok(()),
-                Some(known) => known.file = entry.file,
-                None => lineage.push(entry),
-            }
-            std::fs::create_dir_all(&record).map_err(|err| Error::Invalid(err.to_string()))?;
-            let text = serde_json::to_string_pretty(&lineage)
-                .map_err(|err| Error::Invalid(err.to_string()))?;
-            write_atomic(&record.join("lineage.json"), text.as_bytes())
-        })
-        .await;
+        let written = note_lineage_at(record, entry).await;
         if let Err(err) = written {
             crate::logging::private_trace!(private, warn, "could not note the CLI session in lineage.json"; conversation = %id, error = %err);
         }

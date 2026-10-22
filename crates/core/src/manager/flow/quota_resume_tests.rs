@@ -177,23 +177,154 @@ async fn another_account_taking_over_is_no_reset() {
     flow.stop().await;
 }
 
+/// MA5: Continue now sends the waiting message at once, on the model it waited for, long
+/// before the reset; it goes once.
+#[tokio::test]
+async fn continue_now_sends_the_waiting_message_at_once() {
+    let (flow, turns) = limited_flow(
+        "quota-continue-now",
+        brigadier_providers::LimitKind::UsageWindow,
+        3_600_000,
+    )
+    .await;
+    flow.manager
+        .continue_waiting(&flow.conversation)
+        .await
+        .unwrap();
+    flow.until("the request done", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_none()
+    );
+    flow.manager
+        .continue_waiting(&flow.conversation)
+        .await
+        .unwrap();
+    flow.settled().await;
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    flow.stop().await;
+}
+
+/// MA5: Don't resume leaves the thread idle: past the reset nothing goes on its own.
+#[tokio::test]
+async fn dont_resume_stays_idle_past_the_reset() {
+    let (flow, turns) = waiting_flow("quota-dont-resume").await;
+    let reset = waiting_reset(&flow);
+    flow.manager.dont_resume(&flow.conversation).await.unwrap();
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_none()
+    );
+    flow.until("the limit to reset", |_| crate::now_ms() > reset)
+        .await;
+    flow.manager.retry_waiting_conversations().await;
+    flow.settled().await;
+    assert_eq!(turns.load(Ordering::SeqCst), 1);
+    assert_eq!(flow.board().await.run, crate::work::RunState::Idle);
+    flow.stop().await;
+}
+
+/// MA5: a credits limit never schedules a resume, whatever reset it names; only Continue now
+/// sends the message.
+#[tokio::test]
+async fn a_credits_limit_never_resumes_on_its_own() {
+    let (flow, turns) = limited_flow(
+        "quota-credits",
+        brigadier_providers::LimitKind::Credits,
+        300,
+    )
+    .await;
+    let wait = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .quota_wait
+        .unwrap();
+    assert_eq!(
+        wait.limit_kind,
+        Some(brigadier_providers::LimitKind::Credits)
+    );
+    // The card reads the limit from the CLI's own error, on its turn.
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    let limit = view.turns.last().and_then(|turn| turn.limit.clone());
+    assert_eq!(
+        limit.map(|limit| limit.kind),
+        Some(brigadier_providers::LimitKind::Credits),
+        "{:#?}",
+        view.turns
+    );
+    let reset = waiting_reset(&flow);
+    flow.until("its named reset to pass", |_| crate::now_ms() > reset + 200)
+        .await;
+    flow.manager.retry_waiting_conversations().await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(turns.load(Ordering::SeqCst), 1, "it never went on its own");
+    assert!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .is_some()
+    );
+    flow.manager
+        .continue_waiting(&flow.conversation)
+        .await
+        .unwrap();
+    flow.until("the request done", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    flow.stop().await;
+}
+
 /// A flow whose first turn hits a limit that resets in a moment; Codex is off, so nothing
 /// stands in and the thread waits. Also counts the turns.
 async fn waiting_flow(name: &str) -> (Flow, Arc<AtomicUsize>) {
+    limited_flow(name, brigadier_providers::LimitKind::UsageWindow, 1500).await
+}
+
+/// [`waiting_flow`] with a limit of `kind` that resets in `resets_in_ms`.
+async fn limited_flow(
+    name: &str,
+    kind: brigadier_providers::LimitKind,
+    resets_in_ms: i64,
+) -> (Flow, Arc<AtomicUsize>) {
     let turns = Arc::new(AtomicUsize::new(0));
     let counted = turns.clone();
     let flow = Flow::start(
         name,
-        Options::default(),
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                session_file: true,
+                ..super::FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
         Arc::new(move |_turn| {
             let first = counted.fetch_add(1, Ordering::SeqCst) == 0;
             Box::pin(async move {
                 if first {
                     Reply {
                         limit: Some(brigadier_providers::LimitHit {
-                            kind: brigadier_providers::LimitKind::UsageWindow,
+                            kind,
                             window: Some("five_hour".into()),
-                            resets_at_ms: Some(crate::now_ms() + 1500),
+                            resets_at_ms: Some(crate::now_ms() + resets_in_ms),
                         }),
                         ..Reply::default()
                     }

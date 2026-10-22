@@ -733,6 +733,21 @@ pub enum Request {
     ThreadView {
         conversation_id: ConversationId,
     },
+    /// The user's Continue now on a turn that waits for a usage, spend or credits limit: its
+    /// messages go now (MA5).
+    ContinueWaiting {
+        conversation_id: ConversationId,
+    },
+    /// The user's Don't resume on such a turn: nothing goes on its own (MA5).
+    DontResume {
+        conversation_id: ConversationId,
+    },
+    /// A worker's thread as its CLI keeps it (S14): its CLI session files' items and turns,
+    /// read-only (G19.Q6).
+    WorkerThread {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+    },
     /// An image a CLI session file of the conversation holds, as base64 with its media type.
     ReadSessionFileImage {
         conversation_id: ConversationId,
@@ -1682,6 +1697,11 @@ pub enum Response {
     ThreadView {
         view: brigadier_core::thread_view::ThreadView,
     },
+    WorkerThread {
+        view: brigadier_core::thread_view::ThreadView,
+    },
+    ContinueWaiting,
+    DontResume,
     StopBackgroundTask,
     ReadBackgroundTaskOutput {
         output: String,

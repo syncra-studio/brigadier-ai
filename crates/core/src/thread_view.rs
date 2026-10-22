@@ -11,11 +11,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use brigadier_providers::session_file::{self, FileEntry};
-use brigadier_providers::{BackgroundTask, ProviderEvent, ProviderKind, Role};
+use brigadier_providers::{
+    BackgroundTask, ErrorKind, LimitHit, McpServerState, ProviderEvent, ProviderKind, Role,
+};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::model::ConversationId;
+use crate::work::{CardId, DiffStat, TaskId};
 
 /// A conversation's thread as its CLI keeps it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -30,6 +33,75 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<BackgroundTask>>", optional)]
     pub background: Vec<BackgroundTask>,
+    /// The MCP servers its CLI has, as the CLI last said.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<McpServerState>>", optional)]
+    pub mcp: Vec<McpServerState>,
+    /// Its own workers (`brigadier start`), as their CLIs and git show them (S14).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<WorkerRow>>", optional)]
+    pub workers: Vec<WorkerRow>,
+}
+
+/// One of a session's own workers, as its CLI and git show it: what the session's Workers
+/// row, its rail and its worker cards read (S14, G19). Nothing of it is stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerRow {
+    pub id: TaskId,
+    pub number: u32,
+    pub title: String,
+    pub agent: ProviderKind,
+    pub model: Option<String>,
+    pub started_at_ms: i64,
+    /// Its CLI's turn is open.
+    pub working: bool,
+    /// How its last turn ended; none before one did.
+    pub last_end: Option<TurnEnd>,
+    /// Its CLI ended, or its session closed it.
+    pub gone: bool,
+    /// When its CLI last said anything.
+    pub last_event_at_ms: Option<i64>,
+    /// The usage limit its model hit, while it holds.
+    pub limit: Option<LimitHit>,
+    /// Its CLI compacted its context in the turn that is open.
+    pub fresh_context: bool,
+    /// What its CLI waits on the user for.
+    pub waiting: Vec<WorkerWait>,
+    /// Its MCP servers, as its CLI last said.
+    pub mcp: Vec<McpServerState>,
+    /// Its own branch; none in its session's checkout.
+    pub branch: Option<String>,
+    /// The session's branch it merges back into (G21).
+    pub base: Option<String>,
+    /// What it changed against that branch, committed or not.
+    pub diff: Option<DiffStat>,
+    /// Commits of its branch that branch lacks.
+    pub ahead: u32,
+    /// It has commits, and that branch has them all.
+    pub merged: bool,
+}
+
+/// Something a worker's CLI waits on the user for: the session relays the answer (G19.Q6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerWait {
+    pub kind: WorkerWaitKind,
+    /// What it asks, in a line.
+    pub what: String,
+    /// Its card, when it has one.
+    pub card: Option<CardId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkerWaitKind {
+    /// A permission prompt of its CLI.
+    Permission,
+    /// A question its CLI asks the user.
+    Question,
+    /// One of its MCP servers wants the user to sign in.
+    SignIn,
 }
 
 /// One turn: a user message up to the CLI's end of it.
@@ -47,6 +119,10 @@ pub struct ThreadTurn {
     /// Brigadier's requests it carried: its user message's, then those steered into it. Their
     /// cards, workers and changes show in the turn.
     pub requests: Vec<String>,
+    /// The usage, spend or credits limit that ended it, as its CLI said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub limit: Option<LimitHit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -74,6 +150,8 @@ pub(crate) struct TurnRecord {
     pub ended_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requests: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<LimitHit>,
 }
 
 /// What the live stream added for a conversation, sent as it comes.
@@ -98,6 +176,14 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub background: Option<Vec<BackgroundTask>>,
+    /// Its CLI's MCP servers, all of them, when one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp: Option<Vec<McpServerState>>,
+    /// Its workers, all of them, when one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workers: Option<Vec<WorkerRow>>,
 }
 
 /// Where a conversation's CLI turn stands, as the sidebar reads it: open now, or how its last
@@ -122,6 +208,8 @@ pub(crate) struct LiveTurn {
     pub awaiting_user: bool,
     pub open: bool,
     pub error: Option<String>,
+    /// The limit its CLI hit in it.
+    pub limit: Option<LimitHit>,
     /// Brigadier's requests it carries.
     pub requests: Vec<String>,
     /// The CLI's background tasks: they outlast the turn that started them, so a turn that
@@ -129,6 +217,8 @@ pub(crate) struct LiveTurn {
     pub background: Vec<BackgroundTask>,
     /// A command's output is being followed for its last line.
     pub reading_output: bool,
+    /// Its CLI's MCP servers: they outlast the turn too.
+    pub mcp: Vec<McpServerState>,
 }
 
 /// A session file's items, with the length and change time they were read at.
@@ -200,12 +290,17 @@ pub(crate) fn view(
         if turn.error.is_none() {
             turn.error.clone_from(&live.error);
         }
+        if turn.limit.is_none() {
+            turn.limit.clone_from(&live.limit);
+        }
         add_requests(&mut turn.requests, &live.requests);
     }
     ThreadView {
         entries,
         turns,
         background: live.map(|live| live.background.clone()).unwrap_or_default(),
+        mcp: live.map(|live| live.mcp.clone()).unwrap_or_default(),
+        workers: Vec::new(),
     }
 }
 
@@ -247,6 +342,7 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 end: None,
                 error: None,
                 requests: Vec::new(),
+                limit: None,
             };
             let marker = inside.iter().find_map(|entry| match &entry.event {
                 ProviderEvent::TurnCompleted { status, .. } if entry.parent.is_none() => {
@@ -264,8 +360,13 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 }
                 _ => None,
             });
+            let limit = inside.iter().rev().find_map(|entry| match &entry.event {
+                ProviderEvent::Error { error } if entry.parent.is_none() => limit_of(error),
+                _ => None,
+            });
             let (requests, record) = recorded.remove(id.as_str()).unwrap_or_default();
             turn.requests = requests;
+            turn.limit = record.and_then(|record| record.limit.clone()).or(limit);
             if let Some(record) = record {
                 turn.end = record.end;
                 turn.error = record.error.clone().or(error);
@@ -287,6 +388,19 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             turn
         })
         .collect()
+}
+
+/// The limit an error of the CLI says it hit: a usage window, a spend control or credits.
+pub(crate) fn limit_of(error: &brigadier_providers::ProviderError) -> Option<LimitHit> {
+    match (&error.limit, error.kind) {
+        (Some(limit), _) => Some(limit.clone()),
+        (None, ErrorKind::UsageLimit) => Some(LimitHit {
+            window: None,
+            resets_at_ms: None,
+            kind: Default::default(),
+        }),
+        _ => None,
+    }
 }
 
 /// Adds `more` to `requests`, each once, in order.

@@ -124,6 +124,7 @@ pub mod warm;
 mod watchdog;
 mod worker_handoff;
 mod worker_resume;
+mod worker_rows;
 mod workers;
 pub mod workspace;
 
@@ -184,6 +185,8 @@ pub struct SessionManager {
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
     /// What plain workers' CLIs did that their sessions' `brigadier wait` hasn't taken yet.
     worker_events: plain_workers::WorkerEvents,
+    /// Its sessions' worker rows: their CLIs and git (S14).
+    worker_rows: worker_rows::WorkerRows,
     /// The cards a `brigadier ask` waits on: their answers go back to it, not into the thread.
     cli_asks: cli_tools::CliAsks,
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
@@ -422,6 +425,7 @@ impl SessionManager {
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             worker_events: Default::default(),
+            worker_rows: Default::default(),
             cli_asks: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
             local_checkouts: tokio::sync::Mutex::new(()),

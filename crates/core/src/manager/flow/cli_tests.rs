@@ -1382,3 +1382,205 @@ async fn models_rules_are_the_only_gate_on_start() {
     );
     flow.stop().await;
 }
+
+/// The session's thread starts two workers: one asks permission, one commits a file.
+fn rows_script(answers: Answers) -> Script {
+    Arc::new(move |turn| {
+        let answers = answers.clone();
+        Box::pin(async move {
+            let keep = |name: &str, value: Value| {
+                answers.lock().unwrap().insert(name.into(), value);
+            };
+            let worker = turn
+                .env(GRANT_ENV)
+                .and_then(|grant| turn.host.grants().resolve(grant));
+            if let Some(Role::Worker { .. }) = worker {
+                if turn.input.contains("Ask first.") {
+                    return match turn.ask_approval("curl https://example.com", "curl").await {
+                        Some(brigadier_providers::ApprovalDecision::Allow) => {
+                            Reply::text("Allowed: done.")
+                        }
+                        other => Reply::text(format!("Not allowed: {other:?}")),
+                    };
+                }
+                std::fs::write(turn.cwd.join("notes.txt"), "one\ntwo\nthree\n").unwrap();
+                super::git(&turn.cwd, &["add", "notes.txt"]);
+                super::git(&turn.cwd, &["commit", "-qm", "Notes"]);
+                return Reply::text("Wrote notes.");
+            }
+            if !turn.input.contains("Start them.") {
+                return Reply::text("Noted.");
+            }
+            let a = brigadier(
+                &turn,
+                CliRequest::Start(Box::new(StartRequest {
+                    title: Some("Asker".into()),
+                    ..start("Ask first.")
+                })),
+            )
+            .await;
+            let b = brigadier(
+                &turn,
+                CliRequest::Start(Box::new(StartRequest {
+                    title: Some("Writer".into()),
+                    agent: Some(Agent::Codex),
+                    ..start("Write notes.")
+                })),
+            )
+            .await;
+            let (a_id, b_id) = (id_of(&a), id_of(&b));
+            let mut events = wait_for(&turn, &[], 2).await;
+            keep("asking", json!(true));
+            // The test reads the rows while a's prompt is open.
+            super::eventually("the rows to be read", || {
+                answers.lock().unwrap().contains_key("read while asking")
+            })
+            .await;
+            brigadier(&turn, send(&a_id, None, Some(Answer::Allow))).await;
+            events.extend(wait_for(&turn, &[&a_id], 1).await);
+            keep("events", json!(events));
+            keep("ids", json!([a_id, b_id]));
+            Reply::text("Both done.")
+        })
+    })
+}
+
+/// STRIP-DOWN-PLAN S14: a session's own workers reach its thread view as rows, from their
+/// CLIs' events and git: working, needs you with the CLI's permission prompt (answered by
+/// the session's `send --allow`), done, +/− and commits against the session's branch, and
+/// merged once that branch has them. They come as thread news too, and never as sidebar rows.
+#[tokio::test]
+async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
+    let answers = Answers::default();
+    let options = Options {
+        permission: crate::model::PermissionLevel::AcceptEdits,
+        ..Options::default()
+    };
+    let flow = Flow::start("cli-worker-rows", options, rows_script(answers.clone())).await;
+    let mut news = flow.manager.subscribe_thread_news();
+    flow.say("Start them.").await;
+    flow.until("a asks", |_| answers.lock().unwrap().contains_key("asking"))
+        .await;
+    let rows = |view: &crate::thread_view::ThreadView, title: &str| {
+        view.workers
+            .iter()
+            .find(|row| row.title.starts_with(title))
+            .cloned()
+            .unwrap_or_else(|| panic!("no row {title}: {:#?}", view.workers))
+    };
+    super::eventually_async("a's prompt in its row", || {
+        let manager = flow.manager.clone();
+        let id = flow.conversation.clone();
+        async move {
+            let view = manager.thread_view_with_workers(&id).await.unwrap();
+            let row = view
+                .workers
+                .iter()
+                .find(|row| row.title.starts_with("Asker"))
+                .cloned();
+            row.filter(|row| !row.waiting.is_empty()).is_some()
+        }
+    })
+    .await;
+    let view = flow
+        .manager
+        .thread_view_with_workers(&flow.conversation)
+        .await
+        .unwrap();
+    let a = rows(&view, "Asker");
+    assert!(a.working, "{a:#?}");
+    assert_eq!(a.waiting.len(), 1);
+    assert_eq!(
+        a.waiting[0].kind,
+        crate::thread_view::WorkerWaitKind::Permission
+    );
+    assert!(a.waiting[0].what.contains("curl"), "{a:#?}");
+    assert!(a.waiting[0].card.is_some());
+    assert_eq!(a.agent, ProviderKind::Claude);
+    answers
+        .lock()
+        .unwrap()
+        .insert("read while asking".into(), json!(true));
+    flow.until("both are done", |_| {
+        answers.lock().unwrap().contains_key("events")
+    })
+    .await;
+    flow.settled().await;
+
+    let checkout = flow.manager.checkout_dir(&flow.conversation).unwrap();
+    let checkout = std::path::PathBuf::from(checkout);
+    let parent = super::git(&checkout, &["branch", "--show-current"]);
+    let parent = parent.trim().to_owned();
+    let read = || async {
+        flow.manager
+            .worker_rows_of(&flow.conversation, true)
+            .await
+            .unwrap()
+    };
+    let now = read().await;
+    let by = |rows: &[crate::thread_view::WorkerRow], title: &str| {
+        rows.iter()
+            .find(|row| row.title.starts_with(title))
+            .cloned()
+            .unwrap()
+    };
+    let (a, b) = (by(&now, "Asker"), by(&now, "Writer"));
+    // Answered: nothing waits, and its turn ended done.
+    assert!(a.waiting.is_empty(), "{a:#?}");
+    assert!(!a.working);
+    assert_eq!(a.last_end, Some(crate::thread_view::TurnEnd::Done));
+    assert_eq!(a.base.as_deref(), Some(parent.as_str()));
+    assert!(!a.merged, "nothing of a's to merge");
+    // b committed three lines on its branch: not merged yet.
+    assert_eq!(b.agent, ProviderKind::Codex);
+    assert_eq!(b.last_end, Some(crate::thread_view::TurnEnd::Done));
+    assert_eq!(b.ahead, 1, "{b:#?}");
+    assert_eq!(b.diff.as_ref().map(|diff| diff.insertions), Some(3));
+    assert!(!b.merged);
+    // Newest first.
+    assert!(now[0].title.starts_with("Writer"));
+
+    // The session merges b's branch: b reads merged.
+    let branch = b.branch.clone().unwrap();
+    super::git(
+        &checkout,
+        &["merge", "-q", "--no-ff", "-m", "Merge notes", &branch],
+    );
+    let b = by(&read().await, "Writer");
+    assert!(b.merged, "{b:#?}");
+    assert_eq!(b.ahead, 0);
+
+    // The rows came as thread news too, the prompt included.
+    let mut sent = Vec::new();
+    while let Ok(item) = news.try_recv() {
+        if let Some(rows) = item.workers {
+            sent.push(rows);
+        }
+    }
+    assert!(
+        sent.iter()
+            .any(|rows| rows.iter().any(|row| !row.waiting.is_empty())),
+        "{sent:#?}"
+    );
+    assert!(
+        sent.last()
+            .is_some_and(|rows| rows.iter().all(|row| !row.working)),
+        "{sent:#?}"
+    );
+    // Never sidebar rows.
+    let tasks: Vec<String> = flow
+        .board()
+        .await
+        .tasks
+        .keys()
+        .map(|id| id.0.clone())
+        .collect();
+    assert!(
+        flow.core
+            .visible_catalog()
+            .conversations
+            .iter()
+            .all(|c| !tasks.contains(&c.id.0))
+    );
+    flow.stop().await;
+}

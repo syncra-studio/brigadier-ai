@@ -224,6 +224,11 @@ pub struct QuotaWait {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub account: Option<crate::accounts::AccountRef>,
+    /// What kind of limit a conversation's wait is for: a spend control or credits never
+    /// resumes on its own, only on the user's Continue now (MA5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub limit_kind: Option<brigadier_providers::LimitKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
