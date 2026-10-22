@@ -39,9 +39,10 @@ test("the CLI's turn opening and ending decides Working; Brigadier handing it a 
   assert.deepEqual(row("c2"), { running: false, awaiting: null, workers: 0 });
 });
 
+const worker = (state: string) =>
+  on("c3", { type: "taskUpdated", task: { id: "t1", conversationId: "c3", kind: "write", state, title: "Add a test" } });
+
 test("a worker alone is not work; its count still shows", () => {
-  const worker = (state: string) =>
-    on("c3", { type: "taskUpdated", task: { id: "t1", conversationId: "c3", kind: "write", state, title: "Add a test" } });
   applyActivityEvents([worker("running")]);
   assert.deepEqual(row("c3"), { running: false, awaiting: null, workers: 0 }, "a quiet row");
   applyActivityNews({ conversationId: "c3", entries: [], opened: true });
@@ -50,10 +51,11 @@ test("a worker alone is not work; its count still shows", () => {
   assert.equal(row("c3").workers, 0);
 });
 
+const servers = (taskId: string | null, list: { name: string; status: string }[]) =>
+  on("c4", { type: "mcpServersUpdated", conversationId: "c4", taskId, provider: "claude", atStart: false, boot: "b",
+    servers: list.map((server) => ({ ...server, tools: [], transport: null })) });
+
 test("an MCP server of the session's own CLI that wants a sign-in needs the user; a claude.ai connector or a worker's doesn't", () => {
-  const servers = (taskId: string | null, list: { name: string; status: string }[]) =>
-    on("c4", { type: "mcpServersUpdated", conversationId: "c4", taskId, provider: "claude", atStart: false, boot: "b",
-      servers: list.map((server) => ({ ...server, tools: [], transport: null })) });
   applyActivityEvents([servers(null, [{ name: "claude.ai Gmail", status: "needs-auth" }, { name: "github", status: "connected" }])]);
   assert.equal(row("c4").awaiting, null);
   applyActivityEvents([servers("t1", [{ name: "linear", status: "needs-auth" }])]);
@@ -65,10 +67,11 @@ test("an MCP server of the session's own CLI that wants a sign-in needs the user
   assert.equal(row("c4").awaiting, null);
 });
 
+const stopped = () => stoppedOf(useActivity.getState().byConversation.stopped);
+
 test("a stopped turn is named through reconnect and clears when another turn opens", () => {
   const snapshot = fromSnapshot({ conversationId: "stopped", run: "idle", tasks: [], approvals: [], questions: [], stopped: true });
   useActivity.setState({ byConversation: { stopped: snapshot } });
-  const stopped = () => stoppedOf(useActivity.getState().byConversation.stopped);
   assert.equal(stopped(), true);
   applyActivityEvents([on("stopped", { type: "runStateChanged", conversationId: "stopped", state: "starting" })]);
   assert.equal(stopped(), false, "Brigadier hands the CLI a message");

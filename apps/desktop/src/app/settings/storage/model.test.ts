@@ -124,15 +124,16 @@ test("the summary names what can go; conversations say how many are archived", (
   assert.equal(conversationsLine(project("p", 1, 0, { conversations: 1 })), "1 chat or session");
 });
 
+const folder = (id: string, title: string, bytes: number) => ({
+  conversationId: id,
+  title,
+  kind: "session" as const,
+  archived: false,
+  path: `/Users/me/.brigadier/s/${id}`,
+  bytes,
+});
+
 test("a project's session folders are its work folders, each one a row", () => {
-  const folder = (id: string, title: string, bytes: number) => ({
-    conversationId: id,
-    title,
-    kind: "session" as const,
-    archived: false,
-    path: `/Users/me/.brigadier/s/${id}`,
-    bytes,
-  });
   const app = project("app", 1, 0, {
     sessionsBytes: 5 * MB,
     sessions: [folder("aaaa1111", "Fix login", 4 * MB), folder("bbbb2222", "", MB)],
