@@ -87,7 +87,8 @@ function Fixture() {
     // Each step waits for what it acts on (a menu, the confirmation) instead of a fixed time,
     // so a slow render doesn't skip one; after 5 s it goes on and the result shows what's missing.
     const until = async <T,>(find: () => T | null | undefined | false): Promise<T | undefined> => {
-      for (let waited = 0; waited < 5000 && !stopped; waited += 50) {
+      for (let waited = 0; waited < 5000; waited += 50) {
+        if (stopped) return undefined;
         const found = find();
         if (found) return found;
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -97,7 +98,7 @@ function Fixture() {
     // An item of the menu `trigger` opened, never of another one still closing.
     const item = (trigger: Element | null, label: string) => {
       const menu = trigger?.getAttribute("aria-expanded") === "true" && document.getElementById(trigger.getAttribute("aria-controls") ?? "");
-      return menu ? [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((item) => item.textContent?.startsWith(label)) : undefined;
+      return menu ? [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((entry) => entry.textContent?.startsWith(label)) : undefined;
     };
     const pill = () => q('[data-slot="permission-picker"]');
     void (async () => {
