@@ -16,6 +16,8 @@ use crate::session_file::{FileEntry, FileImage, image_blocks, shown};
 
 /// What Claude writes for the user's Stop in place of the rest of the turn.
 const INTERRUPTED: &str = "[Request interrupted by user";
+/// Claude's own stand-in reply after a Stop.
+const NO_RESPONSE: &str = "No response requested.";
 
 /// The thread the session file at `path` holds, its subagents' beside their calls.
 pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
@@ -183,6 +185,13 @@ fn translate(mut value: Value, subagent: bool) -> Line {
             }
         }
         Some("assistant") => {
+            // Written in place of a reply when the next message follows a Stop; its resume
+            // view hides it.
+            if value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
+                && value.pointer("/message/content").map(text_of).as_deref() == Some(NO_RESPONSE)
+            {
+                return Line::Skip;
+            }
             value["parent_tool_use_id"] = Value::Null;
             if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
                 && value.get("error").is_none_or(Value::is_null)
