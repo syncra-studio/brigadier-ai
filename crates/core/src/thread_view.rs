@@ -98,6 +98,7 @@ pub(crate) struct FileCache(Mutex<HashMap<PathBuf, CachedFile>>);
 
 impl FileCache {
     pub(crate) fn read(&self, kind: ProviderKind, path: &Path) -> Arc<Vec<FileEntry>> {
+        let path = &session_file::locate(kind, path);
         let stamp = std::fs::metadata(path)
             .ok()
             .and_then(|meta| Some((meta.len(), meta.modified().ok()?)));

@@ -71,6 +71,25 @@ pub fn read(kind: ProviderKind, path: &Path) -> std::io::Result<Vec<FileEntry>> 
     Ok(merge(Vec::new(), entries))
 }
 
+/// Where `kind`'s session file recorded at `path` is now. Codex moves a thread's rollout from
+/// `<home>/sessions/<y>/<m>/<d>/` to `<home>/archived_sessions/` when it is archived (Brigadier
+/// archives a thread it closes, so the user's own Codex apps don't list it), and back when
+/// it is resumed.
+pub fn locate(kind: ProviderKind, path: &Path) -> std::path::PathBuf {
+    if kind != ProviderKind::Codex || path.exists() {
+        return path.to_owned();
+    }
+    let archived = path
+        .ancestors()
+        .find(|dir| dir.file_name().is_some_and(|name| name == "sessions"))
+        .and_then(Path::parent)
+        .zip(path.file_name())
+        .map(|(home, name)| home.join("archived_sessions").join(name));
+    archived
+        .filter(|archived| archived.exists())
+        .unwrap_or_else(|| path.to_owned())
+}
+
 /// The item an event is about: its id as the CLI gave it.
 pub fn item_id(event: &ProviderEvent) -> Option<&str> {
     match event {
@@ -390,6 +409,22 @@ mod tests {
         // Each item says when it was last heard of: the command's output, the message's words.
         assert_eq!(merged[1].updated_at_ms, Some(3));
         assert_eq!(merged[2].updated_at_ms, Some(5));
+    }
+
+    /// An archived Codex thread's rollout is found where Codex moved it.
+    #[test]
+    fn an_archived_rollout_is_found_where_codex_moved_it() {
+        let home = std::env::temp_dir().join(format!("session-file-locate-{}", std::process::id()));
+        let recorded = home.join("sessions/2026/10/22/rollout-x.jsonl");
+        let archived = home.join("archived_sessions/rollout-x.jsonl");
+        std::fs::create_dir_all(archived.parent().unwrap()).unwrap();
+        std::fs::write(&archived, "").unwrap();
+        assert_eq!(locate(ProviderKind::Codex, &recorded), archived);
+        assert_eq!(locate(ProviderKind::Claude, &recorded), recorded);
+        std::fs::create_dir_all(recorded.parent().unwrap()).unwrap();
+        std::fs::write(&recorded, "").unwrap();
+        assert_eq!(locate(ProviderKind::Codex, &recorded), recorded);
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     /// One line for an entry: what it is, then its first words.
