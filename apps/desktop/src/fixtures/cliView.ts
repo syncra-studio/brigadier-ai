@@ -137,6 +137,9 @@ export function fixtureView(messages: readonly Message[], board: Board | null): 
 /** How each conversation's newest turn stood when last said: open, or how it ended. */
 const told = new Map<string, TurnEnd | "open" | "none">();
 
+/** Each thread's view as last made, with what it was made from: one that didn't change keeps its view, so its rows don't draw again. */
+const made = new Map<string, { items: readonly Message[]; board: Board | null; view: ThreadView }>();
+
 /** Every conversation the fixture holds a thread of, its view kept in step, and its turn's opening and end said as the stream says them. */
 function sync(): void {
   const { threads } = useApp.getState();
@@ -145,12 +148,23 @@ function sync(): void {
   // A thread still loading with nothing held yet has no view: it reads as loading.
   const unread = new Set<string>();
   for (const [id, thread] of Object.entries(threads)) {
-    if (thread.loading && thread.items.length === 0) unread.add(id);
-    else views[id] = fixtureView(thread.items, board?.conversationId === id ? board : null);
+    if (thread.loading && thread.items.length === 0) {
+      unread.add(id);
+      made.delete(id);
+      continue;
+    }
+    const own = board?.conversationId === id ? board : null;
+    const last = made.get(id);
+    if (last && last.items === thread.items && last.board === own) continue;
+    views[id] = fixtureView(thread.items, own);
+    made.set(id, { items: thread.items, board: own, view: views[id] });
   }
-  useCliThread.setState((state) => ({
-    views: { ...Object.fromEntries(Object.entries(state.views).filter(([id]) => !unread.has(id))), ...views },
-  }));
+  const { views: held } = useCliThread.getState();
+  if (Object.keys(views).length > 0 || [...unread].some((id) => held[id])) {
+    useCliThread.setState((state) => ({
+      views: { ...Object.fromEntries(Object.entries(state.views).filter(([id]) => !unread.has(id))), ...views },
+    }));
+  }
   for (const [id, view] of Object.entries(views)) {
     const last = view.turns.at(-1);
     const now = !last ? "none" : (last.end ?? "open");
