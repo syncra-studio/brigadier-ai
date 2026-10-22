@@ -25,6 +25,8 @@
 > recognises merged, empty and idle worktrees (S20).
 > Amended again with §9, "Excel at what we keep" (the user's 10-22 strategy, one run per kept capability), and
 > the user's Q8 on workers' permission prompts (§8, item 14; S13).
+> Amended again with G23: research goes to lean workers (`brigadier start --lean`, S13), and the skill guides
+> asking once, adversarial reviews and adversarial consultation (S15); §9.1 adds a lean-research bar.
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -61,6 +63,8 @@ default. It trims only its own additions: the short standing instructions (§6),
 one `brigadier --help` pointer, and the always-installed `/brigade` skill, which costs only its description
 until used (G20). The one thing it turns off is the few CLI tools that cannot work inside a Brigadier tab (S17),
 never anything of the user's. Stripping comes back only with measured evidence on our own tasks (§8, item 13).
+The one exception is a research worker the thread starts with `brigadier start --lean` (G23, S13): the thread's
+choice per worker, never the user's own sessions.
 
 **Brigadier pushes nothing (G1).** A thread receives only:
 - the user's messages;
@@ -747,7 +751,7 @@ and `run`.
 
 ### Stage 3: teams = the Delegator, built in
 
-**S13. The `brigadier` CLI, with worker commands equal to `dlg` (G3, G6, G16, G19).** Opus.
+**S13. The `brigadier` CLI, with worker commands equal to `dlg` (G3, G6, G16, G19, G23).** Opus.
 - **Scope:** one command, `brigadier`, built like `cmux`.
   - It is one binary, shipped in the app and put on each session's `PATH`.
   - Output is text by default and `--json` on every subcommand.
@@ -761,7 +765,7 @@ and `run`.
   |---|---|
   | `brigadier sessions` | List the project's sidebar sessions: title, state from CLI events, branch, +/−. Workers are not in it. This is "read anything"; `brigadier show <id>` gives a session or worker in full. |
   | `brigadier workers` | List the calling session's own workers: title, agent, model, state from the worker's own CLI events, branch, +/−. |
-  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` (default: the parent's level, Q8) and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
+  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` (default: the parent's level, Q8), `--lean` with `--skill <name>` (G23, below) and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
   | `brigadier send <id> <text>\|--allow\|--deny` | To one of the caller's own workers, queued mid-turn, like `dlg send`. This is how the parent relays the user's answers (G19.Q6). `--allow` or `--deny` answers the worker's open CLI permission prompt through the CLI's own permission protocol, never key presses (Q8). The prompt reaches the parent as a `brigadier wait` "needs input" event, and until it is answered it shows under Waiting on you in the parent. |
   | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
   | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen, of any session or worker. |
@@ -770,6 +774,13 @@ and `run`.
   | `brigadier models` | Live models, usage and guidance (S13b). |
 
   - Brain search and the code index get their subcommands in S18.
+  - **`brigadier start --lean` (G23)** starts a research worker with just the goal and the repo:
+    - no user MCP servers;
+    - no skills beyond those named with `--skill <name>` (none by default);
+    - no memory writes (Claude `autoMemoryEnabled:false`, Codex `features.memories=false`);
+    - the user's instruction files still load (G17 keeps project instructions).
+    - It is built from the CLIs' own flags and settings: `--strict-mcp-config` with an empty MCP config and a
+      settings JSON for Claude, config overrides for Codex. The user's files are never edited.
   - `workers` is its own command, not `sessions --mine`: the two list different kinds of thing (sidebar
     sessions vs. the caller's workers), so each keeps one fixed `--json` row shape, and `workers` lists exactly
     the ids that `send`, `wait` and `close` accept.
@@ -804,6 +815,8 @@ and `run`.
   - A live dev check on each provider: the thread starts a Codex worker through `brigadier start` that writes
     a file and reports.
   - An app test: the ask card takes a free-text answer when it also shows options.
+  - A provider test per CLI asserts the exact flags and settings `--lean` (with and without `--skill`) passes.
+  - A live lean worker lists its tools and shows none of the user's MCP servers.
 
 **S13b. `brigadier models`: routing as advice (G18).** Codex.
 - **Scope:** `brigadier models [--json]` merges three layers into one view:
@@ -860,7 +873,7 @@ and `run`.
   - An app test: a worker opened from the rail shows its thread and no composer.
   - No component under `SummaryContent` imports `boardJob` or `liveJob`.
 
-**S15. The `/brigade` skill, always on (G3, G19.Q5, G20, G21).** Opus.
+**S15. The `/brigade` skill, always on (G3, G19.Q5, G20, G21, G23).** Opus.
 - **Scope:** one plain, editable skill, the only one Brigadier ships: `crates/core/src/manager/brigade/SKILL.md`,
   included like `computer_use_skill.md`. The public `brigadier-skill` repo is unrelated: it is for outside CLIs
   talking to the app.
@@ -880,6 +893,15 @@ and `run`.
       change better.
     - The parent integrates, runs its checks on the integrated tree, then merges into what the user chose: the
       New worktree's base branch, or the Local checkout's branch chosen from the rail.
+  - Research and review guidance (G23). All of it is guidance; nothing is a gate:
+    - Research goes to lean workers (`brigadier start --lean`, S13). Small reads go to the CLI's own subagents
+      first.
+    - When the ask is unclear: ask the user once. One lean researcher when the options need evidence. Builders
+      only when prototypes must be compared, never by default.
+    - Adversarial review stays: `codex review` per step, and the verifier per phase.
+    - Adversarial consultation before approving a plan or outline, or taking an irreversible step (a delete, a
+      merge into the user's branch, a publish): a critique from the other vendor's CLI; take what you agree with.
+      Not for every small decision.
   - A chat without a project can't start workers: the skill says `brigadier start` needs a project.
   - Gotchas the skill states, one line each (`research/POCOCK.md` §4):
     - Worktrees don't remove collisions; they move them to merge time. Two workers that touch one shared file
@@ -1108,8 +1130,9 @@ changes the guidance or the user's rules file by itself (G18).
 
 This file is all Brigadier adds to a session (G17). The session still gets everything the plain CLI loads: the
 project's CLAUDE.md or AGENTS.md, the user's MCP servers, skills, and memory per the user's own settings.
-Brigadier removes none of it. The file holds only what every turn of every session needs; text that matters
-only at a seam travels in the seam message instead (`research/POCOCK.md` §3.1).
+Brigadier removes none of it; a `--lean` research worker (S13) is the thread's own choice (G23). The file
+holds only what every turn of every session needs; text that matters only at a seam travels in the seam
+message instead (`research/POCOCK.md` §3.1).
 
 ```
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
@@ -1212,7 +1235,8 @@ search the record (`brigadier brain search`, `brigadier brain read`) and quote w
       only the tools that cannot work in a tab, after S17's one-time measurement (POCOCK §3.2).
     - Not taken: LEAN-CONTEXT §5 item 1's default stripping of memory writes, user-global skills and MCP
       servers. Under G17 these stay as the user set them, and come back only with measured evidence on our own
-      tasks. POCOCK §3.5's depth limit on `brigadier start` is not built in either: Brigadier enforces nothing
+      tasks. G23 takes them per worker instead: the thread may start a research worker with `--lean` (S13).
+      POCOCK §3.5's depth limit on `brigadier start` is not built in either: Brigadier enforces nothing
       of its own (G18); a user who wants one writes it into the rules file.
 14. **A worker's CLI permission prompt under read-only workers (G19.Q6). Resolved by Q8 (user, 10-22).** A
     question can be relayed in words with `brigadier send`; a permission prompt needs allow or deny. So:
@@ -1259,6 +1283,8 @@ sessions with token economy. Each has a measurable bar against the best rival to
   - **One skill** of ≤ 150 lines; a user edit survives an app update. **No worker protocol:** a brief with no
     Brigadier text still yields `turn_end` and `needs_input`. **Visible:** a state word changes ≤ 1 s after its
     CLI event, "Merged" ≤ 5 s after the merge.
+  - **Lean research.** A research task given to a lean worker costs fewer tokens and lands a better doc than the
+    same task done in the parent (G23; the orchestration bench, report only).
 - **Steps:**
   1. **O1** (into S13): `wait` events `turn_end`, `needs_input`, `failed`, `interrupted`, `gone`, `limit`,
      `fresh_context`, `quiet` (20 min with no CLI event, naming what runs); a durable per-parent queue with
@@ -1271,11 +1297,12 @@ sessions with token economy. Each has a measurable bar against the best rival to
      HH:MM, Fresh context) and git (Done · not merged, Merged); archive's ask lists unmerged workers. Files:
      `WorkersStrip.tsx`, `stripView.ts`, `WorkerList.tsx`. Done: app tests per state, timings live. Opus, S–M.
   4. **O4** (into S15): the skill: fan out or not, a five-line brief (target, change, do-not-touch, files,
-     acceptance commands), wave, wait, integrate small and often, land on; ≤ 150 lines. A user copy at
+     acceptance commands), wave, wait, integrate small and often, land on, lean research and adversarial
+     consultation (G23); ≤ 150 lines. A user copy at
      `~/.brigadier/brigade/SKILL.md` overrides it ("Reset to shipped" in Settings). Done: skill tests + S15's live
      run. Opus, S.
-  5. **O5** (after S15): the fault battery and the landing bench as a nightly report, in
-     `tools/bench/orchestration/`. Done when the first report has both numbers. Codex, M.
+  5. **O5** (after S15): the fault battery, the landing bench and the lean-research comparison as a nightly
+     report, in `tools/bench/orchestration/`. Done when the first report has all three numbers. Codex, M.
 - **Not copied:** a worker protocol of done, heartbeat and ask commands, report envelopes or decision gates.
   That is the push-and-gate pattern the strip-down removes. Permission prompts are never answered with key
   presses. Sessions never get `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`.
