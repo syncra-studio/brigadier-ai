@@ -2158,8 +2158,6 @@ mod reads_tests;
 #[cfg(unix)]
 mod rebirth_words_tests;
 #[cfg(unix)]
-mod request_changes_tests;
-#[cfg(unix)]
 mod rerun_tests;
 #[cfg(unix)]
 mod restart_waits_tests;
@@ -2169,6 +2167,8 @@ mod resume_tests;
 mod review_picks_tests;
 #[cfg(unix)]
 mod source_branch_tests;
+#[cfg(unix)]
+mod turn_changes_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]

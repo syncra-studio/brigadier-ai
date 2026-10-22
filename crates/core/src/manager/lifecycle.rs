@@ -44,16 +44,31 @@ const UNCLAIMED_TEST_DATA_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 impl SessionManager {
     /// Lets the cleanup ledger remove the worktrees it records.
     pub(super) fn install_worktree_remover(&self) {
+        let refs_git = self.git.clone();
+        self.runtime
+            .ledger()
+            .set_ref_remover(Arc::new(move |repo, namespace| {
+                let git = refs_git.clone();
+                Box::pin(async move {
+                    let session = namespace
+                        .strip_prefix("refs/brigadier/s/")
+                        .and_then(|s| s.strip_suffix('/'))
+                        .ok_or_else(|| "invalid session refs namespace".to_owned())?
+                        .to_owned();
+                    tokio::task::spawn_blocking(move || {
+                        git.open(&repo)
+                            .and_then(|repo| repo.delete_session_snapshots(&session))
+                            .map_err(|err| err.to_string())
+                    })
+                    .await
+                    .map_err(|err| err.to_string())?
+                })
+            }));
         let git = self.git.clone();
-        let manager = self.me.clone();
         self.runtime.ledger().set_worktree_remover(Arc::new(
             move |repo: PathBuf, path: PathBuf| {
                 let git = git.clone();
-                let manager = manager.clone();
                 Box::pin(async move {
-                    if let Some(manager) = manager.upgrade() {
-                        manager.removed_worktree_changes(&path).await;
-                    }
                     tokio::task::spawn_blocking(move || {
                         match git.open(&repo) {
                             Ok(repo) => {
@@ -146,7 +161,6 @@ impl SessionManager {
             }
             // Its thread's background runs the restart cut off are told as such.
             self.recover_background_runs(&conversation.id).await;
-            self.recover_change_records(&conversation.id).await;
             let Ok(tasks) = self.core.tasks(&conversation.id).await else {
                 if let Some(live) = &live
                     && live.recovering(false).await
@@ -1467,7 +1481,7 @@ impl SessionManager {
         self.remove_session_dir(&id).await;
         let store = self.core.store().clone();
         // Its own blobs go now, not a day later; then the usual collection of older leftovers.
-        self.delete_change_records(&id).await?;
+        self.delete_turn_snapshots(&id).await?;
         self.delete_thread_images(&id).await?;
         self.delete_background_output(&id).await?;
         let (removed, own) = store.delete_streams_and_blobs(purge).await?;

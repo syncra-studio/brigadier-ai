@@ -475,7 +475,6 @@ impl SessionManager {
         cancel: CancellationToken,
     ) {
         let ended = Ending::take(self, (run.conversation_id.clone(), run.id.clone()));
-        self.background_command_changes(&run).await;
         // The call it started may have been linked after the handoff, on the board only.
         if run.item_id.is_none()
             && let Ok(board) = self.core.board(&run.conversation_id).await

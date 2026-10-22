@@ -2576,25 +2576,42 @@ impl UserRequest {
     }
 }
 
-/// What a request changed in its session's checkout, file by file: the files its thread's own
-/// edits and commands changed and its workers landed, each from how the file was before the
-/// request first changed it to how it is after its last change. Kept up to date while the
-/// request works (after each of the thread's edits and commands and each landing) and made
-/// final when the request settles. The contents it compares are kept under a private ref
-/// (`refs/brigadier/…`), so View changes, Undo and Reapply outlast Git's garbage collection.
+/// A turn's exact git snapshot diff, with files introduced by merges grouped separately.
+/// The captured trees stay under the session's refs for Review and confirmed Revert.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestChanges {
+    /// Files brought in by merges, grouped by the source branch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<MergedTurnChanges>>", optional)]
+    pub merged: Vec<MergedTurnChanges>,
     /// The files and their lines in and out.
     pub stat: DiffStat,
-    /// The files Undo would leave as they are, and why: someone else changed them during the
-    /// request too, or a command changed them and the user's edits can't be told apart.
+    /// File-review refusals. A full Revert names later files in its confirmation instead.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<HeldPath>>", optional)]
     pub held: Vec<HeldPath>,
-    /// The request settled and every landing of its workers is counted.
+    /// The CLI's turn-end snapshot is retained.
     #[serde(default)]
     pub settled: bool,
+}
+
+/// A branch whose merge introduced files during a turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergedTurnChanges {
+    pub branch: String,
+    pub tip: String,
+    pub merge_commit: String,
+    pub stat: DiffStat,
+}
+
+/// The files named before confirming a turn's start-tree restore.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnRevert {
+    pub expected_tree: String,
+    pub changed_after: Vec<String>,
 }
 
 /// A file Undo or Reapply leaves as it is, with why in plain words.
@@ -2677,15 +2694,13 @@ pub struct PendingHunk {
     pub new_lines: u32,
 }
 
-/// The user's Undo and Reapply of what a request's workers landed (the turn diff card).
-/// Each is a new commit, never a history rewrite.
+/// Whether the user restored the turn's start snapshot in the checkout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestUndo {
-    /// Its changes are reverted now: true after Undo, false after Reapply.
+    /// The start snapshot was restored.
     pub reverted: bool,
-    /// The commits Undo and Reapply landed, oldest first; each reverts the one before it, the
-    /// first the request's own landings.
+    /// No commits are created by a snapshot restore.
     pub commits: Vec<String>,
 }
 

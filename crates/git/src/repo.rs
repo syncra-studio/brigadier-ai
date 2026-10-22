@@ -2426,7 +2426,7 @@ fn absolute(path: &Path) -> Result<PathBuf> {
 /// only when the entry is older than the index file; a copy timed now would pass a file
 /// rewritten to the same size in the index's own second (git compares whole seconds on Linux)
 /// as unchanged, its old content.
-fn copy_index(from: &Path, to: &Path) -> Result<()> {
+pub(crate) fn copy_index(from: &Path, to: &Path) -> Result<()> {
     fs::copy(from, to)?;
     let modified = fs::metadata(from)?.modified()?;
     fs::File::options()

@@ -823,16 +823,7 @@ fn brigadier_socket(spec: &SessionSpec) -> Option<String> {
     Some(real.display().to_string())
 }
 
-/// A thread's output hook ([`SessionSpec::output_hook`]) as settings `hooks`: the same command
-/// after every `Bash` call, successful (`PostToolUse`) or not (`PostToolUseFailure`). Settings
-/// passed with `--settings` hold under `--setting-sources project`, and a successful call's
-/// output is replaced by the hook's `hookSpecificOutput.updatedToolOutput` (code.claude.com/
-/// docs/en/hooks, "PostToolUse decision control"; checked on 2.1.292,
-/// docs/evidence/2026-10-07-thread-phase2-contracts.md §2). A successful file tool's call runs
-/// it too, and its `hookSpecificOutput.additionalContext` (the touched folder's rules) follows
-/// the call's result (BUILD-PLAN D1.6). Before a `Bash` call runs (`PreToolUse`) it runs as
-/// well, and the CLI waits for it: the daemon reads the files the command names, so Undo can
-/// tell what the call changed (#87).
+/// A thread's output/rules hook after a tool finishes. Changes cards use turn trees.
 fn output_hooks(spec: &SessionSpec) -> Option<Value> {
     let hook = spec
         .output_hook
@@ -850,7 +841,6 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
     let mut success = entry.clone();
     success.as_array_mut()?.push(files);
     Some(json!({
-        "PreToolUse": entry.clone(),
         "PostToolUse": success,
         "PostToolUseFailure": entry,
     }))
@@ -2738,9 +2728,8 @@ for line in sys.stdin:
         files["matcher"] = json!("Read|Edit|Write|MultiEdit|NotebookEdit");
         success.as_array_mut().unwrap().push(files);
         assert_eq!(hooks["PostToolUse"], success);
-        // Before a `Bash` call runs, for the files it names (#87).
-        assert_eq!(hooks["PreToolUse"], expected);
-        assert_eq!(hooks.as_object().map(Map::len), Some(3));
+        assert!(hooks.get("PreToolUse").is_none());
+        assert_eq!(hooks.as_object().map(Map::len), Some(2));
         let args = Claude::session_args(
             &thread,
             cwd.path(),
@@ -2883,9 +2872,8 @@ for line in sys.stdin:
             args
         };
         assert_eq!(without_settings(&fork), without_settings(&thread));
-        // The thread's own `PreToolUse` hook only reads what a `Bash` call names (#87).
         let hooks = &settings(&thread, &SubAgents::Any, false)["hooks"];
-        assert_eq!(hooks["PreToolUse"][0]["matcher"], json!("Bash"), "{hooks}");
+        assert!(hooks.get("PreToolUse").is_none());
     }
 
     /// BUILD-PLAN C5: a Brain job reads and searches only, and its system prompt has no

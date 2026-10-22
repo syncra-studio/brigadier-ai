@@ -24,7 +24,7 @@ const render = async (t: Parameters<typeof renderFixturePage>[0], query = "") =>
 // The proofs the thread attached show under the answer inside its Preview card, before the
 // Changes card: captioned thumbnails two to a row; no row of their own in the work.
 test("a turn's proofs show captioned in its Preview card under its answer", { timeout: 60000 }, async (t) => {
-  const seen = await render(t);
+  const seen = await render(t, "&edited=1");
   assert.deepEqual(seen.proofs.map(({ caption, ...rest }) => ({ ...rest, caption: caption.replace(/\d{1,2}:\d{2}.*$/, "").trim() })), [
     { kind: "screenshot", image: "The install section, fixed", video: null, caption: "1.The install section, fixed" },
     { kind: "recording", image: null, video: "data:video/webm;", caption: "2.install.webm" },
@@ -40,15 +40,15 @@ test("a turn's proofs show captioned in its Preview card under its answer", { ti
 
 // What was checked never lists in the thread. A turn that merged with no files of its own counted shows the merge's own Changes card, Revert in it;
 // Revert asks in the card's footer, then sends the thread its fixed request once.
-test("a merge with nothing counted shows its own Changes card with Revert, and no Checked list", { timeout: 60000 }, async (t) => {
+test("a merge with no snapshot diff has no Changes card or Checked list", { timeout: 60000 }, async (t) => {
   const seen = await render(t);
   assert.equal(seen.checkedInThread, false);
-  assert.deepEqual(seen.headers, ["Merged into main (PR #7)"]);
+  assert.deepEqual(seen.headers, []);
   assert.equal(seen.card, null);
   assert.deepEqual(seen.revert, {
-    shown: "Revert",
-    sent: ["Revert merge f00dfee (PR #7) on main and push it the way it went in"],
-    after: ["Reverting…"],
+    shown: "",
+    sent: [],
+    after: [],
   });
 });
 
@@ -66,5 +66,5 @@ test("a merge in a later turn shows on the edited turn's card and in its own tur
   const seen = await render(t, "&later=1");
   assert.equal(seen.card?.merged, "Merged into main (PR #7)");
   assert.deepEqual(seen.card?.buttons, ["Revert", "View changes"]);
-  assert.deepEqual(seen.headers, ["Merged into main (PR #7)"]);
+  assert.deepEqual(seen.headers, []);
 });

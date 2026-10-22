@@ -34,7 +34,7 @@ const FILES = [
   { path: "src/b.ts", insertions: 1, deletions: 1, binary: false },
   { path: "src/c.ts", insertions: 2, deletions: 0, binary: false },
 ];
-let files = FILES;
+const files = FILES;
 
 function show() {
   const request = {
@@ -105,17 +105,6 @@ async function measure() {
   show();
   await until(() => rows()[0]?.dataset.review === "merged");
   out.merged = look();
-  review = { ...review, "src/d.ts": "pending" };
-  show();
-  await until(() => look().review === "1 to review");
-  [...document.querySelectorAll("button")].find((button) => words(button) === "Show 1 more file")?.click();
-  await until(() => rows().length === 4);
-  out.putBack = look();
-  files = [];
-  review = { "src/d.ts": "pending" };
-  show();
-  await until(() => look().title === "1 File");
-  out.putBackAlone = look();
   out.asked = asked;
   return out;
 }

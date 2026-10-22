@@ -806,16 +806,6 @@ impl SessionManager {
     }
 
     async fn landed(&self, task: &Task, target: &str, from: &Oid, new_tip: &Oid, commits: u32) {
-        // Each step on the heap: an unoptimized build gives every inline `.await` its own stack
-        // slots at once, and this frame alone took a fifth of a runtime thread's stack (#356).
-        crate::heap(|| {
-            self.refresh_changes(
-                &task.conversation_id,
-                task.request_id.as_deref(),
-                super::request_changes::Refresh::Landing { from, tip: new_tip },
-            )
-        })
-        .await;
         // The thread's own commits below the landing are recorded as its own first.
         if let Ok(repo) = self.task_repo(task) {
             crate::heap(|| {
@@ -1489,7 +1479,7 @@ impl SessionManager {
             },
         )
         .await;
-        self.merged_pending(id, &merged, &session_tip.0).await;
+
         drop(landing_lock);
         let previews = self.stop_merged_previews(id).await;
         // The session's work is merged. Its worktree and branch stay with the session (BUILD-PLAN

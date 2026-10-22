@@ -180,6 +180,16 @@ impl Leftovers {
 /// The adapter of the extra account whose CLI home is the given folder, while it is set up.
 pub type AccountResolver = Arc<dyn Fn(&str) -> Option<Arc<dyn Provider>> + Send + Sync>;
 
+/// Removes a session's owned git namespace through the configured git engine.
+pub type RefRemover = Arc<
+    dyn Fn(
+            PathBuf,
+            String,
+        ) -> brigadier_providers::BoxFuture<'static, std::result::Result<(), String>>
+        + Send
+        + Sync,
+>;
+
 pub struct CleanupLedger {
     core: Arc<Core>,
     platform: Arc<dyn Platform>,
@@ -189,6 +199,7 @@ pub struct CleanupLedger {
     /// A tab chat's records go, or one is added, one at a time: none slips in between.
     tab_chats: tokio::sync::Mutex<()>,
     worktrees: Mutex<Option<WorktreeRemover>>,
+    refs: Mutex<Option<RefRemover>>,
     accounts: Mutex<Option<AccountResolver>>,
     #[cfg(test)]
     test_providers: Mutex<Option<[Arc<dyn Provider>; 2]>>,
@@ -275,6 +286,7 @@ impl CleanupLedger {
             state: Mutex::new(state),
             tab_chats: tokio::sync::Mutex::new(()),
             worktrees: Mutex::new(None),
+            refs: Mutex::new(None),
             accounts: Mutex::new(None),
             #[cfg(test)]
             test_providers: Mutex::new(None),
@@ -287,6 +299,11 @@ impl CleanupLedger {
 
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Wires removal of git refs owned by session records (Delete only).
+    pub fn set_ref_remover(&self, remover: RefRemover) {
+        *self.refs.lock().unwrap_or_else(|p| p.into_inner()) = Some(remover);
     }
 
     /// Wires in the extra accounts: a session's files go with the adapter of the home it ran
@@ -884,6 +901,19 @@ impl CleanupLedger {
                         }
                         Ok(Err(err)) => leftovers.failures.push(err),
                         Err(err) => leftovers.failures.push(err.to_string()),
+                    }
+                }
+                Artifact::GitRefs { repo, namespace } => {
+                    let remover = self.refs.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                    let result = match remover {
+                        Some(remove) => remove(PathBuf::from(repo), namespace.clone()).await,
+                        None => Err("the git engine is not running".into()),
+                    };
+                    match result {
+                        Ok(()) => removed.push(artifact),
+                        Err(err) => leftovers
+                            .failures
+                            .push(format!("git refs {namespace}: {err}")),
                     }
                 }
                 // Run segments share one worktree: the last owner using it removes it.

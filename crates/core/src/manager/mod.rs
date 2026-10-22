@@ -80,7 +80,6 @@ mod past_projects;
 mod peer_answers;
 mod peer_wait;
 mod peers;
-mod pending_changes;
 mod phases;
 mod preview;
 mod preview_ready;
@@ -93,7 +92,6 @@ mod quiet;
 pub(crate) mod reads;
 mod rebirth;
 mod refcheck;
-mod request_changes;
 mod requests;
 mod reruns;
 mod research;
@@ -104,7 +102,6 @@ pub mod search;
 mod secrets;
 mod session_dir;
 mod setup_script;
-mod shell_changes;
 mod side_chat;
 mod sidecars;
 mod source_actions;
@@ -117,7 +114,7 @@ mod thread_scratch;
 mod tool_output;
 mod tools;
 mod trust;
-mod undo;
+mod turn_changes;
 mod uninstall;
 pub(super) mod upgrade;
 mod usage;
@@ -146,7 +143,7 @@ use crate::model::{
 use crate::runtime::{Runtime, Spawner};
 use crate::sessions::Origin;
 use crate::tools::{Grants, Role, ToolCall, ToolHost, ToolReply};
-use crate::work::{DiffStat, TaskId, TaskState, WorkerDiff};
+use crate::work::{DiffStat, TaskId, WorkerDiff};
 use crate::{Core, Error, Result};
 
 pub(crate) use background_runs::background_run_number;
@@ -202,7 +199,7 @@ pub struct SessionManager {
     /// Held while the thread's new commits are looked for and their tip recorded
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
-    change_records: request_changes::ChangeRecords,
+    turn_snapshots: turn_changes::TurnSnapshots,
     /// The context window each model last reported, by provider and the model asked for: a
     /// Claude session learns its own only when its first turn ends, and its overflow guard needs
     /// it before then (BUILD-PLAN D2.3, D2.3b).
@@ -425,7 +422,7 @@ impl SessionManager {
             plans: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
-            change_records: request_changes::ChangeRecords::default(),
+            turn_snapshots: turn_changes::TurnSnapshots::default(),
             known_windows: std::sync::Mutex::new(HashMap::new()),
             ref_records: Arc::default(),
             source_output: source_actions::SourceOutput::default(),
@@ -663,25 +660,17 @@ impl SessionManager {
     /// is being set up or removed) is left out.
     pub async fn worker_diffs(&self, id: &ConversationId) -> Result<Vec<WorkerDiff>> {
         let board = self.core.board(id).await?;
+        let parent_branch = self.changes_checkout(id).and_then(|(_, branch)| branch);
         let checkouts: Vec<(TaskId, PathBuf, String)> = board
             .tasks
             .values()
-            .filter(|task| {
-                task.kind.writes()
-                    && matches!(
-                        task.state,
-                        TaskState::Running
-                            | TaskState::Blocked
-                            | TaskState::Paused
-                            | TaskState::Reported
-                    )
-            })
+            .filter(|task| task.kind.writes())
             .filter_map(|task| {
                 let workspace = task.workspace.as_ref()?;
                 Some((
                     task.id.clone(),
                     PathBuf::from(workspace.worktree.as_ref()?),
-                    workspace.base.clone()?,
+                    parent_branch.clone()?,
                 ))
             })
             .collect();
@@ -694,8 +683,7 @@ impl SessionManager {
                 .into_iter()
                 .filter_map(|(task_id, path, base)| {
                     let repo = git.open(&path).ok()?;
-                    let files = repo.files_tree().ok()?;
-                    let stat = repo.diff_stat(&brigadier_git::Oid(base), &files).ok()?;
+                    let stat = repo.worker_diff(&base).ok()?;
                     Some(WorkerDiff {
                         task_id,
                         stat: landing::diff_stat_of(&stat),

@@ -26,9 +26,9 @@ use brigadier_core::{
     ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
     RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
     SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
-    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
-    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
-    WorkspaceTree,
+    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -151,27 +151,6 @@ pub struct HookOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub touched: Option<String>,
-    /// Instead of an output: a `Bash` call about to run or just ended, whose named files the
-    /// daemon reads then, so Undo can tell what the call changed. No bytes follow.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub shell: Option<ShellCall>,
-}
-
-/// A thread's `Bash` call as its tool hook sees it, before it runs or once it ended.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ShellCall {
-    /// Whether it ended: false before it runs (`PreToolUse`).
-    pub ended: bool,
-    pub tool_use_id: String,
-    pub command: String,
-    /// Where it runs.
-    pub cwd: Option<String>,
-    /// Sent to the background: it ends after its hook, so only its start is looked at (whether
-    /// it may run), never its files.
-    #[serde(default)]
-    pub background: bool,
 }
 
 /// The daemon's answer to a worker's `Stop` hook.
@@ -193,11 +172,6 @@ pub struct HookReply {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub context: Option<String>,
-    /// Why a `Bash` call about to run is refused (it doesn't run, and the model gets this);
-    /// none: it runs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub deny: Option<String>,
 }
 
 /// Commands and queries.
@@ -706,15 +680,16 @@ pub enum Request {
         scope: String,
         attachments: Vec<AttachmentRef>,
     },
-    /// Undoes (or, with `reapply`, reapplies) what a request changed: its thread's own edits
-    /// and commands and its workers' landings (`UserRequest::changes`), file by file, leaving
-    /// any file someone else changed meanwhile as it is. Uncommitted on the user's own
-    /// checkout. A request from before its changes were kept: what its workers landed, with a
-    /// new commit on the branch they landed on.
-    UndoChanges {
+    /// Preview the later files before confirming a turn snapshot restore.
+    PrepareTurnRevert {
         conversation_id: ConversationId,
         request_id: String,
-        reapply: bool,
+    },
+    /// Restore the turn's start tree, only while the confirmed current tree still matches.
+    RevertTurn {
+        conversation_id: ConversationId,
+        request_id: String,
+        expected_tree: String,
     },
     /// The changes agents made in a session's checkout that the user hasn't kept or undone yet
     /// (the file review, a turn diff card's Undo All and Keep All): every file, or `path`'s.
@@ -1701,7 +1676,10 @@ pub enum Response {
         data: String,
     },
     PinDraftAttachments,
-    UndoChanges {
+    PrepareTurnRevert {
+        preview: TurnRevert,
+    },
+    RevertTurn {
         outcome: UndoOutcome,
     },
     GetPendingChanges {

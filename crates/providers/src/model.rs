@@ -1428,6 +1428,9 @@ pub enum Artifact {
     ProcessesIn { dir: String },
     /// A git worktree Brigadier created (for a task or a session) in its data directory.
     Worktree { repo: String, path: String },
+    /// Git tree refs retained with the session record. Archive keeps this owner; Delete
+    /// removes the entire namespace, including the branch-history anchors.
+    GitRefs { repo: String, namespace: String },
     /// A folder Brigadier created in its data directory (a worker's scratch folder, the
     /// orchestrator's or a Chat's working folder).
     ScratchDir { path: String },

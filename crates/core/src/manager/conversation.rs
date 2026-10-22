@@ -1487,16 +1487,6 @@ impl SessionManager {
             working
         };
         drop(state);
-        // The rest of the turn's file changes are the steered request's: its record starts
-        // here, as a turn's start begins its request's.
-        if steered {
-            self.refresh_changes(
-                &conv.id,
-                message.request_id.as_deref(),
-                super::request_changes::Refresh::Start,
-            )
-            .await;
-        }
         self.note_steered(conv, message.request_id.as_deref(), into)
             .await;
         if let (Some(held), Some(request)) = (held, &message.request_id) {
@@ -2897,12 +2887,7 @@ impl SessionManager {
             crate::heap(|| self.scan_thread_commits(&conv.id, false)).await;
             // On a local checkout, where the request's changes start (BUILD-PLAN B2).
             crate::heap(|| self.note_request_start(&conv.id, request.as_deref())).await;
-            self.refresh_changes(
-                &conv.id,
-                request.as_deref(),
-                super::request_changes::Refresh::Start,
-            )
-            .await;
+            self.snapshot_start(&conv.id, request.as_deref()).await;
         }
         let (reseed, briefing) = {
             let mut state = conv.state.lock().await;
@@ -4119,6 +4104,7 @@ impl SessionManager {
                             self.session_events(EventSource::Conversation(&conv.id), &cli, event)
                         {
                             exited |= matches!(event, ProviderEvent::Exited { .. });
+                            self.snapshot_event(&conv.id, &event).await;
                             crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
                         }
                         if exited {
@@ -4139,6 +4125,16 @@ impl SessionManager {
                     self.store_deltas(&conv, std::mem::take(&mut deltas)).await;
                 }
             }
+        }
+        let current = conv
+            .state
+            .lock()
+            .await
+            .cli
+            .as_ref()
+            .is_none_or(|current| Arc::ptr_eq(current, &cli));
+        if current {
+            self.snapshot_finish(&conv.id).await;
         }
         self.store_deltas(&conv, deltas).await;
         self.record_held_looked(&conv).await;
@@ -4913,7 +4909,6 @@ impl SessionManager {
             }
             _ => {}
         }
-        self.changes_event(&conv.id, &event).await;
         let completed = match &event {
             ProviderEvent::TurnCompleted { status, .. } => Some(*status),
             _ => None,
@@ -6274,13 +6269,6 @@ impl SessionManager {
     }
 
     async fn log_orchestrator(&self, id: &ConversationId, entry: OrchestratorEntry) -> Option<i64> {
-        let entry = match entry {
-            OrchestratorEntry::Provider { provider, event } => OrchestratorEntry::Provider {
-                provider,
-                event: super::request_changes::without_originals(event),
-            },
-            entry => entry,
-        };
         let start = match &entry {
             OrchestratorEntry::Provider { provider, event } => match event {
                 ProviderEvent::SessionStarted { .. } => Some((*provider, event.clone())),

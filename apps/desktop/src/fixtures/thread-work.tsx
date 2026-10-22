@@ -41,7 +41,6 @@ import type { BackgroundRun, Conversation, OrchestratorStepKind, ProviderEvent, 
 import { sessionTabs } from "@/state/sessionTabs";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
-import { useToasts } from "@/state/toasts";
 
 const query = new URLSearchParams(location.search);
 const CHAT = "thread-work";
@@ -99,16 +98,6 @@ mockIPC((command, payload) => {
       // A running one has printed nothing yet; the ended ones, their whole output.
       if (req.runId === "run-1") return { method: req.method, output: "", bytes: 0 };
       return { method: req.method, output: "served on :5173\nshut down", bytes: 26 };
-    case "undoChanges":
-      asked.undo.push(`${req.requestId}:${req.reapply ? "reapply" : "undo"}`);
-      if (req.requestId === "one") return Promise.reject(new Error("Later changes touch the same files (run.mjs)"));
-      return {
-        method: req.method,
-        outcome: {
-          restored: ["src/a.ts", "src/b.ts", "src/c.ts"],
-          held: [{ path: "src/notes.md", reason: "src/notes.md also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is." }],
-        },
-      };
     case "getReviewDiff":
       return { method: req.method, review: { patch: "", files: [], insertions: 0, deletions: 0 } };
     default:
@@ -416,7 +405,7 @@ async function measure(): Promise<object> {
     counts: text(one("[data-slot=turn-diff-counts]", at(id))),
     files: all("[data-slot=turn-diff-file]", at(id)).length,
     more: text(one("[data-slot=turn-diff-more]", at(id))),
-    undo: all("button", at(id)).find((button) => /Discard|Reapply/.test(button.textContent ?? "")) ?? null,
+    undo: all("button", at(id)).find((button) => /Revert/.test(button.textContent ?? "")) ?? null,
   });
   const oneCard = card("turn-diff-one");
   const fourCard = card("turn-diff-four");
@@ -424,25 +413,6 @@ async function measure(): Promise<object> {
     one: { ...oneCard, undo: text(oneCard.undo) },
     four: { ...fourCard, undo: text(fourCard.undo), held: fourCard.undo?.getAttribute("title") ?? null },
   };
-  fourCard.undo?.click();
-  await until(() => useToasts.getState().toasts.length > 0);
-  out.undone = { asked: [...asked.undo], toast: useToasts.getState().toasts.at(-1)?.text ?? null };
-  useBoard.setState((state) => ({
-    board: state.board && { ...state.board, requests: { ...state.board.requests, four: { ...state.board.requests["four"]!, undo: { reverted: true, commits: [] } } } },
-  }));
-  await wait(200);
-  out.reapply = text(card("turn-diff-four").undo);
-  // The toast a click brings, newer than any before it (toasts leave on a timer).
-  const toastAfter = async (click: () => void) => {
-    const before = Math.max(-1, ...useToasts.getState().toasts.map((shown) => shown.id));
-    click();
-    await until(() => useToasts.getState().toasts.some((shown) => shown.id > before));
-    return useToasts.getState().toasts.find((shown) => shown.id > before)?.text ?? null;
-  };
-  out.reapplied = await toastAfter(() => card("turn-diff-four").undo?.click());
-  // A refused Undo says which way it failed.
-  out.refused = await toastAfter(() => oneCard.undo?.click());
-
   // The pill of the working request, from its record; a click opens its first file.
   await until(() => one("[data-slot=composer-capsule]", at("pill")));
   out.pill = text(one("[data-slot=composer-capsule]", at("pill")));

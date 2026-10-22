@@ -453,8 +453,7 @@ impl SessionManager {
             requests.push(request.to_owned());
         }
         // A checkout moved to the merge has the base's other work too: that is merged as well.
-        let merged = if moved { &onto.0 } else { &head };
-        self.merged_pending(id, &requests, merged).await;
+
         self.orchestrator_step_in(
             id,
             requests.last().cloned(),

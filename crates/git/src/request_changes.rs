@@ -144,7 +144,7 @@ impl Repo {
         Ok(file)
     }
 
-    fn blob_tree(
+    pub(crate) fn blob_tree(
         &self,
         base: Option<&Oid>,
         files: &BTreeMap<String, Option<FileBlob>>,

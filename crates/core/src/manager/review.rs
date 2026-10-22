@@ -30,9 +30,11 @@ impl SessionManager {
         whole_files: bool,
         ignore_whitespace: bool,
     ) -> Result<ReviewDiff> {
+        let conversation = self.core.conversation(id)?;
+        let archived = conversation.lifecycle == crate::model::Lifecycle::Archived;
         let Some(Setup::Session {
             repo, environment, ..
-        }) = self.core.conversation(id)?.setup
+        }) = conversation.setup
         else {
             return Err(Error::Invalid(
                 "only a session has changes to review".into(),
@@ -42,52 +44,34 @@ impl SessionManager {
             Environment::LocalCheckout { branch } => (repo, branch, None),
             Environment::NewWorktree {
                 base, branch, path, ..
-            } => (path.unwrap_or(repo), branch, Some(base)),
+            } => (
+                if archived { repo } else { path.unwrap_or(repo) },
+                branch,
+                Some(base),
+            ),
         };
-        // "Last Turn" is what a request's workers landed: the given request, or the latest
-        // that landed anything.
-        let mut recorded_range = None;
-        let (scope, landed) = match scope {
+        let session = id.0.clone();
+        let mut snapshot_turn = None;
+        let scope = match scope {
             ReviewScope::LastTurn { request_id } => {
                 let board = self.core.board(id).await?;
-                let landed_by = |request: &str| -> Vec<Oid> {
-                    board
-                        .tasks
-                        .values()
-                        .filter(|task| task.request_id.as_deref() == Some(request))
-                        .filter_map(|task| task.landed.clone().map(Oid))
-                        .collect()
-                };
                 let request_id = request_id.or_else(|| {
                     board
                         .requests
                         .values()
-                        // A record starts with the request, so one that changed nothing has one.
-                        .filter(|request| {
-                            request
-                                .changes
-                                .as_ref()
-                                .is_some_and(|changes| !changes.stat.files.is_empty())
-                                || !landed_by(&request.id).is_empty()
-                        })
+                        .filter(|request| request.changes.is_some())
                         .max_by_key(|request| request.started_at_ms)
                         .map(|request| request.id.clone())
                 });
-                if let Some(request) = &request_id
-                    && let Some(record) = self.change_record(id, request).await?
-                {
-                    recorded_range = Some(record.commit);
+                if let Some(request) = &request_id {
+                    snapshot_turn = self
+                        .snapshot_turn_record(id, request)
+                        .await?
+                        .map(|turn| turn.number);
                 }
-                let landed = request_id.as_deref().map(landed_by).unwrap_or_default();
-                (ReviewScope::LastTurn { request_id }, landed)
+                ReviewScope::LastTurn { request_id }
             }
-            ReviewScope::Commit { commit, commits } => {
-                if commit.is_empty() || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err(Error::Invalid(format!("`{commit}` is not a commit id")));
-                }
-                (ReviewScope::Commit { commit, commits }, Vec::new())
-            }
-            other => (other, Vec::new()),
+            other => other,
         };
         let git = self.git.clone();
         blocking(move || {
@@ -98,15 +82,13 @@ impl SessionManager {
             };
             let mut untracked = BTreeSet::new();
             let range: Option<(Oid, Oid)> = match &scope {
-                ReviewScope::LastTurn { .. } if recorded_range.is_some() => {
-                    let tip = recorded_range.as_ref().expect("record range");
-                    Some((
-                        repo.resolve(&format!("{tip}^")).map_err(git_error)?,
-                        Oid(tip.clone()),
-                    ))
-                }
-                ReviewScope::LastTurn { .. } if landed.is_empty() => None,
-                ReviewScope::LastTurn { .. } => Some(repo.changes_of(&landed).map_err(git_error)?),
+                ReviewScope::LastTurn { .. } => match snapshot_turn {
+                    Some(turn) => Some((
+                        repo.turn_tree(&session, turn, false).map_err(git_error)?,
+                        repo.turn_tree(&session, turn, true).map_err(git_error)?,
+                    )),
+                    None => None,
+                },
                 ReviewScope::Uncommitted | ReviewScope::Unstaged | ReviewScope::Staged => {
                     let trees = repo.checkout_trees().map_err(git_error)?;
                     match scope {
@@ -215,6 +197,16 @@ impl SessionManager {
                 review.patch = repo
                     .review_patch(&from, &to, CONTEXT, ignore_whitespace)
                     .map_err(git_error)?;
+                review.full_files = false;
+            }
+            if let Some(turn) = snapshot_turn {
+                let own = repo.turn_diff(&session, turn).map_err(git_error)?;
+                review
+                    .files
+                    .retain(|file| own.stat.files.iter().any(|own| own.path == file.path));
+                review.insertions = own.stat.insertions;
+                review.deletions = own.stat.deletions;
+                review.patch = own.patch;
                 review.full_files = false;
             }
             Ok(review)

@@ -1,7 +1,8 @@
 //! Synchronous git CLI engine for isolated worker worktrees and reviewed fast-forward landings.
 //!
 //! Call on a blocking thread. Git 2.38 or later is required; the caller supplies the binary and
-//! login environment. Temporary snapshots never update the user's index, stash or refs. Paths
+//! login environment. Temporary indexes leave staging and stash untouched; turn trees use
+//! session-owned refs. Paths
 //! exposed as strings must be UTF-8; unsupported names fail explicitly rather than being aliased.
 #![warn(missing_docs)]
 
@@ -12,8 +13,8 @@ mod parse;
 mod refname;
 mod repo;
 mod request_changes;
-mod source;
 pub mod snapshot;
+mod source;
 mod trailers;
 mod worktree;
 

@@ -110,30 +110,6 @@ pub async fn serve_hook(
         tracing::warn!("refused an output hook: not a hook grant");
         return;
     }
-    // A `Bash` call's start or end: its named files are read before the answer lets it go on.
-    if let Some(shell) = output.shell {
-        let deny = daemon
-            .sessions
-            .hook_shell(
-                &grant,
-                shell.ended,
-                &shell.tool_use_id,
-                &shell.command,
-                shell.cwd.as_deref(),
-                shell.background,
-            )
-            .await;
-        answer_hook(
-            &mut stream,
-            &HookReply {
-                replacement: None,
-                context: None,
-                deny,
-            },
-        )
-        .await;
-        return;
-    }
     // A file tool's call: no output follows, and the answer is its folders' rules.
     if let Some(path) = &output.touched {
         let context = daemon.sessions.hook_rules(&grant, path).await.flatten();
@@ -142,7 +118,6 @@ pub async fn serve_hook(
             &HookReply {
                 replacement: None,
                 context,
-                deny: None,
             },
         )
         .await;
@@ -192,7 +167,6 @@ pub async fn serve_hook(
         &HookReply {
             replacement,
             context: None,
-            deny: None,
         },
     )
     .await;

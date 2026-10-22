@@ -22,6 +22,8 @@ pub struct MergedDiff {
     pub branch: String,
     /// The merged branch tip.
     pub tip: Oid,
+    /// The merge commit whose first-parent diff introduced these files.
+    pub merge_commit: Oid,
     /// Exact statistics of the files introduced by the merge.
     pub stat: DiffStat,
     /// Binary-capable patch of those files.
@@ -41,17 +43,16 @@ pub fn session_refs(session: &str) -> Result<String> {
 }
 
 impl Repo {
-    /// Capture all non-ignored files as a tree. HEAD's index entries preserve tracked ignored
-    /// files; a fresh index forces git to read content rather than trust cached stat data.
+    /// Capture all non-ignored files using `git add -A` and `write-tree` in a temporary
+    /// copy of the index. The user's staging and cached stat timestamps stay untouched.
     pub fn snapshot_tree(&self) -> Result<Oid> {
         let index = TempIndex::new()?;
-        match self.head()? {
-            Some(head) => {
-                self.index_cmd(&index, &["read-tree", &head.0])?;
-            }
-            None => {
-                self.index_cmd(&index, &["read-tree", "--empty"])?;
-            }
+        let real = self.git_path("index")?;
+        if real.exists() {
+            crate::repo::copy_index(&real, &index.path)?;
+            self.index_cmd(&index, &["update-index", "--no-split-index"])?;
+        } else {
+            self.index_cmd(&index, &["read-tree", "--empty"])?;
         }
         self.index_cmd(&index, &["add", "-A", "--", "."])?;
         parse::oid(&self.index_cmd(&index, &["write-tree"])?)
@@ -144,10 +145,23 @@ impl Repo {
                 let ids: Vec<_> = line.split_whitespace().collect();
                 let merge = Oid(ids[0].into());
                 let parent = Oid(ids[1].into());
+                let merge_paths = self.diff_scope(&parent, &merge)?.1;
+                excluded.extend(merge_paths.iter().cloned());
+                let mut assigned = BTreeSet::new();
                 for source in &ids[2..] {
                     let tip = Oid((*source).into());
-                    let stat = self.diff_stat(&parent, &merge)?;
-                    excluded.extend(self.diff_scope(&parent, &merge)?.1);
+                    let base = self.merge_base(&parent, &tip)?;
+                    let side_paths = self.diff_scope(&base, &tip)?.1;
+                    let paths: Vec<_> = merge_paths
+                        .iter()
+                        .filter(|path| {
+                            (side_paths.contains(path) || Some(source) == ids.last())
+                                && !assigned.contains(*path)
+                        })
+                        .cloned()
+                        .collect();
+                    assigned.extend(paths.iter().cloned());
+                    let stat = filter_stat(self.diff_stat(&parent, &merge)?, &paths);
                     let branches = self.cmd(
                         &[
                             "for-each-ref",
@@ -165,8 +179,9 @@ impl Repo {
                     merged.push(MergedDiff {
                         branch,
                         tip,
+                        merge_commit: merge.clone(),
                         stat,
-                        patch: self.diff(&parent, &merge)?,
+                        patch: self.diff_paths(&parent, &merge, &paths)?,
                     });
                 }
             }
@@ -247,6 +262,41 @@ impl Repo {
         // Two-tree checkout refuses untracked/ignored collisions rather than deleting them.
         self.index_cmd(&index, &["read-tree", "-m", "-u", &current.0, &target.0])?;
         Ok(paths)
+    }
+
+    /// The file review's two trees, initially the turn's immutable snapshots. Keep advances
+    /// only the review base; file Undo advances only the review end. The card never reads these.
+    pub fn turn_review_trees(&self, session: &str, turn: u64) -> Result<(Oid, Oid)> {
+        let prefix = format!("{}turn-{turn}-review", session_refs(session)?);
+        Ok((
+            self.snapshot_ref(&format!("{prefix}-base"))?
+                .unwrap_or(self.turn_tree(session, turn, false)?),
+            self.snapshot_ref(&format!("{prefix}-end"))?
+                .unwrap_or(self.turn_tree(session, turn, true)?),
+        ))
+    }
+
+    /// Update one review file in git, without modifying the immutable turn trees.
+    pub fn review_turn_file(
+        &self,
+        session: &str,
+        turn: u64,
+        keep: bool,
+        path: &str,
+        blob: Option<crate::FileBlob>,
+    ) -> Result<()> {
+        let (base, end) = self.turn_review_trees(session, turn)?;
+        let tree = self.blob_tree(
+            Some(if keep { &base } else { &end }),
+            &std::collections::BTreeMap::from([(path.to_owned(), blob)]),
+        )?;
+        let name = format!(
+            "{}turn-{turn}-review-{}",
+            session_refs(session)?,
+            if keep { "base" } else { "end" }
+        );
+        self.cmd(&["update-ref", &name, &tree.0], false)?;
+        Ok(())
     }
 
     /// Delete precisely a session's ref namespace. Archive deliberately never calls this.

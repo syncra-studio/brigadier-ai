@@ -1,23 +1,20 @@
 import { QUIET, PRIMARY } from "@/app/conversation/changesPills";
-import type { Merged } from "@/app/conversation/activity/revert";
 import { Button } from "@/components/controls";
 import { Spinner } from "@/components/icons";
 
 /**
- * The Changes card's footer row that asks before a merge is reverted: what Revert does, then
+ * The Changes card's footer row that names later files before a snapshot restore, then
  * Cancel and Revert, 4 apart; "Reverting…" once sent.
  */
 export function RevertConfirmRow({
-  merged,
+  changedAfter,
   fileCount,
-  counts,
   reverting,
   onCancel,
   onRevert,
 }: {
-  merged: Merged;
+  changedAfter: string[];
   fileCount: number;
-  counts: { insertions: number; deletions: number };
   reverting: boolean;
   onCancel: () => void;
   onRevert: () => void;
@@ -26,10 +23,10 @@ export function RevertConfirmRow({
     <div data-slot="merge-revert-confirm" className="border-divider flex items-center gap-3 border-t pt-3.5 pb-4 ps-13">
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-foreground text-label font-medium">
-          {fileCount > 0 ? `Revert ${fileCount === 1 ? "this file" : `these ${fileCount} files`} on ${merged.base}?` : `Revert this merge on ${merged.base}?`}
+          Restore the files from the start of this turn?
         </span>
         <span className="text-muted-foreground text-xs">
-          {`Adds one commit that undoes ${fileCount > 0 ? `+${counts.insertions} −${counts.deletions}` : "it"}${merged.pr === undefined ? "" : " and pushes it"}. Work merged after this stays.`}
+          {changedAfter.length > 0 ? `Also replaces files changed after this turn: ${changedAfter.join(", ")}.` : "Restores the turn's start snapshot in this checkout."}
         </span>
       </div>
       {reverting ? (

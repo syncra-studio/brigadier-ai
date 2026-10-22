@@ -1,50 +1,18 @@
-/**
- * A standalone Vite entry, excluded from the app entry and production build: the Changes card
- * in each of its states, as the user's design has them (`Of3wE`). IPC is mocked, no daemon.
- *
- * - `merged`: merged into main, six files (three shown, "Show 3 more files"), Revert and View
- *   changes.
- * - `collapsed`: the same, folded.
- * - `all`: merged, every file shown ("Show less").
- * - `confirm`: Revert asks in the footer: what happens to main, Cancel and "Revert 6 files".
- * - `reverting`: the revert sent: "Reverting…" in place of the footer's buttons.
- * - `reverted`: the session reads Reverted and git shows the revert: one line, folded,
- *   "Undone on main · 4:02 PM", Redo.
- * - `thread-reverted`: a merge the thread reverted (its revert landed as a later merge, the
- *   session reads Merged): git's revert alone reads it Reverted.
- * - `branch`: not merged yet, on its branch two commits ahead: Discard and Merge into main.
- * - `merge-only`: a turn that merged with nothing of its own counted: the merge's card.
- * - `local`: a merge made on this Mac, its base's upstream without it: "Merged into main on this Mac".
- * - `pushed`: the same, pushed since (#496): "Merged into main", and Revert pushes its revert.
- * - `waiting`: on its branch, three files waiting for review: Undo All, Keep All, Review Changes;
- *   a waiting row's Undo and Keep sit before its counts.
- * - `reviewed`: on its branch, every file reviewed (kept 2, undid 1): Discard and Merge into main.
- *
- * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
- * then clicks through it, to `<pre id="changes-card-result">` (ChangesCardRender.test.ts);
- * `?case=all&drive=fold` folds and opens the card from its header with real clicks (cardFold.ts).
- */
+/** The existing card layout with turn snapshots, merge groups and confirmed Revert. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
-import type { ReactNode } from "react";
-
-import type { TurnMerge } from "@/app/conversation/activity/MergeMessage";
-import type { Merged } from "@/app/conversation/activity/revert";
 import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
-import { driveFold } from "@/fixtures/cardFold";
 import { TooltipProvider } from "@/components/overlays";
-import type { Conversation, FileReview, FileStat, OrchestratorStep, Request, UserRequest } from "@/ipc/generated";
+import { driveFold } from "@/fixtures/cardFold";
+import type { Conversation, FileStat, Request, UserRequest } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
-import { useSettledTabs } from "@/state/tabStates";
 
-const query = new URLSearchParams(location.search);
 const CHAT = "changes-card";
-const REVERTED = "changes-card-reverted";
-
-const FILES: FileStat[] = [
+const query = new URLSearchParams(location.search);
+const files: FileStat[] = [
   { path: "public/index.html", insertions: 11, deletions: 2, binary: false },
   { path: "src/server.js", insertions: 22, deletions: 5, binary: false },
   { path: "src/store.js", insertions: 5, deletions: 0, binary: false },
@@ -52,236 +20,79 @@ const FILES: FileStat[] = [
   { path: "test/dates.test.js", insertions: 18, deletions: 0, binary: false },
   { path: "README.md", insertions: 2, deletions: 0, binary: false },
 ];
-
-const request = (id: string, conversationId = CHAT, review?: Record<string, FileReview>): UserRequest =>
-  ({
-    id, conversationId, preview: "Due dates", state: { type: "done" }, startedAtMs: 0, endedAtMs: 1, steeredInto: null, steeredAfter: null,
-    undo: null, worked: [], quotaWait: false, review,
-    changes: { settled: true, stat: { files: FILES, insertions: 88, deletions: 7 } },
-  }) as unknown as UserRequest;
-
-/** The first three files' review: all waiting, or kept, kept and undone. */
-const WAITING: Record<string, FileReview> = Object.fromEntries(FILES.slice(0, 3).map((file) => [file.path, "pending"]));
-const REVIEWED: Record<string, FileReview> = { "public/index.html": "kept", "src/server.js": "kept", "src/store.js": "undone" };
-
-const merged = (commit: string): Merged => ({
-  type: "merged", branch: "brigadier/due-dates", base: "main", commits: 2, askedIn: null, head: "a1b2c3d4", mergeCommit: commit, requests: [],
-});
-
-/** When the reverted merge's revert landed: 4:02 PM. */
-const REVERTED_AT = new Date(2026, 9, 19, 16, 2).getTime();
-
-const MERGES = {
-  merged: merged("f1f1f1f1"),
-  clean: merged("c1c1c1c1"),
-  // The session's latest merge: the one its Reverted state names.
-  reverted: merged("e1e1e1e1"),
-  // Reverted through the thread: not the session's latest merge.
-  threadReverted: merged("a2a2a2a2"),
-  // Made on this Mac; git shows the second on its base's upstream since.
-  local: { ...merged("b1b1b1b1"), upstream: { name: "origin/main", behind: 0 } },
-  pushed: { ...merged("b2b2b2b2"), upstream: { name: "origin/main", behind: 0 } },
+const stat = { files, insertions: 88, deletions: 7 };
+const entry = (id: string, changes: UserRequest["changes"]): UserRequest => ({ id, conversationId: CHAT, preview: "Due dates", state: { type: "done" }, startedAtMs: 1, endedAtMs: 2, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false, review: {}, ...(changes && { changes }) });
+const group = { branch: "worker/one", tip: "f1f1f1f1", mergeCommit: "c1c1c1c1", stat: { files: [{ path: "worker.txt", insertions: 9, deletions: 1, binary: false }], insertions: 9, deletions: 1 } };
+const requests = {
+  own: entry("own", { stat, settled: true }),
+  all: entry("all", { stat, settled: true }),
+  empty: entry("empty", { stat: { files: [], insertions: 0, deletions: 0 }, settled: true }),
+  legacy: entry("legacy", undefined),
+  worker: entry("worker", { stat: { files: [files[0]!], insertions: 11, deletions: 2 }, settled: true, merged: [group] }),
+  binary: entry("binary", { stat: { files: [{ path: "photo.png", insertions: 0, deletions: 0, binary: true }], insertions: 0, deletions: 0 }, settled: true }),
 };
-
-const step = (position: number, kind: OrchestratorStep["kind"]): OrchestratorStep => ({ requestId: null, atMs: 0, position, kind });
-useBoard.setState({
-  board: {
-    ...emptyBoard(CHAT),
-    loaded: true,
-    requests: {
-      ...Object.fromEntries(["merged", "collapsed", "all", "confirm", "reverting", "reverted", "thread-reverted", "branch"].map((id) => [id, request(id)])),
-      waiting: request("waiting", CHAT, WAITING),
-      reviewed: request("reviewed", CHAT, REVIEWED),
-    },
-    orchestratorSteps: [step(1, MERGES.merged), step(2, MERGES.clean), step(3, MERGES.reverted)],
-  },
-});
-useSettledTabs.setState({ byTab: { [CHAT]: { state: "merged", ahead: 2 }, [REVERTED]: { state: "reverted" } } });
+useBoard.setState({ board: { ...emptyBoard(CHAT), loaded: true, requests } });
 useApp.setState({ selection: { type: "conversation", id: CHAT } });
-
-const sent: string[] = [];
-mockIPC((command, payload) => {
+const calls: Request[] = [];
+let release: (() => void) | null = null;
+mockIPC(async (command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method === "sendMessage") {
-    sent.push(req.text);
-    const message = { id: `sent-${sent.length}`, conversationId: req.conversationId, seq: 100 + sent.length, role: "user", text: req.text, blob: null, createdAtMs: Date.now(), attachments: [], mentions: [], model: null, requestId: null, parentId: null };
-    return { method: req.method, outcome: { type: "sent", message } };
-  }
-  // The reverted merge's revert, as git shows it; the other merges stand.
-  if (req.method === "getMergeUndo") {
-    const reverted = [MERGES.reverted.mergeCommit, MERGES.threadReverted.mergeCommit].includes(req.mergeCommit);
-    return { method: req.method, undo: reverted ? { revertedBy: "d0d0d0d0d0", revertedAtMs: REVERTED_AT } : null, pushed: req.mergeCommit === MERGES.pushed.mergeCommit };
+  calls.push(req);
+  if (req.method === "prepareTurnRevert") return { method: req.method, preview: { expectedTree: "confirmed-tree", changedAfter: ["later.txt", "src/user-edit.ts"] } };
+  if (req.method === "revertTurn") {
+    await new Promise<void>((resolve) => { release = resolve; });
+    useBoard.setState((s) => ({ board: s.board ? { ...s.board, requests: { ...s.board.requests, [req.requestId]: { ...s.board.requests[req.requestId]!, undo: { reverted: true, commits: [] } } } } : null }));
+    return { method: req.method, outcome: { restored: files.map((file) => file.path), held: [] } };
   }
   return { method: req.method };
 });
-
-const session = (id: string) =>
-  ({
-    id, kind: "session", title: "Due dates",
-    setup: { type: "session", repo: "/w", environment: { type: "newWorktree", base: "main", branch: "three-small-improvements", path: null, start: null }, permission: "default", orchestrator: { provider: "claude", model: null }, workersSeeUncommitted: null, planMode: false },
-  }) as unknown as Conversation;
-
-const own = (merge: Merged): TurnMerge => ({ merge, own: true });
-
-const CASES: { id: string; conversation: string; node: ReactNode }[] = [
-  { id: "merged", conversation: CHAT, node: <ChangesCard requestIds={["merged"]} merge={own(MERGES.merged)} /> },
-  { id: "collapsed", conversation: CHAT, node: <ChangesCard requestIds={["collapsed"]} merge={own(MERGES.merged)} /> },
-  { id: "all", conversation: CHAT, node: <ChangesCard requestIds={["all"]} merge={own(MERGES.clean)} /> },
-  { id: "confirm", conversation: CHAT, node: <ChangesCard requestIds={["confirm"]} merge={own(MERGES.clean)} /> },
-  { id: "reverting", conversation: CHAT, node: <ChangesCard requestIds={["reverting"]} merge={own(MERGES.clean)} /> },
-  { id: "reverted", conversation: REVERTED, node: <ChangesCard requestIds={["reverted"]} merge={own(MERGES.reverted)} /> },
-  { id: "thread-reverted", conversation: CHAT, node: <ChangesCard requestIds={["thread-reverted"]} merge={own(MERGES.threadReverted)} /> },
-  { id: "branch", conversation: CHAT, node: <ChangesCard requestIds={["branch"]} /> },
-  { id: "merge-only", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.clean)} /> },
-  { id: "local", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.local)} /> },
-  { id: "pushed", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.pushed)} /> },
-  { id: "waiting", conversation: CHAT, node: <ChangesCard requestIds={["waiting"]} /> },
-  { id: "reviewed", conversation: CHAT, node: <ChangesCard requestIds={["reviewed"]} /> },
-];
-
+const conversation = { id: CHAT, setup: { type: "session", repo: "/repo", environment: { type: "localCheckout", branch: "main" } } } as Conversation;
 const only = query.get("case");
 createRoot(document.getElementById("root")!).render(
-  <TooltipProvider>
-    <div className="flex w-190 flex-col gap-6 p-6">
-      {CASES.filter((each) => !only || each.id === only).map((each) => (
-        <ViewContext.Provider key={each.id} value={{ selection: { type: "conversation", id: each.conversation }, conversation: session(each.conversation), embedded: false }}>
-          <div data-case={each.id}>{each.node}</div>
-        </ViewContext.Provider>
-      ))}
-    </div>
-  </TooltipProvider>,
+  <TooltipProvider><ViewContext value={{ conversation, selection: { type: "conversation", id: CHAT }, embedded: false }}>
+    <main className="flex w-full flex-col gap-4 p-6">{Object.keys(requests).filter((id) => !only || only === id).map((id) => <section key={id} data-case={id}><ChangesCard requestIds={[id]} /></section>)}</main>
+  </ViewContext></TooltipProvider>,
 );
-
 const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-async function until(check: () => boolean, ms = 8000) {
-  for (const end = performance.now() + ms; performance.now() < end && !check(); ) await frame();
-  await wait(50);
+async function until(check: () => boolean) {
+  for (let n = 0; n < 240 && !check(); n++) await frame();
+  if (!check()) throw new Error("fixture did not reach expected state");
 }
-const words = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? null;
-const at = (id: string) => document.querySelector<HTMLElement>(`[data-case="${id}"]`);
-const button = (id: string, label: string) =>
-  [...(at(id)?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((each) => (each.getAttribute("aria-label") ?? words(each)) === label);
-
-function look(id: string) {
-  const card = at(id)?.querySelector<HTMLElement>("[data-slot=turn-diff]");
-  return {
-    state: card?.dataset.state ?? null,
-    title: words(card?.querySelector("[data-slot=turn-diff-title]")),
-    counts: words(card?.querySelector("[data-slot=turn-diff-counts]")),
-    status: words(card?.querySelector("[data-slot=turn-diff-status]")),
-    buttons: [...(card?.querySelectorAll("button") ?? [])]
-      .filter((each) => !each.closest("[data-slot=turn-diff-file],[data-slot=merge-revert-confirm]") && each.dataset.slot !== "turn-diff-more")
-      .map((each) => each.getAttribute("aria-label") ?? words(each)),
-    files: [...(card?.querySelectorAll("[data-slot=turn-diff-file]") ?? [])].map((row) => [words(row.querySelector("[data-slot=turn-diff-dir]")), words(row.querySelector("[data-slot=turn-diff-name]")), words(row.querySelector("[data-slot=turn-diff-file-counts]"))]),
-    more: words(card?.querySelector("[data-slot=turn-diff-more]")),
-    confirm: card?.querySelector("[data-slot=merge-revert-confirm]") ? words(card.querySelector("[data-slot=merge-revert-confirm]")) : null,
-  };
-}
-
-/**
- * The measures the design (app.pen ChangesCard parts) sets that a look of words can't show: Cancel
- * and Revert 4 apart, "Reverting…" 12 in, a row's counts right-aligned, and a waiting row's Undo
- * and Keep before its counts, shown (and the row washed) while the row has focus.
- */
-const px = (value: string | undefined) => (value === undefined ? null : Number.parseFloat(value));
-async function measure() {
-  const actions = at("confirm")?.querySelector<HTMLElement>("[data-slot=merge-revert-actions]");
-  const reverting = at("reverting")?.querySelector<HTMLElement>("[data-slot=merge-reverting]");
-  const counts = [...(at("all")?.querySelectorAll<HTMLElement>("[data-slot=turn-diff-file-counts] > span") ?? [])].map((each) => getComputedStyle(each).textAlign);
-  const row = at("waiting")?.querySelector<HTMLElement>("[data-slot=turn-diff-file]");
-  const rowActions = row?.querySelector<HTMLElement>("[data-slot=turn-diff-review-actions]");
-  const rowCounts = row?.querySelector("[data-slot=turn-diff-file-counts]");
-  const before = !!rowActions && !!rowCounts && (rowActions.compareDocumentPosition(rowCounts) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-  const idle = row ? getComputedStyle(row).backgroundColor : null;
-  row?.querySelector<HTMLButtonElement>("button")?.focus();
-  await frame();
-  const focused = { shown: rowActions ? getComputedStyle(rowActions).display : null, washed: !!row && getComputedStyle(row).backgroundColor !== idle };
-  (document.activeElement as HTMLElement | null)?.blur();
-  return {
-    confirmGap: px(actions ? getComputedStyle(actions).columnGap : undefined),
-    revertingInset: px(reverting ? getComputedStyle(reverting).paddingInlineStart : undefined),
-    counts: [...new Set(counts)],
-    reviewBeforeCounts: before,
-    focused,
-  };
-}
-
-const activeTab = () => {
-  const tabs = sessionTabs(CHAT);
-  const tab = tabs.tabs.find((each) => each.id === tabs.active);
-  return tab?.kind === "review" ? { id: tab.id, target: tab.target } : tab ? { id: tab.id } : null;
-};
-
-/** The states that need a click to reach: folded, all files, Revert's question, the revert sent. */
-async function reach() {
-  await until(() => !!document.querySelector("[data-slot=turn-diff-title]"));
-  button("collapsed", "Fold the files")?.click();
-  at("all")?.querySelector<HTMLButtonElement>("[data-slot=turn-diff-more]")?.click();
-  button("confirm", "Revert")?.click();
-  button("reverting", "Revert")?.click();
-  await wait(50);
-  at("reverting")?.querySelector<HTMLButtonElement>("[data-slot=merge-revert-go]")?.click();
-  await until(() => (!!only && only !== "reverting") || !!at("reverting")?.querySelector("[role=status]"));
-  // The folded card's body closes as it animates.
-  await until(() => !at("collapsed") || look("collapsed").files.length === 0);
-  document.body.dataset.reached = "1";
-}
-
+const card = (id: string) => document.querySelector<HTMLElement>(`[data-case="${id}"]`)!;
+const button = (id: string, label: string) => [...card(id).querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent === label || item.getAttribute("aria-label") === label)!;
+const rows = (id: string) => card(id)?.querySelectorAll("[data-slot=turn-diff-file]").length ?? 0;
 async function drive() {
-  const out: Record<string, unknown> = {};
-  out.cases = Object.fromEntries(CASES.map((each) => [each.id, look(each.id)]));
-  out.measured = await measure();
-  // A file row opens that file's part of the merge, in a tab.
-  at("merged")?.querySelector<HTMLButtonElement>("[data-slot=turn-diff-file] button")?.click();
-  await wait(50);
-  out.row = activeTab();
-  button("merged", "View changes")?.click();
-  await wait(50);
-  out.viewChanges = activeTab();
-  // Not merged: a row opens its part of the turn; Merge into main asks the thread.
-  at("branch")?.querySelector<HTMLButtonElement>("[data-slot=turn-diff-file] button")?.click();
-  await wait(50);
-  out.branchRow = activeTab();
-  at("branch")?.querySelector<HTMLButtonElement>("[data-slot=turn-diff-merge]")?.click();
-  await until(() => sent.length >= 2);
-  // Confirm's Cancel puts Revert back.
-  button("confirm", "Cancel")?.click();
-  await wait(50);
-  out.cancelled = look("confirm").buttons;
-  // The reverted card opens to its files.
-  button("reverted", "Show the files")?.click();
-  await wait(50);
-  out.revertedOpen = look("reverted").files.length;
-  // Redo asks the thread to revert the revert.
-  button("reverted", "Redo")?.click();
-  await until(() => sent.length >= 3);
-  // A merge pushed since: Revert asks for its revert pushed.
-  button("pushed", "Revert")?.click();
-  await wait(50);
-  at("pushed")?.querySelector<HTMLButtonElement>("[data-slot=merge-revert-go]")?.click();
-  await until(() => sent.length >= 4);
-  out.sent = sent;
-  // Revert on a folded card opens it to the question.
-  button("collapsed", "Revert")?.click();
-  await until(() => !!look("collapsed").confirm, 2000);
-  out.foldedRevert = [look("collapsed").confirm, !!at("collapsed")?.querySelector("[data-slot=turn-diff][data-open]")];
-  return out;
+  await until(() => rows(only ?? "own") > 0);
+  if (query.get("drive") === "fold") {
+    button("all", "Show 3 more files").click();
+    await until(() => rows("all") === 6);
+    const result = await driveFold(card("all").querySelector<HTMLElement>("[data-slot=turn-diff]")!, button("all", "Revert"), () => rows("all"));
+    return { ...result, afterButton: result.afterButton, reopened: result.reopened };
+  }
+  const own = card("own");
+  const before = { counts: own.querySelector("[data-slot=turn-diff-counts]")?.textContent, rows: rows("own"), empty: rows("empty"), legacy: !!card("legacy").querySelector("[data-slot=turn-diff]"), binary: card("binary").textContent, workerCounts: card("worker").querySelector("[data-slot=turn-diff-counts]")?.textContent, group: card("worker").querySelector("[data-slot=turn-merged-branch]")?.textContent };
+  own.querySelector<HTMLButtonElement>("[data-slot=turn-diff-file] button")!.click();
+  await frame();
+  const tabs = sessionTabs(CHAT);
+  const tab = tabs.tabs.find((item) => item.id === tabs.active);
+  const target = tab?.kind === "review" ? tab.target : null;
+  button("own", "Revert").click();
+  await until(() => !!own.querySelector("[data-slot=merge-revert-confirm]"));
+  const confirm = own.querySelector("[data-slot=merge-revert-confirm]")?.textContent;
+  const writesBeforeConfirm = calls.filter((call) => call.method === "revertTurn").length;
+  button("own", "Cancel").click();
+  await frame();
+  const cancelled = !own.querySelector("[data-slot=merge-revert-confirm]");
+  button("own", "Revert").click();
+  await until(() => !!own.querySelector("[data-slot=merge-revert-go]"));
+  own.querySelector<HTMLButtonElement>("[data-slot=merge-revert-go]")!.click();
+  await until(() => release !== null);
+  const reverting = own.querySelector("[role=status]")?.textContent;
+  release!();
+  await until(() => own.querySelector("[data-slot=turn-diff]")?.getAttribute("data-state") === "reverted");
+  return { before, target, confirm, writesBeforeConfirm, cancelled, reverting, call: calls.find((call) => call.method === "revertTurn"), finalTitle: own.querySelector("[data-slot=turn-diff-title]")?.textContent };
 }
-
-void reach()
-  .then(() =>
-    query.get("drive") === "1"
-      ? drive()
-      : query.get("drive") === "fold"
-        ? driveFold(at("all")!.querySelector("[data-slot=turn-diff]")!, button("all", "View changes")!, () => look("all").files.length)
-        : new Promise<never>(() => {}),
-  )
-  .catch((error: unknown) => ({ error: String(error) }))
-  .then((result) => {
-    const out = document.createElement("pre");
-    out.id = "changes-card-result";
-    out.textContent = JSON.stringify(result);
-    document.body.append(out);
-  });
+if (query.has("drive")) void drive().catch((error: unknown) => ({ error: String(error) })).then((result) => {
+  const output = document.createElement("pre"); output.id = "changes-card-result"; output.textContent = JSON.stringify(result); document.body.append(output);
+});

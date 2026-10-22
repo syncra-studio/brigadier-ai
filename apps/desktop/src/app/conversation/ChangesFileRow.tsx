@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 const REVIEWED: Record<Exclude<FileReview, "pending">, string | null> = { later: "Changed later", kept: "Kept", undone: "Undone", merged: null };
 
 /**
- * One changed file: its icon, the folder dim and the name in full, its counts in two columns
+ * One file from a retained turn tree diff: its icon, the folder dim and the name in full, its counts in two columns
  * (right-aligned) and a chevron. A click on the row opens its diff in a tab (a file that waits for
  * review, its review). While it waits, the hovered row washes and Undo and Keep show before its
  * counts; once reviewed, where the review left it. The name is the row's button (Find rings it,

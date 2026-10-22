@@ -8,11 +8,13 @@ import { toast } from "@/state/toasts";
 /** The files whose agents' changes wait for the user's Keep or Undo, in path order. */
 export function pendingPaths(board: Board | null, conversationId: string | null): string[] {
   if (!board || board.conversationId !== conversationId) return [];
-  const paths = new Set<string>();
-  for (const entry of Object.values(board.requests)) {
-    for (const [path, state] of Object.entries(entry.review ?? {})) if (state === "pending") paths.add(path);
+  const paths = new Map<string, boolean>();
+  const requests = Object.values(board.requests).toSorted((a, b) => a.startedAtMs - b.startedAtMs);
+  for (const entry of requests) {
+    if (!entry.changes?.settled || entry.undo?.reverted) continue;
+    for (const file of entry.changes.stat.files) paths.set(file.path, (entry.review?.[file.path] ?? "pending") === "pending");
   }
-  return [...paths].toSorted();
+  return [...paths].filter(([, pending]) => pending).map(([path]) => path).toSorted();
 }
 
 export function usePendingPaths(conversationId: string | null): string[] {

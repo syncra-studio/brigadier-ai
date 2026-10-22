@@ -49,7 +49,7 @@ function pendingFile(): PendingFile {
 
 function setReview(review: Record<string, FileReview>) {
   const board = emptyBoard(CHAT);
-  const request = { id: "r1", conversationId: CHAT, preview: "Rename the rate", state: { type: "done" }, startedAtMs: 0, endedAtMs: 1, review } as unknown as UserRequest;
+  const request = { id: "r1", conversationId: CHAT, preview: "Rename the rate", state: { type: "done" }, startedAtMs: 0, endedAtMs: 1, review, changes: { settled: true, stat: { files: Object.keys(review).map((path) => ({ path, insertions: 1, deletions: 1, binary: false })), insertions: 2, deletions: 2 } } } as unknown as UserRequest;
   useBoard.setState({ board: { ...board, loaded: true, requests: { r1: request } } });
 }
 

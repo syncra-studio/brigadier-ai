@@ -39,4 +39,4 @@ evidence: string,
 /**
  * A folder removed only once empty (a CLI project folder whose files went with it).
  */
-emptyOnly?: boolean, } | { "type": "processesIn", dir: string, } | { "type": "worktree", repo: string, path: string, } | { "type": "scratchDir", path: string, } | { "type": "previewDataDir", path: string, identity: [number, number] | null, } | { "type": "claudeTempDir", path: string, } | { "type": "cliTrust", cli: TrustCli, file: string, folder: string, before: TrustBefore, };
+emptyOnly?: boolean, } | { "type": "processesIn", dir: string, } | { "type": "worktree", repo: string, path: string, } | { "type": "gitRefs", repo: string, namespace: string, } | { "type": "scratchDir", path: string, } | { "type": "previewDataDir", path: string, identity: [number, number] | null, } | { "type": "claudeTempDir", path: string, } | { "type": "cliTrust", cli: TrustCli, file: string, folder: string, before: TrustBefore, };

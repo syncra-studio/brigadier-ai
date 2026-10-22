@@ -104,31 +104,6 @@ impl SessionManager {
             self.tell_user_rebase(id, now, false).await;
         }
     }
-
-    /// Why the thread of `id` may not run `command` now: it runs git while the user's rebase
-    /// is in progress in the session's checkout.
-    pub(crate) async fn user_rebase_refusal(
-        &self,
-        id: &ConversationId,
-        command: &str,
-    ) -> Option<String> {
-        if !runs_git(command) {
-            return None;
-        }
-        let now = self.users_rebase_now(id).await;
-        let refused = now
-            .as_ref()
-            .map(|(branch, onto)| refusal(branch.as_deref(), onto));
-        self.tell_user_rebase(id, now, false).await;
-        refused
-    }
-}
-
-/// Whether a shell command line runs git: one of its words is `git` (or a path to it).
-pub(crate) fn runs_git(command: &str) -> bool {
-    command
-        .split(|c: char| c.is_whitespace() || ";&|()`$\"'{}".contains(c))
-        .any(|word| word == "git" || word.ends_with("/git"))
 }
 
 fn branch_named(branch: Option<&str>) -> String {
@@ -154,39 +129,4 @@ fn ended_line(branch: Option<&str>, aborted: bool) -> String {
         "[workspace] The user's rebase of {} in your checkout {how}: git is yours to run there again. Look at the branch (`git log`, `git status`) before you go on.",
         branch_named(branch)
     )
-}
-
-/// What a git command of the thread's gets while the user's rebase is in progress.
-fn refusal(branch: Option<&str>, onto: &str) -> String {
-    format!(
-        "Not run: the user is rebasing {} onto `{onto}` in the Source panel and resolving its conflicts in your checkout, where HEAD is detached, so a git command there would land on the half-done rebase. Run no git there until you're told the rebase ended; work that needs no git goes on.",
-        branch_named(branch)
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::runs_git;
-
-    #[test]
-    fn a_command_runs_git_by_its_words() {
-        for command in [
-            "git commit -am x",
-            "cd /w && git status",
-            "/usr/bin/git log",
-            "(git add .)",
-            "echo $(git rev-parse HEAD)",
-        ] {
-            assert!(runs_git(command), "{command}");
-        }
-        for command in [
-            "cargo test",
-            "cat .gitignore",
-            "ls .git",
-            "gitk",
-            "rg git-lfs",
-        ] {
-            assert!(!runs_git(command), "{command}");
-        }
-    }
 }

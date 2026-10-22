@@ -1454,6 +1454,8 @@ fn read_beside(request: &Request) -> bool {
             | Request::GetProjectSourceState { .. }
             | Request::GetSessionDiff { .. }
             | Request::GetWorkerDiffs { .. }
+            | Request::PrepareTurnRevert { .. }
+            | Request::RevertTurn { .. }
             | Request::GetPendingChanges { .. }
             | Request::GetRunDiff { .. }
             | Request::GetReviewDiff { .. }
@@ -2015,16 +2017,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.switch_branch(conversation_id, head)).await?;
             Response::SwitchBranch
         }
-        Request::UndoChanges {
+        Request::PrepareTurnRevert {
             conversation_id,
             request_id,
-            reapply,
-        } => {
-            let outcome =
-                heap(|| sessions.undo_request(conversation_id, request_id, reapply)).await;
-            daemon.metrics.undo_ended(outcome.is_ok());
-            Response::UndoChanges { outcome: outcome? }
-        }
+        } => Response::PrepareTurnRevert {
+            preview: heap(|| sessions.prepare_turn_revert(conversation_id, request_id)).await?,
+        },
+        Request::RevertTurn {
+            conversation_id,
+            request_id,
+            expected_tree,
+        } => Response::RevertTurn {
+            outcome: heap(|| sessions.revert_turn(conversation_id, request_id, expected_tree))
+                .await?,
+        },
         Request::GetPendingChanges {
             conversation_id,
             path,
