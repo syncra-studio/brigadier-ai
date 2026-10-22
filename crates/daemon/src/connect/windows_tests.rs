@@ -189,7 +189,7 @@ async fn run(ops: &Ops, provider: ProviderKind) -> (Option<ConnectProgress>, Vec
     let mut codes = no_codes();
     let attempt = connect(ops, provider, &cancel, &report, &mut codes);
     tokio::pin!(attempt);
-    let outcome = match tokio::time::timeout(Duration::from_secs(90), &mut attempt).await {
+    let outcome = match tokio::time::timeout(Duration::from_secs(180), &mut attempt).await {
         Ok(outcome) => outcome.map(|ended| ended.progress),
         Err(_) => {
             // Give Connect its cancellation path before a failed test drops the runtime.
@@ -310,7 +310,11 @@ async fn an_install_error_or_missing_binary_never_starts_sign_in() {
     ] {
         let home = Home::new();
         home.mode("install", mode);
-        let ops = ops(&home, ProviderKind::Claude);
+        let mut ops = ops(&home, ProviderKind::Claude);
+        // The fake installer exits at once; only process start-up on a loaded CI runner can take
+        // a while. A high timeout keeps that case resolving by exit code, not by racing the
+        // timeout's wall-clock sleep, so the test can't flake into "took too long" instead.
+        ops.install_timeout = Duration::from_secs(150);
         assert_eq!(
             run(&ops, ProviderKind::Claude).await.0,
             Some(ConnectProgress::Failed {
