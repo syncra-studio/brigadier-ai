@@ -30,40 +30,6 @@ use crate::work::{BackgroundRun, BackgroundRunState, InjectionKind};
 /// How long a command of the thread's may hold its tool call before it goes to the
 /// background. Tests wait less.
 pub(crate) const FOREGROUND: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 60 });
-/// How long before its move to the background a `run_check` call stops waiting for its
-/// review, so the wait never sends it there.
-const REVIEW_MARGIN: Duration = FOREGROUND.checked_div(10).expect("not zero");
-
-/// Until when a `run_check` call of session `id` starting now may wait for a review of the
-/// thread's change in the foreground: the rest of its [`FOREGROUND`] minute, less a margin
-/// (#193). In tests only when the test waits (`wait_for_reviews`): their reviewers answer at
-/// once, and the rest hear of a review in a message, as most do in the app. A test whose
-/// commands never go to the background ([`let_background`]) holds its call to the review's
-/// end, however loaded the machine (#442).
-pub(crate) fn review_hold(id: &ConversationId) -> Option<tokio::time::Instant> {
-    #[cfg(test)]
-    if !REVIEW_WAITS.lock().unwrap().contains(id) {
-        return None;
-    }
-    #[cfg(test)]
-    if !BACKGROUNDED.lock().unwrap().contains(id) {
-        return Some(tokio::time::Instant::now() + Duration::from_secs(600));
-    }
-    #[cfg(not(test))]
-    let _ = id;
-    Some(tokio::time::Instant::now() + FOREGROUND - REVIEW_MARGIN)
-}
-
-#[cfg(test)]
-static REVIEW_WAITS: std::sync::LazyLock<std::sync::Mutex<HashSet<ConversationId>>> =
-    std::sync::LazyLock::new(Default::default);
-
-/// Session `id`'s `run_check` calls wait for their review as in the app ([`review_hold`]).
-#[cfg(test)]
-pub(super) fn wait_for_reviews(id: &ConversationId) {
-    REVIEW_WAITS.lock().unwrap().insert(id.clone());
-}
-
 /// How long a stopped run's work may take to end before it is ended for it: Stop always ends
 /// the run, even when its work doesn't heed it.
 const STOP_GRACE: Duration = Duration::from_secs(5);

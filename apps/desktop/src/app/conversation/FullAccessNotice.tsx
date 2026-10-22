@@ -4,7 +4,7 @@ import { openPermissionsHelp } from "@/app/shell/SetupPickers";
 import { Button, TooltipIconButton } from "@/components/controls";
 import { ShieldExclamation, X } from "@/components/icons";
 import type { Conversation } from "@/ipc/generated";
-import { useBoard } from "@/state/board";
+import { useQueueRows } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
@@ -24,10 +24,8 @@ export function FullAccessNotice({ conversation }: { conversation: Conversation 
   const show = useApp((s) => s.settings.showFullAccessNotice);
   const [, setClosed] = useState(0);
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "fullAccess";
-  const queued = useBoard((s) => {
-    const queue = s.board?.conversationId === conversation.id ? s.board.queue : null;
-    return !!queue && (queue.items.length > 0 || (queue.moved?.length ?? 0) > 0);
-  });
+  const { queue, rows } = useQueueRows(conversation.id);
+  const queued = rows.length > 0 || (queue?.moved?.length ?? 0) > 0;
   if (!show || !full || queued || closedNotices.has(conversation.id)) return null;
   const close = () => {
     closedNotices.add(conversation.id);

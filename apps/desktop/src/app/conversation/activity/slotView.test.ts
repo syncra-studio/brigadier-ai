@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { CI_LINGER_MS, ciPill, ciRunWords, ciWatches, ciWords, heldMerge, mergeWords, slotRows } from "@/app/conversation/activity/slotView";
+import { ciPill, ciWatches, heldMerge, mergeWords } from "@/app/conversation/activity/slotView";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { CiRun, OrchestratorStep, OrchestratorStepKind, Question, Task } from "@/ipc/generated";
 
@@ -16,72 +16,68 @@ const watch = (sha: string, runs: CiRun[], result?: string, branch = "main"): Or
   step({ type: "ciWatch", repo: "o/n", branch, sha, waiting: runs.length === 0 && result === undefined, runs, ...(result ? { result } : {}) });
 const ended = (workflow: string, conclusion: string, jobs = 2): CiRun =>
   ({ workflow, status: "completed", conclusion, url: `https://github.com/o/n/actions/runs/${workflow}`, jobsDone: jobs, jobsTotal: jobs });
-/** Long after every row: a result's linger is over. */
-const LATER = 1e12;
+const ciWords = (watches: Parameters<typeof ciPill>[0]) => ciPill(watches).words;
 
-test("the CI pill holds every watch still checking, each by its latest row", () => {
+test("CI's words take every watch still checking, each by its latest row", () => {
   const steps = [
     watch("aaaa1111", []),
     watch("bbbb2222", [], undefined, "fix"),
     watch("aaaa1111", [run(1, 3)]),
     watch("bbbb2222", [run(0, 2)], undefined, "fix"),
   ];
-  const both = ciWatches(steps, LATER);
+  const both = ciWatches(steps);
   assert.deepEqual(both.map((w) => [w.sha, w.branch]), [["aaaa1111", "main"], ["bbbb2222", "fix"]]);
   assert.equal(ciWords(both), "Checking CI for 2 pushes · 1 of 5 jobs done");
-  // One finishes, the other keeps running: the pill stays, with only the one left.
-  const one = ciWatches([...steps, watch("aaaa1111", [run(3, 3)], "passed"), watch("bbbb2222", [run(1, 2)], undefined, "fix")], LATER);
-  assert.deepEqual(one.map((w) => w.sha), ["bbbb2222"]);
+  // One finishes, the other keeps running: the words count only the one left.
+  const one = ciWatches([...steps, watch("aaaa1111", [run(3, 3)], "passed"), watch("bbbb2222", [run(1, 2)], undefined, "fix")]);
+  assert.deepEqual(one.map((w) => [w.sha, w.result]), [["aaaa1111", "passed"], ["bbbb2222", null]]);
   assert.equal(ciWords(one), "Checking CI · 1 of 2 jobs done");
-  // Both over: no pill.
-  assert.deepEqual(ciWatches([...steps, watch("aaaa1111", [], "no runs"), watch("bbbb2222", [run(2, 2)], "failed", "fix")], LATER), []);
+  // Both over: they stay, with how each ended.
+  const over = ciWatches([...steps, watch("aaaa1111", [], "no runs"), watch("bbbb2222", [run(2, 2)], "failed", "fix")]);
+  assert.deepEqual(over.map((w) => w.result), ["no runs", "failed"]);
+  assert.equal(ciWords(over), "CI failed");
 });
 
 test("a watch waits for its first run in plain words", () => {
-  assert.equal(ciWords(ciWatches([watch("cccc3333", [])], LATER)), "Waiting for CI to start…");
-  assert.equal(ciWords(ciWatches([watch("cccc3333", []), watch("dddd4444", [])], LATER)), "Waiting for CI to start for 2 pushes…");
+  assert.equal(ciWords(ciWatches([watch("cccc3333", [])])), "Waiting for CI to start…");
+  assert.equal(ciWords(ciWatches([watch("cccc3333", []), watch("dddd4444", [])])), "Waiting for CI to start for 2 pushes…");
 });
 
 test("a run whose jobs are all done still checks until GitHub completes it", () => {
   const busy: CiRun = { workflow: "CI", status: "in_progress", conclusion: "", url: "https://github.com/o/n/actions/runs/1", jobsDone: 1, jobsTotal: 1 };
-  const pill = ciPill(ciWatches([watch("eeee5555", [busy])], LATER));
+  const pill = ciPill(ciWatches([watch("eeee5555", [busy])]));
   assert.equal(pill.state, "checking");
   assert.doesNotMatch(pill.words, /1 of 1 jobs done/);
   assert.equal(pill.words, "Checking CI · finishing up…");
-  assert.equal(ciRunWords(busy), "Finishing up");
   // Another run still going: the count reads, the finished one counted whole.
-  assert.deepEqual(ciPill(ciWatches([watch("eeee5555", [busy, run(1, 3, "Lint"), ended("Docs", "success")])], LATER)), {
+  assert.deepEqual(ciPill(ciWatches([watch("eeee5555", [busy, run(1, 3, "Lint"), ended("Docs", "success")])])), {
     state: "checking",
     words: "Checking CI · 4 of 6 jobs done",
   });
 });
 
 test("a failed run fails the pill at once, naming its workflow", () => {
-  const failed = ciPill(ciWatches([watch("ffff6666", [ended("test", "failure"), run(1, 3, "Lint")])], LATER));
+  const failed = ciPill(ciWatches([watch("ffff6666", [ended("test", "failure"), run(1, 3, "Lint")])]));
   assert.deepEqual(failed, { state: "failed", words: "CI failed · test" });
-  assert.deepEqual(ciPill(ciWatches([watch("ffff6666", [ended("test", "timed_out"), ended("build", "cancelled")])], LATER)), {
+  assert.deepEqual(ciPill(ciWatches([watch("ffff6666", [ended("test", "timed_out"), ended("build", "cancelled")])])), {
     state: "failed",
     words: "CI failed · 2 workflows",
   });
-  assert.equal(ciRunWords(ended("test", "failure")), "Failed");
-  assert.equal(ciRunWords(ended("build", "success")), "Passed");
 });
 
 test("every run passed while the daemon waits for a late one: passed, still looking", () => {
-  const settling = ciPill(ciWatches([watch("abab7777", [ended("CI", "success"), ended("Lint", "skipped")])], LATER));
+  const settling = ciPill(ciWatches([watch("abab7777", [ended("CI", "success"), ended("Lint", "skipped")])]));
   assert.deepEqual(settling, { state: "passed", words: "CI passed · checking for more runs…" });
 });
 
-test("a watch's result shows for its linger window, then the pill goes", () => {
+test("a watch's result stays once it is over, in its own words", () => {
   const steps = [watch("cdcd8888", [run(1, 2)]), watch("cdcd8888", [ended("CI", "success")]), watch("cdcd8888", [ended("CI", "success")], "passed")];
   const endedAt = steps.at(-1)!.atMs;
-  const lingering = ciWatches(steps, endedAt + CI_LINGER_MS - 1);
-  assert.equal(lingering.length, 1);
-  assert.equal(lingering[0]?.endedAtMs, endedAt);
-  assert.deepEqual(ciPill(lingering), { state: "passed", words: "CI passed" });
-  assert.deepEqual(ciWatches(steps, endedAt + CI_LINGER_MS), []);
-  // Each result in its words while it lingers.
-  const words = (runs: CiRun[], result: string) => ciPill(ciWatches([watch("efef9999", runs, result)], at));
+  const over = ciWatches(steps);
+  assert.equal(over.length, 1);
+  assert.equal(over[0]?.endedAtMs, endedAt);
+  assert.deepEqual(ciPill(over), { state: "passed", words: "CI passed" });
+  const words = (runs: CiRun[], result: string) => ciPill(ciWatches([watch("efef9999", runs, result)]));
   assert.deepEqual(words([ended("test", "failure")], "failed"), { state: "failed", words: "CI failed · test" });
   assert.deepEqual(words([], "no runs"), { state: "ended", words: "No CI runs" });
   assert.deepEqual(words([run(0, 2)], "stopped"), { state: "ended", words: "Stopped watching CI" });
@@ -97,7 +93,7 @@ const tasks = (
   Object.fromEntries(Object.entries(states).map(([id, state]) => [id, { ...base, id, state, kind, createdAtMs, subject }]));
 const held = (askedIn = "m1", waiting = ["t1", "t2"]): OrchestratorStep =>
   step({ type: "mergeHeld", branch: "brigadier/s", base: "main", askedIn, consentedAtMs: 0, condition: "workersFinish", waiting, tip: "abc" });
-test("the merge pill counts the writers it still waits for", () => {
+test("the held merge counts the writers it still waits for", () => {
   const steps = [held()];
   const running = heldMerge(steps, tasks({ t1: "running", t2: "landing" }));
   assert.equal(running?.waiting, 2);
@@ -108,7 +104,7 @@ test("the merge pill counts the writers it still waits for", () => {
   assert.equal(mergeWords(heldMerge(steps, tasks({ t1: "landed", t2: "landed" }))!), "Merging…");
 });
 
-test("the merge pill names a merge task started after the hold, issue 223", () => {
+test("the held merge names a merge task started after the hold, issue 223", () => {
   // The merge met conflicts: held with nothing to wait for, then a merge task brings main in.
   const hold = held("m1", []);
   const steps = [hold];
@@ -132,7 +128,7 @@ const mergeCard = (createdAtMs: number, answer: string | null = null): Question 
   createdAtMs, answeredAtMs: answer === null ? null : createdAtMs + 1,
 });
 
-test("the merge pill waits for the user's yes while a merge card asks", () => {
+test("the held merge waits for the user's yes while a merge card asks", () => {
   const all = tasks({ t1: "landed", t2: "landed" });
   const asking = heldMerge([held()], all, [mergeCard(5)]);
   assert.equal(asking?.asking, true);
@@ -142,7 +138,7 @@ test("the merge pill waits for the user's yes while a merge card asks", () => {
   assert.equal(heldMerge([held()], all, [mergeCard(-1)])?.asking, false);
 });
 
-test("the merge pill goes once the merge lands, is cancelled or is stopped", () => {
+test("the held merge goes once the merge lands, is cancelled or is stopped", () => {
   const all = tasks({ t1: "running" });
   assert.equal(heldMerge([held(), step({ type: "merged", branch: "brigadier/s", base: "main", commits: 2, askedIn: "m1" })], all), null);
   assert.equal(heldMerge([held(), step({ type: "mergeCancelled", askedIn: "m1" })], all), null);
@@ -151,10 +147,4 @@ test("the merge pill goes once the merge lands, is cancelled or is stopped", () 
   assert.notEqual(heldMerge([held("m2"), step({ type: "mergeCancelled", askedIn: "m1" })], all), null);
   assert.notEqual(heldMerge([held(), step({ type: "mergeCancelled", askedIn: "m1" }), held("m3")], all), null);
   assert.equal(heldMerge([], all), null);
-});
-
-test("the slot stacks its rows newest last", () => {
-  assert.deepEqual(slotRows({ workers: 30, ci: 10, merge: 20 }), ["ci", "merge", "workers"]);
-  assert.deepEqual(slotRows({ merge: 5 }), ["merge"]);
-  assert.deepEqual(slotRows({}), []);
 });

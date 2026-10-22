@@ -184,12 +184,8 @@ impl SessionManager {
                     task.number,
                     self.runtime.account_label(&next),
                 );
-                self.notice(
-                    &task.conversation_id,
-                    brigadier_providers::NoticeLevel::Info,
-                    &text,
-                )
-                .await;
+                self.moment(&task.conversation_id, Some(&task.id), text)
+                    .await;
             }
         }
         // Credits run out or a failed sign-in, with another account of the provider to go on:
@@ -231,12 +227,8 @@ impl SessionManager {
                         task.number,
                         self.runtime.account_label(&next),
                     );
-                    self.notice(
-                        &task.conversation_id,
-                        brigadier_providers::NoticeLevel::Info,
-                        &text,
-                    )
-                    .await;
+                    self.moment(&task.conversation_id, Some(&task.id), text)
+                        .await;
                     true
                 }
                 None => false,

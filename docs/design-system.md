@@ -335,10 +335,6 @@ table is the current one.
 | Conversation (app.pen) | `#306 Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
 | Conversation (app.pen) | `#307 RequestCapsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
 | Conversation (app.pen) | `#308 DiffPill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
-| Conversation (app.pen) | `#310 Toggle (ComposerStatusSlot)` | `app/conversation/StatusSlotToggle.tsx` | `StatusSlotToggle` | |
-| Conversation (app.pen) | `#311 CiPill` | `app/conversation/CiPill.tsx` | `CiPill` | |
-| Conversation (app.pen) | `#312 MergePill` | `app/conversation/MergePill.tsx` | `MergePill` | |
-| Conversation (app.pen) | `#314 ComposerStatusSlot › inline: folded count badge` | `app/conversation/FoldedCountBadge.tsx` | `FoldedCountBadge` | |
 | Conversation (app.pen) | `#320 QueueCard › inline: moved message notice` | `app/conversation/MovedMessageNotice.tsx` | `MovedMessageNotice` | |
 | Conversation (app.pen) | `#321 RailPill` | `app/conversation/RailPill.tsx` | `RailPill` | |
 | Conversation (app.pen) | `#326 StandInPill` | `app/shell/StandInPill.tsx` | `StandInPill` | |

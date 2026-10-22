@@ -14,7 +14,8 @@ import { toast } from "@/state/toasts";
 /**
  * The message box (blank: written for you; ✨ writes one now; during a merge, git's merge
  * message; during a rebase, the message of the commit it stopped on, kept as it is), the Commit
- * button with its menu (Continue during a merge or rebase), and the branch.
+ * button with its menu (Continue during a merge or rebase), and the branch. With nothing to
+ * commit, only the branch.
  */
 export const CommitBox: FC<{
   target: SourceTarget;
@@ -33,7 +34,9 @@ export const CommitBox: FC<{
   onBranch: (() => void) | null;
   /** Something is under way: the branch can't change meanwhile. */
   locked: boolean;
-}> = ({ target, state, staging, commitRef, onCommitting, onCommitted, onSync, onContinueRebase, onBranch, locked }) => {
+  /** Nothing to commit: only the branch shows (unless a commit is under way). */
+  idle?: boolean;
+}> = ({ target, state, staging, commitRef, onCommitting, onCommitted, onSync, onContinueRebase, onBranch, locked, idle = false }) => {
   const key = targetKey(target);
   const [message, setMessageState] = useState(() => unsent.get(key) ?? "");
   const setMessage = (next: string) => {
@@ -104,59 +107,70 @@ export const CommitBox: FC<{
   };
   const writing = busy !== null && busy !== "write" && !message.trim() && !merging;
   const label = merging || rebasing ? "Continue" : "Commit";
+  const placeholder = `Message (${mac ? "⌘⏎" : "Ctrl+⏎"} to commit on "${state?.branch ?? "…"}")`;
   return (
     <div className="flex shrink-0 flex-col gap-2 px-2 pb-1">
-      <div className="border-border rounded-control focus-within:border-ring flex items-start border">
-        <textarea
-          rows={1}
-          value={rebasing ? rebasing.message : message}
-          disabled={busy !== null || rebasing !== null}
-          aria-label="Commit message"
-          placeholder={`Message (${mac ? "⌘⏎" : "Ctrl+⏎"} to commit on "${state?.branch ?? "…"}")`}
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && (mac ? event.metaKey : event.ctrlKey)) {
-              event.preventDefault();
-              commit("commit");
-            }
-          }}
-          className="placeholder:text-muted-foreground field-sizing-content max-h-40 min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none"
-        />
-        <TooltipIconButton
-          tooltip="Generate Commit Message"
-          size="icon-xs"
-          className="m-1"
-          disabled={busy !== null || merging !== null || rebasing !== null || !state || state.staged.length === 0}
-          onClick={write}
-        >
-          {busy === "write" ? <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" /> : <Sparkles />}
-        </TooltipIconButton>
-      </div>
-      <div className="flex">
-        <Button
-          size="sm"
-          className="flex-1 rounded-e-none"
-          disabled={nothing || busy !== null || staging}
-          title={(merging || rebasing) && conflicted ? "Resolve the merge conflicts first" : nothing ? "Stage changes to commit them" : undefined}
-          onClick={() => commit("commit")}
-        >
-          {busy === "commit" ? <Spinner className="size-icon-sm animate-spin motion-reduce:animate-none" /> : <Check />}
-          {writing ? "Writing message…" : label}
-        </Button>
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
+      {(!idle || busy !== null) && (
+        <>
+          <div className="border-border rounded-control focus-within:border-ring flex items-start border">
+            {/* An empty box is as tall as its placeholder: WebKit sizes it to one line (#490). */}
+            <div className="grid min-w-0 flex-1">
+              <span aria-hidden className="invisible col-start-1 row-start-1 max-h-40 overflow-hidden px-2 py-1.5 text-sm break-words whitespace-pre-wrap">
+                {(rebasing ? rebasing.message : message) ? "" : placeholder}
+              </span>
+              <textarea
+                rows={1}
+                value={rebasing ? rebasing.message : message}
+                disabled={busy !== null || rebasing !== null}
+                aria-label="Commit message"
+                placeholder={placeholder}
+                onChange={(event) => setMessage(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (mac ? event.metaKey : event.ctrlKey)) {
+                    event.preventDefault();
+                    commit("commit");
+                  }
+                }}
+                className="placeholder:text-muted-foreground field-sizing-content col-start-1 row-start-1 max-h-40 w-full min-w-0 resize-none bg-transparent px-2 py-1.5 text-sm outline-none"
+              />
+            </div>
+            <TooltipIconButton
+              tooltip="Generate Commit Message"
+              size="icon-xs"
+              className="m-1"
+              disabled={busy !== null || merging !== null || rebasing !== null || !state || state.staged.length === 0}
+              onClick={write}
+            >
+              {busy === "write" ? <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" /> : <Sparkles />}
+            </TooltipIconButton>
+          </div>
+          <div className="flex">
             <Button
               size="sm"
-              aria-label="Commit Actions"
-              className="border-background/40 rounded-s-none border-s px-1.5"
-              disabled={busy !== null || staging}
+              className="flex-1 rounded-e-none"
+              disabled={nothing || busy !== null || staging}
+              title={(merging || rebasing) && conflicted ? "Resolve the merge conflicts first" : nothing ? "Stage changes to commit them" : undefined}
+              onClick={() => commit("commit")}
             >
-              <ChevronDown />
+              {busy === "commit" ? <Spinner className="size-icon-sm animate-spin motion-reduce:animate-none" /> : <Check />}
+              {writing ? "Writing message…" : label}
             </Button>
-          </DropdownMenuTrigger>
-          <CommitActionsMenu blocked={blocked} onCommit={commit} />
-        </DropdownMenu>
-      </div>
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  aria-label="Commit Actions"
+                  className="border-background/40 rounded-s-none border-s px-1.5"
+                  disabled={busy !== null || staging}
+                >
+                  <ChevronDown />
+                </Button>
+              </DropdownMenuTrigger>
+              <CommitActionsMenu blocked={blocked} onCommit={commit} />
+            </DropdownMenu>
+          </div>
+        </>
+      )}
       <BranchItem state={state} onClick={onBranch} disabled={locked} />
     </div>
   );

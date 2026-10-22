@@ -37,15 +37,13 @@ function listNames(names: readonly string[]): string {
  * Connecting the agents: a card each, two to a row (one in a narrow window), connected ones
  * first, then those found on this computer, then the rest, in the order the first check found
  * them. Each card says how its agent stands and offers the one thing it needs next: Sign in
- * (the agent's own sign-in, in the browser; the card waits until it comes back) or Install (its
- * install guide, in the browser; the agents are checked again when the window comes back; on
- * Windows the agent's own installer, then its sign-in, the card waiting meanwhile).
+ * (the agent's own sign-in, in the browser; the card waits until it comes back) or Install (the
+ * agent's own installer, then its sign-in, the card waiting meanwhile, as in Settings › Providers).
  * Only the cards scroll; Continue needs one connected agent.
  */
 export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
   const connected = useApp((s) => s.connection.status === "connected");
   const mac = useApp((s) => s.info?.platform === "macos");
-  const windows = useApp((s) => s.info?.platform === "windows");
   const agents = useAgents();
   // The order is set once every agent has been checked, so cards don't jump as they connect.
   const [order, setOrder] = useState<readonly ProviderKind[] | null>(null);
@@ -54,7 +52,7 @@ export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onConti
     if (connected) void checkAgents();
   }, [connected]);
 
-  // Back from an install guide: whatever was installed meanwhile shows.
+  // Installed some other way meanwhile (a terminal): it shows when the window comes back.
   const missing = agents.some((agent) => agent.state === "install");
   useEffect(() => {
     if (!missing) return;
@@ -85,7 +83,7 @@ export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onConti
         <div className="max-w-onboarding mx-auto flex w-full flex-col gap-3">
           <ul className="onboarding-agent-grid">
             {sorted.map(({ provider, overview, state }) => (
-              <AgentCard key={provider} provider={provider} overview={overview} state={state} mac={mac} windows={windows} />
+              <AgentCard key={provider} provider={provider} overview={overview} state={state} mac={mac} />
             ))}
           </ul>
           <p className="text-muted-foreground/70 text-xs">{MORE_LATER}</p>

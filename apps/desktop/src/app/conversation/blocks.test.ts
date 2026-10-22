@@ -944,3 +944,12 @@ test("where a usage limit reset, its divider stands in for the time line, never 
     .map((entry) => (entry.kind === "orchestrator" ? (entry.steps[0]?.kind.type ?? "") : entry.kind));
   assert.deepEqual(kinds, ["tool", "quotaResumed", "tool"]);
 });
+
+test("a limit or switch of an overnight run keeps its divider, and a finished turn keeps it in view (issue 506)", () => {
+  const moment: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "moment", text: "Claude Code is available again; continuing with it." } };
+  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [], [moment]), []);
+  const block = keyed(blocks, "run-1");
+  assert.deepEqual(block.orchestratorSteps.map((step) => step.kind.type), ["moment"]);
+  const kept = sequence(block).filter((entry) => entry.kind === "orchestrator" && !foldsAway(entry, 1));
+  assert.equal(kept.length, 1, "never folded away");
+});

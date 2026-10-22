@@ -208,6 +208,10 @@ pub(crate) struct Board {
     pub(crate) integrated_checks: HashMap<String, crate::work::IntegratedCheck>,
     /// The thread's commands that went to the background, by id.
     pub(crate) background_runs: HashMap<String, crate::work::BackgroundRun>,
+    /// The thread's headline for the session now (`set_headline`).
+    pub(crate) headline: Option<crate::work::SessionHeadline>,
+    /// Why the last merge into the base was refused, while it stands.
+    pub(crate) merge_refused: Option<crate::work::MergeRefused>,
     /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
     /// model's), with the daemon process that heard them ([`crate::boot_id`]).
     pub(crate) mcp_servers: HashMap<Option<String>, (String, crate::model::AgentMcpServers)>,
@@ -303,9 +307,17 @@ impl Board {
             && self
                 .latest_request()
                 .is_some_and(|request| matches!(request.state, crate::work::RequestState::Stopped));
+        let mut requests: Vec<_> = self
+            .requests
+            .values()
+            .filter(|request| request.state == crate::work::RequestState::Working)
+            .map(|request| request.id.clone())
+            .collect();
+        requests.sort();
         (running
             || stopped
             || failed
+            || !requests.is_empty()
             || !tasks.is_empty()
             || !approvals.is_empty()
             || !questions.is_empty()
@@ -320,6 +332,7 @@ impl Board {
             phases,
             failed,
             stopped,
+            requests,
         })
     }
 
@@ -592,6 +605,12 @@ impl Board {
             }
             DomainEvent::BackgroundRunUpdated { run } => {
                 self.background_runs.insert(run.id.clone(), run.clone());
+            }
+            DomainEvent::HeadlineSet { headline, .. } => {
+                self.headline = headline.clone();
+            }
+            DomainEvent::MergeRefusalSet { refusal, .. } => {
+                self.merge_refused = refusal.clone();
             }
             DomainEvent::McpServersUpdated {
                 task_id,
@@ -1409,6 +1428,7 @@ pub(crate) fn state_of(
         if matches!(activity.run, RunState::Starting | RunState::Running)
             || !activity.tasks.is_empty()
             || !activity.phases.is_empty()
+            || !activity.requests.is_empty()
         {
             return Some(TabState::Working);
         }
@@ -1528,6 +1548,36 @@ mod tab_state_tests {
         assert!(!board.activity(&id()).unwrap().stopped);
         board.apply(&request("done"), 3);
         board.apply(&run("idle"), 4);
+        assert!(board.activity(&id()).is_none());
+    }
+
+    /// Issue 485: a request that works with no turn, worker or phase going (its message waits
+    /// for a turn, or a turn is owed) reads Working, as its composer shows it, not Ready.
+    #[test]
+    fn a_working_request_between_turns_reads_working() {
+        let mut board = Board::default();
+        let request = |state: &str| {
+            event(serde_json::json!({
+                "type": "requestUpdated", "request": {
+                    "id": "r1", "conversationId": "tab", "preview": "Do it",
+                    "state": { "type": state }, "startedAtMs": 1, "endedAtMs": null,
+                    "steeredInto": null, "steeredAfter": null, "undo": null,
+                    "worked": [], "quotaWait": false,
+                },
+            }))
+        };
+        board.apply(&ready("r0"), 1);
+        board.apply(&request("working"), 2);
+        board.apply(&run("idle"), 3);
+        assert_eq!(
+            board.activity(&id()).unwrap().requests,
+            vec!["r1".to_owned()]
+        );
+        assert_eq!(
+            board.tab_state(&id(), false, None, false),
+            Some(TabState::Working)
+        );
+        board.apply(&request("done"), 4);
         assert!(board.activity(&id()).is_none());
     }
 

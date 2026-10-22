@@ -26,7 +26,13 @@ impl Lookups for System {
         let pid32 = i32::try_from(pid).ok().filter(|pid| *pid > 0)?;
         let running = unsafe {
             NSRunningApplication::runningApplicationWithProcessIdentifier(pid32).map(|app| {
-                let bundle_id = app.bundleIdentifier().map(|value| value.to_string());
+                // A process AppKit knows no bundle of is named by the bundle its executable
+                // runs from, if any: one without is a bare binary (`tauri dev`), which the
+                // policy tells from the installed app by that (#510).
+                let bundle_id = app
+                    .bundleIdentifier()
+                    .map(|value| value.to_string())
+                    .or_else(|| bundle_id_at(&app_bundle_of(&executable_of(pid32)?)?));
                 let name = app
                     .localizedName()
                     .map(|value| value.to_string())

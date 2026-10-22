@@ -1,34 +1,28 @@
-//! The session's full checks, run once on the integrated tree (SESSION-FIXES-PLAN.md §11).
+//! The session's full checks, run on the integrated tree when an agent asks (`run_checks`,
+//! SESSION-FIXES-PLAN.md §11). Brigadier never starts them by itself: not after a landing, a
+//! commit or a restart.
 //!
 //! Workers run only the checks of their own change and hand back; the thread lands their work
 //! at once. What the work reaches beyond each change (the packages that depend on it, the
-//! workspace's own files, a build of the app) is checked here, once, on the branch the work
-//! landed on, instead of once per worker in every worktree.
+//! workspace's own files, a build of the app) is checked here, on the branch the work landed
+//! on, instead of once per worker in every worktree.
 //!
-//! - **Due.** A landing, or commits of the thread's own, make the branch's new tip due
-//!   ([`SessionManager::checks_due`]). Landings close together make one due check: its tip
-//!   moves with each, and it starts once they settle for [`SETTLE`], or after the run before
-//!   it. A tip a check already ran on, or runs on, is not made due again.
-//! - **Once per request** (BUILD-PLAN B1, C3). A check made due by a commit or a landing starts
-//!   only once its requests have settled ([`super::requests::request_settled`]): no turn of
-//!   theirs runs or waits, no worker of theirs runs or lands, no review of their work runs or
-//!   is about to tell its findings, and no landing is under way. Then one run checks the
-//!   branch's tip at that moment. A merge's check and `rerun_checks` start at once.
 //! - **One run at a time per session**, in a checkout of its own (`checks/<id>/tree`, owned by
 //!   [`checks_owner`]): made warm once, then moved to each tip, so its build output stays and
 //!   no landing changes files under a running build. Its dependency installs are made again
 //!   when the files that pin them change. The commands are the project's own full checks
 //!   (`checks::full_checks`), each through `run_check`'s keyed cache, so the same files under
-//!   the same inputs never run again unless the thread asks (`rerun_checks`), and always with
+//!   the same inputs never run again unless the thread asks (`run_checks` with `rerun`), and always with
 //!   the build lease.
 //! - **The result** reaches the thread: a failure with its command, output and the tasks that
-//!   landed since the checks last passed, for the thread to send back to the worker that broke
-//!   it (a fix task resumes that worker's session, kept until a pass covers its landing); a
-//!   pass when a request's answer waits for it; a run that couldn't finish as such, never as a
-//!   verdict. A merge of the session's work needs a pass at the exact tip it merges.
-//! - **Recorded** as [`IntegratedCheck`]s from the moment they are due: a restart runs a due or
-//!   cut-off check again; a session archived or deleted ends its run and removes its checkout,
-//!   and hears nothing after.
+//!   landed since the checks last passed, for the thread to fix or send back to the worker that
+//!   broke it (a fix task resumes that worker's session, kept until a pass covers its landing);
+//!   a run that couldn't finish as such, never as a verdict. A merge into main needs a pass of
+//!   the thread's own `run_checks` at the exact commit it merges.
+//! - **Recorded** as [`IntegratedCheck`]s from the moment they are asked for. A restart or an
+//!   unarchive starts nothing: a run it cut off, or one still waiting to start, is recorded
+//!   interrupted, for the agent to ask again; a session archived or deleted ends its run and
+//!   removes its checkout, and hears nothing after.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -48,16 +42,9 @@ use crate::work::{
 };
 use crate::{Error, Result, now_ms};
 
-/// How long landings must settle before a due check starts.
-#[cfg_attr(test, allow(dead_code))]
-const SETTLE: Duration = Duration::from_secs(15);
-/// How often a check waiting for its requests to settle looks again, besides being woken when
-/// a turn, a worker, a landing or a review ends.
-const SETTLED_POLL: Duration = Duration::from_secs(2);
-/// How long a merge (or a phase settled done) waits in its call for the checks of its tip,
-/// started at once: a project's quick or kept checks answer it there, others hold it.
-/// Tests wait less for a check they hold on purpose.
-pub(crate) const MERGE_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 30 });
+/// How long `run_checks` holds the thread's call for the verdict before it goes on in the
+/// background, its result then coming as a message.
+const CALL_WAIT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 60 });
 /// How long one command of the full checks may run.
 const FULL_CHECK_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// How long an install of the checkout's dependencies may run.
@@ -77,18 +64,30 @@ pub(crate) fn integrated_check_number(id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// The label of the message that tells check `id`'s end: `checks passed check-7` for a pass
+/// only a deferred answer waits for, `run_checks passed check-7` for one owed to the thread
+/// (#513), `checks check-7` for the rest.
+fn check_label(id: &str, pass: bool, owed: bool) -> String {
+    match (pass, owed) {
+        (true, true) => format!("{}{id}", super::conversation::OWED_PASS),
+        (true, false) => format!("checks passed {id}"),
+        (false, _) => format!("checks {id}"),
+    }
+}
+
 /// What the sessions' full checks need while the daemon runs.
 #[derive(Default)]
 pub(crate) struct IntegratedChecks {
     /// Each session's queue runner, while it has a due check.
     jobs: tokio::sync::Mutex<HashMap<ConversationId, Arc<Job>>>,
     /// Held while a session's checks are read, changed and recorded.
-    records: tokio::sync::Mutex<()>,
+    pub(super) records: tokio::sync::Mutex<()>,
     /// Woken each time a check ends.
     ended: tokio::sync::Notify,
-    /// Tests: the settle wait instead of [`SETTLE`] (100 ms when unset).
-    #[cfg(test)]
-    pub(crate) settle: std::sync::Mutex<Option<Duration>>,
+    /// The `run_checks` runs whose verdict the thread's call still waits for, by session and
+    /// check (a check's id is its session's own): their end is told in the call, not as a
+    /// message. Held while a check's end is told.
+    in_call: tokio::sync::Mutex<std::collections::HashSet<(ConversationId, String)>>,
 }
 
 /// A session's queue runner.
@@ -96,17 +95,6 @@ struct Job {
     wake: tokio::sync::Notify,
     /// Ends it, and the command it runs: the session closed.
     cancel: CancellationToken,
-}
-
-/// How a check is made due.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Due {
-    /// Once landings settle.
-    Settled,
-    /// Now: a merge waits for it.
-    AtOnce,
-    /// Now, without kept results.
-    Rerun,
 }
 
 /// Where the full checks stand at one tip.
@@ -129,10 +117,29 @@ pub(crate) enum TipChecked {
 
 /// Where the full checks of `branch` stand at `tip`: the newest check of that tip decides.
 pub(crate) fn tip_checked(board: &crate::board::Board, branch: &str, tip: &str) -> TipChecked {
+    newest_at(board, branch, tip, |_| true)
+}
+
+/// Where the thread's own run_checks of `branch` stand at `tip`, the only runs the merge rule
+/// counts ([`full_by_thread`]): runs Brigadier started by itself before never do.
+pub(crate) fn tip_checked_by_thread(
+    board: &crate::board::Board,
+    branch: &str,
+    tip: &str,
+) -> TipChecked {
+    newest_at(board, branch, tip, full_by_thread)
+}
+
+fn newest_at(
+    board: &crate::board::Board,
+    branch: &str,
+    tip: &str,
+    counts: fn(&IntegratedCheck) -> bool,
+) -> TipChecked {
     let newest = board
         .integrated_checks
         .values()
-        .filter(|check| check.branch == branch && check.tip == tip)
+        .filter(|check| check.branch == branch && check.tip == tip && counts(check))
         .max_by_key(|check| integrated_check_number(&check.id));
     match newest.map(|check| &check.state) {
         None => TipChecked::Never,
@@ -224,13 +231,19 @@ pub(crate) fn checking_line(board: &crate::board::Board, request: &str) -> Optio
         })
         .min_by_key(|check| integrated_check_number(&check.id))?;
     Some(format!(
-        "[the session's full checks {} on `{}` at {}, in the background: a failure comes as a message. Answer now, or reply {} to answer with their result.]",
+        "[the session's full checks {} on `{}` at {}, in the background: {} comes as a message. Answer now, or reply {} to answer with their result.]",
         match check.state {
             IntegratedCheckState::Due => "are due",
             _ => "run",
         },
         check.branch,
         short(&check.tip),
+        // A run_checks call that went on is owed the verdict, a pass too (#513).
+        if check.owed {
+            "their result"
+        } else {
+            "a failure"
+        },
         super::prompts::QUIET
     ))
 }
@@ -258,23 +271,21 @@ pub(crate) fn standing_lines(board: &crate::board::Board, now_ms: i64) -> Vec<St
             let at = format!("`{}` at {}", check.branch, short(&check.tip));
             match &check.state {
                 IntegratedCheckState::Due => {
-                    format!(
-                        "Full checks: due on {at}; they start once the request's work settles (no turn, worker, landing or review of it runs)."
-                    )
+                    format!("Full checks: about to start on {at}, as run_checks asked.")
                 }
                 IntegratedCheckState::Running { .. } => format!(
                     "Full checks: running on {at} for {}, in the background; their result comes as a message.",
                     minutes(check.started_at_ms)
                 ),
                 IntegratedCheckState::Passed { .. } => format!(
-                    "Full checks: passed on {at}, {} ago. A newer commit makes them due again.",
+                    "Full checks: passed on {at}, {} ago. A newer commit needs run_checks again.",
                     minutes(check.ended_at_ms)
                 ),
                 IntegratedCheckState::Failed {
                     command, status, ..
                 } => format!("Full checks: failed on {at}: `{command}` ({status})."),
                 IntegratedCheckState::Interrupted { reason } => {
-                    format!("Full checks: couldn't finish on {at} ({reason}); rerun_checks runs them again.")
+                    format!("Full checks: couldn't finish on {at} ({reason}); run_checks with rerun true runs them again.")
                 }
             }
         }
@@ -297,110 +308,16 @@ pub(crate) fn standing_lines(board: &crate::board::Board, now_ms: i64) -> Vec<St
     lines
 }
 
-/// Whether `branch` may merge at its tip: a merge needs the session's full checks passed at
-/// the exact tip it merges.
-pub(crate) enum ChecksGate {
-    /// They passed at `0`, the tip it merges.
-    Passed(Oid),
-    /// They are due or run there (made due, or woken, by the look): why, for the thread.
-    Waiting(String),
-    /// They failed there, or couldn't run: why.
-    Failed(String),
-}
-
 fn short(commit: &str) -> &str {
     &commit[..commit.len().min(10)]
 }
 
 impl SessionManager {
-    /// The settle wait of a due check.
-    #[cfg(not(test))]
-    fn check_settle(&self) -> Duration {
-        SETTLE
-    }
-
-    /// The settle wait of a due check in tests: a short one, unless a test sets its own.
-    #[cfg(test)]
-    fn check_settle(&self) -> Duration {
-        self.integrated
-            .settle
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .unwrap_or(Duration::from_millis(100))
-    }
-
-    /// `branch` of `repo` moved to `tip` with the session's work (a landing, or the thread's
-    /// own commits): its full checks are due there, for `request`.
-    pub(crate) async fn checks_due(
-        &self,
-        id: &ConversationId,
-        repo: &Path,
-        branch: &str,
-        tip: &Oid,
-        request: Option<String>,
-    ) {
-        self.make_due(id, repo, branch, tip, request, Due::Settled)
-            .await;
-        self.run_due_checks(id).await;
-    }
-
-    /// Where the full checks of `branch` of `repo` stand for a merge of its tip: a tip never
-    /// checked is made due and a due one started, both at once (a merge is asked: no landing
-    /// is waited for), and their verdict waited for up to `wait`.
-    pub(crate) async fn checks_gate(
-        &self,
-        id: &ConversationId,
-        repo: &Path,
-        branch: &str,
-        wait: Duration,
-    ) -> Result<ChecksGate> {
-        let (git, at, name) = (self.git.clone(), repo.to_owned(), branch.to_owned());
-        let tip = blocking(move || {
-            git.open(&at)
-                .map_err(git_error)?
-                .branch_tip(&name)
-                .map_err(git_error)?
-                .ok_or_else(|| Error::Invalid(format!("branch {name} is gone")))
-        })
-        .await?;
-        let at = short(&tip.0).to_owned();
-        let deadline = tokio::time::Instant::now() + wait;
-        let mut started = false;
-        let checked = loop {
-            let ended = self.integrated.ended.notified();
-            let board = self.core.board(id).await?;
-            let checked = tip_checked(&board, branch, &tip.0);
-            if !matches!(checked, TipChecked::Never | TipChecked::Pending) {
-                break checked;
-            }
-            if !started {
-                started = true;
-                let request = self.request_for(id, None).await;
-                self.make_due(id, repo, branch, &tip, request, Due::AtOnce)
-                    .await;
-                self.run_due_checks(id).await;
-                continue;
-            }
-            if tokio::time::timeout_at(deadline, ended).await.is_err() {
-                break checked;
-            }
-        };
-        Ok(match checked {
-            TipChecked::Passed => ChecksGate::Passed(tip),
-            TipChecked::Never => ChecksGate::Waiting(format!("are due at {at}")),
-            TipChecked::Pending => ChecksGate::Waiting(format!("still run at {at}")),
-            TipChecked::Failed { command, status } => {
-                ChecksGate::Failed(format!("failed at {at}: `{command}` ({status})"))
-            }
-            TipChecked::Couldnt { reason } => {
-                ChecksGate::Failed(format!("couldn't run at {at}: {reason}"))
-            }
-        })
-    }
-
-    /// `rerun_checks`: the session's full checks run again at its tip, at once, without
-    /// kept results.
-    pub(crate) async fn rerun_checks(&self, id: &ConversationId) -> Result<String> {
+    /// The thread's `run_checks`: the project's full checks on the session branch's commit
+    /// now, started at once. A pass of an earlier call at that commit answers it (unless
+    /// `rerun`), one running there is waited for; the call holds up to [`CALL_WAIT`] for the
+    /// verdict, then it goes on in the background and its result comes as a message.
+    pub(crate) async fn run_checks_tool(&self, id: &ConversationId, rerun: bool) -> Result<String> {
         let workspace = self
             .recorded_workspace(id)
             .ok_or_else(|| Error::Invalid("this session has no checkout to check yet".into()))?;
@@ -418,189 +335,119 @@ impl SessionManager {
         })
         .await?;
         let request = self.request_for(id, None).await;
-        self.make_due(
-            id,
-            &workspace.repo,
-            &workspace.branch,
-            &tip,
-            request,
-            Due::Rerun,
-        )
-        .await;
+        let check = self
+            .ask_full_checks(id, &workspace.repo, &workspace.branch, &tip, request, rerun)
+            .await?;
+        let claim = (id.clone(), check.clone());
+        self.integrated.in_call.lock().await.insert(claim.clone());
         self.run_due_checks(id).await;
-        Ok(format!(
-            "The session's full checks run again on `{}` at {}, without kept results. Their result comes as a message; reply [quiet] meanwhile.",
-            workspace.branch,
-            short(&tip.0)
-        ))
-    }
-
-    /// Wakes the session's queue, when it has one: a check waiting for its requests to settle
-    /// looks again. It never waits itself: while the queue holds its lock, the wake goes apart.
-    pub(crate) fn wake_checks(&self, id: &ConversationId) {
-        match self.integrated.jobs.try_lock() {
-            Ok(jobs) => {
-                if let Some(job) = jobs.get(id) {
-                    job.wake.notify_one();
+        let deadline = tokio::time::Instant::now() + CALL_WAIT;
+        loop {
+            let ended = self.integrated.ended.notified();
+            let board = self.core.board(id).await?;
+            if let Some(done) = board
+                .integrated_checks
+                .get(&check)
+                .filter(|done| done.state.is_final())
+            {
+                // Its end is told here: after_check leaves it out of the messages.
+                return Ok(self.checks_verdict(done).await);
+            }
+            if tokio::time::timeout_at(deadline, ended).await.is_err() {
+                let mut waiting = self.integrated.in_call.lock().await;
+                let board = self.core.board(id).await?;
+                let Some(now) = board.integrated_checks.get(&check) else {
+                    waiting.remove(&claim);
+                    return Err(Error::Invalid("the checks' record is gone".into()));
+                };
+                if now.state.is_final() {
+                    drop(waiting);
+                    return Ok(self.checks_verdict(now).await);
                 }
-            }
-            Err(_) => {
-                let (manager, id) = (self.arc(), id.clone());
-                self.spawn(async move {
-                    if let Some(job) = manager.integrated.jobs.lock().await.get(&id) {
-                        job.wake.notify_one();
-                    }
-                });
+                waiting.remove(&claim);
+                // Under the claims' lock, so its end, told as a message, sees it owed.
+                self.set_owed(id, &check, true).await;
+                drop(waiting);
+                return Ok(format!(
+                    "The full checks still run on `{}` at {} ({check}), in the background: their result comes as a message [checks … at {}]. Carry on with what doesn't depend on them, or reply {}; don't call run_checks again for it.",
+                    now.branch,
+                    short(&now.tip),
+                    short(&now.tip),
+                    super::prompts::QUIET,
+                ));
             }
         }
     }
 
-    /// Whether the requests `check` was made due for have settled, so it may start: nothing
-    /// of theirs is under way that could still change the branch, and no review of their work
-    /// runs or is about to tell its findings (they may need a fix first). One with no request
-    /// waits for the thread to be idle.
-    async fn requests_settled(&self, id: &ConversationId, check: &IntegratedCheck) -> bool {
-        let Ok(conv) = self.conv(id) else {
-            return true;
-        };
-        if conv
-            .reviews_telling
-            .load(std::sync::atomic::Ordering::SeqCst)
-            > 0
-        {
-            return false;
-        }
-        let activity = conv.request_activity().await;
-        if activity.reviews_due {
-            return false;
-        }
-        let Ok(board) = self.core.board(id).await else {
-            return true;
-        };
-        if board
-            .tasks
-            .values()
-            .any(|task| task.state == crate::work::TaskState::Landing)
-        {
-            return false;
-        }
-        if check.requests.is_empty() {
-            return activity.running.is_none() && activity.carried.is_empty();
-        }
-        check
-            .requests
-            .iter()
-            .all(|request| super::requests::request_settled(&board, &activity, request))
-    }
-
-    /// Records `tip` of `branch` as due: the branch's due check moves to it, else a new one
-    /// is due, unless a check already ran or runs there (a rerun: always one).
-    async fn make_due(
+    /// A `run_checks` run of the full checks at `tip` of `branch`, by its id: an earlier
+    /// call's pass there (unless `rerun`), one due or running there, or a new one, due at once.
+    async fn ask_full_checks(
         &self,
         id: &ConversationId,
         repo: &Path,
         branch: &str,
         tip: &Oid,
         request: Option<String>,
-        how: Due,
-    ) {
-        let rerun = how == Due::Rerun;
-        let at_once = how != Due::Settled;
+        rerun: bool,
+    ) -> Result<String> {
         let _records = self.integrated.records.lock().await;
-        let Ok(board) = self.core.board(id).await else {
-            return;
-        };
-        let now = now_ms();
-        let due = board
+        let board = self.core.board(id).await?;
+        let asked_here = board
             .integrated_checks
             .values()
-            .find(|check| check.branch == branch && check.state == IntegratedCheckState::Due)
-            .cloned();
-        let check = match due {
-            Some(mut due) => {
-                due.tip = tip.0.clone();
-                due.repo = repo.to_string_lossy().into_owned();
-                // A merge's check stays at once: a landing after it doesn't hold it back.
-                due.due_at_ms = if at_once || !waits_for_requests(&due) {
-                    now - AT_ONCE
-                } else {
-                    now
-                };
-                due.rerun |= rerun;
+            .filter(|check| check.branch == branch && check.tip == tip.0 && full_by_thread(check))
+            .max_by_key(|check| integrated_check_number(&check.id));
+        match asked_here.map(|check| (&check.state, check)) {
+            Some((IntegratedCheckState::Passed { .. }, check)) if !rerun => {
+                return Ok(check.id.clone());
+            }
+            Some((IntegratedCheckState::Due | IntegratedCheckState::Running { .. }, check)) => {
+                // This request waits for it too: its verdict comes to it if the call doesn't
+                // tell it (the runner's next record keeps the request, see `store_run`).
                 if let Some(request) = request
-                    && !due.requests.contains(&request)
+                    && !check.requests.contains(&request)
                 {
-                    due.requests.push(request);
+                    let mut joined = check.clone();
+                    joined.requests.push(request);
+                    self.store_check(&joined).await;
                 }
-                due
+                return Ok(check.id.clone());
             }
-            None => {
-                let checked = tip_checked(&board, branch, &tip.0);
-                if !rerun
-                    && matches!(
-                        checked,
-                        TipChecked::Passed | TipChecked::Pending | TipChecked::Failed { .. }
-                    )
-                {
-                    // Already checked there, or being checked: a request still waits for it
-                    // if it runs.
-                    if let (TipChecked::Pending, Some(request)) = (&checked, request) {
-                        self.ask_running_check(&board, id, branch, &tip.0, request)
-                            .await;
-                    }
-                    return;
-                }
-                let number = board
-                    .integrated_checks
-                    .keys()
-                    .map(|id| integrated_check_number(id))
-                    .max()
-                    .unwrap_or(0)
-                    + 1;
-                IntegratedCheck {
-                    id: format!("check-{number}"),
-                    conversation_id: id.clone(),
-                    repo: repo.to_string_lossy().into_owned(),
-                    branch: branch.to_owned(),
-                    tip: tip.0.clone(),
-                    state: IntegratedCheckState::Due,
-                    due_at_ms: if at_once { now - AT_ONCE } else { now },
-                    started_at_ms: None,
-                    ended_at_ms: None,
-                    requests: request.into_iter().collect(),
-                    tasks: Vec::new(),
-                    rerun,
-                }
-            }
+            _ => {}
+        }
+        let check = IntegratedCheck {
+            id: next_check_id(&board),
+            conversation_id: id.clone(),
+            repo: repo.to_string_lossy().into_owned(),
+            branch: branch.to_owned(),
+            tip: tip.0.clone(),
+            state: IntegratedCheckState::Due,
+            due_at_ms: now_ms(),
+            started_at_ms: None,
+            ended_at_ms: None,
+            requests: request.into_iter().collect(),
+            tasks: Vec::new(),
+            rerun,
+            asked: Some(crate::work::ChecksAsked {
+                task_id: None,
+                scope: crate::work::ChecksScope::Full,
+            }),
+            owed: false,
         };
         self.store_check(&check).await;
+        Ok(check.id)
     }
 
-    /// A request now waits for the check that runs at `tip` too.
-    async fn ask_running_check(
-        &self,
-        board: &crate::board::Board,
-        id: &ConversationId,
-        branch: &str,
-        tip: &str,
-        request: String,
-    ) {
-        let running = board
-            .integrated_checks
-            .values()
-            .filter(|check| check.branch == branch && check.tip == tip)
-            .max_by_key(|check| integrated_check_number(&check.id))
-            .filter(|check| !check.requests.contains(&request))
-            .cloned();
-        if let Some(mut check) = running {
-            check.requests.push(request);
-            debug_assert_eq!(&check.conversation_id, id);
-            self.store_check(&check).await;
+    /// What the thread is told of a `run_checks` run's end, in its call.
+    async fn checks_verdict(&self, check: &IntegratedCheck) -> String {
+        match self.check_message(check, true, true).await {
+            Some((text, _)) => text,
+            None => format!("[checks at {}] They ended.", short(&check.tip)),
         }
     }
 
-    /// Records the runner's copy of `check`, with the requests that joined it meanwhile
-    /// (`ask_running_check`): the record holds them, the runner's copy may not.
+    /// Records the runner's copy of `check`, with the requests that joined it meanwhile and
+    /// whether its verdict is owed: the record holds them, the runner's copy may not.
     async fn store_run(&self, check: &mut IntegratedCheck) {
         let _records = self.integrated.records.lock().await;
         if let Ok(board) = self.core.board(&check.conversation_id).await
@@ -611,11 +458,29 @@ impl SessionManager {
                     check.requests.push(request.clone());
                 }
             }
+            check.owed = stored.owed;
         }
         self.store_check(check).await;
     }
 
-    async fn store_check(&self, check: &IntegratedCheck) {
+    /// Records whether `check`'s verdict is owed to the thread as a message (#513).
+    async fn set_owed(&self, id: &ConversationId, check: &str, owed: bool) {
+        let _records = self.integrated.records.lock().await;
+        let Some(mut stored) = self
+            .core
+            .board(id)
+            .await
+            .ok()
+            .and_then(|board| board.integrated_checks.get(check).cloned())
+            .filter(|stored| stored.owed != owed)
+        else {
+            return;
+        };
+        stored.owed = owed;
+        self.store_check(&stored).await;
+    }
+
+    pub(super) async fn store_check(&self, check: &IntegratedCheck) {
         if let Err(err) = self
             .core
             .record_conversation(
@@ -648,8 +513,7 @@ impl SessionManager {
         self.spawn(queue(self.arc(), id.clone(), job));
     }
 
-    /// The session's queue: each due check, oldest first, once landings settled; ends when
-    /// none is due.
+    /// The session's queue: each due check, oldest first; ends when none is due.
     async fn checks_loop(&self, id: &ConversationId, job: &Arc<Job>) {
         loop {
             if job.cancel.is_cancelled() {
@@ -679,27 +543,6 @@ impl SessionManager {
             let Some(due) = next else {
                 return;
             };
-            let settle = i64::try_from(self.check_settle().as_millis()).unwrap_or(i64::MAX);
-            let wait = due.due_at_ms.saturating_add(settle) - now_ms();
-            if wait > 0 {
-                let wait = Duration::from_millis(u64::try_from(wait).unwrap_or(0));
-                tokio::select! {
-                    () = tokio::time::sleep(wait) => {}
-                    () = job.wake.notified() => {}
-                    () = job.cancel.cancelled() => break,
-                }
-                continue;
-            }
-            // A check of a commit or a landing waits for its requests to settle: one run once
-            // their work is done, not one per commit (BUILD-PLAN B1).
-            if waits_for_requests(&due) && !crate::heap(|| self.requests_settled(id, &due)).await {
-                tokio::select! {
-                    () = tokio::time::sleep(SETTLED_POLL) => {}
-                    () = job.wake.notified() => {}
-                    () = job.cancel.cancelled() => break,
-                }
-                continue;
-            }
             Box::pin(self.run_integrated_check(id, due, &job.cancel)).await;
         }
         let mut jobs = self.integrated.jobs.lock().await;
@@ -721,9 +564,9 @@ impl SessionManager {
         let repo = PathBuf::from(&due.repo);
         // A local checkout's changes stay uncommitted: its checks run on a snapshot of its
         // files as they stand now, never in the user's checkout (BUILD-PLAN B2).
-        let local = self.local_checkout(id).is_some_and(|(_, branch)| {
-            branch == due.branch && (due.rerun || waits_for_requests(&due))
-        });
+        let local = self
+            .local_checkout(id)
+            .is_some_and(|(_, branch)| branch == due.branch);
         let tip = if local {
             crate::heap(|| self.snapshot_local(&repo)).await.map(Some)
         } else {
@@ -749,8 +592,10 @@ impl SessionManager {
                 return;
             }
             match &tip {
-                // Run at the branch's tip now: a landing that made it moved the due check too.
-                Ok(Some(tip)) => check.tip = tip.0.clone(),
+                // `run_checks` checks the commit it was asked at, or a local checkout's files as
+                // they stand now.
+                Ok(Some(tip)) if local => check.tip = tip.0.clone(),
+                Ok(Some(_)) => {}
                 Ok(None) => {
                     check.state = IntegratedCheckState::Interrupted {
                         reason: format!("its branch `{}` is gone", check.branch),
@@ -763,7 +608,11 @@ impl SessionManager {
                 }
             }
             if check.state == IntegratedCheckState::Due {
-                check.state = IntegratedCheckState::Running { command: None };
+                check.state = IntegratedCheckState::Running {
+                    command: None,
+                    done: 0,
+                    total: 0,
+                };
             }
             check.started_at_ms = Some(now_ms());
             self.store_check(&check).await;
@@ -842,9 +691,12 @@ impl SessionManager {
             Err(err) => return interrupted(format!("its checks couldn't be listed: {err}")),
         };
         let mut passed = Vec::new();
+        let total = u32::try_from(commands.len()).unwrap_or(u32::MAX);
         for (command, workdir) in commands {
             check.state = IntegratedCheckState::Running {
                 command: Some(command.clone()),
+                done: u32::try_from(passed.len()).unwrap_or(u32::MAX),
+                total,
             };
             self.store_run(check).await;
             let done = match self
@@ -1071,6 +923,26 @@ impl SessionManager {
         if matches!(check.state, IntegratedCheckState::Passed { .. }) {
             self.release_checked_holds(id).await;
         }
+        // A `run_checks` call still waiting tells its verdict itself, owed to an earlier call
+        // that went on or not; else whether one went on is read under the claims' lock, which
+        // that call recorded it under.
+        let claim = (id.clone(), check.id.clone());
+        let owed = {
+            let mut waiting = self.integrated.in_call.lock().await;
+            if waiting.remove(&claim) {
+                drop(waiting);
+                self.set_owed(id, &check.id, false).await;
+                self.check_held_merge(id).await;
+                self.settle_requests(id).await;
+                return;
+            }
+            self.core.board(id).await.ok().is_some_and(|board| {
+                board
+                    .integrated_checks
+                    .get(&check.id)
+                    .is_some_and(|stored| stored.owed)
+            })
+        };
         // Every independent request that deferred to this run gets its own outcome.
         let mut requests: Vec<_> = self
             .waiting_requests(check)
@@ -1096,11 +968,7 @@ impl SessionManager {
             };
             let envelope = Envelope {
                 kind: InjectionKind::Decision,
-                label: format!(
-                    "checks {}{}",
-                    if optional_pass { "passed " } else { "" },
-                    check.id
-                ),
+                label: check_label(&check.id, optional_pass, owed),
                 task_id: check.tasks.last().cloned(),
                 text,
             };
@@ -1176,7 +1044,8 @@ impl SessionManager {
                 } else {
                     String::new()
                 };
-                if !waited && look.is_empty() {
+                // A run_checks run's pass is told even when no answer waits for it.
+                if !waited && look.is_empty() && check.asked.is_none() {
                     return None;
                 }
                 let covered = if tasks.is_empty() {
@@ -1235,7 +1104,7 @@ impl SessionManager {
                 };
                 Some((
                     format!(
-                        "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}{known}\nThey don't hold a merge; you judge what follows. A break in the code goes back to the task that broke it in one fix task (role fix, subject that task: it resumes the worker's own session), with the failing command and the lines that show why; once it lands they run again on their own. A failure that isn't the code's (a flaky test, the machine): rerun_checks, or leave it.",
+                        "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}{known}\nA merge into main needs them to pass on its exact commit. A break in the code is fixed by you, or goes back to the task that broke it in one fix task (role fix, subject that task: it resumes the worker's own session) with the failing command and the lines that show why; then call run_checks again. A failure that isn't the code's (a flaky test, the machine): run_checks with rerun true.",
                         branch = check.branch,
                         whole = output
                             .as_ref()
@@ -1247,7 +1116,7 @@ impl SessionManager {
             }
             IntegratedCheckState::Interrupted { reason } => Some((
                 format!(
-                    "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked. Fix what stops them if you can, then call rerun_checks.",
+                    "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked. Fix what stops them if you can, then call run_checks with rerun true.",
                     check.branch
                 ),
                 false,
@@ -1362,28 +1231,114 @@ impl SessionManager {
         }
     }
 
-    /// At startup: a check the restart cut off is due again, and a session with a due check
-    /// runs it.
-    pub(crate) async fn recover_integrated_checks(&self, id: &ConversationId) {
+    /// At startup (`cause`: "Brigadier quit") or an unarchive ("The session was archived"):
+    /// nothing runs again by itself. A check cut off while it ran, or one still waiting to
+    /// start, is recorded interrupted, for the agent to call run_checks again. At startup
+    /// (`tell`), each verdict owed to the thread that no turn took goes to it now, once: one
+    /// the stop cut off says so (#513). After an unarchive none is owed any more: the archive
+    /// ended the session's work.
+    pub(crate) async fn recover_integrated_checks(
+        &self,
+        id: &ConversationId,
+        cause: &str,
+        tell: bool,
+    ) {
         let Ok(board) = self.core.board(id).await else {
             return;
         };
-        let mut due = false;
         for check in board.integrated_checks.values() {
-            match check.state {
-                IntegratedCheckState::Running { .. } => {
-                    let mut again = check.clone();
-                    again.state = IntegratedCheckState::Due;
-                    again.started_at_ms = None;
-                    self.store_check(&again).await;
-                    due = true;
-                }
-                IntegratedCheckState::Due => due = true,
-                _ => {}
-            }
+            let when = match check.state {
+                IntegratedCheckState::Running { .. } => "while they ran",
+                IntegratedCheckState::Due => "before they started",
+                _ => continue,
+            };
+            let mut cut = check.clone();
+            cut.state = IntegratedCheckState::Interrupted {
+                reason: format!("{cause} {when}: call run_checks again"),
+            };
+            cut.ended_at_ms = Some(now_ms());
+            self.store_check(&cut).await;
         }
-        if due {
-            self.run_due_checks(id).await;
+        self.tell_owed_checks(id, tell).await;
+    }
+
+    /// See [`Self::recover_integrated_checks`]. One a turn took since it ended (its message is
+    /// logged in the thread's stream) is owed no more; one in the inbox again already (the
+    /// inbox's own recovery) isn't told twice.
+    async fn tell_owed_checks(&self, id: &ConversationId, tell: bool) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let mut owed: Vec<IntegratedCheck> = board
+            .integrated_checks
+            .values()
+            .filter(|check| check.owed && check.state.is_final())
+            .cloned()
+            .collect();
+        if owed.is_empty() {
+            return;
+        }
+        if !tell {
+            for check in &owed {
+                self.set_owed(id, &check.id, false).await;
+            }
+            return;
+        }
+        owed.sort_by_key(|check| integrated_check_number(&check.id));
+        let since = owed
+            .iter()
+            .map(|check| check.ended_at_ms.unwrap_or(0))
+            .min()
+            .unwrap_or(0);
+        let taken = self
+            .injections_taken_since(id, since, InjectionKind::Decision)
+            .await;
+        for check in owed {
+            let labels = [
+                check_label(&check.id, true, true),
+                check_label(&check.id, true, false),
+                check_label(&check.id, false, false),
+            ];
+            let ended = check.ended_at_ms.unwrap_or(0);
+            if taken
+                .iter()
+                .any(|(at_ms, label, _)| *at_ms >= ended && labels.contains(label))
+            {
+                self.set_owed(id, &check.id, false).await;
+                continue;
+            }
+            let request = check.requests.last().cloned();
+            let task = check.tasks.last().cloned();
+            let mut queued = false;
+            for label in &labels {
+                queued |= self
+                    .inbox_holds(
+                        id,
+                        InjectionKind::Decision,
+                        label,
+                        task.as_ref(),
+                        request.as_deref(),
+                    )
+                    .await;
+            }
+            if queued {
+                continue;
+            }
+            let Some((text, pass)) = self.check_message(&check, false, true).await else {
+                continue;
+            };
+            tracing::info!(conversation = %id, check = %check.id, "a check's verdict the thread was owed goes to it after the restart");
+            self.deliver_for(
+                id,
+                Envelope {
+                    kind: InjectionKind::Decision,
+                    label: check_label(&check.id, pass, true),
+                    task_id: task,
+                    text,
+                },
+                request,
+            )
+            .await;
         }
     }
 
@@ -1435,18 +1390,28 @@ impl SessionManager {
     }
 }
 
-/// When a due check is made due at once (a merge waits for it), its due time is set this far
-/// back.
-const AT_ONCE: i64 = i64::MAX / 4;
-
-/// Whether `due` waits for its requests to settle before it starts: made due by a commit or a
-/// landing, not by a merge or `rerun_checks`, which start at once.
-fn waits_for_requests(due: &IntegratedCheck) -> bool {
-    !due.rerun && due.due_at_ms > -AT_ONCE / 2
+/// The next free check id of a conversation's board (`check-<n>`).
+pub(super) fn next_check_id(board: &crate::board::Board) -> String {
+    let number = board
+        .integrated_checks
+        .keys()
+        .map(|id| integrated_check_number(id))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    format!("check-{number}")
 }
 
-/// A session's queue runner, as a future of a named type: its end looks at a held merge,
-/// which can make another check due, so the queue is reached from itself.
+/// Whether `check` is a run of the full checks the thread asked for with `run_checks`: the
+/// only kind a merge into main counts.
+pub(crate) fn full_by_thread(check: &IntegratedCheck) -> bool {
+    check.asked.as_ref().is_some_and(|asked| {
+        asked.task_id.is_none() && asked.scope == crate::work::ChecksScope::Full
+    })
+}
+
+/// A session's queue runner, as a future of a named type: its end looks at a held merge, so
+/// the queue is reached from itself.
 fn queue(
     manager: Arc<SessionManager>,
     id: ConversationId,
@@ -1635,6 +1600,8 @@ test result: FAILED. 1 passed; 3 failed";
             requests: vec!["r1".into()],
             tasks: Vec::new(),
             rerun: false,
+            asked: None,
+            owed: false,
         }
     }
 
@@ -1672,6 +1639,14 @@ test result: FAILED. 1 passed; 3 failed";
                 "[the session's full checks are due on `work` at b2, in the background: a failure comes as a message. Answer now, or reply [quiet] to answer with their result.]"
             )
         );
+        board.integrated_checks.get_mut("check-10").unwrap().owed = true;
+        assert_eq!(
+            checking_line(&board, "r1").as_deref(),
+            Some(
+                "[the session's full checks are due on `work` at b2, in the background: their result comes as a message. Answer now, or reply [quiet] to answer with their result.]"
+            ),
+            "a run_checks call that went on is owed its pass too"
+        );
         assert_eq!(
             board
                 .sorted_integrated_checks()
@@ -1701,13 +1676,17 @@ test result: FAILED. 1 passed; 3 failed";
         assert_eq!(
             standing_lines(&board, 5 * 60_000),
             [
-                "Full checks: passed on `work` at a1, 5 min ago. A newer commit makes them due again."
+                "Full checks: passed on `work` at a1, 5 min ago. A newer commit needs run_checks again."
             ]
         );
         let mut running = check(
             "check-2",
             "b2",
-            IntegratedCheckState::Running { command: None },
+            IntegratedCheckState::Running {
+                command: None,
+                done: 0,
+                total: 0,
+            },
         );
         running.started_at_ms = Some(60_000);
         board.integrated_checks.insert(running.id.clone(), running);

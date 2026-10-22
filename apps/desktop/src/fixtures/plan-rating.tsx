@@ -135,7 +135,7 @@ async function drive() {
   document.body.append(result);
 }
 
-select({ type: "conversation", id });
+await select({ type: "conversation", id });
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <SidebarProvider className="bg-background flex h-screen flex-row" defaultOpen={false}>

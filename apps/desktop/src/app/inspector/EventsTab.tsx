@@ -132,6 +132,10 @@ function summary(event: DomainEvent): string {
       return `${event.check.id} ${event.check.state.type} at ${event.check.tip.slice(0, 10)}`;
     case "backgroundRunUpdated":
       return `${event.run.id} ${event.run.state.type}: ${event.run.command}`;
+    case "headlineSet":
+      return event.headline === null ? "headline cleared" : event.headline.text;
+    case "mergeRefusalSet":
+      return event.refusal === null ? "merge refusal cleared" : `merge refused: ${event.refusal.reason}`;
     case "mcpServersUpdated":
       return `${event.taskId ?? "lead"} · ${event.provider}: ${event.servers.map((server) => `${server.name} ${server.status}`).join(", ") || "none"}`;
     case "threadCommitsSeen":
@@ -139,7 +143,7 @@ function summary(event: DomainEvent): string {
     case "unreviewedChanged":
       return event.range === null
         ? "nothing unreviewed"
-        : `unreviewed ${event.range.base.slice(0, 10)}..${event.range.tip.slice(0, 10)}${event.range.risky === null ? "" : " (risky)"}`;
+        : `unreviewed ${event.range.base.slice(0, 10)}..${event.range.tip.slice(0, 10)}`;
     case "outputStored":
       return `${event.output.alias} ${event.output.source} ${event.output.bytes} B`;
     case "checkRan":

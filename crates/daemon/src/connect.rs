@@ -14,7 +14,9 @@
 //! home:
 //! - Claude Code's installer asks nothing; its `claude install` prints plain text when piped.
 //!   It leaves the shell profiles alone, so `~/.local/bin` may not be on the login PATH
-//!   ([`CliEnv::installer_folder`] finds it there).
+//!   ([`CliEnv::installer_folder`] finds it there). On Windows its `install.ps1` leaves the
+//!   user's Path alone as well, so once it has installed, Connect adds `%USERPROFILE%\.local\bin`
+//!   to the user's Path (`user_path.rs`); Codex's installer adds its own folder.
 //! - Codex's asks "Start Codex now?" (and whether to remove a conflicting npm or Homebrew
 //!   install) on `/dev/tty`, and in a terminal waits for the answer forever.
 //!   `CODEX_NON_INTERACTIVE=1` skips both questions (the answer is no), as having no
@@ -33,9 +35,16 @@
 //! - `curl … | sh` runs with `pipefail`, so a download that fails fails the install instead of
 //!   piping an empty script into a shell that succeeds. Either installer offline exits non-zero
 //!   with curl's error on stderr (7: can't connect).
+//! - Without curl (a Linux desktop may have only wget) the script is fetched with `wget -qO-`:
+//!   both `install.sh` download their binaries with curl or wget. With neither, nothing runs and
+//!   Connect says so ([`ConnectFailure::NoDownloader`]), for the user to install one or the agent.
 
 use std::collections::{HashMap, VecDeque};
+#[cfg(windows)]
+use std::ffi::OsStr;
 use std::future::Future;
+#[cfg(windows)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,7 +54,8 @@ use std::time::Duration;
 use brigadier_core::accounts::AccountRef;
 use brigadier_core::runtime::Runtime;
 use brigadier_core::{
-    AgentConnect, ConnectProgress, ConnectStep, ConnectView, DomainEvent, now_ms, streams,
+    AgentConnect, ConnectFailure, ConnectProgress, ConnectStep, ConnectView, DomainEvent, now_ms,
+    streams,
 };
 use brigadier_providers::cli::CliEnv;
 use brigadier_providers::login_mark::LoginMark;
@@ -57,6 +67,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::server::Daemon;
+#[cfg(windows)]
+use crate::user_path;
 
 /// An installer that runs longer than this is stopped (a download on a slow line takes a few
 /// minutes; one that hangs never ends).
@@ -471,6 +483,9 @@ async fn publish(daemon: &Daemon) {
     }
 }
 
+#[cfg(windows)]
+type AddToPath = Arc<dyn Fn(&Path) -> std::io::Result<user_path::Added> + Send + Sync>;
+
 type Status =
     Arc<dyn Fn(ProviderKind) -> Pin<Box<dyn Future<Output = ProviderStatus> + Send>> + Send + Sync>;
 
@@ -494,12 +509,17 @@ struct Ops {
     /// Opens the vendor's sign-in page in the browser.
     #[cfg(any(unix, windows))]
     open_link: Arc<dyn Fn(&str) + Send + Sync>,
+    /// Adds a folder to the user's Path ([`user_path::add`]).
+    #[cfg(windows)]
+    add_to_path: AddToPath,
 }
 
 impl Ops {
     fn of(daemon: &Daemon) -> Self {
         let runtime = daemon.runtime.clone();
         let env = runtime.cli_env().clone();
+        #[cfg(windows)]
+        let path_env = env.clone();
         Self {
             platform: runtime.platform().clone(),
             env: runtime.cli_env().clone(),
@@ -516,6 +536,10 @@ impl Ops {
             linger: LINGER,
             #[cfg(any(unix, windows))]
             open_link: Arc::new(open_in_browser),
+            #[cfg(windows)]
+            add_to_path: Arc::new(move |folder| {
+                user_path::add(folder, |name| path_env.var(name).map(OsStr::to_os_string))
+            }),
         }
     }
 }
@@ -681,8 +705,16 @@ impl Ended {
     }
 
     fn failed(step: ConnectStep, error: String) -> Self {
+        Self::failed_for(step, error, None)
+    }
+
+    fn failed_for(step: ConnectStep, error: String, reason: Option<ConnectFailure>) -> Self {
         Self {
-            progress: ConnectProgress::Failed { step, error },
+            progress: ConnectProgress::Failed {
+                step,
+                error,
+                reason,
+            },
             status: None,
         }
     }
@@ -713,6 +745,13 @@ async fn connect(
             Installed::Done => {}
             Installed::Cancelled => return None,
             Installed::Failed(error) => return failed(ConnectStep::Install, error),
+            Installed::NoDownloader => {
+                return Some(Ended::failed_for(
+                    ConnectStep::Install,
+                    no_downloader(provider),
+                    Some(ConnectFailure::NoDownloader),
+                ));
+            }
         }
         status = (ops.status)(provider).await;
         if status.path.is_none() {
@@ -721,6 +760,12 @@ async fn connect(
                 ConnectStep::Install,
                 format!("{label} was installed, but Brigadier can't find it. Try again."),
             );
+        }
+        #[cfg(windows)]
+        if provider == ProviderKind::Claude
+            && let Some(binary) = &status.path
+        {
+            put_on_user_path(ops, provider, Path::new(binary)).await;
         }
     }
     if status.logged_in {
@@ -738,11 +783,44 @@ enum Installed {
     Done,
     Cancelled,
     Failed(String),
+    /// Neither curl nor wget is there to download the installer with: nothing ran.
+    NoDownloader,
+}
+
+/// Claude Code's Windows installer leaves its folder off the user's Path, so `claude` would be
+/// "not recognized" in a terminal: when the agent just installed is in its installer's folder,
+/// that folder is added ([`user_path`]). A failure is only logged; the agent is installed.
+#[cfg(windows)]
+async fn put_on_user_path(ops: &Ops, provider: ProviderKind, binary: &Path) {
+    let Some(folder) = ops.env.installer_folder(provider) else {
+        return;
+    };
+    if !binary.starts_with(&folder) {
+        return;
+    }
+    let shown = folder.display().to_string();
+    let add = ops.add_to_path.clone();
+    let added = tokio::task::spawn_blocking(move || add(&folder))
+        .await
+        .map_err(std::io::Error::other)
+        .flatten();
+    match added {
+        Ok(user_path::Added::Already) => {
+            tracing::info!(%provider, folder = %shown, "the agent's folder is on the user's Path already");
+        }
+        Ok(user_path::Added::Appended | user_path::Added::Created) => {
+            tracing::info!(%provider, folder = %shown, "added the agent's folder to the user's Path");
+        }
+        Err(error) => {
+            tracing::warn!(%provider, folder = %shown, %error, "the agent's folder couldn't be added to the user's Path");
+        }
+    }
 }
 
 /// The spawn spec of the vendor's installer: its line in a shell that fails with the
-/// download, with no questions asked, in the home folder.
-fn installer_spec(ops: &Ops, provider: ProviderKind) -> SpawnSpec {
+/// download, with no questions asked, in the home folder. `None` on macOS and Linux with
+/// nothing to download it with ([`downloaded_with`]).
+fn installer_spec(ops: &Ops, provider: ProviderKind) -> Option<SpawnSpec> {
     let line = (ops.installer)(provider);
     let spec = if cfg!(windows) {
         ops.env
@@ -754,6 +832,7 @@ fn installer_spec(ops: &Ops, provider: ProviderKind) -> SpawnSpec {
             .arg("-Command")
             .arg(format!("$ErrorActionPreference = 'Stop'; {line}"))
     } else {
+        let line = downloaded_with(&line, |program| ops.env.which(program).is_some())?;
         ops.env
             .spec(&PathBuf::from("/bin/bash"))
             .arg("-c")
@@ -761,12 +840,40 @@ fn installer_spec(ops: &Ops, provider: ProviderKind) -> SpawnSpec {
     };
     let mut spec = spec.env("CODEX_NON_INTERACTIVE", "1").env("NO_COLOR", "1");
     spec.cwd = ops.env.home();
-    spec
+    Some(spec)
+}
+
+/// The installer's line with what downloads it on macOS and Linux, given which programs are
+/// on the login PATH: as it is (curl) with curl, the same download with `wget -qO-` with only
+/// wget, `None` with neither. A line that doesn't start with curl is kept as it is.
+fn downloaded_with(line: &str, installed: impl Fn(&str) -> bool) -> Option<String> {
+    let Some(rest) = line.strip_prefix("curl -fsSL ") else {
+        return Some(line.to_owned());
+    };
+    if installed("curl") {
+        Some(line.to_owned())
+    } else if installed("wget") {
+        Some(format!("wget -qO- {rest}"))
+    } else {
+        None
+    }
+}
+
+/// What the card says when there is nothing to download the installer with.
+fn no_downloader(provider: ProviderKind) -> String {
+    let label = provider.label();
+    format!(
+        "Installing {label} needs curl or wget, and neither is installed. Install one (for \
+         example `sudo apt install curl`) and try again, or install {label} yourself."
+    )
 }
 
 async fn install(ops: &Ops, provider: ProviderKind, cancel: &CancellationToken) -> Installed {
     let label = provider.label();
-    let spec = installer_spec(ops, provider);
+    let Some(spec) = installer_spec(ops, provider) else {
+        tracing::warn!(%provider, "neither curl nor wget is installed to download the installer");
+        return Installed::NoDownloader;
+    };
     tracing::info!(%provider, "installing the agent with its own installer");
     let spawned = match process::spawn(ops.platform.clone(), &spec, process::Options::default()) {
         Ok(spawned) => spawned,
@@ -1257,6 +1364,7 @@ echo "Claude Code successfully installed!"
         Some(ConnectProgress::Failed {
             step,
             error: error.into(),
+            reason: None,
         })
     }
 
@@ -1426,7 +1534,7 @@ echo "asked: $answer" > "$HOME/asked"
             "asked: \n"
         );
 
-        let spec = installer_spec(&ops, ProviderKind::Codex);
+        let spec = installer_spec(&ops, ProviderKind::Codex).unwrap();
         assert!(
             spec.env
                 .iter()
@@ -1438,6 +1546,86 @@ echo "asked: $answer" > "$HOME/asked"
                 .last()
                 .is_some_and(|line| line.to_string_lossy().starts_with("set -o pipefail; "))
         );
+    }
+
+    /// A login PATH of one folder: the system tools the installer's line and the stand-in
+    /// installer use, and `with`'s stand-ins (curl or wget, by name and script), but neither
+    /// real one.
+    fn tools(home: &Home, with: &[(&str, &str)]) -> Arc<CliEnv> {
+        let dir = home.0.join("tools");
+        std::fs::create_dir_all(&dir).unwrap();
+        for tool in ["sh", "bash", "cat", "mkdir", "cp", "rm"] {
+            std::os::unix::fs::symlink(Path::new("/bin").join(tool), dir.join(tool)).unwrap();
+        }
+        for (name, script) in with {
+            home.write(&format!("tools/{name}"), script);
+        }
+        Arc::new(CliEnv::from_vars([
+            ("HOME".into(), home.0.clone().into_os_string()),
+            ("PATH".into(), dir.into_os_string()),
+        ]))
+    }
+
+    /// A stand-in for wget: notes its arguments, then prints the stand-in installer, or prints
+    /// nothing and fails as wget does offline (4) when `wget-mode` says `fail`.
+    const FAKE_WGET: &str = r#"#!/bin/sh
+echo "$@" > "$HOME/wget-args"
+case "$(cat "$HOME/wget-mode" 2>/dev/null)" in
+  fail) exit 4 ;;
+esac
+cat "$HOME/install.sh"
+"#;
+
+    /// Without curl, the vendor's own line downloads its installer with wget; a download that
+    /// fails still fails the install.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn without_curl_the_installer_is_downloaded_with_wget() {
+        let home = Home::new("wget");
+        let mut ops = ops(&home);
+        ops.env = tools(&home, &[("wget", FAKE_WGET)]);
+        ops.installer = Arc::new(|provider| provider.install_command(false).to_owned());
+        let cancel = CancellationToken::new();
+
+        std::fs::write(home.0.join("wget-mode"), "fail").unwrap();
+        assert!(matches!(
+            install(&ops, ProviderKind::Claude, &cancel).await,
+            Installed::Failed(error) if error == "Claude Code couldn't be installed. Try again."
+        ));
+        assert_eq!(tries(&home), 0);
+
+        std::fs::remove_file(home.0.join("wget-mode")).unwrap();
+        assert!(matches!(
+            install(&ops, ProviderKind::Claude, &cancel).await,
+            Installed::Done
+        ));
+        assert_eq!(
+            std::fs::read_to_string(home.0.join("wget-args")).unwrap(),
+            "-qO- https://claude.ai/install.sh\n"
+        );
+        assert_eq!(tries(&home), 1);
+        assert!(home.has(".local/bin/claude"));
+    }
+
+    /// With neither curl nor wget, nothing runs and Connect says what is missing, for the card
+    /// to link the agent's install guide.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_neither_curl_nor_wget_nothing_runs_and_connect_says_so() {
+        let home = Home::new("no-downloader");
+        let mut ops = ops(&home);
+        ops.env = tools(&home, &[]);
+        ops.installer = Arc::new(|provider| provider.install_command(false).to_owned());
+
+        let (outcome, seen) = run(&ops).await;
+        assert_eq!(
+            outcome,
+            Some(ConnectProgress::Failed {
+                step: ConnectStep::Install,
+                error: no_downloader(ProviderKind::Claude),
+                reason: Some(ConnectFailure::NoDownloader),
+            })
+        );
+        assert_eq!(seen, [ConnectProgress::Installing]);
+        assert_eq!(tries(&home), 0);
     }
 
     /// When the browser can't hand the sign-in back, Claude Code's code page is offered and a
@@ -1875,6 +2063,7 @@ echo "asked: $answer" > "$HOME/asked"
         let failed = ConnectProgress::Failed {
             step: ConnectStep::SignIn,
             error: "Signing in to Claude Code didn't finish. Try again.".into(),
+            reason: None,
         };
         assert!(connects.finish(ProviderKind::Claude, retry, Some(failed.clone())));
         assert_eq!(progress(&connects), [failed]);
@@ -1907,3 +2096,96 @@ echo "asked: $answer" > "$HOME/asked"
 
 #[cfg(all(test, windows))]
 mod windows_tests;
+
+/// What downloads the vendor's installer on macOS and Linux, from what is on the login PATH:
+/// the choice alone, so it runs on every system.
+#[cfg(test)]
+mod downloader_tests {
+    use super::*;
+
+    /// A login PATH of one scratch folder holding stand-ins for `programs`, removed when
+    /// dropped.
+    struct Tools(PathBuf);
+
+    impl Tools {
+        fn with(programs: &[&str]) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "brigadier-connect-tools-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            for program in programs {
+                let path = dir.join(format!("{program}{}", std::env::consts::EXE_SUFFIX));
+                std::fs::write(&path, "#!/bin/sh\n").unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                }
+            }
+            Self(dir)
+        }
+
+        /// The vendor's macOS and Linux line for `provider`, with what downloads it here.
+        fn line(&self, provider: ProviderKind) -> Option<String> {
+            let env = CliEnv::from_vars([
+                ("HOME".into(), self.0.clone().into_os_string()),
+                ("PATH".into(), self.0.clone().into_os_string()),
+            ]);
+            downloaded_with(provider.install_command(false), |program| {
+                env.which(program).is_some()
+            })
+        }
+    }
+
+    impl Drop for Tools {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn curl_downloads_the_installer_else_wget_and_with_neither_nothing_runs() {
+        let (claude, codex) = (ProviderKind::Claude, ProviderKind::Codex);
+        let both = Tools::with(&["curl", "wget"]);
+        assert_eq!(
+            both.line(claude).as_deref(),
+            Some("curl -fsSL https://claude.ai/install.sh | bash")
+        );
+        assert_eq!(
+            both.line(codex).as_deref(),
+            Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+        );
+        let curl = Tools::with(&["curl"]);
+        assert_eq!(curl.line(claude), both.line(claude));
+        let wget = Tools::with(&["wget"]);
+        assert_eq!(
+            wget.line(claude).as_deref(),
+            Some("wget -qO- https://claude.ai/install.sh | bash")
+        );
+        assert_eq!(
+            wget.line(codex).as_deref(),
+            Some("wget -qO- https://chatgpt.com/codex/install.sh | sh")
+        );
+        let neither = Tools::with(&[]);
+        assert_eq!(neither.line(claude), None);
+        assert_eq!(neither.line(codex), None);
+        // A line that downloads nothing runs as it is.
+        assert_eq!(
+            downloaded_with("/tmp/install.sh", |_| false).as_deref(),
+            Some("/tmp/install.sh")
+        );
+    }
+
+    #[test]
+    fn with_neither_connect_names_what_is_missing() {
+        assert_eq!(
+            no_downloader(ProviderKind::Claude),
+            "Installing Claude Code needs curl or wget, and neither is installed. Install one \
+             (for example `sudo apt install curl`) and try again, or install Claude Code \
+             yourself."
+        );
+    }
+}

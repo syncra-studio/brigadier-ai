@@ -796,6 +796,16 @@ impl Core {
                 },
             ),
         ];
+        // The user wrote again: the thread's headline was about what came before.
+        if self.board(&id).await?.headline.is_some() {
+            events.push((
+                streams::conversation(&id),
+                DomainEvent::HeadlineSet {
+                    conversation_id: id.clone(),
+                    headline: None,
+                },
+            ));
+        }
         let untitled = matches!(
             conversation.title.as_str(),
             NEW_SESSION_TITLE | NEW_CHAT_TITLE
@@ -1518,6 +1528,8 @@ impl Core {
             previews: board.sorted_previews(),
             integrated_checks: board.sorted_integrated_checks(),
             background_runs: board.sorted_background_runs(),
+            headline: board.headline.clone(),
+            merge_refused: board.merge_refused.clone(),
             background_cleared: board.sorted_background_cleared(),
             mcp_servers: board.current_mcp_servers(),
             peer_messages: board.sorted_peer_messages(),

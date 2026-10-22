@@ -240,6 +240,7 @@ fn sharing(inputs: Inputs) -> Script {
                 .unwrap()
                 .push((turn.add_dirs[0].clone(), turn.input.clone()));
             if turn.input.contains("[merge] The user clicked") {
+                turn.call("run_checks", serde_json::json!({})).await;
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Merged.");
@@ -408,8 +409,9 @@ async fn the_board_lists_siblings_and_tells_an_overlap_and_a_merge_once() {
     assert_eq!(heard(&inputs, &folder_a, fact), 2, "told again");
 
     // B merges: A hears it once.
+    flow.checks_passed_in(&b).await;
     flow.manager
-        .merge_session(&b, super::click())
+        .merge_session(&b, super::click(), false)
         .await
         .unwrap();
     flow.until_in(&b, "b's merge", |board| {
@@ -562,8 +564,9 @@ async fn sessions_in_two_repositories_of_a_project_overlap_only_within_one() {
     );
 
     // C merges: A hears it, B (another repository) doesn't.
+    flow.checks_passed_in(&c).await;
     flow.manager
-        .merge_session(&c, super::click())
+        .merge_session(&c, super::click(), false)
         .await
         .unwrap();
     flow.until_in(&c, "c's merge", |board| {
@@ -620,6 +623,7 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
                 .unwrap()
                 .push((turn.add_dirs[0].clone(), turn.input.clone()));
             if turn.input.contains("[merge] The user clicked") {
+                turn.call("run_checks", serde_json::json!({})).await;
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Merged.");
@@ -816,12 +820,14 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
     );
     let notes = "Draft the release notes.";
     let heard_before = heard(&inputs, &folder_a, notes);
+    let requests_before = flow.board_of(&a).await.requests.len();
     flow.manager
         .run_queued_here(&a, &queue.items[0].id)
         .await
         .unwrap();
-    flow.until_in(&a, "the queue to empty", |board| {
-        board.queue.items.is_empty()
+    // Its request too: the queue drops the item a write before the request shows.
+    flow.until_in(&a, "the queued message to run", |board| {
+        board.queue.items.is_empty() && board.requests.len() > requests_before
     })
     .await;
     flow.settled_in(&a).await;
@@ -893,8 +899,9 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
     assert_eq!(heard(&inputs, &folder_b, "took their message"), 1);
 
     // B merges; a follow-up routed to it goes, with the fact attached.
+    flow.checks_passed_in(&b).await;
     flow.manager
-        .merge_session(&b, super::click())
+        .merge_session(&b, super::click(), false)
         .await
         .unwrap();
     flow.until_in(&b, "b's merge", |board| {
@@ -1195,9 +1202,10 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         board_text.contains("\"state\": \"ready to merge\""),
         "{board_text}"
     );
+    flow.checks_passed_in(&a).await;
 
     flow.manager
-        .merge_session(&a, super::click())
+        .merge_session(&a, super::click(), false)
         .await
         .unwrap();
     flow.until_in(&a, "a's merge", |board| {
@@ -1328,8 +1336,8 @@ async fn an_offered_session_starts_only_on_the_users_click() {
     flow.stop().await;
 }
 
-/// A tab whose request settled while its full checks still run reads working from the
-/// checking phase, with no quota wait, then ready once they pass (#346: the Working read right
+/// A tab whose request settled while the full checks it asked for still run reads working from
+/// the checking phase, with no quota wait, then ready once they pass (#346: the Working read right
 /// after `settled_in` was these checks, not a stray wait).
 #[tokio::test]
 async fn a_settled_tab_reads_working_while_its_full_checks_run_without_a_quota_wait() {
@@ -1358,6 +1366,10 @@ while [ -f "$common/hold-checks" ]; do sleep 0.05; done
 
     flow.say_to(&a, "Write alpha.").await;
     flow.settled_in(&a).await;
+    // The thread's run_checks, which holds its call a while and then goes on in the
+    // background.
+    let (manager, id) = (flow.manager.clone(), a.clone());
+    tokio::spawn(async move { manager.run_checks_tool(&id, false).await });
     super::eventually_async("the full checks to run", || async {
         let board = flow.core.board(&a).await.unwrap();
         board.integrated_checks.values().any(|check| {

@@ -3,15 +3,17 @@
  * found (missing, signedOut or connected; Claude Code missing and Codex connected unless said),
  * ?waiting=claude has Claude Code's sign-in under way (offering its code page with ?code=1)
  * and ?plan= names the plan Codex reports:
- * the step stays as it opens, for screenshots. ?drive=1 presses Claude Code's Install, has it
- * installed meanwhile (the window coming back), presses Sign in, cancels it from Waiting… (which
- * reads Cancel when hovered), signs in again, fails it, signs in again and has the sign-in
- * noticed, writing what each card and the step said at every point to
+ * the step stays as it opens, for screenshots. ?drive=1 presses Claude Code's Install (Connect:
+ * the agent's installer, then its sign-in), has it installed and its sign-in under way, cancels
+ * that from Waiting… (which reads Cancel when hovered), presses Sign in, fails it, signs in
+ * again and has the sign-in noticed, writing what each card and the step said at every point to
  * #onboarding-agents-result (OnboardingAgentsRender.test.ts reads it). The faked daemon moves on
  * only when the drive says, so every point is read as it stands. With ?code=1 the drive instead
  * has Claude Code's sign-in offer its code page, opens it, pastes a code and presses Enter.
- * With ?windows=1 (as on Windows) the drive presses Install, which is Connect there: the card
- * installs, then waits for the sign-in, which is noticed.
+ * With ?install=1 it only presses Install and follows the card through the install and the
+ * sign-in to Connected. With ?nodownloader=1 the install fails as it does on a Linux with
+ * neither curl nor wget, and the drive opens the install guide the card links.
+ * ?platform= names the platform (macos, linux or windows; none unless given).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -69,6 +71,8 @@ function publish(agents: AgentConnect[]) {
 const claudeAt = (progress: AgentConnect["progress"], codePage?: string) =>
   publish([{ provider: "claude", progress, ...(codePage === undefined ? {} : { codePage }) }]);
 const CODE_PAGE = "https://claude.com/cai/oauth/authorize?code=true";
+const NO_DOWNLOADER =
+  "Installing Claude Code needs curl or wget, and neither is installed. Install one (for example `sudo apt install curl`) and try again, or install Claude Code yourself.";
 
 const asked: string[] = [];
 mockIPC((command, payload) => {
@@ -94,9 +98,9 @@ mockIPC((command, payload) => {
 });
 
 useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
-// ?mac=1 reads as on a Mac ("this Mac", ⌘ shortcuts), for screenshots.
-if (params.has("mac")) useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
-if (params.has("windows")) useApp.setState((state) => ({ info: { ...state.info, platform: "windows" } as typeof state.info }));
+// ?mac=1 reads as on a Mac ("this Mac", ⌘ shortcuts), for screenshots, as ?platform=macos does.
+const platform = params.get("platform") ?? (params.has("mac") ? "macos" : null);
+if (platform) useApp.setState((state) => ({ info: { ...state.info, platform } as typeof state.info }));
 show();
 if (params.get("waiting") === "claude") claudeAt({ type: "signingIn" }, params.has("code") ? CODE_PAGE : undefined);
 
@@ -198,17 +202,47 @@ function Fixture() {
           return;
         }
 
-        if (params.has("windows")) {
-          // Install is Connect: the agent's installer, then its sign-in, the card waiting.
-          await fixtureClick(button("Install")!);
-          // The pointer away, so Waiting… doesn't read Cancel under it.
-          await fixtureInput({ type: "pointer", x: 0, y: 0 });
-          await until(() => claudeCard().action === "Waiting…", "installing");
-          seen.installing = claudeCard();
-          claudeStatus = { ...claudeStatus, path: String.raw`C:\Users\me\.local\bin\claude.exe`, version: "2.1.306" };
-          claudeAt({ type: "signingIn" });
-          await until(() => claudeCard().line === "Complete sign-in in your browser", "signing in");
-          seen.waiting = claudeCard();
+        // Install is Connect: the agent's installer, then its sign-in, the card waiting.
+        await fixtureClick(button("Install")!);
+        // The pointer away, so Waiting… doesn't read Cancel under it.
+        await fixtureInput({ type: "pointer", x: 0, y: 0 });
+        await until(() => claudeCard().line === "Installing Claude Code…", "installing");
+        seen.installing = claudeCard();
+
+        if (params.has("nodownloader")) {
+          // Neither curl nor wget to download the installer: the card says so and links the guide.
+          claudeAt({
+            type: "failed",
+            step: "install",
+            error: NO_DOWNLOADER,
+            reason: "noDownloader",
+          });
+          await until(() => claudeCard().line === NO_DOWNLOADER, "the missing downloader");
+          const element = cards().find((each) => text(each.querySelector("p")) === "Claude Code")!;
+          const line = element.querySelector('[data-slot="agent-line"]')!;
+          const guide = element.querySelector('[data-slot="connect-guide"] button');
+          seen.noDownloader = {
+            line: text(line),
+            wraps: getComputedStyle(line).whiteSpace !== "nowrap",
+            guide: text(guide),
+            buttons: [...element.querySelectorAll("button")].map((each) => text(each)),
+          };
+          await fixtureClick(guide!);
+          await until(() => asked.some((what) => what.startsWith("openUrl")), "the guide opened");
+          seen.asked = asked;
+          setResult(JSON.stringify(seen));
+          return;
+        }
+
+        const path = platform === "windows" ? String.raw`C:\Users\me\.local\bin\claude.exe` : "/home/me/.local/bin/claude";
+        // Installed: a check finds it, signed out, as its sign-in starts.
+        claudeStatus = { ...claudeStatus, path, version: "2.1.306" };
+        show();
+        claudeAt({ type: "signingIn" });
+        await until(() => claudeCard().line === "Complete sign-in in your browser", "signing in");
+        seen.waiting = claudeCard();
+
+        if (params.has("install")) {
           claudeAt({ type: "connected" });
           claudeStatus = { ...claudeStatus, loggedIn: true, authMethod: "claude.ai", plan: "max" };
           show();
@@ -218,17 +252,6 @@ function Fixture() {
           setResult(JSON.stringify(seen));
           return;
         }
-
-        await fixtureClick(button("Install")!);
-        // Installed from its guide meanwhile: the window coming back checks again.
-        claudeStatus = { ...claudeStatus, path: "/Users/me/.local/bin/claude", version: "2.1.302" };
-        window.dispatchEvent(new Event("focus"));
-        await until(() => claudeCard().action === "Sign in", "found, signed out");
-        seen.found = claudeCard();
-
-        await signIn();
-        await until(() => claudeCard().action === "Waiting…", "waiting");
-        seen.waiting = claudeCard();
 
         // Hovered, Waiting… reads Cancel in the same room, and stops the sign-in.
         const waitButton = document.querySelector('[data-slot="agent-wait"]')!;

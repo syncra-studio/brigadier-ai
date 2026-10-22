@@ -4,6 +4,7 @@ import { createStore, type StoreApi, useStore } from "zustand";
 import { liveActivity, toolName } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { showConversationNotice, shownNotice } from "@/state/notices";
+import { type Stop, stopsOf, useStopping } from "@/state/stopping";
 
 import type {
   AgentMcpServers,
@@ -19,6 +20,7 @@ import type {
   IntegratedCheck,
   MachineStep,
   MemoryChange,
+  MergeRefused,
   MessageQueue,
   Notice,
   OrchestratorLogEntry,
@@ -33,6 +35,7 @@ import type {
   RawEntry,
   ReviewRun,
   RunState,
+  SessionHeadline,
   StreamingMessage,
   ThinkingSegment,
   Task,
@@ -90,6 +93,10 @@ export type Board = {
   integratedChecks: Record<string, IntegratedCheck>;
   /** The thread's run / run_check commands still going after a minute, owned by the session, by id. */
   backgroundRuns: Record<string, BackgroundRun>;
+  /** What the session is doing now, in the thread's words (set_headline); null once the user wrote since. */
+  headline: SessionHeadline | null;
+  /** Why the last merge into the base was refused (the merge rule), while it stands; null once a merge went through or the user said to merge anyway. */
+  mergeRefused: MergeRefused | null;
   /** The ended previews and runs the user dismissed or restarted from the Background rows (Q94), by id. */
   backgroundCleared: string[];
   /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
@@ -175,15 +182,101 @@ const mainBoard: BoardStore = createStore<BoardState>()(() => ({
 /** Side chats' boards, each shown beside the open conversation in its side panel. */
 const sideBoards = new Set<BoardStore>();
 
+/** Boards kept of conversations shown before: the newest ones the user left. */
+const KEPT_BOARDS = 8;
+
+/**
+ * The loaded boards of conversations no view shows now, oldest first, kept current by their
+ * events: a conversation shown again shows its true state at once while its view is read again
+ * (#484), never an empty board that looks finished.
+ */
+const keptBoards = new Map<string, Board>();
+
+/** Keeps a board no view shows any more, unless it never loaded. */
+export function keepBoard(board: Board | null): void {
+  if (!board?.loaded) return;
+  keptBoards.delete(board.conversationId);
+  keptBoards.set(board.conversationId, board);
+  for (const id of keptBoards.keys()) {
+    if (keptBoards.size <= KEPT_BOARDS) break;
+    keptBoards.delete(id);
+  }
+}
+
+/** Takes a kept board out to show it, if one is kept. */
+export function takeKeptBoard(conversationId: string): Board | null {
+  const board = keptBoards.get(conversationId) ?? null;
+  keptBoards.delete(conversationId);
+  return board;
+}
+
+/** Whether a conversation's board is loaded, shown or kept: it can show at once. */
+export function boardHeld(conversationId: string): boolean {
+  return !!keptBoards.get(conversationId)?.loaded || !!boardOf(conversationId)?.loaded;
+}
+
+/** Forgets the kept boards: events may have been missed (a resync), so they may be stale. */
+export function forgetKeptBoards(): void {
+  keptBoards.clear();
+}
+
 /** The board the components below read: the open conversation's, unless a side chat's. */
 export const BoardStoreContext = createContext<BoardStore>(mainBoard);
 
+/** A worker that is over, as the board shows it. */
+const WORKER_OVER: ReadonlySet<Task["state"]> = new Set(["reported", "landed", "done", "rejected", "stopped", "failed"]);
+
+/** `board` as the user's stops under way show it: their workers stopped, a stopped turn over. */
+export function stoppedBoard(board: Board, stops: readonly Stop[]): Board {
+  let shown = board;
+  for (const stop of stopsOf(stops, board.conversationId)) {
+    let tasks = shown.tasks;
+    for (const id of stop.tasks) {
+      const task = tasks[id];
+      if (!task || WORKER_OVER.has(task.state)) continue;
+      tasks = { ...tasks, [id]: { ...task, state: "stopped", updatedAtMs: Math.max(task.updatedAtMs, stop.atMs) } };
+    }
+    if (tasks !== shown.tasks) shown = { ...shown, tasks };
+    if (!stop.turn) continue;
+    // The answers it worked on end with the turn, as the daemon ends them.
+    const open = Object.values(shown.requests).filter(
+      (request) => request.state.type === "working" || request.state.type === "waiting",
+    );
+    const running = shown.run === "running" || shown.run === "starting";
+    if (!running && open.length === 0 && shown.doing === null) continue;
+    shown = {
+      ...shown,
+      run: running ? "idle" : shown.run,
+      doing: null,
+      requests: open.length === 0
+        ? shown.requests
+        : { ...shown.requests, ...Object.fromEntries(open.map((request) => [request.id, { ...request, state: { type: "stopped" } as const }])) },
+    };
+  }
+  return shown;
+}
+
+const shownStates = new WeakMap<BoardState, { stops: readonly Stop[]; state: BoardState }>();
+
+/** `state` with its board as the stops under way show it; the same state when none touch it. */
+function shownState(state: BoardState, stops: readonly Stop[]): BoardState {
+  const { board } = state;
+  if (!board || stopsOf(stops, board.conversationId).length === 0) return state;
+  const cached = shownStates.get(state);
+  if (cached?.stops === stops) return cached.state;
+  const shown = { ...state, board: stoppedBoard(board, stops) };
+  shownStates.set(state, { stops, state: shown });
+  return shown;
+}
+
 /**
- * Reads the board of the view it renders in. `getState`/`setState` are the open
- * conversation's board, for code outside any view.
+ * Reads the board of the view it renders in, as the user's stops under way show it (#498).
+ * `getState`/`setState` are the open conversation's board as it really is, for code outside
+ * any view.
  */
 export function useBoard<T>(selector: (state: BoardState) => T): T {
-  return useStore(useContext(BoardStoreContext), selector);
+  const stops = useStopping((s) => s.stops);
+  return useStore(useContext(BoardStoreContext), (state) => selector(shownState(state, stops)));
 }
 useBoard.getState = mainBoard.getState;
 useBoard.setState = mainBoard.setState;
@@ -211,7 +304,7 @@ export function useCheckoutChanges(conversationId: string): string {
 /** A board for a side chat, fed by the same events as the open one's until disposed. */
 export function createSideBoard(conversationId: string): BoardStore {
   const store = createStore<BoardState>()(() => ({
-    board: emptyBoard(conversationId),
+    board: takeKeptBoard(conversationId) ?? emptyBoard(conversationId),
     orchestrator: null,
   }));
   sideBoards.add(store);
@@ -220,6 +313,7 @@ export function createSideBoard(conversationId: string): BoardStore {
 
 export function disposeSideBoard(store: BoardStore): void {
   sideBoards.delete(store);
+  keepBoard(store.getState().board);
 }
 
 /** The board showing `conversationId`, the open one's or a side chat's, if any does. */
@@ -236,7 +330,7 @@ export function workingRequest(board: Board): string | null {
  * The newest request's id and the request of its steer chain that still works or waits, if any
  * (see [`workingRequest`]).
  */
-export function liveRequest(board: Board): { newest: string; live: UserRequest } | null {
+export function liveRequest(board: Pick<Board, "requests">): { newest: string; live: UserRequest } | null {
   const requests = Object.values(board.requests);
   const latest = requests.reduce<UserRequest | null>(
     (newest, request) =>
@@ -284,6 +378,8 @@ export function emptyBoard(conversationId: string): Board {
     previews: {},
     integratedChecks: {},
     backgroundRuns: {},
+    headline: null,
+    mergeRefused: null,
     backgroundCleared: [],
     mcpServers: {},
     overnight: {},
@@ -336,6 +432,8 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "planUpdated",
   "reviewUpdated",
   "integratedCheckUpdated",
+  "headlineSet",
+  "mergeRefusalSet",
   "mcpServersUpdated",
   "previewUpdated",
   "previewsCleared",
@@ -404,6 +502,10 @@ export function boardFromView(
     integratedChecks: byId(view.integratedChecks ?? []),
     // Nor one from before the thread's long commands went to the background.
     backgroundRuns: byId(view.backgroundRuns ?? []),
+    // Nor one from before the thread wrote a headline.
+    headline: view.headline ?? null,
+    // Nor one from before the merge rule.
+    mergeRefused: view.mergeRefused ?? null,
     backgroundCleared: view.backgroundCleared ?? [],
     // Nor one from before agents told their MCP servers.
     mcpServers: Object.fromEntries((view.mcpServers ?? []).map((agent) => [mcpAgentKey(agent.taskId), agent])),
@@ -613,6 +715,10 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, integratedChecks: { ...board.integratedChecks, [event.check.id]: event.check } };
     case "backgroundRunUpdated":
       return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
+    case "headlineSet":
+      return { ...board, headline: event.headline };
+    case "mergeRefusalSet":
+      return { ...board, mergeRefused: event.refusal };
     case "mcpServersUpdated": {
       const key = mcpAgentKey(event.taskId);
       const { [key]: _gone, ...others } = board.mcpServers;
@@ -869,42 +975,64 @@ export function applyBoardEvents(envelopes: readonly EventEnvelope[]): void {
     }
   }
   for (const store of [mainBoard, ...sideBoards]) applyToStore(store, envelopes);
+  for (const [id, board] of keptBoards) {
+    const next = applyToShown(board, envelopes);
+    if (next !== board) keptBoards.set(id, next);
+  }
+}
+
+/** Whether an event is the board's: its conversation's, its own log's, or one of its tasks'. */
+function boardStream(board: Board, stream: string): boolean {
+  // The conversation's own log says what its model is doing right now.
+  if (stream === `conversation:${board.conversationId}` || stream === `orch:${board.conversationId}`) return true;
+  return stream.startsWith("task:") && !!board.tasks[stream.slice("task:".length)];
+}
+
+function applyToShown(board: Board, envelopes: readonly EventEnvelope[]): Board {
+  let next = board;
+  for (const envelope of envelopes) {
+    if (boardStream(next, envelope.stream)) next = applyToBoard(next, envelope);
+  }
+  return next;
 }
 
 function applyToStore(store: BoardStore, envelopes: readonly EventEnvelope[]): void {
   const { board, orchestrator } = store.getState();
   if (!board && !orchestrator) return;
-  const conversationStream = board ? `conversation:${board.conversationId}` : null;
-  const boardLogStream = board ? `orch:${board.conversationId}` : null;
   const orchestratorStream = orchestrator ? `orch:${orchestrator.conversationId}` : null;
   let nextBoard = board;
   let nextLog = orchestrator;
   for (const envelope of envelopes) {
     const { stream } = envelope;
-    // The open conversation's own log says what its model is doing right now.
-    if (nextBoard && stream === boardLogStream) nextBoard = applyToBoard(nextBoard, envelope);
-    if (nextBoard && stream === conversationStream) {
+    if (nextBoard && boardStream(nextBoard, stream)) {
       nextBoard = applyToBoard(nextBoard, envelope);
-    } else if (
-      nextBoard &&
-      stream.startsWith("task:") &&
-      nextBoard.tasks[stream.slice("task:".length)]
-    ) {
-      nextBoard = applyToBoard(nextBoard, envelope);
-    } else if (nextLog && stream === orchestratorStream) {
-      nextLog = applyToLog(nextLog, envelope);
+      // The open conversation's own log feeds its board and the Inspector's log alike.
+      if (stream !== `orch:${nextBoard.conversationId}`) continue;
     }
+    if (nextLog && stream === orchestratorStream) nextLog = applyToLog(nextLog, envelope);
   }
   if (nextBoard !== board || nextLog !== orchestrator) {
     store.setState({ board: nextBoard, orchestrator: nextLog });
   }
 }
 
-/** Updates every board that shows the given conversation (the open one's, a side chat's). */
+/** Updates every board of the given conversation (the open one's, a side chat's, a kept one). */
 export function updateBoard(conversationId: string, update: (board: Board) => Board): void {
   for (const store of [mainBoard, ...sideBoards]) {
     store.setState((state) =>
       state.board?.conversationId === conversationId ? { board: update(state.board) } : state,
     );
   }
+  const kept = keptBoards.get(conversationId);
+  if (kept) keptBoards.set(conversationId, update(kept));
+}
+
+/**
+ * Puts a conversation's fresh view in its boards, or keeps it when none is there: read ahead of
+ * showing it, it then shows at once.
+ */
+export function placeView(view: ConversationView, arrived: readonly EventEnvelope[]): void {
+  const id = view.conversation.id;
+  if (boardOf(id) || keptBoards.has(id)) updateBoard(id, (board) => boardFromView(view, board, arrived));
+  else keepBoard(boardFromView(view, null, arrived));
 }

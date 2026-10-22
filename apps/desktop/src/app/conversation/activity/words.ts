@@ -64,7 +64,7 @@ const PLUMBING = new Set([
   "finish_session",
   "note_for_user",
   "remember",
-  // Its review shows as the review's own row.
+  // request_review.s name before, on older rows: its review shows as the review's own row.
   "review_candidate",
   // Its proof shows under the reply.
   "attach_proof",
@@ -104,6 +104,8 @@ const OTHER: Record<string, [doing: string, done: string]> = {
   approve_outline: ["Checking a worker’s outline", "Checked a worker’s outline"],
   settle_step: ["Finishing a phase", "Finished a phase"],
   end_run: ["Ending the run", "Ended the run"],
+  request_review: ["Asking for a review", "Asked for a review"],
+  // Its name before request_review, on older rows.
   review_code: ["Asking for a review", "Asked for a review"],
   review_plan: ["Asking for a review", "Asked for a review"],
   request_approval: ["Asking for approval", "Asked for approval"],

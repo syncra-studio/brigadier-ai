@@ -1201,7 +1201,7 @@ fn saved_default_permission() -> PermissionLevel {
 
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
-pub const SETTINGS_VERSION: u32 = 4;
+pub const SETTINGS_VERSION: u32 = 5;
 
 /// A model named by its CLI's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -1487,6 +1487,12 @@ pub struct ConversationView {
     /// The thread's commands that went to the background, oldest first.
     #[serde(default)]
     pub background_runs: Vec<crate::work::BackgroundRun>,
+    /// What the session is doing now, in the thread's words; none once the user wrote since.
+    #[serde(default)]
+    pub headline: Option<crate::work::SessionHeadline>,
+    /// Why the last merge into the base was refused, while it stands.
+    #[serde(default)]
+    pub merge_refused: Option<crate::work::MergeRefused>,
     /// The ended previews and background runs the user dismissed or restarted from the
     /// Background rows (Q94), by id.
     #[serde(default)]
@@ -1822,11 +1828,24 @@ pub enum ConnectProgress {
     /// The vendor's sign-in page is open in the browser; it is checked every few seconds.
     SigningIn,
     Connected,
-    /// `error` is one plain sentence for the user; Connect again retries.
+    /// `error` is one plain sentence for the user; Connect again retries. `reason`, when set,
+    /// is why Connect couldn't do it at all, which the card says how to get past.
     Failed {
         step: ConnectStep,
         error: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        reason: Option<ConnectFailure>,
     },
+}
+
+/// Why Connect couldn't do a step at all, so the user does it themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectFailure {
+    /// On macOS or Linux, neither curl nor wget is installed to download the vendor's
+    /// installer: the card links the agent's install guide.
+    NoDownloader,
 }
 
 /// One agent's Connect.
@@ -2525,6 +2544,18 @@ pub enum DomainEvent {
     IntegratedCheckUpdated {
         check: crate::work::IntegratedCheck,
     },
+    /// The thread set the session's headline (`set_headline`), or it was cleared (none) by
+    /// the user's next message.
+    HeadlineSet {
+        conversation_id: ConversationId,
+        headline: Option<crate::work::SessionHeadline>,
+    },
+    /// A merge into the base was refused by the merge rule, or (none) the refusal is over: a
+    /// merge went through, or the user said to merge anyway.
+    MergeRefusalSet {
+        conversation_id: ConversationId,
+        refusal: Option<crate::work::MergeRefused>,
+    },
     /// A command of the thread's went to the background, or ended there (full snapshot).
     BackgroundRunUpdated {
         run: crate::work::BackgroundRun,
@@ -2824,6 +2855,8 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
             Self::BackgroundRunUpdated { .. } => "background_run.updated",
+            Self::HeadlineSet { .. } => "headline.set",
+            Self::MergeRefusalSet { .. } => "merge.refusal",
             Self::McpServersUpdated { .. } => "mcp_servers.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::UnreviewedChanged { .. } => "thread.unreviewed",

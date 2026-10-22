@@ -2,7 +2,7 @@ import { type FormEvent, useState } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { ExclamationMarkCircle, Spinner } from "@/components/icons";
+import { ArrowUpRight, ExclamationMarkCircle, Spinner } from "@/components/icons";
 import { Button, Input } from "@/components/controls";
 import { openUrl } from "@/ipc/client";
 import type { ProviderKind } from "@/ipc/generated";
@@ -79,8 +79,42 @@ export function ConnectStatus({
               </Button>
             )}
       </div>
+      <ConnectGuide provider={provider} />
       <ConnectCode provider={provider} />
     </div>
+  );
+}
+
+/** Each vendor's own install guide, for installing the agent by hand. */
+const INSTALL_GUIDES: Record<ProviderKind, string> = {
+  claude: "https://code.claude.com/docs/en/setup",
+  codex: "https://github.com/openai/codex",
+};
+
+/**
+ * Whether Connect couldn't install `provider` at all: on macOS or Linux, neither curl nor wget
+ * is there to download its installer.
+ */
+export function useNeedsGuide(provider: ProviderKind): boolean {
+  const progress = useConnectProgress(provider);
+  return progress?.type === "failed" && progress.reason === "noDownloader";
+}
+
+/** Then, a link to the vendor's install guide, for installing it by hand; nothing otherwise. */
+export function ConnectGuide({ provider, className }: { provider: ProviderKind; className?: string }) {
+  const needed = useNeedsGuide(provider);
+  if (!needed) return null;
+  return (
+    <p data-slot="connect-guide" className={cn("text-muted-foreground text-xs", className)}>
+      <button
+        type="button"
+        className="text-link inline-flex items-center gap-0.5 hover:underline"
+        onClick={() => openUrl(INSTALL_GUIDES[provider]).catch((cause: unknown) => console.error(cause))}
+      >
+        {PROVIDER_LABELS[provider]}'s install guide
+        <ArrowUpRight aria-hidden className="size-icon-xs" />
+      </button>
+    </p>
   );
 }
 

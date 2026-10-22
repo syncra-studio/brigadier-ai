@@ -344,7 +344,7 @@ impl SessionManager {
                 })
                 .collect();
             return Ok(if said.is_empty() {
-                "No review of its own: the thread's own edits, under the review line.".to_owned()
+                "No review was asked for.".to_owned()
             } else {
                 format!("Review settled: {}.", said.join("; "))
             });

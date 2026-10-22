@@ -27,6 +27,7 @@ export const ROUTED_KINDS: readonly TaskCategory[] = [
   "merge",
   "verify",
   "operate",
+  "design",
   "chat",
   "orchestrate",
   "gitText",

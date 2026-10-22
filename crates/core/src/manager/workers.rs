@@ -1144,7 +1144,8 @@ impl SessionManager {
                 subject.as_ref(),
             ),
         };
-        let category = extra.category.unwrap_or_else(|| category(kind));
+        let design = makes_designs(extra.design, extra.mockup.as_ref(), &needs);
+        let category = extra.category.unwrap_or_else(|| category(kind, design));
         let areas = areas.unwrap_or_else(|| brigadier_router::infer_areas(&spec));
         let floor = floor.unwrap_or_else(|| brigadier_router::default_floor(category));
         // The roles that write, check or merge the request's code run on a vendor's best,
@@ -1321,6 +1322,7 @@ impl SessionManager {
             target: extra.target,
             end_state: extra.end_state,
             mockup: extra.mockup,
+            design,
             plan: None,
             attachments,
             workspace: None,
@@ -3461,7 +3463,7 @@ impl SessionManager {
         if Self::waits_for_go_ahead(&task) {
             return;
         }
-        // A verifier whose own review still runs (`review_code`) waits for its findings: they
+        // A verifier whose own review still runs (`request_review`) waits for its findings: they
         // start its next turn, and it triages them before it reports. Any other worker never
         // waits for its review: findings after its report go to the thread. Not while the
         // user has reviews off: nothing waits on one. The lock orders this with the switch,
@@ -5637,7 +5639,6 @@ pub(crate) fn needs_of(
     }
 }
 
-/// The router's category for a task kind.
 /// What only Brigadier sets on a task it makes itself.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TaskExtra {
@@ -5660,6 +5661,8 @@ pub(crate) struct TaskExtra {
     pub end_state: Option<String>,
     /// Its part in a mockup first.
     pub mockup: Option<crate::work::MockupPart>,
+    /// It makes designs or images (`delegate_task`'s `design`).
+    pub design: bool,
     /// The live look at the integrated tree's dev build (`delegate_task`'s `live_look`).
     pub live_look: bool,
     /// A fresh verifier's candidate commit (`start_verifier` with `fresh`).
@@ -5673,8 +5676,31 @@ pub(crate) struct TaskExtra {
     pub integrations: Vec<String>,
 }
 
-pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
+/// The router's category for a task: design work when it makes designs or images
+/// ([`Task::design`]), else its kind's.
+pub(crate) fn task_category(task: &Task) -> brigadier_router::TaskCategory {
+    category(task.kind, task.design)
+}
+
+/// Whether a new task makes designs or images: the thread said so, it builds a mockup, or it
+/// must generate images.
+pub(crate) fn makes_designs(
+    design: bool,
+    mockup: Option<&crate::work::MockupPart>,
+    needs: &[brigadier_router::Capability],
+) -> bool {
+    design
+        || matches!(mockup, Some(crate::work::MockupPart::Builds))
+        || needs.contains(&brigadier_router::Capability::ImageGeneration)
+}
+
+/// The router's category for a task kind, `design` when it makes designs or images. A task
+/// that checks other work (a review, merge or check run) stays that work, whatever it checks.
+pub(crate) fn category(kind: TaskKind, design: bool) -> brigadier_router::TaskCategory {
     use brigadier_router::TaskCategory;
+    if design && !matches!(kind, TaskKind::Review | TaskKind::Merge | TaskKind::Verify) {
+        return TaskCategory::Design;
+    }
     match kind {
         TaskKind::Scout => TaskCategory::Scout,
         TaskKind::Research => TaskCategory::Research,
@@ -6549,7 +6575,7 @@ mod tests {
         assert!(needs_of(TaskKind::Operate, &[], &[]).image_input);
         assert!(!needs_of(TaskKind::Research, &[], &[]).image_input);
         assert_eq!(
-            category(TaskKind::Operate),
+            category(TaskKind::Operate, false),
             brigadier_router::TaskCategory::Operate
         );
         for permission in [PermissionLevel::AskForApproval, PermissionLevel::FullAccess] {

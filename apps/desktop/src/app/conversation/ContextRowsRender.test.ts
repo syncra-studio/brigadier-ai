@@ -11,7 +11,8 @@ test("the context card reads in the reference order, one row-height line per row
   assert.deepEqual(seen.project, ["brigadier/web-ui+380 −2"]);
   // The plan, the reviews and the checks are the Job card's (Q88), under the context card.
   assert.equal(seen.planInCard, 0);
-  assert.equal(seen.job, "Phase 2 of 3 · Building");
+  // The Job card says what happened last (the checks passed), over the plan's phase bar: no fixed Building phase.
+  assert.equal(seen.job, "Checks passed on b2c3d4e");
   assert.equal(seen.jobAfterCard, true);
   assert.equal(seen.branchTip, "brigadier/web-ui");
   assert.equal(seen.findingsInCard, 0, "no findings list in the card");

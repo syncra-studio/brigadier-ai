@@ -208,10 +208,6 @@ pub struct SessionManager {
     /// ([`thread`]), so a range is taken once.
     thread_scans: tokio::sync::Mutex<()>,
     change_records: request_changes::ChangeRecords,
-    /// Where each session's thread's newest `run_check` stands: a review of its own changes
-    /// starts only on files a check passed on, never while one runs or on files one failed
-    /// on ([`unreviewed::ThreadCheck`], BUILD-PLAN C10).
-    thread_checks: std::sync::Mutex<HashMap<ConversationId, unreviewed::ThreadCheck>>,
     /// The context window each model last reported, by provider and the model asked for: a
     /// Claude session learns its own only when its first turn ends, and its overflow guard needs
     /// it before then (BUILD-PLAN D2.3, D2.3b).
@@ -233,7 +229,7 @@ pub struct SessionManager {
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
-    /// The reviews a `review_candidate` or `run_check` call waits on, by session and range,
+    /// The reviews a `request_review` or `run_check` call waits on, by session and range,
     /// with how many calls wait: their replies carry the outcome, so no message of it is
     /// delivered (#137, #193), unless all of them were cancelled (#332).
     review_replies: Mutex<review_runs::ReplyClaims>,
@@ -461,7 +457,6 @@ impl SessionManager {
             reviews: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             change_records: request_changes::ChangeRecords::default(),
-            thread_checks: std::sync::Mutex::new(HashMap::new()),
             known_windows: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),

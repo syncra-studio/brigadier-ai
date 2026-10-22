@@ -248,7 +248,7 @@ async fn a_session_from_before_hears_the_change_once_and_does_the_work_itself() 
                 }
                 if turn.input.contains("Add a greeting module.") {
                     let workspace = turn.add_dirs[0].clone();
-                    // Big enough for the review line (Q48): 150 changed lines of code.
+                    // 150 changed lines of code.
                     let greetings: String = (1..=150)
                         .map(|n| format!("pub fn greet_{n}() -> &'static str {{ \"hi\" }}\n"))
                         .collect();
@@ -261,9 +261,14 @@ async fn a_session_from_before_hears_the_change_once_and_does_the_work_itself() 
                     }
                     super::git(&workspace, &["add", "-A"]);
                     super::git(&workspace, &["commit", "-q", "-m", "Add a greeting module"]);
-                    let reply = check(turn).await;
+                    check(turn.clone()).await;
+                    // Big enough to ask the other vendor for a review.
+                    let reply = turn
+                        .call("request_review", json!({"wait_seconds": 0}))
+                        .await
+                        .text;
                     said.lock().unwrap().push(reply.clone());
-                    return Reply::text(if reply.contains("[review running]") {
+                    return Reply::text(if reply.contains("still reviews") {
                         "[quiet]"
                     } else {
                         "Added the greeting module."
@@ -334,13 +339,13 @@ async fn a_session_from_before_hears_the_change_once_and_does_the_work_itself() 
         "{:#?}",
         board.questions
     );
-    // One review, of the feature's commit, before its answer.
+    // One review, of the feature's commit, asked for before its answer.
     let reviews: Vec<_> = board.reviews.values().collect();
     assert_eq!(reviews.len(), 1, "{reviews:#?}");
     assert!(reviews[0].task_id.is_none());
     assert_eq!(reviews[0].state, ReviewState::Clean);
     let said = checks.lock().unwrap().clone();
-    assert!(said[1].contains("[review running]"), "{said:#?}");
+    assert!(said[1].contains("still reviews"), "{said:#?}");
     // The note came once, at the first turn after the change, in plain words.
     let heard = inputs.lock().unwrap().clone();
     let note = revision_note(THREAD_WORKS_REVISION - 1, false).unwrap();

@@ -343,6 +343,7 @@ impl SessionManager {
                             target,
                             end_state,
                             mockup,
+                            design: args.design,
                             live_look: args.live_look,
                             request,
                             integrations: args.integrations,
@@ -585,8 +586,8 @@ impl SessionManager {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 crate::heap(|| self.verify_task(id, args)).await
             }
-            OrchestratorCall::ReviewCandidate(args) => {
-                crate::heap(|| self.review_candidate(id, args)).await
+            OrchestratorCall::RequestReview(args) => {
+                crate::heap(|| self.request_review(id, args)).await
             }
             OrchestratorCall::AttachProof(args) => {
                 crate::heap(|| self.attach_proof(id, args)).await
@@ -613,7 +614,11 @@ impl SessionManager {
             OrchestratorCall::FinishSession(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 let consent = args.consent.as_deref().unwrap_or(&args.user_words);
-                crate::heap(|| self.finish_session_when(id, consent, args.message, args.when)).await
+                let anyway = args.anyway.as_deref();
+                crate::heap(|| {
+                    self.finish_session_when(id, consent, args.message, args.when, anyway)
+                })
+                .await
             }
             OrchestratorCall::StopMerge(args) => {
                 crate::heap(|| self.stop_merge(id, &args.why)).await
@@ -638,6 +643,7 @@ impl SessionManager {
             OrchestratorCall::OfferSession(args) => {
                 crate::heap(|| self.offer_session(id, args)).await
             }
+            OrchestratorCall::SetHeadline(args) => self.set_headline(id, args).await,
             OrchestratorCall::SettleStep(args) => crate::heap(|| self.settle_step(id, args)).await,
             OrchestratorCall::EndRun(args) => crate::heap(|| self.end_run_now(id, args)).await,
             OrchestratorCall::ProposeOvernight(args) => {
@@ -677,7 +683,9 @@ impl SessionManager {
             }
             OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
             OrchestratorCall::CleanUp => crate::heap(|| self.clean_up(id)).await,
-            OrchestratorCall::RerunChecks => crate::heap(|| self.rerun_checks(id)).await,
+            OrchestratorCall::RunChecks(args) => {
+                crate::heap(|| self.run_checks_tool(id, args.rerun)).await
+            }
             OrchestratorCall::ReviewPlan(args) => {
                 crate::heap(|| self.review_thread_plan(id, args)).await
             }
@@ -725,7 +733,10 @@ impl SessionManager {
                 crate::heap(|| self.stop_preview_tool(id, args.id.as_deref(), None)).await
             }
             OrchestratorCall::PreviewLog(args) => {
-                crate::heap(|| self.preview_log(id, args.id.as_deref(), args.tail_lines)).await
+                crate::heap(|| {
+                    self.preview_log(id, args.id.as_deref(), args.tail_lines, args.wait_secs)
+                })
+                .await
             }
             OrchestratorCall::ListSessions(args) => {
                 crate::heap(|| self.list_sessions(id, args.query.as_deref(), args.project)).await
@@ -801,6 +812,14 @@ impl SessionManager {
     pub(crate) async fn orchestrator_step(&self, id: &ConversationId, kind: OrchestratorStepKind) {
         let request = self.request_for(id, None).await;
         self.orchestrator_step_in(id, request, kind).await;
+    }
+
+    /// Says a moment of the conversation (a usage limit, a switch of model, provider or
+    /// account) as a divider in the thread, under the request it happened in (`task`'s own).
+    pub(crate) async fn moment(&self, id: &ConversationId, task: Option<&TaskId>, text: String) {
+        let request = self.request_for(id, task).await;
+        self.orchestrator_step_in(id, request, OrchestratorStepKind::Moment { text })
+            .await;
     }
 
     /// Files a row for the thread under `request`.
@@ -957,7 +976,9 @@ impl SessionManager {
                 self.submit_outline(&conversation_id, &task_id, args.outline)
                     .await
             }
-            WorkerCall::ReviewCode => self.review_code(&conversation_id, &task_id).await,
+            WorkerCall::RequestReview => {
+                self.worker_request_review(&conversation_id, &task_id).await
+            }
             // The app shows the note from the call itself, in the worker's live events.
             WorkerCall::NoteProgress(args) => {
                 if args.note.trim().is_empty() {
@@ -1003,6 +1024,9 @@ impl SessionManager {
                 self.run_check_tool(&conversation_id, Some(&task_id), args)
                     .await
             }
+            WorkerCall::RunChecks(args) => {
+                crate::heap(|| self.worker_run_checks(&conversation_id, &task_id, args.rerun)).await
+            }
             WorkerCall::StartPreview(args) => {
                 crate::heap(|| self.start_worker_preview(&conversation_id, &task_id, args)).await
             }
@@ -1019,6 +1043,7 @@ impl SessionManager {
                         &task_id,
                         args.id.as_deref(),
                         args.tail_lines,
+                        args.wait_secs,
                     )
                 })
                 .await
@@ -1080,6 +1105,37 @@ impl SessionManager {
                 .into())
             }
         }
+    }
+
+    /// `set_headline`: the session's headline and its one detail line, stored and sent as an
+    /// event for the Job card. The user's next message clears it.
+    pub(crate) async fn set_headline(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::SetHeadline,
+    ) -> Result<String> {
+        let text = one_line(&args.headline, HEADLINE_MAX);
+        if text.is_empty() {
+            return Err(Error::Invalid("`headline` is empty".into()));
+        }
+        let detail = args
+            .detail
+            .map(|detail| one_line(&detail, HEADLINE_MAX * 2))
+            .filter(|detail| !detail.is_empty());
+        self.core
+            .record_conversation(
+                id,
+                vec![DomainEvent::HeadlineSet {
+                    conversation_id: id.clone(),
+                    headline: Some(crate::work::SessionHeadline {
+                        text,
+                        detail,
+                        at_ms: crate::now_ms(),
+                    }),
+                }],
+            )
+            .await?;
+        Ok("Headline set.".into())
     }
 
     /// `suggest_full_access`: a notice in the thread, under the request the orchestrator serves,
@@ -1499,6 +1555,18 @@ impl SessionManager {
 }
 
 /// The orchestrator's provider/model/effort override.
+/// The most a headline may hold; its detail line holds twice that.
+const HEADLINE_MAX: usize = 80;
+
+/// `text` on one line, its whitespace collapsed, cut at `max` characters.
+fn one_line(text: &str, max: usize) -> String {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match joined.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", joined[..at].trim_end()),
+        None => joined,
+    }
+}
+
 fn pin(
     provider: Option<&str>,
     model: Option<String>,

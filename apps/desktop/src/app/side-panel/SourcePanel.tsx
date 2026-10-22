@@ -307,6 +307,8 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const merging = state?.merging ?? null;
   // A merge or rebase stopped on conflicts: the branch stays as it is till it ends.
   const resolving = merging !== null || state?.rebasing != null;
+  // Nothing to commit and nothing under way: the message box and Commit have no job (#490).
+  const clean = state !== null && staged.length === 0 && all.length === 0 && !resolving;
   const openGroup = (scope: "staged" | "unstaged") => {
     if (conversationId) openReviewTab(conversationId, { type: "changes", staged: scope === "staged" });
   };
@@ -393,12 +395,20 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
               onContinueRebase={continueRebase}
               onBranch={canCheckout ? () => pick("checkout") : null}
               locked={locked}
+              idle={clean}
             />
           )}
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {error && !state && <p className="text-destructive p-2 text-sm">{error}</p>}
-            {state && staged.length === 0 && all.length === 0 && !resolving && (
-              <p className="text-muted-foreground p-2 text-sm">No changes</p>
+            {state && clean && (
+              <div className="text-muted-foreground p-2 text-sm">
+                <p>Nothing to commit</p>
+                {state.ahead > 0 && (
+                  <p>
+                    The changes are committed on this branch ({state.ahead} {state.ahead === 1 ? "commit" : "commits"} not pushed).
+                  </p>
+                )}
+              </div>
             )}
             {conflicted.length > 0 && (
               <SourceGroup

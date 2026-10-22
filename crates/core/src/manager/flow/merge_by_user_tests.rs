@@ -49,11 +49,13 @@ async fn session(name: &str) -> (Flow, Log) {
                     return Reply::text("Ready to merge when you are.");
                 }
                 if turn.input.contains("[merge] The user clicked") {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn.call("finish_session", json!({})).await;
                     log(format!("finish_session: {} {}", reply.is_error, reply.text));
                     return Reply::text("Merged.");
                 }
                 if turn.input.contains("just merge it") {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call("finish_session", json!({ "user_words": "just merge it" }))
                         .await;
@@ -372,6 +374,59 @@ async fn a_merge_brings_main_up_to_date_and_says_it_isnt_pushed() {
     flow.stop().await;
 }
 
+/// A merge made on this Mac reads not pushed until its base's upstream has it: once the merged
+/// `main` is pushed, it reads pushed (#496).
+#[tokio::test]
+async fn a_merge_reads_pushed_once_its_base_is_pushed() {
+    let (flow, _log) = session("merge-pushed").await;
+    let origin = flow.repo.with_file_name("merge-pushed-origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&flow.repo, &["fetch", "-q", "origin"]);
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    flow.say("Yes, just merge it.").await;
+    flow.until("the merge", |board| merged(board) == 1).await;
+    let board = flow.settled().await;
+    assert!(merged_upstream(&board)[0].is_some(), "merged on this Mac");
+    let commit = board
+        .orchestrator_steps
+        .iter()
+        .find_map(|step| match &step.kind {
+            OrchestratorStepKind::Merged { merge_commit, .. } => merge_commit.clone(),
+            _ => None,
+        })
+        .unwrap();
+    let pushed = || async {
+        flow.manager
+            .merge_pushed(&flow.conversation, &commit)
+            .await
+            .unwrap()
+    };
+    assert!(!pushed().await, "not pushed yet");
+    git(&flow.repo, &["push", "-q", "origin", "main"]);
+    assert!(pushed().await, "pushed");
+    assert!(
+        !flow
+            .manager
+            .merge_pushed(&flow.conversation, "0123456")
+            .await
+            .unwrap(),
+        "not a merge of this session's"
+    );
+    flow.stop().await;
+}
+
 /// The click merges, once: it is recorded with where it came from, the thread merges on its
 /// [merge], and a second finish_session on the same click is refused. Nothing was ever put on a
 /// card, and the workspace stays with its branch at the merge.
@@ -392,7 +447,7 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     let request = flow.board().await.latest_request().unwrap().id.clone();
     let reply = flow
         .manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap();
     assert!(reply.contains("Merging"), "{reply}");
@@ -458,7 +513,7 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     // And with nothing left to merge, the button's request is refused.
     let nothing = flow
         .manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap_err()
         .to_string();
@@ -487,7 +542,7 @@ async fn a_spent_click_never_falls_back_to_the_words_before_it() {
     flow.say("Add notes. Then merge it into main.").await;
     flow.settled().await;
     flow.manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap();
     flow.until("the merge", |board| merged(board) == 1).await;
@@ -497,6 +552,7 @@ async fn a_spent_click_never_falls_back_to_the_words_before_it() {
     std::fs::write(path.join("LATER.md"), "later\n").unwrap();
     git(&path, &["add", "LATER.md"]);
     git(&path, &["commit", "-qm", "Add later"]);
+    flow.checks_passed().await;
     let refused = flow
         .manager
         .finish_session(&flow.conversation, "merge it into main", None)
@@ -535,6 +591,7 @@ async fn a_card_answer_merges_when_the_thread_names_it() {
             .is_err()
     );
     let card = card.id.to_string();
+    flow.checks_passed().await;
     let merged_on = flow
         .manager
         .finish_session(&flow.conversation, &card, None)
@@ -663,7 +720,7 @@ async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
     assert!(note.contains("there are no merge cards"), "{note}");
     assert_eq!(logged(&log, &note).len(), 1);
     flow.manager
-        .merge_session(&flow.conversation, click())
+        .merge_session(&flow.conversation, click(), false)
         .await
         .unwrap();
     flow.until("the merge", |board| merged(board) == 1).await;

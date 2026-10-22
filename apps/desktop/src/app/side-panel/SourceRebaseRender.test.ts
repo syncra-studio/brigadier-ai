@@ -31,5 +31,5 @@ test("a rebase stopped on conflicts is resolved in the conflict tab, continued c
   assert.equal(continued.step, "Rebasing 3 of 5: Show the discount on the receipt");
   assert.equal(continued.message, "Show the discount on the receipt");
   assert.deepEqual(continued.toasts, ["There are merge conflicts. Resolve them before committing your changes."]);
-  assert.deepEqual(seen.aborted, { branch: "brigadier/912a9469/session", message: "", boxDisabled: false });
+  assert.deepEqual(seen.aborted, { branch: "brigadier/912a9469/session", box: false });
 });

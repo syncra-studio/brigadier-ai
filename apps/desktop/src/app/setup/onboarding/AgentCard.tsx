@@ -1,20 +1,12 @@
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { ConnectCode } from "@/app/setup/onboarding/ConnectStatus";
+import { ConnectCode, ConnectGuide, useNeedsGuide } from "@/app/setup/onboarding/ConnectStatus";
 import { PILL_BUTTON, RAISED_BUTTON } from "@/app/setup/onboarding/parts";
 import type { AgentState } from "@/app/setup/onboarding/SetupTerminal";
-import { ArrowUpRight, Check, ProviderGlyph, Spinner } from "@/components/icons";
+import { Check, ProviderGlyph, Spinner } from "@/components/icons";
 import { Badge, Button } from "@/components/controls";
-import { openUrl } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { cancelConnect, connectAgent, connecting, useConnect, useConnectProgress } from "@/state/connect";
-
-// Install opens each vendor's own install page; on Windows it is Connect (the vendor's PowerShell
-// installer, then its sign-in), as in Settings › Providers.
-const INSTALL_GUIDES: Record<ProviderKind, string> = {
-  claude: "https://code.claude.com/docs/en/setup",
-  codex: "https://github.com/openai/codex",
-};
 
 /** "Max plan" from the plan the agent reports. */
 function planLine(plan: string | null | undefined): string {
@@ -29,19 +21,20 @@ export function AgentCard({
   overview,
   state,
   mac,
-  windows,
 }: {
   provider: ProviderKind;
   overview: ProviderOverview | undefined;
   state: AgentState;
   mac: boolean;
-  windows: boolean;
 }) {
   const label = PROVIDER_LABELS[provider];
   const progress = useConnectProgress(provider);
   // Asking to connect failed (the daemon was away): said like a failed Connect.
   const askError = useConnect((s) => s.errors[provider]);
   const error = askError ?? (progress?.type === "failed" ? progress.error : null);
+  // Connect couldn't install it at all: the card says what is missing in full, and links the
+  // vendor's install guide.
+  const guide = useNeedsGuide(provider) && !askError;
   const ready = state === "ready";
   // Signing in, or Connected said and the agent's check on its way: the card waits.
   const waiting = !ready && (connecting(progress) || progress?.type === "connected");
@@ -77,13 +70,15 @@ export function AgentCard({
             data-slot="agent-line"
             role={error ? "alert" : undefined}
             className={cn(
-              "truncate text-xs",
+              guide ? "text-balance" : "truncate",
+              "text-xs",
               error ? "text-destructive" : ready ? "text-muted-foreground" : "text-muted-foreground/70",
             )}
             title={error ?? undefined}
           >
             {line}
           </p>
+          {guide && <ConnectGuide provider={provider} />}
         </div>
         {ready ? (
           <Badge variant="success" className="bg-success/10 h-7 gap-1.5 px-2.5">
@@ -111,23 +106,11 @@ export function AgentCard({
               Cancel
             </span>
           </button>
-        ) : state === "signIn" ? (
+        ) : state === "signIn" || state === "install" ? (
+          // Both are Connect, as in Settings › Providers: Install runs the vendor's own installer
+          // first, then its sign-in.
           <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
-            Sign in
-          </Button>
-        ) : state === "install" && windows ? (
-          <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
-            Install
-          </Button>
-        ) : state === "install" ? (
-          <Button
-            size="sm"
-            variant="outline"
-            className={RAISED_BUTTON}
-            onClick={() => openUrl(INSTALL_GUIDES[provider]).catch((cause: unknown) => console.error(cause))}
-          >
-            Install
-            <ArrowUpRight className="text-muted-foreground size-icon-xs" />
+            {state === "install" ? "Install" : "Sign in"}
           </Button>
         ) : null}
       </div>

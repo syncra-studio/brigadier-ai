@@ -1,7 +1,8 @@
 //! A session's state and its reasons on its row (Q73): a failed run needs the user until the
 //! next run starts, through a reconnect and a restart; its pull request as last seen on GitHub,
 //! looked up when a turn ends and again at a connect for a ready session; a merge reverted on
-//! the base reads reverted, and merged again once the revert is reverted.
+//! the base reads reverted, and merged again once the revert is reverted; a session that
+//! changed nothing never reads ready or merged.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -228,6 +229,71 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
         flow.manager.merge_undo(&id, "0123456").await.unwrap(),
         None,
         "not a merge of this session's"
+    );
+    flow.stop().await;
+}
+
+/// A session whose branch starts from the base as its remote has it, ahead of the local base,
+/// and that changes nothing: the remote's commits aren't its own, so it never reads ready, nor
+/// merged once the local base catches up (#495).
+#[tokio::test]
+async fn a_session_that_changed_nothing_never_reads_ready_or_merged() {
+    let flow = Flow::start(
+        "states-nothing",
+        Options::default(),
+        script(|_| async { Reply::text("Nothing to change.") }),
+    )
+    .await;
+    let root = flow.repo.parent().unwrap().to_path_buf();
+    let origin = root.join("origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&flow.repo, &["fetch", "-q", "origin"]);
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    // Someone pushes to origin's main: the local main is behind it.
+    let other = root.join("other");
+    git(
+        &flow.repo,
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(other.join("UPSTREAM.md"), "upstream\n").unwrap();
+    git(&other, &["add", "-A"]);
+    git(&other, &["commit", "-q", "-m", "Upstream work"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+
+    flow.say("Look around.").await;
+    let board = flow.settled().await;
+    assert!(board.ready.is_empty(), "{:?}", board.ready);
+    let id = flow.conversation.clone();
+    let state = || async {
+        let tab = flow.core.conversation(&id).unwrap();
+        flow.manager.tab_state(&tab).await
+    };
+    assert_eq!(state().await, None, "nothing to merge");
+    // The local main catches up with its remote: still nothing merged.
+    git(&flow.repo, &["merge", "-q", "--ff-only", "origin/main"]);
+    assert_eq!(state().await, None, "never merged");
+    assert!(
+        !flow
+            .manager
+            .settled_tabs()
+            .await
+            .iter()
+            .any(|tab| tab.conversation_id == id)
     );
     flow.stop().await;
 }

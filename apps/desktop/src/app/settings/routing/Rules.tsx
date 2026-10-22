@@ -3,19 +3,30 @@ import { useState } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { BanIcon, Badge, Note, PreferIcon } from "@/app/settings/routing/parts";
 import { TargetItems } from "@/app/settings/routing/pickers";
-import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/settings/routing/ruleWords";
+import {
+  type Draft,
+  type DraftEffect,
+  draftKindsName,
+  draftRule,
+  type Names,
+  previewDraft,
+  ruleLine,
+  ruleTitle,
+  toggleKind,
+} from "@/app/settings/routing/ruleWords";
 import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/settings/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
 import { type ModelGroup, SettingsCard } from "@/components/shared";
 import { Button, SettingsSelect, SettingsSelectTrigger } from "@/components/controls";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import { DotsHorizontal, Info, Plus, Warning } from "@/components/icons";
-import type { OverrideRule, OverrideTarget, RoutePreview, TaskCategory } from "@/ipc/generated";
+import type { OverrideRule, OverrideTarget, RoutePreview } from "@/ipc/generated";
 import { newRuleId, PLAIN_KIND_NAMES, ruleSentence } from "@/lib/routing";
 import { isNewModelRule } from "@/state/providers";
 import { addOverride, removeOverride } from "@/state/routing";
@@ -33,10 +44,6 @@ const EFFECTS: { value: DraftEffect; label: string }[] = [
   { value: "prefer", label: "Prefer" },
 ];
 
-const KINDS: { value: TaskCategory | ""; label: string }[] = [
-  { value: "", label: "Any work" },
-  ...ROUTED_KINDS.map((value) => ({ value, label: PLAIN_KIND_NAMES[value] })),
-];
 
 /** The names the rules' words need, from the model list and the projects. */
 function useNames(groups: readonly ModelGroup[]): Names {
@@ -143,7 +150,7 @@ function DraftRow({
   const rules = useApp((s) => s.settings.routingOverrides);
   const rankings = useApp((s) => s.settings.routingRankings);
   const models = useUsage((s) => s.view?.models);
-  const [draft, setDraft] = useState<Draft>({ effect: "never", target: null, kind: "" });
+  const [draft, setDraft] = useState<Draft>({ effect: "never", target: null, kinds: [] });
   const add = useAction();
   const target = draft.target;
   const preview = previewDraft(draft, {
@@ -180,7 +187,27 @@ function DraftRow({
             </DropdownMenuContent>
           </DropdownMenu>
           for
-          <SettingsSelect align="start" label="The kind of work the rule is about" value={draft.kind} options={KINDS} onChange={(kind) => set({ kind })} />
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <SettingsSelectTrigger label="The kinds of work the rule is about">{draftKindsName(draft.kinds)}</SettingsSelectTrigger>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-96 max-w-sm min-w-(--radix-dropdown-menu-trigger-width) overflow-y-auto">
+              {/* Any work stands alone; kinds tick together, the menu staying open. */}
+              <DropdownMenuCheckboxItem checked={draft.kinds.length === 0} onCheckedChange={() => set({ kinds: [] })}>
+                Any work
+              </DropdownMenuCheckboxItem>
+              {ROUTED_KINDS.map((kind) => (
+                <DropdownMenuCheckboxItem
+                  key={kind}
+                  checked={draft.kinds.includes(kind)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={() => set({ kinds: toggleKind(draft.kinds, kind) })}
+                >
+                  {PLAIN_KIND_NAMES[kind]}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button size="sm" disabled={!target || add.busy} onClick={submit}>

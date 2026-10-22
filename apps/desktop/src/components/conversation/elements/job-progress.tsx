@@ -1,7 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 
 import { ghostButton, mono } from "@/components/conversation/elements/surfaces";
-import { Check, ExclamationMarkCircle, Moon, Spinner, Stop, X } from "@/components/icons";
+import { Branch, Check, ExclamationMarkCircle, HandRaised, Moon, Spinner, Stop, StopCircleFilled, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**
@@ -26,6 +26,31 @@ export interface JobStage {
 }
 
 export type JobOutcomeStatus = "success" | "partial" | "failed" | "cancelled";
+
+/**
+ * How a live job reads now, whatever its stages: at work (a spinner), waiting on the user (a
+ * raised hand), failed (a red cross), done (a tick), stopped, or merged. With it the card says
+ * what is happening; a bar shows only when it has stages.
+ */
+export type JobTone = "running" | "waiting" | "failed" | "done" | "stopped" | "merged";
+
+/** Each tone's icon. */
+function ToneIcon({ tone }: { tone: JobTone }) {
+  switch (tone) {
+    case "running":
+      return <Spinner className="text-muted-foreground size-icon-sm shrink-0 motion-safe:animate-spin" />;
+    case "waiting":
+      return <HandRaised aria-hidden className="text-warning size-icon-sm shrink-0" />;
+    case "failed":
+      return <X aria-hidden className="text-destructive size-icon-sm shrink-0" />;
+    case "done":
+      return <Check aria-hidden className="text-success size-icon-sm shrink-0" />;
+    case "stopped":
+      return <StopCircleFilled aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />;
+    case "merged":
+      return <Branch aria-hidden className="text-success size-icon-sm shrink-0" />;
+  }
+}
 
 /** Constrains a value to `min…max`; NaN is `min`. */
 function clamp(value: number, min: number, max: number) {
@@ -85,6 +110,9 @@ export function JobProgress({
   detail,
   warning,
   actions,
+  stalled = false,
+  tone,
+  status,
   className,
   ...props
 }: Omit<
@@ -109,6 +137,12 @@ export function JobProgress({
   warning?: string | undefined;
   /** Its buttons, last. */
   actions?: ReactNode;
+  /** No stage is at work: after a failure the line shows it still, with no spinner. */
+  stalled?: boolean | undefined;
+  /** A live job's state, apart from its stages: it picks the icon, and the timer shows while it runs. */
+  tone?: JobTone | undefined;
+  /** What a screen reader hears of it: by default, the stage at work or how it ended. */
+  status?: string | undefined;
 }) {
   const stage = progressOf(stageIndex, stages.length);
   const progress = clamp(stageProgress, 0, 1);
@@ -116,16 +150,17 @@ export function JobProgress({
   const completed = stages.slice(0, stage).reduce((sum, item) => sum + item.weight, 0);
   const current = stages[stage];
   const overall = proposed ? 0 : pct(completed + (current ? current.weight * progress : 0), totalWeight);
-  const finished = !proposed && stage >= stages.length;
+  // A live job is over only when its tone says so, never for want of stages.
+  const finished = !proposed && !tone && stage >= stages.length;
   const running = !finished && outcome === undefined;
-  const state = proposed ? "proposed" : (outcome?.status ?? (finished ? "done" : "running"));
-  const elapsed = !running && elapsedMs !== undefined ? formatElapsed(elapsedMs) : undefined;
+  const state = tone ?? (proposed ? "proposed" : (outcome?.status ?? (finished ? "done" : "running")));
+  const elapsed = (tone || !running) && elapsedMs !== undefined ? formatElapsed(elapsedMs) : undefined;
   const statusWord = outcome?.status === "success" ? "done" : (outcome?.status ?? "done");
   const stateOf = (item: JobStage, index: number): JobStageState =>
     item.state ??
     (proposed ? "pending" : index < stage || finished ? "done" : index === stage && running ? "active" : "pending");
   const failing = running && stages.some((item, index) => stateOf(item, index) === "failed");
-  const announcement = proposed
+  const announcement = status ?? (proposed
     ? "Job not started"
     : outcome
       ? `Job ${outcome.status === "success" ? "done" : outcome.status === "partial" ? "partly done" : outcome.status}`
@@ -133,7 +168,7 @@ export function JobProgress({
         ? `Current stage: ${current.name}`
         : finished
           ? "Job done"
-          : "Job running";
+          : "Job running");
   const progressPercent = outcome?.status === "success" ? 100 : overall;
   // The step the line under the bar names: the last one that failed, else the one at work or
   // where the job stopped; then the step after it. A job done in full names none.
@@ -155,7 +190,7 @@ export function JobProgress({
     if (outcome) return { color: OUTCOME_PART[outcome.status], width: progress * 100 };
     return null;
   };
-  const right = elapsed ? <time dateTime={elapsed.dateTime}>{elapsed.label}</time> : !running ? statusWord : (meta ?? eta);
+  const right = elapsed ? <time dateTime={elapsed.dateTime}>{elapsed.label}</time> : tone ? (meta ?? eta) : !running ? statusWord : (meta ?? eta);
   const lines = [shown?.description, outcome?.summary ? undefined : detail].filter(Boolean);
 
   return (
@@ -166,7 +201,9 @@ export function JobProgress({
       {...props}
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        {proposed ? (
+        {tone ? (
+          <ToneIcon tone={tone} />
+        ) : proposed ? (
           <Moon aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
         ) : outcome?.status === "partial" ? (
           <ExclamationMarkCircle aria-hidden className="text-warning size-icon-sm shrink-0" />
@@ -176,6 +213,8 @@ export function JobProgress({
           <X aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
         ) : !running ? (
           <Check aria-hidden className="text-success size-icon-sm shrink-0" />
+        ) : stalled && failing ? (
+          <X aria-hidden className="text-destructive size-icon-sm shrink-0" />
         ) : (
           <Spinner
             className={cn(
@@ -187,7 +226,7 @@ export function JobProgress({
         <span
           className={cn(
             "min-w-0 flex-1 truncate font-medium",
-            (failing || outcome?.status === "failed") && "text-destructive",
+            (tone ? tone === "failed" : failing || outcome?.status === "failed") && "text-destructive",
           )}
         >
           {title}
@@ -206,37 +245,39 @@ export function JobProgress({
         ) : null}
       </div>
 
-      <span
-        role="progressbar"
-        aria-label={`${title} progress`}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(progressPercent * 10) / 10}
-        className="flex w-full gap-0.75"
-      >
-        {stages.map((item, index) => {
-          const at = stateOf(item, index);
-          const fill = segmentFill(at, index);
-          return (
-            <span
-              key={`${item.name}-${index}`}
-              data-segment={at}
-              className="bg-foreground/10 h-1 min-w-0 basis-0 overflow-hidden rounded-full"
-              style={{ flexGrow: item.weight }}
-            >
-              {fill && (
-                <span
-                  className={cn(
-                    "block h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out",
-                    fill.color,
-                  )}
-                  style={{ width: `${fill.width}%` }}
-                />
-              )}
-            </span>
-          );
-        })}
-      </span>
+      {stages.length > 0 && (
+        <span
+          role="progressbar"
+          aria-label={`${title} progress`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progressPercent * 10) / 10}
+          className="flex w-full gap-0.75"
+        >
+          {stages.map((item, index) => {
+            const at = stateOf(item, index);
+            const fill = segmentFill(at, index);
+            return (
+              <span
+                key={`${item.name}-${index}`}
+                data-segment={at}
+                className="bg-foreground/10 h-1 min-w-0 basis-0 overflow-hidden rounded-full"
+                style={{ flexGrow: item.weight }}
+              >
+                {fill && (
+                  <span
+                    className={cn(
+                      "block h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out",
+                      fill.color,
+                    )}
+                    style={{ width: `${fill.width}%` }}
+                  />
+                )}
+              </span>
+            );
+          })}
+        </span>
+      )}
 
       {(proposed || shown || outcome?.summary || lines.length > 0 || actions) && (
         <div className="flex min-w-0 flex-col gap-2.5">

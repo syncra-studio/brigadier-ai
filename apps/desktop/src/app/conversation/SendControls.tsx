@@ -19,6 +19,7 @@ import { clearBackgroundSend, markBackgroundSend, useBackgroundArmed } from "@/s
 import { useBoard } from "@/state/board";
 import { cancelDictation, useDictation } from "@/state/dictation";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
+import { turnStopping, useStopping } from "@/state/stopping";
 import { useApp } from "@/state/store";
 import { isTaskTab } from "@/state/tabStates";
 
@@ -172,7 +173,10 @@ export function SendControls({
   );
   const empty = useAuiState((s) => s.composer.isEmpty);
   const cancellable = useAuiState((s) => s.composer.canCancel);
-  const canCancel = useHeldOn(cancellable, STOP_HOLD_MS);
+  // The user's own Stop shows at once (#498): no hold after it.
+  const stopping = useStopping((s) => turnStopping(s.stops, conversationId));
+  const held = useHeldOn(cancellable, STOP_HOLD_MS);
+  const canCancel = cancellable || (held && !stopping);
   const starting = useFirstStart(run, canCancel);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
   const armed = useEscToStop(canCancel, dictationOwner);

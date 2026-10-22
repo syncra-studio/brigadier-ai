@@ -65,14 +65,14 @@ test("older providers' live drift notices are hidden, but decode failures still 
   assert.deepEqual(applyToBoard(board, event(decode)).notices, [decode]);
 });
 
-test("a saved account-switch notice shows its accounts' emails masked", () => {
+test("a saved notice shows its emails masked", () => {
   const board = emptyBoard("conversation");
   const saved: Notice = {
-    level: "info",
+    level: "warning",
     atMs: 4,
-    text: "Claude Code hit its usage limit on stephen@example.com; continuing on work@corp.io.",
+    text: "Signing in as stephen@example.com failed; work@corp.io stays signed in.",
   };
-  const masked = "Claude Code hit its usage limit on ste•••••@•••••.com; continuing on wor•••••@•••••.io.";
+  const masked = "Signing in as ste•••••@•••••.com failed; wor•••••@•••••.io stays signed in.";
   const view = {
     ...board,
     conversation: { id: board.conversationId },
@@ -97,4 +97,37 @@ test("a saved account-switch notice shows its accounts' emails masked", () => {
     [masked, environment.text],
   );
   assert.equal(applyToBoard(board, event(saved)).notices[0]?.text, masked);
+});
+
+test("saved usage-limit and switch notices are hidden: the thread says them as dividers", () => {
+  const board = emptyBoard("conversation");
+  const saved: Notice[] = [
+    "You've hit your session limit · resets 7:10pm",
+    "Claude Code hit its usage limit; continuing on Codex (GPT-5.5) until 19:10, then back on Claude Code.",
+    "Claude Code hit its usage limit on ste•••••@•••••.com; continuing on wor•••••@•••••.io.",
+    "Claude Code is available again; continuing with it.",
+    "Claude Code hit its usage limit on this computer's login; task 3 continues on wor•••••@•••••.io.",
+    "Every model you allow is at its limit. Your message waits and goes on its own once a model you allow can take it.",
+  ].map((text, index) => ({ level: "info", atMs: 10 + index, text }));
+  const view = {
+    ...board,
+    conversation: { id: board.conversationId },
+    tasks: [],
+    approvals: [],
+    questions: [],
+    plans: [],
+    reviews: [],
+    previews: [],
+    integratedChecks: [],
+    backgroundRuns: [],
+    mcpServers: [],
+    overnight: [],
+    requests: [],
+    waiting: [],
+    compactions: [],
+    peerMessages: [],
+    notices: [...saved, decode],
+  } as unknown as ConversationView;
+  assert.deepEqual(boardFromView(view, null, []).notices, [decode]);
+  for (const notice of saved) assert.equal(applyToBoard(board, event(notice)), board);
 });

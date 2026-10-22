@@ -165,6 +165,11 @@ export const RequestBlock: FC = () => {
       (run) => run.state.type === "running" && run.requestId !== null && !!requestIds?.includes(run.requestId),
     ),
   );
+  // Its model's turn runs now: what that turn offers waits for it to end, not for its workers.
+  const turnRuns = useBoard((s) => {
+    const board = s.board;
+    return !!board && (board.run === "running" || board.run === "starting") && !!board.runRequest && !!requestIds?.includes(board.runRequest);
+  });
   // The sessions it waits for, by title (one deleted meanwhile is no longer waited for).
   const waitingFor = useApp(useShallow((s) => (meta?.waitingFor ?? []).flatMap((id) => s.conversations[id]?.title ?? [])));
   // Its cards load before its work can open, so they are there the moment it does.
@@ -239,8 +244,8 @@ export const RequestBlock: FC = () => {
       {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
       {/* A step still running when the user stopped the turn reads "Stopped …". */}
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
-      {/* A feedback offer waits until nothing of the request runs: never mid-turn. */}
-      <TurnEnded.Provider value={!live}>
+      {/* A feedback offer waits for the turn that made it to end: never mid-turn (#486). */}
+      <TurnEnded.Provider value={!live || !turnRuns}>
       <div ref={body} data-slot="request-body" className="flex min-w-0 flex-col">
         {before.length > 0 && (
           <div data-slot="request-leading-steers" className="gap-activity pb-activity flex min-w-0 flex-col">

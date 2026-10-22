@@ -310,7 +310,7 @@ async fn a_verifier_waiting_for_its_review_resumes_after_a_kill() {
                     return Reply::text("Reported.");
                 }
                 turn.tool_output(PLANTED);
-                let started = turn.call("review_code", json!({})).await;
+                let started = turn.call("request_review", json!({})).await;
                 assert!(
                     started.text.starts_with("Started a review"),
                     "{}",

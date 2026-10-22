@@ -305,6 +305,8 @@ async function drive() {
 }
 
 select({ type: "conversation", id });
+// Shown, as the app shows it, once the conversation is selected: once its view is in.
+await until("the conversation shown", () => useApp.getState().selection.type === "conversation");
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <SidebarProvider className="bg-background flex h-screen flex-col" defaultOpen={false}>

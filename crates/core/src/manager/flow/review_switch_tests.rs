@@ -69,7 +69,7 @@ async fn lead_and_land(turn: &Turn) -> Reply {
     Reply::text("[quiet]")
 }
 
-/// Reviews off: the thread and the lead are told so, the lead's review_code and the thread's
+/// Reviews off: the thread and the lead are told so, the lead's request_review and the thread's
 /// review_plan start none, the landing gets none, and the lead never waits for one.
 #[tokio::test]
 async fn with_reviews_off_nothing_is_reviewed_and_nothing_waits() {
@@ -98,14 +98,14 @@ async fn with_reviews_off_nothing_is_reviewed_and_nothing_waits() {
                 return lead_and_land(&turn).await;
             }
             assert!(
-                turn.input.contains("don't call review_code"),
+                turn.input.contains("don't call request_review"),
                 "the lead's brief has no review: {}",
                 turn.input
             );
             turn.write("hello.txt", "hello\n");
             turn.git(&["add", "-A"]);
             turn.git(&["commit", "-q", "-m", "Add hello.txt"]);
-            let review = turn.call("review_code", json!({})).await;
+            let review = turn.call("request_review", json!({})).await;
             assert!(!review.is_error, "{}", review.text);
             assert!(
                 review.text.starts_with("Reviews are off"),
@@ -192,7 +192,7 @@ async fn switching_reviews_off_releases_a_worker_waiting_for_its_review() {
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("Reported.");
                 }
-                let started = turn.call("review_code", json!({})).await;
+                let started = turn.call("request_review", json!({})).await;
                 assert!(
                     started.text.starts_with("Started a review"),
                     "{}",
@@ -288,7 +288,7 @@ async fn switching_reviews_off_as_a_worker_starts_to_wait_never_leaves_it_waitin
                 turn.write("hello.txt", "hello\n");
                 turn.git(&["add", "-A"]);
                 turn.git(&["commit", "-q", "-m", "Add hello.txt"]);
-                let started = turn.call("review_code", json!({})).await;
+                let started = turn.call("request_review", json!({})).await;
                 assert!(
                     started.text.starts_with("Started a review"),
                     "{}",
@@ -333,7 +333,7 @@ async fn switching_reviews_off_as_a_worker_starts_to_wait_never_leaves_it_waitin
     flow.stop().await;
 }
 
-/// The user turns reviews off while a review is about to start (the lead's review_code waits
+/// The user turns reviews off while a review is about to start (the lead's request_review waits
 /// for the lock the switch holds): it doesn't start, and the lead hears reviews are off.
 #[tokio::test]
 async fn switching_reviews_off_while_a_review_starts_stops_it_starting() {
@@ -355,7 +355,7 @@ async fn switching_reviews_off_while_a_review_starts_stops_it_starting() {
                 turn.git(&["add", "-A"]);
                 turn.git(&["commit", "-q", "-m", "Add hello.txt"]);
                 about.notify_one();
-                let review = turn.call("review_code", json!({})).await;
+                let review = turn.call("request_review", json!({})).await;
                 assert!(!review.is_error, "{}", review.text);
                 assert!(
                     review.text.starts_with("Reviews are off"),
@@ -377,7 +377,7 @@ async fn switching_reviews_off_while_a_review_starts_stops_it_starting() {
     let switch = flow.manager.reviews.lock().await;
     flow.say("Add a greeting file and merge it.").await;
     asking.notified().await;
-    // review_code now waits for the lock to start its review.
+    // request_review now waits for the lock to start its review.
     tokio::time::sleep(Duration::from_millis(300)).await;
     set_reviews(&flow, false).await;
     drop(switch);

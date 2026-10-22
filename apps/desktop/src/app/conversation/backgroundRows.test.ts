@@ -59,6 +59,14 @@ test("a row stays while it still needs the user (Q94): failed until dealt with, 
   const again = preview("preview-5", "Dev app", "PORT=4000 pnpm dev", 90);
   assert.deepEqual(rows([crashed, again]), [["Dev app", "running"]]);
   assert.deepEqual(rows([crashed, { ...again, state: { type: "stopped", reason: "stopped by the user" } }]), []);
+  // #510: a restart with other flags is the same app by its name; the user quitting it (exit 0)
+  // leaves no row, and the first start's failure doesn't come back.
+  const app = preview("preview-4", "Brigadier dev app", "pnpm tauri dev --config a.json", 100, exited(1), { kind: "app", endedAtMs: 110 });
+  const restarted = preview("preview-5", "Brigadier dev app", "pnpm tauri dev --config b.json", 120, { type: "running" }, { kind: "app" });
+  assert.deepEqual(rows([app, restarted]), [["Brigadier dev app", "running"]]);
+  assert.deepEqual(rows([app, { ...restarted, state: exited(0), endedAtMs: 200 }]), []);
+  // Another app of the thread's keeps its own failure.
+  assert.deepEqual(rows([app, { ...restarted, name: "Docs site", command: "pnpm docs" }]), [["Docs site", "running"], ["Brigadier dev app", "failed"]]);
   // A worker's process that ended is its worker's: no row.
   assert.deepEqual(rows([{ ...crashed, taskId: "t1" }]), []);
 });

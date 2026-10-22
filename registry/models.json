@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "revision": 5,
-  "updated": "2026-10-17",
+  "revision": 6,
+  "updated": "2026-10-21",
   "models": [
     {
       "key": "claude-opus-5-5",
@@ -43,7 +43,8 @@
         "verify": 6,
         "chat": 8.5,
         "orchestrate": 9,
-        "operate": 9
+        "operate": 9,
+        "design": 9
       },
       "defaultEffort": {
         "scout": "low",
@@ -53,7 +54,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-09-22",
       "sources": [
@@ -102,7 +104,8 @@
         "merge": 8,
         "verify": 8,
         "chat": 8,
-        "orchestrate": 7.5
+        "orchestrate": 7.5,
+        "design": 8.5
       },
       "defaultEffort": {
         "scout": "low",
@@ -112,7 +115,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-09-28",
       "sources": [
@@ -165,7 +169,8 @@
         "chat": 0,
         "orchestrate": 0,
         "gitText": 0,
-        "operate": 10
+        "operate": 10,
+        "design": 0
       },
       "defaultEffort": {
         "operate": "medium"
@@ -213,7 +218,8 @@
         "merge": 4,
         "verify": 7,
         "chat": 6,
-        "orchestrate": 3
+        "orchestrate": 3,
+        "design": 4
       },
       "defaultEffort": {},
       "released": "2025-10-15",
@@ -261,7 +267,8 @@
         "merge": 8,
         "verify": 5.5,
         "chat": 7.5,
-        "orchestrate": 8
+        "orchestrate": 8,
+        "design": 8
       },
       "defaultEffort": {
         "scout": "low",
@@ -271,7 +278,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-07-24",
       "sources": [
@@ -320,7 +328,8 @@
         "merge": 6,
         "verify": 6.5,
         "chat": 6.5,
-        "orchestrate": 5.5
+        "orchestrate": 5.5,
+        "design": 6
       },
       "defaultEffort": {
         "scout": "low",
@@ -330,7 +339,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-06-30",
       "sources": [
@@ -379,7 +389,8 @@
         "merge": 7,
         "verify": 5,
         "chat": 7,
-        "orchestrate": 7
+        "orchestrate": 7,
+        "design": 7
       },
       "defaultEffort": {
         "scout": "low",
@@ -389,7 +400,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-05-28",
       "sources": [
@@ -437,7 +449,8 @@
         "merge": 6.5,
         "verify": 5,
         "chat": 6.5,
-        "orchestrate": 6.5
+        "orchestrate": 6.5,
+        "design": 6.5
       },
       "defaultEffort": {
         "scout": "low",
@@ -447,7 +460,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-04-16",
       "sources": [
@@ -494,7 +508,8 @@
         "merge": 6,
         "verify": 5,
         "chat": 6,
-        "orchestrate": 6
+        "orchestrate": 6,
+        "design": 6
       },
       "defaultEffort": {
         "scout": "low",
@@ -504,7 +519,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-02-05",
       "sources": [
@@ -551,7 +567,8 @@
         "merge": 5.5,
         "verify": 6,
         "chat": 6,
-        "orchestrate": 5
+        "orchestrate": 5,
+        "design": 5.5
       },
       "defaultEffort": {
         "scout": "low",
@@ -561,7 +578,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-02-17",
       "sources": [
@@ -611,7 +629,8 @@
         "merge": 8.5,
         "verify": 6,
         "chat": 8.5,
-        "orchestrate": 9
+        "orchestrate": 9,
+        "design": 8.5
       },
       "defaultEffort": {
         "scout": "low",
@@ -621,7 +640,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-09-03",
       "sources": [
@@ -674,7 +694,8 @@
         "verify": 7.5,
         "chat": 8,
         "orchestrate": 8,
-        "operate": 8.5
+        "operate": 8.5,
+        "design": 9
       },
       "defaultEffort": {
         "scout": "low",
@@ -684,7 +705,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-09-29",
       "sources": [
@@ -734,7 +756,8 @@
         "merge": 9,
         "verify": 7.5,
         "chat": 8,
-        "orchestrate": 8
+        "orchestrate": 8,
+        "design": 9
       },
       "defaultEffort": {
         "scout": "low",
@@ -744,7 +767,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-09-22",
       "sources": [
@@ -796,7 +820,8 @@
         "merge": 6,
         "verify": 8,
         "chat": 7,
-        "orchestrate": 5
+        "orchestrate": 5,
+        "design": 6
       },
       "defaultEffort": {
         "scout": "low",
@@ -806,7 +831,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-09-22",
       "sources": [
@@ -856,7 +882,8 @@
         "merge": 8,
         "verify": 7,
         "chat": 7,
-        "orchestrate": 7
+        "orchestrate": 7,
+        "design": 8
       },
       "defaultEffort": {
         "scout": "low",
@@ -866,7 +893,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-07-09",
       "sources": [
@@ -919,7 +947,8 @@
         "merge": 6,
         "verify": 7,
         "chat": 6.5,
-        "orchestrate": 5.5
+        "orchestrate": 5.5,
+        "design": 6.5
       },
       "defaultEffort": {
         "scout": "low",
@@ -929,7 +958,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-07-09",
       "sources": [
@@ -980,7 +1010,8 @@
         "merge": 5,
         "verify": 7,
         "chat": 6,
-        "orchestrate": 4
+        "orchestrate": 4,
+        "design": 5
       },
       "defaultEffort": {
         "scout": "low",
@@ -990,7 +1021,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-07-09",
       "sources": [
@@ -1041,7 +1073,8 @@
         "merge": 7,
         "verify": 6.5,
         "chat": 6.5,
-        "orchestrate": 6.5
+        "orchestrate": 6.5,
+        "design": 7
       },
       "defaultEffort": {
         "scout": "low",
@@ -1051,7 +1084,8 @@
         "merge": "high",
         "verify": "medium",
         "orchestrate": "medium",
-        "operate": "medium"
+        "operate": "medium",
+        "design": "medium"
       },
       "released": "2026-04-24",
       "sources": [

@@ -643,10 +643,19 @@ const SEATBELT_NETWORK: &str = r#"(allow network-outbound)
 // Restrict registration to dev/test identities: a wildcard could squat a production app's
 // rendezvous name. Custom packaged apps must use a dev identity or Full access.
 // Chromium's single-instance socket binds only inside this preview's private temp folder.
-// Do not permit arbitrary Mach registration, GPU clients, shared caches or sandbox extensions.
+// An app registers per-process names of its own, as App Sandbox apps may: AppKit's
+// accessibility server (com.apple.axserver: without it the app answers no accessibility
+// request, so the computer tools see no window of it, #510), text input and drag. A per-process
+// name is no global service, so it can squat none. WebKit hands its page process the
+// mach-bootstrap extension, without which a web view's page has no accessibility tree (#510);
+// it widens only WebKit's own sandbox of that process, as in every other app.
+// Do not permit arbitrary global Mach registration, GPU clients, shared caches or other sandbox
+// extensions.
 const SEATBELT_GUI: &str = r#"(allow iokit-open (iokit-user-client-class "IOSurfaceRootUserClient"))
 (allow mach-register
   (global-name-regex #"^(ai\.brigadier\.dev|com\.github\.Electron|org\.chromium\.Chromium|com\.google\.chrome\.for\.testing)\.MachPortRendezvousServer\.[0-9]+$"))
+(allow mach-register (local-name-prefix ""))
+(allow generic-issue-extension (extension-class "com.apple.webkit.mach-bootstrap"))
 (allow network-bind (local unix-socket (subpath (param "PREVIEW_TMP"))))
 "#;
 
@@ -1408,6 +1417,91 @@ mod tests {
             .status
             .success()
         );
+    }
+
+    /// A preview's app registers its own per-process Mach names, AppKit's accessibility server
+    /// among them, so the computer tools can read its windows (#510); a global name it may not.
+    #[test]
+    #[allow(unsafe_code)]
+    fn a_gui_preview_registers_per_process_names_but_no_global_one() {
+        const REGISTER_PROBE: &str = "BRIGADIER_PREVIEW_REGISTER_PROBE";
+        if std::env::var_os(REGISTER_PROBE).is_some() {
+            unsafe extern "C" {
+                static bootstrap_port: libc::mach_port_t;
+                static mach_task_self_: libc::mach_port_t;
+                fn bootstrap_register2(
+                    bp: libc::mach_port_t,
+                    name: *const libc::c_char,
+                    sp: libc::mach_port_t,
+                    flags: u64,
+                ) -> libc::kern_return_t;
+                fn mach_port_allocate(
+                    task: libc::mach_port_t,
+                    right: u32,
+                    name: *mut libc::mach_port_t,
+                ) -> libc::kern_return_t;
+                fn mach_port_insert_right(
+                    task: libc::mach_port_t,
+                    name: libc::mach_port_t,
+                    poly: libc::mach_port_t,
+                    poly_type: u32,
+                ) -> libc::kern_return_t;
+            }
+            const MACH_PORT_RIGHT_RECEIVE: u32 = 1;
+            const MACH_MSG_TYPE_MAKE_SEND: u32 = 20;
+            const BOOTSTRAP_PER_PID_SERVICE: u64 = 1;
+            let register = |name: &std::ffi::CStr, flags: u64| unsafe {
+                let task = mach_task_self_;
+                let mut port = 0;
+                assert_eq!(
+                    mach_port_allocate(task, MACH_PORT_RIGHT_RECEIVE, &mut port),
+                    0
+                );
+                assert_eq!(
+                    mach_port_insert_right(task, port, port, MACH_MSG_TYPE_MAKE_SEND),
+                    0
+                );
+                bootstrap_register2(bootstrap_port, name.as_ptr(), port, flags)
+            };
+            let own = register(c"com.apple.axserver", BOOTSTRAP_PER_PID_SERVICE);
+            let global = register(c"ai.brigadier.dev.register-probe", 0);
+            println!("per-process {own}, global {global}");
+            std::process::exit(if own == 0 && global != 0 { 0 } else { 1 });
+        }
+        if nested_sandbox_refused("a_gui_preview_registers_per_process_names_but_no_global_one") {
+            return;
+        }
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brig-preview-reg-{}", std::process::id())));
+        std::fs::create_dir_all(&*dir).unwrap();
+        let policy = SandboxPolicy {
+            writable_roots: vec![dir.to_path_buf()],
+            deny_read: Vec::new(),
+            network: false,
+        };
+        let probe = Seatbelt
+            .confine_preview(
+                SpawnSpec {
+                    program: std::env::current_exe().unwrap(),
+                    args: vec![
+                        "--exact".into(),
+                        "macos::tests::a_gui_preview_registers_per_process_names_but_no_global_one"
+                            .into(),
+                        "--nocapture".into(),
+                    ],
+                    ..SpawnSpec::default()
+                },
+                &policy,
+                &[],
+                &dir,
+            )
+            .unwrap();
+        let out = Command::new(&probe.program)
+            .args(&probe.args)
+            .env(REGISTER_PROBE, "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
     }
 
     #[test]

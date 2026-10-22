@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 
 import { JobCard, RunJobCard, WaitCard } from "@/app/conversation/cards/JobCard";
-import { useSessionJobs } from "@/app/conversation/boardJob";
+import { usePlanBar, useSessionJobs } from "@/app/conversation/boardJob";
+import { useLiveJob } from "@/app/conversation/liveJob";
 import { overnightActions, useOvernightCards } from "@/app/conversation/overnightAdapter";
 import { runInSlot } from "@/app/conversation/runJob";
 import { revealOvernight } from "@/app/conversation/summaryState";
@@ -40,22 +41,34 @@ function useWaits(conversationId: string): Wait[] {
 }
 
 /**
- * The session's job while it works through steps (Q88), or its overnight run in every state of
- * the run, then what it waits for at a set time: cards of their own, under the context card or in
- * its place while it is hidden.
+ * The session's Job card: what is happening right now (J1), gone when nothing runs and nothing
+ * waits on the user (J4). An overnight run, in every state of the run, or a plan of several steps
+ * adds its phase bar under the same live words and buttons. Then what the session waits for at a
+ * set time: cards of their own, under the context card or in its place while it is hidden.
  */
 export function JobStack({ conversationId }: { conversationId: string }) {
   const job = useSessionJobs(conversationId)?.current ?? null;
   const run = runInSlot(useOvernightCards(conversationId), job);
+  const live = useLiveJob(conversationId);
+  const plan = usePlanBar(conversationId);
   const waits = useWaits(conversationId);
-  const nowMs = useNow(waits.length > 0 ? 30_000 : null);
+  const nowMs = useNow(live?.tone === "running" ? 1_000 : waits.length > 0 ? 30_000 : null);
   const open = () => openPanelTab(conversationId, { type: "reviews" }, "Progress");
   return (
     <>
       {run ? (
-        <RunJobCard key={run.run.id} model={run} actions={overnightActions} onOpen={open} onEdit={() => revealOvernight(run.run.id)} />
+        <RunJobCard
+          key={run.run.id}
+          model={run}
+          actions={overnightActions}
+          conversationId={conversationId}
+          live={live}
+          nowMs={nowMs}
+          onOpen={open}
+          onEdit={() => revealOvernight(run.run.id)}
+        />
       ) : (
-        job && <JobCard job={job} onOpen={open} />
+        (live || plan) && <JobCard conversationId={conversationId} live={live} plan={plan} nowMs={nowMs} onOpen={open} />
       )}
       {waits.map((wait) => (
         <WaitCard key={wait.key} title={wait.title} reason={wait.reason} atMs={wait.atMs} nowMs={nowMs} />

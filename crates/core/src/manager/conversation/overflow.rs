@@ -242,7 +242,8 @@ impl SessionManager {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
-                state.carry_peers();
+                let envelopes = state.carry_envelopes(false);
+                self.keep_carried(&conv.id, &envelopes).await;
             }
             user_stopped
         };

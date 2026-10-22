@@ -2820,6 +2820,7 @@ fn edit_and_merge() -> Script {
         let id = turn.conversation().unwrap();
         let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
         if turn.input.contains("[merge] The user clicked") {
+            turn.call("run_checks", serde_json::json!({})).await;
             let reply = turn.call("finish_session", serde_json::json!({})).await;
             assert!(!reply.is_error, "{}", reply.text);
             return Reply::text("Merged.");
@@ -2842,6 +2843,7 @@ fn edit_and_merge() -> Script {
         }
         git(&workspace, &["commit", "-q", "-m", "Thread edits"]);
         if turn.input.contains("merge it") {
+            turn.call("run_checks", serde_json::json!({})).await;
             let reply = turn
                 .call(
                     "finish_session",
@@ -2881,8 +2883,9 @@ async fn merged_after(name: &str, words: &str, done: impl Fn(&Board) -> bool) ->
             .is_some_and(|request| request.review.len() == 2)
     })
     .await;
+    flow.checks_passed().await;
     flow.manager
-        .merge_session(&flow.conversation, super::click())
+        .merge_session(&flow.conversation, super::click(), false)
         .await
         .unwrap();
     flow.until("the merge", merged).await;
@@ -2957,8 +2960,9 @@ async fn pending_changes_leave_the_review_once_merged() {
     let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
     git(&workspace, &["commit", "-q", "-am", "The rest"]);
     let first = board.latest_request().unwrap().id.clone();
+    flow.checks_passed().await;
     flow.manager
-        .merge_session(&flow.conversation, super::click())
+        .merge_session(&flow.conversation, super::click(), false)
         .await
         .unwrap();
     flow.until("b merged", |board| {

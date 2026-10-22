@@ -2,8 +2,7 @@
 
 /**
  * The thread's own changes for a request that no review covered yet, taken together
- * (BUILD-PLAN B2): one review of all of them starts once they cross the size line, or once
- * the thread marks them risky, and the range starts again after what it covered.
+ * (BUILD-PLAN B2): a `request_review` covers them, and the range starts again after it.
  */
 export type UnreviewedRange = { 
 /**
@@ -30,14 +29,4 @@ local: boolean,
 /**
  * On a local checkout, the snapshot of its files when the request started.
  */
-start: string | null, 
-/**
- * Why the thread marked them risky (`run_check`'s `risky`), when it did.
- */
-risky: string | null, 
-/**
- * In a worktree, `tip` is a snapshot of changes the thread hadn't committed yet when
- * `run_check` started their review: the commit that follows with the same files needs no
- * review of its own.
- */
-snapshot: boolean, };
+start: string | null, };

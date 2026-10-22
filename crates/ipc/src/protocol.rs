@@ -207,7 +207,8 @@ pub enum Request {
     /// The open tabs that are ready or merged (their tab and workspace row states).
     GetSettledTabs,
     /// What became of a session's merge on its base since it merged: when it was reverted,
-    /// and redone after that (the Changes card's "Undone on main · ‹time›").
+    /// and redone after that (the Changes card's "Undone on main · ‹time›"), and whether it is
+    /// pushed.
     GetMergeUndo {
         conversation_id: ConversationId,
         merge_commit: String,
@@ -907,9 +908,13 @@ pub enum Request {
         sent: bool,
     },
     /// The user clicked "Merge into main" on the side panel: the session branch merges into
-    /// its base on this click, once.
+    /// its base on this click, once. `anyway`: it was "Merge anyway", the user skipping the
+    /// checks a merge into the base needs (the card shows it on a refused merge).
     MergeSession {
         conversation_id: ConversationId,
+        #[serde(default)]
+        #[ts(optional, as = "Option<bool>")]
+        anyway: bool,
     },
     /// "Close workspace": removes the session's own worktree, its uncommitted changes kept as
     /// a commit on its branch first. The next change makes a fresh one in the same folder.
@@ -1499,6 +1504,9 @@ pub enum Response {
     GetMergeUndo {
         /// None: never reverted.
         undo: Option<MergeUndo>,
+        /// The merge is on its base's upstream: pushed since, if it was made on this Mac.
+        #[serde(default)]
+        pushed: bool,
     },
     CreateProject {
         project: Box<Project>,

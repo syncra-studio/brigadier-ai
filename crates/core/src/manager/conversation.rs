@@ -154,11 +154,15 @@ pub enum SendOutcome {
     Queued(QueuedMessage),
 }
 
-/// The label of a clean review of the thread's own changes, told only while its answer waits.
+/// The label of a clean review of the thread's own changes, told only when its request_review
+/// call went on before it ended: then it is owed, whatever the thread did meanwhile (#513).
 pub(crate) const CLEAN_REVIEW: &str = "review of your commits · clean";
+/// The start of the label of a pass whose run_checks call went on before it ended: owed to the
+/// thread whatever it did meanwhile, so never dropped as an optional pass is (#513).
+pub(crate) const OWED_PASS: &str = "run_checks passed ";
 
 /// Something for the orchestrator's next turn.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Envelope {
     pub kind: InjectionKind,
     /// Short label for the Inspector ("report task-3").
@@ -175,18 +179,13 @@ impl Envelope {
         self.kind == InjectionKind::Decision && self.label.starts_with("checks passed ")
     }
 
-    /// A clean review of the thread's own changes only wakes a request whose answer waits for
-    /// it (BUILD-PLAN B2): an answer given meanwhile makes it moot.
-    fn optional_clean_review(&self) -> bool {
-        self.kind == InjectionKind::Report && self.label == CLEAN_REVIEW
-    }
-
     /// Whether it needs nothing from the thread now, so it may wait a little for others to
     /// wake it once with (BUILD-PLAN C3): a landing done, checks passed, a clean review of its
     /// own changes, or a status due.
     pub(crate) fn quiet(&self) -> bool {
         self.optional_check_pass()
-            || self.optional_clean_review()
+            || (self.kind == InjectionKind::Decision && self.label.starts_with(OWED_PASS))
+            || (self.kind == InjectionKind::Report && self.label == CLEAN_REVIEW)
             || (self.kind == InjectionKind::Decision && self.label.starts_with("landed task-"))
             || (self.kind == InjectionKind::Reminder && self.label == "status")
     }
@@ -355,9 +354,13 @@ struct ConvState {
     pending: Vec<Message>,
     /// The chain of the running turn's newest input ([`TurnChain`]).
     chain: Option<TurnChain>,
-    /// The messages of other sessions the running (or last) turn took, with their requests:
-    /// they go again, first, when a usage limit hands the turn over.
-    in_turn_peers: Vec<(Envelope, Option<String>)>,
+    /// What the running turn took from the inbox (worker reports, check results, messages of
+    /// other sessions steered in), with their requests: they go again, first, when a usage
+    /// limit or a rebirth hands the turn over (#508).
+    in_turn_envelopes: Vec<(Envelope, Option<String>)>,
+    /// Those of a turn cut short by an account's limit that the CLI had already begun: in the
+    /// session the next turn resumes, which says to carry on instead of reading them again.
+    continuing_envelopes: Vec<Envelope>,
     /// Notes about messages between sessions, by message id, which the next turn carries,
     /// starting none of its own: a reply that came after its request was over (stopped, or
     /// its overnight run ended), and the user's answer to a send that waited for their OK.
@@ -505,11 +508,20 @@ struct ConvState {
 }
 
 impl ConvState {
-    /// A usage limit hands the turn over: the messages of other sessions it took go again,
-    /// first (they were seen, so nothing else would bring them back).
-    fn carry_peers(&mut self) {
-        let peers = std::mem::take(&mut self.in_turn_peers);
-        self.inbox.splice(0..0, peers);
+    /// A usage limit or a rebirth hands the turn over: what it took from the inbox goes again,
+    /// first (it was taken, so nothing else would bring it back). `landed`: the CLI had begun
+    /// the turn and its session goes on, so the next turn says to carry on with them instead.
+    /// Answers what went back, to keep so.
+    fn carry_envelopes(&mut self, landed: bool) -> Vec<(Envelope, Option<String>)> {
+        let carried = std::mem::take(&mut self.in_turn_envelopes);
+        if landed {
+            self.continuing_envelopes = carried
+                .iter()
+                .map(|(envelope, _)| envelope.clone())
+                .collect();
+        }
+        self.inbox.splice(0..0, carried.iter().cloned());
+        carried
     }
 
     /// The requests and follow-ups marked as waiting behind a command, unless none are.
@@ -626,11 +638,6 @@ const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
 
-/// Tests: landings to let through, then the pause's reached and release signals.
-#[cfg(test)]
-pub(super) type ReviewPause =
-    std::sync::Mutex<Option<(usize, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>;
-
 /// A conversation's live state.
 pub(crate) struct ConvLive {
     pub(super) private_logs: bool,
@@ -664,12 +671,6 @@ pub(crate) struct ConvLive {
     /// What the thread was last told of the held merge (its consent's `asked_in`, and
     /// "due" or "waiting"), so each is said once.
     pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
-    /// Landings whose review isn't stored yet: the landed task is final before its review
-    /// starts, so a held merge waits for these as for a running review.
-    pub(super) reviews_due: std::sync::atomic::AtomicUsize,
-    /// Reviews that ended and whose findings aren't queued for the thread yet: the session's
-    /// full checks wait for these as for a running review (BUILD-PLAN C3).
-    pub(super) reviews_telling: std::sync::atomic::AtomicUsize,
     /// The thread was told the user closed the session's workspace, and that the next change
     /// makes a fresh one in the same folder: that fresh one is no news to it (#39).
     pub(super) workspace_closed: std::sync::atomic::AtomicBool,
@@ -703,10 +704,6 @@ pub(crate) struct ConvLive {
     #[cfg(test)]
     pub(super) merge_pause:
         std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
-    /// Tests: how many landings' reviews start first, then what the next one's start waits
-    /// for.
-    #[cfg(test)]
-    pub(super) review_pause: ReviewPause,
     /// Tests: what a limited turn's end waits for before its hand-over is chosen.
     #[cfg(test)]
     pub(super) hand_over_pause:
@@ -743,11 +740,9 @@ impl ConvLive {
             pr_watch: std::sync::atomic::AtomicBool::new(false),
             pr_merge_due: std::sync::atomic::AtomicBool::new(false),
             merge_told: std::sync::Mutex::new(None),
-            reviews_due: std::sync::atomic::AtomicUsize::new(0),
             workspace_closed: std::sync::atomic::AtomicBool::new(false),
             user_rebase: std::sync::Mutex::new(None),
             user_rebase_looked: std::sync::atomic::AtomicBool::new(false),
-            reviews_telling: std::sync::atomic::AtomicUsize::new(0),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),
             ci_watches: std::sync::Mutex::new(Vec::new()),
@@ -758,8 +753,6 @@ impl ConvLive {
             items: std::sync::Mutex::default(),
             #[cfg(test)]
             merge_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            review_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -1284,10 +1277,13 @@ impl ConvLive {
             .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
     }
 
-    /// Whether the last turn for `request` was stopped or failed, a Stop that had no turn to
-    /// interrupt included.
-    pub(super) async fn request_ended(&self, request: &str) -> bool {
-        self.state.lock().await.outcomes.contains_key(request)
+    /// Whether the last turn for `request` was stopped, a Stop that had no turn to interrupt
+    /// included.
+    pub(super) async fn request_stopped(&self, request: &str) -> bool {
+        matches!(
+            self.state.lock().await.outcomes.get(request),
+            Some(RequestState::Stopped)
+        )
     }
 
     /// Whether no turn runs and nothing waits for one.
@@ -1329,7 +1325,6 @@ impl ConvLive {
                 .as_ref()
                 .map(Background::requests)
                 .unwrap_or_default(),
-            reviews_due: self.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
         }
     }
 }
@@ -1355,8 +1350,6 @@ pub(super) struct RequestActivity {
     /// The requests the CLI's background jobs run for, and how many of each still run (none:
     /// the turn of one's end is still to come).
     pub background: HashMap<String, u32>,
-    /// A landing's review isn't stored yet.
-    pub reviews_due: bool,
 }
 
 /// What the thread hears with the user's message while a merge is held on their earlier
@@ -2193,7 +2186,7 @@ impl SessionManager {
         };
         state.chain = Some(chain);
         state
-            .in_turn_peers
+            .in_turn_envelopes
             .push((envelope.clone(), Some(request.to_owned())));
         let into = if reply {
             None
@@ -2419,6 +2412,8 @@ impl SessionManager {
         // it started may still come, and works its request again then, as a late event does.
         self.stop_ci_watches(&id).await;
         self.stop_merge_for_stop(&id).await;
+        // With no turn to interrupt, the thread shows stopped now.
+        self.idle_without_turn(&conv).await;
         self.settle_requests(&id).await;
         interrupted
     }
@@ -2856,11 +2851,13 @@ impl SessionManager {
             return None;
         }
         // Recheck under the same lock as turn completion: a later turn may have answered
-        // since the checks runner chose the request that was deferred then.
+        // since the checks runner chose the request that was deferred then. One whose turn
+        // still runs hasn't deferred yet: the pass waits in the inbox, and that turn's end
+        // keeps it for a [quiet] or drops it for an answer (#512).
         if envelope.optional_check_pass()
-            && request
-                .as_ref()
-                .is_none_or(|request| !state.deferred.contains(request))
+            && request.as_ref().is_none_or(|request| {
+                !state.deferred.contains(request) && state.request.as_ref() != Some(request)
+            })
         {
             return None;
         }
@@ -2966,6 +2963,23 @@ impl SessionManager {
             .collect()
     }
 
+    /// No turn runs, none starts and none is being handed over: a run state still at Running
+    /// or Starting, as a limited turn handed to a stand-in with nothing left to say leaves it,
+    /// reads Idle (#507). Under the state's lock, so no turn starts in between.
+    async fn idle_without_turn(&self, conv: &Arc<ConvLive>) {
+        let state = conv.state.lock().await;
+        if state.busy || state.closing || state.hand_over.is_some() {
+            return;
+        }
+        let Ok(board) = self.core.board(&conv.id).await else {
+            return;
+        };
+        if matches!(board.run, RunState::Running | RunState::Starting) {
+            self.set_run(&conv.id, RunState::Idle, None).await;
+        }
+        drop(state);
+    }
+
     /// Starts the next turn if none runs and there is something to say.
     pub(crate) fn kick(&self, conv: &Arc<ConvLive>) {
         let manager = self.arc();
@@ -3065,7 +3079,8 @@ impl SessionManager {
             }
             if users.is_empty() && envelopes.is_empty() {
                 drop(state);
-                // Nothing left to say: the requests settle.
+                // Nothing left to say: the thread is idle and the requests settle.
+                self.idle_without_turn(&conv).await;
                 self.settle_requests(&conv.id).await;
                 if session && !sent_queued && self.send_queued(&conv).await {
                     sent_queued = true;
@@ -3122,11 +3137,7 @@ impl SessionManager {
                 state.asked_user.clear();
             }
             state.in_turn = users.clone();
-            state.in_turn_peers = envelopes
-                .iter()
-                .filter(|(envelope, _)| envelope.peer_message().is_some())
-                .cloned()
-                .collect();
+            state.in_turn_envelopes.clone_from(&envelopes);
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
             break (users, envelopes, request, origin, notes);
@@ -3199,10 +3210,22 @@ impl SessionManager {
             });
             (reseed, briefing)
         };
+        let (landed, landed_envelopes) = {
+            let mut state = conv.state.lock().await;
+            (
+                std::mem::take(&mut state.continuing),
+                std::mem::take(&mut state.continuing_envelopes),
+            )
+        };
+        // What the resumed session already holds isn't read again: it carries on with it.
+        let unread: Vec<(Envelope, Option<String>)> = envelopes
+            .iter()
+            .filter(|(envelope, _)| !landed_envelopes.contains(envelope))
+            .cloned()
+            .collect();
         let notes = self
-            .request_notes(&conv.id, &envelopes, origin.as_deref())
+            .request_notes(&conv.id, &unread, origin.as_deref())
             .await;
-        let landed = std::mem::take(&mut conv.state.lock().await.continuing);
         let unsent: Vec<Message> = users
             .iter()
             .filter(|message| !landed.contains(&message.id))
@@ -3211,7 +3234,7 @@ impl SessionManager {
         let mut input = self
             .turn_input(&conv, &unsent, &[user_notes, notes.clone()].concat())
             .await;
-        if unsent.len() < users.len() {
+        if unsent.len() < users.len() || unread.len() < envelopes.len() {
             let stalled = conv.state.lock().await.watchdog.take_carry_note();
             input.prepend_text(if stalled {
                 watchdog::CARRY_ON
@@ -3277,7 +3300,7 @@ impl SessionManager {
         for message in &unsent {
             self.log_user_injection(&conv, message).await;
         }
-        for ((envelope, _), note) in envelopes.iter().zip(&notes) {
+        for ((envelope, _), note) in unread.iter().zip(&notes) {
             self.log_injection(
                 &conv.id,
                 envelope.kind,
@@ -4878,16 +4901,9 @@ impl SessionManager {
                             },
                         }));
                 }
-                // A limit another account of the provider takes over from: the chat goes on
-                // there, and only the note saying so is shown (see `switch_account`).
-                let switching = limited
-                    && self
-                        .runtime
-                        .switch_target(&cli.account, cli.model.model.as_deref())
-                        .is_some();
                 // An error that ends a request's turn is said once, by the failed request in
-                // the thread; a limit has its own hand-over, and an error with no request to
-                // carry it is a notice.
+                // the thread; a limit has its own hand-over, which says it in the thread
+                // (#506), and an error with no request to carry it is a notice.
                 let unshown = !error.will_retry && {
                     let mut state = conv.state.lock().await;
                     state.turn_error = Some(error.message.clone());
@@ -4897,7 +4913,7 @@ impl SessionManager {
                     }
                     carried
                 };
-                if !error.will_retry && !switching && !unshown {
+                if !error.will_retry && !limited && !unshown {
                     self.notice(
                         &conv.id,
                         brigadier_providers::NoticeLevel::Warning,
@@ -5107,6 +5123,7 @@ impl SessionManager {
                         state.unshown_error = None;
                         state.last_reply = None;
                         state.in_turn.clear();
+                        state.in_turn_envelopes.clear();
                         state.outcomes.remove(&request);
                         state.stopped_open.remove(&request);
                         state.request = Some(request.clone());
@@ -5365,12 +5382,11 @@ impl SessionManager {
             self.end_stopped_calls(conv).await;
         }
         if conv.kind == ConversationKind::Session {
-            // What the thread committed in this turn gets its review, before a next turn can
-            // take its commits for the user's.
+            // What the thread committed in this turn is recorded as its own, before a next turn
+            // can take its commits for the user's; nothing starts from it.
             self.scan_thread_commits(&conv.id, true).await;
-            // Its changes so far are measured again: a range over the line or marked risky
-            // gets its review now, if `run_check` didn't start it (BUILD-PLAN B2, C2).
-            crate::heap(|| self.unreviewed_at_turn_end(&conv.id)).await;
+            // On a local checkout, its uncommitted changes as they stand.
+            crate::heap(|| self.record_local_changes(&conv.id)).await;
             // The ref check, for the thread: its own commits are recorded, what it broke of
             // others' is put back (PLAN bug 6). Beside the turn's ending, which it doesn't hold
             // up: what it finds starts a turn of its own.
@@ -5502,6 +5518,9 @@ impl SessionManager {
                     request: served.clone(),
                     stopped: false,
                 });
+            } else {
+                // Read: nothing of it goes again.
+                state.in_turn_envelopes.clear();
             }
             if let Some(request) = &served
                 && let Some(ended) = ended.clone()
@@ -5531,11 +5550,10 @@ impl SessionManager {
                     if status == TurnStatus::Completed {
                         state.answered.insert(request.clone());
                         // A pass arriving during this turn was queued against its previous
-                        // [quiet]. This answer settles it without another turn.
+                        // [quiet]. This answer settles it without another turn. One its
+                        // run_checks call owes the thread still comes (#513).
                         state.inbox.retain(|(envelope, queued)| {
-                            queued.as_ref() != Some(request)
-                                || !(envelope.optional_check_pass()
-                                    || envelope.optional_clean_review())
+                            queued.as_ref() != Some(request) || !envelope.optional_check_pass()
                         });
                     }
                 }
@@ -5663,13 +5681,21 @@ impl SessionManager {
                 }
             }
             // Nowhere to go: the turn fails (unless the user stopped it meanwhile).
-            let mut state = conv.state.lock().await;
-            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
-            if let Some(request) = &served
-                && let Some(ended) = ended
-                && !stopped
-            {
-                state.outcomes.insert(request.clone(), ended);
+            let unserved = {
+                let mut state = conv.state.lock().await;
+                let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+                match (&served, ended) {
+                    (Some(request), Some(ended)) if !stopped => {
+                        state.outcomes.insert(request.clone(), ended);
+                        None
+                    }
+                    // No request says the limit: the thread does.
+                    (None, Some(RequestState::Failed { error })) if !stopped => Some(error),
+                    _ => None,
+                }
+            };
+            if let Some(error) = unserved {
+                self.moment(&conv.id, None, error).await;
             }
         }
         self.set_run(&conv.id, RunState::Idle, None).await;
@@ -5971,10 +5997,10 @@ impl SessionManager {
             Some(at) => format!("until {}", reset_clock(at, now_ms())),
             None => "until its limit resets".into(),
         };
-        self.notice(
+        self.moment(
             &conv.id,
-            brigadier_providers::NoticeLevel::Info,
-            &format!("{reason}; continuing on {stand_in} {until}, then back on {vendor}."),
+            None,
+            format!("{reason}; continuing on {stand_in} {until}, then back on {vendor}."),
         )
         .await;
         conv.restarting(WriteCause::Reroute).await;
@@ -6000,7 +6026,9 @@ impl SessionManager {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
-                state.carry_peers();
+                // A fresh session never read them.
+                let envelopes = state.carry_envelopes(false);
+                self.keep_carried(&conv.id, &envelopes).await;
             }
             stopped
         };
@@ -6035,10 +6063,10 @@ impl SessionManager {
                 "was stopped by a spend limit or a failed sign-in"
             }
         };
-        self.notice(
+        self.moment(
             &conv.id,
-            brigadier_providers::NoticeLevel::Info,
-            &format!(
+            None,
+            format!(
                 "{} {stopped} on {from}; continuing on {to}.",
                 cli.provider.label()
             ),
@@ -6060,7 +6088,8 @@ impl SessionManager {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;
-                state.carry_peers();
+                let envelopes = state.carry_envelopes(landed);
+                self.keep_carried(&conv.id, &envelopes).await;
             }
             stopped
         };
@@ -6123,7 +6152,8 @@ impl SessionManager {
             let mut pending = carried;
             pending.append(&mut state.pending);
             state.pending = pending;
-            state.carry_peers();
+            let envelopes = state.carry_envelopes(false);
+            self.keep_carried(&conv.id, &envelopes).await;
             // The request isn't over: its messages wait.
             if let Some(request) = &served {
                 state.outcomes.remove(request);
@@ -6132,10 +6162,10 @@ impl SessionManager {
         };
         if first {
             crate::logging::private_trace!(conv.private_logs, info, "messages wait for quota"; conversation = %conv.id, reason = %waiting.reason);
-            self.notice(
+            self.moment(
                 &conv.id,
-                brigadier_providers::NoticeLevel::Info,
-                &format!(
+                None,
+                format!(
                     "{}. Your message waits and goes on its own once a model you allow can take it.",
                     waiting.reason.trim_end_matches('.')
                 ),
@@ -6448,6 +6478,25 @@ impl SessionManager {
         if !changed && !self.choice_available(&fallback.replaces).await {
             return;
         }
+        // The account it names may still be at its limit while another took over as lead: it
+        // goes back on one that can take it, never on the limited one (which would hand it
+        // straight back to the stand-in, #505).
+        let mut move_to = None;
+        if !changed {
+            let account = self.runtime.account_for(&fallback.replaces);
+            if !self
+                .account_frees_choice(&fallback.replaces, &account)
+                .await
+            {
+                match self
+                    .runtime
+                    .switch_target(&account, fallback.replaces.model.as_deref())
+                {
+                    Some(next) => move_to = Some(next),
+                    None => return,
+                }
+            }
+        }
         let cli = {
             let mut state = conv.state.lock().await;
             if state.busy || state.closing {
@@ -6464,6 +6513,13 @@ impl SessionManager {
         if let Err(err) = self.core.set_fallback(&conv.id, None).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not end the stand-in model"; conversation = %conv.id, error = %err);
         }
+        if let Some(next) = &move_to
+            && let Err(err) = self
+                .run_on_account(&conv.id, &fallback.replaces, next)
+                .await
+        {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the account it moved to"; conversation = %conv.id, error = %err);
+        }
         {
             let mut state = conv.state.lock().await;
             state.closing = false;
@@ -6471,10 +6527,10 @@ impl SessionManager {
             state.reseed = true;
         }
         if !changed {
-            self.notice(
+            self.moment(
                 &conv.id,
-                brigadier_providers::NoticeLevel::Info,
-                &format!(
+                None,
+                format!(
                     "{} is available again; continuing with it.",
                     fallback.replaces.provider.label()
                 ),

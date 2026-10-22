@@ -39,6 +39,8 @@ mod terminals;
 mod uninstall;
 mod updates;
 mod upgrade;
+#[cfg(windows)]
+mod user_path;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

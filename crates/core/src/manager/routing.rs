@@ -66,7 +66,7 @@ impl TaskQuestion {
     /// The question for `task`. `hold_pin`: its pin binds.
     pub(crate) fn ask<'a>(&'a self, task: &'a Task, hold_pin: bool, trial: Trial) -> Ask<'a> {
         Ask {
-            category: super::workers::category(task.kind),
+            category: super::workers::task_category(task),
             areas: &task.areas,
             floor: task.floor,
             floor_binds: task.rerun.is_some(),

@@ -206,8 +206,8 @@ function ReportRow({ report }: { report: FeedbackReport }) {
 }
 
 /**
- * Whether nothing of the request a step renders under runs any more (done, stopped or failed):
- * the offer waits for it, so it never comes mid-turn.
+ * Whether the model's turn of the request a step renders under is over (its workers may still
+ * run, #486): the offer waits for it, so it never comes mid-turn.
  */
 export const TurnEnded = createContext(false);
 
@@ -234,7 +234,10 @@ function asReport(kind: FeedbackKind, title: string, body: string): FeedbackRepo
  * Dismiss puts it away for good.
  */
 export function FeedbackOffer({ id, kind, title, body }: { id: string; kind: FeedbackKind; title: string; body: string }) {
-  const ended = useContext(TurnEnded);
+  // Shown once its turn ended, it stays through the request's next turns.
+  const turnEnded = useContext(TurnEnded);
+  const [ended, setEnded] = useState(turnEnded);
+  if (turnEnded && !ended) setEnded(true);
   const conversationId = useBoard((s) => s.board?.conversationId ?? null);
   const answered = useBoard((s) => {
     const step = s.board?.orchestratorSteps.find((each) => each.kind.type === "feedbackAnswered" && each.kind.id === id);

@@ -38,7 +38,7 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.deepEqual(seen.left, ["run-2", "preview-2"], "what the user stopped left the card");
 });
 
-type Ended = { state: string; icon: string | null; red: boolean; shimmer: boolean; muted: boolean; lastLine: string | null; elapsed: string; actions: string[]; actionsVisibleAtRest: boolean | null; clear?: boolean | null };
+type Ended = { state: string; icon: string | null; red: boolean; shimmer: boolean; muted: boolean; lastLine: string | null; elapsed: string; actions: string[]; actionsVisibleAtRest: boolean | null; clear?: boolean | null; cut?: boolean | null };
 
 test("Background rows stay while they need the user (Q94): a failed one red with its last line, Restart and × clear of its words; a finished or stopped one gone", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
@@ -46,14 +46,19 @@ test("Background rows stay while they need the user (Q94): a failed one red with
   };
   // Newest first; the docs build and lint that finished and the storybook the user stopped are not there.
   assert.deepEqual(seen.order, ["preview-12", "preview-11", "run-13", "run-15"]);
+  // The name and its last line are long enough, at the card's width, to need cutting off (#511):
+  // the words end in an ellipsis before Restart and ×, never under them.
   assert.deepEqual(seen.rows["preview-11"], { state: "failed", icon: "failed", red: true, shimmer: false, muted: false,
-    lastLine: "· Error: listen EADDRINUSE: address already in use :::5199", elapsed: "1m", actions: ["Restart Demo pages", "Dismiss Demo pages"], actionsVisibleAtRest: true, clear: true });
+    lastLine: "· Error: the bundle couldn't be opened, check the build log for details", elapsed: "1m",
+    actions: ["Restart Brigadier dev app", "Dismiss Brigadier dev app"], actionsVisibleAtRest: true, clear: true, cut: true });
   // A crash is a failure too, and so is a run with a non-zero exit or one cut off.
   assert.equal(seen.rows["preview-12"]?.state, "failed");
   assert.deepEqual([seen.rows["run-13"]?.state, seen.rows["run-13"]?.lastLine, seen.rows["run-13"]?.actions, seen.rows["run-13"]?.actionsVisibleAtRest],
     ["failed", "· test result: FAILED. 9 passed; 3 failed", ["Restart Core tests", "Dismiss Core tests"], true]);
   assert.equal(seen.rows["run-15"]?.state, "failed");
   assert.equal(seen.rows["run-15"]?.actionsVisibleAtRest, true, "a failed row's Restart and × show without hover");
+  // Every failed row's words stay clear of its Restart and ×, not only the longest one.
+  for (const activity of ["preview-11", "preview-12", "run-13", "run-15"]) assert.equal(seen.rows[activity]?.clear, true, activity);
   assert.deepEqual(seen.calls, ["dismissBackground run-15", "restartBackgroundRun run-13", "restartPreview preview-11"]);
   // Restarted under its id, the page is its running row again; the run restarted and the one dismissed left.
   assert.equal(seen.restarted, "starting");

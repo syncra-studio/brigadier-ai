@@ -275,7 +275,7 @@ impl Runtime {
     /// A provider's quota as routing sees it: each window with its rolling estimate, from the
     /// monitor's samples over the window's span. The windows are the lead account's, except
     /// that a model's own window used up there is another signed-in account's that still has
-    /// room (with switching on): work on that model starts there ([`Self::launch_account`]).
+    /// room: work on that model starts there ([`Self::launch_account`]).
     pub fn provider_usage(
         &self,
         kind: ProviderKind,
@@ -285,36 +285,34 @@ impl Runtime {
         let mut snapshot = self.monitor.current_for(&lead, now)?;
         let mut owners = vec![lead.clone(); snapshot.windows.len()];
         let settings = self.core.settings();
-        if settings.switches_accounts(kind) {
-            let candidates = self.account_candidates(kind);
-            for (window, owner) in snapshot.windows.iter_mut().zip(&mut owners) {
-                if window.model.is_none() || window.used_percent < 100.0 {
-                    continue;
-                }
-                // The account work on that model starts on instead, as `select` picks it.
-                let Some(next) = crate::accounts::soonest_ready(
-                    &settings,
-                    kind,
-                    window.model.as_deref(),
-                    &candidates,
-                    std::slice::from_ref(&lead),
-                ) else {
-                    continue;
-                };
-                let other = candidates
-                    .iter()
-                    .find(|candidate| candidate.account == next)
-                    .and_then(|candidate| candidate.quota.as_ref())
-                    .and_then(|quota| {
-                        quota
-                            .windows
-                            .iter()
-                            .find(|other| other.id == window.id && other.used_percent < 100.0)
-                    });
-                if let Some(other) = other {
-                    *window = other.clone();
-                    *owner = next;
-                }
+        let candidates = self.account_candidates(kind);
+        for (window, owner) in snapshot.windows.iter_mut().zip(&mut owners) {
+            if window.model.is_none() || window.used_percent < 100.0 {
+                continue;
+            }
+            // The account work on that model starts on instead, as `select` picks it.
+            let Some(next) = crate::accounts::ready(
+                &settings,
+                kind,
+                window.model.as_deref(),
+                &candidates,
+                std::slice::from_ref(&lead),
+            ) else {
+                continue;
+            };
+            let other = candidates
+                .iter()
+                .find(|candidate| candidate.account == next)
+                .and_then(|candidate| candidate.quota.as_ref())
+                .and_then(|quota| {
+                    quota
+                        .windows
+                        .iter()
+                        .find(|other| other.id == window.id && other.used_percent < 100.0)
+                });
+            if let Some(other) = other {
+                *window = other.clone();
+                *owner = next;
             }
         }
         Some(self.estimated(&snapshot, &owners, now))

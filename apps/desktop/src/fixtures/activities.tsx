@@ -64,7 +64,7 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "previewLog") {
-    const tail = req.previewId === "preview-11" ? "listening…\nError: listen EADDRINUSE: address already in use :::5199\n\n" : "VITE ready in 286 ms";
+    const tail = req.previewId === "preview-11" ? "listening…\nError: the bundle couldn't be opened, check the build log for details\n\n" : "VITE ready in 286 ms";
     return { method: req.method, tail, url: null };
   }
   if (req.method === "readBackgroundRun") return { method: req.method, output: req.runId === "run-13" ? "running 12 tests\ntest result: FAILED. 9 passed; 3 failed\n" : "done\n" };
@@ -202,7 +202,8 @@ async function drive(): Promise<Record<string, unknown>> {
 
 /** The thread's processes that ended (Q94): a page that crashed, an api server that failed, a docs build and a lint that finished, tests that failed, a check interrupted, and one the user stopped. */
 const exited = (code: number) => ({ type: "exited" as const, code, status: `exit ${code}` });
-const crashed: Preview = { ...page, id: "preview-11", state: exited(1), startedAtMs: now - 9 * MIN, endedAtMs: now - 8 * MIN };
+// Long enough, with a long last line (#511), to need truncation at the card's width.
+const crashed: Preview = { ...page, id: "preview-11", name: "Brigadier dev app", state: exited(1), startedAtMs: now - 9 * MIN, endedAtMs: now - 8 * MIN };
 const api: Preview = { ...own, id: "preview-12", name: "api server", command: "node server.js", building: false, state: { type: "exited", code: null, status: "killed by signal 11" }, startedAtMs: now - 7 * MIN, endedAtMs: now - 6 * MIN };
 const docs: Preview = { ...own, id: "preview-13", name: "docs build", command: "pnpm docs", building: false, state: exited(0), startedAtMs: now - 5 * MIN, endedAtMs: now - 4 * MIN };
 const userStopped: Preview = { ...own, id: "preview-14", name: "storybook", command: "pnpm storybook", building: false, state: { type: "stopped", reason: "stopped by the user" }, startedAtMs: now - 3 * MIN, endedAtMs: now - 2 * MIN };
@@ -225,6 +226,7 @@ async function driveEnded(): Promise<Record<string, unknown>> {
     const word = button.querySelector("[data-state]");
     const place = button.nextElementSibling?.matches('[data-slot="summary-row-action"]') ? button.nextElementSibling : null;
     const actions = [...(place?.querySelectorAll("button") ?? [])].map((each) => each.getAttribute("aria-label"));
+    const words = button.querySelector("span.truncate");
     return [activity, {
       state: text(word), icon: button.querySelector("[data-icon]")?.getAttribute("data-icon") ?? null,
       red: word?.classList.contains("text-destructive") ?? false, shimmer: word?.classList.contains("shimmer") ?? false,
@@ -232,7 +234,9 @@ async function driveEnded(): Promise<Record<string, unknown>> {
       elapsed: text(button.querySelector("span.tabular-nums")), actions,
       // A failed row's Restart and × show at rest, not only on hover, clear of its words.
       actionsVisibleAtRest: place ? getComputedStyle(place).display !== "none" : null,
-      clear: place ? place.getBoundingClientRect().left >= (button.querySelector("span.truncate")?.getBoundingClientRect().right ?? 0) : null,
+      clear: place && words ? place.getBoundingClientRect().left >= words.getBoundingClientRect().right : null,
+      // The words don't fit as one line at the card's width (#511): they cut off, not run under the buttons.
+      cut: words ? words.scrollWidth > words.clientWidth : null,
     }];
   }));
   // Restart on the crashed page: its own command again, under its id; the row is the running one.

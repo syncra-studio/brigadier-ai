@@ -9,6 +9,7 @@ import type { Decision } from "./Decision";
 import type { IntegratedCheck } from "./IntegratedCheck";
 import type { MachineStep } from "./MachineStep";
 import type { MemoryChange } from "./MemoryChange";
+import type { MergeRefused } from "./MergeRefused";
 import type { MessagePage } from "./MessagePage";
 import type { MessageQueue } from "./MessageQueue";
 import type { Notice } from "./Notice";
@@ -21,6 +22,7 @@ import type { Question } from "./Question";
 import type { Rating } from "./Rating";
 import type { ReviewRun } from "./ReviewRun";
 import type { RunState } from "./RunState";
+import type { SessionHeadline } from "./SessionHeadline";
 import type { StreamingMessage } from "./StreamingMessage";
 import type { Task } from "./Task";
 import type { ThinkingSegment } from "./ThinkingSegment";
@@ -112,6 +114,14 @@ integratedChecks: Array<IntegratedCheck>,
  * The thread's commands that went to the background, oldest first.
  */
 backgroundRuns: Array<BackgroundRun>, 
+/**
+ * What the session is doing now, in the thread's words; none once the user wrote since.
+ */
+headline: SessionHeadline | null, 
+/**
+ * Why the last merge into the base was refused, while it stands.
+ */
+mergeRefused: MergeRefused | null, 
 /**
  * The ended previews and background runs the user dismissed or restarted from the
  * Background rows (Q94), by id.

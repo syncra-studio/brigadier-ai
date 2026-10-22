@@ -1,10 +1,9 @@
 //! A request's phases, as the delegator runs them: the orchestrator splits a big request into
 //! phases only when they must run one after another, each phase gets one lead, and a lead whose
 //! work is big writes an outline first. The orchestrator gets the outline at once and gives the
-//! go-ahead (the user gives it under "Ask for approval"); a plan review by the other vendor runs
-//! in the background meanwhile, and its findings may arrive after the go-ahead. A verifier is
-//! the orchestrator's call, for big or risky work. Nothing here rejects, re-reviews or counts
-//! rounds.
+//! go-ahead (the user gives it under "Ask for approval"); it judges the outline itself, and a
+//! plan review is its call (`review_plan`). A verifier is the orchestrator's call, for big or
+//! risky work. Nothing here rejects, re-reviews or counts rounds.
 
 use tokio::sync::oneshot;
 
@@ -543,14 +542,9 @@ impl SessionManager {
                 "Plan mode is on: the user decides. Put this outline before them as your plan with propose_plan (in the plan's shape, its Changes from the outline), then reply [quiet]. Their yes gives task-{} its go-ahead; build nothing before it.",
                 task.number
             )
-        } else if self.reviews_on() {
-            format!(
-                "Judge the outline against the brief and call approve_outline (task-{}) now, with corrections for anything it gets wrong (the brief wins any conflict; never reopen what is settled). A plan review by the other vendor runs in the background: its findings arrive as a [plan review …] message, maybe after the go-ahead. There are no review rounds.",
-                task.number
-            )
         } else {
             format!(
-                "Judge the outline against the brief and call approve_outline (task-{}) now, with corrections for anything it gets wrong (the brief wins any conflict; never reopen what is settled). Reviews are off: no plan review runs.",
+                "Judge the outline against the brief and call approve_outline (task-{}) now, with corrections for anything it gets wrong (the brief wins any conflict; never reopen what is settled).",
                 task.number
             )
         };
@@ -564,10 +558,6 @@ impl SessionManager {
             },
         )
         .await;
-        if !plan_mode {
-            let manager = self.arc();
-            self.spawn(async move { manager.review_plan(&task, &outline).await });
-        }
         Ok("Outline received. End your turn now: the go-ahead, with any corrections, arrives as your next message. Build nothing before it.".into())
     }
 
@@ -1047,7 +1037,7 @@ impl SessionManager {
 
     /// Starts a fresh verifier of `lead`'s phase: its own worktree on a branch from the lead's
     /// last commit, the phase's brief, outline and the lead's report. It asks for one review
-    /// by the other vendor (`review_code`, unless the user has reviews off), checks every "done when" for real while it runs,
+    /// by the other vendor (`request_review`, unless the user has reviews off), checks every "done when" for real while it runs,
     /// triages the findings, fixes and commits what fails, and reports; the orchestrator then
     /// lands the phase with it.
     pub(crate) async fn start_verifier(
@@ -1072,12 +1062,12 @@ impl SessionManager {
         // Reviews off (the user's setting): the same steps without the review.
         let spec = if !self.reviews_on() {
             format!(
-                "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish. Reviews are off (the user's setting): don't call review_code.\n1. Check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n2. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n3. Then submit_report: pass or fail per \"done when\" with its evidence, what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
+                "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish. Reviews are off (the user's setting): don't call request_review.\n1. Check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n2. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n3. Then submit_report: pass or fail per \"done when\" with its evidence, what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
                 number = lead.number,
             )
         } else {
             format!(
-                "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish.\n1. Call review_code once, first: it starts a review of the whole phase by the other vendor and returns at once.\n2. Meanwhile check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n3. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n4. The review's findings arrive as a message from Brigadier (if your checks finish first, end your turn: the findings start your next one). Triage them: fix and commit each one you agree with; for one you don't, say why.\n5. Then submit_report: pass or fail per \"done when\" with its evidence, what the review found and what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
+                "You verify this phase (\u{201c}{phase_title}\u{201d}) before it lands. Its lead, task-{number}, built it and reported; your worktree is a new branch at the lead's last commit, so its commits are yours to finish.\n1. Call request_review once, first: it starts a review of the whole phase by the other vendor and returns at once.\n2. Meanwhile check every \"done when\" of the brief for real (run it, read it), and run the project's checks: typecheck, lint, build and the tests of what changed.\n3. Fix and commit whatever fails, in small steps. Don't redo the lead's work or widen the scope.\n4. The review's findings arrive as a message from Brigadier (if your checks finish first, end your turn: the findings start your next one). Triage them: fix and commit each one you agree with; for one you don't, say why.\n5. Then submit_report: pass or fail per \"done when\" with its evidence, what the review found and what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe brief the lead worked from:\n{brief}\n\nThe outline it followed:\n{outline}\n\nThe lead's report:\n{report}",
                 number = lead.number,
             )
         };

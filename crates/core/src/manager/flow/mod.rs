@@ -381,7 +381,9 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
-        "review_candidate" => ToolCall::Orchestrator(O::ReviewCandidate(arg(name, args))),
+        "request_review" if orchestrator => {
+            ToolCall::Orchestrator(O::RequestReview(arg(name, args)))
+        }
         "attach_proof" => ToolCall::Orchestrator(O::AttachProof(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
@@ -389,6 +391,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "stop_merge" => ToolCall::Orchestrator(O::StopMerge(arg(name, args))),
         "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
+        "set_headline" => ToolCall::Orchestrator(O::SetHeadline(arg(name, args))),
         "record_findings" => ToolCall::Orchestrator(O::RecordFindings(arg(name, args))),
         "suggest_full_access" => ToolCall::Orchestrator(O::SuggestFullAccess(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
@@ -401,7 +404,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
-        "review_code" => ToolCall::Worker(W::ReviewCode),
+        "request_review" => ToolCall::Worker(W::RequestReview),
         "note_progress" => ToolCall::Worker(W::NoteProgress(arg(name, args))),
         "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
@@ -420,7 +423,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "preview_log" => ToolCall::Worker(W::PreviewLog(arg(name, args))),
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "clean_up" => ToolCall::Orchestrator(O::CleanUp),
-        "rerun_checks" => ToolCall::Orchestrator(O::RerunChecks),
+        "run_checks" if orchestrator => ToolCall::Orchestrator(O::RunChecks(arg(name, args))),
+        "run_checks" => ToolCall::Worker(W::RunChecks(arg(name, args))),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         "list_sessions" => ToolCall::Orchestrator(O::ListSessions(arg(name, args))),
         "message_session" => ToolCall::Orchestrator(O::MessageSession(arg(name, args))),
@@ -1381,9 +1385,9 @@ pub(crate) struct Scratch {
 }
 
 impl Scratch {
-    /// A fresh folder named for `name`.
+    /// A fresh folder named for `name`, outside any session's temp folder (issue #493).
     pub fn new(name: &str) -> Self {
-        Self::within(&std::env::temp_dir(), name)
+        Self::within(&crate::manager::protection::unprotected_temp_dir(), name)
     }
 
     /// A fresh folder named for `name` under `/tmp`, whatever the temp directory is, for paths
@@ -1913,12 +1917,6 @@ impl Flow {
         super::background_runs::let_background(&self.conversation);
     }
 
-    /// Has the thread's `run_check` wait for a running review of its change in its call, as
-    /// in the app: by default a test hears of it in a message.
-    pub fn wait_for_reviews(&self) {
-        super::background_runs::wait_for_reviews(&self.conversation);
-    }
-
     /// Waits until `done` holds for the conversation's board.
     pub async fn until(&self, what: &str, done: impl Fn(&Board) -> bool) -> Board {
         self.until_in(&self.conversation, what, done).await
@@ -1965,6 +1963,54 @@ impl Flow {
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// The thread's run_checks passed at the session branch's tip now, as if it had called it:
+    /// for tests of what a merge does once the merge rule lets it through, not of its checks.
+    pub async fn checks_passed(&self) {
+        self.checks_passed_in(&self.conversation).await;
+    }
+
+    /// [`Self::checks_passed`] in the session `id`.
+    pub async fn checks_passed_in(&self, id: &ConversationId) {
+        let Some(crate::model::Setup::Session {
+            repo,
+            environment: crate::model::Environment::NewWorktree { branch, .. },
+            ..
+        }) = self.core.conversation(id).unwrap().setup
+        else {
+            panic!("{id:?} has no session branch");
+        };
+        let tip = git(std::path::Path::new(&repo), &["rev-parse", &branch]);
+        let board = self.core.board(id).await.unwrap();
+        let check = crate::work::IntegratedCheck {
+            id: crate::manager::integrated_checks::next_check_id(&board),
+            conversation_id: id.clone(),
+            repo,
+            branch,
+            tip: tip.trim().to_owned(),
+            state: crate::work::IntegratedCheckState::Passed {
+                commands: Vec::new(),
+            },
+            due_at_ms: 0,
+            started_at_ms: Some(crate::now_ms()),
+            ended_at_ms: Some(crate::now_ms()),
+            requests: Vec::new(),
+            tasks: Vec::new(),
+            rerun: false,
+            asked: Some(crate::work::ChecksAsked {
+                task_id: None,
+                scope: crate::work::ChecksScope::Full,
+            }),
+            owed: false,
+        };
+        self.core
+            .record_conversation(
+                id,
+                vec![crate::model::DomainEvent::IntegratedCheckUpdated { check }],
+            )
+            .await
+            .unwrap();
     }
 
     /// Waits until every request of the conversation is over.
@@ -2066,8 +2112,9 @@ impl Flow {
 #[cfg(unix)]
 mod accounts_tests;
 #[cfg(unix)]
-mod answer_tests;
+mod agent_tools_tests;
 #[cfg(unix)]
+mod answer_tests;
 mod app_state_tests;
 #[cfg(unix)]
 mod auto_merge_tests;
@@ -2108,6 +2155,8 @@ mod constraints_tests;
 mod decision_index_tests;
 #[cfg(unix)]
 mod deliverable_tests;
+#[cfg(unix)]
+mod design_work_tests;
 #[cfg(unix)]
 mod ending_tests;
 #[cfg(unix)]
@@ -2155,6 +2204,8 @@ mod interrupted_turn_tests;
 mod kept_output_tests;
 #[cfg(unix)]
 mod lean_work_tests;
+#[cfg(unix)]
+mod limited_input_tests;
 #[cfg(unix)]
 mod litter_tests;
 #[cfg(unix)]
@@ -2232,8 +2283,6 @@ mod resume_tests;
 #[cfg(unix)]
 mod review_hold_tests;
 #[cfg(unix)]
-mod review_on_pass_tests;
-#[cfg(unix)]
 mod review_picks_tests;
 #[cfg(unix)]
 mod review_switch_tests;
@@ -2255,6 +2304,8 @@ mod spare_worktree_tests;
 mod status_tests;
 #[cfg(unix)]
 mod stop_hook_tests;
+#[cfg(unix)]
+mod stopped_run_tests;
 #[cfg(unix)]
 mod subfolder_rules_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.

@@ -201,7 +201,18 @@ export function SummaryRowButton({
     <button
       type="button"
       data-slot="summary-row"
-      className={cn(ROW, ROW_INTERACTIVE, "isolate", !action && "group/row", muted && "text-muted-foreground", className)}
+      className={cn(
+        ROW,
+        ROW_INTERACTIVE,
+        "isolate",
+        !action && "group/row",
+        // Beside an action that keeps its own room (a failed row's Restart and ×), a definite
+        // flex basis shrinks the row reliably; a 100% width basis doesn't reliably shrink a
+        // <button> below its content everywhere.
+        action && "w-auto min-w-0 flex-1 basis-0",
+        muted && "text-muted-foreground",
+        className,
+      )}
       {...props}
     >
       <RowParts icon={icon} meta={meta} action={action} actionVisible={actionVisible}>

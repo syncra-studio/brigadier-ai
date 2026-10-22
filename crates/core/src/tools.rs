@@ -207,6 +207,11 @@ pub struct DelegateTask {
     /// it on one that can, hand-offs included.
     #[serde(default)]
     pub image_generation: bool,
+    /// True when the task makes designs or images: edits design files (Pencil's `.pen`),
+    /// draws mockups or generates images. Routing files it under design work, which the user's
+    /// routing rules can name. A mockup or image generation counts as design by itself.
+    #[serde(default)]
+    pub design: bool,
     /// For a task that works on a phase of the request's plan (`plan_phases`): that phase's
     /// number (1 is the first). The user follows the plan's progress by it.
     #[serde(default, alias = "step")]
@@ -327,11 +332,11 @@ pub struct TaskRef {
     pub task: String,
 }
 
-/// `review_candidate`: the other vendor's review of the thread's candidate commit, reusing
+/// `request_review`: the other vendor's review of the thread's candidate commit, reusing
 /// what earlier reviews already cover.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ReviewCandidate {
+pub struct RequestReview {
     /// The candidate commit; your checkout's HEAD when absent.
     #[serde(default)]
     pub commit: Option<String>,
@@ -505,6 +510,17 @@ pub struct RunCommand {
     pub timeout_secs: Option<u64>,
 }
 
+/// `run_checks`: the thread's runs the project's full checks (builds included) on the session
+/// branch's commit; a worker's runs the checks its change calls for, in its own checkout.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunChecks {
+    /// Run them again even where an earlier run's result would answer (a flaky test, the
+    /// machine).
+    #[serde(default)]
+    pub rerun: bool,
+}
+
 /// `run_check`: a check (tests, lint, typecheck, build) run in the caller's tree, its result
 /// kept per tree; without a command, the checks the tree's changes affect (THREAD-PLAN.md Q8
 /// lever 3). For workers and the thread alike.
@@ -535,7 +551,7 @@ pub struct RunCheck {
     pub name: Option<String>,
 }
 
-/// The thread's `run_check`: a worker's, and its change's risk (BUILD-PLAN B2).
+/// The thread's `run_check`: a worker's, and the commit it asks for on a pass.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ThreadRunCheck {
@@ -561,11 +577,6 @@ pub struct ThreadRunCheck {
     /// it while it runs.
     #[serde(default)]
     pub name: Option<String>,
-    /// Why your change for this request is risky, when it is (persistence, security,
-    /// migrations, concurrency, deletion, public API): it then gets an other-vendor review
-    /// whatever its size.
-    #[serde(default)]
-    pub risky: Option<String>,
     /// A commit message: when the check passes, all your changes are committed with it and
     /// your trailer, in this same call; when it fails, nothing is. Not on the user's own
     /// checkout.
@@ -573,22 +584,21 @@ pub struct ThreadRunCheck {
     pub commit: Option<String>,
     /// The review findings this change fixes, by id (`R1.2`), when it does nothing else: when
     /// the check passes they are recorded fixed, checked by it, and its `commit` carries their
-    /// Fixes trailer, so it gets no review of its own.
+    /// Fixes trailer.
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub fixes: Vec<String>,
     /// Those of `fixes` of high severity (it loses data, breaks a build or a security
-    /// boundary): their fix gets one targeted re-check.
+    /// boundary).
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub high: Vec<String>,
 }
 
-/// The parts of the thread's `run_check`: the check, the risk it marks, the commit it asks
-/// for on a pass, the review findings that pass fixes and those of them that are high.
+/// The parts of the thread's `run_check`: the check, the commit it asks for on a pass, the
+/// review findings that pass fixes and those of them that are high.
 pub struct ThreadCheckParts {
     pub check: RunCheck,
-    pub risky: Option<String>,
     pub commit: Option<String>,
     pub fixes: Vec<String>,
     pub high: Vec<String>,
@@ -605,7 +615,6 @@ impl ThreadRunCheck {
                 inputs: self.inputs,
                 name: self.name,
             },
-            risky: self.risky,
             commit: self
                 .commit
                 .map(|message| message.trim().to_owned())
@@ -713,6 +722,11 @@ pub struct PreviewLog {
     /// How many of its last lines to show (default 40, at most 400).
     #[serde(default)]
     pub tail_lines: Option<u32>,
+    /// While it is starting (building), wait up to this many seconds (at most 300) for it to
+    /// run or end, then show its log. Wait this way, never with sleep in a command: the wait
+    /// ends the moment it runs.
+    #[serde(default)]
+    pub wait_secs: Option<u32>,
 }
 
 /// `query_brain`: ask the Project Brain.
@@ -1025,6 +1039,12 @@ pub struct FinishSession {
     /// holds it until they land.
     #[serde(default)]
     pub when: MergeWhen,
+    /// Only when the user said to merge without or despite the checks ("merge anyway"): the
+    /// id of that message or card answer, or their words quoted exactly. A merge into the base
+    /// needs run_checks passed on its commit; only the user can skip that, never your judgement.
+    /// Leave it out on [merge] after their "Merge anyway" click.
+    #[serde(default)]
+    pub anyway: Option<String>,
 }
 
 /// When `finish_session` merges (#243).
@@ -1164,8 +1184,7 @@ pub struct FindingRecord {
     /// Why, in your words, for the user: required to dismiss.
     #[serde(default)]
     pub why: Option<String>,
-    /// It is high severity (it loses data, breaks a build or a security boundary): its fix
-    /// gets one targeted re-check.
+    /// It is high severity (it loses data, breaks a build or a security boundary).
     #[serde(default)]
     pub high: Option<bool>,
 }
@@ -1254,6 +1273,17 @@ pub struct OfferSession {
     /// A short name for the card ("Fix the date parser"); the task's start when left out.
     #[serde(default)]
     pub title: Option<String>,
+}
+
+/// `set_headline`: what the session is doing now, in the thread's words, for the Job card.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetHeadline {
+    /// A few plain words on what happens now ("Starting the dev server", "The build failed").
+    pub headline: String,
+    /// One short line under it, usually what comes next ("Next: open the window").
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 /// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
@@ -1353,7 +1383,7 @@ pub enum OrchestratorCall {
     ProposePlan(ProposePlan),
     ApproveOutline(ApproveOutline),
     StartVerifier(StartVerifier),
-    ReviewCandidate(ReviewCandidate),
+    RequestReview(RequestReview),
     AttachProof(AttachProof),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
@@ -1367,6 +1397,7 @@ pub enum OrchestratorCall {
     SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
     OfferSession(OfferSession),
+    SetHeadline(SetHeadline),
     ListTasks,
     SettleStep(SettleStep),
     EndRun(EndRun),
@@ -1375,7 +1406,7 @@ pub enum OrchestratorCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     CleanUp,
-    RerunChecks,
+    RunChecks(RunChecks),
     ReviewPlan(ReviewPlan),
     ReadPage(ReadPage),
     WritePage(WritePage),
@@ -1413,7 +1444,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "propose_plan",
     "approve_outline",
     "start_verifier",
-    "review_candidate",
+    "request_review",
     "attach_proof",
     "request_approval",
     "land_phase",
@@ -1426,6 +1457,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "suggest_full_access",
     "offer_feedback",
     "offer_session",
+    "set_headline",
     "list_tasks",
     "settle_step",
     "end_run",
@@ -1434,7 +1466,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "code_refs",
     "project_map",
     "clean_up",
-    "rerun_checks",
+    "run_checks",
     "review_plan",
     "read_page",
     "write_page",
@@ -1498,7 +1530,7 @@ impl OrchestratorCall {
             Self::ProposePlan(_) => "propose_plan",
             Self::ApproveOutline(_) => "approve_outline",
             Self::StartVerifier(_) => "start_verifier",
-            Self::ReviewCandidate(_) => "review_candidate",
+            Self::RequestReview(_) => "request_review",
             Self::AttachProof(_) => "attach_proof",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
@@ -1512,6 +1544,7 @@ impl OrchestratorCall {
             Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
             Self::OfferSession(_) => "offer_session",
+            Self::SetHeadline(_) => "set_headline",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
             Self::EndRun(_) => "end_run",
@@ -1520,7 +1553,7 @@ impl OrchestratorCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::CleanUp => "clean_up",
-            Self::RerunChecks => "rerun_checks",
+            Self::RunChecks(_) => "run_checks",
             Self::ReviewPlan(_) => "review_plan",
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",
@@ -1816,15 +1849,16 @@ fn empty_item(item: &str) -> bool {
 pub enum WorkerCall {
     AskOrchestrator(AskOrchestrator),
     SubmitOutline(SubmitOutline),
-    /// `review_code`: one review of the worker's committed work by the other vendor; returns
+    /// `request_review`: one review of the worker's committed work by the other vendor; returns
     /// at once, and the findings arrive as a message.
-    ReviewCode,
+    RequestReview,
     SubmitReport(SubmitReport),
     QueryBrain(QueryBrain),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
     RunCheck(RunCheck),
+    RunChecks(RunChecks),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
@@ -1837,13 +1871,14 @@ impl WorkerCall {
         match self {
             Self::AskOrchestrator(_) => "ask_thread",
             Self::SubmitOutline(_) => "submit_outline",
-            Self::ReviewCode => "review_code",
+            Self::RequestReview => "request_review",
             Self::SubmitReport(_) => "submit_report",
             Self::QueryBrain(_) => "query_brain",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::RunCheck(_) => "run_check",
+            Self::RunChecks(_) => "run_checks",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",

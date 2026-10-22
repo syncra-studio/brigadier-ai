@@ -8,6 +8,8 @@
  *   work around it in two groups.
  * - `scene=quota`: the pause was a usage limit that reset; a divider, "Claude usage limit reset ·
  *   9:39 PM", stands there instead of the time line (#128).
+ * - `scene=moments`: the turn moved to a stand-in at its limit and back: each a divider in the
+ *   turn, in view with its work folded, and no card above the composer (#506).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -22,6 +24,9 @@ import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
 const quota = query.get("scene") === "quota";
+const moments = query.get("scene") === "moments";
+const STAND_IN = "Claude Code hit its usage limit; continuing on Codex gpt-6 until 19:10, then back on Claude Code.";
+const BACK = "Claude Code is available again; continuing with it.";
 const id = "thread-gaps";
 const MINUTE = 60_000;
 const start = Date.now() - 5 * 60 * MINUTE;
@@ -54,6 +59,13 @@ const steps: OrchestratorStep[] = [
   call(4, "Edit", "/repo/src/cart/rules.ts", start + 20_000),
   // The limit it waited for reset.
   ...(quota ? [{ requestId: "r1", atMs: back - 5000, position: 5, kind: { type: "quotaResumed", provider: "claude" } } as OrchestratorStep] : []),
+  // The stand-in at the limit, and the chosen model back.
+  ...(moments
+    ? [
+        { requestId: "r1", atMs: start + 21_000, position: 5, kind: { type: "moment", text: STAND_IN } } as OrchestratorStep,
+        { requestId: "r1", atMs: back - 1000, position: 5.5, kind: { type: "moment", text: BACK } } as OrchestratorStep,
+      ]
+    : []),
   // After the pause.
   call(6, "Edit", "/repo/src/cart/checkout.ts", back),
   call(7, "Bash", "pnpm test cart", back + 20_000),
@@ -93,21 +105,34 @@ async function until<T>(what: string, find: () => T | null | undefined, ms = 10_
   }
 }
 
+/** What the turn's folded view shows of its stand-in and the way back, and above the composer. */
+async function seeMoments(turn: HTMLElement, seen: Record<string, unknown>) {
+  await until("the dividers", () => turn.querySelectorAll("[data-slot=moment]").length === 2 || null);
+  seen.moments = [...turn.querySelectorAll<HTMLElement>("[data-slot=moment]")].map((element) => element.textContent);
+  seen.expectedMoments = [STAND_IN, BACK];
+  seen.notices = document.querySelectorAll("[aria-label=Notices] li").length;
+  seen.workOpen = turn.querySelector("[data-slot=request-work-header]")?.getAttribute("aria-expanded") ?? null;
+}
+
+/** What the opened work shows, in order: its groups by their summary, and the line. */
+async function seeWork(turn: HTMLElement, seen: Record<string, unknown>) {
+  const header = await until("the work header", () => turn.querySelector<HTMLElement>("[data-slot=request-work-header]"));
+  if (header.getAttribute("aria-expanded") === "false") header.click();
+  const work = await until("the opened work", () => turn.querySelector<HTMLElement>("[data-slot=request-work]"));
+  await until("the line", () => work.querySelector("[data-slot=time-separator], [data-slot=quota-resumed]"));
+  seen.work = [...work.querySelectorAll<HTMLElement>("[data-slot=work-group] > button, [data-slot=time-separator], [data-slot=quota-resumed]")].map((element) =>
+    element.dataset.slot === "time-separator" ? `line: ${element.textContent}`
+      : element.dataset.slot === "quota-resumed" ? `divider: ${element.textContent}`
+        : `group: ${element.textContent}`,
+  );
+  seen.expected = quota ? formatTime(back - 5000) : formatDaySeparator(back, Date.now());
+}
+
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
     const turn = await until("the turn", () => document.querySelector<HTMLElement>("[data-role=assistant]"));
-    const header = await until("the work header", () => turn.querySelector<HTMLElement>("[data-slot=request-work-header]"));
-    if (header.getAttribute("aria-expanded") === "false") header.click();
-    const work = await until("the opened work", () => turn.querySelector<HTMLElement>("[data-slot=request-work]"));
-    await until("the line", () => work.querySelector("[data-slot=time-separator], [data-slot=quota-resumed]"));
-    // What the opened work shows, in order: its groups by their summary, and the line.
-    seen.work = [...work.querySelectorAll<HTMLElement>("[data-slot=work-group] > button, [data-slot=time-separator], [data-slot=quota-resumed]")].map((element) =>
-      element.dataset.slot === "time-separator" ? `line: ${element.textContent}`
-        : element.dataset.slot === "quota-resumed" ? `divider: ${element.textContent}`
-          : `group: ${element.textContent}`,
-    );
-    seen.expected = quota ? formatTime(back - 5000) : formatDaySeparator(back, Date.now());
+    await (moments ? seeMoments(turn, seen) : seeWork(turn, seen));
   } catch (error) {
     seen.error = String(error);
   }
@@ -118,7 +143,7 @@ async function drive() {
   document.body.append(result);
 }
 
-select({ type: "conversation", id });
+await select({ type: "conversation", id });
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <SidebarProvider className="bg-background flex h-screen flex-col" defaultOpen={false}>

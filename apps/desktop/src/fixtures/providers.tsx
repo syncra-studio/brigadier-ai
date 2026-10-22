@@ -23,7 +23,9 @@ import { useUpdates } from "@/state/updates";
  * again, writing what it saw to #providers-result (ProvidersPageRender.test.ts reads it).
  * Without it the page stays as it opens, for screenshots; ?agent=claude opens Claude's page.
  * ?drive=missing starts with Codex not on this computer and walks its Set up (Connect) through
- * a failed install, Try again, its sign-in and the agent coming in, to #providers-result too.
+ * a failed install, Try again, its sign-in and the agent coming in, to #providers-result too;
+ * with ?nodownloader=1 the install fails as it does on a Linux with neither curl nor wget, and
+ * the drive opens the install guide the row links before it tries again.
  * ?drive=look (under renderFixtureLive) reads Settings › General's card and switch, then the
  * cards, an agent row under the pointer and the switches of Providers and Claude's page, to
  * #providers-result too.
@@ -38,6 +40,7 @@ if (params.has("drive")) {
 }
 
 const missing = params.get("drive") === "missing";
+const noDownloader = params.has("nodownloader");
 const look = params.get("drive") === "look";
 /** Codex as the daemon finds it, in the missing drive: nowhere at first. */
 const missingCodex = (fields: Partial<NonNullable<ProviderOverview["status"]>>) =>
@@ -112,6 +115,10 @@ useUpdates.setState({
 mockIPC((command, payload) => {
   // Location's Change picks a file that isn't an agent, then one that is.
   if (command === "pick_file") return picks.shift() ?? null;
+  if (command === "open_url") {
+    asked.push(`openUrl ${(payload as { url: string }).url}`);
+    return null;
+  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
@@ -256,10 +263,21 @@ function Fixture() {
           },
           () => {
             seen.installing = notSetUp();
-            codexAt({ type: "failed", step: "install", error: "Codex couldn't be installed. Try again." });
+            codexAt(
+              noDownloader
+                ? {
+                    type: "failed",
+                    step: "install",
+                    error:
+                      "Installing Codex needs curl or wget, and neither is installed. Install one (for example `sudo apt install curl`) and try again, or install Codex yourself.",
+                    reason: "noDownloader",
+                  }
+                : { type: "failed", step: "install", error: "Codex couldn't be installed. Try again." },
+            );
           },
           () => {
             seen.failed = notSetUp();
+            document.querySelector<HTMLButtonElement>('[data-slot="agent-not-set-up"] [data-slot="connect-guide"] button')?.click();
             button("Try again")?.click();
           },
           () => {

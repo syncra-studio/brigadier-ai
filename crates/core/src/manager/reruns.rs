@@ -19,7 +19,7 @@
 use brigadier_router::{QualityTier, Rerun};
 
 use super::SessionManager;
-use super::workers::{TaskExtra, category, route_label};
+use super::workers::{TaskExtra, route_label, task_category};
 use crate::model::ConversationId;
 use crate::work::{OrchestratorStepKind, Route, Task};
 use crate::{Error, Result};
@@ -128,7 +128,7 @@ impl SessionManager {
         task: &Task,
         reason: &str,
     ) -> std::result::Result<Task, String> {
-        let kind = category(task.kind);
+        let kind = task_category(task);
         if !brigadier_router::reruns(kind) {
             return Err(format!(
                 "task-{} is {kind} work: only scout and research tasks rerun one tier up. Delegate a new task if you want more.",
@@ -229,7 +229,7 @@ impl SessionManager {
     /// Whether `task`'s report reruns it by itself: a scout or research task that is no rerun
     /// and that the thread didn't put on a model by name.
     pub(crate) fn reruns_by_itself(task: &Task) -> bool {
-        brigadier_router::reruns(category(task.kind))
+        brigadier_router::reruns(task_category(task))
             && task.rerun.is_none()
             // A fused answer is judged against its partner's, not rerun on another model.
             && task.fusion.is_none()
@@ -248,7 +248,7 @@ impl SessionManager {
                 model.provider == choice.provider
                     && brigadier_router::is_model(model, &inputs.registry, id)
             })?
-            .tier_for(category(task.kind))
+            .tier_for(task_category(task))
     }
 }
 

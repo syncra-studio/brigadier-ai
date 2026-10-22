@@ -1,15 +1,14 @@
-//! A landed worker stays resumable until its review's findings settle (SESSION-FIXES-PLAN.md
-//! Q6.1). At landing its CLI session files move to the ledger owner `review-hold:<task>` and its
-//! branch is kept, though merged; its worktree and scratch folder go as always. The findings the
-//! thread records as open go back as one fix task (`role` fix, `subject` the landed task), which
-//! resumes that same session, model and account in a worktree made again at the old path, on
-//! the old branch moved up to the session's tip. The batch's review part settles when its review
-//! is clean or couldn't run, when the thread records none of its findings open, or when the fix
-//! task ends. The session's full checks hold it too (SESSION-FIXES-PLAN.md §11): a failure is
-//! sent back to the worker that broke it the same way, so the hold lasts until a passing check
-//! covers its landing as well (a fix's own landing is held for that alone). Merging, archiving
-//! or deleting the session ends every hold. Then the files go, and the branch with them while
-//! it is still merged.
+//! A landed worker stays resumable until a passing run of the session's full checks covers its
+//! landing (SESSION-FIXES-PLAN.md Q6.1, §11). At landing its CLI session files move to the
+//! ledger owner `review-hold:<task>` and its branch is kept, though merged; its worktree and
+//! scratch folder go as always. A failure of the checks, or review findings the thread records
+//! open, go back as one fix task (`role` fix, `subject` the landed task), which resumes that
+//! same session, model and account in a worktree made again at the old path, on the old branch
+//! moved up to the session's tip. The hold of an older landing (from when every landing got a
+//! review) also waits for that review's findings to settle: when it is clean or couldn't run,
+//! when the thread records none of its findings open, or when the fix task ends. Merging,
+//! archiving or deleting the session ends every hold. Then the files go, and the branch with
+//! them while it is still merged.
 
 use std::path::{Path, PathBuf};
 
@@ -22,7 +21,7 @@ use crate::model::{ConversationId, Setup, TaskId};
 use crate::work::{FindingStatus, ReviewFor, ReviewKind, ReviewState, Task, TaskKind, WorkerRole};
 use crate::{Error, Result};
 
-/// The ledger owner of a landed task's CLI session files while its review's findings settle.
+/// The ledger owner of a landed task's CLI session files while they are kept.
 pub(crate) fn hold_owner(task: &TaskId) -> String {
     format!("review-hold:{task}")
 }
@@ -64,10 +63,6 @@ pub(crate) fn batch(board: &crate::board::Board, which: impl Fn(&Task) -> bool) 
         .collect()
 }
 
-/// Why a fix of landed work's findings can't ask for a review: it gets none of its own, only
-/// the targeted re-check of a finding the thread marked high, after it lands (Q6.1).
-pub(crate) const NO_FIX_REVIEW: &str = "A fix of landed work's review findings gets no review of its own: once it lands, the thread has each finding it marked high re-checked. Don't call review_code; run the checks your fix affects and call submit_report.";
-
 /// The line a resumed fix worker reads before its findings.
 pub(crate) fn workspace_line(
     number: u32,
@@ -78,7 +73,7 @@ pub(crate) fn workspace_line(
     test_dir: &Path,
 ) -> String {
     format!(
-        "[workspace] Your work landed. Your earlier task is done; this is a new one, task-{number}. Your worktree was made again at {worktree}, on your branch `{branch}` moved up to the session's tip {} (your landed work and what landed after it). Your earlier task's folders are gone: your scratch folder is now {}, your outputs folder {}, and your test data folder {}. {NO_FIX_REVIEW}",
+        "[workspace] Your work landed. Your earlier task is done; this is a new one, task-{number}. Your worktree was made again at {worktree}, on your branch `{branch}` moved up to the session's tip {} (your landed work and what landed after it). Your earlier task's folders are gone: your scratch folder is now {}, your outputs folder {}, and your test data folder {}.",
         &tip.0[..tip.0.len().min(10)],
         scratch.display(),
         super::outputs::outputs_dir(scratch).display(),
@@ -87,15 +82,9 @@ pub(crate) fn workspace_line(
 }
 
 impl SessionManager {
-    /// At landing: keeps `task`'s CLI session files and its branch for the findings of the
-    /// review that starts now and of the session's full checks (`review_settled`: no review's
-    /// findings come back for it, only the checks'). False when it has no session files to keep.
-    pub(crate) async fn hold_for_review(
-        &self,
-        task: &Task,
-        target: &str,
-        review_settled: bool,
-    ) -> bool {
+    /// At landing: keeps `task`'s CLI session files and its branch until a passing run of the
+    /// session's full checks covers its landing. False when it has no session files to keep.
+    pub(crate) async fn hold_for_review(&self, task: &Task, target: &str) -> bool {
         if task.kind != TaskKind::Implement {
             return false;
         }
@@ -122,7 +111,8 @@ impl SessionManager {
         let target = target.to_owned();
         self.update_task(&task.conversation_id, &task.id, |t| {
             t.review_hold = Some(target);
-            t.review_settled = review_settled;
+            // No review of the landing starts: nothing of one is waited for.
+            t.review_settled = true;
         })
         .await
         .is_ok()

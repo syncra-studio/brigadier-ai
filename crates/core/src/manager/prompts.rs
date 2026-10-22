@@ -252,7 +252,7 @@ pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: be
 
 /// How a worker runs a dev server or app: through Brigadier, so it shows in the session's
 /// Activities with a Stop (issue #203).
-pub(crate) const WORKER_PREVIEWS: &str = "Run dev servers and apps with start_preview, never with `&`, nohup or `open`: they show in the session's Activities, with a Stop. Build and launch a desktop app as one start_preview with `kind: \"app\"` (`<build> && \"<the .app>/Contents/MacOS/<binary>\"`, the app in the foreground): it reads Building, then Starting, then Running. A preview you start lasts only while your task is alive: it stops when your task ends and its folder goes.";
+pub(crate) const WORKER_PREVIEWS: &str = "Run dev servers and apps with start_preview, never with `&`, nohup or `open`: they show in the session's Activities, with a Stop. Build and launch a desktop app as one start_preview with `kind: \"app\"` (`<build> && \"<the .app>/Contents/MacOS/<binary>\"`, the app in the foreground): it reads Building, then Starting, then Running. To wait for one, call preview_log with wait_secs, never sleep in a command. A preview you start lasts only while your task is alive: it stops when your task ends and its folder goes.";
 
 /// The session thread's role (THREAD-PLAN.md Q1), with the user's preferences from the Personal
 /// Brain. `provider`: the thread's CLI, which picks how it runs long commands; `start_workers`:
@@ -319,8 +319,8 @@ How to work:
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
-- The session's full checks run once per request, on their own; run more yourself when it's worth it, and never ask the user how much to check. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then rerun_checks.
-- Reviews by the other vendor scale with risk: one per landing of a worker's; your own changes get one once, since the last review, they pass 150 lines or 5 files of code (not tests/docs), or you mark one risky (run_check's risky); a tiny edit gets none. While a review of your work runs, reply {quiet}; fix its valid findings before your final answer.
+- {RUN_CHECKS_RULE} {MERGE_RULE}
+- Call request_review for a large or risky change before you merge it; small edits need none.
 - A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end (fresh: true sees only request, constraints, done_when, commit; own work too).
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
@@ -330,6 +330,7 @@ How to work:
 - {APP_RULE}
 - {OFFER_SESSION_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once; when they ask you to report something to its developers, call it with asked true.
+- {HEADLINE_RULE}
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
@@ -426,6 +427,43 @@ macro_rules! offer_session_rule {
 /// The thread offers out-of-scope work as a session of its own (Q73's third way to start one).
 pub(crate) const OFFER_SESSION_RULE: &str = offer_session_rule!();
 
+macro_rules! headline_rule {
+    () => {
+        "When what you are doing changes, say it with set_headline for the user's Job card: a few plain words (\"Starting the dev server\"), and one line of what comes next. Not for every step."
+    };
+}
+
+macro_rules! run_checks_rule {
+    () => {
+        "Run the project's full checks with run_checks before every merge into main: a merge goes through only once they passed on its exact commit. Never ask the user how much to check. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then run_checks with rerun true."
+    };
+}
+
+/// When the thread runs the full checks (thread-truth grill Q5).
+pub(crate) const RUN_CHECKS_RULE: &str = run_checks_rule!();
+
+macro_rules! merge_rule {
+    () => {
+        "Only the user can skip that, by saying to merge anyway: pass their words in finish_session's anyway, never your own judgement."
+    };
+}
+
+/// Who may skip the checks a merge into main needs (thread-truth grill Q5).
+pub(crate) const MERGE_RULE: &str = merge_rule!();
+
+macro_rules! worker_run_checks_rule {
+    () => {
+        "Before submit_report, commit and call run_checks: it runs the checks of your own change; fix what fails and call it again."
+    };
+}
+
+/// When a worker runs its change's checks.
+#[cfg(test)]
+pub(crate) const WORKER_RUN_CHECKS_RULE: &str = worker_run_checks_rule!();
+
+/// The thread writes the session's headline (thread-truth grill J2).
+pub(crate) const HEADLINE_RULE: &str = headline_rule!();
+
 macro_rules! separate_follow_up {
     () => {
         "A follow-up that is separate work, with a different goal that leaves the files this request is changing alone (another file, feature or fix), is a session of its own: route it \"new_session\", however small, rather than \"wait\"."
@@ -489,13 +527,12 @@ const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call 
 const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
 const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
 
-/// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its commits get
-/// their own one-shot review.
+/// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its self-edit
+/// metric and unreviewed range count it as the thread's.
 pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
 
 /// The trailer key with which a commit of the thread's names the review findings it fixes
-/// (`R2.2, R2.3`): such a commit gets no review of its own, only the re-check of those the
-/// thread recorded high, and a held merge's consent covers it.
+/// (`R2.2, R2.3`).
 pub(crate) const FIXES_TRAILER: &str = "Brigadier-Fixes";
 
 /// What the thread does with its own changes: on the user's own checkout (`local`) they stay
@@ -506,7 +543,7 @@ fn own_commits(local: bool) -> String {
             .to_owned()
     } else {
         format!(
-            "Commit your changes on your workspace's branch: give run_check `commit: \"<message>\"` on the first check you expect to pass, which commits them all with your trailer when it passes (a failing check commits nothing: fix it and run it again), or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git or try anything after it. A commit that only fixes review findings, nothing else, also gives run_check their ids in `fixes`, which records them fixed on that pass (with git, add `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`); a held merge covers it."
+            "Commit your changes on your workspace's branch: give run_check `commit: \"<message>\"` on the first check you expect to pass, which commits them all with your trailer when it passes (a failing check commits nothing: fix it and run it again), or use `git commit --trailer \"{THREAD_TRAILER}\"`. Its reply names the commit's files and what git status still shows: that is the record, so don't check the commit again with git or try anything after it. A commit that only fixes review findings, nothing else, also gives run_check their ids in `fixes`, which records them fixed on that pass (with git, add `--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`)."
         )
     }
 }
@@ -854,7 +891,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: OWN_REVIEW_REVISION,
-        thread: "From now on, a worker's own review (review_code) is its change's one review: when its work lands, what it committed after that review (its fixes) gets no second review. Only work it committed after a clean review gets a review of those commits alone.",
+        thread: "From now on, a worker's own review (request_review) is its change's one review: when its work lands, what it committed after that review (its fixes) gets no second review. Only work it committed after a clean review gets a review of those commits alone.",
         worker: "",
     },
     Revision {
@@ -907,7 +944,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: LEAN_WORK_REVISION,
         thread: "From now on, make a small change yourself instead of delegating it: one bounded change in one area (a bug, a small feature, about 100 changed lines or fewer in a few files), with no part worth running in parallel and no worker writing those files; read the code it touches, run the checks of what you changed, then commit with the trailer. Everything bigger still goes to workers. Never rerun a worker's checks after you land its work: the session's full checks run on their own after each landing. When one worker takes the whole request, set delegate_task's include_request and Brigadier adds the request verbatim (with what was added to it since and who sent it): don't copy it into the spec. A worker no longer waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason.",
-        worker: "From now on, unless you verify a phase: never wait for your own review (review_code). Once your checks pass and your evidence is in, call submit_report; findings that arrive before your report are yours, later ones go to the thread. Do exactly what your task asks: no extra feature, sample data, docs or refactor it didn't ask for, and a finding that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it.",
+        worker: "From now on, unless you verify a phase: never wait for your own review (request_review). Once your checks pass and your evidence is in, call submit_report; findings that arrive before your report are yours, later ones go to the thread. Do exactly what your task asks: no extra feature, sample data, docs or refactor it didn't ask for, and a finding that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it.",
     },
     Revision {
         number: MERGE_BY_USER_REVISION,
@@ -1126,7 +1163,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: REVIEW_CANDIDATE_REVISION,
-        thread: "From now on, review_candidate asks the other vendor to review a candidate commit of yours (your checkout's HEAD by default), small changes too. What earlier reviews cover isn't reviewed again; after findings it re-checks only their fix. It waits for the findings and returns them in its reply (wait_seconds; one still running arrives as a message later). With no other-vendor reviewer or reviews off it says so as a fact. When to ask for one is yours to judge.",
+        thread: "From now on, request_review asks the other vendor to review a candidate commit of yours (your checkout's HEAD by default), small changes too. What earlier reviews cover isn't reviewed again; after findings it re-checks only their fix. It waits for the findings and returns them in its reply (wait_seconds; one still running arrives as a message later). With no other-vendor reviewer or reviews off it says so as a fact. When to ask for one is yours to judge.",
         worker: "",
     },
     Revision {
@@ -1275,6 +1312,46 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: FEEDBACK_ASKED_REVISION,
         thread: "From now on, when the user asks you to report something to Brigadier's developers (\"report this\", \"file that as a bug\"), call offer_feedback with asked true, drafted from this conversation in their words: its card's Send files it on GitHub as them.",
         worker: "",
+    },
+    Revision {
+        number: HEADLINE_REVISION,
+        thread: concat!("From now on: ", headline_rule!()),
+        worker: "",
+    },
+    Revision {
+        number: RUN_CHECKS_REVISION,
+        thread: concat!(
+            "From now on, rerun_checks is gone and run_checks takes its place: it runs the project's full checks on your session branch's commit now and answers with the verdict (past a minute the result comes as a message). ",
+            run_checks_rule!()
+        ),
+        worker: concat!(
+            "From now on: ",
+            worker_run_checks_rule!(),
+            " The project's full checks are the thread's."
+        ),
+    },
+    Revision {
+        number: REQUEST_REVIEW_REVISION,
+        thread: "From now on, review_candidate is gone and request_review takes its place, with the same commit and wait_seconds: the other vendor reviews your commit and the findings come back in its reply.",
+        worker: "From now on, review_code is gone and request_review takes its place: it starts the same review of your committed work, and its findings arrive as a message.",
+    },
+    Revision {
+        number: MERGE_RULE_REVISION,
+        thread: concat!(
+            "From now on, finish_session refuses a merge into main until run_checks passed on the commit it merges. ",
+            merge_rule!()
+        ),
+        worker: "",
+    },
+    Revision {
+        number: NO_AUTO_PIPELINE_REVISION,
+        thread: "From now on, Brigadier no longer reviews or checks anything by itself: no review after a landing or of your own commits, no full checks after a landing. Call request_review for a large or risky change before merging, and run_checks before every merge into main.",
+        worker: "",
+    },
+    Revision {
+        number: WORKER_REVIEW_REVISION,
+        thread: "",
+        worker: "From now on, call request_review only when your task asks for a review or your change is large or risky; otherwise report once your checks pass and your evidence is in.",
     },
     Revision {
         number: INTEGRATIONS_REVISION,
@@ -1465,7 +1542,7 @@ const INTEGRATIONS_LABEL: &str = "integrations";
 
 /// What the thread does while the user has reviews off; it replaces what its instructions say
 /// about reviews (Settings' "Review the work").
-pub(crate) const REVIEWS_OFF: &str = "Reviews are off (the user's setting): no landing, commit of your own or outline gets a review by the other vendor, review_plan starts none, and a verifier doesn't ask for one. Nothing waits for a review: judge the work yourself, from its report, its diff and its checks, and say in your final answer that no review ran. A review that started before may still send its findings; weigh them as usual.";
+pub(crate) const REVIEWS_OFF: &str = "Reviews are off (the user's setting): request_review and review_plan start none, and a verifier doesn't ask for one. Nothing waits for a review: judge the work yourself, from its report, its diff and its checks, and say in your final answer that no review ran. A review that started before may still send its findings; weigh them as usual.";
 
 /// The thread's instructions while reviews are off, after what they say about reviews.
 pub(crate) fn reviews_off_section() -> String {
@@ -1476,7 +1553,7 @@ pub(crate) fn reviews_off_section() -> String {
 /// started with.
 pub(crate) fn reviews_note(on: bool) -> String {
     if on {
-        "[settings] The user turned reviews on. From now on, what your instructions say about reviews holds: every landing gets one review by the other vendor in the background, your own changes one once they pass the size line or carry a risky mark, and review_plan has a plan reviewed. Don't mention this note.".to_owned()
+        "[settings] The user turned reviews on. From now on, what your instructions say about reviews holds: request_review has the other vendor review a change, and review_plan a plan. Don't mention this note.".to_owned()
     } else {
         format!(
             "[settings] The user turned reviews off. From now on, this replaces what your instructions say about reviews: {REVIEWS_OFF} Don't mention this note."
@@ -1495,12 +1572,12 @@ const AUTO_MERGE_ON_LABEL: &str = "merging on its own on";
 const AUTO_MERGE_OFF_LABEL: &str = "merging on its own off";
 
 /// How the thread ships and merges while the user has "Merge on its own" on (WORKSPACES-PLAN.md
-/// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine doesn't
-/// gate a merge; the merge message shows what was verified.
+/// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine gates
+/// a merge only by the merge rule (run_checks passed); the merge message shows what was verified.
 pub(crate) const AUTO_MERGE: &str = "Merging on its own is on (the user's setting): when the work is ready, ship it and merge it yourself, with no consent asked; this replaces what your instructions say about waiting for the user's yes to merge. With a GitHub remote and `gh` signed in: push the branch, open a pull request, babysit its CI and reviews, fix, and merge it with `gh pr merge`; Brigadier records the merge and brings the base up to date when your request ends. When the base needs a merge queue or auto-merge (the merge is refused, or the pull request only joins the queue), use `gh pr merge --auto` with the same method instead of failing or waiting yourself: say it is queued, not merged; Brigadier watches it and records the merge when GitHub lands it. Otherwise finish_session merges it into the base here.
 Ship it the way a careful engineer would; you judge how much a change needs, and a change the user can see always comes with its proof. What usually makes a merge safe:
-- tests and type checks run on the final commit, after your last change;
-- the other vendor's review of the final commit (review_candidate reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
+- run_checks passed on the final commit, after your last change (finish_session merges nothing without it);
+- the other vendor's review of the final commit (request_review reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
 - with a pull request, green CI on it (ci_status reads its checks);
 - for a change the user can see (a page, a screen, a control, its words or its look), however small: the app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof), with a short caption of what it shows. Reading the code, a grep or a passing test isn't that proof: it shows the change is there, not that it works for the user;
 - for a change you judge big or risky: a fresh verifier (start_verifier with fresh: true) that tries to break it against the original request.
@@ -1565,9 +1642,9 @@ pub(crate) fn browser_note(on: bool) -> String {
 /// Tells a running worker that builds the user switched reviews: its brief keeps what it said.
 pub(crate) fn worker_reviews_note(on: bool) -> &'static str {
     if on {
-        "[settings] The user turned reviews on. Once your work is committed, call review_code once if you haven't, and fix the findings you agree with before your report; this replaces what your task says about reviews."
+        "[settings] The user turned reviews on. If your change is large or risky, or your task asks for a review, call request_review once your work is committed if you haven't, and fix the findings you agree with before your report; this replaces what your task says about reviews."
     } else {
-        "[settings] The user turned reviews off. From now on, don't call review_code and don't wait for a review: nothing waits on one. A review already running may still send its findings; fix those you agree with if they arrive before your report, but don't wait for them. Once your checks pass and your evidence is in, call submit_report. This replaces what your task says about reviews."
+        "[settings] The user turned reviews off. From now on, don't call request_review and don't wait for a review: nothing waits on one. A review already running may still send its findings; fix those you agree with if they arrive before your report, but don't wait for them. Once your checks pass and your evidence is in, call submit_report. This replaces what your task says about reviews."
     }
 }
 
@@ -1790,7 +1867,7 @@ pub(crate) const WORKSPACE_ROUTES_REVISION: u32 = 98;
 /// request, the constraints, the criteria and the candidate commit, of a task or the thread's
 /// own work.
 pub(crate) const FRESH_VERIFIER_REVISION: u32 = 99;
-/// review_candidate (WORKSPACES-PLAN.md phase 3): the thread asks the other vendor to review
+/// request_review (WORKSPACES-PLAN.md phase 3): the thread asks the other vendor to review
 /// any candidate of its own; covered ranges are reused, fixes re-checked alone, and the
 /// findings come back in the call's reply (#137, #138).
 pub(crate) const REVIEW_CANDIDATE_REVISION: u32 = 100;
@@ -1862,10 +1939,28 @@ pub(crate) const SEPARATE_FOLLOW_UP_REVISION: u32 = 122;
 /// The user may ask the thread to report something to Brigadier's developers ("report this"):
 /// it offers the feedback card with `asked`, which an earlier offer doesn't refuse (#471).
 pub(crate) const FEEDBACK_ASKED_REVISION: u32 = 123;
+/// The thread keeps the session's headline current with set_headline, for the Job card
+/// (thread-truth grill J2, 10-21).
+pub(crate) const HEADLINE_REVISION: u32 = 124;
+/// run_checks replaces rerun_checks: the thread runs the full checks before a merge into
+/// main, a worker its change's checks before its report (thread-truth grill Q5, Q6).
+pub(crate) const RUN_CHECKS_REVISION: u32 = 125;
+/// request_review replaces review_candidate (the thread) and review_code (workers): one name
+/// for asking the other vendor for a review (thread-truth grill Q6).
+pub(crate) const REQUEST_REVIEW_REVISION: u32 = 126;
+/// finish_session enforces the merge rule: run_checks passed on the commit, or the user's
+/// word to merge anyway (thread-truth grill Q5).
+pub(crate) const MERGE_RULE_REVISION: u32 = 127;
+/// Brigadier starts no review, full check or fix by itself: no review after a landing or of the
+/// thread's own commits, no full checks after a landing (thread-truth grill, 10-21).
+pub(crate) const NO_AUTO_PIPELINE_REVISION: u32 = 128;
+/// A worker asks for its own review only when its task asks or its change is large or risky
+/// (thread-truth grill Q2).
+pub(crate) const WORKER_REVIEW_REVISION: u32 = 129;
 /// Workers share the agents' MCP servers and skills (PLAN.md §6 Phase 7): a task names the
 /// servers a worker gets besides its own agent's (`integrations`), from the list the thread's
 /// instructions and `[integrations]` notes give.
-pub(crate) const INTEGRATIONS_REVISION: u32 = 124;
+pub(crate) const INTEGRATIONS_REVISION: u32 = 130;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1873,7 +1968,7 @@ pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, fr
 - Judge each report against its \"done when\" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
 - Land finished work with land_phase (no phase needed), each report at once. Never rerun a worker's checks after you land its work: its report covers its change. A worker's [checks failed …] goes to one fix task (role fix, subject the task that broke it) with the failing lines, unless you fix it yourself.
 - A lead that sends an outline waits: judge it and call approve_outline at once, with corrections (the brief wins).
-- Every landing gets one review by the other vendor. A worker never waits for its own review: land a report whose review still runs, and its findings come to you. Record a finding fixed (in task-N) only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list.
+- A landing gets no review by itself. A worker never waits for its own review (request_review): land a report whose review still runs, and its findings come to you. Record a finding fixed (in task-N) only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; what stays open goes to the user as a list.
 - The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread: don't repeat a task's spec or restate reports.";
 
 /// How the thread treats another session's message, which every one carries: it may come
@@ -2530,7 +2625,7 @@ const WORKER_VOICE: &str = "
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the thread.\n- After your work lands, the findings of its review that the thread keeps open may come back to you in this same session, as a new task.";
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. If your change is large or risky, or your task asks for a review, call request_review once as soon as your work is committed: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the thread.\n- After your work lands, the findings of its review that the thread keeps open may come back to you in this same session, as a new task.";
 
 /// What a worker that builds a mockup does instead of the change (SESSION-FIXES-PLAN.md Q10):
 /// a static preview from the real components with fake data, shown as screenshots.
@@ -2541,7 +2636,7 @@ This task builds a mockup the user asked to see before the change is made, not t
 - Show the change in its real place on the screen at the app's usual window size, and each state the user should see (empty, many items, a narrow window) in a screenshot of its own.
 - Take the screenshots with a headless browser (the project's own screenshot or fixture scripts when it has them, else Playwright with an installed Chromium) and save them in your outputs folder as mockup-1.png, mockup-2.png, …, in the order to look at them. Open each one and check it shows what you meant.
 - A part you can't fake (it needs live state no preview can have): say so in the report and show the rest.
-- Don't send an outline and don't call review_code: a mockup is a quick look, reviewed only if it lands. Report what each screenshot shows, the preview page's path and the command that serves it.
+- Don't send an outline and don't call request_review: a mockup is a quick look, reviewed only if it lands. Report what each screenshot shows, the preview page's path and the command that serves it.
 - Notes on the mockup may come back: change the preview to match them, take the screenshots again under the same names and report again.";
 
 /// What the real work after a mockup does besides building (Q10): match the mockup, then
@@ -2554,7 +2649,7 @@ The user approved a mockup of this change: its screenshots are among your attach
 - Under verification, for each pair: the screen's name, the three files, what matches, and each difference with whether you fixed it or why it stays.";
 
 /// [`LEAD_STEPS`] while the user has reviews off: no review of its own.
-const LEAD_STEPS_UNREVIEWED: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Reviews are off (the user's setting): don't call review_code. Once your checks pass and your evidence (screenshots, manual runs) is in, call submit_report at once: no more verifying, re-reading or screenshots after that.";
+const LEAD_STEPS_UNREVIEWED: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. Reviews are off (the user's setting): don't call request_review. Once your checks pass and your evidence (screenshots, manual runs) is in, call submit_report at once: no more verifying, re-reading or screenshots after that.";
 
 /// A worker's pointer to the code index tools (PLAN.md §7).
 const WORKER_CODE_TOOLS: &str = "
@@ -2565,8 +2660,11 @@ const WORKER_CODE_TOOLS: &str = "
 const CODEX_READING: &str = "\n- Read a file with one `sed -n 'a,bp' <full path>` for the lines you need (several ranges in one call when you need them), never `cd` and then `cat` a whole file.";
 
 /// How every worker runs its checks (THREAD-PLAN.md Q8 lever 3).
-const WORKER_CHECKS: &str = "
-- Run every check (tests, lint, typecheck, build, formatting) with run_check, not your shell. Run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched: never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the session's full checks run once on everyone's work, and a failure comes back to you. Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss.";
+const WORKER_CHECKS: &str = concat!(
+    "\n- ",
+    worker_run_checks_rule!(),
+    " Run any other check (tests, lint, typecheck, build, formatting) with run_check, not your shell: only the checks of your own change and the type and lint of what you touched, never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the thread runs the project's full checks on everyone's work, and a failure comes back to you. Continuing a task in a fresh session, don't rerun what passed before it: its hand-off's checks.md lists each check that passed and the files changed since, so rerun only the checks those changes cover. A check that already ran on the same files answers from the cache. Give run_check the bare command: it already runs with a high open-files limit and TMPDIR set to your test data folder, so never prefix `ulimit -n …;` or `TMPDIR=…`: a prefix only makes the cache miss."
+);
 
 /// How implement and merge workers write code (PLAN.md §7; after ponytail's rules, see
 /// THIRD_PARTY_NOTICES.md).
@@ -2866,14 +2964,14 @@ pub(crate) const SCRIPTED_UI_COMPUTER: &str =
     " Not for checking your own change: that is the scripted UI checks above.";
 
 /// The live look's role: it changes nothing and looks at the integrated tree's own build.
-const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's landed work, and you look at it live. Build its dev app, launch it yourself with the computer tools on a fresh data folder in your scratch folder, check each change the task names, and report what you saw for each. No outline, no review_code, no commits.";
+const LIVE_LOOK: &str = "\n- You change nothing: your worktree is the session's landed work, and you look at it live. Build its dev app, launch it yourself with the computer tools on a fresh data folder in your scratch folder, check each change the task names, and report what you saw for each. No outline, no request_review, no commits.";
 
 /// How a worker whose change shows in an app checks it live with the `computer` tools, with the
 /// project's dev-app command when it is known (SESSION-FIXES-PLAN.md "Computer use").
 pub(crate) fn worker_computer(dev_app: Option<&str>) -> String {
     let start = dev_app.map_or_else(String::new, |command| format!(" ({command})"));
     format!(
-        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then check each change in its window with the computer tools, as their skill says: read the window's structure before pixels, and check each step's effect in the next read.\n- Put what you saw, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- Act only on windows you launched or the task names.\n- Screenshots the task asks to save (live-1.png, …) are made as it says."
+        "\n\nChecking it live (your change shows in an app):\n- Start the build this task made, the way the project starts it{start}. Then check each change in its window with the computer tools, as their skill says: read the window's structure before pixels, and check each step's effect in the next read.\n- Put what you saw, or a screenshot artifact, under verification.\n- Never use the user's installed copy of the app or its data: use your own build, with a fresh data folder in your scratch folder when the app takes one. For Brigadier itself that is Brigadier Dev.app, never /Applications/Brigadier.app or ~/Library/Application Support/Brigadier.\n- When the task names an app the session already runs (the user's or the thread's dev app), check in that one: find its window with list_windows, and never start a second copy beside it.\n- Act only on windows you launched or the task names.\n- Screenshots the task asks to save (live-1.png, …) are made as it says."
     )
 }
 
@@ -3350,8 +3448,9 @@ pub(crate) struct TabLine {
 }
 
 /// Tells the orchestrator of a follow-up the user sent while `request` works: it may sort it
-/// with route_follow_up, or answer or act on it itself. `tabs` are the project's other
-/// sessions, where the message may belong instead.
+/// with route_follow_up, and answers or acts on it once it is sent from the queue as the
+/// user's message (#494). `tabs` are the project's other sessions, where the message may
+/// belong instead.
 pub(crate) fn follow_up(
     id: &str,
     request: &str,
@@ -3387,8 +3486,9 @@ pub(crate) fn follow_up(
          route \"wait\" keeps it queued until this work is done, only for a request of its own \
          that has to come after this work (it builds on its result or changes the same \
          files).{to_tab} Otherwise it joins this work (at once with route \"join\", else shortly \
-         by itself) and reaches you as the user's message; you may also answer or act on it now. \
-         If you have nothing to say now, reply with exactly {QUIET}."
+         by itself) and reaches you as the user's message. Answer it or act on it only once it \
+         reaches you that way: until then it waits in the user's queue, so say nothing about it \
+         yet. If you have nothing to say now, reply with exactly {QUIET}."
     ));
     block
 }
@@ -3600,7 +3700,8 @@ mod tests {
     #[test]
     fn workers_check_focused_read_from_the_index_and_codex_reads_ranges() {
         let claude = worker(&task("claude", Some("lead")));
-        assert!(claude.contains("Run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched: never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the session's full checks run once on everyone's work, and a failure comes back to you."));
+        assert!(claude.contains(WORKER_RUN_CHECKS_RULE));
+        assert!(claude.contains("only the checks of your own change and the type and lint of what you touched, never the full suite, a workspace-wide check, a CI script or an app build. Once your work lands, the thread runs the project's full checks on everyone's work, and a failure comes back to you."));
         assert!(claude.contains("check your own change: the checks of what you touched (its tests, format, lint, types), never the whole suite or an app build."));
         assert!(!claude.contains("full suite once"));
         assert!(!claude.contains("the full test suite"));
@@ -3655,7 +3756,7 @@ mod tests {
     fn a_lead_outlines_big_work_reviews_small_work_and_commits_its_steps() {
         let lead = worker(&task("claude", Some("lead")));
         assert!(lead.contains("submit_outline"));
-        assert!(lead.contains("call review_code once"));
+        assert!(lead.contains("call request_review once"));
         assert!(lead.contains("Commit each finished step"));
         assert!(!lead.contains("when your sandbox can't write git's files"));
         assert!(lead.contains(
@@ -3707,7 +3808,7 @@ mod tests {
             "call submit_report at once: no more verifying, re-reading or screenshots after that"
         ));
         // Its review runs while it gathers its evidence and runs its checks: no idle wait.
-        assert!(brief.contains("As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it"));
+        assert!(brief.contains("If your change is large or risky, or your task asks for a review, call request_review once as soon as your work is committed: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it"));
         assert!(brief.contains("Findings that arrive after your report go to the thread."));
         assert!(brief.contains("Do exactly what the task asks"));
         // #66: the user reads a worker's words, which name the thread as they know it.
@@ -3770,9 +3871,11 @@ mod tests {
         assert!(brief.contains("check each step's effect in the next read"));
         assert!(brief.contains("never /Applications/Brigadier.app"));
         assert!(brief.contains("Act only on windows you launched or the task names"));
+        // #510: the app the session already runs is the one checked, never a second copy.
+        assert!(brief.contains("never start a second copy beside it"));
         assert!(brief.contains("You change nothing: your worktree is the session's landed work"));
         assert!(!brief.contains("submit_outline"));
-        assert!(!brief.contains("call review_code once"));
+        assert!(!brief.contains("call request_review once"));
         let mut matched = ui.clone();
         matched.mockup = Some(MockupPart::Matches {
             task: crate::work::TaskId("t-mock".into()),
@@ -3878,7 +3981,7 @@ mod tests {
         assert!(brief.contains("save them in your outputs folder as mockup-1.png"));
         assert!(brief.contains("Change nothing in the product's code or behaviour"));
         assert!(brief.contains("How to write code"));
-        assert!(!brief.contains("call review_code once"));
+        assert!(!brief.contains("call request_review once"));
         assert!(!brief.contains("send your outline with submit_outline"));
         assert!(!brief.contains("save_as"));
 
@@ -3895,7 +3998,7 @@ mod tests {
         assert!(brief.contains("save each pair side by side as compare-1.png"));
         assert!(brief.contains("for each pair: the screen's name, the three files"));
         // It is still the work's lead: outline when big, one review.
-        assert!(brief.contains("call review_code once"));
+        assert!(brief.contains("call request_review once"));
         assert!(!brief.contains("This task builds a mockup"));
 
         let plain = worker_brief(&task("claude", Some("lead")), "", "", true);
@@ -3906,19 +4009,19 @@ mod tests {
     fn a_lead_asks_for_its_review_only_while_reviews_are_on() {
         let lead = task("claude", Some("lead"));
         let reviewed = worker_brief(&lead, "", "", true);
-        assert!(reviewed.contains("call review_code once"));
+        assert!(reviewed.contains("call request_review once"));
         let unreviewed = worker_brief(&lead, "", "", false);
         assert!(
-            !unreviewed.contains("call review_code once"),
+            !unreviewed.contains("call request_review once"),
             "{unreviewed}"
         );
         assert!(
-            unreviewed.contains("Reviews are off (the user's setting): don't call review_code.")
+            unreviewed.contains("Reviews are off (the user's setting): don't call request_review.")
         );
         assert!(unreviewed.contains("call submit_report at once"));
         assert!(worker_reviews_note(false).contains("nothing waits on one"));
         assert!(!worker_reviews_note(false).contains("no findings"));
-        assert!(worker_reviews_note(true).contains("call review_code once"));
+        assert!(worker_reviews_note(true).contains("call request_review once"));
     }
 }
 
@@ -4257,12 +4360,13 @@ mod environment_tests {
                         run.is_none()
                     );
                     assert!(prompt.contains("How to write code:"));
-                    // Full checks once per request, reviews scaled with risk, extra care
-                    // only for a big job (B1, B2).
-                    assert!(prompt.contains("The session's full checks run once per request"));
+                    // The full checks before a merge, a review asked for a large or risky
+                    // change, extra care only for a big job (B1, B2).
+                    assert!(prompt.contains("before every merge into main: a merge goes through only once they passed on its exact commit"));
                     assert!(prompt.contains("not your shell, before your final answer"));
-                    assert!(prompt.contains("Reviews by the other vendor scale with risk"));
-                    assert!(prompt.contains("or you mark one risky"));
+                    assert!(prompt.contains("request_review for a large or risky change before you merge it; small edits need none."));
+                    assert!(!prompt.contains("Reviews by the other vendor scale with risk"));
+                    assert!(!prompt.contains("risky mark"));
                     assert!(
                         prompt
                             .contains("A big job (many parts, several workers, or hours of work)")
@@ -4322,7 +4426,6 @@ mod environment_tests {
                         "7. Land with",
                         "8. Then start the next phase",
                         "You only talk",
-                        "request_review",
                         "There are no review rounds",
                     ] {
                         assert!(!prompt.contains(step), "{step}");
@@ -4415,9 +4518,9 @@ mod environment_tests {
                 text.contains("workers can open apps, look at them and use them with the computer tools; you can't"),
                 cfg!(target_os = "macos")
             );
-            // The full checks run once per request, never by it or a worker (§11, BUILD-PLAN
-            // B1); landing at once is in the rules for workers.
-            assert!(text.contains("The session's full checks run once per request, on their own; run more yourself when it's worth it, and never ask the user how much to check."));
+            // The full checks are the thread's to run before a merge (thread-truth grill Q5);
+            // landing at once is in the rules for workers.
+            assert!(text.contains("before every merge into main: a merge goes through only once they passed on its exact commit. Never ask the user how much to check."));
             assert!(WORKER_RULES.contains("each report at once"));
             assert!(!text.contains("Never run the full suite"));
             // Git is the thread's call (Q61); the three approvals stay, whoever asks.
@@ -4477,8 +4580,9 @@ mod environment_tests {
         // research question, judged blind (Q77), and to 16,000 for the interview on cards: a
         // decision tree, facts looked up first, numbered rounds and a confirm card (Q78), and to
         // 16,300 for each file named once, inline, never listed at the end (Q84), and to 18,300
-        // for the answer's optional parts and a fused answer without its two lines (Q86).
-        assert!(codex.len() < 18_300, "{}", codex.len());
+        // for the answer's optional parts and a fused answer without its two lines (Q86), and
+        // to 18,500 for who may skip the checks a merge needs (thread-truth grill Q5).
+        assert!(codex.len() < 18_500, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4979,8 +5083,8 @@ mod environment_tests {
             "with no consent asked",
             "you judge how much a change needs",
             "What usually makes a merge safe",
-            "tests and type checks run on the final commit",
-            "review_candidate",
+            "run_checks passed on the final commit",
+            "request_review",
             "each finding fixed or answered in one line",
             "green CI",
             "start_preview",
@@ -5044,7 +5148,10 @@ mod environment_tests {
             !note.contains("browser_"),
             "the tools named only where they are"
         );
-        assert_eq!(revision_note(VISIBLE_PROOF_REVISION - 1, true), None);
+        assert_eq!(
+            revision_note(VISIBLE_PROOF_REVISION - 1, true),
+            revision_note(VISIBLE_PROOF_REVISION, true)
+        );
     }
 
     /// While the built-in browser is on, the instructions don't mention it: the browser tools
@@ -5140,7 +5247,9 @@ mod environment_tests {
                 .unwrap()
                 .contains(REVISED_ANSWER)
         );
-        assert!(revision_note(BREAKDOWN_REVISION, true).is_none());
+        assert!(
+            revision_note(BREAKDOWN_REVISION - 1, true) == revision_note(BREAKDOWN_REVISION, true)
+        );
     }
 
     /// Q73: work found outside the request is offered as a session of its own, never done here
@@ -5169,7 +5278,10 @@ mod environment_tests {
             !revision_note(OFFER_SESSION_REVISION, false)
                 .is_some_and(|note| note.contains(OFFER_SESSION_RULE))
         );
-        assert!(revision_note(REVISED_ANSWER_REVISION, true).is_none());
+        assert!(
+            revision_note(REVISED_ANSWER_REVISION - 1, true)
+                == revision_note(REVISED_ANSWER_REVISION, true)
+        );
     }
 
     fn session(permission: &str) -> Conversation {
@@ -5484,16 +5596,6 @@ mod environment_tests {
         let note = revision_note(before, false).unwrap();
         assert!(note.starts_with(&format!("[instructions] {}", added.thread)));
         assert_eq!(revision_note(revision(), false), None);
-        let prompt = thread(
-            &session("fullAccess"),
-            None,
-            &[],
-            None,
-            Some("/work/session @ brigadier/flow"),
-            ProviderKind::Codex,
-            true,
-        );
-        assert!(prompt.contains("fix its valid findings before your final answer"));
     }
 
     /// SESSION-MESSAGING-PLAN.md §5.7: the thread told the revision before sessions could
@@ -5608,7 +5710,7 @@ mod environment_tests {
         assert!(!WORKER_RULES.contains("announce"));
     }
 
-    /// review_candidate: open threads hear of it once, as their call.
+    /// request_review: open threads hear of it once, as their call.
     #[test]
     fn review_candidate_reaches_an_open_thread_as_its_call() {
         let added = REVISIONS
@@ -5618,7 +5720,7 @@ mod environment_tests {
         assert!(added.worker.is_empty());
         let note = revision_note(REVIEW_CANDIDATE_REVISION - 1, false).unwrap();
         for words in [
-            "review_candidate",
+            "request_review",
             "small changes too",
             "isn't reviewed again",
             "returns them in its reply",
@@ -5691,7 +5793,6 @@ mod environment_tests {
         ] {
             assert!(!alone.contains(gone), "{gone}: {alone}");
         }
-        assert!(alone.contains("you may also answer or act on it now"));
         assert!(alone.ends_with(&format!(
             "If you have nothing to say now, reply with exactly {QUIET}."
         )));
@@ -5712,6 +5813,27 @@ mod environment_tests {
         assert!(
             !block.contains("tab") && !block.contains("workspace"),
             "{block}"
+        );
+    }
+
+    /// #494: the thread wrote about a follow-up while it still waited in the user's queue,
+    /// before it showed in the thread or was sorted. It answers or acts on one only once the
+    /// queue sends it as the user's message, and says nothing about it before.
+    #[test]
+    fn a_follow_up_is_acted_on_only_once_the_queue_sends_it() {
+        let block = follow_up("q-1", "Build the export", "Also add CSV.", &[], &[]);
+        assert!(!block.contains("act on it now"), "{block}");
+        assert!(
+            block.contains(
+                "Answer it or act on it only once it reaches you that way: until then it waits \
+                 in the user's queue, so say nothing about it yet."
+            ),
+            "{block}"
+        );
+        // The way to act on it now is to send it: route "join".
+        assert!(
+            block.find("at once with route \"join\"").unwrap()
+                < block.find("Answer it or act on it only once").unwrap()
         );
     }
 
@@ -5759,7 +5881,10 @@ mod environment_tests {
             ),
             "{note}"
         );
-        assert!(revision_note(SEPARATE_FOLLOW_UP_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(SEPARATE_FOLLOW_UP_REVISION - 1, true)
+                == revision_note(SEPARATE_FOLLOW_UP_REVISION, true)
+        );
     }
 
     /// The queue decides again (user, 10-20): open threads hear once that a message sent
@@ -5910,7 +6035,10 @@ mod environment_tests {
         }
         assert!(note.contains("save it with save_report"));
         assert!(note.contains("split it across 2 to 4 research workers"));
-        assert!(revision_note(ANSWER_FORMAT_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(ANSWER_FORMAT_REVISION - 1, true)
+                == revision_note(ANSWER_FORMAT_REVISION, true)
+        );
     }
 
     /// Q79, the 10-18 live checks (#319): a research answer broke the voice's no-bold-labels rule
@@ -6018,7 +6146,7 @@ mod environment_tests {
     fn open_threads_hear_once_to_ask_one_clarifying_card_before_research() {
         let note = revision_note(CLARIFY_REVISION - 1, false).unwrap();
         assert!(note.contains(CHAT_THREAD_RULES[0]), "{note}");
-        assert!(revision_note(CLARIFY_REVISION - 1, true).is_none());
+        assert!(revision_note(CLARIFY_REVISION - 1, true) == revision_note(CLARIFY_REVISION, true));
         let rule = thread(
             &session("approveForMe"),
             None,
@@ -6144,7 +6272,9 @@ mod environment_tests {
         assert_eq!(told.contract, Some(CHAT_CONTRACT));
         assert!(notes(&told, &now).is_empty());
         let note = revision_note(GRILLING_REVISION - 1, false).unwrap();
-        assert!(revision_note(GRILLING_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(GRILLING_REVISION - 1, true) == revision_note(GRILLING_REVISION, true)
+        );
         let rule = thread(
             &session("approveForMe"),
             None,
@@ -6172,7 +6302,10 @@ mod environment_tests {
             "Never write \"Recommended\" in an option",
         ];
         let note = revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, false).unwrap();
-        assert!(revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, true)
+                == revision_note(FUSED_INTERVIEW_FIXES_REVISION, true)
+        );
         let now = Current::chat(Vec::new());
         for contract in [CHAT_FUSION_CONTRACT, CHAT_FIXES_CONTRACT - 1] {
             let mut told = now.told();
@@ -6314,7 +6447,10 @@ mod environment_tests {
             "never tell the user to save one under your answer",
         ];
         let note = revision_note(INLINE_FILES_REVISION - 1, false).unwrap();
-        assert!(revision_note(INLINE_FILES_REVISION - 1, true).is_none());
+        assert!(
+            revision_note(INLINE_FILES_REVISION - 1, true)
+                == revision_note(INLINE_FILES_REVISION, true)
+        );
         let now = Current::chat(Vec::new());
         for contract in [CHAT_THREAD_CONTRACT, CHAT_FILES_CONTRACT - 1] {
             let mut told = now.told();
@@ -6500,7 +6636,7 @@ mod environment_tests {
             assert!(note.contains(words), "{words}");
         }
         assert!(
-            revision_note(APP_TOOLS_REVISION - 1, true).is_none(),
+            revision_note(APP_TOOLS_REVISION - 1, true) == revision_note(APP_TOOLS_REVISION, true),
             "workers hear nothing"
         );
         assert!(
@@ -6558,7 +6694,7 @@ mod environment_tests {
             true,
         );
         let note = revision_note(START_REVISION - 1, false).unwrap();
-        assert!(revision_note(START_REVISION - 1, true).is_none());
+        assert!(revision_note(START_REVISION - 1, true) == revision_note(START_REVISION, true));
         for words in words {
             assert_eq!(chat(&[]).matches(words).count(), 1, "{words}");
             assert_eq!(rule.matches(words).count(), 1, "{words}");
@@ -6615,7 +6751,7 @@ mod environment_tests {
         for words in FUSION_RULES {
             assert!(note.contains(words), "{words}");
         }
-        assert!(revision_note(FUSION_REVISION - 1, true).is_none());
+        assert!(revision_note(FUSION_REVISION - 1, true) == revision_note(FUSION_REVISION, true));
         let rule = thread(
             &session("approveForMe"),
             None,
@@ -6871,7 +7007,7 @@ mod environment_tests {
         assert!(WORKER_RULES.contains(
             "a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session"
         ));
-        assert!(WORKER_RULES.contains("its landing gets only a re-check of the high ones"));
+        assert!(WORKER_RULES.contains("A landing gets no review by itself."));
         assert!(WORKER_RULES.contains("goes to the user as a list"));
         assert!(LEAD_STEPS.contains("may come back to you in this same session"));
     }
@@ -6911,9 +7047,7 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(prompt.contains(&format!(
-            "--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`); a held merge covers it"
-        )));
+        assert!(prompt.contains(&format!("--trailer \"{FIXES_TRAILER}: R2.2, R2.3\"`).")));
         assert!(prompt.contains("also gives mcp__brigadier__run_check their ids in `fixes`"));
         // Only a commit that does nothing else skips its review through the Fixes trailer.
         assert!(

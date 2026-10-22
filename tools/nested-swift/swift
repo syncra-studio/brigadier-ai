@@ -1,0 +1,12 @@
+#!/bin/sh
+# `swift` for a process inside a macOS sandbox (a session's commands and previews). SwiftPM
+# compiles each package manifest under sandbox-exec, which macOS refuses inside another sandbox
+# ("sandbox_apply: Operation not permitted"); it has no environment override, so `swift build`
+# gets --disable-sandbox and keeps the sandbox it already runs in. BRIGADIER_SWIFT is the real
+# swift. tools/full-checks.sh and apps/desktop/scripts/stage-sidecar.mjs put this folder first
+# on PATH only when a sandbox can't be applied.
+if [ "${1:-}" = build ]; then
+  shift
+  exec "$BRIGADIER_SWIFT" build --disable-sandbox "$@"
+fi
+exec "$BRIGADIER_SWIFT" "$@"

@@ -336,10 +336,12 @@ function seen(column: Element) {
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
 async function until(check: () => boolean, what: string): Promise<void> {
-  for (let tries = 0; tries < 100; tries++) {
+  // Ten seconds however busy the machine: a loaded one stretches each wait.
+  for (const end = performance.now() + 10_000; performance.now() < end; ) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  if (check()) return;
   const alert = document.querySelector('[data-column="live"] [role="alert"]')?.textContent;
   throw new Error(`Timed out waiting for ${what} (asked: ${calls.map((call) => call.method).join(", ")}${alert ? `; it said: ${alert}` : ""})`);
 }
@@ -359,6 +361,10 @@ async function act(steps: Record<string, unknown>) {
   await fixtureClick(liveButton("Stop"));
   await until(() => document.querySelector('[role="dialog"]') !== null, "the stop question");
   const dialog = document.querySelector('[role="dialog"]')!;
+  // A click lands where the button is now: wait out the dialog's opening, which a loaded
+  // machine stretches, or it misses the moving button.
+  const opening = () => dialog.getAnimations({ subtree: true }).some((animation) => animation.playState === "running");
+  await until(() => !opening(), "the stop question to open");
   steps["ask"] = { question: dialog.querySelector("h2")?.textContent ?? null, methods: methods(), tab: tabOpen() };
   await fixtureClick([...dialog.querySelectorAll("button")].find((button) => button.textContent === "Stop")!);
   await until(() => liveColumn().querySelector('[role="alert"]') !== null, "the stop failure");

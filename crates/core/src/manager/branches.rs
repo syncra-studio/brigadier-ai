@@ -332,6 +332,7 @@ mod tests {
             |asked_in: Option<&str>, request_id: Option<&str>| crate::work::OrchestratorStep {
                 request_id: request_id.map(str::to_owned),
                 kind: crate::work::OrchestratorStepKind::Merged {
+                    checks_skipped: false,
                     branch: "brigadier/s1/session".into(),
                     base: "main".into(),
                     commits: 1,

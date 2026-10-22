@@ -124,7 +124,12 @@ requests?: Array<string>,
  * What was checked of the code it merged, as recorded then (the merge message's
  * "Checked" list); none on merges from before it was kept.
  */
-record?: MergeRecord, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
+record?: MergeRecord, 
+/**
+ * It merged without a passing run_checks on its commit, because the user said to merge
+ * anyway ("Merge anyway", or their own words).
+ */
+checksSkipped?: boolean, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.
@@ -146,7 +151,11 @@ tip: string, } | { "type": "mergeRequested", id: string, branch: string, base: s
 /**
  * Who sent the click: the client and how.
  */
-origin: AnswerOrigin, } | { "type": "mergeCancelled", askedIn: string, } | { "type": "mergeStopped", askedIn: string, reason: string, } | { "type": "ciWatch", 
+origin: AnswerOrigin, 
+/**
+ * It was "Merge anyway": the user skips the checks a merge into the base needs.
+ */
+anyway?: boolean, } | { "type": "mergeCancelled", askedIn: string, } | { "type": "mergeStopped", askedIn: string, reason: string, } | { "type": "ciWatch", 
 /**
  * `owner/name` on GitHub.
  */
@@ -171,4 +180,4 @@ title?: string,
 /**
  * Why, in the words the thread heard.
  */
-reason: string, } | { "type": "quotaResumed", provider: ProviderKind, };
+reason: string, } | { "type": "quotaResumed", provider: ProviderKind, } | { "type": "moment", text: string, };

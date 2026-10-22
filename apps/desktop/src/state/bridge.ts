@@ -14,7 +14,7 @@ import {
 import { applyActivityEvents, loadActivity } from "@/state/activity";
 import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
-import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
+import { applyBoardEvents, forgetKeptBoards, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
 import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
@@ -60,9 +60,9 @@ function flush() {
 }
 
 /** Reloads everything the UI holds: used after (re)connecting and after missing events.
- * Threads other than the shown ones may be stale, so they are dropped and reload when opened.
- * The shown conversations' boards, the Inspector's orchestrator log and the Brain tab's session
- * workers are read again. */
+ * Threads and kept boards other than the shown ones may be stale, so they are dropped and reload
+ * when opened. The shown conversations' boards, the Inspector's orchestrator log and the Brain
+ * tab's session workers are read again. */
 async function resync() {
   const { selection, threads } = useApp.getState();
   const openId = selection.type === "conversation" ? selection.id : null;
@@ -73,6 +73,8 @@ async function resync() {
       shown.flatMap((id) => (threads[id] ? [[id, threads[id]] as const] : [])),
     ),
   });
+  // So are the boards kept of the conversations shown before.
+  forgetKeptBoards();
   // Ready and merged count commits in each tab's worktree: they come when they come.
   void loadSettledTabs().catch(() => {});
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates(), loadConnect()]);
