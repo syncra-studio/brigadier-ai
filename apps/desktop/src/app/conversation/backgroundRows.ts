@@ -78,12 +78,12 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
  */
 export function eventRows(board: BackgroundEvents): BackgroundRow[] {
   const rows: BackgroundRow[] = [];
-  const check = sessionChecks(board).at(-1);
-  if (check && (check.state.type === "due" || check.state.type === "running")) {
+  // A check queued on a newer commit waits behind the one still running: each is a row.
+  for (const check of sessionChecks(board)) {
     const name = check.asked?.scope === "full" ? "Full checks" : "Checks";
     if (check.state.type === "due") {
       rows.push({ type: "event", id: check.id, startedAtMs: check.dueAtMs, name, state: "next", words: null, tip: `They run on ${short(check.tip)} once the work lands`, action: null });
-    } else {
+    } else if (check.state.type === "running") {
       // run_checks counts its commands: "3 of 5" is the third at work; one alone needs no count.
       const { command, done, total } = check.state;
       rows.push({ type: "event", id: check.id, startedAtMs: check.startedAtMs ?? check.dueAtMs, name, state: "checking",

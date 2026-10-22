@@ -88,6 +88,12 @@ test("the full checks are a row while they are next and while they run, counting
   for (const state of [{ type: "passed", commands: ["a"] }, { type: "failed", command: "pnpm test", status: "exit 1", output: null }, { type: "interrupted", reason: "Brigadier quit" }] as IntegratedCheckState[]) {
     assert.deepEqual(events({ integratedChecks: { "check-1": check(state) } }), [], state.type);
   }
+  // Checks queued on a newer commit wait behind the ones still running: both are rows.
+  const queued = { ...check({ type: "due" }), id: "check-2", dueAtMs: 120 };
+  assert.deepEqual(events({ integratedChecks: { "check-1": check({ type: "running", command: null, done: 0, total: 1 }), "check-2": queued } }), [
+    ["Full checks", "next", null, null],
+    ["Full checks", "checking", null, null],
+  ]);
   // A worker's own checks are its row's, an overnight run's its card's.
   assert.deepEqual(events({ integratedChecks: { "check-1": check({ type: "due" }, { taskId: "t1", scope: "change" }) } }), []);
   assert.deepEqual(events({ integratedChecks: { "check-1": check({ type: "due" }, { taskId: null, scope: "full" }, ["run-night"]) } }), []);
