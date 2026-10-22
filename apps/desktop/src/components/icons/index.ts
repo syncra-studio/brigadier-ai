@@ -5,6 +5,7 @@ export * from "./app-glyphs/codicons";
 export * from "./app-glyphs/diff-glyph";
 export * from "./app-glyphs/feedback-glyph";
 export * from "./app-glyphs/help-icon";
+export { Mcp } from "./app-glyphs/mcp";
 export * from "./app-glyphs/page-drag-handle";
 export * from "./app-glyphs/permission-glyphs";
 export * from "./app-glyphs/plan-partial";
