@@ -1383,8 +1383,8 @@ fn web_search(tools: ToolSet) -> Option<&'static str> {
 }
 
 /// Per-thread config: Brigadier's MCP servers on, the user's off but in a session with their
-/// setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
-/// session's permission profile.
+/// setup ([`ToolSet::user_setup`]), and the workspace sandbox, or the session's permission
+/// profile.
 async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<String, Value>> {
     let effective: Value = rpc
         .call(
@@ -1435,7 +1435,6 @@ async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<
         config.insert(
             "sandbox_workspace_write".into(),
             json!({
-                "network_access": true,
                 "writable_roots": writable_roots(spec)
                     .iter()
                     .map(|root| root.display().to_string())
@@ -1684,13 +1683,15 @@ fn thread_sandbox(access: Access) -> Option<p::SandboxMode> {
 }
 
 /// Codex's own sandbox at `access`: `workspace-write` (the working directory and
-/// `writable_roots`, with the network) below Full access, none at Full access.
+/// `writable_roots`) below Full access, none at Full access. `network_access` stays at its own
+/// default (off): the user's `~/.codex/config.toml` decides, and a network command raises
+/// Codex's own escalation prompt (G5).
 fn sandbox_policy(access: Access, writable_roots: &[PathBuf]) -> p::SandboxPolicy {
     match access {
         Access::Ask | Access::AcceptEdits => p::SandboxPolicy::WorkspaceWrite {
             exclude_slash_tmp: false,
             exclude_tmpdir_env_var: false,
-            network_access: true,
+            network_access: false,
             writable_roots: writable_roots
                 .iter()
                 .map(|root| p::AbsolutePathBuf(root.display().to_string()))
@@ -3018,7 +3019,10 @@ mod tests {
                         let roots: Vec<&str> =
                             writable_roots.iter().map(|root| root.0.as_str()).collect();
                         assert_eq!(roots, [real.as_str()]);
-                        assert!(*network_access);
+                        assert!(
+                            !*network_access,
+                            "Codex's own default decides, not Brigadier"
+                        );
                     }
                     _ => panic!("{access:?}: {policy:?}"),
                 }
