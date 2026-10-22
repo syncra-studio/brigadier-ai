@@ -5,12 +5,14 @@
 > what a CLI can't do by itself: seeing and driving other sessions, previews, the browser, computer use, asking
 > the user as a card, and searching the record. This plan only removes and re-wires.
 
-> Status: plan, 2026-10-22, from the user's decisions G1–G16 (project memory `plain-cli-threads-1022`), the
+> Status: plan, 2026-10-22, from the user's decisions G1–G18 (project memory `plain-cli-threads-1022`), the
 > 10-22 diagnosis (run `20261022-0805-take-over-5-sessions`, `DIAGNOSIS.md`) and the long-sessions research
 > (same run, `research/PROPOSAL.md`, `QUESTIONS.md`, `EVIDENCE.md`). The decisions are settled. Where one looks
 > hard, §8 says so with evidence; nothing here changes one.
 > Revised the same day after the Codex plan review (`msgs/w12-plan-review.md`) and three live user decisions:
 > G16 (a `brigadier` CLI, not an MCP server), the Personal Brain deleted outright (S19), and #517 closed by G9.
+> Amended the same day with G17 (no stripping of what the plain CLI loads), G18 (model choice is advice:
+> `brigadier models`, S13b) and the take-aways of `research/LEAN-CONTEXT.md` and `research/POCOCK.md`.
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -41,6 +43,13 @@ runs checks (`tools/full-checks.sh`), reviews (`codex review`), `git merge`, `gi
 commands. They show as ordinary tool rows with their real output and exit code. Its subagents, background tasks,
 permission prompts and memory files are the CLI's own.
 
+**A session gets exactly what the plain CLI gets (G17).** The project's instructions (CLAUDE.md, AGENTS.md),
+the user's MCP servers, skills, and memory as the user's own settings have it. Brigadier strips none of it by
+default. It trims only its own additions: the short standing instructions (§6), no MCP server of its own, and
+the one `brigadier --help` pointer. The one thing it turns off is the few CLI tools that cannot work inside a
+Brigadier tab (S17), never anything of the user's. Stripping comes back only with measured evidence on our own
+tasks (§8, item 13).
+
 **Brigadier pushes nothing (G1).** A thread receives only:
 - the user's messages;
 - results of things it started itself, which the CLI already delivers;
@@ -69,6 +78,7 @@ instructions points at `brigadier --help`. The thread calls it when it wants to:
   message or screen, close.
 - **Previews, browser, computer use.**
 - **Ask the user as a card.**
+- **Models:** `brigadier models`, the live model, usage and guidance view (G18).
 - **Brain search** over the project's records (G14).
 
 Every checks, review, land and headline tool goes. So does the Brigadier MCP server. A thin MCP wrapper over
@@ -79,6 +89,13 @@ has no app-internal paths.
 **Teams = the Delegator pattern, built in (G3).** A plain, editable skill plus the `brigadier` session commands. Workers are
 ordinary sessions in the sidebar. Overnight is the same skill with a deadline. The engine has no lead, phase or
 landing protocol.
+
+**Model choice is advice, not a gate (G18).** The thread picks provider, model and effort itself, through the
+team skill. Before `brigadier start` it reads `brigadier models`: what each CLI reports as available, usage and
+reset times per account, the current account, a shipped guidance table, and the user's own rules on top
+(S13b). **Brigadier enforces nothing on its own.** `brigadier start` refuses only what the user's rules file
+forbids; the shipped default of that file carries today's rules (never Fable, effort ≤ high), and the user may
+edit it. The old task router and its fallback rerouting go. Account auto-switch stays.
 
 **Permissions pass straight through (G5).** The composer offers Ask, Accept edits and Full access. These map to
 Claude Code's and Codex's own modes. The CLI's own permission prompts show as cards. Brigadier runs no sandbox
@@ -104,7 +121,9 @@ shows the exact diff between the two. Revert restores the start snapshot.
 - **Ledger.** The thread keeps `record/ledger.md` as it works. A standing instruction asks for it; nothing
   enforces it (Q3).
 - **Nudge.** Past 200k tokens of hot context, Brigadier queues one mid-turn nudge, Delegator style. 200k is an
-  env default, not a cap (Q1, Q2). The thread updates the ledger and writes a hand-off note.
+  env default, not a cap (Q1, Q2). The thread finishes the step it is on, at a boundary it chooses, then
+  updates the ledger and writes a hand-off note. The hand-off instructions travel in that nudge, not in the
+  standing instructions (§6).
 - **Successor.** A fresh CLI session continues in the same tab, after a visible divider: "Fresh context ·
   hand-off note", and the note opens from it. Its bootstrap is the first lines of its first user message, also
   saved to disk (Q4). The successor may search every earlier file of the lineage (Q5).
@@ -179,7 +198,7 @@ In `docs/PLAN.md`:
   - the 2026-10-05 "Delegator-style flow" row
 - **§10.** Overnight mode, all of it. Overnight is now the team skill with a deadline.
 
-Other plans lose the parts G1–G16 change. Where they conflict, this plan wins:
+Other plans lose the parts G1–G18 change. Where they conflict, this plan wins:
 - `THREAD-PLAN.md`: engine tools, reviews and the verifier.
 - `THREAD-UX-PLAN.md` and `THREAD-PARITY-PLAN.md`: thread items from engine records, and the Job card.
 - `SESSION-MESSAGING-PLAN.md`: peer tools become the `brigadier` session commands of S13.
@@ -318,8 +337,10 @@ inventory.
   - The worker-silence half of `M/watchdog.rs`.
 - **Routing:** `M/routing.rs`'s task routing (923), and `crates/router`'s decision code (`decide.rs` 3,868).
   - `ProviderKind` and `Registry` stay.
-  - `crates/core/src/routing/*` stays (quota and model lists).
+  - `crates/core/src/routing/*` stays (quota and model lists). It feeds `brigadier models` (S13b).
   - `M/fallback.rs` (946) goes as far as it reroutes a task; account switching stays.
+  - Built-in model rules go with the router, such as the Fable exclusion in `M/routing.rs:368/498`. Under G18
+    such rules live only in the user's rules file (S13b).
 - **Landing engine and CI watch:**
   - `M/landing.rs` (3,477, what S5 left).
   - The CI-watch half of `M/ci.rs` (2,358). The `gh` PR read in `M/pull_request.rs` stays and moves to S14's PR
@@ -469,11 +490,12 @@ and `run`.
 **S3. The CLIs' own subagents and task control, on both providers (G12.read).** Opus.
 - **Scope:**
   - Claude: the thread's built-in tools are Claude Code's own. Lift the exclusions of `Agent`/`Task`, `Monitor`
-    and `TaskStop` (`THREAD_TOOLS`, `P/claude/mod.rs:94`). Model rules still hold through Claude Code's own
-    `availableModels`: subagents can't pick Fable.
+    and `TaskStop` (`THREAD_TOOLS`, `P/claude/mod.rs:94`). Brigadier adds no model rule of its own (G18).
+    What the user's rules file (S13b) forbids reaches Claude Code's own `availableModels`, so subagents follow
+    the same file; when the file forbids nothing, nothing is set.
   - Codex: drop `multi_agent`, `multi_agent_v2`, `goals` and `sleep_tool` from `THREAD_FEATURES`
     (`P/codex/mod.rs:131`) and `agents.enabled=false` (:144) for threads. Codex can't hold a subagent to a model
-    list, but its subagents run Codex models only, so the never-Fable rule holds.
+    list; its subagents run Codex models only.
 - **Files:** `P/claude/mod.rs`, `P/codex/mod.rs`, their provider tests.
 - **Done when:**
   - Provider tests assert the thread's tool and feature flags on both CLIs.
@@ -669,12 +691,13 @@ and `run`.
   | Command | What it does |
   |---|---|
   | `brigadier sessions` | List the project's sessions: title, state from CLI events, branch, +/− and started-by. This is "read anything"; `brigadier show <id>` gives one in full. |
-  | `brigadier start` | Takes `--project`, `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local`, `--base`, `--permission` and the prompt. It starts an ordinary session in the sidebar, marked "started by <this one>". |
+  | `brigadier start` | Takes `--project`, `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local`, `--base`, `--permission` and the prompt. It starts an ordinary session in the sidebar, marked "started by <this one>". It refuses only what the user's rules file forbids (S13b), quoting the rule. |
   | `brigadier send <id> <text>` | Queued mid-turn, like `dlg send`. |
   | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from a session this one started: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
   | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen. |
   | `brigadier close <id>` | Closes the session. |
-  | `brigadier preview start\|stop\|log`, `brigadier browser …`, `brigadier ask …`, `brigadier app …`, `brigadier page …` | The tools the thread keeps today (previews, browser, ask-user card, app actions, pages), moved as they are. `brigadier ask` blocks until the card is answered. |
+  | `brigadier preview start\|stop\|log`, `brigadier browser …`, `brigadier ask …`, `brigadier app …`, `brigadier page …` | The tools the thread keeps today (previews, browser, ask-user card, app actions, pages), moved as they are. `brigadier ask` blocks until the card is answered. Its card always allows a free-text answer next to any options, never options only; the recommended option comes first, so "yes" takes it. |
+  | `brigadier models` | Live models, usage and guidance (S13b). |
 
   - Brain search and the code index get their subcommands in S18.
   - `peers.rs`, `peer_wait.rs` and `peer_records.rs` fold into this. `message_session`, `wait_for_replies`,
@@ -682,7 +705,8 @@ and `run`.
     keeps only the old protocol tools until S16.
   - Computer use stays the vendored driver's own interface (`M/computer_use.rs`), not part of Brigadier's tool
     surface.
-  - Model rules from the user's policy hold: never Fable, effort ≤ high.
+  - Brigadier enforces no model rule of its own (G18). The only refusal is `brigadier start`'s check against the
+    user's rules file, built in S13b; until then `start` checks nothing.
   - Non-goal: an MCP wrapper over the same commands. It would come only if a client can't run shell.
 - **Files:** a new `crates/cli` (the `brigadier` binary), a daemon request handler for it, `M/peers.rs`,
   `M/peer_wait.rs`, `crates/core/src/sessions/peer_records.rs`, `catalog.rs`, `tools.rs`, the app bundle and
@@ -694,6 +718,31 @@ and `run`.
   - A call without a valid session token is refused.
   - A live dev check on each provider: the thread starts a Codex session through `brigadier start` that writes
     a file and reports.
+  - An app test: the ask card takes a free-text answer when it also shows options.
+
+**S13b. `brigadier models`: routing as advice (G18).** Codex.
+- **Scope:** `brigadier models [--json]` merges three layers into one view:
+  - **Live state:** the models each CLI reports as available, usage and reset times per account, and the
+    current account. It reads what `crates/core/src/routing/*` and the accounts code already hold.
+  - **Shipped guidance:** a plain, editable file shipped in the app like the team skill
+    (`crates/core/src/manager/models_guidance.md`): which provider, model and effort fits what kind of work,
+    with a one-line reason each. It is updated per release.
+  - **The user's rules:** the user's own file (`~/.brigadier/models.md`), layered on top. Its rows override the
+    shipped rows; its rules (forbidden models, an effort ceiling, allowlists) are shown as such. The shipped
+    default of this file carries today's rules: never Fable, effort ≤ high. The user may edit or empty it.
+  - `brigadier start` refuses a model or effort only when the user's file forbids it, and quotes the rule.
+    Brigadier enforces nothing else; there is no built-in list.
+  - The team skill tells the thread to consult `brigadier models` before `brigadier start` (S15).
+  - Account auto-switch stays as it is.
+- **Files:** `crates/cli` (the subcommand), the daemon handler, the guidance file, `crates/core/src/routing/*`
+  (read only), the account usage reader.
+- **Done when:**
+  - The `--json` output matches a checked-in schema.
+  - Unit tests: a user row overrides the shipped row; a user rule shows in the merged view.
+  - A flow test: with the default rules file, `brigadier start` with a Fable model is refused and quotes the
+    rule; after the user removes that rule, the same call starts the session.
+  - `git grep` finds no other model refusal outside the rules-file check.
+  - A live dev check: the listed accounts' usage and reset times match Settings › Usage.
 
 **S14. Context card per G9/G10.** Opus.
 - **Scope:** the card from §1:
@@ -724,7 +773,16 @@ and `run`.
     - cmux tabs become sessions;
     - "hand off at 300k" becomes the seam;
     - overnight is the same skill with a deadline;
-    - workers run their own checks and push.
+    - workers run their own checks and push;
+    - the thread consults `brigadier models` before each `brigadier start` and picks provider, model and effort
+      itself (G18, S13b).
+  - Gotchas the skill states, one line each (`research/POCOCK.md` §4):
+    - Worktrees don't remove collisions; they move them to merge time. Two workers that touch one shared file
+      (a registry, a type, a string catalogue) run in order, or get their exact names fixed up front.
+    - Tests that need gitignored files (fixtures, local databases, credentials) can skip silently in a fresh
+      worktree. The worker copies or symlinks those files in, and says which tests skipped.
+    - Review runs once, at the end, on the integrated tree, never mid-run. After the fix pass only focused
+      checks run, with a stop rule: one review, one fix pass, then report what is left instead of looping.
   - Install it into each Claude session's skills folder and Codex's skills folder (§8, item 7). The user
     invokes it by name; the thread may invoke it too.
   - It is behind `BRIGADIER_TEAM_SKILL=1` until the done-when passes, then on.
@@ -766,11 +824,20 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - Repo instructions are then each CLI's own, with no parity added. Claude Code reads CLAUDE.md files as it
     always does. Codex reads AGENTS.md along the root → cwd path only: no CLAUDE.md, and no AGENTS.md in
     subfolders below the cwd. That is plain Codex behaviour, taken as is (§8, item 6).
+  - Nothing of the user's is stripped (G17): project instructions, the user's MCP servers, skills and memory
+    load as in a plain CLI. Brigadier's own additions are the only thing kept short.
+  - The hand-off text is not in this file. It travels in the seam nudge and the successor's bootstrap (S22).
   - The ledger shows in Sources and opens from there.
 - **Done when:**
   - A provider test asserts the exact appended text, the Codex developer instructions and the env on both CLIs.
-  - A byte test keeps the file under 2,500 bytes.
+  - A byte test keeps the file under 2,000 bytes and 15 lines.
   - A dev session writes `record/ledger.md` when told a rule.
+  - A one-time measurement of what a Brigadier-run `claude -p` sends per turn, next to a plain `claude` in the
+    same repo: `/context`, or our own small local proxy on `ANTHROPIC_BASE_URL` (written by us, not copied). The
+    report lists each block and tool with its size. Then Brigadier denies only the tools that cannot work inside
+    a Brigadier tab: `RemoteTrigger`, `PushNotification`, `ScheduleWakeup` and `Cron*` (no idle loop in `-p`),
+    and claude.ai connectors (`disableClaudeAiConnectors`). Nothing of the user's is denied. A provider test
+    asserts that deny list and nothing more.
 
 **S18. Brain = pull-only search over the records (G14, Q5).** Codex for the reader, Opus for the deletions.
 - **Scope:** re-point the transcript index (`M/brains.rs:1218–1302` `sync_transcript_stream`, `crates/brain/src/transcript.rs`)
@@ -829,6 +896,8 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   (default 200000), queue the one nudge mid-turn, the Delegator's way.
   - Wait while the CLI reports running background tasks or an open prompt.
   - One nudge per generation, recorded in `record/seam.json`.
+  - The nudge carries the hand-off text of §6 (it is not in the standing instructions). It says "finish the step
+    you are on" and lets the thread choose its boundary; it never says stop now.
 - **Note and divider:**
   - The thread writes `record/handoff/<n>.md`.
   - Brigadier draws the divider "Fresh context · hand-off note" (openable) and closes the predecessor.
@@ -838,7 +907,7 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - the whole ledger;
   - the note;
   - a verbatim tail of about 15k tokens;
-  - the successor rules of §6.
+  - the successor lines of §6's seam text.
 - **Edge cases:**
   - A user message during the note turn waits up to a minute, then goes to the successor, exactly once.
   - Death without a note (limit, crash, prompt too long) → the successor starts from the ledger and tail with
@@ -891,7 +960,7 @@ worse than today's rebirth.
 ### Order and parallel runs, in one view
 
 ```
-S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12 → S13 → S14 → S15 → S16a → S16b → S16c
+S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12 → S13 → S13b → S14 → S15 → S16a → S16b → S16c
                                   └→ S11 (∥ S7–S10)
 after S10:  S17 → S18 → S19 → S20      (∥ Stage 3; S17 rebases after S16)
 after S8:  S21 (∥ anything)
@@ -905,7 +974,15 @@ They run nightly or before a release. A regression becomes a GitHub issue. No st
 number from them, except S23's switch-on, which compares the seam with today's rebirth. That is the user's Q6
 decision, and the comparison is read by the person landing it, not by a gate in code.
 
+Outcome learning (which model finished what) comes only later, as a nightly report the user reads. It never
+changes the guidance or the user's rules file by itself (G18).
+
 ## 6. Standing instructions (draft of `standing_instructions.md`)
+
+This file is all Brigadier adds to a session (G17). The session still gets everything the plain CLI loads: the
+project's CLAUDE.md or AGENTS.md, the user's MCP servers, skills, and memory per the user's own settings.
+Brigadier removes none of it. The file holds only what every turn of every session needs; text that matters
+only at a seam travels in the seam message instead (`research/POCOCK.md` §3.1).
 
 ```
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
@@ -918,11 +995,18 @@ Each entry says its kind and its source (which message, command or file). Kinds:
 - Learned from reading: file:line and a one-line finding, never a copy.
 Never delete entries; move finished ones to ledger-archive.md beside it. A worker's claim is not a fact until you check it; say whose it is.
 For big reading, use your own subagents and keep only conclusions with file:line. Read exact ranges. Brigadier's commands: `brigadier --help`.
-When a message says a fresh session will continue: finish the step you are on, update the ledger, write the hand-off note where it says
-(doing now, waiting for, next, "read A,B,C; next D,E", stale ledger entries), then stop. Don't start new work.
+```
+
+**Seam text (not standing).** S22 sends the first part as the seam nudge; the successor's bootstrap carries the
+last line.
+
+```
+A fresh session will continue this work. Finish the step you are on, at a boundary you choose; don't start new work.
+Update the ledger, then write the hand-off note at <path>: doing now, waiting for, next, "read A,B,C; next D,E", stale ledger entries. Then stop.
 If this is your second hand-off in a row that is still reading, say so in the note and propose splitting the work.
-If you are that fresh session: the ledger, note and last exchanges in your first message are authoritative. For anything else from
-before, search the record (`brigadier brain search`, `brigadier brain read`) and quote what you find; if it isn't there, say so rather than guess.
+---
+You continue an earlier session. The ledger, note and last exchanges below are authoritative. For anything else from before,
+search the record (`brigadier brain search`, `brigadier brain read`) and quote what you find; if it isn't there, say so rather than guess.
 ```
 
 ## 7. Order of risk: what proves the plan early
@@ -988,3 +1072,16 @@ before, search the record (`brigadier brain search`, `brigadier brain read`) and
       upgrade are archived (S1's done-when, and the "Nothing is migrated" rule in §4).
     - Taken: #2 (S9's ids and `record/turns.jsonl`, with a restart-parity check), #3 (the last-consumers table
       in §4), #4 (S2), #5 (S3), #7 (S17 and item 6), #8 (S19), #9 (S11 and S20).
+13. **Stripping context by default is unsupported (G17).** The evidence is `research/LEAN-CONTEXT.md` (§0, §5)
+    and `research/POCOCK.md` (§3.1, §3.2).
+    - Nobody has measured "strip everything" making agents better. Short, human-written project instructions
+      are neutral to slightly positive on correctness and cut runtime; curated skills help a lot (LEAN-CONTEXT
+      §0, §5 item 7).
+    - The real cost, MCP tool schemas, is already deferred by both CLIs, and only skill descriptions load
+      (LEAN-CONTEXT §4).
+    - So sessions load what the plain CLI loads. Brigadier keeps only its own additions short (§6) and denies
+      only the tools that cannot work in a tab, after S17's one-time measurement (POCOCK §3.2).
+    - Not taken: LEAN-CONTEXT §5 item 1's default stripping of memory writes, user-global skills and MCP
+      servers. Under G17 these stay as the user set them, and come back only with measured evidence on our own
+      tasks. POCOCK §3.5's depth limit on `brigadier start` is not built in either: Brigadier enforces nothing
+      of its own (G18); a user who wants one writes it into the rules file.
