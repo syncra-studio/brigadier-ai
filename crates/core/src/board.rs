@@ -32,7 +32,6 @@ pub(crate) const KINDS: &[&str] = &[
     "question.updated",
     "plan.updated",
     "integrated_check.updated",
-    "background_run.updated",
     "thread.seen",
     "thread.files",
     "output.stored",
@@ -186,8 +185,6 @@ pub(crate) struct Board {
     pub(crate) waits_listed: HashSet<String>,
     /// Its overnight runs, a segment each.
     pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
-    /// The thread's commands that went to the background, by id.
-    pub(crate) background_runs: HashMap<String, crate::work::BackgroundRun>,
     /// The thread's headline for the session now (`set_headline`).
     pub(crate) headline: Option<crate::work::SessionHeadline>,
     /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
@@ -211,8 +208,8 @@ pub(crate) struct Board {
     pub(crate) previews: HashMap<String, crate::work::Preview>,
     /// Highest preview number ever recorded, including cleared rows.
     pub(crate) preview_number: u64,
-    /// The ended previews and background runs that left the Background rows (Q94); a preview
-    /// started again under its id is back.
+    /// The ended previews that left the Background rows (Q94); a preview started again under
+    /// its id is back.
     pub(crate) background_cleared: HashSet<String>,
     /// Its messages to and from other sessions, by message id.
     pub(crate) peer_messages: HashMap<String, PeerRecord>,
@@ -457,9 +454,6 @@ impl Board {
                 let mut plan = plan.clone();
                 plan.position = position;
                 self.plans.insert(plan.id.clone(), plan);
-            }
-            DomainEvent::BackgroundRunUpdated { run } => {
-                self.background_runs.insert(run.id.clone(), run.clone());
             }
             DomainEvent::HeadlineSet { headline, .. } => {
                 self.headline = headline.clone();
@@ -975,13 +969,6 @@ impl Board {
         plans
     }
 
-    /// The thread's background runs, oldest first (by number).
-    pub(crate) fn sorted_background_runs(&self) -> Vec<crate::work::BackgroundRun> {
-        let mut runs: Vec<_> = self.background_runs.values().cloned().collect();
-        runs.sort_by_key(|run| crate::manager::background_run_number(&run.id));
-        runs
-    }
-
     /// The MCP servers of `task_id`'s agent (`None`: the conversation's own model), as this
     /// daemon process heard them.
     pub(crate) fn mcp_servers_of(
@@ -1015,7 +1002,7 @@ impl Board {
         previews
     }
 
-    /// The ended previews and runs that left the Background rows, by id.
+    /// The ended previews that left the Background rows, by id.
     pub(crate) fn sorted_background_cleared(&self) -> Vec<String> {
         let mut ids: Vec<_> = self.background_cleared.iter().cloned().collect();
         ids.sort();

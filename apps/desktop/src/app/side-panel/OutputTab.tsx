@@ -5,9 +5,10 @@ import { previewActions, previewActive, previewWord } from "@/app/conversation/p
 import { useAction } from "@/app/conversation/useAction";
 import { Button } from "@/components/controls";
 import { request } from "@/ipc/client";
-import type { BackgroundRun, ItemStatus, Preview } from "@/ipc/generated";
-import { pausePreview, previewLogTail, resumePreview, stopPreview } from "@/state/actions";
+import type { BackgroundTask, ItemStatus, Preview } from "@/ipc/generated";
+import { pausePreview, previewLogTail, resumePreview, stopBackgroundTask, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useCliThread } from "@/state/cliThread";
 import { openLink } from "@/state/links";
 import type { PanelView } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -18,16 +19,16 @@ const READ_EVERY_MS = 2000;
 /**
  * What something in the context card's Background prints, in a tab of its own: a preview's log
  * (with Open for a web page that is up, Pause or Resume where the system can hold it, and Stop) or
- * a long command's output, read again while it runs. It stays once the thing ends, with what it
- * printed last.
+ * a CLI's background command's output file (with Stop), read again while it runs. It stays once
+ * the thing ends, with what it printed last.
  */
 export function OutputTab({ conversationId, view }: { conversationId: string; view: Extract<PanelView, { type: "output" }> }) {
   const preview = useBoard((s) => (s.board?.conversationId === conversationId && view.source === "preview" ? s.board.previews[view.id] : undefined));
-  const run = useBoard((s) => (s.board?.conversationId === conversationId && view.source === "run" ? s.board.backgroundRuns[view.id] : undefined));
+  const task = useCliThread((s) => (view.source === "task" ? s.views[conversationId]?.background?.find((held) => held.id === view.id) : undefined));
   return (
     <div data-slot="output-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="max-w-thread mx-auto flex w-full flex-col gap-3 px-5 pt-6 pb-10">
-        {preview ? <PreviewOutput preview={preview} /> : run ? <RunOutput run={run} /> : (
+        {preview ? <PreviewOutput preview={preview} /> : task ? <TaskOutput conversationId={conversationId} task={task} /> : (
           <p className="text-muted-foreground text-sm">It has ended, and what it printed is gone.</p>
         )}
       </div>
@@ -35,15 +36,15 @@ export function OutputTab({ conversationId, view }: { conversationId: string; vi
   );
 }
 
-/** What a preview or a long command has printed so far. */
-function readOutput(source: "preview" | "run", conversationId: string, id: string): Promise<string> {
+/** What a preview or a CLI's background command has printed so far. */
+function readOutput(source: "preview" | "task", conversationId: string, id: string): Promise<string> {
   return source === "preview"
     ? previewLogTail(conversationId, id).then(({ tail }) => tail)
-    : request({ method: "readBackgroundRun", conversationId, runId: id }).then(({ output }) => output);
+    : request({ method: "readBackgroundTaskOutput", conversationId, taskId: id }).then(({ output }) => output);
 }
 
 /** Reads what it printed now, and again every 2 s while `running`; the last text read stays shown. */
-function useOutput(source: "preview" | "run", conversationId: string, id: string, state: string, running: boolean): { text: string | null; error: string | null } {
+function useOutput(source: "preview" | "task", conversationId: string, id: string, state: string, running: boolean): { text: string | null; error: string | null } {
   const [output, setOutput] = useState<{ text: string | null; error: string | null }>({ text: null, error: null });
   useEffect(() => {
     let current = true;
@@ -95,18 +96,24 @@ function PreviewOutput({ preview }: { preview: Preview }) {
   );
 }
 
-function RunOutput({ run }: { run: BackgroundRun }) {
-  const running = run.state.type === "running";
-  const { text, error } = useOutput("run", run.conversationId, run.id, run.state.type, running);
-  const stopped = run.state.type === "stopped" || run.state.type === "interrupted";
-  const code = run.state.type === "finished" ? /exit(?: code)?\s+(-?\d+)/i.exec(run.state.status) : null;
-  const status: ItemStatus = running ? "inProgress" : stopped || (code && code[1] !== "0") ? "failed" : "completed";
+function TaskOutput({ conversationId, task }: { conversationId: string; task: BackgroundTask }) {
+  const running = task.status === "running";
+  const { text, error } = useOutput("task", conversationId, task.id, task.status, running);
+  const action = useAction();
+  const status: ItemStatus = running ? "inProgress" : task.status === "completed" ? "completed" : "failed";
   return (
     <>
-      <Header title={run.name ?? run.command} state={running ? "Running" : stopped ? "Stopped" : "Finished"} />
+      <Header title={task.label} state={running ? "Running" : task.status === "completed" ? "Finished" : task.status === "stopped" ? "Stopped" : "Failed"}>
+        {running && (
+          <Button variant="ghost" size="xs" disabled={action.busy} onClick={() => action.run(() => stopBackgroundTask(conversationId, task.id))}>
+            Stop
+          </Button>
+        )}
+      </Header>
+      {action.error && <p role="alert" className="text-destructive text-sm">{action.error}</p>}
       {error && <p className="text-destructive text-sm">{error}</p>}
-      <ShellBox command={run.command} output={text || null} status={status} exit={code ? Number(code[1]) : null}
-        stopped={stopped} notes={running && !text ? ["No output yet"] : []} />
+      <ShellBox command={task.label} output={text || null} status={status} exit={null}
+        stopped={task.status === "stopped"} notes={running && !text ? ["No output yet"] : []} />
     </>
   );
 }

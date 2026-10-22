@@ -155,8 +155,6 @@ impl SessionManager {
             if conversation.quota_wait.is_some() && conversation.lifecycle != Lifecycle::Archived {
                 self.keep_conversation_wait(&conversation).await;
             }
-            // Its thread's background runs the restart cut off are told as such.
-            self.recover_background_runs(&conversation.id).await;
             let Ok(tasks) = self.core.tasks(&conversation.id).await else {
                 if let Some(live) = &live
                     && live.recovering(false).await
@@ -867,10 +865,9 @@ impl SessionManager {
         // Asked again just before the folder goes: a turn or worker that started meanwhile
         // keeps it (Codex review, phase A verify).
         self.quiet_for_close(id).await?;
-        // What runs in the folder stops before it goes; a request a background run kept
-        // working ends with it.
+        // What runs in the folder stops before it goes.
         let _ = self.stop_previews(id, "its worktree was removed").await;
-        self.stop_background_runs(id);
+        self.stop_session_work(id);
         // A request that just ended takes its last snapshot of the folder right after: it
         // runs before the folder goes.
         if !self
@@ -1020,15 +1017,15 @@ impl SessionManager {
                 self.dispose_task(&task, TaskState::Stopped).await;
             }
         }
-        // Its thread's commands in the background stop.
-        self.stop_background_runs(id);
+        // Its thread's setup script stops.
+        self.stop_session_work(id);
         let (owner, _) = conversation_owner(conversation);
         self.grants.revoke_owner(&owner);
         let mut owners = vec![
             owner,
             super::workers::worker_home_owner(id),
             super::workers::thread_temp_owner(id),
-            super::background_runs::background_owner(id),
+            super::setup_script::setup_owner(id),
             super::preview::preview_data_owner(id),
             // The checkout an older Brigadier ran the session's full checks in.
             format!("checks:{id}"),
@@ -1458,7 +1455,10 @@ impl SessionManager {
         // Its own blobs go now, not a day later; then the usual collection of older leftovers.
         self.delete_turn_snapshots(&id).await?;
         self.delete_thread_images(&id).await?;
-        self.delete_background_output(&id).await?;
+        // What background runs of an older Brigadier printed.
+        store
+            .delete_stream_prefixes(vec![format!("background-output:{id}:")])
+            .await?;
         let (removed, own) = store.delete_streams_and_blobs(purge).await?;
         self.core.forget_conversation(id.clone()).await?;
         self.convs_lock().remove(&id);

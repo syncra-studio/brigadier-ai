@@ -1071,9 +1071,9 @@ export async function stopPreview(conversationId: string, previewId: string | nu
   await request({ method: "stopPreview", conversationId, previewId });
 }
 
-/** Stops one of the thread's commands running in the background; the thread hears it. */
-export async function stopBackgroundRun(conversationId: string, runId: string): Promise<void> {
-  await request({ method: "stopBackgroundRun", conversationId, runId });
+/** Stops one of the thread's CLI's background tasks, as the CLI's own Stop does. */
+export async function stopBackgroundTask(conversationId: string, taskId: string): Promise<void> {
+  await request({ method: "stopBackgroundTask", conversationId, taskId });
 }
 
 export async function pausePreview(conversationId: string, previewId: string): Promise<void> {

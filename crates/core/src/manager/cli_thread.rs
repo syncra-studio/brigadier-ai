@@ -2,7 +2,9 @@
 //! of the running turn, the turn ends written to `record/turns.jsonl`, and the view read back.
 
 use brigadier_providers::session_file::{self, FileEntry, FileImage};
-use brigadier_providers::{ProviderEvent, Role, TurnStatus};
+use brigadier_providers::{
+    BackgroundTask, BackgroundTaskKind, BackgroundTaskStatus, ProviderEvent, Role, TurnStatus,
+};
 
 use super::SessionManager;
 use super::conversation::ConvLive;
@@ -35,9 +37,24 @@ impl SessionManager {
         let mut opened = false;
         let mut context = None;
         let mut noted = None;
+        let mut background = None;
+        let mut read_output = false;
         {
             let mut threads = self.cli_threads.lock().unwrap();
             let live = threads.entry(conv.id.clone()).or_default();
+            match event {
+                Some(ProviderEvent::BackgroundTask { task }) => {
+                    background = Some(update_background(&mut live.background, task, at));
+                    read_output = !live.reading_output && reads_output(&live.background);
+                    live.reading_output |= read_output;
+                }
+                // The CLI's background tasks end with it.
+                Some(ProviderEvent::Exited { .. }) | None if !live.background.is_empty() => {
+                    live.background.clear();
+                    background = Some(Vec::new());
+                }
+                _ => {}
+            }
             match event {
                 Some(ProviderEvent::TurnStarted { .. }) => {
                     if !live.open {
@@ -45,6 +62,8 @@ impl SessionManager {
                         *live = LiveTurn {
                             open: true,
                             awaiting_user: true,
+                            background: std::mem::take(&mut live.background),
+                            reading_output: live.reading_output,
                             ..LiveTurn::default()
                         };
                     }
@@ -59,6 +78,8 @@ impl SessionManager {
                         opened = true;
                         *live = LiveTurn {
                             open: true,
+                            background: std::mem::take(&mut live.background),
+                            reading_output: live.reading_output,
                             ..LiveTurn::default()
                         };
                     }
@@ -135,14 +156,79 @@ impl SessionManager {
                 }
             }
         }
-        if !news.is_empty() || opened || ended.is_some() || context.is_some() {
+        if !news.is_empty()
+            || opened
+            || ended.is_some()
+            || context.is_some()
+            || background.is_some()
+        {
             let _ = self.thread_news.send(ThreadNews {
                 conversation_id: conv.id.clone(),
                 entries: news,
                 opened,
                 ended,
                 context,
+                background,
             });
+        }
+        if read_output {
+            let manager = self.arc();
+            let id = conv.id.clone();
+            tokio::spawn(async move { manager.follow_task_output(id).await });
+        }
+    }
+
+    /// Follows the last line each running background command of conversation `id` prints,
+    /// from its output file, while it has one: its row shows it, as the CLI's own does.
+    async fn follow_task_output(&self, id: ConversationId) {
+        loop {
+            tokio::time::sleep(LAST_LINE_EVERY).await;
+            let files: Vec<(String, String)> = {
+                let mut threads = self.cli_threads.lock().unwrap();
+                let Some(live) = threads.get_mut(&id) else {
+                    return;
+                };
+                if !reads_output(&live.background) {
+                    live.reading_output = false;
+                    return;
+                }
+                live.background
+                    .iter()
+                    .filter(|task| reads_output(std::slice::from_ref(*task)))
+                    .filter_map(|task| Some((task.id.clone(), task.output_file.clone()?)))
+                    .collect()
+            };
+            let lines: Vec<(String, Option<String>)> = files
+                .into_iter()
+                .map(|(task, file)| (task, last_line(std::path::Path::new(&file))))
+                .collect();
+            let changed = {
+                let mut threads = self.cli_threads.lock().unwrap();
+                let Some(live) = threads.get_mut(&id) else {
+                    return;
+                };
+                let mut changed = false;
+                for (task, line) in lines {
+                    if let Some(task) = live.background.iter_mut().find(|held| held.id == task)
+                        && line.is_some()
+                        && task.last_line != line
+                    {
+                        task.last_line = line;
+                        changed = true;
+                    }
+                }
+                changed.then(|| live.background.clone())
+            };
+            if let Some(background) = changed {
+                let _ = self.thread_news.send(ThreadNews {
+                    conversation_id: id.clone(),
+                    entries: Vec::new(),
+                    opened: false,
+                    ended: None,
+                    context: None,
+                    background: Some(background),
+                });
+            }
         }
     }
 
@@ -218,10 +304,114 @@ impl SessionManager {
         ))
     }
 
+    /// Stops background task `task` of conversation `id`'s CLI, as the CLI's own Stop does.
+    pub async fn stop_background_task(&self, id: &ConversationId, task: String) -> Result<()> {
+        let conv = self.conv(id)?;
+        let cli = conv.live_cli().await;
+        let cli = cli.ok_or_else(|| Error::Invalid("its CLI isn't running".into()))?;
+        cli.session
+            .stop_task(task)
+            .await
+            .map_err(|err| Error::Provider(err.to_string()))
+    }
+
+    /// What background command `task` of conversation `id` printed so far: the end of its
+    /// output file, as much as a row's output shows.
+    pub fn background_task_output(&self, id: &ConversationId, task: &str) -> Result<String> {
+        use std::io::{Read, Seek, SeekFrom};
+        let file = self
+            .cli_threads
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|live| live.background.iter().find(|held| held.id == task))
+            .filter(|held| held.kind == BackgroundTaskKind::Shell)
+            .and_then(|held| held.output_file.clone())
+            .ok_or_else(|| Error::NotFound(format!("output of background task {task}")))?;
+        let mut file = std::fs::File::open(&file).map_err(|err| Error::Invalid(err.to_string()))?;
+        let len = file
+            .metadata()
+            .map_err(|err| Error::Invalid(err.to_string()))?
+            .len();
+        file.seek(SeekFrom::Start(len.saturating_sub(OUTPUT_SHOWN)))
+            .map_err(|err| Error::Invalid(err.to_string()))?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail)
+            .map_err(|err| Error::Invalid(err.to_string()))?;
+        Ok(String::from_utf8_lossy(&tail).into_owned())
+    }
+
     /// What live streams add to threads, as it comes.
     pub fn subscribe_thread_news(&self) -> tokio::sync::broadcast::Receiver<ThreadNews> {
         self.thread_news.subscribe()
     }
+}
+
+/// How often a running background command's last output line is read again.
+const LAST_LINE_EVERY: std::time::Duration = std::time::Duration::from_millis(1500);
+/// How long an ended background task is kept: the longest a row stays (a command's, about
+/// 5 minutes after it exits, as Claude Code keeps it).
+const ENDED_KEPT_MS: i64 = 5 * 60_000;
+/// The most of a background command's output its row opens to: its end.
+const OUTPUT_SHOWN: u64 = 256 * 1024;
+/// The most of a line a row shows.
+const LINE_MAX: usize = 200;
+
+/// `task` as it stands now among `tasks`, those ended long ago dropped; the tasks after.
+fn update_background(
+    tasks: &mut Vec<BackgroundTask>,
+    task: &BackgroundTask,
+    at: i64,
+) -> Vec<BackgroundTask> {
+    match tasks.iter_mut().find(|held| held.id == task.id) {
+        Some(held) => {
+            let line = held.last_line.take();
+            *held = task.clone();
+            held.last_line = task.last_line.clone().or(line);
+        }
+        None => tasks.push(task.clone()),
+    }
+    tasks.retain(|task| {
+        task.ended_at_ms
+            .is_none_or(|ended| at - ended < ENDED_KEPT_MS)
+    });
+    if task.status != BackgroundTaskStatus::Running
+        && let Some(file) = &task.output_file
+        && task.kind == BackgroundTaskKind::Shell
+        && let Some(held) = tasks.iter_mut().find(|held| held.id == task.id)
+    {
+        // Its last words, once more, as it ended.
+        if let Some(line) = last_line(std::path::Path::new(file)) {
+            held.last_line = Some(line);
+        }
+    }
+    tasks.clone()
+}
+
+/// Whether any of `tasks` is a running command whose output file is known.
+fn reads_output(tasks: &[BackgroundTask]) -> bool {
+    tasks.iter().any(|task| {
+        task.kind == BackgroundTaskKind::Shell
+            && task.status == BackgroundTaskStatus::Running
+            && task.output_file.is_some()
+    })
+}
+
+/// The last line with text in the file at `path`, read from its end.
+fn last_line(path: &std::path::Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(4096))).ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let text = String::from_utf8_lossy(&tail);
+    let line = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    Some(line.chars().take(LINE_MAX).collect())
 }
 
 fn entry(event: Option<ProviderEvent>, at: i64) -> FileEntry {
@@ -251,4 +441,106 @@ fn shown_live(event: &ProviderEvent) -> bool {
             | ProviderEvent::Image { .. }
             | ProviderEvent::CompactionEnded { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(id: &str, kind: BackgroundTaskKind, status: BackgroundTaskStatus) -> BackgroundTask {
+        BackgroundTask {
+            id: id.into(),
+            item_id: None,
+            kind,
+            label: format!("task {id}"),
+            status,
+            started_at_ms: 1_000,
+            ended_at_ms: (status != BackgroundTaskStatus::Running).then_some(2_000),
+            output_file: None,
+            summary: None,
+            last_line: None,
+        }
+    }
+
+    #[test]
+    fn a_task_is_updated_in_place_and_dropped_long_after_it_ends() {
+        let mut tasks = Vec::new();
+        let shell = task(
+            "b1",
+            BackgroundTaskKind::Shell,
+            BackgroundTaskStatus::Running,
+        );
+        let agent = task(
+            "a1",
+            BackgroundTaskKind::Agent,
+            BackgroundTaskStatus::Running,
+        );
+        update_background(&mut tasks, &shell, 1_500);
+        let after = update_background(&mut tasks, &agent, 1_500);
+        assert_eq!(after.len(), 2);
+
+        // A line read earlier is kept when the CLI's update carries none.
+        tasks[0].last_line = Some("compiling".into());
+        let done = task(
+            "b1",
+            BackgroundTaskKind::Shell,
+            BackgroundTaskStatus::Completed,
+        );
+        let after = update_background(&mut tasks, &done, 2_500);
+        assert_eq!(after[0].status, BackgroundTaskStatus::Completed);
+        assert_eq!(after[0].last_line.as_deref(), Some("compiling"));
+        assert_eq!(after[1].id, "a1");
+
+        // Five minutes after it ended, the next update drops it.
+        let still = task(
+            "a1",
+            BackgroundTaskKind::Agent,
+            BackgroundTaskStatus::Running,
+        );
+        let after = update_background(&mut tasks, &still, 2_000 + ENDED_KEPT_MS);
+        assert_eq!(
+            after
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a1"]
+        );
+    }
+
+    #[test]
+    fn an_ended_command_reads_its_last_line_once_more() {
+        let file =
+            std::env::temp_dir().join(format!("brigadier-task-{}.output", uuid::Uuid::now_v7()));
+        std::fs::write(&file, "one\ntwo\n\n  done  \n\n").unwrap();
+        let mut tasks = Vec::new();
+        let mut running = task(
+            "b1",
+            BackgroundTaskKind::Shell,
+            BackgroundTaskStatus::Running,
+        );
+        running.output_file = Some(file.to_string_lossy().into_owned());
+        assert!(reads_output(&[running.clone()]));
+        update_background(&mut tasks, &running, 1_500);
+        assert_eq!(tasks[0].last_line, None);
+
+        let mut done = running.clone();
+        done.status = BackgroundTaskStatus::Completed;
+        done.ended_at_ms = Some(2_000);
+        assert!(!reads_output(&[done.clone()]));
+        let after = update_background(&mut tasks, &done, 2_000);
+        assert_eq!(after[0].last_line.as_deref(), Some("done"));
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn the_last_line_is_the_last_with_text_and_kept_short() {
+        let file =
+            std::env::temp_dir().join(format!("brigadier-line-{}.output", uuid::Uuid::now_v7()));
+        std::fs::write(&file, format!("start\n{}\n   \n", "x".repeat(500))).unwrap();
+        assert_eq!(last_line(&file).map(|line| line.len()), Some(LINE_MAX));
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(last_line(&file), None);
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(last_line(&file), None);
+    }
 }

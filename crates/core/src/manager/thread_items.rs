@@ -9,8 +9,6 @@
 //!
 //! Native CLI output arrives at completion for Claude and streams for Codex. Brigadier's
 //! own command tools feed the same live buffers from their child pipes, for both providers.
-//! A tool call that returns a background run id transfers its buffer to that run; the same
-//! bytes remain readable until the command ends and its existing output store retains them.
 //! The row hears how much came at most once a [`OUTPUT_STEP_EVERY`]; live reads hide secrets
 //! before returning the output's tail.
 
@@ -45,9 +43,6 @@ pub(crate) struct ThreadItems {
     turn: Option<i64>,
     /// Running commands' streamed output, by item.
     live: HashMap<String, LiveOutput>,
-    /// The same buffers after their tool calls return a background run id.
-    background: HashMap<String, LiveOutput>,
-    background_items: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -78,44 +73,7 @@ impl ThreadItems {
 
     /// The CLI ended: its commands' output streams no more.
     pub(super) fn cli_ended(&mut self) {
-        for (item, run) in &self.background_items {
-            if let Some(mut live) = self.live.remove(item) {
-                live.row = None;
-                self.background.insert(run.clone(), live);
-            }
-        }
         self.live.clear();
-    }
-    pub(super) fn background_started(&mut self, item: &str, run: &str) {
-        self.background_items
-            .insert(item.to_owned(), run.to_owned());
-    }
-
-    pub(super) fn background_output(
-        &self,
-        run: &str,
-        item: Option<&str>,
-    ) -> Option<(Vec<u8>, u64)> {
-        let live = self
-            .background
-            .get(run)
-            .or_else(|| item.and_then(|item| self.live.get(item)))?;
-        Some((live.output.clone(), live.bytes()))
-    }
-
-    pub(super) fn background_ended(&mut self, run: &str) -> Option<Vec<u8>> {
-        let item = self
-            .background_items
-            .iter()
-            .find_map(|(item, of)| (of == run).then(|| item.clone()));
-        let live = self
-            .background
-            .remove(run)
-            .or_else(|| item.as_ref().and_then(|item| self.live.remove(item)));
-        if let Some(item) = item {
-            self.background_items.remove(&item);
-        }
-        live.filter(|live| live.bytes() > 0).map(|live| live.output)
     }
 }
 
@@ -269,78 +227,6 @@ pub(super) fn digest_alias(output: &str) -> Option<String> {
 }
 
 impl SessionManager {
-    /// The newest active call with this exact command, read from its log rather than the
-    /// row's abbreviated detail. Long commands sharing their first words stay distinct. A call
-    /// whose command went on in the background is active too: its row has its answer, but
-    /// what the command prints from then on is still that row's.
-    pub(super) async fn own_command_item(
-        &self,
-        id: &ConversationId,
-        tool: &str,
-        command: &str,
-    ) -> Option<String> {
-        let board = self.core.board(id).await.ok()?;
-        let backgrounded: std::collections::HashSet<String> = self
-            .conv(id)
-            .map(|conv| conv.items().background_items.keys().cloned().collect())
-            .unwrap_or_default();
-        for step in board.orchestrator_steps.iter().rev() {
-            let OrchestratorStepKind::Tool {
-                item_id,
-                name,
-                status,
-                log_seq: Some(seq),
-                ..
-            } = &step.kind
-            else {
-                continue;
-            };
-            if *status != ItemStatus::InProgress && !backgrounded.contains(item_id) {
-                continue;
-            }
-            if crate::digest::bare_tool_name(name) != crate::digest::bare_tool_name(tool) {
-                continue;
-            }
-            let events = self
-                .core
-                .store()
-                .read_stream(
-                    streams::orchestrator(id),
-                    StreamPage {
-                        before: Some(seq + 1),
-                        limit: 1,
-                        kinds: vec!["orchestrator.logged".into()],
-                    },
-                )
-                .await
-                .ok()?;
-            let Some(event) = events.iter().find(|event| event.stream_seq == *seq) else {
-                continue;
-            };
-            let Ok(DomainEvent::OrchestratorLogged {
-                entry:
-                    OrchestratorEntry::Provider {
-                        event:
-                            ProviderEvent::ToolCall {
-                                input: Some(input), ..
-                            },
-                        ..
-                    },
-                ..
-            }) = crate::sessions::decode(event)
-            else {
-                continue;
-            };
-            let Ok(input) = serde_json::from_str::<serde_json::Value>(&input) else {
-                continue;
-            };
-            if input.get("command").and_then(serde_json::Value::as_str) == Some(command) {
-                return Some(item_id.clone());
-            }
-        }
-        None
-    }
-
     pub(super) async fn tool_row(&self, conv: &ConvLive, row: OrchestratorStepKind) {
         if matches!(&row, OrchestratorStepKind::Tool { name, .. } if crate::digest::own_run(name)) {
             self.command_row(conv, row).await;
@@ -372,20 +258,13 @@ impl SessionManager {
             }
             live.row = Some(row.clone());
         } else {
-            let background = conv.items().background_items.get(item_id.as_str()).cloned();
             let ended = conv.items().live.remove(item_id.as_str());
-            let Some(mut live) = ended else {
+            let Some(live) = ended else {
                 self.orchestrator_step(&conv.id, row).await;
                 return;
             };
             if live.bytes() > 0 {
                 *output_bytes = Some(live.bytes());
-            }
-            if let Some(run) = background {
-                live.row = None;
-                conv.items().background.insert(run, live);
-                self.orchestrator_step(&conv.id, row).await;
-                return;
             }
             if full_output.is_none() && live.bytes() > EVENT_OUTPUT as u64 {
                 let ended = exit.map_or_else(
@@ -424,11 +303,7 @@ impl SessionManager {
     async fn command_output_bytes(&self, conv: &ConvLive, item_id: &str, text: &[u8]) {
         let row = {
             let mut items = conv.items();
-            let run = items.background_items.get(item_id).cloned();
-            let live = match run.filter(|run| items.background.contains_key(run)) {
-                Some(run) => items.background.get_mut(&run).expect("background buffer"),
-                None => items.live.entry(item_id.to_owned()).or_default(),
-            };
+            let live = items.live.entry(item_id.to_owned()).or_default();
             let room = OUTPUT_MAX_BYTES.saturating_sub(live.output.len());
             let kept = text.len().min(room);
             live.output.extend_from_slice(&text[..kept]);

@@ -134,6 +134,7 @@ pub(crate) fn progress(event: &ProviderEvent, previous: Option<&ProviderEvent>) 
         | ProviderEvent::Looked { .. }
         | ProviderEvent::Progress { .. }
         | ProviderEvent::BackgroundJobs { .. }
+        | ProviderEvent::BackgroundTask { .. }
         | ProviderEvent::McpServers { .. }
         | ProviderEvent::McpServerChanged { .. }
         | ProviderEvent::ContextSize { .. }

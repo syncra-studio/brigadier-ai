@@ -1282,6 +1282,59 @@ fn startup_status(
     })
 }
 
+/// The thread's background terminals as `thread/backgroundTerminals/list` gives them, against
+/// those `known` from the last listing: each new one as running, each one gone as ended at
+/// `now`. `known` becomes this listing's.
+pub(crate) fn background_terminals(
+    listed: &Value,
+    known: &mut HashMap<String, BackgroundTask>,
+    now: i64,
+) -> Vec<BackgroundTask> {
+    let mut changed = Vec::new();
+    let mut listing = HashMap::new();
+    for terminal in listed
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = terminal.get("processId").and_then(Value::as_str) else {
+            continue;
+        };
+        let task = known.remove(id).unwrap_or_else(|| {
+            let task = BackgroundTask {
+                id: id.to_owned(),
+                item_id: terminal
+                    .get("itemId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                kind: BackgroundTaskKind::Terminal,
+                label: terminal
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                status: BackgroundTaskStatus::Running,
+                started_at_ms: now,
+                ended_at_ms: None,
+                output_file: None,
+                summary: None,
+                last_line: None,
+            };
+            changed.push(task.clone());
+            task
+        });
+        listing.insert(id.to_owned(), task);
+    }
+    for (_, mut gone) in known.drain() {
+        gone.status = BackgroundTaskStatus::Completed;
+        gone.ended_at_ms = Some(now);
+        changed.push(gone);
+    }
+    *known = listing;
+    changed
+}
+
 /// The servers `mcpServerStatus/list` names, by name, Brigadier's own and disabled ones left
 /// out. A server Codex has not started for the thread (no runtime state) reads from its sign-in
 /// and its tools: one that wants a sign-in needs it, one with tools is up, else it is still
@@ -1352,6 +1405,62 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// The thread's background terminals, listing after listing: a new one is running, one
+    /// gone ended; one still listed is not said again.
+    #[test]
+    fn background_terminals_start_and_end_as_listed() {
+        let mut known = HashMap::new();
+        let listed = |ids: &[&str]| {
+            json!({ "data": ids.iter().map(|id| json!({ "processId": id, "itemId": format!("call_{id}"),
+                "command": format!("sleep 30 # {id}"), "cwd": "/w", "osPid": 4242 })).collect::<Vec<_>>() })
+        };
+        let said =
+            |tasks: Vec<BackgroundTask>| -> Vec<(String, BackgroundTaskStatus, Option<i64>)> {
+                let mut said: Vec<_> = tasks
+                    .into_iter()
+                    .map(|task| (task.id, task.status, task.ended_at_ms))
+                    .collect();
+                said.sort_by(|a, b| a.0.cmp(&b.0));
+                said
+            };
+        let first = background_terminals(&listed(&["7"]), &mut known, 1_000);
+        assert_eq!(
+            (
+                first[0].kind,
+                first[0].label.as_str(),
+                first[0].item_id.as_deref(),
+                first[0].started_at_ms
+            ),
+            (
+                BackgroundTaskKind::Terminal,
+                "sleep 30 # 7",
+                Some("call_7"),
+                1_000
+            )
+        );
+        assert_eq!(
+            said(background_terminals(
+                &listed(&["7", "9"]),
+                &mut known,
+                2_000
+            )),
+            [("9".to_owned(), BackgroundTaskStatus::Running, None)]
+        );
+        assert_eq!(
+            said(background_terminals(&listed(&["9"]), &mut known, 3_000)),
+            [("7".to_owned(), BackgroundTaskStatus::Completed, Some(3_000))]
+        );
+        assert_eq!(
+            said(background_terminals(
+                &json!({ "data": [] }),
+                &mut known,
+                4_000
+            )),
+            [("9".to_owned(), BackgroundTaskStatus::Completed, Some(4_000))]
+        );
+        assert!(known.is_empty());
+    }
 
     #[test]
     fn request_changes_codex_web_actions_keep_their_structured_arguments() {

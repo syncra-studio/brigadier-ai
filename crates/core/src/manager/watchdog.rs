@@ -2,8 +2,6 @@
 //! replace the worker. Commands and tool calls are never interrupted for taking time.
 //! A CLI process that has gone away is recovered automatically after the plumbing grace.
 //! Unanswered cards are still listed under "Waiting on you" for overnight runs.
-//! A background run of the thread's still shown running though nothing watches it any more
-//! is ended, and the thread hears it.
 
 pub(crate) mod progress;
 
@@ -281,17 +279,6 @@ pub(crate) fn stuck_cards(board: &Board, now: i64, after: i64) -> Vec<StuckCard>
     stuck
 }
 
-/// A duration as people say it ("10 minutes", "45 seconds").
-pub(crate) fn spoken(ms: i64) -> String {
-    let secs = (ms / 1_000).max(0);
-    let (n, unit) = if secs < 60 {
-        (secs, "second")
-    } else {
-        ((secs + 30) / 60, "minute")
-    };
-    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
-}
-
 impl SessionManager {
     /// Starts the watchdog's rounds.
     pub(super) fn start_watchdog(&self) {
@@ -314,8 +301,7 @@ impl SessionManager {
         });
     }
 
-    /// One round: the live conversations' workers, gates and cards, and their background runs
-    /// whose end was missed.
+    /// One round: the live conversations' workers, gates and cards.
     async fn watch(&self, timing: &Timing) {
         let lives: Vec<Arc<TaskLive>> = self.tasks_lock().values().cloned().collect();
         let mut conversations: HashSet<ConversationId> =
@@ -343,7 +329,6 @@ impl SessionManager {
             }
             self.watch_cards(&conversation_id, &board, timing, now)
                 .await;
-            self.end_missed_runs(&conversation_id).await;
         }
     }
 
@@ -823,15 +808,6 @@ mod tests {
         assert_eq!(later[0].card_id, CardId("a2".into()));
     }
 
-    #[test]
-    fn durations_read_as_people_say_them() {
-        assert_eq!(spoken(45_000), "45 seconds");
-        assert_eq!(spoken(60_000), "1 minute");
-        assert_eq!(spoken(100_000), "2 minutes");
-        assert_eq!(spoken(10 * MIN), "10 minutes");
-        assert_eq!(spoken(2 * MIN), "2 minutes");
-        assert_eq!(spoken(1_000), "1 second");
-    }
     #[test]
     fn watchdog_running_servers_builds_and_plain_commands_have_no_deadline() {
         use super::progress::{CommandKind, command_kind};

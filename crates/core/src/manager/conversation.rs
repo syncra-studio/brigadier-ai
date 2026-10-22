@@ -1840,16 +1840,6 @@ impl SessionManager {
         // The newest answer that works only for what Brigadier owes it (a CI watch, a held
         // merge, a review it left its answer to) has no turn to interrupt: it ends Stopped.
         let owed = self.owed_only(&conv).await;
-        // So does one a background run of its thread's keeps working: the Stop ends the run.
-        let backgrounded: Vec<String> = match self.core.board(&id).await {
-            Ok(board) => board
-                .background_runs
-                .values()
-                .filter(|run| run.state == crate::work::BackgroundRunState::Running)
-                .filter_map(|run| run.request_id.clone())
-                .collect(),
-            Err(_) => Vec::new(),
-        };
         let open: Vec<String> = match self.core.board(&id).await {
             Ok(board) => board
                 .requests
@@ -1864,7 +1854,7 @@ impl SessionManager {
         let (stopped, handed_over, waits_on_jobs) = {
             let mut state = conv.state.lock().await;
             state.stopped_open.extend(open);
-            for request in owed.into_iter().chain(backgrounded) {
+            if let Some(request) = owed {
                 state.outcomes.insert(request, RequestState::Stopped);
             }
             // A request that waits only for the CLI's background jobs ends Stopped; the turn
@@ -1966,7 +1956,7 @@ impl SessionManager {
         if let Err(err) = stopped {
             tracing::warn!(conversation = %id, error = %err, "could not remove user-stopped previews");
         }
-        self.stop_background_runs(&id);
+        self.stop_session_work(&id);
         // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
         // thread for them later: the CI watches (the composer's Stop stops the workers too). A
         // failed turn ends none of it: what it started may still come, and works its request
@@ -4102,7 +4092,6 @@ impl SessionManager {
         }
         let turn = conv.items().turn();
         self.image_row(&conv.id, &event, log_seq, turn).await;
-        self.background_item(&conv.id, &event).await;
         match &event {
             ProviderEvent::Reasoning { item_id, text } => {
                 let request_id = conv.state.lock().await.request.clone();

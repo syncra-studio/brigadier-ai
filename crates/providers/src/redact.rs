@@ -562,6 +562,10 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
             opt(input);
             opt(output);
         }
+        ProviderEvent::BackgroundTask { task } => {
+            r(&mut task.label);
+            opt(&mut task.summary);
+        }
         ProviderEvent::Command {
             command,
             cwd,

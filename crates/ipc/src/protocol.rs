@@ -598,11 +598,6 @@ pub enum Request {
         conversation_id: ConversationId,
         preview_id: String,
     },
-    /// Stops one of the thread's commands gone to the background (`run_id`); the thread hears it.
-    StopBackgroundRun {
-        conversation_id: ConversationId,
-        run_id: String,
-    },
     ResumePreview {
         conversation_id: ConversationId,
         preview_id: String,
@@ -616,16 +611,10 @@ pub enum Request {
     ClearPreviews {
         conversation_id: ConversationId,
     },
-    /// The × on an ended preview's or run's Background row (Q94): it leaves the rows.
+    /// The × on an ended preview's Background row (Q94): it leaves the rows.
     DismissBackground {
         conversation_id: ConversationId,
         id: String,
-    },
-    /// Restart on a failed run's Background row (Q94): the row leaves and the thread runs it
-    /// again.
-    RestartBackgroundRun {
-        conversation_id: ConversationId,
-        run_id: String,
     },
     PreviewLog {
         conversation_id: ConversationId,
@@ -727,6 +716,18 @@ pub enum Request {
         conversation_id: ConversationId,
         item_id: String,
     },
+    /// Stops one of the thread's CLI's background tasks (`task_id`, the CLI's own id), as the
+    /// CLI's own Stop does.
+    StopBackgroundTask {
+        conversation_id: ConversationId,
+        task_id: String,
+    },
+    /// What a background command of the thread's CLI printed so far: the end of its output
+    /// file, up to 256 KiB.
+    ReadBackgroundTaskOutput {
+        conversation_id: ConversationId,
+        task_id: String,
+    },
     /// The thread as its CLI keeps it (S9, S10): its CLI session files' items, the live
     /// stream's after them, and its turns. `threadNews` frames extend it.
     ThreadView {
@@ -736,11 +737,6 @@ pub enum Request {
     ReadSessionFileImage {
         conversation_id: ConversationId,
         image: brigadier_providers::session_file::FileImage,
-    },
-    /// A background run's output (`run-<n>`): its end, up to 256 KiB, so far while it runs.
-    ReadBackgroundRun {
-        conversation_id: ConversationId,
-        run_id: String,
     },
     /// A session's changes in the Review tab's scope: whole files unless `whole_files` is
     /// off, whitespace changes left out with `ignore_whitespace`.
@@ -1643,13 +1639,11 @@ pub enum Response {
     Interrupt,
     Resume,
     StopPreview,
-    StopBackgroundRun,
     PausePreview,
     ResumePreview,
     RestartPreview,
     ClearPreviews,
     DismissBackground,
-    RestartBackgroundRun,
     PreviewLog {
         tail: String,
         url: Option<String>,
@@ -1688,10 +1682,9 @@ pub enum Response {
     ThreadView {
         view: brigadier_core::thread_view::ThreadView,
     },
-    ReadBackgroundRun {
+    StopBackgroundTask,
+    ReadBackgroundTaskOutput {
         output: String,
-        /// How many bytes it printed in all (more than `output` holds when its start was cut).
-        bytes: u64,
     },
     GetReviewDiff {
         review: ReviewDiff,
@@ -2477,13 +2470,6 @@ mod preview_tests {
         );
         let decoded: Response = serde_json::from_value(wire).unwrap();
         assert!(matches!(decoded, Response::PreviewLog { tail, .. } if tail == "last two\nlines"));
-    }
-
-    #[test]
-    fn stopping_one_background_run_keeps_its_wire_method() {
-        let wire = serde_json::json!({"method": "stopBackgroundRun", "conversationId": "c", "runId": "run-1"});
-        let request: Request = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(serde_json::to_value(request).unwrap(), wire);
     }
 }
 

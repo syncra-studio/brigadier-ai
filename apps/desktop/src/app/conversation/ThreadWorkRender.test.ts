@@ -28,7 +28,7 @@ function assertMaking(seen: unknown, animation: string) {
   assert.deepEqual(made.tiles, [tile, making.grids[0]!.box]);
 }
 
-test("the thread's own work reads like the reference thread: running commands stream, a row per edited file, image rows, background terminals, the turn's changes from its own record", { timeout: 120000 }, async (t) => {
+test("the thread's own work reads like the reference thread: running commands stream, a row per edited file, image rows, the turn's changes from its own record", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-work.html", "thread-work-result", 90000)) as Record<string, unknown> & { error?: string };
   assert.equal(seen.error, undefined);
   const live = seen as unknown as {
@@ -79,15 +79,6 @@ test("the thread's own work reads like the reference thread: running commands st
   assertMaking(seen.making, "pulse");
   // Shown closed with its image made; one more starting opens it to its place.
   assert.deepEqual(seen.later, ["closed", "open", "Creating 2 images"]);
-
-  // Background terminals, by how they stand; a finished one opens to its output.
-  assert.deepEqual(seen.background, [
-    { row: "Started background terminal with npm run dev -- --port 5173", state: "running", icon: "run" },
-    // A finished one names its command too.
-    { row: "Background terminal finished with npm run dev -- --port 5173", state: "finished", icon: "run" },
-    { row: "Background terminal stopped with npm run dev -- --port 5173", state: "stopped", icon: "stop" },
-  ]);
-  assert.deepEqual(seen.backgroundOutput, { output: "served on :5173 shut down", ending: "Success", asked: ["run-2"] });
 
   // The turn's changes from the request's own record: one file named; four listed, three then more.
   const turnDiff = seen.turnDiff as Record<"one" | "four", { title: string; counts: string; files: number; more: string | null; undo: string | null; held?: string | null }>;

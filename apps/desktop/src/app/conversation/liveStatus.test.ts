@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { answeredHead, elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { BackgroundRun, OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
+import type { OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, boardFromView, doingOf, emptyBoard, type ShownApproval, workerNote } from "@/state/board";
 
@@ -242,32 +242,16 @@ test("a turn resting on other sessions' replies says whom it waits for", () => {
   });
 });
 
-const run = (patch: Partial<BackgroundRun> = {}): BackgroundRun => ({ id: "run-1", conversationId: "c", requestId: "r1", tool: "run",
-  command: "cargo test -p brigadier-core --lib -- flow::background_tests", startedAtMs: 1_000, endedAtMs: null,
-  state: { type: "running" }, ...patch });
-
-test("a long run the request waits on says what runs and since when, rather than Thinking", () => {
-  assert.deepEqual(head(input({ backgroundRuns: byId([run()]) })),
-    { text: "Running cargo test -p brigadier-core --lib -- f…", tone: "busy", sinceMs: 1_000, run: true });
-  // Only its first line names a script.
-  assert.deepEqual(head(input({ backgroundRuns: byId([run({ command: "make\nmake test" })]) }))?.text, "Running make");
-  // Over, or another request's: the line is back to what the thread does.
-  assert.deepEqual(head(input({ backgroundRuns: byId([run({ state: { type: "finished", status: "exit 0" } })]) })), { text: "Thinking", tone: "busy" });
-  assert.deepEqual(head(input({ backgroundRuns: byId([run({ requestId: "r2" })]) })), { text: "Thinking", tone: "busy" });
-  // While the thread itself works, its own line says what it does.
-  assert.deepEqual(head(input({ ...leading, backgroundRuns: byId([run()]) })), { text: "Thinking", tone: "busy" });
-});
-
-test("an answered request whose long run still goes says so under its answer", () => {
-  const running = head(input({ backgroundRuns: byId([run()]) }));
+test("an answered request's line shows once it waits or a late result reopened it", () => {
   // Still in the same working span: neither waiting nor reopened.
   const span = { waitingFor: [], waiting: false, reopened: false };
-  assert.deepEqual(answeredHead(running, span)?.text, "Running cargo test -p brigadier-core --lib -- f…");
   // What the thread merely does between its turns shows only once it waits or a late result reopened it.
   assert.equal(answeredHead({ text: "Thinking", tone: "busy" }, span), null);
   assert.deepEqual(answeredHead({ text: "Thinking", tone: "busy" }, { ...span, reopened: true }), { text: "Thinking", tone: "busy" });
   // The user first, then the sessions it waits on.
-  assert.deepEqual(answeredHead(running, { ...span, waitingFor: ["Docs"] }), { text: "Waiting for Docs to reply", tone: "still" });
+  assert.deepEqual(answeredHead({ text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" }, { ...span, waitingFor: ["Docs"] }),
+    { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
+  assert.deepEqual(answeredHead({ text: "Thinking", tone: "busy" }, { ...span, waitingFor: ["Docs"] }), { text: "Waiting for Docs to reply", tone: "still" });
 });
 
 test("a run's elapsed time is short", () => {

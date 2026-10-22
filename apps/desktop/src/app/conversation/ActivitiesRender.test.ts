@@ -4,46 +4,42 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Row = { label: string; state: string; moving: boolean; elapsed: string; tip: string } | null;
 
-test("Background lists what still runs, one line each with its state and Stop on hover; a web preview opens in the browser, the rest open their output in a tab, and what the user stopped leaves the card", { timeout: 90000 }, async (t) => {
+test("Background lists what still runs, one line each with its state and Stop on hover; a web preview opens in the browser, another preview opens its output in a tab, and what the user stopped leaves the card", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?drive=1", "activities-result", 60000)) as {
     empty: boolean; title: string; order: string[]; rows: Record<string, Row>; heights: number[]; workerLine: string | null; sameRow: boolean;
-    stops: string[]; stopVisibleAtRest: boolean; browsed: string | null; outputs: boolean[]; opened: string | null; openedApp: string; openedRun: string; grew: boolean; calls: string[]; left: string[];
+    stops: string[]; stopVisibleAtRest: boolean; browsed: string | null; outputs: boolean[]; opened: string | null; openedApp: string; grew: boolean; calls: string[]; left: string[];
   };
   assert.equal(seen.empty, true, "nothing running, no section");
   assert.equal(seen.title, "Background");
-  // Newest first: the previews and the thread's long commands in one list.
-  assert.deepEqual(seen.order, ["run-1", "run-2", "preview-2", "preview-1"]);
+  // Newest first.
+  assert.deepEqual(seen.order, ["preview-2", "preview-1"]);
   assert.deepEqual(seen.rows["preview-1"], { label: "Demo pages", state: "running", moving: false, elapsed: "12m", tip: "Showing: pnpm dev --port 5199" });
-  // A build and a check spin; the page that is up shows its live dot.
+  // A build spins; the page that is up shows its live dot.
   assert.deepEqual([seen.rows["preview-2"]?.label, seen.rows["preview-2"]?.state, seen.rows["preview-2"]?.moving], ["Dev app", "building", true]);
   assert.match(seen.rows["preview-2"]?.tip ?? "", /^Building: pnpm tauri build[^]*\nFrom Demo of the fixes$/);
-  assert.deepEqual(seen.rows["run-1"], { label: "Core tests", state: "checking", moving: true, elapsed: "2m", tip: "cargo test -p brigadier-core" });
-  // A command the thread gave no name reads as its command, cut short.
-  assert.equal(seen.rows["run-2"]?.label, "pnpm lint --max-warnings 0 --cache --ca…");
   assert.deepEqual(seen.heights, [28], "one line each");
   // The worker's line names it; what it runs shows in the Workers panel, not the card.
   assert.doesNotMatch(seen.workerLine ?? "", /cargo clippy --workspace/);
   assert.equal(seen.sameRow, true, "the build and the app are the same row");
-  assert.deepEqual(seen.stops, ["Stop", "Stop", "Stop", "Stop"]);
+  assert.deepEqual(seen.stops, ["Stop", "Stop"]);
   assert.equal(seen.stopVisibleAtRest, false, "a running row's Stop shows on hover only");
   // The web preview opens in Brigadier's browser; its output is its row's Show output.
   assert.equal(seen.browsed, "http://localhost:5199/");
-  assert.deepEqual(seen.outputs, [true, false, false]);
+  assert.deepEqual(seen.outputs, [true, false]);
   assert.equal(seen.opened, "panel:output:preview:preview-1 Demo pages");
-  // An app preview and a command open what they print.
+  // An app preview opens what it prints.
   assert.equal(seen.openedApp, "panel:output:preview:preview-2");
-  assert.equal(seen.openedRun, "panel:output:run:run-1");
   assert.equal(seen.grew, false, "nothing opens in the card");
-  assert.deepEqual(seen.calls, ["stopBackgroundRun run-1", "stopPreview preview-1"]);
-  assert.deepEqual(seen.left, ["run-2", "preview-2"], "what the user stopped left the card");
+  assert.deepEqual(seen.calls, ["stopPreview preview-1"]);
+  assert.deepEqual(seen.left, ["preview-2"], "what the user stopped left the card");
 });
 
 test("a Background row leaves as soon as its process ends, failed, finished or stopped: no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
     running: string[]; ended: string[]; section: boolean; restartOrDismiss: number;
   };
-  assert.deepEqual(seen.running, ["preview-14", "preview-13", "preview-12", "preview-11", "run-13", "run-14", "run-15"]);
-  // A crash, a non-zero exit, an interruption, a clean exit and a Stop all take their row off at once.
+  assert.deepEqual(seen.running, ["preview-14", "preview-13", "preview-12", "preview-11"]);
+  // A crash, a non-zero exit, a clean exit and a Stop all take their row off at once.
   assert.deepEqual(seen.ended, []);
   assert.equal(seen.section, false, "nothing runs, no section");
   assert.equal(seen.restartOrDismiss, 0);
@@ -86,4 +82,27 @@ test("Background rows: a spinner while a process is on its way, a green live dot
     assert.deepEqual([look.moving, look.sweeping], [false, false], `${state} is still with less motion`);
     assert.equal(look.icon, expected[state]?.icon, `${state} keeps its icon`);
   }
+});
+
+test("Background shows the CLI's own background tasks: a command and a subagent, each with Stop; the command opens its output; each drops on the CLI's own timing", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "activities.html?tasks=1", "activities-result", 60000)) as {
+    running: string[]; rows: Record<string, Row>; stops: string[]; buttons: string[]; opened: string; output: boolean; calls: string[];
+    done: Record<string, string>; icons: string[]; agentLeft: boolean; agentLeftWith: string[]; shellLeft: boolean; stoppedOrFailed: string[]; section: boolean;
+  };
+  // Newest first, each named as the CLI names it.
+  assert.deepEqual(seen.running, ["task:a0c79", "task:bdza4j3ng"]);
+  assert.deepEqual(seen.rows["task:bdza4j3ng"], { label: "Sleep 20 seconds then echo marker", state: "running", moving: false, elapsed: "8s", tip: "sleeping" });
+  assert.deepEqual(seen.rows["task:a0c79"], { label: "Reply with hi", state: "running", moving: false, elapsed: "5s", tip: "Reply with hi" });
+  assert.deepEqual(seen.stops, ["Stop", "Stop"]);
+  assert.deepEqual(seen.buttons, ["DIV", "BUTTON"], "only the command opens something");
+  assert.equal(seen.opened, "panel:output:task:bdza4j3ng");
+  assert.equal(seen.output, true, "its output tab reads the CLI's output file");
+  assert.deepEqual(seen.calls, ["stopBackgroundTask bdza4j3ng"]);
+  assert.deepEqual(seen.done, { "task:a0c79": "done", "task:bdza4j3ng": "done" });
+  assert.deepEqual(seen.icons, ["done", "done"]);
+  assert.equal(seen.agentLeft, true, "a done subagent leaves 30 s after it ended");
+  assert.deepEqual(seen.agentLeftWith, ["task:bdza4j3ng"]);
+  assert.equal(seen.shellLeft, true, "a command leaves 5 min after it exited");
+  assert.deepEqual(seen.stoppedOrFailed, [], "stopped and failed tasks leave at once");
+  assert.equal(seen.section, false);
 });

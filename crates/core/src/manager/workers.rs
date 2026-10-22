@@ -2676,7 +2676,7 @@ impl SessionManager {
         let stoppable = self.stoppable(id, "setup");
         self.run_setup_script(
             id,
-            &super::background_runs::background_owner(id),
+            &super::setup_script::setup_owner(id),
             worktree,
             &worker_env(&tmp),
             stoppable.cancel.clone(),

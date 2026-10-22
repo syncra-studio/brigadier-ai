@@ -188,6 +188,15 @@ pub trait ProviderSession: Send + Sync {
         Box::pin(async { Err(Error::Invalid("this CLI cannot compact its context".into())) })
     }
 
+    /// Stops one of the CLI's background tasks ([`ProviderEvent::BackgroundTask`]) by its id.
+    fn stop_task(&self, _task_id: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async {
+            Err(Error::Invalid(
+                "this CLI cannot stop a background task".into(),
+            ))
+        })
+    }
+
     /// Answers an [`ProviderEvent::ApprovalRequested`].
     fn answer(&self, approval_id: String, decision: ApprovalDecision) -> BoxFuture<'_, Result<()>>;
 

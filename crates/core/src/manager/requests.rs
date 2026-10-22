@@ -512,8 +512,7 @@ fn tasks_in(board: &Board, request: &str, matches: impl Fn(TaskState) -> bool) -
 }
 
 /// Whether a task of the request runs, lands, or is about to (a fix Brigadier checks and
-/// lands once its worker's turn is over), or a command of its thread runs in the background:
-/// its result comes as a message.
+/// lands once its worker's turn is over).
 fn runs_in(board: &Board, request: &str) -> bool {
     tasks_in(board, request, |state| {
         matches!(
@@ -521,10 +520,6 @@ fn runs_in(board: &Board, request: &str) -> bool {
             TaskState::Queued | TaskState::Starting | TaskState::Running | TaskState::Landing
         )
     }) || relanding_in(board, request)
-        || board.background_runs.values().any(|run| {
-            run.state == crate::work::BackgroundRunState::Running
-                && run.request_id.as_deref() == Some(request)
-        })
 }
 
 /// Whether Brigadier still owes the request a turn: something under way will wake the thread

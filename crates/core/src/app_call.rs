@@ -68,7 +68,7 @@ pub enum OpenTarget {
     },
     /// The Progress tab: the job step by step, with its reviews and checks.
     Progress,
-    /// What a preview or a background run prints, in an Output tab.
+    /// What a preview prints, in an Output tab.
     Output {
         source: OutputOf,
         id: String,
@@ -116,7 +116,6 @@ pub enum DiffScope {
 #[serde(rename_all = "camelCase")]
 pub enum OutputOf {
     Preview,
-    Run,
 }
 
 impl AppOp {

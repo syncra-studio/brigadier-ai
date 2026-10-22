@@ -191,11 +191,6 @@ async fn the_threads_full_checks_are_a_plain_command_with_their_real_exit_and_ou
         Some("Exit code 3\ncore tests: 12 passed\nlint: 1 problem in src/a.rs\n")
     );
     assert!(board.machine_steps.is_empty(), "{:#?}", board.machine_steps);
-    assert!(
-        board.background_runs.is_empty(),
-        "{:#?}",
-        board.background_runs
-    );
     flow.stop().await;
 }
 
@@ -366,11 +361,6 @@ async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
     // Time for anything automatic to start.
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     let board = flow.board().await;
-    assert!(
-        board.background_runs.is_empty(),
-        "{:#?}",
-        board.background_runs
-    );
     assert_eq!(board.tasks.len(), 1, "{:#?}", board.tasks);
     flow.stop().await;
 }

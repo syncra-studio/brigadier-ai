@@ -3,4 +3,4 @@
 /**
  * What an Output tab shows.
  */
-export type OutputOf = "preview" | "run";
+export type OutputOf = "preview";

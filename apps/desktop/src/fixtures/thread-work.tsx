@@ -17,7 +17,6 @@
  *   each image still being made, beside the one made already; one finishes into its tile in the
  *   same place, one fails and leaves nothing. `making=1` measures only these.
  * - A row shown closed with an image made already: one more starting to be made opens it.
- * - Background terminals: running, finished (opening to its output), stopped.
  * - A Codex find in a page: "Searched the web for 'LTS' in https://nodejs.org/en".
  * - The turn's changed files from the request's own record: one file named in the title; four
  *   files with one Undo leaves as it is; Undo, its toast naming that file, then Reapply.
@@ -37,7 +36,7 @@ import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { OpenFileContext } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
-import type { BackgroundRun, Conversation, OrchestratorStepKind, ProviderEvent, RawEntry, Request, UserRequest } from "@/ipc/generated";
+import type { Conversation, OrchestratorStepKind, ProviderEvent, RawEntry, Request, UserRequest } from "@/ipc/generated";
 import { sessionTabs } from "@/state/sessionTabs";
 import { emptyBoard, useBoard } from "@/state/board";
 import { applyThreadNews, mergeEntries, useCliThread } from "@/state/cliThread";
@@ -58,7 +57,7 @@ const NEW_DIFF = "@@ -0,0 +1,3 @@\n+export const one = 1;\n+export const two = 2
 const OLD_DIFF = "@@ -1,4 +0,0 @@\n-a\n-b\n-c\n-d\n";
 const SVG = (fill: string) => btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 48"><rect width="64" height="48" fill="${fill}"/></svg>`);
 
-const asked = { images: [] as string[], runs: [] as string[], undo: [] as string[], opened: [] as string[] };
+const asked = { images: [] as string[], undo: [] as string[], opened: [] as string[] };
 
 const entry = (streamSeq: number, event: ProviderEvent): RawEntry => ({ streamSeq, atMs: now, event });
 
@@ -91,11 +90,6 @@ mockIPC((command, payload) => {
       asked.images.push(req.itemId);
       if (req.itemId === "view-gone") return Promise.reject(new Error("This image is no longer there"));
       return { method: req.method, data: SVG(req.itemId === "made" ? "purple" : req.itemId === "view-1" ? "teal" : "orange"), mime: "image/svg+xml" };
-    case "readBackgroundRun":
-      asked.runs.push(req.runId);
-      // A running one has printed nothing yet; the ended ones, their whole output.
-      if (req.runId === "run-1") return { method: req.method, output: "", bytes: 0 };
-      return { method: req.method, output: "served on :5173\nshut down", bytes: 26 };
     case "getReviewDiff":
       return { method: req.method, review: { patch: "", files: [], insertions: 0, deletions: 0 } };
     default:
@@ -125,10 +119,6 @@ const request = (id: string, state: UserRequest["state"]["type"], changes: UserR
     id, conversationId: CHAT, preview: id, state: { type: state }, startedAtMs: now - 60_000, endedAtMs: state === "working" ? null : now,
     steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false, ...(changes && { changes }),
   }) as UserRequest;
-const run = (id: string, itemId: string, state: BackgroundRun["state"]): BackgroundRun => ({
-  id, conversationId: CHAT, requestId: "r1", tool: "run", command: "npm run dev -- --port 5173", startedAtMs: now - 90_000,
-  endedAtMs: state.type === "running" ? null : now, state, itemId,
-});
 
 // The thread's view: the request's calls, each merged the way the stream says them.
 useCliThread.setState({
@@ -146,11 +136,6 @@ useBoard.setState({
         settled: true,
       }),
       live: request("live", "working", { stat: stat([["src/math.js", 8, 2], ["src/new.ts", 3, 0]]), settled: false }),
-    },
-    backgroundRuns: {
-      "run-1": run("run-1", "bg-running", { type: "running" }),
-      "run-2": run("run-2", "bg-finished", { type: "finished", status: "exit 0" }),
-      "run-3": run("run-3", "bg-stopped", { type: "stopped" }),
     },
   } as unknown as ReturnType<typeof emptyBoard>,
 });
@@ -211,7 +196,6 @@ function LaterRow() {
   if (begun) steps.push(tool(27, { itemId: "made-6", name: "imagegen", detail: "a blue square", item: "image", status: "inProgress" }));
   return <ImagesRow steps={steps} />;
 }
-const bg = (itemId: string, position: number) => tool(position, { itemId, name: "mcp__brigadier__run", detail: "npm run dev -- --port 5173", item: "command" });
 
 /** The live group, its steps moving on as `grow` says: the running commands hear more output. */
 let grow: (by: number) => void = () => {};
@@ -279,11 +263,6 @@ function Page() {
             </Case>
             <Case id="made-gathered">
               <MadeImages steps={[...views, ...made]} />
-            </Case>
-            <Case id="background">
-              <LeadStepRow step={bg("bg-running", 30)} />
-              <LeadStepRow step={bg("bg-finished", 31)} />
-              <LeadStepRow step={bg("bg-stopped", 32)} />
             </Case>
             <Case id="turn-diff-one">
               <ChangesCard requestIds={["one"]} />
@@ -394,20 +373,6 @@ async function measure(): Promise<object> {
   begin();
   await until(() => all("[data-slot=image-generation]", at("later")).length === 1);
   out.later = [shut, later()!.getAttribute("data-state"), text(one("[role=button]", later()!))];
-
-  // Background terminals: their words; a finished one opens to its output.
-  out.background = all("[data-slot=background-run-row]", at("background")).map((row) => ({
-    row: text(row),
-    state: row.getAttribute("data-state"),
-    icon: one("[data-icon]", row)?.getAttribute("data-icon") ?? null,
-  }));
-  one<HTMLElement>("[data-state=finished] [role=button]", at("background"))?.click();
-  await until(() => one("[data-state=finished] [data-slot=shell-output]", at("background")));
-  out.backgroundOutput = {
-    output: text(one("[data-state=finished] [data-slot=shell-output]", at("background"))),
-    ending: text(one("[data-state=finished] [data-slot=shell-ending]", at("background"))),
-    asked: [...asked.runs],
-  };
 
   // The turn's changed files, from the request's own record.
   const card = (id: string) => ({

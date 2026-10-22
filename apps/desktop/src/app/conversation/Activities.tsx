@@ -1,27 +1,31 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows, taskRows } from "@/app/conversation/backgroundRows";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewWord } from "@/app/conversation/previewStatus";
 import { workerName } from "@/app/conversation/rowWords";
-import { StateIcon, SummaryRowButton, SummarySection } from "@/components/conversation";
+import { StateIcon, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import { Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
 import { openUrl } from "@/ipc/client";
-import type { Preview } from "@/ipc/generated";
-import { stopBackgroundRun, stopPreview } from "@/state/actions";
+import type { BackgroundTask, Preview } from "@/ipc/generated";
+import { stopBackgroundTask, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useCliThread } from "@/state/cliThread";
 import { openLink } from "@/state/links";
 import { openPanelTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
 
-/** One thing the session has going: a preview (the thread's or a worker's), a long command, or an event (CI, a merge). */
+/**
+ * One thing the session has going: a preview (the thread's or a worker's), a background task of
+ * its CLI's, or an event (CI, a merge).
+ */
 type Activity = BackgroundRow;
 
-/** A process or an event at work: its word shimmers. Paused, it rests. */
-const live = (state: BackgroundState) => state !== "paused";
+/** A process or an event at work: its word shimmers. Paused or done, it rests. */
+const live = (state: BackgroundState) => state !== "paused" && state !== "done";
 
 /** What a row is for, first letter up: "Dev app", "Core tests". A command stands as it is. */
 const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
@@ -29,37 +33,42 @@ const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
 const label = (activity: Activity) =>
   activity.type === "event"
     ? activity.name
-    : activity.type === "preview"
-      ? activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name)
-      : activity.run.name ? title(activity.run.name) : commandWords(activity.run.command);
+    : activity.type === "task"
+      ? activity.task.kind === "terminal" ? commandWords(activity.task.label) : activity.task.label
+      : activity.preview.name === activity.preview.command ? commandWords(activity.preview.command) : title(activity.preview.name);
+
+/** No background tasks. */
+const NO_TASKS: readonly BackgroundTask[] = [];
 
 /**
  * "Background": what the session has going in the background, one row per thing: the thread's
- * and the workers' previews, the thread's long commands, and its own events while they run (the
- * CI watch, a merge at work), each with its state in a
+ * and the workers' previews, its CLI's own background tasks (by the CLI's rules, `taskShown`),
+ * and its own events while they run (the CI watch, a merge at work), each with its state in a
  * word and an icon (a worker's copy of an app or a browser at it is a state of the app's row),
  * how long it has gone, and its button on hover: Stop on a process, Open CI on the CI watch. A click on a web preview that is up opens its page in the browser
  * (Brigadier's, by Settings › Browser), with what it prints one button away; an event opens the
- * Progress tab; any other row opens what it prints in a tab. The rows come from the live board:
+ * Progress tab; any other preview opens what it prints in a tab. The rows come from the live board:
  * one leaves as soon as its thing ends, finished, failed or stopped (the thread's fold keeps the
  * history).
  */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const board = useBoard(useShallow((s) => {
     if (s.board?.conversationId !== conversationId) return null;
-    const { previews, backgroundRuns, tasks, orchestratorSteps, requests } = s.board;
-    return { previews, backgroundRuns, tasks, orchestratorSteps, requests };
+    const { previews, tasks, orchestratorSteps, requests } = s.board;
+    return { previews, tasks, orchestratorSteps, requests };
   }));
-  const activities = board
-    ? backgroundRows(Object.values(board.previews), Object.values(board.backgroundRuns), board.tasks, (task) => workerName(board.tasks, task), board)
+  const cliTasks = useCliThread((s) => s.views[conversationId]?.background ?? NO_TASKS);
+  const rows = board
+    ? backgroundRows(Object.values(board.previews), board.tasks, (task) => workerName(board.tasks, task), board)
     : [];
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
-  const since = activities.map((activity) => `${activity.id}@${activity.startedAtMs}`).join();
+  const since = [...rows, ...cliTasks].map((thing) => `${thing.id}@${thing.startedAtMs}`).join();
   // eslint-disable-next-line react/purity
   const [clock, setClock] = useState(() => ({ since, now: Date.now() }));
   // eslint-disable-next-line react/purity
   if (clock.since !== since) setClock({ since, now: Date.now() });
+  const activities = [...rows, ...taskRows(cliTasks, clock.now)].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
   const ticking = activities.length > 0;
   useEffect(() => {
     if (!ticking) return;
@@ -78,12 +87,14 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
 
 function BackgroundRow({ conversationId, activity, now }: { conversationId: string; activity: Activity; now: number }) {
   const name = label(activity);
-  const meta = elapsedWords(now - activity.startedAtMs);
+  // A task that ended shows how long it ran.
+  const meta = elapsedWords((activity.type === "task" ? (activity.task.endedAtMs ?? now) : now) - activity.startedAtMs);
   const state = (
     <span data-state={activity.state} className={cn("text-muted-foreground", live(activity.state) && "shimmer")}>
       {" "}{activity.state}{activity.type === "event" && activity.words ? ` · ${activity.words}` : ""}
     </span>
   );
+  if (activity.type === "task") return <TaskRow conversationId={conversationId} task={activity.task} name={name} meta={meta} state={activity.state} words={state} />;
   if (activity.type === "event") {
     return (
       <SummaryRowButton
@@ -99,18 +110,14 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
       </SummaryRowButton>
     );
   }
-  const tip = activity.type === "preview"
-    ? [
-      `${previewWord(activity.preview)}: ${activity.preview.command}`,
-      activity.worker && `From ${activity.worker}`,
-      ...activity.with.map((copy: Preview) => `${title(copy.name)}: ${copy.command}`),
-    ].filter(Boolean).join("\n")
-    : activity.run.command;
-  const stop = activity.type === "preview"
-    ? () => stopPreview(conversationId, activity.id)
-    : () => stopBackgroundRun(conversationId, activity.id);
-  const output = () => openPanelTab(conversationId, { type: "output", source: activity.type, id: activity.id }, name);
-  const url = activity.type === "preview" && activity.preview.kind === "web" && activity.preview.state.type === "running" ? activity.preview.url : undefined;
+  const tip = [
+    `${previewWord(activity.preview)}: ${activity.preview.command}`,
+    activity.worker && `From ${activity.worker}`,
+    ...activity.with.map((copy: Preview) => `${title(copy.name)}: ${copy.command}`),
+  ].filter(Boolean).join("\n");
+  const stop = () => stopPreview(conversationId, activity.id);
+  const output = () => openPanelTab(conversationId, { type: "output", source: "preview", id: activity.id }, name);
+  const url = activity.preview.kind === "web" && activity.preview.state.type === "running" ? activity.preview.url : undefined;
   return (
     <SummaryRowButton
       data-activity={activity.id}
@@ -133,6 +140,34 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
     >
       {name}
       {state}
+    </SummaryRowButton>
+  );
+}
+
+/**
+ * A row for one of the CLI's background tasks: its last line on hover, Stop while it runs, and a
+ * command's output in a tab on a click. A subagent or a Codex terminal has no output to open.
+ */
+function TaskRow({ conversationId, task, name, meta, state, words }: {
+  conversationId: string;
+  task: BackgroundTask;
+  name: string;
+  meta: string;
+  state: BackgroundState;
+  words: ReactNode;
+}) {
+  const parts = {
+    "data-activity": `task:${task.id}`,
+    title: task.lastLine ?? task.summary ?? task.label,
+    icon: <StateIcon state={state} />,
+    meta,
+    action: task.status === "running" ? <StopButton name={name} stop={() => stopBackgroundTask(conversationId, task.id)} /> : undefined,
+  };
+  if (task.kind !== "shell" || !task.outputFile) return <SummaryRow {...parts}>{name}{words}</SummaryRow>;
+  return (
+    <SummaryRowButton {...parts} onClick={() => openPanelTab(conversationId, { type: "output", source: "task", id: task.id }, name)}>
+      {name}
+      {words}
     </SummaryRowButton>
   );
 }

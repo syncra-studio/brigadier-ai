@@ -94,23 +94,17 @@ impl SessionManager {
                 }
                 let board = self.core.board(id).await?;
                 let wanted = wanted.trim().to_owned();
-                let (source, title) = if let Some(preview) = board.previews.get(&wanted) {
-                    let name = if preview.name.is_empty() {
-                        &preview.command
-                    } else {
-                        &preview.name
-                    };
-                    (OutputOf::Preview, first_up(name))
-                } else if let Some(run) = board.background_runs.get(&wanted) {
-                    (
-                        OutputOf::Run,
-                        first_up(run.name.as_deref().unwrap_or(&run.command)),
-                    )
-                } else {
+                let Some(preview) = board.previews.get(&wanted) else {
                     return Err(Error::Invalid(format!(
-                        "there is no preview or background run {wanted} in this session"
+                        "there is no preview {wanted} in this session"
                     )));
                 };
+                let name = if preview.name.is_empty() {
+                    &preview.command
+                } else {
+                    &preview.name
+                };
+                let (source, title) = (OutputOf::Preview, first_up(name));
                 let words = format!("the output of {title}");
                 (
                     OpenTarget::Output {

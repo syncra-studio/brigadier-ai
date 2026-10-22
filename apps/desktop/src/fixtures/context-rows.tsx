@@ -16,7 +16,7 @@ import { AgentsPanelContext, type AgentsPanelState } from "@/app/conversation/Wo
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, Conversation, OrchestratorStep, Plan, Preview, Request, Task } from "@/ipc/generated";
+import type { Conversation, OrchestratorStep, Plan, Preview, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { openPanelTab, sessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -50,11 +50,9 @@ plan.steps = [
 ];
 const page: Preview = { id: "preview-1", conversationId: id, name: "todo app", command: "npm run dev", kind: "web", workdir: "/work/todo-app-web-ui",
   workspace: "/work/todo-app-web-ui", pid: 42, log: null, url: "http://localhost:3000/", state: { type: "running" }, building: false, startedAtMs: now - 3 * MIN, endedAtMs: null };
-const run: BackgroundRun = { id: "run-1", conversationId: id, requestId: "r1", tool: "run", name: "api tests", command: "npm test -- --watch",
-  startedAtMs: now - 2 * MIN, endedAtMs: null, state: { type: "running" } };
 const step = (kind: OrchestratorStep["kind"], at: number): OrchestratorStep => ({ requestId: "r1", kind, atMs: now - at * MIN, position: 0 });
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [plan.id]: plan },
-  previews: { [page.id]: page }, backgroundRuns: { [run.id]: run },
+  previews: { [page.id]: page },
   // The MCP servers each agent's CLI connected: the session's own model at its start, a worker's kept current.
   mcpServers: {
     lead: { taskId: null, provider: "claude", atStart: true, servers: [

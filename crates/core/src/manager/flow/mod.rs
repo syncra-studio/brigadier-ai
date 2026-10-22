@@ -1964,12 +1964,6 @@ impl Flow {
         self.core.board(id).await.unwrap()
     }
 
-    /// Lets the thread's commands go to the background past `FOREGROUND`, as in the app: by
-    /// default a test's answer in their calls, however loaded the machine.
-    pub fn background_commands(&self) {
-        super::background_runs::let_background(&self.conversation);
-    }
-
     /// Waits until `done` holds for the conversation's board.
     pub async fn until(&self, what: &str, done: impl Fn(&Board) -> bool) -> Board {
         self.until_in(&self.conversation, what, done).await

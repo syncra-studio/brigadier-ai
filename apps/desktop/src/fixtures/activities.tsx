@@ -1,13 +1,15 @@
 /**
  * The production context card's Background section, fed from board data and the events that
- * change it: the thread's web preview, a worker's dev app (building, then starting, then running,
- * as its preview events say), the thread's named long command and an unnamed one. With `drive=1`
- * it opens their output, stops two, ends them, and writes what it saw. With `states=1` it shows a
- * row in each state (building, starting, running, paused, smoke testing, checking) and writes how
- * each one's icon and word look and move. With `ended=1` it runs processes, then ends them
- * (failed, finished, stopped) and writes that their rows left. With `events=1` it shows the
+ * change it: the thread's web preview and a worker's dev app (building, then starting, then
+ * running, as its preview events say). With `drive=1` it opens their output, stops one, ends it,
+ * and writes what it saw. With `states=1` it shows a row in each state (building, starting,
+ * running, paused, smoke testing, checking) and writes how each one's icon and word look and move.
+ * With `ended=1` it runs processes, then ends them (failed, finished, stopped) and writes that
+ * their rows left. With `events=1` it shows the
  * session's events while they run (the CI watch, then a merge at work), opens CI, ends them, and
- * writes what it saw.
+ * writes what it saw. With `tasks=1` the CLI's own background tasks come as its live stream says
+ * them (a `run_in_background` command and a background subagent): their rows, Stop, the command's
+ * output, and each row dropping on the CLI's own timing; it writes what it saw.
  * Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -16,11 +18,13 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
+import { OutputTab } from "@/app/side-panel/OutputTab";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, CiRun, Conversation, EventEnvelope, OrchestratorStep, Preview, Request, Task, UserRequest } from "@/ipc/generated";
+import type { BackgroundTask, CiRun, Conversation, EventEnvelope, OrchestratorStep, Preview, Request, Task, UserRequest } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
+import { applyThreadNews, useCliThread } from "@/state/cliThread";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
@@ -42,10 +46,6 @@ const app: Preview = { id: "preview-2", conversationId: id, taskId: "task-2", na
   command: "pnpm tauri build --debug --bundles app --config /scratch/tauri.conf.json && \"/work/task-2/target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier-desktop\"",
   workdir: "/work/task-2", workspace: "/work/task-2", pid: 43, log: null,
   state: { type: "starting" }, building: true, startedAtMs: now - 4 * MIN, endedAtMs: null };
-const tests: BackgroundRun = { id: "run-1", conversationId: id, requestId: "r1", tool: "run", name: "core tests",
-  command: "cargo test -p brigadier-core", startedAtMs: now - 2 * MIN, endedAtMs: null, state: { type: "running" } };
-const lint: BackgroundRun = { id: "run-2", conversationId: id, requestId: "r1", tool: "run", command: "pnpm lint --max-warnings 0 --cache --cache-location /scratch/lint",
-  startedAtMs: now - 3 * MIN, endedAtMs: null, state: { type: "running" } };
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks: { [worker.id]: worker },
   // The worker goes on with other work while its dev app builds.
   activity: { "task-2": "$ cargo clippy --workspace" } } });
@@ -67,7 +67,8 @@ mockIPC((command, payload) => {
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "previewLog") return { method: req.method, tail: "VITE ready in 286 ms", url: null };
   if (req.method === "stopPreview") calls.push(`stopPreview ${req.previewId}`);
-  if (req.method === "stopBackgroundRun") calls.push(`stopBackgroundRun ${req.runId}`);
+  if (req.method === "stopBackgroundTask") calls.push(`stopBackgroundTask ${req.taskId}`);
+  if (req.method === "readBackgroundTaskOutput") return { method: req.method, output: "sleeping\nmarker\n" };
   return { method: req.method };
 });
 
@@ -99,7 +100,7 @@ const actionsVisible = (activity: string) => {
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 30)));
 
 /** One row in each state: a build, an app starting, the thread's page up, a paused app, an app a
- * worker smoke-tests, and a check. */
+ * worker smoke-tests, and an app a worker checks against its own copy. */
 const { taskId: _worker, ...own } = app;
 const states = {
   building: app,
@@ -107,8 +108,10 @@ const states = {
   running: page,
   paused: { ...own, id: "preview-5", name: "storybook", command: "pnpm storybook", building: false, state: { type: "paused" }, startedAtMs: now - 20 * MIN } as Preview,
   "smoke testing": { ...own, id: "preview-6", name: "todo app", command: "pnpm start", building: false, state: { type: "running" }, startedAtMs: now - 30 * MIN } as Preview,
+  checking: { ...own, id: "preview-8", name: "core api", command: "node api.js", building: false, state: { type: "running" }, startedAtMs: now - 2 * MIN } as Preview,
 };
 const smoke: Preview = { ...states["smoke testing"], id: "preview-7", taskId: "task-2", name: "todo app smoke", command: "PORT=5301 pnpm start", startedAtMs: now - MIN };
+const check: Preview = { ...states.checking, id: "preview-9", taskId: "task-2", name: "core api copy", command: "PORT=5302 node api.js", startedAtMs: now - MIN };
 
 const moves = (node: Element | null | undefined) => !!node && getComputedStyle(node).animationName !== "none";
 
@@ -116,7 +119,7 @@ const moves = (node: Element | null | undefined) => !!node && getComputedStyle(n
 async function readStates(): Promise<Record<string, unknown>> {
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
   send(...Object.values(states).map((preview) => ({ type: "previewUpdated" as const, preview })), { type: "previewUpdated", preview: smoke },
-    { type: "backgroundRunUpdated", run: tests });
+    { type: "previewUpdated", preview: check });
   await frame();
   return Object.fromEntries([...(section()?.querySelectorAll<HTMLElement>("[data-activity]") ?? [])].map((button) => {
     const icon = button.querySelector("[data-icon]");
@@ -135,12 +138,11 @@ async function drive(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
   seen.empty = !section();
-  send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "backgroundRunUpdated", run: lint },
-    { type: "previewUpdated", preview: app });
+  send({ type: "previewUpdated", preview: page }, { type: "previewUpdated", preview: app });
   await frame();
   seen.title = text(section()?.querySelector("header button[aria-controls]"));
   seen.order = [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
-  seen.rows = Object.fromEntries(["preview-1", "preview-2", "run-1", "run-2"].map((activity) => [activity, read(activity)]));
+  seen.rows = Object.fromEntries(["preview-1", "preview-2"].map((activity) => [activity, read(activity)]));
   seen.heights = [...new Set([...(section()?.querySelectorAll<HTMLElement>("[data-activity]") ?? [])].map((button) => Math.round(button.getBoundingClientRect().height)))];
   seen.workerLine = text(document.querySelector('[aria-label="Session workers"]'));
   // The build is done and the app starts, then runs: the same row.
@@ -150,11 +152,11 @@ async function drive(): Promise<Record<string, unknown>> {
   send({ type: "previewUpdated", preview: { ...app, building: false, state: { type: "running" } } });
   await frame();
   seen.sameRow = building !== null && row("preview-2") === building;
-  seen.stops = ["preview-1", "preview-2", "run-1", "run-2"].map((activity) => text(stop(activity)));
+  seen.stops = ["preview-1", "preview-2"].map((activity) => text(stop(activity)));
   // A running row's Stop shows only on hover or focus, not at rest.
-  seen.stopVisibleAtRest = actionsVisible("run-1");
+  seen.stopVisibleAtRest = actionsVisible("preview-2");
   // A web preview that is up opens its page in Brigadier's browser, its output one button away;
-  // anything else opens what it prints in a tab. Nothing opens in the card.
+  // any other preview opens what it prints in a tab. Nothing opens in the card.
   const height = section()!.getBoundingClientRect().height;
   const front = () => {
     const tabs = sessionTabs(id);
@@ -164,7 +166,7 @@ async function drive(): Promise<Record<string, unknown>> {
   await frame();
   const browser = front();
   seen.browsed = browser?.kind === "browser" ? browser.url : browser?.kind ?? null;
-  seen.outputs = ["preview-1", "preview-2", "run-1"].map((activity) => !!action(activity, "Show output"));
+  seen.outputs = ["preview-1", "preview-2"].map((activity) => !!action(activity, "Show output"));
   action("preview-1", "Show output")?.click();
   await frame();
   const tab = front();
@@ -172,31 +174,23 @@ async function drive(): Promise<Record<string, unknown>> {
   row("preview-2")?.click();
   await frame();
   seen.openedApp = sessionTabs(id).active;
-  row("run-1")?.click();
-  await frame();
-  seen.openedRun = sessionTabs(id).active;
   seen.grew = section()!.getBoundingClientRect().height !== height;
   stop("preview-1")?.click();
-  stop("run-1")?.click();
-  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 2; ) await frame();
+  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 1; ) await frame();
   seen.calls = calls.toSorted();
   // What the user stopped leaves the card.
-  send({ type: "previewUpdated", preview: { ...page, state: { type: "stopped", reason: "stopped by the user" }, endedAtMs: Date.now() } },
-    { type: "backgroundRunUpdated", run: { ...tests, state: { type: "stopped" }, endedAtMs: Date.now() } as BackgroundRun });
+  send({ type: "previewUpdated", preview: { ...page, state: { type: "stopped", reason: "stopped by the user" }, endedAtMs: Date.now() } });
   await frame();
   seen.left = [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
   return seen;
 }
 
-/** The thread's processes running, then ended: a page that crashes, an api server that fails, a docs build and a lint that finish, tests that fail, a check interrupted, and one the user stops. */
+/** The thread's processes running, then ended: a page that crashes, an api server that fails, a docs build that finishes, and one the user stops. */
 const exited = (code: number) => ({ type: "exited" as const, code, status: `exit ${code}` });
 const crashed: Preview = { ...page, id: "preview-11", name: "Brigadier dev app", startedAtMs: now - 9 * MIN };
 const api: Preview = { ...own, id: "preview-12", name: "api server", command: "node server.js", building: false, state: { type: "running" }, startedAtMs: now - 7 * MIN };
 const docs: Preview = { ...own, id: "preview-13", name: "docs build", command: "pnpm docs", building: false, state: { type: "running" }, startedAtMs: now - 5 * MIN };
 const storybook: Preview = { ...own, id: "preview-14", name: "storybook", command: "pnpm storybook", building: false, state: { type: "running" }, startedAtMs: now - 3 * MIN };
-const failedTests: BackgroundRun = { ...tests, id: "run-13", startedAtMs: now - 10 * MIN };
-const lintDone: BackgroundRun = { ...lint, id: "run-14", startedAtMs: now - 11 * MIN };
-const cut: BackgroundRun = { ...lint, id: "run-15", name: "e2e", command: "pnpm e2e", startedAtMs: now - 12 * MIN };
 
 /** The rows' ids, top to bottom. */
 const ids = () => [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
@@ -206,8 +200,7 @@ const restartOrDismiss = () => document.querySelectorAll('[data-slot="summary-ca
 async function driveEnded(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
-  send(...[crashed, api, docs, storybook].map((preview) => ({ type: "previewUpdated" as const, preview })),
-    ...[failedTests, lintDone, cut].map((run) => ({ type: "backgroundRunUpdated" as const, run })));
+  send(...[crashed, api, docs, storybook].map((preview) => ({ type: "previewUpdated" as const, preview })));
   await frame();
   seen.running = ids();
   const ended = Date.now();
@@ -216,12 +209,7 @@ async function driveEnded(): Promise<Record<string, unknown>> {
     { ...api, state: { type: "exited", code: null, status: "killed by signal 11" } },
     { ...docs, state: exited(0) },
     { ...storybook, state: { type: "stopped", reason: "stopped by the user" } },
-  ].map((preview) => ({ type: "previewUpdated" as const, preview: { ...preview, endedAtMs: ended } as Preview })),
-  ...[
-    { ...failedTests, state: { type: "finished", status: "exit 101" } },
-    { ...lintDone, state: { type: "finished", status: "exit 0" } },
-    { ...cut, state: { type: "interrupted", reason: "Brigadier quit" } },
-  ].map((run) => ({ type: "backgroundRunUpdated" as const, run: { ...run, endedAtMs: ended } as BackgroundRun })));
+  ].map((preview) => ({ type: "previewUpdated" as const, preview: { ...preview, endedAtMs: ended } as Preview })));
   await frame();
   seen.ended = ids();
   seen.section = !!section();
@@ -276,16 +264,65 @@ async function driveEvents(): Promise<Record<string, unknown>> {
   return seen;
 }
 
+/** The CLI's background tasks, as Claude Code's stream says them. */
+const sleep: BackgroundTask = { id: "bdza4j3ng", itemId: "toolu_bash", kind: "shell", label: "Sleep 20 seconds then echo marker", status: "running",
+  startedAtMs: now - 8_000, endedAtMs: null, outputFile: "/tmp/claude/tasks/bdza4j3ng.output", summary: null, lastLine: "sleeping" };
+const helper: BackgroundTask = { id: "a0c79", itemId: "toolu_agent", kind: "agent", label: "Reply with hi", status: "running",
+  startedAtMs: now - 5_000, endedAtMs: null, outputFile: null, summary: null, lastLine: null };
+const tasksSaid = (...background: BackgroundTask[]) => applyThreadNews({ conversationId: id, entries: [], opened: false, background });
+/** Frames until `done` holds, up to `ms`; how long it took. */
+async function until(done: () => boolean, ms: number): Promise<number> {
+  const start = Date.now();
+  while (!done() && Date.now() - start < ms) await frame();
+  return Date.now() - start;
+}
+
+async function driveTasks(): Promise<Record<string, unknown>> {
+  const seen: Record<string, unknown> = {};
+  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
+  useCliThread.setState({ views: { [id]: { entries: [], turns: [] } } });
+  tasksSaid(sleep, helper);
+  await until(() => ids().length === 2, 3000);
+  seen.running = ids();
+  seen.rows = Object.fromEntries(ids().map((activity) => [activity, read(activity!)]));
+  seen.stops = ids().map((activity) => text(stop(activity!)));
+  seen.buttons = ids().map((activity) => row(activity!)?.tagName ?? null);
+  // A command opens its output in a tab; a subagent has none to open.
+  row("task:bdza4j3ng")?.click();
+  await frame();
+  seen.opened = sessionTabs(id).active;
+  seen.output = await until(() => !!document.querySelector('[data-slot="output-tab"]')?.textContent?.includes("marker"), 3000) < 3000;
+  stop("task:bdza4j3ng")?.click();
+  await until(() => calls.length > 0, 3000);
+  seen.calls = calls.toSorted();
+  // The subagent finished 29 s ago: done for a second more, then gone (30 s). The command exited
+  // almost 5 minutes ago: done, then gone. A stopped or failed task leaves at once.
+  const ended = Date.now();
+  tasksSaid({ ...sleep, status: "completed", endedAtMs: ended - 5 * MIN + 2500 }, { ...helper, status: "completed", endedAtMs: ended - 29_000, summary: "hi" });
+  await frame();
+  seen.done = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
+  seen.icons = ids().map((activity) => row(activity!)?.querySelector("[data-icon]")?.getAttribute("data-icon") ?? null);
+  seen.agentLeft = await until(() => !row("task:a0c79"), 5000) < 5000 && Date.now() - ended >= 900;
+  seen.agentLeftWith = ids();
+  seen.shellLeft = await until(() => !row("task:bdza4j3ng"), 6000) < 6000 && Date.now() - ended >= 2400;
+  tasksSaid({ ...sleep, id: "b2", status: "stopped", endedAtMs: Date.now() }, { ...helper, id: "a2", status: "failed", endedAtMs: Date.now() });
+  await frame();
+  seen.stoppedOrFailed = ids();
+  seen.section = !!section();
+  return seen;
+}
+
 function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
+    else if (params.has("tasks")) void driveTasks().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("ended")) void driveEnded().then((seen) => setResult(JSON.stringify(seen)));
     else if (params.has("events")) void driveEvents().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     // `shot=1` leaves the result off the page, for a screenshot.
     else if (params.has("states")) void readStates().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
-    else send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "previewUpdated", preview: app },
+    else send({ type: "previewUpdated", preview: page }, { type: "previewUpdated", preview: app },
       // `smoke=1`: the worker smoke-tests its own copy of the demo pages: a state of their row.
       ...(params.has("smoke") ? [{ type: "previewUpdated" as const, preview: { ...page, id: "preview-3", taskId: "task-2", name: "demo pages smoke", command: "PORT=5300 pnpm dev --port 5199", startedAtMs: now - MIN } }] : []));
   }, []);
@@ -296,6 +333,8 @@ function Fixture() {
           <div className="mx-auto max-w-xl px-6 py-12 text-sm">The demo pages are fixed; a worker builds the dev app.</div>
           <PinnedSummary conversation={conversation} />
         </div>
+        {/* The tab a command's row opens, as the side panel shows it. */}
+        {params.has("tasks") && <OutputTab conversationId={id} view={{ type: "output", source: "task", id: sleep.id }} />}
       </main>
       {result && <pre id="activities-result">{result}</pre>}
     </AssistantRuntimeProvider>

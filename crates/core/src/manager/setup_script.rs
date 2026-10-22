@@ -4,8 +4,12 @@
 //! the session hears, not a gate (#326). On Windows, which has no `/bin/sh`, the session is
 //! told to run it itself.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
+
+use tokio_util::sync::CancellationToken;
 
 use super::SessionManager;
 use super::prompts::{SETUP_LINE, SETUP_SCRIPT};
@@ -20,7 +24,63 @@ const TAIL_BYTES: usize = 2000;
 /// The most of its output's end kept as it runs, the tail's lines picked from.
 const KEPT_BYTES: usize = 4 * TAIL_BYTES;
 
+/// The cleanup-ledger owner of a thread's setup script while it runs: it ends with the
+/// session. The name predates the script's use of it, and stays so that an entry recorded under
+/// it still goes with its session.
+pub(crate) fn setup_owner(id: &ConversationId) -> String {
+    format!("background:{id}")
+}
+
+/// What ends each piece of a session's work its Stop ends (a new worktree's setup script), by
+/// conversation and name.
+#[derive(Default)]
+pub(crate) struct Stoppables(Mutex<HashMap<(ConversationId, String), CancellationToken>>);
+
+/// Work the session's Stop ends ([`SessionManager::stoppable`]), until dropped.
+pub(super) struct Stoppable<'a> {
+    of: &'a Stoppables,
+    key: (ConversationId, String),
+    pub(super) cancel: CancellationToken,
+}
+
+impl Drop for Stoppable<'_> {
+    fn drop(&mut self) {
+        self.of
+            .0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.key);
+    }
+}
+
 impl SessionManager {
+    /// Work of the session's that its Stop ends (a new worktree's setup script), `name` telling
+    /// it apart: it is stoppable until the returned guard drops.
+    pub(super) fn stoppable(&self, id: &ConversationId, name: &str) -> Stoppable<'_> {
+        let key = (id.clone(), name.to_owned());
+        let cancel = CancellationToken::new();
+        self.stoppables
+            .0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key.clone(), cancel.clone());
+        Stoppable {
+            of: &self.stoppables,
+            key,
+            cancel,
+        }
+    }
+
+    /// Ends the session's stoppable work (the user's Stop, an archive or delete).
+    pub(crate) fn stop_session_work(&self, id: &ConversationId) {
+        let running = self.stoppables.0.lock().unwrap_or_else(|p| p.into_inner());
+        for ((of, _), cancel) in running.iter() {
+            if of == id {
+                cancel.cancel();
+            }
+        }
+    }
+
     /// Runs the setup script in the new `worktree` of conversation `id`, its process recorded
     /// under `owner` while it runs, with `env`, until it ends or `cancel` (the user's Stop).
     /// Returns what the session is told.
@@ -30,7 +90,7 @@ impl SessionManager {
         owner: &str,
         worktree: &Path,
         env: &[(String, String)],
-        cancel: tokio_util::sync::CancellationToken,
+        cancel: CancellationToken,
     ) -> String {
         if cfg!(windows) {
             return SETUP_LINE.into();

@@ -157,7 +157,6 @@ impl Projection {
             | DomainEvent::PlanUpdated { .. }
             | DomainEvent::ReviewUpdated { .. }
             | DomainEvent::IntegratedCheckUpdated { .. }
-            | DomainEvent::BackgroundRunUpdated { .. }
             | DomainEvent::HeadlineSet { .. }
             | DomainEvent::MergeRefusalSet { .. }
             | DomainEvent::McpServersUpdated { .. }

@@ -10,7 +10,6 @@ import type {
   AgentMcpServers,
   Approval,
   ApprovalSubject,
-  BackgroundRun,
   Compaction,
   ContextUsage,
   ConversationView,
@@ -85,11 +84,9 @@ export type Board = {
   plans: Record<string, Plan>;
   /** The thread's previews (a dev server, the app it runs for the user), by id. */
   previews: Record<string, Preview>;
-  /** The thread's run commands still going after a minute, owned by the session, by id. */
-  backgroundRuns: Record<string, BackgroundRun>;
   /** What the session is doing now, in the thread's words (set_headline); null once the user wrote since. */
   headline: SessionHeadline | null;
-  /** The ended previews and runs the user dismissed or restarted from the Background rows (Q94), by id. */
+  /** The ended previews the user dismissed from the Background rows (Q94), by id. */
   backgroundCleared: string[];
   /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
   mcpServers: Record<string, AgentMcpServers>;
@@ -354,7 +351,6 @@ export function emptyBoard(conversationId: string): Board {
     questions: {},
     plans: {},
     previews: {},
-    backgroundRuns: {},
     headline: null,
     backgroundCleared: [],
     mcpServers: {},
@@ -469,8 +465,6 @@ export function boardFromView(
     plans: byId(view.plans),
     // A daemon from before previews sends none.
     previews: byId(view.previews ?? []),
-    // Nor one from before the thread's long commands went to the background.
-    backgroundRuns: byId(view.backgroundRuns ?? []),
     // Nor one from before the thread wrote a headline.
     headline: view.headline ?? null,
     // Nor one from before the merge rule.
@@ -662,8 +656,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, questions: placed(board.questions, event.question, envelope, board) };
     case "planUpdated":
       return { ...board, plans: placed(board.plans, event.plan, envelope, board) };
-    case "backgroundRunUpdated":
-      return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
     case "headlineSet":
       return { ...board, headline: event.headline };
     case "mcpServersUpdated": {

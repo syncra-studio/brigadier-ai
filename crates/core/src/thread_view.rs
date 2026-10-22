@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use brigadier_providers::session_file::{self, FileEntry};
-use brigadier_providers::{ProviderEvent, ProviderKind, Role};
+use brigadier_providers::{BackgroundTask, ProviderEvent, ProviderKind, Role};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -25,6 +25,11 @@ pub struct ThreadView {
     pub entries: Vec<FileEntry>,
     /// Its turns, oldest first.
     pub turns: Vec<ThreadTurn>,
+    /// What its CLI runs in the background now, as the CLI says it, and those that ended
+    /// lately: the app shows them by the CLI's own rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<BackgroundTask>>", optional)]
+    pub background: Vec<BackgroundTask>,
 }
 
 /// One turn: a user message up to the CLI's end of it.
@@ -89,6 +94,10 @@ pub struct ThreadNews {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub context: Option<crate::model::ContextUsage>,
+    /// Its CLI's background tasks, all of them, when one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub background: Option<Vec<BackgroundTask>>,
 }
 
 /// Where a conversation's CLI turn stands, as the sidebar reads it: open now, or how its last
@@ -115,6 +124,11 @@ pub(crate) struct LiveTurn {
     pub error: Option<String>,
     /// Brigadier's requests it carries.
     pub requests: Vec<String>,
+    /// The CLI's background tasks: they outlast the turn that started them, so a turn that
+    /// opens keeps them.
+    pub background: Vec<BackgroundTask>,
+    /// A command's output is being followed for its last line.
+    pub reading_output: bool,
 }
 
 /// A session file's items, with the length and change time they were read at.
@@ -188,7 +202,11 @@ pub(crate) fn view(
         }
         add_requests(&mut turn.requests, &live.requests);
     }
-    ThreadView { entries, turns }
+    ThreadView {
+        entries,
+        turns,
+        background: live.map(|live| live.background.clone()).unwrap_or_default(),
+    }
 }
 
 /// The turns `entries` hold: each user message that isn't a steer starts one.

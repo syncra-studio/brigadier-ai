@@ -142,8 +142,8 @@ test("open_in_app opens in front only when asked to show and the user is on the 
 
   useApp.setState({ selection: { type: "conversation", id: USER } });
   selectTab(session, theirs);
-  const away = await opened(session, { kind: "output", source: "run", id: "run-2", title: "Core tests" }, true);
-  assert.deepEqual(away, { app: "opened", tab: "panel:output:run:run-2", front: false, kept: false }, "the user is on another session: behind");
+  const away = await opened(session, { kind: "output", source: "preview", id: "preview-2", title: "Dev app" }, true);
+  assert.deepEqual(away, { app: "opened", tab: "panel:output:preview:preview-2", front: false, kept: false }, "the user is on another session: behind");
   assert.equal(sessionTabs(session).active, theirs);
   assert.deepEqual(useApp.getState().selection, { type: "conversation", id: USER }, "and the user stays where they are");
   useApp.setState({ selection: { type: "conversation", id: session } });

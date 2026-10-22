@@ -9,9 +9,6 @@
  * - `drive=steer`: a message steered in while a command runs.
  * - `drive=queue` (`kind=session` for a session): a queued message's ⋯ menu, and turning
  *   queueing off from it.
- * - `drive=background` (with `kind=session`): the thread's check goes to the background and it
- *   says so; the request works on with a live line and a context-card row (Stop) until the
- *   result's answer.
  * - `drive=timer`: the turn waits on its question card, then ends; its header shows the work and the
  *   wait for the user apart (BUILD-PLAN A9).
  * - `drive=joined` (with `kind=session`): a follow-up joined the turn as it ended; both answers stay
@@ -35,7 +32,6 @@ import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import type {
-  BackgroundRun,
   Conversation,
   ConversationView as View,
   Message,
@@ -163,9 +159,6 @@ mockIPC((command, payload) => {
     case "openSideChat":
       calls.push(`${req.method} ${req.conversationId}`);
       return { method: req.method, conversation: { ...conversation(SIDE, "Side chat", "chat"), sideOf: ID } };
-    case "stopBackgroundRun":
-      calls.push(`${req.method} ${req.runId}`);
-      return { method: req.method };
     default:
       return { method: req.method };
   }
@@ -174,8 +167,8 @@ mockIPC((command, payload) => {
 useApp.setState((state) => ({
   conversations,
   connection: { status: "connected", daemon: null, reason: null },
-  // The background drive reads the context card beside the thread.
-  summaryShown: { [ID]: drive === "background" },
+  // The thread alone, no context card beside it.
+  summaryShown: { [ID]: false },
   settings: { ...state.settings, followUp: "queue" },
 }));
 await openConversation(ID);
@@ -951,45 +944,6 @@ async function driveQueue(): Promise<object> {
   return { items, followUp: useApp.getState().settings.followUp, saved: settings.followUp };
 }
 
-async function driveBackground(): Promise<object> {
-  await settle(600);
-  // The thread's command outlasted its call: it went to the background, and the thread said so.
-  steps([...daemon.steps, tool("check", 1.3, "mcp__brigadier__run", "cargo test --workspace", "completed")]);
-  const said: Message = {
-    id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: Date.now(), attachments: [], mentions: [],
-    text: "The full Rust tests run in the background, about 15 minutes; I'll answer when they finish.", model: null,
-    requestId: "r1", parentId: "r1", answerAtMs: Date.now(),
-  };
-  daemon.messages = [...daemon.messages, said];
-  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
-  const run: BackgroundRun = {
-    id: "run-1", conversationId: ID, requestId: "r1", tool: "run", command: "cargo test --workspace",
-    startedAtMs: Date.now() - 6 * 60_000 - 5_000, endedAtMs: null, state: { type: "running" },
-  };
-  daemon.run = "idle";
-  change(() => ({ run: "idle", runRequest: null, head: "a1", backgroundRuns: { [run.id]: run } }));
-  await settle(300);
-  const card = () => one("[data-activity=run-1]");
-  const running = {
-    ...seen(),
-    said: all("[data-slot=request-work]", turn() ?? document).some((part) => text(part)?.includes("about 15 minutes")),
-    row: text(card()),
-    elapsed: text(one("[data-activity=run-1] span.tabular-nums")),
-  };
-  await hold("background");
-  // The row's Stop, in its time's place on hover.
-  one<HTMLButtonElement>("[data-slot=summary-row-action] button", card()?.parentElement ?? document.createElement("div"))?.click();
-  for (const end = Date.now() + 3000; Date.now() < end && calls.length === 0; ) await wait(25);
-  // It stopped and the thread answered: the request is done, the run's row gone.
-  const answer: Message = { ...said, id: "a2", seq: 3, text: "The full Rust tests pass: 812 tests, no failures.", createdAtMs: Date.now(), answerAtMs: Date.now() };
-  daemon.messages = [...daemon.messages, answer];
-  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
-  change(() => ({ head: "a2", backgroundRuns: { [run.id]: { ...run, endedAtMs: Date.now(), state: { type: "stopped" } } } }));
-  request("r1", { state: { type: "done" }, endedAtMs: Date.now(), worked: [{ fromMs: begun, toMs: Date.now() }] });
-  await settle(300);
-  return { running, calls, done: { ...seen(), row: text(card()) } };
-}
-
 async function driveTimer(): Promise<object> {
   await settle(600);
   // 10 s of work, then its question card waits on the user.
@@ -1016,7 +970,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

@@ -146,8 +146,8 @@ export type PanelView =
   | { type: "reviews" }
   /** Every source the session used: attachments, links, integrations, its searches and the pages it opened. */
   | { type: "sources" }
-  /** What something in the context card's Background prints: a preview's log or a long command's output. */
-  | { type: "output"; source: "preview" | "run"; id: string };
+  /** What something in the context card's Background prints: a preview's log or a CLI's background command's output. */
+  | { type: "output"; source: "preview" | "task"; id: string };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
 /**
  * Text pasted as a chip, `[Pasted text #n]`, read in a tab (#427): the composer's own, which

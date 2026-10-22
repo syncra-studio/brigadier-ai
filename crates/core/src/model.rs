@@ -1461,14 +1461,10 @@ pub struct ConversationView {
     /// Its previews, oldest first.
     #[serde(default)]
     pub previews: Vec<crate::work::Preview>,
-    /// The thread's commands that went to the background, oldest first.
-    #[serde(default)]
-    pub background_runs: Vec<crate::work::BackgroundRun>,
     /// What the session is doing now, in the thread's words; none once the user wrote since.
     #[serde(default)]
     pub headline: Option<crate::work::SessionHeadline>,
-    /// The ended previews and background runs the user dismissed or restarted from the
-    /// Background rows (Q94), by id.
+    /// The ended previews the user dismissed from the Background rows (Q94), by id.
     #[serde(default)]
     pub background_cleared: Vec<String>,
     /// The MCP servers of its agents whose CLI runs now, its own model's first, then each
@@ -2523,10 +2519,6 @@ pub enum DomainEvent {
         #[ts(type = "unknown")]
         refusal: serde_json::Value,
     },
-    /// A command of the thread's went to the background, or ended there (full snapshot).
-    BackgroundRunUpdated {
-        run: crate::work::BackgroundRun,
-    },
     /// The MCP servers one of the conversation's agents has, as its CLI tells them, Brigadier's
     /// own left out (full snapshot; none: its CLI ended or restarts). `taskId`: the worker's;
     /// absent for the conversation's own model. `boot`: the daemon process that heard it
@@ -2621,8 +2613,8 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         ids: Vec<String>,
     },
-    /// Ended previews and background runs (by id) that leave the context card's Background
-    /// rows: the user's dismiss or Restart of a failed one (Q94). The records stay.
+    /// Ended previews (by id) that leave the context card's Background rows: the user's
+    /// dismiss (Q94). The records stay.
     BackgroundCleared {
         conversation_id: ConversationId,
         ids: Vec<String>,
@@ -2832,7 +2824,6 @@ impl DomainEvent {
             Self::PlanUpdated { .. } => "plan.updated",
             Self::ReviewUpdated { .. } => "review.updated",
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
-            Self::BackgroundRunUpdated { .. } => "background_run.updated",
             Self::HeadlineSet { .. } => "headline.set",
             Self::MergeRefusalSet { .. } => "merge.refusal",
             Self::McpServersUpdated { .. } => "mcp_servers.updated",
@@ -2935,10 +2926,10 @@ pub mod streams {
     }
 
     /// Whether the clients' live feed carries `stream`'s events: not the engine's own records,
-    /// which are no domain events (a background run's stored output, a request's change
-    /// records and pending changes, the thread's inbox), #189.
+    /// which are no domain events (a request's change records and pending changes, the
+    /// thread's inbox), #189.
     pub fn on_live_feed(stream: &str) -> bool {
-        !["background-output:", "changes:", "pending:", "inbox:"]
+        !["changes:", "pending:", "inbox:"]
             .iter()
             .any(|internal| stream.starts_with(internal))
     }

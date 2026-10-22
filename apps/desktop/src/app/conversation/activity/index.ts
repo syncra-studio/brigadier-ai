@@ -19,6 +19,5 @@ export * from "./QuietBrief";
 export * from "./QuotaResumed";
 export * from "./RawToolCallDialog";
 export * from "./RepeatsRow";
-export * from "./RunOutput";
 export * from "./StripRow";
 export * from "./WorkerName";

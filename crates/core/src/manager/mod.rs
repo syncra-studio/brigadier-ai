@@ -21,7 +21,6 @@ mod app_call;
 mod app_state;
 // Nothing feeds it since `run` went (S6); the module goes in S12.
 #[allow(dead_code)]
-mod background_runs;
 mod brain_first;
 mod brain_jobs;
 mod brains;
@@ -146,7 +145,6 @@ use crate::tools::{Grants, Role, ToolCall, ToolHost, ToolReply};
 use crate::work::{DiffStat, TaskId, WorkerDiff};
 use crate::{Core, Error, Result};
 
-pub(crate) use background_runs::background_run_number;
 pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;
@@ -213,8 +211,8 @@ pub struct SessionManager {
     ref_records: Arc<refcheck::RefRecords>,
     /// Each checkout's Git Output, for the Source panel ([`source_actions`]).
     source_output: source_actions::SourceOutput,
-    /// The thread's commands gone to the background ([`background_runs`]).
-    background_runs: background_runs::BackgroundRuns,
+    /// The session's work its Stop ends ([`setup_script`]).
+    stoppables: setup_script::Stoppables,
     /// The previews running now ([`preview`]).
     previews: preview::Previews,
     /// When each ready session's pull request was last looked up at a connect
@@ -433,7 +431,7 @@ impl SessionManager {
             known_windows: std::sync::Mutex::new(HashMap::new()),
             ref_records: Arc::default(),
             source_output: source_actions::SourceOutput::default(),
-            background_runs: background_runs::BackgroundRuns::default(),
+            stoppables: setup_script::Stoppables::default(),
             previews: preview::Previews::default(),
             pr_looked_up: Mutex::default(),
             #[cfg(test)]

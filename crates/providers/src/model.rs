@@ -425,6 +425,51 @@ pub enum ItemStatus {
     Declined,
 }
 
+/// A task the CLI runs in the background, as the CLI itself says it: a command (Claude's
+/// `run_in_background` Bash, a Codex background terminal) or a background subagent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTask {
+    /// The CLI's id for it: Claude's task id, Codex's process id.
+    pub id: String,
+    /// The tool call that started it, when the CLI says.
+    pub item_id: Option<String>,
+    pub kind: BackgroundTaskKind,
+    /// The CLI's own words for it: Claude's description, Codex's command.
+    pub label: String,
+    pub status: BackgroundTaskStatus,
+    pub started_at_ms: i64,
+    pub ended_at_ms: Option<i64>,
+    /// Where the CLI writes what it prints, once it says.
+    pub output_file: Option<String>,
+    /// The CLI's own words on how it ended.
+    pub summary: Option<String>,
+    /// The last line it printed, as its output file holds it now (read by Brigadier).
+    #[serde(default)]
+    pub last_line: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundTaskKind {
+    /// Claude's background Bash.
+    Shell,
+    /// A Codex background terminal: listed while it runs, gone when it ends.
+    Terminal,
+    Agent,
+    /// Any other kind the CLI runs (a monitor, a workflow).
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundTaskStatus {
+    Running,
+    Completed,
+    Failed,
+    Stopped,
+}
+
 /// How a turn ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -865,6 +910,11 @@ pub enum ProviderEvent {
     /// jobs running still has work coming. Never stored.
     BackgroundJobs {
         running: Vec<String>,
+    },
+    /// One of the CLI's own background tasks as it stands now: started, or changed (ended,
+    /// its output file known). Never stored.
+    BackgroundTask {
+        task: BackgroundTask,
     },
     /// The MCP servers the CLI's agent has, as the CLI reports them, Brigadier's own left out:
     /// the whole set. `atStart`: what the CLI said when it started, not kept current since

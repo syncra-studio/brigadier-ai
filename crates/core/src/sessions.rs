@@ -1386,7 +1386,6 @@ impl Core {
             memories: board.memories.clone(),
             overnight: board.sorted_runs(),
             previews: board.sorted_previews(),
-            background_runs: board.sorted_background_runs(),
             headline: board.headline.clone(),
             background_cleared: board.sorted_background_cleared(),
             mcp_servers: board.current_mcp_servers(),
@@ -3292,7 +3291,8 @@ mod tests {
     }
 
     /// Events of a feature Brigadier no longer has (computer use's action log and its
-    /// permission item) still load: read back as retired, and never listed.
+    /// permission item, the thread's own background runs) still load: read back as retired,
+    /// and never listed.
     #[tokio::test]
     async fn stored_events_of_a_removed_feature_still_load() {
         let dir =
@@ -3329,10 +3329,19 @@ mod tests {
                 "createdAtMs": 1
             }
         });
+        let run = serde_json::json!({
+            "type": "backgroundRunUpdated",
+            "run": {
+                "id": "run-1", "conversationId": id.0, "requestId": "r1", "tool": "run",
+                "command": "cargo test", "startedAtMs": 1, "endedAtMs": null,
+                "state": { "type": "running" }
+            }
+        });
         store
             .append(vec![
                 NewEvent::new(stream.clone(), "computer.acted", 1, &acted).unwrap(),
                 NewEvent::new(stream.clone(), "waiting.updated", 2, &waiting).unwrap(),
+                NewEvent::new(stream.clone(), "background_run.updated", 3, &run).unwrap(),
             ])
             .await
             .unwrap();
@@ -3351,10 +3360,11 @@ mod tests {
             .unwrap();
         let retired = all
             .iter()
-            .filter(|event| event.kind == "computer.acted")
+            .filter(|event| ["computer.acted", "background_run.updated"].contains(&&*event.kind))
             .map(|event| decode(event).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(retired, [DomainEvent::Retired]);
+        assert_eq!(retired, [DomainEvent::Retired, DomainEvent::Retired]);
+        core.conversation_view(id.clone(), 10).await.unwrap();
         let board = core.board(&id).await.unwrap();
         assert!(board.waiting.is_empty());
         assert!(board.sorted_waiting().is_empty());

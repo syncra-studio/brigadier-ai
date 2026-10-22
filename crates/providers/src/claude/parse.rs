@@ -125,6 +125,9 @@ pub struct Parser {
     /// The background jobs Claude last said still run: each `task_notification` of one ends
     /// it alone, in the order Claude starts their turns (#221).
     background: Vec<String>,
+    /// Claude's tasks (`task_started`) by id, and whether each is in the background: those
+    /// are reported ([`ProviderEvent::BackgroundTask`]) each time they change.
+    tasks: HashMap<String, (BackgroundTask, bool)>,
     /// Brigadier's own MCP servers, left out of the servers reported
     /// ([`ProviderEvent::McpServers`]).
     pub(crate) own_mcp: HashSet<String>,
@@ -567,6 +570,7 @@ impl Parser {
             };
             // Whole: the event sender cuts it once it is redacted and kept (`crate::events`).
             let output = content_text(block);
+            self.task_output(id, &output, structured, out);
             let kept = kept_output(&output, structured, failed);
             let event = match tool_kind(&tool.name) {
                 // Claude's command output arrives at completion; Codex streams. A running
@@ -881,8 +885,13 @@ impl Parser {
                         .to_owned(),
                 ));
             }
-            // A background task or sub-agent at work.
-            Some("task_started" | "task_progress") => progress(value, out),
+            // A task (a command, a sub-agent) at work: the session is alive.
+            Some("task_started") => {
+                progress(value, out);
+                self.task_started(value, out);
+            }
+            Some("task_progress") => progress(value, out),
+            Some("task_updated") => self.task_updated(value, out),
             // Its background jobs (commands, sub-agents) still running, all of them each time.
             // One that ends starts a turn of its own.
             Some("background_tasks_changed") => {
@@ -898,10 +907,19 @@ impl Parser {
                     .collect();
                 self.background.clone_from(&running);
                 out.push(Output::Event(ProviderEvent::BackgroundJobs { running }));
+                for task in value
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    self.task_backgrounded(task, out);
+                }
             }
             // A job's end, before the word of those still running: said one at a time, so each
             // end's turn is matched to its own job even when several end at once.
             Some("task_notification") => {
+                self.task_ended(value, out);
                 let ended = str_of(value, "task_id");
                 if let Some(at) = self
                     .background
@@ -915,6 +933,134 @@ impl Parser {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A task Claude started (`task_started`): reported once it is in the background.
+    fn task_started(&mut self, value: &Value, out: &mut Vec<Output>) {
+        let Some(id) = str_of(value, "task_id") else {
+            return;
+        };
+        let task = BackgroundTask {
+            id: id.to_owned(),
+            item_id: str_of(value, "tool_use_id").map(str::to_owned),
+            kind: task_kind(value),
+            label: str_of(value, "description").unwrap_or_default().to_owned(),
+            status: BackgroundTaskStatus::Running,
+            started_at_ms: now_ms(),
+            ended_at_ms: None,
+            output_file: None,
+            summary: None,
+            last_line: None,
+        };
+        let backgrounded = value.get("is_backgrounded").and_then(Value::as_bool) == Some(true);
+        self.tasks.insert(id.to_owned(), (task, backgrounded));
+        self.report_task(id, out);
+    }
+
+    /// A task Claude lists among its background ones (`background_tasks_changed`): one that
+    /// started in the foreground and moved there, or one it never said start.
+    fn task_backgrounded(&mut self, listed: &Value, out: &mut Vec<Output>) {
+        let Some(id) = str_of(listed, "task_id") else {
+            return;
+        };
+        let entry = self.tasks.entry(id.to_owned()).or_insert_with(|| {
+            let task = BackgroundTask {
+                id: id.to_owned(),
+                item_id: None,
+                kind: task_kind(listed),
+                label: str_of(listed, "description").unwrap_or_default().to_owned(),
+                status: BackgroundTaskStatus::Running,
+                started_at_ms: now_ms(),
+                ended_at_ms: None,
+                output_file: None,
+                summary: None,
+                last_line: None,
+            };
+            (task, false)
+        });
+        if !entry.1 {
+            entry.1 = true;
+            self.report_task(id, out);
+        }
+    }
+
+    /// A task's state changed (`task_updated`): its status, its end time.
+    fn task_updated(&mut self, value: &Value, out: &mut Vec<Output>) {
+        let (Some(id), Some(patch)) = (str_of(value, "task_id"), value.get("patch")) else {
+            return;
+        };
+        let Some((task, backgrounded)) = self.tasks.get_mut(id) else {
+            return;
+        };
+        if let Some(status) = str_of(patch, "status").and_then(task_status) {
+            task.status = status;
+        }
+        if let Some(end) = patch.get("end_time").and_then(Value::as_i64) {
+            task.ended_at_ms = Some(end);
+        }
+        if patch.get("is_backgrounded").and_then(Value::as_bool) == Some(true) {
+            *backgrounded = true;
+        }
+        self.report_task(id, out);
+    }
+
+    /// A task ended (`task_notification`): how, where its output is, Claude's summary.
+    fn task_ended(&mut self, value: &Value, out: &mut Vec<Output>) {
+        let Some(id) = str_of(value, "task_id") else {
+            return;
+        };
+        let Some((task, _)) = self.tasks.get_mut(id) else {
+            return;
+        };
+        task.status = str_of(value, "status")
+            .and_then(task_status)
+            .unwrap_or(BackgroundTaskStatus::Completed);
+        task.ended_at_ms.get_or_insert_with(now_ms);
+        if let Some(file) = str_of(value, "output_file") {
+            task.output_file = Some(file.to_owned());
+        }
+        if let Some(summary) = str_of(value, "summary") {
+            task.summary = Some(summary.to_owned());
+        }
+        self.report_task(id, out);
+    }
+
+    /// Where the task a tool call started writes its output, as the call's result says.
+    fn task_output(
+        &mut self,
+        item_id: &str,
+        text: &str,
+        structured: Option<&Value>,
+        out: &mut Vec<Output>,
+    ) {
+        let Some(id) = self
+            .tasks
+            .iter()
+            .find(|(_, (task, _))| task.item_id.as_deref() == Some(item_id))
+            .map(|(id, _)| id.clone())
+        else {
+            return;
+        };
+        let file = structured
+            .and_then(|result| str_of(result, "outputFile"))
+            .map(str::to_owned)
+            .or_else(|| written_to(text));
+        let Some((task, _)) = self.tasks.get_mut(&id) else {
+            return;
+        };
+        if file.is_some() && task.output_file.is_none() {
+            task.output_file = file;
+            self.report_task(&id, out);
+        }
+    }
+
+    /// Reports a task as it stands now, if it is in the background.
+    fn report_task(&self, id: &str, out: &mut Vec<Output>) {
+        if let Some((task, true)) = self.tasks.get(id) {
+            out.push(Output::Event(ProviderEvent::BackgroundTask {
+                task: task.clone(),
+            }));
         }
     }
 
@@ -1652,6 +1798,34 @@ fn progress(value: &Value, out: &mut Vec<Output>) {
         .unwrap_or("progress")
         .to_owned();
     out.push(Output::Event(ProviderEvent::Progress { item_id }));
+}
+
+/// What kind of task a `task_*` line or a listed task is.
+fn task_kind(value: &Value) -> BackgroundTaskKind {
+    match str_of(value, "task_type") {
+        Some("local_bash") => BackgroundTaskKind::Shell,
+        Some(kind) if kind.contains("agent") => BackgroundTaskKind::Agent,
+        _ => BackgroundTaskKind::Other,
+    }
+}
+
+/// A task status as Claude words it.
+fn task_status(status: &str) -> Option<BackgroundTaskStatus> {
+    match status {
+        "running" | "pending" => Some(BackgroundTaskStatus::Running),
+        "completed" => Some(BackgroundTaskStatus::Completed),
+        "failed" => Some(BackgroundTaskStatus::Failed),
+        "stopped" | "killed" => Some(BackgroundTaskStatus::Stopped),
+        _ => None,
+    }
+}
+
+/// The file a background command's result says its output goes to ("Output is being written
+/// to: <path>.").
+fn written_to(text: &str) -> Option<String> {
+    let rest = &text[text.find("Output is being written to: ")? + 28..];
+    let path = rest.split_whitespace().next()?.trim_end_matches('.');
+    path.ends_with(".output").then(|| path.to_owned())
 }
 
 /// Whether a `tool_progress` line is only the CLI's heartbeat for a running tool.
@@ -2437,6 +2611,143 @@ mod tests {
         assert_eq!(jobs(&mut parser, json!([])), [Vec::<String>::new()]);
         // A foreground command's notification ends no job.
         assert!(notified(&mut parser, "fg9").is_empty());
+    }
+
+    /// The tasks Claude says it runs in the background, as each changes: a `run_in_background`
+    /// Bash and a background subagent, in the shapes Claude Code 2.1.308 streams them. A
+    /// foreground command's task is not one.
+    #[test]
+    fn background_tasks_are_reported_as_they_change() {
+        let mut parser = Parser::live();
+        let tasks = |outputs: Vec<Output>| -> Vec<(
+            String,
+            BackgroundTaskKind,
+            BackgroundTaskStatus,
+            Option<String>,
+        )> {
+            outputs
+                .into_iter()
+                .filter_map(|output| match output {
+                    Output::Event(ProviderEvent::BackgroundTask { task }) => {
+                        Some((task.id, task.kind, task.status, task.output_file))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut feed = |line: Value| tasks(parser.feed(&line.to_string()));
+        let calls = json!({ "type": "assistant", "parent_tool_use_id": null, "message": { "id": "m1", "content": [
+            { "type": "tool_use", "id": "toolu_bash", "name": "Bash",
+              "input": { "command": "sleep 20; echo marker", "description": "Sleep 20 seconds then echo marker", "run_in_background": true } },
+            { "type": "tool_use", "id": "toolu_agent", "name": "Agent",
+              "input": { "description": "Reply with hi", "prompt": "Reply with the word hi.", "run_in_background": true } },
+            { "type": "tool_use", "id": "toolu_fg", "name": "Bash", "input": { "command": "ls" } },
+        ] } });
+        feed(calls);
+        let path = "/private/tmp/claude-501/-w/s1/tasks/bdza4j3ng.output";
+        let started = feed(
+            json!({ "type": "system", "subtype": "task_started", "task_id": "bdza4j3ng",
+            "tool_use_id": "toolu_bash", "description": "Sleep 20 seconds then echo marker",
+            "is_backgrounded": true, "task_type": "local_bash" }),
+        );
+        assert_eq!(
+            started,
+            [(
+                "bdza4j3ng".to_owned(),
+                BackgroundTaskKind::Shell,
+                BackgroundTaskStatus::Running,
+                None
+            )]
+        );
+        let result = json!({ "type": "user", "parent_tool_use_id": null, "message": { "role": "user", "content": [
+            { "type": "tool_result", "tool_use_id": "toolu_bash",
+              "content": format!("Command running in background with ID: bdza4j3ng. Output is being written to: {path}. You will be notified when it completes.") }
+        ] }, "tool_use_result": { "stdout": "", "stderr": "", "backgroundTaskId": "bdza4j3ng" } });
+        assert_eq!(
+            feed(result),
+            [(
+                "bdza4j3ng".to_owned(),
+                BackgroundTaskKind::Shell,
+                BackgroundTaskStatus::Running,
+                Some(path.to_owned())
+            )]
+        );
+        // A foreground command's task never shows.
+        assert!(feed(json!({ "type": "system", "subtype": "task_started", "task_id": "fg1",
+            "tool_use_id": "toolu_fg", "description": "List files", "is_backgrounded": false, "task_type": "local_bash" })).is_empty());
+        assert!(feed(json!({ "type": "system", "subtype": "task_notification", "task_id": "fg1", "status": "completed" })).is_empty());
+        // Listed again with the subagent: only the subagent is new.
+        assert!(feed(json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [
+            { "task_id": "bdza4j3ng", "task_type": "local_bash", "description": "Sleep 20 seconds then echo marker" },
+        ] })).is_empty());
+        let agent = feed(
+            json!({ "type": "system", "subtype": "task_started", "task_id": "a0c79",
+            "tool_use_id": "toolu_agent", "description": "Reply with hi", "subagent_type": "general-purpose",
+            "is_backgrounded": true, "task_type": "local_agent" }),
+        );
+        assert_eq!(
+            agent,
+            [(
+                "a0c79".to_owned(),
+                BackgroundTaskKind::Agent,
+                BackgroundTaskStatus::Running,
+                None
+            )]
+        );
+        let done = feed(
+            json!({ "type": "system", "subtype": "task_updated", "task_id": "a0c79",
+            "patch": { "status": "completed", "end_time": 1_792_684_499_730_i64 } }),
+        );
+        assert_eq!(
+            done,
+            [(
+                "a0c79".to_owned(),
+                BackgroundTaskKind::Agent,
+                BackgroundTaskStatus::Completed,
+                None
+            )]
+        );
+        let agent_file = "/private/tmp/claude-501/-w/s1/tasks/a0c79.output";
+        let notified = parser.feed(&json!({ "type": "system", "subtype": "task_notification", "task_id": "a0c79",
+            "tool_use_id": "toolu_agent", "status": "completed", "output_file": agent_file, "summary": "hi" }).to_string());
+        let Some(Output::Event(ProviderEvent::BackgroundTask { task })) = notified
+            .into_iter()
+            .find(|output| matches!(output, Output::Event(ProviderEvent::BackgroundTask { .. })))
+        else {
+            panic!("the subagent's end is reported");
+        };
+        assert_eq!(
+            (
+                task.status,
+                task.ended_at_ms,
+                task.output_file.as_deref(),
+                task.summary.as_deref(),
+                task.item_id.as_deref(),
+                task.label.as_str()
+            ),
+            (
+                BackgroundTaskStatus::Completed,
+                Some(1_792_684_499_730),
+                Some(agent_file),
+                Some("hi"),
+                Some("toolu_agent"),
+                "Reply with hi"
+            )
+        );
+        let mut feed = |line: Value| tasks(parser.feed(&line.to_string()));
+        // The command is stopped.
+        assert_eq!(
+            feed(
+                json!({ "type": "system", "subtype": "task_notification", "task_id": "bdza4j3ng",
+                "status": "stopped", "output_file": path })
+            ),
+            [(
+                "bdza4j3ng".to_owned(),
+                BackgroundTaskKind::Shell,
+                BackgroundTaskStatus::Stopped,
+                Some(path.to_owned())
+            )]
+        );
     }
 
     /// A turn can end while Claude's own background job still runs: Claude says how many run,

@@ -693,7 +693,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "approvalUpdated":
     case "questionUpdated":
     case "planUpdated":
-    case "backgroundRunUpdated":
     case "headlineSet":
     case "mcpServersUpdated":
     case "threadCommitsSeen":

@@ -1595,7 +1595,7 @@ pub enum OpenInAppTarget {
     Diff { scope: OpenDiffScope },
     /// The Progress tab: the job step by step, with its reviews and checks.
     Progress,
-    /// What a preview or a background run prints ("preview-1", "run-2").
+    /// What a preview prints ("preview-1").
     Output { id: String },
     /// A page on the web, or a preview's address.
     Url { url: String },

@@ -1,8 +1,5 @@
-//! The thread's commands that outlast a tool call (`run`): past
-//! [`FOREGROUND`](crate::manager::background_runs::FOREGROUND) they go to the background, the
-//! thread may end its turn quiet, and the result still comes to it as a message in the same
-//! request, which works until then and settles on the thread's answer to it. The user's Stop
-//! ends a run quietly; a restart that cut one off tells the thread.
+//! Jobs the thread's CLI keeps running in the background past its turn: the request works
+//! until their end, which the thread hears in it; and the context card's Background rows.
 
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +7,7 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::model::{DomainEvent, MessageRole};
-use crate::work::{BackgroundRun, BackgroundRunState, RequestState};
+use crate::work::RequestState;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -21,10 +18,6 @@ where
 }
 
 type Log = Arc<Mutex<Vec<String>>>;
-
-fn run_state(board: &crate::board::Board, id: &str) -> Option<BackgroundRunState> {
-    board.background_runs.get(id).map(|run| run.state.clone())
-}
 
 async fn answers(flow: &Flow) -> Vec<String> {
     flow.core
@@ -37,38 +30,6 @@ async fn answers(flow: &Flow) -> Vec<String> {
         .filter(|message| message.role == MessageRole::Assistant)
         .map(|message| message.text)
         .collect()
-}
-
-/// A tool call dropped while its command runs (its MCP request cancelled, its bridge gone)
-/// ends the command rather than leaving it running with no one to hear its result.
-#[tokio::test]
-async fn a_dropped_call_ends_its_command() {
-    let flow = Flow::start(
-        "background-dropped",
-        Options::default(),
-        script(|_| async { Reply::text("Looked.") }),
-    )
-    .await;
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let ended = cancel.clone();
-    let seen = cancel.clone();
-    let call = flow.manager.in_foreground(
-        &flow.conversation,
-        ("run", None),
-        "sleep 600",
-        tokio_util::sync::CancellationToken::new(),
-        cancel,
-        async move {
-            seen.cancelled().await;
-            Ok(("[stopped]".to_owned(), String::new()))
-        },
-    );
-    let held = tokio::time::timeout(std::time::Duration::from_millis(300), call).await;
-    assert!(held.is_err(), "the call returned while its command ran");
-    tokio::time::timeout(std::time::Duration::from_secs(5), ended.cancelled())
-        .await
-        .expect("the dropped call's command was not ended");
-    flow.stop().await;
 }
 
 /// The messages the user sees from the thread: text and the request each belongs to.
@@ -744,225 +705,44 @@ async fn a_job_ending_during_an_unowned_jobs_turn_keeps_its_turn_owed() {
     flow.stop().await;
 }
 
-/// #220: the user's Stop ends a background run even when its work doesn't heed it: the row
-/// reads stopped, and the thread hears the user stopped it.
+/// Q94: × takes an ended preview's Background row off; × on one still running, or on no
+/// preview, is refused; a preview started again under its id is back; the view lists the rows
+/// taken off, for a reload.
 #[tokio::test]
-async fn the_users_stop_ends_a_run_whose_work_ignores_it() {
-    let inputs: Log = Default::default();
-    let log = inputs.clone();
+async fn dismiss_takes_an_ended_previews_row_off() {
     let flow = Flow::start(
-        "background-stop-stubborn",
+        "background-dismiss",
         Options::default(),
-        script(move |turn| {
-            log.lock().unwrap().push(turn.input.clone());
-            async { Reply::text("Noted.") }
-        }),
+        script(|_| async { Reply::text("Noted.") }),
     )
     .await;
-    flow.background_commands();
-    let reply = flow
-        .manager
-        .in_foreground(
-            &flow.conversation,
-            ("run", None),
-            "sleep 600",
-            tokio_util::sync::CancellationToken::new(),
-            tokio_util::sync::CancellationToken::new(),
-            std::future::pending(),
-        )
-        .await
-        .unwrap();
-    assert!(reply.starts_with("[run-1 still runs"), "{reply}");
-    flow.manager
-        .stop_background_run(flow.conversation.clone(), "run-1".into())
-        .await
-        .unwrap();
-    flow.until("the run stopped", |board| {
-        run_state(board, "run-1") == Some(BackgroundRunState::Stopped)
-    })
-    .await;
-    flow.until("the thread told", |_| {
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|input| input.contains("[The user stopped run-1 after "))
-    })
-    .await;
-    flow.stop().await;
-}
-
-/// #220: a run its row shows running though nothing watches it any more (its end was missed)
-/// doesn't stay listed: the user's Stop ends it and tells the thread, and the watchdog's look
-/// ends one nobody stopped.
-#[tokio::test]
-async fn a_run_whose_end_was_missed_does_not_stay_running() {
-    let inputs: Log = Default::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "background-missed-end",
-        Options::default(),
-        script(move |turn| {
-            log.lock().unwrap().push(turn.input.clone());
-            async { Reply::text("Noted.") }
-        }),
-    )
-    .await;
-    for id in ["run-7", "run-8"] {
-        let run = BackgroundRun {
-            id: id.into(),
-            conversation_id: flow.conversation.clone(),
-            request_id: None,
-            tool: "run_check".into(),
-            name: None,
-            command: "cargo fmt --check".into(),
-            started_at_ms: crate::now_ms() - 14 * 60_000,
-            ended_at_ms: None,
-            state: BackgroundRunState::Running,
-            item_id: None,
-        };
-        flow.core
-            .record_conversation(
-                &flow.conversation,
-                vec![DomainEvent::BackgroundRunUpdated { run }],
-            )
-            .await
-            .unwrap();
-    }
-    flow.manager
-        .stop_background_run(flow.conversation.clone(), "run-7".into())
-        .await
-        .unwrap();
-    let board = flow
-        .until("the stopped row", |board| {
-            run_state(board, "run-7") == Some(BackgroundRunState::Stopped)
-        })
-        .await;
-    assert_eq!(
-        run_state(&board, "run-8"),
-        Some(BackgroundRunState::Running)
-    );
-    flow.manager.end_missed_runs(&flow.conversation).await;
-    flow.until("the missed run ended", |board| {
-        matches!(
-            run_state(board, "run-8"),
-            Some(BackgroundRunState::Interrupted { .. })
-        )
-    })
-    .await;
-    flow.until("the thread told of both", |_| {
-        let inputs = inputs.lock().unwrap();
-        inputs
-            .iter()
-            .any(|input| input.contains("[The user stopped run-7 after "))
-            && inputs
-                .iter()
-                .any(|input| input.contains("[run-8 ended without Brigadier seeing how"))
-    })
-    .await;
-    // Over, neither can be stopped again.
-    for id in ["run-7", "run-8"] {
-        assert!(
-            flow.manager
-                .stop_background_run(flow.conversation.clone(), id.into())
-                .await
-                .is_err()
-        );
-    }
-    flow.stop().await;
-}
-
-/// Q94: Restart on a failed run takes its Background row off and asks the thread to run it
-/// again; × takes an ended preview's or run's row off. One still running, one that ended well
-/// or one that was stopped doesn't restart; × on one still running is refused; a preview
-/// started again under its id is back; the view lists the rows taken off, for a reload.
-#[tokio::test]
-async fn a_failed_runs_restart_asks_the_thread_and_dismiss_takes_a_row_off() {
-    let inputs: Log = Default::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "background-restart-dismiss",
-        Options::default(),
-        script(move |turn| {
-            log.lock().unwrap().push(turn.input.clone());
-            async { Reply::text("Noted.") }
-        }),
-    )
-    .await;
-    let ended = |id: &str, state: BackgroundRunState| BackgroundRun {
-        id: id.into(),
-        conversation_id: flow.conversation.clone(),
-        request_id: None,
-        tool: "run_check".into(),
-        name: None,
-        command: "cargo test -p brigadier-core".into(),
-        started_at_ms: crate::now_ms() - 60_000,
-        ended_at_ms: Some(crate::now_ms()),
-        state,
-        item_id: None,
-    };
-    let runs = [
-        ended(
-            "run-1",
-            BackgroundRunState::Finished {
-                status: "exit 101".into(),
-            },
-        ),
-        ended(
-            "run-2",
-            BackgroundRunState::Finished {
-                status: "exit 0".into(),
-            },
-        ),
-        ended("run-3", BackgroundRunState::Stopped),
-        BackgroundRun {
-            ended_at_ms: None,
-            ..ended("run-4", BackgroundRunState::Running)
-        },
-    ];
-    let preview = |state: serde_json::Value| -> crate::work::Preview {
+    let preview = |id: &str, state: serde_json::Value| -> crate::work::Preview {
         serde_json::from_value(json!({
-            "id": "preview-1", "conversationId": flow.conversation.0, "name": "web",
+            "id": id, "conversationId": flow.conversation.0, "name": "web",
             "command": "pnpm dev", "workdir": "/work", "workspace": "/work", "state": state,
             "startedAtMs": 1, "endedAtMs": 2
         }))
         .unwrap()
     };
-    let mut events: Vec<DomainEvent> = runs
-        .into_iter()
-        .map(|run| DomainEvent::BackgroundRunUpdated { run })
-        .collect();
-    events.push(DomainEvent::PreviewUpdated {
-        preview: preview(json!({"type": "exited", "code": 1, "status": "exit 1"})),
-    });
     flow.core
-        .record_conversation(&flow.conversation, events)
+        .record_conversation(
+            &flow.conversation,
+            vec![
+                DomainEvent::PreviewUpdated {
+                    preview: preview(
+                        "preview-1",
+                        json!({"type": "exited", "code": 1, "status": "exit 1"}),
+                    ),
+                },
+                DomainEvent::PreviewUpdated {
+                    preview: preview("preview-2", json!({"type": "starting"})),
+                },
+            ],
+        )
         .await
         .unwrap();
     let id = || flow.conversation.clone();
-    for run in ["run-2", "run-3", "run-4", "run-9"] {
-        assert!(
-            flow.manager
-                .restart_background_run(id(), run.into())
-                .await
-                .is_err(),
-            "{run} doesn't restart"
-        );
-    }
-    flow.manager
-        .restart_background_run(id(), "run-1".into())
-        .await
-        .unwrap();
-    flow.until("the thread asked to run it again", |_| {
-        inputs.lock().unwrap().iter().any(|input| {
-            input.contains(
-                "[The user pressed Restart on run-1 (exit 101) · run_check `cargo test -p \
-                 brigadier-core`",
-            )
-        })
-    })
-    .await;
-    for row in ["run-4", "run-9"] {
+    for row in ["preview-2", "preview-9", "run-1"] {
         assert!(
             flow.manager
                 .dismiss_background(id(), row.into())
@@ -971,25 +751,23 @@ async fn a_failed_runs_restart_asks_the_thread_and_dismiss_takes_a_row_off() {
             "{row} isn't dismissed"
         );
     }
-    for row in ["run-2", "preview-1"] {
-        flow.manager
-            .dismiss_background(id(), row.into())
-            .await
-            .unwrap();
-    }
+    flow.manager
+        .dismiss_background(id(), "preview-1".into())
+        .await
+        .unwrap();
     let view = flow.core.conversation_view(id(), 50).await.unwrap();
-    assert_eq!(view.background_cleared, ["preview-1", "run-1", "run-2"]);
+    assert_eq!(view.background_cleared, ["preview-1"]);
     // Started again under its id, the preview is back.
     flow.core
         .record_conversation(
             &flow.conversation,
             vec![DomainEvent::PreviewUpdated {
-                preview: preview(json!({"type": "starting"})),
+                preview: preview("preview-1", json!({"type": "starting"})),
             }],
         )
         .await
         .unwrap();
     let view = flow.core.conversation_view(id(), 50).await.unwrap();
-    assert_eq!(view.background_cleared, ["run-1", "run-2"]);
+    assert!(view.background_cleared.is_empty());
     flow.stop().await;
 }

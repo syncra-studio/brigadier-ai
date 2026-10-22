@@ -513,8 +513,8 @@ impl SessionManager {
                     OwnerState::Unfinished
                 } else {
                     let alive = match owner.split_once(':') {
-                        // A session's thread temporary folder, background runs, full checks
-                        // and previews with their data folders go with the session, as its own
+                        // A session's thread temporary folder, setup script, full checks and
+                        // previews with their data folders go with the session, as its own
                         // folders do.
                         Some((
                             "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"

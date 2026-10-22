@@ -132,8 +132,6 @@ function summary(event: DomainEvent): string {
     case "unreviewedChanged":
       // Only in old stored events: the checks, reviews and merge refusals they told of are gone.
       return "";
-    case "backgroundRunUpdated":
-      return `${event.run.id} ${event.run.state.type}: ${event.run.command}`;
     case "headlineSet":
       return event.headline === null ? "headline cleared" : event.headline.text;
     case "mcpServersUpdated":

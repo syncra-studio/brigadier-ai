@@ -13,12 +13,11 @@ import { type Board, RETRYING } from "@/state/board";
 export type StatusTone = "busy" | "still" | "needsYou";
 
 /**
- * `sinceMs`: a long run's start, its elapsed time said after the words ("Running pnpm test · 6m").
+ * `sinceMs`: when what it names started, its elapsed time said after the words ("Running pnpm test · 6m").
  * `waitsOn`: what of the user's the turn waits on: an answer's line carries a checklist glyph, an
  * approval's shimmers fainter.
- * `run`: a long run the request works on until its result comes, said under its answer as well.
  */
-export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; waitsOn?: "answer" | "approval"; run?: true };
+export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; waitsOn?: "answer" | "approval" };
 
 /**
  * What the end of a live turn says: one line. Each worker's own progress is in the Workers
@@ -27,7 +26,7 @@ export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; wai
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages" | "backgroundRuns">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -60,28 +59,14 @@ export function commandWords(command: string): string {
 }
 
 /**
- * A long run these requests wait on while the thread rests: a command of its own gone to the
- * background. The request works until its result comes, so the line says what runs and for how
- * long rather than "Thinking".
- */
-function runningHead({ board, requestIds }: StatusInput): StatusHead | null {
-  const run = Object.values(board.backgroundRuns)
-    .filter((each) => each.state.type === "running" && each.requestId !== null && requestIds.includes(each.requestId))
-    .toSorted((a, b) => a.startedAtMs - b.startedAtMs)[0];
-  return run ? { text: `Running ${commandWords(run.command)}`, tone: "busy", sinceMs: run.startedAtMs, run: true } : null;
-}
-
-/**
  * The line under an answer whose request still waits: what waits on the user first, else the
- * sessions whose replies it waits for (also while the answer streams), else a long run the
- * request works on until its result comes, else what it waits on, or does once a late result
- * reopened it.
+ * sessions whose replies it waits for (also while the answer streams), else what it waits on,
+ * or does once a late result reopened it.
  */
 export function answeredHead(head: StatusHead | null, { waitingFor, waiting, reopened }:
   { waitingFor: readonly string[]; waiting: boolean; reopened: boolean }): StatusHead | null {
   if (head?.tone === "needsYou") return head;
   if (waitingFor.length > 0) return { text: waitingWords(waitingFor), tone: "still" };
-  if (head?.run) return head;
   // Reopened by a late result: it works again under its answer, so it says so (#107).
   return waiting || reopened ? head : null;
 }
@@ -159,8 +144,6 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
     const text = busy.length === 1 ? "Waiting for a worker" : `Waiting for ${busy.length} workers`;
     return { head: { text, tone: working ? "busy" : "still" } };
   }
-  const running = runningHead(input);
-  if (running) return { head: running };
   // The lead's turn ended while a command it runs in the background goes on: that command's end
   // starts the turn that answers.
   const jobs = requestIds.reduce((sum, id) => sum + (board.requests[id]?.backgroundJobs ?? 0), 0);

@@ -1,5 +1,4 @@
 import { type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
-import { BackgroundRunRow } from "@/app/conversation/activity/BackgroundRunRow";
 import { EditedFileRows, editedFiles } from "@/app/conversation/activity/EditedFiles";
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { leadStepDetail } from "@/app/conversation/activity/leadStepDetail";
@@ -56,10 +55,6 @@ export function LeadStepRow({ step }: { step: LeadStep }) {
   const tasks = useBoard((s) => s.board?.tasks);
   const conversationId = useViewConversation()?.id ?? null;
   const described = describeLeadStep(step, tasks);
-  // A command that went on in the background: its run's row, which says how it stands now.
-  const itemId = step.kind.type === "tool" ? step.kind.itemId : null;
-  const run = useBoard((s) => (itemId === null ? undefined : Object.values(s.board?.backgroundRuns ?? {}).find((each) => each.itemId === itemId)));
-  if (run) return <BackgroundRunRow run={run} />;
   // A file change with its files counted: a row per file, each with its link and "+7 −2".
   const files = editedFiles(step);
   if (files) return <EditedFileRows step={step} files={files} conversationId={conversationId} />;

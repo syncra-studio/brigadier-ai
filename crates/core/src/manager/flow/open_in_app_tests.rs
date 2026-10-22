@@ -158,8 +158,10 @@ async fn what_the_session_doesnt_have_never_reaches_the_window() {
             "isn't a file in this session's checkout",
         ),
         (
-            OpenInAppTarget::Output { id: "run-9".into() },
-            "there is no preview or background run run-9",
+            OpenInAppTarget::Output {
+                id: "preview-9".into(),
+            },
+            "there is no preview preview-9",
         ),
         (
             OpenInAppTarget::Worker {

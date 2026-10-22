@@ -1943,13 +1943,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.stop_preview(conversation_id, preview_id)).await?;
             Response::StopPreview
         }
-        Request::StopBackgroundRun {
-            conversation_id,
-            run_id,
-        } => {
-            heap(|| sessions.stop_background_run(conversation_id, run_id)).await?;
-            Response::StopBackgroundRun
-        }
         Request::PausePreview {
             conversation_id,
             preview_id,
@@ -1977,13 +1970,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => {
             heap(|| sessions.dismiss_background(conversation_id, id)).await?;
             Response::DismissBackground
-        }
-        Request::RestartBackgroundRun {
-            conversation_id,
-            run_id,
-        } => {
-            heap(|| sessions.restart_background_run(conversation_id, run_id)).await?;
-            Response::RestartBackgroundRun
         }
         Request::ClearPreviews { conversation_id } => {
             heap(|| sessions.clear_previews(conversation_id)).await?;
@@ -2074,6 +2060,21 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| sessions.read_thread_image(&conversation_id, &item_id)).await?;
             Response::ReadThreadImage { data, mime }
         }
+        Request::StopBackgroundTask {
+            conversation_id,
+            task_id,
+        } => {
+            sessions
+                .stop_background_task(&conversation_id, task_id)
+                .await?;
+            Response::StopBackgroundTask
+        }
+        Request::ReadBackgroundTaskOutput {
+            conversation_id,
+            task_id,
+        } => Response::ReadBackgroundTaskOutput {
+            output: sessions.background_task_output(&conversation_id, &task_id)?,
+        },
         Request::ThreadView { conversation_id } => Response::ThreadView {
             view: sessions.thread_view(&conversation_id)?,
         },
@@ -2083,14 +2084,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => {
             let (data, mime) = sessions.thread_image(&conversation_id, &image)?;
             Response::ReadThreadImage { data, mime }
-        }
-        Request::ReadBackgroundRun {
-            conversation_id,
-            run_id,
-        } => {
-            let (output, bytes) =
-                heap(|| sessions.read_background_run(&conversation_id, &run_id)).await?;
-            Response::ReadBackgroundRun { output, bytes }
         }
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,

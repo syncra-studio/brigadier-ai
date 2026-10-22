@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
-import type { AttachmentRef, FileEntry, FileImage, ProviderEvent, ThreadNews, ThreadView } from "@/ipc/generated";
+import type { AttachmentRef, BackgroundTask, FileEntry, FileImage, ProviderEvent, ThreadNews, ThreadView } from "@/ipc/generated";
 
 /**
  * The thread as the CLI keeps it (S9): per conversation, the engine's `threadView` (its CLI's own
@@ -105,8 +105,11 @@ function isDelta(event: ProviderEvent): boolean {
   return event.type === "messageDelta" || event.type === "reasoningDelta" || event.type === "commandOutputDelta";
 }
 
-/** Reads under way, with what the stream said meanwhile, and whether a turn ended meanwhile. */
-const reads = new Map<string, { heard: FileEntry[]; again: boolean }>();
+/**
+ * Reads under way, with what the stream said meanwhile (items, and the CLI's background tasks
+ * when they changed), and whether a turn ended meanwhile.
+ */
+const reads = new Map<string, { heard: FileEntry[]; background?: BackgroundTask[]; again: boolean }>();
 
 function setView(conversationId: string, view: ThreadView): void {
   useCliThread.setState((state) => ({ views: { ...state.views, [conversationId]: view } }));
@@ -123,7 +126,7 @@ export async function loadThreadView(conversationId: string): Promise<void> {
     going.again = true;
     return;
   }
-  const read = { heard: [] as FileEntry[], again: false };
+  const read: { heard: FileEntry[]; background?: BackgroundTask[]; again: boolean } = { heard: [], again: false };
   reads.set(conversationId, read);
   try {
     const { view } = await request({ method: "threadView", conversationId });
@@ -131,7 +134,8 @@ export async function loadThreadView(conversationId: string): Promise<void> {
     // One without an id of its own (an error) is the view's already when it holds the same.
     const seen = new Set(view.entries.filter((entry) => itemIdOf(entry.event) === null).map((entry) => JSON.stringify(entry)));
     const fresh = heard.filter((entry) => itemIdOf(entry.event) !== null || !seen.has(JSON.stringify(entry)));
-    setView(conversationId, fresh.length > 0 ? { ...view, entries: mergeEntries(view.entries, fresh) } : view);
+    const landed = fresh.length > 0 ? { ...view, entries: mergeEntries(view.entries, fresh) } : view;
+    setView(conversationId, read.background ? { ...landed, background: read.background } : landed);
   } catch (error) {
     console.error("reading the thread failed", error);
   } finally {
@@ -155,12 +159,17 @@ function flushNews(): void {
     const read = reads.get(id);
     if (read) {
       read.heard.push(...news.entries);
+      if (news.background) read.background = news.background;
       continue;
     }
     // A thread not read yet is read whole when it opens.
     const view = next[id] ?? views[id];
-    if (!view || news.entries.length === 0) continue;
-    next[id] = { ...view, entries: mergeEntries(view.entries, news.entries) };
+    if (!view || (news.entries.length === 0 && !news.background)) continue;
+    next[id] = {
+      ...view,
+      ...(news.entries.length > 0 && { entries: mergeEntries(view.entries, news.entries) }),
+      ...(news.background && { background: news.background }),
+    };
   }
   if (Object.keys(next).length > 0) useCliThread.setState((state) => ({ views: { ...state.views, ...next } }));
   for (const id of turned) if (reads.has(id) || useCliThread.getState().views[id]) void loadThreadView(id);

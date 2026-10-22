@@ -1701,6 +1701,15 @@ impl ProviderSession for ClaudeSession {
         })
     }
 
+    fn stop_task(&self, task_id: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let mut request = Map::new();
+            request.insert("subtype".into(), "stop_task".into());
+            request.insert("task_id".into(), task_id.into());
+            self.request(request, CONTROL_TIMEOUT).await.map(drop)
+        })
+    }
+
     fn answer(&self, approval_id: String, decision: ApprovalDecision) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             let input = lock(&self.shared.approvals)

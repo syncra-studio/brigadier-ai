@@ -3,14 +3,14 @@
 //! The thread's own commands leave things no task owns: a second checkout to compare with the
 //! base, its build output and test data, the processes of a test it killed. They go when
 //! every request of the session is over (none works or waits) and nothing of its thread runs:
-//! no turn, nothing waiting for one, no background run, no overnight run
+//! no turn, nothing waiting for one, no overnight run
 //! ([`SessionManager::scratch_sweepable`], the one check the sweep and Free up space share).
 //!
 //! - **Left behind**: what the thread CLI's finished commands left running out of its process
 //!   tree ([`brigadier_providers::ProviderSession::left_behind`]): orphans of a killed test,
 //!   detached helpers. A stopped one always goes (SIGKILL ends it). A running one that
 //!   listens on a TCP port stays, as a server the user may have asked to keep up; so does
-//!   anything another owner of the cleanup ledger records (a preview, a background run, the
+//!   anything another owner of the cleanup ledger records (a preview, the setup script, the
 //!   full checks), and what still runs below the CLI (its MCP servers). One whose tree or
 //!   process group holds such a server (an `npm run dev` above its listening node) keeps it:
 //!   ending it would end the server too.
@@ -43,7 +43,7 @@ use super::conversation::ConvLive;
 use super::{SessionManager, blocking};
 use crate::Result;
 use crate::model::{ConversationId, ConversationKind, Lifecycle};
-use crate::work::{BackgroundRunState, RequestState};
+use crate::work::RequestState;
 
 /// What a sweep of a thread's scratch did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -72,23 +72,18 @@ fn claude_own(name: &str) -> bool {
     name.starts_with('-') || name == "bash-edit-diff" || name.starts_with("cache-break-state-")
 }
 
-/// Whether session `id`'s board says nothing of it is going: every request is over and no
-/// background run of its thread runs.
+/// Whether session `id`'s board says nothing of it is going: every request is over.
 fn board_over(board: &crate::board::Board) -> bool {
     board
         .requests
         .values()
         .all(|request| !matches!(request.state, RequestState::Working | RequestState::Waiting))
-        && board
-            .background_runs
-            .values()
-            .all(|run| run.state != BackgroundRunState::Running)
 }
 
 impl SessionManager {
     /// The shared check of whether session `id`'s thread scratch may go now: an open session,
-    /// not closing, with no overnight run, every request over (none works or waits), no
-    /// background run, and nothing of its driver holding the thread. Returns its driver.
+    /// not closing, with no overnight run, every request over (none works or waits), and
+    /// nothing of its driver holding the thread. Returns its driver.
     pub(crate) async fn scratch_sweepable(&self, id: &ConversationId) -> Option<Arc<ConvLive>> {
         let conversation = self.core.conversation(id).ok()?;
         if conversation.kind != ConversationKind::Session
@@ -290,7 +285,7 @@ impl SessionManager {
     }
 
     /// The processes other owners than session `id`'s thread record in the cleanup ledger
-    /// (previews, background runs, checks, workers): a sweep never ends them.
+    /// (previews, the setup script, checks, workers): a sweep never ends them.
     fn recorded_elsewhere(&self, id: &ConversationId) -> HashSet<u32> {
         let own = self
             .core

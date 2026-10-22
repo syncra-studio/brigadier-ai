@@ -3,7 +3,6 @@ import type { AccountsView } from "./AccountsView";
 import type { Approval } from "./Approval";
 import type { Artifact } from "./Artifact";
 import type { AttachmentRef } from "./AttachmentRef";
-import type { BackgroundRun } from "./BackgroundRun";
 import type { BrainJob } from "./BrainJob";
 import type { Compaction } from "./Compaction";
 import type { ConnectView } from "./ConnectView";
@@ -73,7 +72,7 @@ requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */
-subject: string, rating: Rating, } | { "type": "ratingCleared", subject: string, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: unknown, } | { "type": "integratedCheckUpdated", check: unknown, } | { "type": "headlineSet", conversationId: ConversationId, headline: SessionHeadline | null, } | { "type": "mergeRefusalSet", refusal: unknown, } | { "type": "backgroundRunUpdated", run: BackgroundRun, } | { "type": "mcpServersUpdated", conversationId: ConversationId, taskId: string | null, provider: ProviderKind, servers: Array<McpServerState>, atStart: boolean, boot: string, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, 
+subject: string, rating: Rating, } | { "type": "ratingCleared", subject: string, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: unknown, } | { "type": "integratedCheckUpdated", check: unknown, } | { "type": "headlineSet", conversationId: ConversationId, headline: SessionHeadline | null, } | { "type": "mergeRefusalSet", refusal: unknown, } | { "type": "mcpServersUpdated", conversationId: ConversationId, taskId: string | null, provider: ProviderKind, servers: Array<McpServerState>, atStart: boolean, boot: string, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, 
 /**
  * The thread made the commits from this one to `tip` itself (in its turn, or with its
  * trailer): the record of who wrote them, since a commit it makes on the user's own

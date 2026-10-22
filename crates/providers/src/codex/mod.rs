@@ -903,6 +903,11 @@ impl Provider for Codex {
                 })
                 .await;
             list_mcp_servers(&session.rpc, &session.shared);
+            tokio::spawn(watch_background_terminals(
+                session.rpc.clone(),
+                session.shared.clone(),
+                session.thread_id.clone(),
+            ));
             for message in notices {
                 session
                     .emit(ProviderEvent::Notice {
@@ -1949,7 +1954,12 @@ impl Rpc {
                         title: Some("Brigadier".into()),
                         version: env!("CARGO_PKG_VERSION").into(),
                     },
-                    capabilities: None,
+                    // Its background terminals are listed only to a client that takes its
+                    // experimental API (`thread/backgroundTerminals/*`, codex 0.163).
+                    capabilities: Some(p::InitializeCapabilities {
+                        experimental_api: true,
+                        ..Default::default()
+                    }),
                 },
             )
             .await?;
@@ -2217,6 +2227,19 @@ impl ProviderSession for CodexSession {
         })
     }
 
+    fn stop_task(&self, task_id: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let _: Value = self
+                .rpc
+                .call(
+                    "thread/backgroundTerminals/terminate",
+                    &json!({ "threadId": self.thread_id, "processId": task_id }),
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
     fn answer(&self, approval_id: String, decision: ApprovalDecision) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             let (rpc_id, kind) = lock(&self.shared.approvals)
@@ -2448,6 +2471,46 @@ fn exit_message(process: &CliProcess) -> String {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// How often the thread's background terminals are listed while a turn runs or some run.
+const TERMINALS_EVERY: Duration = Duration::from_secs(2);
+
+/// Follows the thread's background terminals as Codex's `/ps` lists them
+/// (`thread/backgroundTerminals/list`): each new one is reported running, each one gone,
+/// ended. Listed while a turn runs (only a turn starts one), once as it ends, and while any
+/// run; it stops with the app-server, or for good when the app-server won't list them.
+async fn watch_background_terminals(rpc: Arc<Rpc>, shared: Arc<Shared>, thread: String) {
+    let mut known: HashMap<String, BackgroundTask> = HashMap::new();
+    let mut was_active = false;
+    while rpc.process.is_running() {
+        tokio::time::sleep(TERMINALS_EVERY).await;
+        let active = lock(&shared.turn_id).is_some();
+        let ended = std::mem::replace(&mut was_active, active) && !active;
+        if !active && !ended && known.is_empty() {
+            continue;
+        }
+        let listed = match rpc
+            .call::<_, Value>(
+                "thread/backgroundTerminals/list",
+                &json!({ "threadId": thread }),
+            )
+            .await
+        {
+            Ok(listed) => listed,
+            Err(Error::Timeout(_)) => continue,
+            Err(err) => {
+                crate::logging::private_trace!(rpc.process.private_logs(), debug, "Codex does not list its background terminals here"; thread = %thread, error = %err);
+                return;
+            }
+        };
+        for task in parse::background_terminals(&listed, &mut known, now_ms()) {
+            shared
+                .events
+                .send(ProviderEvent::BackgroundTask { task })
+                .await;
+        }
+    }
 }
 
 #[cfg(test)]

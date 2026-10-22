@@ -1,8 +1,9 @@
 import { ciJobs, ciWatches, runFailed, shortSha } from "@/app/conversation/activity/slotView";
+import { taskShown } from "@/app/conversation/backgroundTasks";
 import { isRunRequest } from "@/app/conversation/blocks";
 import { lastMessageAtMs, liveMergeClick } from "@/app/conversation/liveJob";
 import { previewActive } from "@/app/conversation/previewStatus";
-import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
+import type { BackgroundTask, Preview, Task } from "@/ipc/generated";
 import type { Board } from "@/state/board";
 
 /**
@@ -16,7 +17,7 @@ import type { Board } from "@/state/board";
  * the history.
  */
 
-export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "waiting" | "merging";
+export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking" | "waiting" | "merging" | "done";
 
 /** The session's events the rows read off the board, as liveJob.ts reads them. */
 export type BackgroundEvents = Pick<Board, "orchestratorSteps" | "requests">;
@@ -26,7 +27,8 @@ export type EventAction = { type: "openCi"; url: string };
 
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
-  | { type: "run"; id: string; startedAtMs: number; run: BackgroundRun; state: BackgroundState }
+  /** One of the CLI's own background tasks (Claude Code's `/tasks`, Codex's `/ps`). */
+  | { type: "task"; id: string; startedAtMs: number; task: BackgroundTask; state: BackgroundState }
   | {
     type: "event";
     id: string;
@@ -60,14 +62,6 @@ function portOf(preview: Preview): string | null {
   );
 }
 
-/** A run's state from what it runs: a build builds, a test or lint checks. */
-export function runState(command: string): BackgroundState {
-  const words = appCommand(command);
-  if (/\b(test|tests|check|lint|typecheck|clippy|vitest|jest|pytest|playwright)\b/i.test(words)) return "checking";
-  if (/\b(build|compile|bundle|tsc)\b/i.test(words)) return "building";
-  return "running";
-}
-
 /**
  * The rows for the session's own events while they run, as the Job card reads them (an
  * overnight run's are its card's): the CI watch until its result, and a merge at work. Each
@@ -92,15 +86,21 @@ export function eventRows(board: BackgroundEvents): BackgroundRow[] {
   return rows;
 }
 
+/** The rows for the CLI's own background tasks that still have one at `now` (`taskShown`). */
+export function taskRows(tasks: readonly BackgroundTask[], now: number): BackgroundRow[] {
+  return tasks.filter((task) => taskShown(task, now)).map((task) => ({
+    type: "task", id: `task:${task.id}`, startedAtMs: task.startedAtMs, task, state: task.status === "running" ? "running" : "done",
+  }));
+}
+
 /**
- * The rows for the session's previews that still run, its long commands and its events
- * (`eventRows`), newest first. Of a group of copies of one app, the thread's own (else the
+ * The rows for the session's previews that still run and its events (`eventRows`), newest
+ * first. Of a group of copies of one app, the thread's own (else the
  * oldest) is the row; the others are its state while they run: "smoke testing" for a worker
  * that only looks at the running app or a browser at it, "checking" for any other worker's copy.
  */
 export function backgroundRows(
   previews: readonly Preview[],
-  runs: readonly BackgroundRun[],
   tasks: Record<string, Task> | null,
   workerName: (task: Task) => string | null,
   events: BackgroundEvents | null = null,
@@ -143,9 +143,6 @@ export function backgroundRows(
               : "running";
     return { type: "preview", id: lead.id, startedAtMs: lead.startedAtMs, preview: lead, state, worker: task ? workerName(task) : null, with: copies };
   });
-  for (const run of runs) {
-    if (run.state.type === "running") rows.push({ type: "run", id: run.id, startedAtMs: run.startedAtMs, run, state: runState(run.command) });
-  }
   if (events) rows.push(...eventRows(events));
   return rows.toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
 }

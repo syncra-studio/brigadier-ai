@@ -1501,6 +1501,28 @@ impl SessionManager {
         signal_preview_group(live.pid, paused)
     }
 
+    /// The user's × on an ended preview's Background row (Q94): it leaves the rows; its record
+    /// and log stay. One still running is refused.
+    pub async fn dismiss_background(&self, id: ConversationId, row: String) -> Result<()> {
+        let board = self.core.board(&id).await?;
+        let Some(preview) = board.previews.get(&row) else {
+            return Err(Error::Invalid(format!("there is no {row} in this session")));
+        };
+        if preview.state.is_live() {
+            return Err(Error::Invalid(format!("{row} still runs")));
+        }
+        self.core
+            .record_conversation(
+                &id,
+                vec![DomainEvent::BackgroundCleared {
+                    conversation_id: id.clone(),
+                    ids: vec![row],
+                }],
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Only ended rows go; stored logs may still be referenced by the thread.
     pub async fn clear_previews(&self, id: ConversationId) -> Result<()> {
         let board = self.core.board(&id).await?;

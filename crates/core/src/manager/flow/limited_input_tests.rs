@@ -1,5 +1,5 @@
 //! What a turn cut short by a usage limit was reading goes on with whatever takes over (#508):
-//! a worker's report, a user message or a background run's result is read exactly once by the
+//! a worker's report, a user message or a background job's result is read exactly once by the
 //! next turn, on a stand-in, on another account (which carries on in the same session), or on
 //! the chosen model back at once, without the user nudging; and a worker cut short on the
 //! thread's message hands it to the model that goes on.
