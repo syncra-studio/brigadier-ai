@@ -44,6 +44,7 @@
 
 pub(crate) mod files;
 pub mod parse;
+pub mod session_file;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

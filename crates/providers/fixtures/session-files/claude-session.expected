@@ -1,0 +1,37 @@
+User: text 1
+thinking: text 2
+tool ToolSearch Completed
+tool mcp__brigadier__delegate_task Completed
+thinking: text 16
+Assistant: text 17
+User: text 18
+tool ToolSearch Completed
+tool mcp__brigadier__route_follow_up Completed
+tool mcp__brigadier__message_worker Completed
+User: text 28 (steer)
+Assistant: text 30
+User: text 31
+thinking: text 32
+tool mcp__brigadier__message_worker Completed
+Assistant: text 37
+User: text 38
+thinking: text 39
+Assistant: text 40
+User: text 41
+Assistant: text 42
+User: text 43
+thinking: text 44
+command text 45 Completed
+turn end Interrupted
+User: text 52
+error: text 53
+tool mcp__pencil__execute Completed [4 image]
+tool Agent Completed
+  ↳ thinking: text 2
+  ↳ command text 3 Completed
+  ↳ command text 10 Completed
+  ↳ command text 17 Completed
+  ↳ thinking: text 24
+  ↳ command text 25 Completed
+  ↳ thinking: text 32
+  ↳ command text 33 Completed

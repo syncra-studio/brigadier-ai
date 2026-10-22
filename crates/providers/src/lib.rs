@@ -29,6 +29,7 @@ pub mod policy;
 pub mod process;
 pub mod record;
 pub mod redact;
+pub mod session_file;
 pub mod simulate;
 mod time;
 pub mod trust;

@@ -38,6 +38,7 @@ mod home_live_tests;
 pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
 pub mod protocol;
+pub mod rollout;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
