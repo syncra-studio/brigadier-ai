@@ -183,9 +183,12 @@ async fn a_stand_in_reads_the_user_message_a_limited_turn_was_reading() {
     flow.stop().await;
 }
 
-/// Each worker turn's provider, account, CLI session and input (its first turn's twice: what
-/// it started with, then what was steered in).
-type WorkerLog = Arc<Mutex<Vec<(ProviderKind, Option<String>, String, String)>>>;
+/// A worker turn's provider, account, CLI session, input and its hand-off's spec.md as the turn
+/// found it (read while the task lives: its scratch folder goes when the task ends).
+type WorkerTurn = (ProviderKind, Option<String>, String, String, String);
+
+/// Each worker turn (its first turn's twice: what it started with, then what was steered in).
+type WorkerLog = Arc<Mutex<Vec<WorkerTurn>>>;
 
 /// A thread that delegates a scout on "Scout it." (`pin`: on that provider) and messages it on
 /// "Tell it."; the scout's first turn hits its usage limit right after the thread's message was
@@ -218,12 +221,19 @@ fn worker_limited_on_message(pin: Option<&'static str>, log: &WorkerLog) -> Scri
                 }
                 return Reply::text("Done.");
             }
+            let spec = turn
+                .env("TMPDIR")
+                .and_then(|tmp| {
+                    std::fs::read_to_string(std::path::Path::new(tmp).join("handoff/spec.md")).ok()
+                })
+                .unwrap_or_default();
             let seen = |input: String| {
                 (
                     turn.provider,
                     turn.account.clone(),
                     turn.native_id.clone(),
                     input,
+                    spec.clone(),
                 )
             };
             let first = log.lock().unwrap().is_empty();
@@ -244,10 +254,7 @@ fn worker_limited_on_message(pin: Option<&'static str>, log: &WorkerLog) -> Scri
 
 /// Starts the scout, tells it once it works, and waits for its report: answers the worker's
 /// turns, checked to be its first (with the message steered in) and the one after.
-async fn tell_the_worker(
-    flow: &Flow,
-    log: &WorkerLog,
-) -> Vec<(ProviderKind, Option<String>, String, String)> {
+async fn tell_the_worker(flow: &Flow, log: &WorkerLog) -> Vec<WorkerTurn> {
     flow.say("Scout it.").await;
     let started = log.clone();
     flow.until("the worker to work", move |board| {
@@ -286,15 +293,10 @@ async fn a_worker_cut_short_on_the_threads_message_hands_it_to_the_next_model() 
     .await;
     let turns = tell_the_worker(&flow, &log).await;
     assert_ne!(turns[2].0, turns[0].0, "another model: {turns:#?}");
-    let board = flow.board().await;
-    let task = Flow::task(&board, 1);
-    let scratch = &task.workspace.as_ref().unwrap().scratch;
-    let spec = std::fs::read_to_string(std::path::Path::new(scratch).join("handoff/spec.md"))
-        .unwrap_or_default();
+    let (input, spec) = (&turns[2].3, &turns[2].4);
     assert!(
-        turns[2].3.contains("Look under the stairs.") || spec.contains("Look under the stairs."),
-        "{}\n---\n{spec}",
-        turns[2].3
+        input.contains("Look under the stairs.") || spec.contains("Look under the stairs."),
+        "{input}\n---\n{spec}"
     );
     flow.stop().await;
 }
