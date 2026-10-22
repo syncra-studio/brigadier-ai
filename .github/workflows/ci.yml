@@ -105,7 +105,8 @@ jobs:
         include:
           - name: Linux
             os: ubuntu-24.04
-            timeout-minutes: 15
+            # A cold clippy is ~10 min; a slow apt mirror can add up to 12 more.
+            timeout-minutes: 30
           - name: Windows
             os: windows-latest
             # Clippy itself finishes in ~15 min, but saving the Rust cache off the Dev Drive has
@@ -130,25 +131,43 @@ jobs:
           env-mapping: |
             CARGO_HOME,{{ DEV_DRIVE }}/.cargo
             CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
-      - name: Cache apt packages
+      - name: Restore apt packages
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        id: apt-cache
+        uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/.apt-cache/archives
+          path: ${{ runner.temp }}/apt-cache
           key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
         if: runner.os == 'Linux'
-        timeout-minutes: 14
+        timeout-minutes: 12
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.apt-cache/archives/partial"
+          # Outside the checkout: rust-cache walks the workspace and fails on apt's root-only partial/.
+          archives="$RUNNER_TEMP/apt-cache"
+          mkdir -p "$archives"
+          apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$archives")
+          packages=(libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev)
+          # The Azure mirror sometimes takes ~10 s a package. Finished downloads stay in $archives,
+          # so a capped attempt keeps its progress, and the next one uses archive.ubuntu.com.
           for i in 1 2 3; do
-            sudo timeout 240 apt-get update -o Acquire::Retries=3 -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" && \
-            sudo timeout 240 apt-get install -y --fix-missing -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev \
-              libayatana-appindicator3-dev librsvg2-dev && break
-            echo "apt attempt $i failed, retrying..."
-            sleep 15
+            sudo timeout 60 apt-get "${apt_opts[@]}" update && \
+              sudo timeout 150 apt-get "${apt_opts[@]}" install -y --download-only "${packages[@]}" && break
+            echo "apt download attempt $i failed, switching to archive.ubuntu.com and retrying..."
+            sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
+            sleep 5
           done
+          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
+          sudo rm -rf "$archives/partial" "$archives/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$archives"
+      - name: Save apt packages
+        # Saved now, not at job end, so a cancelled or timed-out job still fills the cache.
+        if: runner.os == 'Linux' && steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/apt-cache
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -190,23 +209,41 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - name: Cache apt packages
-        uses: actions/cache@v4
+      - name: Restore apt packages
+        id: apt-cache
+        uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/.apt-cache/archives
+          path: ${{ runner.temp }}/apt-cache
           key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xfsprogs
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
-        timeout-minutes: 14
+        timeout-minutes: 12
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.apt-cache/archives/partial"
+          # Outside the checkout: rust-cache walks the workspace and fails on apt's root-only partial/.
+          archives="$RUNNER_TEMP/apt-cache"
+          mkdir -p "$archives"
+          apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$archives")
+          packages=(libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xfsprogs)
+          # The Azure mirror sometimes takes ~10 s a package. Finished downloads stay in $archives,
+          # so a capped attempt keeps its progress, and the next one uses archive.ubuntu.com.
           for i in 1 2 3; do
-            sudo timeout 240 apt-get update -o Acquire::Retries=3 -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" && \
-            sudo timeout 240 apt-get install -y --fix-missing -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev \
-              libayatana-appindicator3-dev librsvg2-dev xfsprogs && break
-            echo "apt attempt $i failed, retrying..."
-            sleep 15
+            sudo timeout 60 apt-get "${apt_opts[@]}" update && \
+              sudo timeout 150 apt-get "${apt_opts[@]}" install -y --download-only "${packages[@]}" && break
+            echo "apt download attempt $i failed, switching to archive.ubuntu.com and retrying..."
+            sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
+            sleep 5
           done
+          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
+          sudo rm -rf "$archives/partial" "$archives/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$archives"
+      - name: Save apt packages
+        # Saved now, not at job end, so a cancelled or timed-out job still fills the cache.
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/apt-cache
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -252,7 +289,9 @@ jobs:
   linux-app:
     name: Linux app, launch smoke check
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Warm builds take up to ~18 min and a cold one about half as long again; a slow apt mirror
+    # can add up to 12 more.
+    timeout-minutes: 45
     env:
       # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.
       # Cargo passes these settings to the app and its sidecar builds alike.
@@ -260,23 +299,41 @@ jobs:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v7
-      - name: Cache apt packages
-        uses: actions/cache@v4
+      - name: Restore apt packages
+        id: apt-cache
+        uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/.apt-cache/archives
+          path: ${{ runner.temp }}/apt-cache
           key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-curl-wget-file-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xvfb-dbus
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
-        timeout-minutes: 14
+        timeout-minutes: 12
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.apt-cache/archives/partial"
+          # Outside the checkout: rust-cache walks the workspace and fails on apt's root-only partial/.
+          archives="$RUNNER_TEMP/apt-cache"
+          mkdir -p "$archives"
+          apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Dir::Cache::Archives="$archives")
+          packages=(libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus)
+          # The Azure mirror sometimes takes ~10 s a package. Finished downloads stay in $archives,
+          # so a capped attempt keeps its progress, and the next one uses archive.ubuntu.com.
           for i in 1 2 3; do
-            sudo timeout 240 apt-get update -o Acquire::Retries=3 -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" && \
-            sudo timeout 240 apt-get install -y --fix-missing -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" libwebkit2gtk-4.1-dev build-essential curl wget file \
-              libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus && break
-            echo "apt attempt $i failed, retrying..."
-            sleep 15
+            sudo timeout 60 apt-get "${apt_opts[@]}" update && \
+              sudo timeout 150 apt-get "${apt_opts[@]}" install -y --download-only "${packages[@]}" && break
+            echo "apt download attempt $i failed, switching to archive.ubuntu.com and retrying..."
+            sudo grep -rlZ azure.archive.ubuntu.com /etc/apt | xargs -0r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
+            sleep 5
           done
+          sudo apt-get "${apt_opts[@]}" install -y "${packages[@]}"
+          # apt leaves a root-only partial/ and lock behind; actions/cache must be able to read it all.
+          sudo rm -rf "$archives/partial" "$archives/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$archives"
+      - name: Save apt packages
+        # Saved now, not at job end, so a cancelled or timed-out job still fills the cache.
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/apt-cache
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
