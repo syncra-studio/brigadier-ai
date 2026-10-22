@@ -5,22 +5,29 @@
  * plain chat, an answered project and the two unanswered ones, answers both and comes back,
  * and writes what it saw to #trust-result
  * (TrustDialogRender.test.ts reads it). ?look=1 sets the open dialog, its two answers and the
- * path's tooltip beside the app's shared parts and writes their looks to #trust-look. Without
- * either the page stays as it opens, for screenshots.
+ * path's tooltip beside the app's shared parts and writes their looks to #trust-look. ?type=1
+ * (under renderFixtureLive) has the app's own new session behind the dialog, types, pastes and
+ * presses Enter while it asks, answers, types on and writes what the message box held to
+ * #trust-typed (#477). Without any the page stays as it opens, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { ConversationView } from "@/app/conversation/ConversationView";
+import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { TrustDialog } from "@/app/shell/dialogs/TrustDialog";
 import { Folder } from "@/components/icons";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Conversation, Project, Request } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { type Selection, useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
-if (params.has("drive") || params.has("look")) {
+if (params.has("drive") || params.has("look") || params.has("type")) {
   const still = document.createElement("style");
   still.textContent =
     "*, *::before, *::after { animation: none !important; transition: none !important; backdrop-filter: none !important; }";
@@ -45,8 +52,10 @@ const projects: Project[] = names.map((name, index) => ({
 // A session in `invoice-service`, the newest project.
 const session = { id: "s1", projectId: "p2", title: "Add invoice export" } as Conversation;
 
+localStorage.clear();
 useApp.setState((state) => ({
   catalogLoaded: true,
+  connection: { status: "connected", daemon: null, reason: null },
   settings: { ...state.settings, onboarded: true },
   projects: Object.fromEntries(projects.map((project) => [project.id, project])),
   conversations: { [session.id]: session },
@@ -58,7 +67,7 @@ const answers: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method !== "setFolderTrust") return null;
+  if (req.method !== "setFolderTrust") return { method: req.method };
   answers.push(`${req.id} ${req.trusted}`);
   const project = useApp.getState().projects[req.id]!;
   const path = req.path ?? project.repos[0]!.path;
@@ -113,6 +122,45 @@ async function drive(): Promise<string> {
   return JSON.stringify(seen);
 }
 
+/** The message box behind the dialog under ?type=1. */
+const field = () => document.querySelector<HTMLElement>(COMPOSER_EDITABLE);
+
+/**
+ * Types, pastes and presses Enter while the dialog asks, answers, and types on: what the
+ * message box behind it held each time, and where the keyboard went.
+ */
+async function typeWhileAsked(): Promise<string> {
+  const seen: Record<string, unknown> = {};
+  for (let i = 0; i < 100 && !(dialog() && field()); i++) await settle();
+  await fixtureInput({ type: "type", text: "Add a READMX" });
+  await fixtureInput({ type: "key", key: "Backspace" });
+  await fixtureInput({ type: "type", text: "E" });
+  const pasted = new DataTransfer();
+  pasted.setData("text/plain", " to the repo");
+  document.activeElement?.dispatchEvent(
+    new ClipboardEvent("paste", { clipboardData: pasted, bubbles: true, cancelable: true }),
+  );
+  // Enter neither sends the message nor answers.
+  await fixtureInput({ type: "key", key: "Enter" });
+  await settle();
+  seen.whileAsked = { text: field()?.textContent, focused: dialog()?.focused, answers: [...answers] };
+  const trust = [...document.querySelectorAll("[data-testid=trust-dialog] button")].find(
+    (button) => button.textContent === "Trust folder",
+  );
+  if (trust) await fixtureClick(trust);
+  for (let i = 0; i < 50 && dialog(); i++) await settle();
+  await fixtureInput({ type: "type", text: ", please" });
+  // Long enough for the draft to be kept (it waits for typing to rest).
+  for (let i = 0; i < 6; i++) await settle();
+  seen.answered = {
+    text: field()?.textContent,
+    focused: field()?.contains(document.activeElement) ?? false,
+    answers,
+    kept: JSON.parse(localStorage.getItem("brigadier.drafts") ?? "{}").new?.text,
+  };
+  return JSON.stringify(seen);
+}
+
 /** The dialog's parts and the shared ones they are drawn with, once `Canon` is mounted. */
 async function looks(): Promise<string> {
   for (let i = 0; i < 50 && !dialog(); i++) await settle();
@@ -138,7 +186,21 @@ function Shell() {
   useEffect(() => {
     if (params.has("drive")) void drive().then(setResult);
     if (params.has("look")) void looks().then(setLooked);
+    if (params.has("type")) void typeWhileAsked().then(setResult);
   }, []);
+  if (params.has("type")) {
+    return (
+      <TooltipProvider>
+        <SidebarProvider className="flex h-screen flex-col" defaultOpen={false}>
+          <main className="relative flex min-h-0 w-full flex-1 flex-col">
+            <ConversationView key="draft" selection={{ type: "draft", kind: "session", projectId: "p2" }} />
+          </main>
+          <TrustDialog />
+          {result && <pre id="trust-typed">{result}</pre>}
+        </SidebarProvider>
+      </TooltipProvider>
+    );
+  }
   return (
     <div className="flex h-screen">
       <nav className="bg-sidebar text-sidebar-foreground w-sidebar grid content-start gap-1 p-3">

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 // The real dialog in Chromium over a seeded store: it asks only about the project the user is
 // in, once, and nothing about the other unanswered projects meanwhile.
@@ -27,6 +27,23 @@ test("the trust question shows when an unanswered project is entered, once", { t
   assert.equal((seen.newSession as { path: string }).path, "/Users/you/Development/ops-scripts");
   assert.equal(seen.backAgain, null);
   assert.deepEqual(seen.answers, ["p2 true", "p3 false"]);
+});
+
+// #477: what's typed while the question is up, the card having the keyboard, goes into the message
+// box behind it, not nowhere; Enter neither sends it nor answers, and once answered the box takes
+// the keyboard back, the text kept.
+test("text typed while the trust question asks stays in the message box", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "trust.html?type=1", "trust-typed", 90000)) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.deepEqual(seen.whileAsked, { text: "Add a README to the repo", focused: "trust-dialog", answers: [] });
+  assert.deepEqual(seen.answered, {
+    text: "Add a README to the repo, please",
+    focused: true,
+    answers: ["p2 true"],
+    kept: "Add a README to the repo, please",
+  });
 });
 
 // Drawn with the app's shared parts (#385): its card, title and line are the app's dialog's, its

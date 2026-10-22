@@ -13,6 +13,19 @@ const DRAFT_SAVE_MS = 400;
 /** Prompts ↑ walks back through, kept per thread. */
 const HISTORY = 20;
 
+/** The composers open now by draft scope, each taking edits made from outside it (`typeInto`). */
+const typists = new Map<string, (edit: (text: string) => string) => void>();
+
+/**
+ * Edits the text of the composer open for `scope` from outside it, as where the user types
+ * while a dialog has the keyboard; returns whether one was open.
+ */
+export function typeInto(scope: string, edit: (text: string) => string): boolean {
+  const type = typists.get(scope);
+  type?.(edit);
+  return type !== undefined;
+}
+
 /** Where each remembered file or conversation's `@name` stands in `text`. */
 function mentionsAt(text: string, memory: MentionMemory): DraftMention[] {
   const found: DraftMention[] = [];
@@ -28,7 +41,7 @@ function mentionsAt(text: string, memory: MentionMemory): DraftMention[] {
  * Keeps the composer's draft for `scope` (see state/drafts): restores it when the composer
  * opens empty, and saves text, stored attachments and mentions once typing rests and when it
  * closes. A restored mention whose `@name` is still where it was chips again, and sends the
- * same file or conversation.
+ * same file or conversation. Edits for `scope` from outside it (`typeInto`) go into its text.
  */
 export function useComposerDraft(
   scope: string,
@@ -77,6 +90,17 @@ export function useComposerDraft(
 
   // Leaving the conversation keeps what was typed last.
   useEffect(() => () => keep(), [keep]);
+
+  useEffect(() => {
+    const type = (edit: (text: string) => string) => {
+      const composer = aui.composer();
+      composer.setText(edit(composer.getState().text));
+    };
+    typists.set(scope, type);
+    return () => {
+      if (typists.get(scope) === type) typists.delete(scope);
+    };
+  }, [aui, scope]);
 }
 
 /**

@@ -1,5 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type SyntheticEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { typeInto } from "@/app/conversation/composerDraft";
+import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { useAction } from "@/app/conversation/useAction";
 import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
 import { Button, ErrorLine } from "@/components/controls";
@@ -14,6 +16,7 @@ import type { Project } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
 import { useRevealed } from "@/lib/splash";
 import { cn } from "@/lib/utils";
+import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { useOnboarding } from "@/state/onboarding";
 import { useApp } from "@/state/store";
 import { projectFolder, setFolderTrust, toAsk } from "@/state/trust";
@@ -33,6 +36,15 @@ export function TrustDialog() {
   const revealed = useRevealed();
   const folder = project && projectFolder(project);
   const open = revealed && catalogLoaded && !smoke && !onboarding && !reopened && folder !== null;
+  // The composer behind it: the conversation's, or the new chat's.
+  const scope = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : NEW_CHAT_SCOPE));
+  // Whether text typed while it asked went into the composer, which then takes the keyboard back.
+  const typed = useRef(false);
+  const type = (edit: ((text: string) => string) | null, event: SyntheticEvent) => {
+    if (!edit || event.target !== event.currentTarget || !typeInto(scope, edit)) return;
+    event.preventDefault();
+    typed.current = true;
+  };
   return (
     <Dialog open={open}>
       <DialogContent
@@ -46,6 +58,22 @@ export function TrustDialog() {
           event.preventDefault();
           (event.currentTarget as HTMLElement).focus();
         }}
+        // What's typed or pasted meanwhile goes into the message box behind it, not nowhere (#477).
+        onKeyDown={(event) => type(typedEdit(event), event)}
+        onPaste={(event) => {
+          const pasted = event.clipboardData.getData("text/plain");
+          type(pasted ? (text) => text + pasted : null, event);
+        }}
+        onCloseAutoFocus={(event) => {
+          if (!typed.current) return;
+          typed.current = false;
+          event.preventDefault();
+          // At the text's end, to go on typing.
+          const field = document.querySelector<HTMLElement>(COMPOSER_EDITABLE);
+          field?.focus();
+          if (field) getSelection()?.selectAllChildren(field);
+          getSelection()?.collapseToEnd();
+        }}
       >
         {open && project && folder && (
           <TrustForm key={`${project.id}\n${folder}`} project={project} folder={folder} />
@@ -53,6 +81,17 @@ export function TrustDialog() {
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * What a key typed on the dialog's card does to the composer's text: a character goes on its
+ * end and Backspace takes the last one off; `null` for a shortcut or any other key.
+ */
+function typedEdit(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey">): ((text: string) => string) | null {
+  // Ctrl with Alt is AltGr on Windows, which types characters.
+  if (event.metaKey || (event.ctrlKey && !event.altKey)) return null;
+  if (event.key === "Backspace") return (text) => [...text].slice(0, -1).join("");
+  return [...event.key].length === 1 ? (text) => text + event.key : null;
 }
 
 /** The folder's path split at its last part: where it lives, and the folder's own name. */
