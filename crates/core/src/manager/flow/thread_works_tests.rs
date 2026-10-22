@@ -172,7 +172,7 @@ async fn parts_that_run_at_once(start_workers_on_own: bool) {
         inputs.lock().unwrap()
     );
     // How workers are handled is in the instructions the CLI starts with, never a note.
-    assert!(rule.contains("How you handle workers:"), "{rule}");
+    assert!(rule.contains(crate::manager::prompts::BRIGADE), "{rule}");
     let heard = inputs.lock().unwrap().clone();
     assert!(
         heard.iter().all(|input| !input.contains("[instructions]")),
