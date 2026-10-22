@@ -760,6 +760,12 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     if spec.tools.user_setup() && settings.get("hooks").is_some() {
         settings["disableAllHooks"] = json!(false);
     }
+    // A session that calls `brigadier` reaches the daemon's socket under Claude's own sandbox
+    // too, when the user turns that on: Claude's sandbox refuses every Unix socket it isn't told
+    // of ("Operation not permitted"). This allows that one socket; it turns nothing on.
+    if let Some(socket) = brigadier_socket(spec) {
+        settings["sandbox"] = json!({ "network": { "allowUnixSockets": [socket] } });
+    }
     // Full access is the user's own choice in Brigadier, so its terminal ("Open in terminal")
     // doesn't ask again with Claude's bypass-mode warning, whose default answer exits. Flag
     // settings count as consent (2.1.294 reads the key from user, local, flag and policy
@@ -781,6 +787,40 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         settings["env"] = Value::Object(env);
     }
     settings
+}
+
+/// The daemon's socket, for a session given `brigadier` (its environment names its session): in
+/// the data folder its environment names, else the installed app's. The real path, which is
+/// what Claude's sandbox checks (`/tmp` is `/private/tmp` on macOS).
+fn brigadier_socket(spec: &SessionSpec) -> Option<String> {
+    let var = |name: &str| {
+        spec.env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    var("BRIGADIER_SESSION")?;
+    let data = match var(brigadier_sandbox::DATA_DIR_ENV) {
+        Some(dir) => PathBuf::from(dir),
+        None => brigadier_sandbox::default_data_dir().ok()?,
+    };
+    let brigadier_sandbox::IpcEndpoint::UnixSocket(socket) =
+        brigadier_sandbox::AppPaths::resolve(data)
+            .ok()?
+            .ipc_endpoint
+    else {
+        return None;
+    };
+    // Its folder may not exist yet: the nearest one that does, made real, and the rest.
+    let real = socket
+        .ancestors()
+        .find_map(|dir| {
+            let rest = socket.strip_prefix(dir).ok()?;
+            Some(dir.canonicalize().ok()?.join(rest))
+        })
+        .unwrap_or(socket);
+    Some(real.display().to_string())
 }
 
 /// A thread's output hook ([`SessionSpec::output_hook`]) as settings `hooks`: the same command
@@ -2385,6 +2425,38 @@ for line in sys.stdin:
         .unwrap();
         let flag = &args[args.iter().position(|arg| arg == "--settings").unwrap() + 1];
         assert!(flag.contains("\"CLAUDE_CODE_OAUTH_TOKEN\":\"\""), "{flag}");
+    }
+
+    /// A session given `brigadier` may reach the daemon's socket (by its real path) under
+    /// Claude's own sandbox, should the user turn it on; nothing else of the sandbox is set, and
+    /// a session without `brigadier` gets no sandbox key at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_with_brigadier_may_reach_its_socket_under_claudes_sandbox() {
+        let cwd = Temp::new();
+        // Short enough for the socket to stay in the data folder.
+        let data = std::path::PathBuf::from(format!("/tmp/brigadier-sock-{}", std::process::id()));
+        let mut spec = spec(cwd.path(), &["claude-opus-5-5"]);
+        assert!(
+            settings(&spec, &SubAgents::Any, false)
+                .get("sandbox")
+                .is_none()
+        );
+        spec.env = vec![
+            ("BRIGADIER_SESSION".into(), "s-1".into()),
+            ("BRIGADIER_DATA_DIR".into(), data.display().to_string()),
+        ];
+        // `/tmp` is `/private/tmp` on macOS; the folder isn't made.
+        let socket = std::path::Path::new("/tmp")
+            .canonicalize()
+            .unwrap()
+            .join(data.strip_prefix("/tmp").unwrap())
+            .join("run/brigadierd.sock");
+        assert!(!data.exists());
+        assert_eq!(
+            settings(&spec, &SubAgents::Any, false)["sandbox"],
+            json!({ "network": { "allowUnixSockets": [socket.display().to_string()] } })
+        );
     }
 
     fn spec(cwd: &Path, ids: &[&str]) -> SessionSpec {
