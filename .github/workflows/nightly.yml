@@ -357,13 +357,21 @@ jobs:
           env-mapping: |
             CARGO_HOME,{{ DEV_DRIVE }}/.cargo
             CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+      - name: Cache apt packages
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.apt-cache/archives
+          key: apt-${{ runner.os }}-${{ runner.arch }}-libwebkit2gtk-4.1-dev-build-essential-curl-wget-file-libxdo-dev-libssl-dev-libayatana-appindicator3-dev-librsvg2-dev-xvfb-dbus
+          restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux system dependencies
         if: runner.os == 'Linux'
-        timeout-minutes: 6
+        timeout-minutes: 14
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/.apt-cache/archives/partial"
           for i in 1 2 3; do
-            sudo apt-get update -o Acquire::Retries=3 && \
-            sudo apt-get install -y --fix-missing libwebkit2gtk-4.1-dev build-essential curl wget file \
+            sudo timeout 240 apt-get update -o Acquire::Retries=3 -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" && \
+            sudo timeout 240 apt-get install -y --fix-missing -o Dir::Cache::Archives="$GITHUB_WORKSPACE/.apt-cache/archives" libwebkit2gtk-4.1-dev build-essential curl wget file \
               libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus && break
             echo "apt attempt $i failed, retrying..."
             sleep 15
