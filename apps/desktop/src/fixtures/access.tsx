@@ -83,47 +83,53 @@ function Fixture() {
   useEffect(() => {
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
-    const at = (ms: number, run: () => void) => setTimeout(run, ms);
-    const timers = [
-      at(300, () => {
-        seen.first = { select: selectTrigger()?.textContent, picker: picker() };
-        selectTrigger()?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
-      }),
-      at(600, () => {
-        [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
-          .find((item) => item.textContent?.startsWith("Accept edits"))
-          ?.click();
-      }),
-      at(900, () => {
-        const settings = useApp.getState().settings;
-        seen.saved = {
-          select: selectTrigger()?.textContent,
-          newSession: resolvePermission(null, settings),
-          pickedForOne: resolvePermission("full", settings),
-          session: sessionLevel(),
-          picker: picker(),
-        };
-        // The pill opens its menu on ↑, as the composer's keyboard path does.
-        const pill = q('[data-slot="permission-picker"]');
-        pill?.focus();
-        pill?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }));
-      }),
-      at(1100, () => {
-        [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
-          .find((item) => item.textContent?.startsWith("Full access"))
-          ?.click();
-      }),
-      at(1400, () => {
-        seen.confirming = !!buttonNamed("Confirm");
-        buttonNamed("Confirm")?.click();
-      }),
-      at(1700, () => {
-        seen.switched = { session: sessionLevel(), picker: picker() };
-        seen.calls = calls;
-        setResult(JSON.stringify(seen));
-      }),
-    ];
-    return () => timers.forEach(clearTimeout);
+    let stopped = false;
+    // Each step waits for what it acts on (a menu, the confirmation) instead of a fixed time,
+    // so a slow render doesn't skip one; after 5 s it goes on and the result shows what's missing.
+    const until = async <T,>(find: () => T | null | undefined | false): Promise<T | undefined> => {
+      for (let waited = 0; waited < 5000 && !stopped; waited += 50) {
+        const found = find();
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return undefined;
+    };
+    // An item of the menu `trigger` opened, never of another one still closing.
+    const item = (trigger: Element | null, label: string) => {
+      const menu = trigger?.getAttribute("aria-expanded") === "true" && document.getElementById(trigger.getAttribute("aria-controls") ?? "");
+      return menu ? [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((item) => item.textContent?.startsWith(label)) : undefined;
+    };
+    const pill = () => q('[data-slot="permission-picker"]');
+    void (async () => {
+      await until(() => selectTrigger() && picker());
+      seen.first = { select: selectTrigger()?.textContent, picker: picker() };
+      selectTrigger()?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      (await until(() => item(selectTrigger(), "Accept edits")))?.click();
+      await until(() => selectTrigger()?.textContent === "Accept edits" && selectTrigger()?.getAttribute("aria-expanded") === "false");
+      const settings = useApp.getState().settings;
+      seen.saved = {
+        select: selectTrigger()?.textContent,
+        newSession: resolvePermission(null, settings),
+        pickedForOne: resolvePermission("full", settings),
+        session: sessionLevel(),
+        picker: picker(),
+      };
+      // The pill opens its menu on ↑, as the composer's keyboard path does.
+      pill()?.focus();
+      pill()?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }));
+      (await until(() => item(pill(), "Full access")))?.click();
+      const confirm = await until(() => buttonNamed("Confirm"));
+      seen.confirming = !!confirm;
+      confirm?.click();
+      await until(() => sessionLevel() === "full" && picker() === "Full access");
+      if (stopped) return;
+      seen.switched = { session: sessionLevel(), picker: picker() };
+      seen.calls = calls;
+      setResult(JSON.stringify(seen));
+    })();
+    return () => {
+      stopped = true;
+    };
   }, []);
   return (
     <TooltipProvider>
