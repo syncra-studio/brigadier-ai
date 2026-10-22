@@ -19,6 +19,11 @@ path: string,
  */
 locations: Array<SkillLocationView>, 
 /**
+ * The plugin it comes with when it comes only with plugins: its agent shows it as
+ * `<plugin>:<name>`.
+ */
+plugin: string | null, 
+/**
  * The agents whose workers in the project find it by themselves; every other worker gets
  * it from Brigadier.
  */
@@ -29,6 +34,7 @@ nativeTo: Array<ProviderKind>,
 off: boolean, 
 /**
  * Claude Code switches its own skills off by name: switching this one off hides every
- * skill Claude finds by itself under the same name.
+ * skill Claude finds by itself under the same name (a plugin's skill only goes by its
+ * `<plugin>:<name>`).
  */
 claudeOffByName: boolean, };

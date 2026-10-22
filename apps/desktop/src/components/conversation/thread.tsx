@@ -500,17 +500,19 @@ export const MessageText: FC<TextMessagePartProps> = (props) => (
 
 /**
  * Markdown outside a thread message, such as a worker's replies in its panel. `plainLeads`: an
- * answer, whose line-opening bold shows plain (see `MarkdownText`).
+ * answer, whose line-opening bold shows plain; `paced`: off, streaming text shows as it arrives
+ * (see `MarkdownText`).
  */
-export const MarkdownBlock: FC<{ text: string; streaming?: boolean; breaks?: boolean; plainLeads?: boolean }> = ({
-  text,
-  streaming = false,
-  breaks = false,
-  plainLeads = false,
-}) => (
+export const MarkdownBlock: FC<{
+  text: string;
+  streaming?: boolean;
+  paced?: boolean;
+  breaks?: boolean;
+  plainLeads?: boolean;
+}> = ({ text, streaming = false, paced = true, breaks = false, plainLeads = false }) => (
   <TextMessagePartProvider text={text} isRunning={streaming}>
     <Suspense fallback={<p className="whitespace-pre-wrap">{text}</p>}>
-      <MarkdownText streaming={streaming} breaks={breaks} plainLeads={plainLeads} />
+      <MarkdownText streaming={streaming} paced={paced} breaks={breaks} plainLeads={plainLeads} />
     </Suspense>
   </TextMessagePartProvider>
 );

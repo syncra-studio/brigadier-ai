@@ -105,6 +105,15 @@ export function jumpInThread(target: Element | null | undefined): void {
 }
 
 /**
+ * A fold whose toggle isn't what should stay put (a code block's footer, which moves with its
+ * end) keeps `target` in its place instead, as a click on it would (see `ThreadScroller.clicked`).
+ */
+export function holdInThread(target: Element | null | undefined): void {
+  const viewport = target?.closest("[data-slot=aui_thread-viewport]");
+  if (viewport && target) scrollers.get(viewport)?.clicked(target);
+}
+
+/**
  * How many times the user acted on a thread's view, in any thread: their input in it, a focus
  * moved in, a jump, the scroll button, a message sent or an edit. Code keeping a place for the
  * user (a landed jump) stops when it changes.

@@ -31,25 +31,12 @@ const SOURCES: Record<string, IntegrationSource> = {
   "Claude Desktop": "Desktop",
   "Cursor (user)": "CursorUser",
   "Cursor (project)": "CursorProject",
+  "Claude Code (plugin)": "ClaudePlugin",
+  "Codex (plugin)": "CodexPlugin",
 };
 
 function source(label: string): IntegrationSource {
   return SOURCES[label] ?? "ClaudeUser";
-}
-
-/** The config file a source reads, with the project's real folder. */
-function sourceFile(kind: IntegrationSource, project: string | null): string {
-  const root = project ? shortPath(project) : "";
-  switch (kind) {
-    case "ClaudeUser":
-    case "ClaudeLocal": return "~/.claude.json";
-    case "ClaudeProjectFile": return `${root}/.mcp.json`;
-    case "CodexUser": return "~/.codex/config.toml";
-    case "CodexProject": return `${root}/.codex/config.toml`;
-    case "Desktop": return "~/Library/Application Support/Claude/claude_desktop_config.json";
-    case "CursorUser": return "~/.cursor/mcp.json";
-    case "CursorProject": return `${root}/.cursor/mcp.json`;
-  }
 }
 
 const agentOf = (provider: ProviderKind): IntegrationAgent => provider;
@@ -119,7 +106,7 @@ function server(members: McpServerView[], projects: Project[]): IntegrationServe
     ...(pending ? { pendingSignIn: pending } : {}),
     nativeAgents: agents,
     canSwitchOff: true,
-    sourceFiles: members.map((member) => ({ source: source(member.source), path: sourceFile(source(member.source), member.project) })),
+    sourceFiles: members.map((member) => ({ source: source(member.source), path: shortPath(member.file), ...(member.plugin ? { plugin: member.plugin } : {}) })),
   };
 }
 
@@ -142,8 +129,8 @@ function problem(view: ProblemView, projects: Project[]): IntegrationServer {
   };
 }
 
-/** Whether a daemon id names an item of the project at `root`: `claude:project:<root>:<name>`. */
-const ownedBy = (id: string, root: string) => id.includes(`:project:${root}:`);
+/** Whether a daemon id names an item of the project at `root`: `claude:project:<root>:<name>`, or a plugin's installed for it, `claude:plugin:<root>:<plugin>:…`. */
+const ownedBy = (id: string, root: string) => id.includes(`:project:${root}:`) || id.includes(`:plugin:${root}:`);
 
 function skill(view: SkillView, projects: Project[]): IntegrationSkill {
   // A user's skill linked into a project stays the user's: its id names its own root.
@@ -151,15 +138,17 @@ function skill(view: SkillView, projects: Project[]): IntegrationSkill {
     const root = item.repos[0]?.path;
     return root && ownedBy(view.id, root);
   });
-  const locations = view.locations.length ? view.locations : [{ path: view.path, linkedTo: null, nativeTo: view.nativeTo }];
+  const locations = view.locations.length ? view.locations : [{ path: view.path, linkedTo: null, plugin: null, nativeTo: view.nativeTo }];
   return {
     id: view.id,
-    name: view.name,
+    // A plugin's skill, as its agent shows it.
+    name: view.plugin ? `${view.plugin}:${view.name}` : view.name,
     description: view.description,
     locations: locations.map((location) => shortPath(location.path)),
     locationDetails: locations.map((location) => ({
       path: shortPath(location.path),
       ...(location.linkedTo ? { linkedTo: shortPath(location.linkedTo) } : {}),
+      ...(location.plugin ? { plugin: location.plugin } : {}),
       agents: location.nativeTo.map(agentOf),
     })),
     nativeAgents: view.nativeTo.map(agentOf),
@@ -261,6 +250,7 @@ function pathsOf(view: IntegrationsView): Map<string, string> {
     for (const location of item.locations) add(location.path);
   }
   for (const item of view.problems) add(item.file);
+  for (const item of view.servers) add(item.file);
   return paths;
 }
 

@@ -11,7 +11,9 @@ export type IntegrationSource =
   | "CodexProject"
   | "Desktop"
   | "CursorUser"
-  | "CursorProject";
+  | "CursorProject"
+  | "ClaudePlugin"
+  | "CodexPlugin";
 
 /** How one agent's workers are signed in to a remote server (`SignInState`). */
 export type IntegrationSignIn =
@@ -42,7 +44,7 @@ export type IntegrationServer = {
   /** A project's own server: its project's id and folder. */
   projectId?: string;
   projectPath?: string;
-  sourceFiles?: { source: IntegrationSource; path: string; line?: number }[];
+  sourceFiles?: { source: IntegrationSource; path: string; line?: number; plugin?: string }[];
 };
 
 export type IntegrationSkill = {
@@ -50,7 +52,7 @@ export type IntegrationSkill = {
   name: string;
   description: string;
   locations: string[];
-  locationDetails?: { path: string; linkedTo?: string; agents: IntegrationAgent[] }[];
+  locationDetails?: { path: string; linkedTo?: string; plugin?: string; agents: IntegrationAgent[] }[];
   nativeAgents: IntegrationAgent[];
   project?: string;
   projectId?: string;

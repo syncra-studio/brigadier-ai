@@ -54,7 +54,7 @@ export function ServerPage({ server, scope, projects, project, busy, adapter, fo
       {server.env.length > 0 && <InfoRow title="Environment" value={server.env.join(", ")} />}
       {server.headers.length > 0 && <InfoRow title="Headers" value={server.headers.join(", ")} />}
     </SettingsCard></IntegrationSection>
-    <IntegrationSection title="Found in" aside="Read-only · change it there"><SettingsCard>{files.map((file) => <InfoRow key={`${file.source}:${file.path}`} title={origin && OWN_FILES[file.source] ? `${origin.name} · ${OWN_FILES[file.source]}` : SOURCE_NAMES[file.source]} value={file.path + (file.line ? ` · line ${file.line}` : "")} show="file" onShow={() => onShowPath(file.path)} />)}</SettingsCard></IntegrationSection>
+    <IntegrationSection title="Found in" aside="Read-only · change it there"><SettingsCard>{files.map((file) => <InfoRow key={`${file.source}:${file.path}`} title={origin && OWN_FILES[file.source] ? `${origin.name} · ${OWN_FILES[file.source]}` : file.plugin ? `${SOURCE_NAMES[file.source]} ${file.plugin}` : SOURCE_NAMES[file.source]} value={file.path + (file.line ? ` · line ${file.line}` : "")} show="file" onShow={() => onShowPath(file.path)} />)}</SettingsCard></IntegrationSection>
     {!signs && <IntegrationSection title="Workers"><SettingsCard>{(["claude", "codex"] as const).map((agent) => {
       const name = agent === "claude" ? "Claude Code" : "Codex";
       const native = server.nativeAgents.includes(agent);

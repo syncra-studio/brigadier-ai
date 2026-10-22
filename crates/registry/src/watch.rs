@@ -8,11 +8,13 @@ use std::time::Duration;
 use notify::RecursiveMode;
 use notify_debouncer_full::{DebounceEventResult, Debouncer, NoCache};
 
-/// What to watch: config files (and what they link to), and folders whose whole tree counts.
+/// What to watch: config files (and what they link to), folders whose whole tree counts, and
+/// folders whose entries count (a plugin's versions).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Watched {
     pub files: Vec<PathBuf>,
     pub trees: Vec<PathBuf>,
+    pub dirs: Vec<PathBuf>,
 }
 
 /// The folders watched and the events that count, symlinks resolved (events name real paths).
@@ -22,6 +24,8 @@ struct Plan {
     folders: BTreeSet<PathBuf>,
     files: BTreeSet<PathBuf>,
     trees: BTreeSet<PathBuf>,
+    /// Folders whose own entries count (in [`Self::folders`]).
+    dirs: BTreeSet<PathBuf>,
     /// Configs and roots whose folder doesn't exist yet, under their nearest existing
     /// ancestor (watched in [`Self::folders`]): making any folder on the way counts.
     missing: BTreeSet<PathBuf>,
@@ -66,6 +70,12 @@ impl Plan {
                 plan.files.insert(target);
             }
         }
+        for dir in &watched.dirs {
+            if let Ok(dir) = std::fs::canonicalize(dir) {
+                plan.folders.insert(dir.clone());
+                plan.dirs.insert(dir);
+            }
+        }
         let mut trees = Vec::new();
         for tree in &watched.trees {
             match std::fs::canonicalize(tree) {
@@ -89,6 +99,10 @@ impl Plan {
 
     fn counts(&self, path: &Path) -> bool {
         self.files.contains(path)
+            || self.dirs.contains(path)
+            || path
+                .parent()
+                .is_some_and(|parent| self.dirs.contains(parent))
             || self.trees.iter().any(|tree| path.starts_with(tree))
             || self.missing.iter().any(|target| target.starts_with(path))
     }
