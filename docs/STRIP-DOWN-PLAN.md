@@ -5,7 +5,7 @@
 > what a CLI can't do by itself: seeing and driving other sessions, previews, the browser, computer use, asking
 > the user as a card, and searching the record. This plan only removes and re-wires.
 
-> Status: plan, 2026-10-22, from the user's decisions G1–G18 (project memory `plain-cli-threads-1022`), the
+> Status: plan, 2026-10-22, from the user's decisions G1–G19 (project memory `plain-cli-threads-1022`), the
 > 10-22 diagnosis (run `20261022-0805-take-over-5-sessions`, `DIAGNOSIS.md`) and the long-sessions research
 > (same run, `research/PROPOSAL.md`, `QUESTIONS.md`, `EVIDENCE.md`). The decisions are settled. Where one looks
 > hard, §8 says so with evidence; nothing here changes one.
@@ -13,6 +13,10 @@
 > G16 (a `brigadier` CLI, not an MCP server), the Personal Brain deleted outright (S19), and #517 closed by G9.
 > Amended the same day with G17 (no stripping of what the plain CLI loads), G18 (model choice is advice:
 > `brigadier models`, S13b) and the take-aways of `research/LEAN-CONTEXT.md` and `research/POCOCK.md`.
+> Amended again with G19 (a worker belongs to its parent session and is never a sidebar session; this corrects
+> G3's "workers are ordinary sessions in the sidebar") and the user's two answers after it: the skill is named
+> `/brigade` (G19.Q5) and workers are read-only to the user (G19.Q6). These are memory's Q5 and Q6, not the
+> long-sessions Q5 and Q6 cited in §1, S18 and S23.
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -71,10 +75,10 @@ There are no status nags, no cross-session notices, no mid-task rule changes, no
 
 **The `brigadier` CLI is pull-only (G3, G6, G16).** Brigadier's whole tool surface is one command,
 `brigadier`, built like `cmux`: subcommands, `--json` output, called through the CLI's own Bash tool. It costs
-no context until used, and it is the same for Claude, Codex and the team skill. One line of the standing
+no context until used, and it is the same for Claude, Codex and the `/brigade` skill. One line of the standing
 instructions points at `brigadier --help`. The thread calls it when it wants to:
-- **Read anything:** sessions, tabs, states, the workers it started.
-- **Session commands equal to `dlg`:** start, send, wait for events of the sessions it started, read the last
+- **Read anything:** sessions, tabs, states, its own workers.
+- **Worker commands equal to `dlg`:** start a worker, send, wait for its workers' events, read the last
   message or screen, close.
 - **Previews, browser, computer use.**
 - **Ask the user as a card.**
@@ -86,12 +90,24 @@ the same commands is a non-goal; it would come only if a client can't run shell,
 should be shippable as a product later, so it is one binary, its subcommand names are stable, and its interface
 has no app-internal paths.
 
-**Teams = the Delegator pattern, built in (G3).** A plain, editable skill plus the `brigadier` session commands. Workers are
-ordinary sessions in the sidebar. Overnight is the same skill with a deadline. The engine has no lead, phase or
-landing protocol.
+**Teams = the Delegator pattern, built in (G3, G19).** The `/brigade` skill (plain, editable, the one skill
+Brigadier ships, G19.Q5) plus the `brigadier` worker commands. Overnight is the same skill with a deadline. The
+engine has no lead, phase or landing protocol.
+
+**A worker belongs to its parent session (G19).** A worker is never a sidebar session. `brigadier start`
+creates a worker of the calling session, and it lives only inside that session: in its Workers row (context
+card), the rail above its composer and its worker cards and panel. It is like Claude Code's subagents or the
+Delegator's worker tabs. Archiving or deleting the parent takes its workers (S20). Under the hood a worker is
+still a plain CLI with its own worktree, its own checks and its own push.
+
+**Workers are read-only to the user (G19.Q6).** The user can open a worker from the rail and read its thread.
+There is no worker composer. The parent reports what a worker needs: Waiting on you lists the worker's real
+pending prompts and questions. The user answers in the parent, and the parent relays the answer with
+`brigadier send`. An `@worker` mention in the parent's composer is only a routing hint to the parent. A second
+composer would duplicate the parent and complicate the UI.
 
 **Model choice is advice, not a gate (G18).** The thread picks provider, model and effort itself, through the
-team skill. Before `brigadier start` it reads `brigadier models`: what each CLI reports as available, usage and
+`/brigade` skill. Before `brigadier start` it reads `brigadier models`: what each CLI reports as available, usage and
 reset times per account, the current account, a shipped guidance table, and the user's own rules on top
 (S13b). **Brigadier enforces nothing on its own.** `brigadier start` refuses only what the user's rules file
 forbids; the shipped default of that file carries today's rules (never Fable, effort ≤ high), and the user may
@@ -104,9 +120,11 @@ of its own.
 **Context card (G9, G10).** It has these rows:
 - **Project and branch**, with +/− from git.
 - **PR row:** `#N`, a state word and a colour, from `gh`. It has no actions.
-- **Waiting on you:** only real pending CLI permission prompts, ask-user questions and MCP sign-ins of the
-  sessions this one started. This session's own question shows only above the composer.
-- **Workers:** title, state from their CLI events, +/− from their worktree's git, and "N done · M stopped".
+- **Waiting on you:** only real pending CLI permission prompts, ask-user questions and MCP sign-ins of this
+  session's workers. The user answers them here, and the parent relays (G19.Q6). This session's own question
+  shows only above the composer.
+- **Workers:** this session's own workers (G19). Title, state from the worker's own CLI events, +/− from its
+  worktree's git, and "N done · M stopped". The rail above the composer and the worker cards read the same.
 - **Background:** the CLI's own background tasks. The label is the CLI's description, with elapsed time. These
   rows behave exactly like Claude Code's own.
 - **Sources:** attachments first, then fetched URLs, then MCP servers used; + adds one.
@@ -149,10 +167,12 @@ the CLIs' own memory (Claude Code's auto memory, Codex memories) is no longer sw
 | `dev/` | dev servers and build output | removes | removes |
 | `logs/` | logs | removes | removes |
 
-`TMPDIR` points at `tmp/` as a convention, not a guard.
+`TMPDIR` points at `tmp/` as a convention, not a guard. A worker gets its own folder of the same shape, owned
+by its parent.
 - **Archive** also stops the session's processes, and keeps its Brain entries and lineage transcripts.
 - **Delete** removes everything of the session: its folder, its Brain entries, its lineage's CLI transcript
   files, its worktree, and its branch after the existing "not merged" ask.
+- Both do the same to each of the session's workers (G19).
 - **Storage** shows the size of each folder.
 
 Some things stay where they are: the CLIs' own session files, shared caches (`~/.cargo`, the pnpm store) and
@@ -186,7 +206,7 @@ In `docs/PLAN.md`:
   - **Task, Worker, Artifact and Personal Brain.**
 - **§6.**
   - **Phase 3:** the orchestrator runtime, its MCP tool list, "A phase lands once…", the permission levels and
-    worker cards.
+    the engine feed of worker cards. The cards themselves stay (G19).
   - **Phase 4:** rebirth, briefings, skeleton pass, idle-quota enrichment and Personal Brain.
   - **Phase 5:** mid-task cross-provider hand-off of a task.
   - **Phase 6:** verifier, verification pipeline as an engine step, freshness research scout.
@@ -196,12 +216,13 @@ In `docs/PLAN.md`:
   - Q2, Q5 (mid-task fallback of a task), Q6, Q8, Q13 (Personal Brain), Q15, Q18 (enrichment), Q25 (Delete
     keeps Brain), Q26 and Q27
   - the 2026-10-05 "Delegator-style flow" row
-- **§10.** Overnight mode, all of it. Overnight is now the team skill with a deadline.
+- **§10.** Overnight mode, all of it. Overnight is now the `/brigade` skill with a deadline.
 
-Other plans lose the parts G1–G18 change. Where they conflict, this plan wins:
+Other plans lose the parts G1–G19 change. Where they conflict, this plan wins:
 - `THREAD-PLAN.md`: engine tools, reviews and the verifier.
 - `THREAD-UX-PLAN.md` and `THREAD-PARITY-PLAN.md`: thread items from engine records, and the Job card.
-- `SESSION-MESSAGING-PLAN.md`: peer tools become the `brigadier` session commands of S13.
+- `SESSION-MESSAGING-PLAN.md`: peer tools become the `brigadier` worker commands of S13, parent to its own
+  workers only.
 - `WORKSPACES-PLAN.md`: auto-merge.
 - `SESSION-FIXES-PLAN.md`: merge gates.
 - `docs/research/long-sessions/BUILD-PLAN.md`: rebirth, briefings and the output store.
@@ -321,7 +342,14 @@ inventory.
   `decision_index_tests`, `card_tests`, `stop_hook_tests`, and the headline cases in `agent_tools_tests`.
 - WaitCard is replaced by the "Resumes at" card read from the CLI's error (S14).
 
-### 3.6 Workers, routing and the landing engine (G3, G4) → steps S16b, S16c
+### 3.6 Engine-side worker orchestration, routing and the landing engine (G3, G4, G19) → steps S16b, S16c
+What goes is the engine's orchestration: spawning, routing, holding and merging workers, the hand-off and resume
+machinery, and context packs. **The worker UI stays (G19):** the rail above the composer
+(`activity/WorkersStrip.tsx`, `StripRow.tsx`, `stripView.ts`), the Workers row (`side-panel/WorkerSummary.tsx`)
+and the worker cards and panel (`side-panel/WorkerList.tsx`, `WorkerThread.tsx`, `WorkerHeader.tsx`,
+`WorkerChip.tsx`, `WorkerActivity.tsx`). S14 re-feeds them from the worker's own CLI events and worktree git;
+only their engine-record reads go. The parent → worker link stays as well, moved into the session store.
+`cards/PhaseWork.tsx` is the Job card's phase list, not worker UI, and goes with §3.5.
 - **Worker tools:** `delegate_task`, `message_worker`, `answer_worker`, `stop_worker`, `rerun_task`,
   `route_follow_up`, `list_tasks`, `read_report`, `read_artifact`, `store_output`, `ask_thread`, `note_progress`,
   `submit_report` and `attach_proof`.
@@ -350,7 +378,8 @@ inventory.
   `thread()` at :260–363.
 - **Tests:** `resume`, `successor`, `worker_turns`, `watchdog`, the peer test files, `takeover` (worker
   hand-back), `thread_overflow` and `base_merge`; most of `flow/tests.rs` and `thread_tests.rs` are rewritten.
-- Closes: #480, #481, #276, #271, #295, and #482 (workers are plain sessions with their own write access).
+- Closes: #480, #481, #276, #271, #295, and #482 (workers are plain CLIs with their own worktree and write
+  access).
   Re-check #456, #45 and #34. They test scout and stand-in paths that no longer exist; close them if so.
 
 ### 3.7 Brigadier's copy of the conversation and its guessed states (G2, G11) → steps S10, S11, S16b, S23
@@ -678,7 +707,7 @@ and `run`.
 
 ### Stage 3: teams = the Delegator, built in
 
-**S13. The `brigadier` CLI, with session commands equal to `dlg` (G3, G6, G16).** Opus.
+**S13. The `brigadier` CLI, with worker commands equal to `dlg` (G3, G6, G16, G19).** Opus.
 - **Scope:** one command, `brigadier`, built like `cmux`.
   - It is one binary, shipped in the app and put on each session's `PATH`.
   - Output is text by default and `--json` on every subcommand.
@@ -690,17 +719,24 @@ and `run`.
 
   | Command | What it does |
   |---|---|
-  | `brigadier sessions` | List the project's sessions: title, state from CLI events, branch, +/− and started-by. This is "read anything"; `brigadier show <id>` gives one in full. |
-  | `brigadier start` | Takes `--project`, `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local`, `--base`, `--permission` and the prompt. It starts an ordinary session in the sidebar, marked "started by <this one>". It refuses only what the user's rules file forbids (S13b), quoting the rule. |
-  | `brigadier send <id> <text>` | Queued mid-turn, like `dlg send`. |
-  | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from a session this one started: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
-  | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen. |
-  | `brigadier close <id>` | Closes the session. |
+  | `brigadier sessions` | List the project's sidebar sessions: title, state from CLI events, branch, +/−. Workers are not in it. This is "read anything"; `brigadier show <id>` gives a session or worker in full. |
+  | `brigadier workers` | List the calling session's own workers: title, agent, model, state from the worker's own CLI events, branch, +/−. |
+  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local`, `--base`, `--permission` and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
+  | `brigadier send <id> <text>` | To one of the caller's own workers, queued mid-turn, like `dlg send`. This is how the parent relays the user's answers (G19.Q6). |
+  | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
+  | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen, of any session or worker. |
+  | `brigadier close <id>` | Closes one of the caller's own workers. |
   | `brigadier preview start\|stop\|log`, `brigadier browser …`, `brigadier ask …`, `brigadier app …`, `brigadier page …` | The tools the thread keeps today (previews, browser, ask-user card, app actions, pages), moved as they are. `brigadier ask` blocks until the card is answered. Its card always allows a free-text answer next to any options, never options only; the recommended option comes first, so "yes" takes it. |
   | `brigadier models` | Live models, usage and guidance (S13b). |
 
   - Brain search and the code index get their subcommands in S18.
-  - `peers.rs`, `peer_wait.rs` and `peer_records.rs` fold into this. `message_session`, `wait_for_replies`,
+  - `workers` is its own command, not `sessions --mine`: the two list different kinds of thing (sidebar
+    sessions vs. the caller's workers), so each keeps one fixed `--json` row shape, and `workers` lists exactly
+    the ids that `send`, `wait` and `close` accept.
+  - `send`, `wait` and `close` act only on the caller's own workers; another session's worker is refused.
+    Sidebar sessions don't message each other.
+  - `peers.rs`, `peer_wait.rs` and `peer_records.rs` go. Their parent → own worker parts move into the
+    worker commands; session-to-session messaging has no successor. `message_session`, `wait_for_replies`,
     `settle_wait` and `offer_session` go. The kept tools leave the MCP catalog in the same step; the MCP server
     keeps only the old protocol tools until S16.
   - Computer use stays the vendored driver's own interface (`M/computer_use.rs`), not part of Brigadier's tool
@@ -710,13 +746,15 @@ and `run`.
   - Non-goal: an MCP wrapper over the same commands. It would come only if a client can't run shell.
 - **Files:** a new `crates/cli` (the `brigadier` binary), a daemon request handler for it, `M/peers.rs`,
   `M/peer_wait.rs`, `crates/core/src/sessions/peer_records.rs`, `catalog.rs`, `tools.rs`, the app bundle and
-  `PATH` setup in `P/claude/mod.rs` and `P/codex/mod.rs`, `D/` sidebar (started-by link).
+  `PATH` setup in `P/claude/mod.rs` and `P/codex/mod.rs`, the parent → worker link in the session store.
 - **Done when:**
   - CLI tests: every subcommand's `--json` output matches a checked-in schema, and `brigadier --help` lists them.
-  - Flow tests with the fake CLI: start two sessions, send one a message mid-turn, and `brigadier wait` returns
+  - Flow tests with the fake CLI: start two workers, send one a message mid-turn, and `brigadier wait` returns
     both turn ends with their last messages. Close removes them.
-  - A call without a valid session token is refused.
-  - A live dev check on each provider: the thread starts a Codex session through `brigadier start` that writes
+  - A flow test: the workers are listed by `brigadier workers` and not by `brigadier sessions`, and the sidebar
+    has no row for them.
+  - A call without a valid session token is refused, and so is `send` or `close` on another session's worker.
+  - A live dev check on each provider: the thread starts a Codex worker through `brigadier start` that writes
     a file and reports.
   - An app test: the ask card takes a free-text answer when it also shows options.
 
@@ -724,7 +762,7 @@ and `run`.
 - **Scope:** `brigadier models [--json]` merges three layers into one view:
   - **Live state:** the models each CLI reports as available, usage and reset times per account, and the
     current account. It reads what `crates/core/src/routing/*` and the accounts code already hold.
-  - **Shipped guidance:** a plain, editable file shipped in the app like the team skill
+  - **Shipped guidance:** a plain, editable file shipped in the app like the `/brigade` skill
     (`crates/core/src/manager/models_guidance.md`): which provider, model and effort fits what kind of work,
     with a one-line reason each. It is updated per release.
   - **The user's rules:** the user's own file (`~/.brigadier/models.md`), layered on top. Its rows override the
@@ -732,7 +770,7 @@ and `run`.
     default of this file carries today's rules: never Fable, effort ≤ high. The user may edit or empty it.
   - `brigadier start` refuses a model or effort only when the user's file forbids it, and quotes the rule.
     Brigadier enforces nothing else; there is no built-in list.
-  - The team skill tells the thread to consult `brigadier models` before `brigadier start` (S15).
+  - The `/brigade` skill tells the thread to consult `brigadier models` before `brigadier start` (S15).
   - Account auto-switch stays as it is.
 - **Files:** `crates/cli` (the subcommand), the daemon handler, the guidance file, `crates/core/src/routing/*`
   (read only), the account usage reader.
@@ -749,28 +787,40 @@ and `run`.
   - the branch row (git);
   - the PR row: `#N` + state word + colour from `gh pr view`, refreshed when the CLI's events show a
     `git push` or `gh pr` command; failed checks red;
-  - Waiting on you (pending prompts of started sessions);
-  - Workers (sessions it started through `brigadier start`, S13; "N done · M stopped");
+  - Waiting on you (real pending prompts and questions of this session's workers, G19.Q6);
+  - Workers (this session's own workers from `brigadier start`, S13: title, state from the worker's own CLI
+    events, +/− from its worktree's git, "N done · M stopped");
   - Background (S12);
   - Sources: attachments first, then URLs from the CLI's fetch and browser tool items, then MCP servers seen in
     its events; + adds one.
   - A "Resumes at" card from the CLI's usage-limit error.
   - Nothing reads `Board` engine records any more.
+  - **The worker UI keeps its look (G19)** and gets the same feed as the Workers row: the rail above the
+    composer, the worker cards and the worker panel. Workers never show in the sidebar.
+  - **Read-only workers (G19.Q6):** opening a worker from the rail shows its thread (the S9 reader on the
+    worker's own files), with no composer. The user answers a worker's prompt or question in the parent, and the
+    parent relays it with `brigadier send`. An `@worker` mention in the parent's composer is a routing hint for
+    the parent only; it sends nothing to the worker.
 - **Files:** `D/app/conversation/SummaryContent.tsx`, `PinnedSummary.tsx`, `FloatingSummary.tsx`,
-  `side-panel/WorkerSummary.tsx`, `SourcesTab.tsx`, `M/pull_request.rs` (read only; merge queue and CI watch
-  go), `M/mod.rs:663` (`session_diff_stat`).
+  `side-panel/WorkerSummary.tsx`, `WorkerList.tsx`, `WorkerThread.tsx`, `activity/WorkersStrip.tsx`,
+  `stripView.ts`, `SourcesTab.tsx`, `M/pull_request.rs` (read only; merge queue and CI watch go), `M/mod.rs:663`
+  (`session_diff_stat`).
 - **Done when:**
   - App tests per row with fixture events.
   - A flow test: after a `git push` item, the PR row refreshes.
-  - A dev session with a started worker shows the worker's state and +/−.
+  - A dev session with a started worker shows the worker's state and +/− in its Workers row and rail, and the
+    worker has no sidebar row.
+  - An app test: a worker opened from the rail shows its thread and no composer.
   - No component under `SummaryContent` imports `boardJob` or `liveJob`.
 
-**S15. The team skill (G3).** Opus.
-- **Scope:** one plain, editable skill shipped with Brigadier: `crates/core/src/manager/team_skill/SKILL.md`,
-  included like `computer_use_skill.md`.
+**S15. The `/brigade` skill (G3, G19.Q5).** Opus.
+- **Scope:** one plain, editable skill, the only one Brigadier ships: `crates/core/src/manager/brigade/SKILL.md`,
+  included like `computer_use_skill.md`. The public `brigadier-skill` repo is unrelated: it is for outside CLIs
+  talking to the app.
   - It is adapted from `~/.claude/skills/delegator/SKILL.md`:
     - the `dlg` commands become `brigadier` subcommands (S13);
-    - cmux tabs become sessions;
+    - cmux tabs become workers of the calling session (G19);
+    - the user answers workers in the parent, and the skill relays with `brigadier send` (G19.Q6);
     - "hand off at 300k" becomes the seam;
     - overnight is the same skill with a deadline;
     - workers run their own checks and push;
@@ -784,8 +834,8 @@ and `run`.
     - Review runs once, at the end, on the integrated tree, never mid-run. After the fix pass only focused
       checks run, with a stop rule: one review, one fix pass, then report what is left instead of looping.
   - Install it into each Claude session's skills folder and Codex's skills folder (§8, item 7). The user
-    invokes it by name; the thread may invoke it too.
-  - It is behind `BRIGADIER_TEAM_SKILL=1` until the done-when passes, then on.
+    invokes it as `/brigade`; the thread may invoke it too.
+  - It is behind `BRIGADIER_BRIGADE_SKILL=1` until the done-when passes, then on.
 - **Files:** the skill file, `M/computer_use.rs`-style installer, `P/claude/mod.rs` (`--plugin-dir` / skill
   path), `P/codex/home.rs`.
 - **Done when:**
@@ -799,10 +849,13 @@ and `run`.
   - Done when `git grep -n 'JobCard\|set_headline\|propose_overnight\|plan_phases'` finds nothing.
   - Overnight is reachable only as the skill.
   - The app and core tests that remain pass.
-- **S16b.** Workers, routing, context packs, worker hand-off and resume, research, outcomes and reruns (§3.6).
-  Also their last-consumer leftovers: `requests.rs` and the request spans, and the heat guard (§4 table).
+- **S16b.** Engine-side worker orchestration only (§3.6): spawning, routing, holding and merging by the
+  engine, the worker hand-off and resume machinery, context packs, research, outcomes and reruns. Also their
+  last-consumer leftovers: `requests.rs` and the request spans, and the heat guard (§4 table). The worker UI
+  (rail, Workers row, worker cards and panel) stays, already fed by the worker's own CLI events since S14 (G19).
   - Done when the MCP catalog lists no worker, routing or task tool, `M/requests.rs` is gone, and `crates/router`
     keeps only the shared types.
+  - A worker started with `brigadier start` still shows in its parent's rail, Workers row and worker cards.
 - **S16c.** The landing engine, the CI-watch engine and the Brigadier MCP server (§3.6, §3.9).
   - Done when `M/landing.rs` and `crates/mcp-server` are gone, sessions start with no Brigadier entry in their
     MCP config (the user's own servers still load), and the PR row still works.
@@ -879,11 +932,12 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     `refs/brigadier/s/<id>/` snapshot refs and the worktree. It removes the branch after the existing unmerged
     ask.
   - Archive keeps the snapshot refs its Changes cards show.
+  - Archiving or deleting a session does the same to each of its workers (G19). Archive stops them first.
   - Update the §5 Lifecycle text in `docs/PLAN.md` to point here.
 - **Files:** `M/lifecycle.rs`, `M/closing.rs`, `crates/core/src/ledger.rs`, `M/brains.rs` (`forget_transcript`
   → forget the session's entries), `M/disk/*`.
 - **Done when:** flow tests list exactly what each action leaves on disk, in git refs and in the Brain, for a
-  session with two lineage generations.
+  session with two lineage generations and one worker; the worker gets the same treatment as its parent.
 
 **S21. Continuity battery v0 (Q7).** Codex. Can run in parallel with anything after S8.
 - **Scope:** a local script, `tools/continuity-battery/`, with a text report. It covers the planted items and
@@ -1052,7 +1106,7 @@ search the record (`brigadier brain search`, `brigadier brain read`) and quote w
    less than `instructions.rs` gives it today. Taken as is ("take, don't rebuild"); a project that wants both
    CLIs to see the same rules keeps them in AGENTS.md.
 7. **Skills on Codex.** S15 assumes Codex loads a skill from its skills folder. If the installed Codex can't,
-   the team skill reaches Codex threads as a file the thread is told to read when asked. This is checked in S15.
+   the `/brigade` skill reaches Codex threads as a file the thread is told to read when asked. This is checked in S15.
    The skill drives sessions only through `brigadier` commands, so it is the same text on both CLIs.
 8. **No Brigadier sandbox (G5) also removes the "protect" profile.** That profile kept every CLI, Full access
    included, from writing Brigadier's own data folder (`P/cli.rs:259–287`). After S6, a session can delete
@@ -1085,3 +1139,8 @@ search the record (`brigadier brain search`, `brigadier brain read`) and quote w
       servers. Under G17 these stay as the user set them, and come back only with measured evidence on our own
       tasks. POCOCK §3.5's depth limit on `brigadier start` is not built in either: Brigadier enforces nothing
       of its own (G18); a user who wants one writes it into the rules file.
+14. **A worker's CLI permission prompt under read-only workers (G19.Q6).** A question can be relayed in words
+    with `brigadier send`. A permission prompt needs allow or deny, and a queued message doesn't answer it.
+    S13 settles how the parent answers one: either `brigadier send` answers the worker's open prompt when one is
+    pending, or workers start at Accept edits or Full access so that prompts are rare. The user is asked before
+    S13 builds it.
