@@ -371,6 +371,8 @@ async fn post(url: &str, key: Option<&str>) -> (StatusCode, String, bool) {
     (status, response.text().await.unwrap(), challenged)
 }
 
+// macOS only: off macOS, Claude's and Codex's sign-ins read as unsupported by design.
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn settings_never_asks_and_reports_a_reusable_sign_in_only_once_read() {
     let home = home();
@@ -1002,6 +1004,8 @@ async fn brigadier_s_own_sign_in_reopens_cancels_fails_plainly_and_signs_out() {
     );
 }
 
+// macOS only: off macOS, Claude's and Codex's sign-ins read as unsupported by design.
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn without_a_keychain_sign_ins_are_unsupported() {
     use crate::manager::integrations::{SignInState, view};
@@ -1254,6 +1258,8 @@ async fn a_token_without_a_refresh_token_serves_until_it_expires() {
     assert!(auth.token(&route, None).await.unwrap().expose() == "own-access");
 }
 
+// macOS only: off macOS, Claude's and Codex's sign-ins read as unsupported by design.
+#[cfg(target_os = "macos")]
 mod in_brigadier {
     //! The sign-in in Brigadier, through the manager the IPC methods call, serving workers of
     //! both agents whose own configs have the server unsigned.

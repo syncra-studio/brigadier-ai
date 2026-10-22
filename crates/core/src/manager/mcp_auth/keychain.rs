@@ -2,14 +2,17 @@
 
 use zeroize::Zeroizing;
 
+#[cfg(any(test, target_os = "macos"))]
 use super::stores::OWN_SERVICE;
 
 /// Why a store couldn't be read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StoreError {
     /// The user said no to the system's prompt.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
     Denied,
     /// Reading it now would ask the user (a quiet read), or another read is asking them.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
     Busy,
     /// A store Brigadier can't read or write on this system.
     Unsupported,
