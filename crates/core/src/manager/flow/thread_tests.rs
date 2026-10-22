@@ -2364,12 +2364,15 @@ async fn the_thread_offers_feedback_once_per_incident() {
     flow.stop().await;
 }
 
+/// What the thread's offer_feedback calls answered: the title, an error, and its text.
+type Offered = Arc<Mutex<Vec<(String, bool, String)>>>;
+
 /// Asked to report several things at once, the thread offers a card for each (#483): up to ten
 /// in a request, each title once, each answered on its own. Any card of that request still
 /// unanswered, or dismissed, holds back the next unasked offer.
 #[tokio::test]
 async fn several_feedback_cards_are_offered_when_asked() {
-    let replies: Arc<Mutex<Vec<(String, bool, String)>>> = Arc::default();
+    let replies: Offered = Arc::default();
     let log = replies.clone();
     let flow = Flow::start(
         "thread-offer-feedback-several",
@@ -2407,9 +2410,7 @@ async fn several_feedback_cards_are_offered_when_asked() {
         }),
     )
     .await;
-    let taken = |replies: &Arc<Mutex<Vec<(String, bool, String)>>>| {
-        std::mem::take(&mut *replies.lock().unwrap())
-    };
+    let taken = |replies: &Offered| std::mem::take(&mut *replies.lock().unwrap());
     let offers = |board: &crate::board::Board| -> Vec<String> {
         board
             .orchestrator_steps
