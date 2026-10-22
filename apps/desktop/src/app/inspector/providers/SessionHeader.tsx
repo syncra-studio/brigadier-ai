@@ -74,7 +74,7 @@ export function SessionHeader({
         </span>
         {live && (
           <span>
-            {session.access.type === "workspace" ? "edit its folder" : session.access.type} ·{" "}
+            {session.access.type === "acceptEdits" ? "edit its folder" : session.access.type} ·{" "}
             {session.approvals === "delegated" ? "policy + me" : "decline all"}
           </span>
         )}

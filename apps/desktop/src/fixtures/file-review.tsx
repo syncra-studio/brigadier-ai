@@ -86,7 +86,7 @@ useApp.setState((state) => ({
     [CHAT]: {
       id: CHAT, kind: "session", title: "Review", projectId: null, pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active",
       forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
-      setup: { type: "session", repo: "/repo", environment: { type: "local" }, permission: "fullAccess", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "codex", model: null, effort: null } },
+      setup: { type: "session", repo: "/repo", environment: { type: "local" }, permission: "full", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "codex", model: null, effort: null } },
     } as unknown as Conversation,
   },
   selection: { type: "conversation", id: CHAT },

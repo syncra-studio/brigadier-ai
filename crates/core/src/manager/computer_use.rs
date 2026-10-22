@@ -129,7 +129,6 @@ impl SessionManager {
                 tool_timeout_secs: Some(TOOL_TIMEOUT_SECS),
                 trusted: true,
                 always_load,
-                prompt_tools: Vec::new(),
             },
             plugin: placed.plugin,
             token: placed.token,

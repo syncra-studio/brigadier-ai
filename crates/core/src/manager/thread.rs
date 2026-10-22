@@ -7,8 +7,8 @@
 //! is never recorded under the thread's cleanup-ledger owner, so ending the thread's processes
 //! (hibernation, rebirth, fallback) never reaches what runs there.
 //!
-//! The thread's access follows the session's permission level exactly as a worker's does.
-//! What its CLI was started with is remembered on it ([`ThreadLaunch`]): when the workspace or
+//! The thread's CLI runs at the session's permission level, passed straight through as its
+//! CLI's own permission mode, as a worker's is (G5). What its CLI was started with is remembered on it ([`ThreadLaunch`]): when the workspace or
 //! the level changes, the CLI is closed between turns and the next turn resumes the same
 //! native session with the new ones. Nothing tells the thread: a resumed session keeps the
 //! instructions it started with, and the next fresh conversation starts on the new ones.
@@ -24,31 +24,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use brigadier_git::Oid;
-use brigadier_providers::policy::Route as PolicyRoute;
 use brigadier_providers::{
     Access, ApprovalDecision, ApprovalRequest, Decider, ProviderEvent, ProviderKind,
 };
 
 use super::conversation::{Cli, ConvLive};
-use super::escalation::Settled;
 use super::workers::{session_temp_dir, thread_temp_owner};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
     ConversationId, ConversationKind, DomainEvent, Environment, PermissionLevel, Setup,
 };
-use crate::work::TaskKind;
 use crate::{Error, Result};
-
-/// `run_unsandboxed` as a Claude thread's CLI names it in its permission prompt.
-const CLAUDE_RUN_UNSANDBOXED: &str = "mcp__brigadier__run_unsandboxed";
-
-/// A Claude thread's `run_unsandboxed` leaves the sandbox, though its CLI asks about it as an
-/// ordinary tool call (Ask for approval's `ask` rule): only the user answers it.
-fn mark_unsandboxed(request: &mut ApprovalRequest) {
-    if request.tool == CLAUDE_RUN_UNSANDBOXED {
-        request.escalation = true;
-    }
-}
 
 /// Where the thread works: a checkout of the session's repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,10 +58,8 @@ impl ThreadWorkspace {
 pub(crate) struct ThreadLaunch {
     pub workspace: Option<ThreadWorkspace>,
     pub permission: PermissionLevel,
-    /// The access it runs with, which its approval requests are judged against.
+    /// Its CLI's permission mode, the level's.
     pub access: Access,
-    /// What it may never write ([`SessionManager::thread_protection`]).
-    pub protection: brigadier_sandbox::Protection,
     /// Its output hook's grant, under which the subfolder rules its CLI session has had are
     /// kept; `None` without the hook (it has every rule up front).
     pub hook_grant: Option<String>,
@@ -83,22 +67,11 @@ pub(crate) struct ThreadLaunch {
 
 impl ThreadLaunch {
     /// Whether a CLI started for `self` must start again for `now`: another folder, or
-    /// another level (its sandbox and permission mode are fixed when it starts).
+    /// another level (its permission mode is fixed when it starts).
     pub(crate) fn outdated(&self, now: &ThreadLaunch) -> bool {
         self.permission != now.permission
             || self.workspace.as_ref().map(|w| &w.path) != now.workspace.as_ref().map(|w| &w.path)
     }
-}
-
-/// Whether Brigadier's own reviewer settles a thread CLI's requests to go beyond its sandbox:
-/// a Codex thread at Approve for me in a sandbox (`approvalsReviewer: user`, see
-/// [`super::escalation`]). A Claude thread's run in its CLI's auto mode instead.
-fn brigadier_reviews(provider: ProviderKind, launch: Option<&ThreadLaunch>) -> bool {
-    provider == ProviderKind::Codex
-        && launch.is_some_and(|launch| {
-            launch.permission == PermissionLevel::ApproveForMe
-                && !matches!(launch.access, Access::Full | Access::ReadOnly)
-        })
 }
 
 impl SessionManager {
@@ -197,66 +170,25 @@ impl SessionManager {
             .map_or_else(|| self.owned_dir("orch", &id.0), |workspace| workspace.path)
     }
 
-    /// The thread's access at `permission`, mapped as a worker's is: Full access runs without
-    /// a sandbox; otherwise it writes its scratch folder, the workspace and the repository's
-    /// git folder (it commits its tiny edits), with the network unless the user is asked for
-    /// everything. Under Approve for me the CLI's own reviewer settles what leaves the
-    /// sandbox (`true`); under Ask for approval it reaches the user as a card.
-    pub(crate) fn thread_access(
-        &self,
-        id: &ConversationId,
-        workspace: Option<&ThreadWorkspace>,
-        scratch: &Path,
-        permission: PermissionLevel,
-    ) -> (Access, bool) {
-        let level = super::workers::access_for(TaskKind::Implement, permission);
-        if level.unsandboxed {
-            return (Access::Full, false);
-        }
-        let mut writable_roots = vec![scratch.to_owned(), session_temp_dir(id)];
-        if let Some(workspace) = workspace {
-            writable_roots.push(workspace.path.clone());
-            if let Ok(repo) = self.git.open(&workspace.path) {
-                for root in super::workers::commit_roots(&repo, Some(&workspace.branch), true) {
-                    if !writable_roots.contains(&root) {
-                        writable_roots.push(root);
-                    }
-                }
-            }
-        }
-        (
-            self.sandboxed(true, writable_roots, level.network),
-            permission == PermissionLevel::ApproveForMe,
-        )
-    }
-
     /// What the thread's CLI is started for now: its workspace (made if need be when `make`,
-    /// else as planned), level and access.
+    /// else as planned) and level.
     pub(crate) async fn thread_launch(
         &self,
         id: &ConversationId,
-        scratch: &Path,
         make: bool,
-    ) -> Result<(ThreadLaunch, bool)> {
+    ) -> Result<ThreadLaunch> {
         let workspace = if make {
             self.effective_workspace(id).await?
         } else {
             self.planned_workspace(id)
         };
         let permission = self.permission(id);
-        let (access, auto_review) = self.thread_access(id, workspace.as_ref(), scratch, permission);
-        let protection =
-            self.thread_protection(id, workspace.as_ref(), scratch, access == Access::Full);
-        Ok((
-            ThreadLaunch {
-                workspace,
-                permission,
-                access,
-                protection,
-                hook_grant: None,
-            },
-            auto_review,
-        ))
+        Ok(ThreadLaunch {
+            workspace,
+            permission,
+            access: permission.access(),
+            hook_grant: None,
+        })
     }
 
     /// The thread's CLI was started for another workspace or permission level than the
@@ -272,11 +204,10 @@ impl SessionManager {
         let Some(launch) = cli.launch.as_ref() else {
             return;
         };
-        let scratch = self.owned_dir("orch", &conv.id.0);
         // As planned: a merged session's next worktree is made by the user's next message,
         // at the same path, so it moves nothing.
-        let now = match self.thread_launch(&conv.id, &scratch, false).await {
-            Ok((now, _)) => now,
+        let now = match self.thread_launch(&conv.id, false).await {
+            Ok(now) => now,
             Err(err) => {
                 tracing::warn!(conversation = %conv.id, error = %err, "could not look at the thread's workspace");
                 return;
@@ -367,73 +298,25 @@ impl SessionManager {
         super::workers::worker_env(tmp)
     }
 
-    /// An approval request from the thread's CLI, answered as a worker's is: what stays
-    /// inside its access goes, the rest is the user's card.
+    /// An approval request from the thread's CLI, answered as a worker's is: what the user
+    /// already allowed "for this session" goes, the rest is the user's card.
     pub(crate) async fn route_thread_approval(
         &self,
         conv: &Arc<ConvLive>,
         cli: &Arc<Cli>,
         mut request: ApprovalRequest,
     ) {
-        mark_unsandboxed(&mut request);
-        let access = cli
-            .launch
-            .as_ref()
-            .map_or(Access::ReadOnly, |launch| launch.access.clone());
         let workspace = cli
             .launch
             .as_ref()
             .and_then(|launch| launch.workspace.as_ref())
             .map(|workspace| workspace.path.as_path());
-        let reviewed = brigadier_reviews(cli.provider, cli.launch.as_ref());
-        let (route, decider) =
-            self.approval_route(&conv.id, &mut request, &access, workspace, reviewed);
-        let decision = match route {
-            PolicyRoute::Allow => ApprovalDecision::Allow,
-            PolicyRoute::Deny => ApprovalDecision::Deny {
-                message: "This session may not do that.".into(),
-            },
-            // A Codex thread at Approve for me: Brigadier's reviewer settles it
-            // (`super::escalation`), while the CLI waits.
-            PolicyRoute::AskUser if reviewed => {
-                let manager = self.arc();
-                let (conv, cli) = (conv.clone(), cli.clone());
-                self.spawn(async move {
-                    let Some(launch) = cli.launch.as_ref() else {
-                        return;
-                    };
-                    let workspace = launch.workspace.as_ref().map(|w| w.path.as_path());
-                    let unattended = manager.overnight.active.get(&conv.id).is_some();
-                    match manager
-                        .settle_codex_escalation(
-                            &conv.id,
-                            &request,
-                            workspace,
-                            &launch.protection,
-                            unattended,
-                        )
-                        .await
-                    {
-                        Settled::Answer(decision) => {
-                            manager
-                                .answer_thread(&conv, &cli, request, decision, Decider::Policy)
-                                .await;
-                        }
-                        Settled::Ask(why) => {
-                            request.reason = Some(why);
-                            manager.ask_user_for_thread(&conv, &cli, request).await;
-                        }
-                    }
-                });
-                return;
-            }
-            PolicyRoute::AskUser => {
-                self.ask_user_for_thread(conv, cli, request).await;
-                return;
-            }
-        };
-        self.answer_thread(conv, cli, request, decision, decider)
-            .await;
+        if self.allowed_before(&conv.id, &mut request, workspace) {
+            self.answer_thread(conv, cli, request, ApprovalDecision::Allow, Decider::User)
+                .await;
+        } else {
+            self.ask_user_for_thread(conv, cli, request).await;
+        }
     }
 
     /// The user's card for the thread CLI's request, while that CLI runs.
@@ -452,7 +335,6 @@ impl SessionManager {
         decision: ApprovalDecision,
         decider: Decider,
     ) {
-        self.pass_unsandboxed(&conv.id, &request, &decision);
         if let Err(err) = cli
             .session
             .answer(request.id.clone(), decision.clone())
@@ -473,9 +355,8 @@ impl SessionManager {
         request: &ApprovalRequest,
         decision: ApprovalDecision,
     ) -> Result<()> {
-        // Brigadier's own question: the `run_unsandboxed` call waiting on the card takes the
-        // answer (`super::escalation`).
-        if request.id.starts_with(super::escalation::OWN_APPROVAL) {
+        // Brigadier's own question: the call waiting on the card takes the answer.
+        if request.id.starts_with(super::cards::OWN_APPROVAL) {
             return Ok(());
         }
         let cli = self
@@ -487,7 +368,6 @@ impl SessionManager {
             ApprovalDecision::AllowSimilar => ApprovalDecision::Allow,
             other => other.clone(),
         };
-        self.pass_unsandboxed(conversation_id, request, &answer);
         cli.session
             .answer(request.id.clone(), answer)
             .await
@@ -504,36 +384,6 @@ impl SessionManager {
         )
         .await;
         Ok(())
-    }
-
-    /// An approved `run_unsandboxed` call may run its command, once (see `super::run`).
-    /// Codex names the tool and gives the call's `workdir` as the request's folder; Claude
-    /// names it as an MCP tool, and the `workdir` is in its input.
-    fn pass_unsandboxed(
-        &self,
-        id: &ConversationId,
-        request: &ApprovalRequest,
-        decision: &ApprovalDecision,
-    ) {
-        if matches!(decision, ApprovalDecision::Deny { .. }) {
-            return;
-        }
-        let Some(command) = &request.command else {
-            return;
-        };
-        if request.tool == super::run::RUN_UNSANDBOXED {
-            self.run_passes.grant(id, command, request.cwd.as_deref());
-        } else if request.tool == CLAUDE_RUN_UNSANDBOXED {
-            let input: Option<serde_json::Value> = request
-                .input
-                .as_deref()
-                .and_then(|input| serde_json::from_str(input).ok());
-            let workdir = input
-                .as_ref()
-                .and_then(|input| input.get("workdir"))
-                .and_then(serde_json::Value::as_str);
-            self.run_passes.grant(id, command, workdir);
-        }
     }
 
     async fn log_resolution(
@@ -694,46 +544,5 @@ impl SessionManager {
         self.spawn(async move {
             manager.count_thread_edits_again(&id, again).await;
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use brigadier_providers::model::ApprovalKind;
-    use brigadier_providers::policy::{self, ApprovalMode};
-
-    use super::*;
-
-    #[test]
-    fn a_claude_thread_s_run_unsandboxed_at_ask_for_approval_goes_to_the_user() {
-        let ask = Access::Scoped {
-            write_cwd: true,
-            writable_roots: Vec::new(),
-            network: false,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        let mut request = ApprovalRequest {
-            id: "1".into(),
-            kind: ApprovalKind::Tool,
-            tool: CLAUDE_RUN_UNSANDBOXED.into(),
-            command: Some("curl -sS https://example.com".into()),
-            cwd: None,
-            paths: Vec::new(),
-            reason: None,
-            escalation: false,
-            input: None,
-            grant: None,
-        };
-        // As the CLI asks it, any tool call inside the sandbox's access would be allowed.
-        assert_eq!(
-            policy::route(&request, &ask, ApprovalMode::Delegated),
-            PolicyRoute::Allow
-        );
-        mark_unsandboxed(&mut request);
-        assert_eq!(
-            policy::route(&request, &ask, ApprovalMode::Delegated),
-            PolicyRoute::AskUser
-        );
     }
 }

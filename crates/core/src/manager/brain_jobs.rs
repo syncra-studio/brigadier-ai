@@ -23,8 +23,6 @@ use std::time::Duration;
 use brigadier_brain::{
     Claim, Edge, EdgeKind, NewNode, NodeFilter, NodeKind, NodeState, Origin, Provenance, WorkerRef,
 };
-use brigadier_providers::codex;
-use brigadier_providers::policy::{self, ApprovalMode, Route as PolicyRoute};
 use brigadier_providers::{
     Access, ApprovalDecision, Origin as SessionOrigin, ProviderEvent, ProviderKind, QuotaSnapshot,
     SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
@@ -326,14 +324,11 @@ impl SessionManager {
     }
 
     /// The signed-in provider with the most quota left; with `known_only`, only one whose
-    /// usage windows are known. Codex qualifies only where its sandbox can keep the job out of
-    /// the run folder (the IPC token): a job's scratch folder outside any repository.
+    /// usage windows are known.
     fn job_provider(&self, known_only: bool) -> Option<ProviderKind> {
-        let scratch = self.owned_dir("scratch", "");
         ProviderKind::ALL
             .into_iter()
             .filter(|kind| self.provider_usable(*kind) && self.cheapest(*kind).is_ok())
-            .filter(|kind| *kind != ProviderKind::Codex || codex::can_deny_reads(true, &scratch))
             .filter_map(|kind| {
                 let quota = self
                     .runtime
@@ -530,11 +525,9 @@ impl SessionManager {
                 job_id: job.id.clone(),
             },
         );
-        // Codex cannot run with a read-only cwd: it works from the scratch folder and reads
-        // the repository by path, as read-only workers do. There its sandbox is a permission
-        // profile that denies reading the run folder, or the session does not start.
+        // A Codex job works from its scratch folder and reads the repository by path, in its
+        // CLI's read-only sandbox.
         let codex = provider == ProviderKind::Codex;
-        let run_dir = self.runtime.platform().paths().run_dir.clone();
         let spec = SessionSpec {
             cwd: if codex { scratch.clone() } else { root },
             model: Some(model),
@@ -542,17 +535,7 @@ impl SessionManager {
             fast: false,
             origin: SessionOrigin::New,
             ephemeral: true,
-            access: Access::Scoped {
-                write_cwd: codex,
-                writable_roots: if codex {
-                    Vec::new()
-                } else {
-                    vec![scratch.clone()]
-                },
-                network: false,
-                deny_read: vec![run_dir],
-                unix_sockets: self.socket_path().into_iter().collect(),
-            },
+            access: Access::ReadOnly,
             append_system_prompt: Some(prompt.system),
             mcp_servers: vec![self.brigadier_server(grant.clone(), JOB_TOOL_TIMEOUT_SECS, true)],
             tools: ToolSet::Reader,
@@ -571,14 +554,11 @@ impl SessionManager {
             // A Brain job hands nothing on: no sub-agents at all (Codex runs without them,
             // Claude without its Agent tool).
             allowed_models: Some(brigadier_providers::AllowedModels::default()),
-            auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
-            protection: Default::default(),
         };
-        let access = spec.access.clone();
         let time = match job.kind {
             BrainJobKind::Skeleton => SKELETON_TIME,
             BrainJobKind::Enrichment => ENRICH_TIME,
@@ -612,12 +592,10 @@ impl SessionManager {
 &calls,
                         ).await,
                         ProviderEvent::ApprovalRequested { request } => {
-                            // It stays inside its sandbox; nobody is asked on its behalf.
-                            let decision = match policy::route(&request, &access, ApprovalMode::Delegated) {
-                                PolicyRoute::Allow => ApprovalDecision::Allow,
-                                _ => ApprovalDecision::Deny {
-                                    message: "Declined: a Brain job only reads the repository and records nodes.".into(),
-                                },
+                            // It only reads: what its CLI asks about is declined, and nobody is
+                            // asked on its behalf.
+                            let decision = ApprovalDecision::Deny {
+                                message: "Declined: a Brain job only reads the repository and records nodes.".into(),
                             };
                             let _ = session.answer(request.id, decision).await;
                         }

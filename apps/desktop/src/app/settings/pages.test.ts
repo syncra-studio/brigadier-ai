@@ -49,8 +49,8 @@ test("search finds every merged setting on Configuration, and no Recent activity
       "Show the Full access notice",
       "Use spare quota to deepen the Brain",
       "Default permission level",
-      "Ask for approval",
-      "Approve for me",
+      "Ask",
+      "Accept edits",
       "Full access",
     ]) {
       assert.ok(
@@ -61,7 +61,7 @@ test("search finds every merged setting on Configuration, and no Recent activity
     // The memories have a page of their own, under Personal.
     assert.ok(found("Memories").some((result) => result.page.id === "memory" && result.row?.label === "Memories"));
     // A level's row brings the default level's row into view.
-    const level = found("Approve for me").find((result) => result.row?.label === "Approve for me");
+    const level = found("Accept edits").find((result) => result.row?.label === "Accept edits");
     assert.equal(level?.row?.target, "Default permission level");
     // Its own name, and the names it went by.
     for (const name of ["Configuration", "Configurations", "Conversations", "Personalization"]) {

@@ -71,7 +71,7 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
                     branch: "main".into(),
                     create_from: None,
                 },
-                permission: PermissionLevel::FullAccess,
+                permission: PermissionLevel::Full,
                 orchestrator: ModelChoice {
                     provider: brigadier_providers::ProviderKind::Claude,
                     model: Some("claude-opus-5-5".into()),
@@ -188,7 +188,7 @@ async fn the_self_edit_metric_counts_the_threads_uncommitted_and_trailerless_cha
                     branch: "main".into(),
                     create_from: None,
                 },
-                permission: PermissionLevel::FullAccess,
+                permission: PermissionLevel::Full,
                 orchestrator: ModelChoice {
                     provider: brigadier_providers::ProviderKind::Claude,
                     model: Some("claude-opus-5-5".into()),

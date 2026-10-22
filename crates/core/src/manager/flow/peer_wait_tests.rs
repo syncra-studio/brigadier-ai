@@ -778,13 +778,13 @@ async fn no_reply_goes_while_the_receivers_worker_runs() {
     flow.stop().await;
 }
 
-/// Under Ask for approval the wait holds through the card: once the user sends the message,
+/// Under Ask the wait holds through the card: once the user sends the message,
 /// the reply comes back inside the same turn.
 #[tokio::test]
 async fn a_wait_holds_through_the_send_card() {
     let peers = Peers::new();
     let options = Options {
-        permission: PermissionLevel::AskForApproval,
+        permission: PermissionLevel::Ask,
         ..Options::default()
     };
     let flow = Flow::start("peer-wait-ask", options, peers.script()).await;

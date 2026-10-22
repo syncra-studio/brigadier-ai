@@ -34,7 +34,7 @@ const RAN: &str = "Brigadier ran this repository's setup script `.brigadier/setu
 type Seen = Arc<Mutex<Vec<(String, Vec<bool>)>>>;
 
 async fn first_turns(name: &str, trusted: bool) -> Vec<(String, Vec<bool>)> {
-    first_turns_with(name, trusted, FILES.to_vec(), PermissionLevel::FullAccess).await
+    first_turns_with(name, trusted, FILES.to_vec(), PermissionLevel::Full).await
 }
 
 async fn first_turns_with(
@@ -132,7 +132,7 @@ async fn a_failing_setup_script_is_told_not_held() {
         "worktree-copies-failing",
         true,
         files,
-        PermissionLevel::FullAccess,
+        PermissionLevel::Full,
     )
     .await;
     let (input, _) = &seen[0];
@@ -150,7 +150,7 @@ async fn a_sandboxed_thread_has_its_setup_script_run_in_its_sandbox() {
         "worktree-copies-sandboxed",
         true,
         FILES.to_vec(),
-        PermissionLevel::ApproveForMe,
+        PermissionLevel::AcceptEdits,
     )
     .await;
     let (input, has) = &seen[0];

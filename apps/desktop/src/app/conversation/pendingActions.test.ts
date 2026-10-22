@@ -9,7 +9,7 @@ import type { ShownApproval } from "@/state/board";
 type Session = Extract<Setup, { type: "session" }>;
 const setup: Session = {
   type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "main" },
-  permission: "fullAccess", planMode: false, workersSeeUncommitted: null,
+  permission: "full", planMode: false, workersSeeUncommitted: null,
   orchestrator: { provider: "claude", model: null, effort: null },
 };
 const conversation: Pick<Conversation, "id" | "setup"> = { id: night.conversationId, setup };
@@ -40,8 +40,8 @@ test("Full access asks questions and approvals; a proposed overnight run stays i
   assert.deepEqual(pendingActionKeys(conversation, board), ["question:question", "approval:approval"]);
 });
 
-test("approval and plan modes include proposed plans in their original order", () => {
-  for (const change of [{ permission: "askForApproval" as const }, { planMode: true }]) {
+test("Ask and plan mode include proposed plans in their original order", () => {
+  for (const change of [{ permission: "ask" as const }, { planMode: true }]) {
     assert.deepEqual(pendingActionKeys({ ...conversation, setup: { ...setup, ...change } }, board),
       ["question:question", "plan:plan", "approval:approval"]);
   }

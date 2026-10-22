@@ -1,5 +1,5 @@
 //! "Do you trust this folder?" ([`crate::manager::trust`]): the answer reaches both CLIs'
-//! settings and is undone exactly; Don't trust holds the folder's sessions to Ask for approval.
+//! settings and is undone exactly; Don't trust holds the folder's sessions to Ask.
 //! Every test writes a scratch home of its own, never the user's files.
 
 use std::path::{Path, PathBuf};
@@ -97,7 +97,7 @@ async fn an_unanswered_folder_asks_first_until_trusted() {
     let project = project_of(&flow);
     assert_eq!(
         flow.manager.permission(&flow.conversation),
-        PermissionLevel::AskForApproval
+        PermissionLevel::Ask
     );
     flow.core
         .set_folder_trust(&project, &flow.repo.display().to_string(), true)
@@ -105,7 +105,7 @@ async fn an_unanswered_folder_asks_first_until_trusted() {
         .unwrap();
     assert_eq!(
         flow.manager.permission(&flow.conversation),
-        PermissionLevel::FullAccess
+        PermissionLevel::Full
     );
     flow.stop().await;
 }
@@ -134,7 +134,7 @@ async fn a_trusted_folder_is_answered_for_both_clis_until_untrusted_or_removed()
     assert_eq!(trust_records(&flow, &project).len(), 2);
     assert_eq!(
         flow.manager.permission(&flow.conversation),
-        PermissionLevel::FullAccess
+        PermissionLevel::Full
     );
 
     let report = flow
@@ -148,7 +148,7 @@ async fn a_trusted_folder_is_answered_for_both_clis_until_untrusted_or_removed()
     assert!(trust_records(&flow, &project).is_empty());
     assert_eq!(
         flow.manager.permission(&flow.conversation),
-        PermissionLevel::AskForApproval
+        PermissionLevel::Ask
     );
 
     flow.manager

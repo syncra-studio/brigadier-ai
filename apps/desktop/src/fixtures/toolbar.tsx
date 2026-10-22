@@ -59,7 +59,7 @@ mockIPC((command, args) => {
 const mentions = new MentionMemory();
 // Only the mention memory is read by the panes.
 const target = { mentions } as unknown as ComposerTarget;
-const session: Conversation = { ...conversation, kind: "session", setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
+const session: Conversation = { ...conversation, kind: "session", setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const previews = useBoard.getState().board!.previews;
 
 const color = (button: HTMLElement) => getComputedStyle(button).color;

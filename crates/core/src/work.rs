@@ -1080,7 +1080,7 @@ pub enum ApprovalSubject {
     /// An outward command stopped by the command gate of earlier versions. Only in recorded
     /// conversations: nothing asks this way any more.
     OutwardCommand { argv: Vec<String>, cwd: String },
-    /// Ask for approval: land a reviewed task on its branch.
+    /// Ask: land a reviewed task on its branch.
     Landing {
         task_id: TaskId,
         branch: String,
@@ -1096,13 +1096,13 @@ pub enum ApprovalSubject {
     },
     /// An action the orchestrator asked the user to approve.
     Action { action: String, details: String },
-    /// Ask for approval: start a phase from its lead's outline ("Implement this plan?").
+    /// Ask: start a phase from its lead's outline ("Implement this plan?").
     Outline {
         task_id: TaskId,
         title: String,
         outline: String,
     },
-    /// Ask for approval: send the thread's message to another session ("Send a message to
+    /// Ask: send the thread's message to another session ("Send a message to
     /// ‹title› in ‹project›?"), exactly as written.
     PeerMessage {
         message_id: String,
@@ -1381,7 +1381,7 @@ pub enum PhaseStage {
     Pending,
     /// Its lead reads the code and writes the outline.
     Outlining,
-    /// The outline waits for the go-ahead (the user's, under Ask for approval). Its plan
+    /// The outline waits for the go-ahead (the user's, under Ask). Its plan
     /// review runs in the background meanwhile; stores from before that read their outline
     /// review stage as this.
     #[serde(alias = "outlineReview")]
@@ -2081,8 +2081,9 @@ pub enum OrchestratorStepKind {
         #[ts(as = "Option<Vec<String>>", optional)]
         requests: Vec<String>,
     },
-    /// A notice that something the user asked for needs more than the session's sandbox
-    /// allows (`suggest_full_access`), with a button that switches the session to Full access.
+    /// A notice an earlier version showed when something the user asked for needed more than
+    /// its sandbox allowed (`suggest_full_access`, gone since S6): kept so old records load;
+    /// nothing writes it now.
     FullAccessSuggested { reason: String },
     /// A card with a change of one of the few settings the thread may suggest
     /// (`suggest_setting`) and one button that makes it; nothing changes until it is pressed.
@@ -2274,7 +2275,7 @@ pub enum DecisionKind {
     Answer,
 }
 
-/// Something decided on the user's behalf (under "Approve for me" and "Full access"), and
+/// Something decided on the user's behalf (under "Accept edits" and "Full access"), and
 /// why: the summary card's "Decided for you", and a quiet row in the request's thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

@@ -27,11 +27,7 @@ use crate::work::{ChecksResult, FeedbackKind, ReviewVerdict, TaskKind, WorkerRol
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Role {
     /// The orchestrator of a session (its thread).
-    Orchestrator {
-        conversation_id: ConversationId,
-        /// Its command tools, which depend on its vendor and level.
-        run: RunTools,
-    },
+    Orchestrator { conversation_id: ConversationId },
     /// The worker running one task.
     Worker {
         conversation_id: ConversationId,
@@ -54,11 +50,7 @@ pub enum Role {
     },
     /// A thread's note fork (BUILD-PLAN B5): it is shown the thread's own tools, so it shares
     /// the thread's cached start, and every call of it is refused.
-    NoteFork {
-        conversation_id: ConversationId,
-        /// The thread's command tools, listed as the thread's are.
-        run: RunTools,
-    },
+    NoteFork { conversation_id: ConversationId },
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },
@@ -77,19 +69,6 @@ pub enum TabTools {
     Page,
     /// `read_tab_file` and `write_tab_file`, for the tab's file only.
     File,
-}
-
-/// The command tools a thread has besides the orchestrator tools (THREAD-PLAN.md Q4): a Codex
-/// thread runs long commands through Brigadier, which keeps their whole output and returns a
-/// digest. A Claude thread's own `Bash` output is trimmed by its hook instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RunTools {
-    #[default]
-    None,
-    /// `run`.
-    Run,
-    /// `run`, and `run_unsandboxed` to leave the sandbox with the level's approval.
-    WithEscalation,
 }
 
 /// Live grants, keyed by their secret value. Each belongs to a cleanup-ledger owner
@@ -467,47 +446,6 @@ pub struct ReadArtifact {
     /// Bytes to read (at most 16000).
     #[serde(default)]
     pub limit: Option<u32>,
-}
-
-/// `run`: a shell command run for the thread, its whole output kept.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RunCommand {
-    /// The command, as you would type it in a shell (`/bin/sh -c`).
-    pub command: String,
-    /// A short name for what a long command is for ("Core tests", "Desktop build"): the
-    /// session's Activities show it while it runs.
-    #[serde(default)]
-    pub name: Option<String>,
-    /// The folder it runs in: the workspace (the default) or a folder inside it, or your own
-    /// scratch folder.
-    #[serde(default)]
-    pub workdir: Option<String>,
-    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
-    #[serde(default)]
-    pub timeout_secs: Option<u64>,
-}
-
-/// `run_unsandboxed`: the same, outside the sandbox, once approved.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RunUnsandboxed {
-    /// The command, as you would type it in a shell (`/bin/sh -c`).
-    pub command: String,
-    /// A short name for what a long command is for ("Core tests", "Desktop build"): the
-    /// session's Activities show it while it runs.
-    #[serde(default)]
-    pub name: Option<String>,
-    /// The folder it runs in: the workspace (the default) or a folder inside it, or your own
-    /// scratch folder.
-    #[serde(default)]
-    pub workdir: Option<String>,
-    /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
-    #[serde(default)]
-    pub timeout_secs: Option<u64>,
-    /// Why it must run outside the sandbox (what the sandbox blocked), in a sentence: the
-    /// approval is decided on it.
-    pub justification: String,
 }
 
 /// `start_preview`: a long-running process (a dev server, the app) the user can look at.
@@ -963,24 +901,13 @@ pub struct CiPush {
     pub sha: String,
 }
 
-/// `suggest_full_access`: something the user asked for needs more than the session's sandbox
-/// allows; the thread shows a notice with a button that switches the session to Full access.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SuggestFullAccess {
-    /// One line for the user: what the sandbox stopped and what Full access would let you do
-    /// ("Installing Xcode's command line tools writes outside the project").
-    pub reason: String,
-}
-
 /// `suggest_setting`: a card with one settings change and a button that makes it, when the
 /// user's request needs it. Only these settings; anything else is the user's own.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SuggestSetting {
     pub setting: SuggestedSetting,
-    /// permission: "ask_for_approval", "approve_for_me" or "full_access"; browser: "on" or
-    /// "off".
+    /// permission: "ask", "accept_edits" or "full_access"; browser: "on" or "off".
     pub value: String,
     /// One line for the user: why the change helps with what they asked.
     pub reason: String,
@@ -1145,7 +1072,6 @@ pub enum OrchestratorCall {
     NoteForUser(NoteForUser),
     CiStatus(CiPush),
     WatchCi(CiPush),
-    SuggestFullAccess(SuggestFullAccess),
     SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
     OfferSession(OfferSession),
@@ -1161,8 +1087,6 @@ pub enum OrchestratorCall {
     ReadPage(ReadPage),
     WritePage(WritePage),
     SaveReport(SaveReport),
-    Run(RunCommand),
-    RunUnsandboxed(RunUnsandboxed),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
@@ -1200,7 +1124,6 @@ pub const THREAD_TOOLS: &[&str] = &[
     "note_for_user",
     "ci_status",
     "watch_ci",
-    "suggest_full_access",
     "offer_feedback",
     "offer_session",
     "set_headline",
@@ -1215,8 +1138,6 @@ pub const THREAD_TOOLS: &[&str] = &[
     "read_page",
     "write_page",
     "save_report",
-    "run",
-    "run_unsandboxed",
     "start_preview",
     "stop_preview",
     "preview_log",
@@ -1280,7 +1201,6 @@ impl OrchestratorCall {
             Self::NoteForUser(_) => "note_for_user",
             Self::CiStatus(_) => "ci_status",
             Self::WatchCi(_) => "watch_ci",
-            Self::SuggestFullAccess(_) => "suggest_full_access",
             Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
             Self::OfferSession(_) => "offer_session",
@@ -1296,8 +1216,6 @@ impl OrchestratorCall {
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",
             Self::SaveReport(_) => "save_report",
-            Self::Run(_) => "run",
-            Self::RunUnsandboxed(_) => "run_unsandboxed",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",

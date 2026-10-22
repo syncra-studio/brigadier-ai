@@ -5,8 +5,7 @@
 //!
 //! - streams its normalized events into `raw:<id>`, with text deltas merged over
 //!   [`DELTA_WINDOW`] so the store is not hit on every token;
-//! - has its approvals routed by [`policy::route`]: Brigadier answers what stays inside the
-//!   session's access, the user the rest;
+//! - has its approvals answered by the user, or all declined ([`RawApprovals`]);
 //! - records every artifact its CLI creates in the cleanup ledger before relying on it, and
 //!   removes exactly those when it is closed, when it fails to start, or in the crash sweep.
 //!
@@ -24,7 +23,6 @@ use brigadier_providers::claude::Claude;
 use brigadier_providers::cli::CliEnv;
 use brigadier_providers::codex::Codex;
 use brigadier_providers::history::PastFolder;
-use brigadier_providers::policy::{self, ApprovalMode, Route};
 use brigadier_providers::record::{self, Recording};
 use brigadier_providers::{
     Access, ApprovalDecision, Decider, ModelCatalog, Origin, Provider, ProviderEvent, ProviderKind,
@@ -1047,7 +1045,7 @@ impl Runtime {
             cwd: Some(cwd.display().to_string()),
             model: request.model.clone().filter(|model| !model.is_empty()),
             effort: request.effort.clone().filter(|effort| !effort.is_empty()),
-            access: request.access.clone(),
+            access: request.access,
             approvals: request.approvals,
             native_id: None,
             parent_id: None,
@@ -1528,7 +1526,7 @@ impl Runtime {
         id: &RawSessionId,
         request: brigadier_providers::ApprovalRequest,
     ) {
-        let (session, route) = {
+        let (session, decline) = {
             let mut state = self.state();
             let Some(raw) = state.sessions.get(id).cloned() else {
                 return;
@@ -1537,22 +1535,17 @@ impl Runtime {
                 // A replay: nobody to answer.
                 return;
             };
-            let mode = match raw.approvals {
-                RawApprovals::Delegated => ApprovalMode::Delegated,
-                RawApprovals::DeclineAll => ApprovalMode::DeclineAll,
-            };
-            let route = policy::route(&request, &raw.access, mode);
-            if route == Route::AskUser {
+            let decline = raw.approvals == RawApprovals::DeclineAll;
+            if !decline {
                 live.pending.insert(request.id.clone());
             }
-            (live.session.clone(), route)
+            (live.session.clone(), decline)
         };
-        let decision = match route {
-            Route::AskUser => return,
-            Route::Allow => ApprovalDecision::Allow,
-            Route::Deny => ApprovalDecision::Deny {
-                message: "Declined by Brigadier: this session may not do that.".into(),
-            },
+        if !decline {
+            return;
+        }
+        let decision = ApprovalDecision::Deny {
+            message: "Declined by Brigadier: this session may not do that.".into(),
         };
         match session.answer(request.id.clone(), decision.clone()).await {
             Ok(()) => {
@@ -1635,7 +1628,7 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         origin,
         // The user's own session: they may resume it.
         ephemeral: false,
-        access: session.access.clone(),
+        access: session.access,
         append_system_prompt: None,
         mcp_servers: Vec::new(),
         tools: ToolSet::Default,
@@ -1652,12 +1645,10 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         sweep_dir: None,
         auto_compact: true,
         allowed_models: None,
-        auto_review: false,
         omit_ai_coauthors: false,
         output_hook: None,
         stop_hook: None,
         deny_tools: None,
-        protection: Default::default(),
     }
 }
 

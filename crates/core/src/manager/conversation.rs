@@ -57,7 +57,7 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::{
     McpUpdate, inline_image_tokens, inline_paste, place_inline_pastes, push_block,
 };
-use crate::tools::{Role, RunTools};
+use crate::tools::Role;
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
     OrchestratorEntry, OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState,
@@ -93,17 +93,13 @@ fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
         task_id: None,
         text: format!(
             "[{what} stopped when your CLI ended, before it finished: no result came. If you \
-             still need it, run it again with run: a long command goes to the background on its \
-             own and its result comes back to you as a message.]"
+             still need it, run it again.]"
         ),
     }
 }
-/// How long a blocking MCP call may take for the thread: a Codex thread's `run` waits for its
-/// command (THREAD-PLAN.md Q4), so the longest
-/// command timeout plus a minute, so a command that runs out its time is still reaped and its
-/// output stored before the call itself expires (the call's clock starts first).
-pub(super) const RUNNER_TOOL_TIMEOUT_SECS: u64 = super::run::RUN_TIMEOUT_MAX.as_secs() + 60;
-const _: () = assert!(RUNNER_TOOL_TIMEOUT_SECS > super::run::RUN_TIMEOUT_MAX.as_secs());
+/// How long a blocking MCP call may take for the thread (a wait for other sessions' replies):
+/// half an hour and a minute.
+pub(super) const RUNNER_TOOL_TIMEOUT_SECS: u64 = 1860;
 /// A Chat's Brigadier tools (saving a memory) answer within this.
 const CHAT_TOOL_TIMEOUT_SECS: u64 = 60;
 /// Messages carried verbatim when a conversation's CLI session is started over.
@@ -3172,17 +3168,14 @@ impl SessionManager {
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
         let mut launch = None;
-        let mut auto_review = false;
         let mut output_hook = None;
-        let mut run_tools = None;
+        let mut thread = false;
         let (mut choice, prompt, mcp) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
                 // Its workspace exists before its CLI starts.
-                let (started_for, reviews) = self.thread_launch(&conv.id, &dir, true).await?;
-                auto_review = reviews;
+                let started_for = self.thread_launch(&conv.id, true).await?;
                 let workspace = started_for.workspace.clone();
-                let permission = started_for.permission;
                 if let Some(workspace) = &workspace {
                     self.record_session_refs(&conv.id, &workspace.path);
                 }
@@ -3196,26 +3189,15 @@ impl SessionManager {
                         choice.provider,
                     )
                     .await;
-                // A Codex thread runs long commands through `run`; a Claude thread's own Bash
-                // output is trimmed by its hook (THREAD-PLAN.md Q4).
-                let commands = super::run::run_tools(choice.provider, permission);
-                run_tools = Some(commands);
+                thread = true;
                 let grant = self.grants.issue(
                     &owner,
                     Role::Orchestrator {
                         conversation_id: conv.id.clone(),
-                        run: commands,
                     },
                 );
                 grant_values.push(grant.clone());
-                let mut server = self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false);
-                // Under Ask for approval the user approves each command that leaves the sandbox;
-                // a Claude thread's at Approve for me goes to Brigadier's reviewer instead.
-                if commands == RunTools::WithEscalation
-                    && permission == crate::model::PermissionLevel::AskForApproval
-                {
-                    server.prompt_tools = vec![super::run::RUN_UNSANDBOXED.into()];
-                }
+                let server = self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false);
                 if self.thread_hooked(choice.provider) {
                     let hook_grant = self.grants.issue(
                         &owner,
@@ -3332,7 +3314,7 @@ impl SessionManager {
             // A Chat only searches the web.
             access: launch
                 .as_ref()
-                .map_or(Access::ReadOnly, |launch| launch.access.clone()),
+                .map_or(Access::ReadOnly, |launch| launch.access),
             append_system_prompt: Some(prompt.clone()),
             mcp_servers: mcp,
             tools: match conv.kind {
@@ -3375,24 +3357,14 @@ impl SessionManager {
             // An orchestrator is reborn, never compacted.
             auto_compact: conv.kind == ConversationKind::Chat,
             allowed_models: None,
-            auto_review,
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook,
             stop_hook: None,
             deny_tools: None,
-            protection: launch
-                .as_ref()
-                .map(|launch| launch.protection.clone())
-                .unwrap_or_default(),
         };
         let mut resumed = resume.is_some();
         let tools_key = crate::routing::meter::tools_key(&spec);
-        let fork_base = run_tools.map(|run| {
-            Arc::new(rebirth::ForkBase {
-                spec: spec.clone(),
-                run,
-            })
-        });
+        let fork_base = thread.then(|| Arc::new(rebirth::ForkBase { spec: spec.clone() }));
         // Every account shares the CLI's session history: a conversation resumes on whichever
         // account it runs on now.
         let account = self.runtime.account_for(&choice);
@@ -3556,7 +3528,6 @@ impl SessionManager {
             tool_timeout_secs: Some(timeout_secs),
             trusted: true,
             always_load,
-            prompt_tools: Vec::new(),
         }
     }
 

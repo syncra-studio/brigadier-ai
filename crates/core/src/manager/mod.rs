@@ -19,6 +19,8 @@ mod accounts;
 mod add_project;
 mod app_call;
 mod app_state;
+// Nothing feeds it since `run` went (S6); the module goes in S12.
+#[allow(dead_code)]
 mod background_runs;
 mod brain_first;
 mod brain_jobs;
@@ -45,7 +47,6 @@ mod conversation;
 pub(crate) mod decisions;
 pub mod disk;
 mod engine;
-mod escalation;
 mod evidence;
 mod export;
 mod fallback;
@@ -87,7 +88,6 @@ mod project_removal;
 mod project_sessions;
 mod prompts;
 mod protected_folders;
-mod protection;
 mod pull_request;
 mod quiet;
 pub(crate) mod reads;
@@ -206,9 +206,6 @@ pub struct SessionManager {
     /// Claude session learns its own only when its first turn ends, and its overflow guard needs
     /// it before then (BUILD-PLAN D2.3, D2.3b).
     known_windows: std::sync::Mutex<HashMap<(ProviderKind, String), i64>>,
-    /// Commands a Codex thread's `run_unsandboxed` may run, each once: what the user (or their
-    /// "allow similar") approved when Codex asked ([`run`]).
-    run_passes: run::RunPasses,
     /// The engine's branches and their tips, for the ref check (PLAN bug 6); read and written
     /// under each repository's ref lock, off the async threads.
     ref_records: Arc<refcheck::RefRecords>,
@@ -429,7 +426,6 @@ impl SessionManager {
             thread_scans: tokio::sync::Mutex::new(()),
             change_records: request_changes::ChangeRecords::default(),
             known_windows: std::sync::Mutex::new(HashMap::new()),
-            run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),
             source_output: source_actions::SourceOutput::default(),
             background_runs: background_runs::BackgroundRuns::default(),
@@ -877,15 +873,6 @@ impl SessionManager {
     /// `<data>/<area>/<id>`: a Brigadier-owned folder.
     fn owned_dir(&self, area: &str, id: &str) -> PathBuf {
         self.data_dir.join(area).join(id)
-    }
-
-    /// The IPC socket CLIs' sandboxes must be able to reach (the MCP bridge).
-    fn socket_path(&self) -> Option<PathBuf> {
-        match &self.runtime.platform().paths().ipc_endpoint {
-            brigadier_sandbox::IpcEndpoint::UnixSocket(path) => Some(path.clone()),
-            #[allow(unreachable_patterns)]
-            _ => None,
-        }
     }
 
     /// A CLI session's event as its handlers get it: in development builds, with what an

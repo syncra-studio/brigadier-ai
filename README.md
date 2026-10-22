@@ -100,8 +100,8 @@ rough edges.
 
 - **macOS** is the main platform, and every feature here works on it.
 - **Windows and Linux** build and pass a launch check in CI (Linux on every push, Windows
-  nightly), but are not ready for real use. The worker sandbox, computer use and browser data
-  import are macOS-only for now. Agents in the browser work on macOS and Windows; Linux has no
+  nightly), but are not ready for real use. Computer use and browser data import are
+  macOS-only for now. Agents in the browser work on macOS and Windows; Linux has no
   built-in browser.
 - **Agents:** Claude Code and Codex today. Next: the Cursor, opencode and Grok CLIs, and local
   models.
@@ -116,7 +116,7 @@ rough edges.
   report and a notification.
 - **Sessions that message each other.** A session's thread can send a message to another
   session, in the same project or another one, and the reply comes back to it on its own. Both
-  sides show the exchange. Under Ask for approval, each message waits for your Send.
+  sides show the exchange. Under Ask, each message waits for your Send.
 - **Long commands in the background.** A command the thread runs that is still going after a
   minute moves to the background with a live line, and its result comes back to the thread when
   it ends. A turn's steps fold under "Worked for …" once the answer starts. A sidebar dot marks a
@@ -202,37 +202,22 @@ couldn't be removed is retried at the next launch.
 
 ### Permission levels
 
-A session's permission level is picked in the composer. **Fresh installs start in Approve for me**;
-Settings › Configuration changes the default for new sessions. Existing installs keep their saved
-default, and existing sessions keep their chosen level.
+A session's permission level is picked in the composer. New sessions start in **Accept edits**;
+Settings › Configuration changes the default. The level goes straight to the CLI as its own
+setting: Brigadier adds no sandbox, no reviewer and no permission rules of its own, and the CLI's
+own permission prompts reach you as cards.
 
-- **Ask for approval**: you approve every plan and every change before it lands. Workers run
-  in the OS sandbox without network. Each step outside it (another folder, a host to reach)
-  asks you on a card. The "Allow … for this session" button allows commands with the same first
-  words (such as `git push` or `curl`), connections to the same host, or file changes inside
-  the asker's own checkout or worktree for the rest of the conversation. File changes outside
-  that folder, in Git metadata, or in the CLIs' own config (`.claude`, `.codex`, `.agents`,
-  `.vscode`, `.mcp.json`) still ask. These grants live in memory only. A message to another
-  session waits on a card for your Send.
-- **Approve for me**: Brigadier approves plans and changes for you (a risky plan gets an
-  independent review first) and asks you only what only you can answer. Workers run in the OS
-  sandbox with network. When a command needs more, Claude's auto mode or Brigadier's reviewer
-  for Codex decides and declines what it judges unsafe.
-- **Full access**: as Approve for me, but workers run like your own terminal (Claude in
-  `bypassPermissions`, Codex with no sandbox and no approvals). They can read, change and delete
-  any file your account can, run any command and use the internet, without asking. The composer
-  shows a notice while a conversation is in Full access.
+| Level | Claude Code | Codex |
+|---|---|---|
+| **Ask** | `default` mode: asks before edits and commands | `untrusted` approvals, `workspace-write` sandbox |
+| **Accept edits** | `acceptEdits` mode: edits files freely, asks before other commands | `on-request` approvals, `workspace-write` sandbox |
+| **Full access** | `bypassPermissions`: never asks | `never` approvals, `danger-full-access` |
 
-These sandbox descriptions apply to macOS. On Linux and Windows, the level still requests the
-CLI's sandbox and approval review, but support depends on the installed CLI and OS. Brigadier's
-own worker sandbox is macOS-only; Windows and Linux remain incomplete
-(see [Status and roadmap](#status-and-roadmap)).
-
-In the sandbox a worker can write to its own worktree and scratch folder, its worktree's git
-folder (so it can commit) and the toolchains' caches (`~/.cargo`, `~/.rustup`, the npm, pnpm,
-yarn and bun caches, `~/Library/Caches`, the temporary folder), so builds, tests and installs
-just work. Claude's sandbox lets network traffic out only as HTTP(S) through its proxy, so a push
-over `git://` or `ssh` from a sandboxed Claude worker fails.
+Codex's sandbox is Codex's own setting, so it stays at Ask and Accept edits; Brigadier keeps its
+network on, as Claude's is. At Full access a session can read, change and delete any file your
+account can, Brigadier's own data included, run any command and use the internet, without asking.
+The composer shows a notice while a conversation is in Full access. A folder you don't trust runs
+every session there at Ask.
 
 At every level, workers and the thread push, publish, deploy or open pull requests when the
 task calls for it, with your own git and `gh` sign-ins. The thread asks for your approval before
@@ -243,11 +228,10 @@ own work; a worker lists such steps for you instead.
 
 - Workers and threads get grants scoped to their role and task, checked on every call to
   Brigadier's MCP server and revoked when the session ends. Requests only the UI may make (such as
-  answering approvals) need the IPC token in `<data>/run/`. Claude workers can't read that
-  folder, and neither can read-only Codex sessions. A Codex worker that writes in a worktree
-  runs in Codex's older sandbox, which can't deny reads, so a hostile one could read the token.
-  On macOS it still can't act as the UI: the daemon refuses the token from any sandboxed process.
-  On Linux and Windows, which have no worker sandbox yet, nothing refuses it.
+  answering approvals) need the IPC token in `<data>/run/`. Sessions run as their CLI would on
+  its own, so a hostile one could read the token. On macOS a process inside Codex's sandbox still
+  can't act as the UI: the daemon refuses the token from any sandboxed process. A Claude Code
+  session, or a Codex one at Full access, has no sandbox, and nothing refuses it.
 - A process that detaches and moves out of Brigadier's folders escapes the cleanup.
 - A thread can message sessions in other projects. The receiver hears it as coming from another
   session, not from you. After eight messages with no word from you, the next one still goes

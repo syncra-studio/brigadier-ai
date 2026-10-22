@@ -35,7 +35,7 @@ let conversation = {
 // The `plan` case's is a session in Plan mode.
 if (which === "plan") {
   conversation = { ...conversation, kind: "session", title: "A session", setup: { type: "session", repo: "/fixture",
-    environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: true,
+    environment: { type: "localCheckout", branch: "fixture" }, permission: "ask", planMode: true,
     workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } } as unknown as Conversation;
 }
 const messages: Message[] = [

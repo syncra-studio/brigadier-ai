@@ -20,14 +20,8 @@
 //!   (`preview_log`) stores a snapshot in the blob store under an `out-<id>` alias, as a long
 //!   command output is (`super::tool_output`), and the final log is stored when it ends.
 //!
-//! **Access.** The daemon starts it, so the CLI's sandbox doesn't hold it; it gets the
-//! thread's access instead. At Full access it runs as it is. On macOS, other levels use
-//! Brigadier's GUI Seatbelt profile even when Codex is installed: the same writable roots,
-//! denied reads, network and Unix socket grants, plus window surfaces and Chromium helper
-//! rendezvous for dev/test identities. A private temp directory and a newly created,
-//! validated app data directory are writable.
-//! Chromium/Electron may need `--no-sandbox` to avoid nesting their sandbox; Brigadier's
-//! outer confinement still applies to every helper. Linux keeps the command sandbox path.
+//! **Access.** The daemon starts it as a plain process in its own process group, as the
+//! user's terminal would: Brigadier adds no sandbox (G5).
 //!
 //! **Brigadier itself.** A preview never touches the installed app's data: the daemon's own
 //! `BRIGADIER_DATA_DIR` is never passed on, one the thread sets may not name the installed
@@ -41,7 +35,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_providers::{Access, Artifact, ProviderKind};
+use brigadier_providers::Artifact;
 use tokio_util::sync::CancellationToken;
 
 use super::{OUTPUT_MAX_BYTES, SessionManager, blocking};
@@ -83,9 +77,8 @@ pub(crate) fn preview_owner(id: &ConversationId) -> String {
 }
 
 /// Who starts a preview, and where: the thread in the session's workspace, or a worker in its
-/// own worktree (or scratch folder), each with its own access.
+/// own worktree (or scratch folder).
 struct Starter {
-    access: Access,
     /// The folder it belongs to; `workdir` must be inside it (or inside `scratch` for a
     /// worker).
     workspace: PathBuf,
@@ -209,31 +202,6 @@ impl Previews {
     }
 }
 
-/// A worker's `access` for its preview, which may run in another folder than its CLI: the write
-/// its working directory has goes to `root`, the folder its CLI was granted (its checkout, or
-/// its scratch folder when it works from there), as for its checks, never to the preview's.
-fn pinned_access(access: Access, root: &Path) -> Access {
-    match access {
-        Access::Scoped {
-            write_cwd: true,
-            mut writable_roots,
-            network,
-            deny_read,
-            unix_sockets,
-        } => {
-            writable_roots.push(root.to_owned());
-            Access::Scoped {
-                write_cwd: false,
-                writable_roots,
-                network,
-                deny_read,
-                unix_sockets,
-            }
-        }
-        access => access,
-    }
-}
-
 impl SessionManager {
     /// `start_preview`: starts `args.command` in the thread's workspace and answers once it is
     /// running (or has already ended), with its first output.
@@ -265,7 +233,6 @@ impl SessionManager {
             ));
         }
         let starter = Starter {
-            access: launch.access.clone(),
             workspace,
             scratch: self.owned_dir("orch", &id.0),
             task: None,
@@ -288,9 +255,9 @@ impl SessionManager {
     }
 
     /// Who starts a preview for the worker of `task_id`: in its worktree (or scratch folder),
-    /// with its access while it runs.
+    /// while it runs.
     async fn worker_starter(&self, id: &ConversationId, task_id: &TaskId) -> Result<Starter> {
-        let access = match self.existing_task_live(task_id) {
+        match self.existing_task_live(task_id) {
             Some(live) => live.tool_access().await,
             None => None,
         }
@@ -300,17 +267,7 @@ impl SessionManager {
             .workspace
             .ok_or_else(|| Error::Invalid("the task has no folder yet".into()))?;
         let scratch = PathBuf::from(&workspace.scratch);
-        let tree = workspace.worktree.as_ref().map(PathBuf::from);
-        let root = cwd_grant(
-            access.provider,
-            task.kind.writes(),
-            tree.as_deref(),
-            &scratch,
-        )
-        .or(tree)
-        .unwrap_or_else(|| scratch.clone());
         let starter = Starter {
-            access: pinned_access(access.access, &root),
             workspace: workspace
                 .worktree
                 .map_or_else(|| scratch.clone(), PathBuf::from),
@@ -344,20 +301,11 @@ impl SessionManager {
             })?,
             None => {
                 let scratch = self.owned_dir("orch", &id.0);
-                let access = match self.conv(&id)?.live_cli().await {
-                    Some(cli) => cli.launch.as_ref().map(|launch| launch.access.clone()),
-                    None => None,
-                };
-                let access = match access {
-                    Some(access) => access,
-                    None => self.thread_launch(&id, &scratch, false).await?.0.access,
-                };
                 let workspace = self
                     .recorded_workspace(&id)
                     .map(|workspace| workspace.path)
                     .ok_or_else(|| Error::Invalid("this session has no workspace now".into()))?;
                 Starter {
-                    access,
                     workspace,
                     scratch,
                     task: None,
@@ -427,7 +375,6 @@ impl SessionManager {
         again: Option<String>,
     ) -> Result<String> {
         let Starter {
-            access,
             workspace,
             scratch,
             task,
@@ -535,52 +482,7 @@ impl SessionManager {
                 },
             )
             .await?;
-        #[cfg(target_os = "macos")]
-        let mut data = if access != Access::Full
-            && let Some(value) = env.get(brigadier_sandbox::DATA_DIR_ENV)
-        {
-            let data = create_preview_data(
-                &workdir.join(value),
-                &protected,
-                ledger.clone(),
-                preview_data_owner(id),
-            )
-            .await?;
-            env.insert(
-                brigadier_sandbox::DATA_DIR_ENV.into(),
-                data.path.to_string_lossy().into_owned(),
-            );
-            Some(data)
-        } else {
-            None
-        };
-        #[cfg(target_os = "macos")]
-        let (env, writable_roots, preview_temp) = {
-            let mut env = env;
-            let mut roots = Vec::new();
-            let mut preview_temp = None;
-            if access != Access::Full {
-                let temp = self.preview_temp(&owner).await?;
-                for name in ["TMPDIR", "MAC_CHROMIUM_TMPDIR"] {
-                    env.entry(name.into())
-                        .or_insert_with(|| temp.to_string_lossy().into_owned());
-                }
-                preview_temp = Some(temp);
-                if let Some(data) = &data {
-                    roots.push(data.path.clone());
-                }
-            }
-            (env, roots, preview_temp)
-        };
-        #[cfg(not(target_os = "macos"))]
-        let (writable_roots, preview_temp): (Vec<PathBuf>, Option<PathBuf>) = (Vec::new(), None);
-        let mut spec = self.preview_spec(
-            &access,
-            &workdir,
-            &script(&command, &env),
-            &writable_roots,
-            preview_temp.as_deref(),
-        )?;
+        let mut spec = self.run_spec(&workdir, &script(&command, &env));
         brigadier_providers::cli::apply_session_env(
             &mut spec,
             &super::workers::worker_env(&scratch),
@@ -678,13 +580,7 @@ impl SessionManager {
                 watched.ask_to_stop("it could not be recorded");
             }
             drop(starting);
-            #[cfg(target_os = "macos")]
-            let recorded_ok = recorded.is_ok();
             let _ = recorded_tx.send(recorded);
-            #[cfg(target_os = "macos")]
-            if recorded_ok && let Some(data) = &mut data {
-                data.created = false;
-            }
             this.spawn(this.clone().watch_ready(watched.clone()));
             this.watch_preview(watched, child, artifact).await;
             drop(spared);
@@ -783,84 +679,6 @@ impl SessionManager {
              {lifetime}. Its output so far:\n{output}",
             workdir.display()
         ))
-    }
-
-    /// A short, private folder for Chromium's Unix socket (long worktree paths overflow
-    /// sun_path). Track it before creating it so cancellation and launch failures are swept.
-    #[cfg(target_os = "macos")]
-    async fn preview_temp(&self, owner: &str) -> Result<PathBuf> {
-        #[cfg(not(test))]
-        let root = PathBuf::from("/tmp");
-        // Tests keep all their writes beneath their isolated TMPDIR.
-        #[cfg(test)]
-        let root = std::env::temp_dir();
-        let dir = root.join(format!(
-            "brigadier-pv-{}",
-            &uuid::Uuid::new_v4().simple().to_string()[..16]
-        ));
-        self.runtime
-            .ledger()
-            .record(
-                owner,
-                Artifact::ScratchDir {
-                    path: dir.to_string_lossy().into_owned(),
-                },
-            )
-            .await?;
-        self.runtime
-            .platform()
-            .private_fs()
-            .create_private_dir(&dir)
-            .map_err(|err| Error::Invalid(err.to_string()))?;
-        Ok(dir)
-    }
-
-    /// Full access uses run_spec. Other macOS previews always use GUI Seatbelt, independently
-    /// of Codex's installation. Elsewhere, retain the existing command sandbox selection.
-    fn preview_spec(
-        &self,
-        access: &Access,
-        workdir: &Path,
-        script: &str,
-        writable_roots: &[PathBuf],
-        preview_temp: Option<&Path>,
-    ) -> Result<brigadier_sandbox::SpawnSpec> {
-        if *access == Access::Full {
-            return self.run_spec(access, workdir, script);
-        }
-        if cfg!(target_os = "macos") {
-            let temp = preview_temp.ok_or_else(|| {
-                Error::Invalid("a preview needs its private temp directory".into())
-            })?;
-            let mut spec = self.runtime.cli_env().spec(Path::new(super::run::SHELL));
-            spec.args = vec!["-c".into(), script.into()];
-            spec.cwd = Some(workdir.to_owned());
-            let mut policy = super::run::seatbelt_policy(access, workdir);
-            policy.writable_roots.extend_from_slice(writable_roots);
-            policy.writable_roots.push(temp.to_owned());
-            let unix_sockets = match access {
-                Access::Scoped { unix_sockets, .. } => unix_sockets.as_slice(),
-                _ => &[],
-            };
-            return self
-                .runtime
-                .platform()
-                .sandbox()
-                .confine_preview(spec, &policy, unix_sockets, temp)
-                .map_err(|err| {
-                    Error::Invalid(format!("the preview can't be sandboxed here: {err}"))
-                });
-        }
-        if self
-            .runtime
-            .cli_env()
-            .resolve(ProviderKind::Codex)
-            .is_some()
-        {
-            return self.run_spec(access, workdir, script);
-        }
-        self.seatbelt_spec(access, workdir, &["-c".into(), script.into()])
-            .map_err(|err| Error::Invalid(format!("the preview can't be sandboxed here: {err}")))
     }
 
     /// Waits for a preview to end or to be stopped, then records its end.
@@ -2065,22 +1883,6 @@ impl SessionManager {
     }
 }
 
-/// The folder a worker's access grants as its writable working directory when that isn't its
-/// checkout `tree` (see `launch_admitted`): a Codex worker that doesn't write works from its
-/// `scratch` folder, since Codex can't run in a read-only folder. A Claude worker's access is
-/// made for its checkout, and a writing Codex worker starts in it.
-fn cwd_grant(
-    provider: ProviderKind,
-    writes: bool,
-    tree: Option<&Path>,
-    scratch: &Path,
-) -> Option<PathBuf> {
-    match (tree, provider, writes) {
-        (Some(_), ProviderKind::Claude, _) | (Some(_), _, true) => None,
-        _ => Some(scratch.to_owned()),
-    }
-}
-
 fn process_artifact(member: crate::machine::Proc) -> Artifact {
     Artifact::Process {
         pid: member.pid,
@@ -2323,164 +2125,6 @@ pub(crate) fn preview_data_owner(id: &ConversationId) -> String {
     format!("preview-data:{id}")
 }
 
-/// A new claim rolls back on failure or cancellation, including its ledger records.
-#[cfg(any(target_os = "macos", all(test, unix)))]
-struct PreviewData {
-    path: PathBuf,
-    created: bool,
-    ledger: Arc<crate::ledger::CleanupLedger>,
-    owner: String,
-    artifacts: Vec<Artifact>,
-}
-
-#[cfg(any(target_os = "macos", all(test, unix)))]
-impl Drop for PreviewData {
-    fn drop(&mut self) {
-        if self.created {
-            self.ledger
-                .rollback(self.owner.clone(), self.artifacts.clone());
-        }
-    }
-}
-
-#[cfg(any(target_os = "macos", all(test, unix)))]
-fn directory_path(fd: &impl std::os::fd::AsFd) -> std::io::Result<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        let mut path = PathBuf::new();
-        nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETPATH(&mut path))?;
-        Ok(path)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        use std::os::fd::AsRawFd as _;
-        std::fs::read_link(format!("/proc/self/fd/{}", fd.as_fd().as_raw_fd()))
-    }
-}
-
-/// Walk from the temp root without following links, then claim the leaf through its
-/// parent's descriptor. Only this session's ledger grants permission to reuse a leaf.
-#[cfg(any(target_os = "macos", all(test, unix)))]
-async fn create_preview_data(
-    path: &Path,
-    protected: &[PathBuf],
-    ledger: Arc<crate::ledger::CleanupLedger>,
-    owner: String,
-) -> Result<PreviewData> {
-    use nix::fcntl::{OFlag, open, openat};
-    use nix::sys::stat::{Mode, mkdirat};
-    use std::os::unix::fs::MetadataExt;
-    use std::path::Component;
-
-    let invalid = |why: String| {
-        Error::Invalid(format!(
-            "BRIGADIER_DATA_DIR needs an existing, non-symlink parent under /tmp \
-         (only this session's recorded folder may be reused); pick a fresh name: {why}"
-        ))
-    };
-    let check = |dir: &Path| {
-        check_env(
-            &BTreeMap::from([(
-                brigadier_sandbox::DATA_DIR_ENV.into(),
-                dir.to_string_lossy().into_owned(),
-            )]),
-            Path::new("/"),
-            protected,
-        )
-    };
-    check(path)?;
-    let temp = Path::new("/tmp")
-        .canonicalize()
-        .map_err(|err| invalid(err.to_string()))?;
-    let relative = path
-        .strip_prefix("/tmp")
-        .or_else(|_| path.strip_prefix(&temp))
-        .map_err(|err| invalid(err.to_string()))?;
-    let mut parts = relative.components().collect::<Vec<_>>();
-    let Some(Component::Normal(name)) = parts.pop() else {
-        return Err(invalid(path.display().to_string()));
-    };
-    if name.to_string_lossy().starts_with("brigadier-pv-")
-        || name.to_string_lossy().starts_with("brigadier-test-")
-    {
-        return Err(invalid("reserved folder name".into()));
-    }
-    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-    let mut parent = open(&temp, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?;
-    for part in parts {
-        let Component::Normal(part) = part else {
-            return Err(invalid("invalid parent component".into()));
-        };
-        parent =
-            openat(&parent, part, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?;
-    }
-    let dir = directory_path(&parent)
-        .map_err(|err| invalid(err.to_string()))?
-        .join(name);
-    check(&dir)?;
-    let pending = Artifact::PreviewDataDir {
-        path: dir.to_string_lossy().into_owned(),
-        identity: None,
-    };
-    let owned = ledger.artifacts(&owner);
-    let mut data = PreviewData {
-        path: dir,
-        created: true,
-        ledger,
-        owner,
-        artifacts: vec![pending.clone()],
-    };
-    // Persist intent before mkdirat. An intent without an identity never owns an entry.
-    data.ledger.record(&data.owner, pending.clone()).await?;
-    let current = directory_path(&parent)
-        .map_err(|err| invalid(err.to_string()))?
-        .join(name);
-    check(&current)?;
-    if current != data.path {
-        return Err(invalid("parent changed while recording the folder".into()));
-    }
-    let created = match mkdirat(&parent, name, Mode::S_IRWXU) {
-        Ok(()) => true,
-        Err(nix::errno::Errno::EEXIST) => false,
-        Err(err) => return Err(invalid(err.to_string())),
-    };
-    let leaf = std::fs::File::from(
-        openat(&parent, name, flags, Mode::empty()).map_err(|err| invalid(err.to_string()))?,
-    );
-    let stat = leaf.metadata().map_err(|err| invalid(err.to_string()))?;
-    let artifact = Artifact::PreviewDataDir {
-        path: data.path.to_string_lossy().into_owned(),
-        identity: Some((stat.dev(), stat.ino())),
-    };
-    if !created && !owned.contains(&artifact) {
-        return Err(invalid(
-            "the existing folder's identity is not owned".into(),
-        ));
-    }
-    if created {
-        data.artifacts.push(artifact.clone());
-    }
-    let real = directory_path(&leaf).map_err(|err| invalid(err.to_string()))?;
-    check(&real)?;
-    if real != data.path || data.path.canonicalize().ok().as_ref() != Some(&real) {
-        return Err(invalid("parent changed while creating the folder".into()));
-    }
-    data.ledger.record(&data.owner, artifact).await?;
-    data.ledger.unrecord(&data.owner, pending.clone()).await?;
-    data.artifacts.retain(|artifact| *artifact != pending);
-    let bound = brigadier_sandbox::removal::bind(&temp, &data.path)
-        .map_err(|err| invalid(err.to_string()))?;
-    if !bound.is_dir() || bound.unix_identity() != (stat.dev(), stat.ino()) {
-        return Err(invalid(
-            "folder changed while recording its identity".into(),
-        ));
-    }
-    data.created = created;
-    Ok(data)
-}
-
-/// `path` as the file system resolves it (`/tmp` → `/private/tmp`), down to the part of it
-/// that exists; the rest, which doesn't exist yet, as written (`..` and `.` taken out).
 fn resolved(path: &Path) -> PathBuf {
     let mut clean = PathBuf::new();
     for part in path.components() {
@@ -2843,40 +2487,6 @@ mod tests {
     }
 
     use super::*;
-
-    /// A worker's preview writes where its CLI may write, never more: a read-only Codex
-    /// worker's CLI may write only its scratch folder (Codex needs a writable working
-    /// directory), so its preview in the checkout can't write the checkout, and a writer's
-    /// preview in a subfolder writes its whole checkout (a build's target folder).
-    #[test]
-    fn a_workers_preview_writes_only_where_its_cli_may() {
-        let (tree, scratch) = (Path::new("/w/checkout"), Path::new("/w/scratch"));
-        let workdir = tree.join("apps/web");
-        let access = Access::Scoped {
-            write_cwd: true,
-            writable_roots: vec![PathBuf::from("/w/tests")],
-            network: false,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        let writable = |writes: bool| {
-            let root = super::cwd_grant(ProviderKind::Codex, writes, Some(tree), scratch)
-                .unwrap_or_else(|| tree.to_owned());
-            super::super::run::seatbelt_policy(&pinned_access(access.clone(), &root), &workdir)
-                .writable_roots
-        };
-        let reader = writable(false);
-        assert!(reader.contains(&scratch.to_owned()), "{reader:?}");
-        assert!(
-            !reader.iter().any(|root| workdir.starts_with(root)),
-            "{reader:?}"
-        );
-        let writer = writable(true);
-        assert!(writer.contains(&tree.to_owned()), "{writer:?}");
-        // Unpinned, the access would grant whatever folder the preview runs in.
-        let unpinned = super::super::run::seatbelt_policy(&access, &workdir).writable_roots;
-        assert!(unpinned.contains(&workdir), "{unpinned:?}");
-    }
 
     /// A dev app built and launched in one command reads Building while its log shows the
     /// build under way, and no longer once the build finished.
@@ -3355,83 +2965,6 @@ while True:
         }
     }
 
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn macos_preview_uses_gui_seatbelt_and_tracks_its_private_temp() {
-        use crate::manager::flow::{Flow, Options, Reply};
-
-        let flow = Flow::start(
-            "preview-profile",
-            Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("") })),
-        )
-        .await;
-        let manager = &flow.manager;
-        // This must remain Seatbelt when the login environment resolves Codex, too.
-        let owner = preview_owner(&flow.conversation);
-        let temp = manager.preview_temp(&owner).await.unwrap();
-        assert!(temp.is_dir());
-        assert!(
-            manager
-                .runtime
-                .ledger()
-                .artifacts(&owner)
-                .contains(&Artifact::ScratchDir {
-                    path: temp.to_string_lossy().into_owned(),
-                })
-        );
-        let data = temp.join("new-app-data");
-        let extra = [data.clone()];
-        let command = format!(
-            "mkdir {}; touch {}/probe",
-            shell_quote(data.to_str().unwrap()),
-            shell_quote(temp.to_str().unwrap())
-        );
-        for access in [
-            Access::Workspace {
-                extra_roots: Vec::new(),
-            },
-            Access::Scoped {
-                write_cwd: false,
-                writable_roots: vec![flow.repo.clone()],
-                network: false,
-                deny_read: vec![flow.repo.join("secret")],
-                unix_sockets: vec![flow.repo.join("granted.sock")],
-            },
-        ] {
-            let spec = manager
-                .preview_spec(&access, &flow.repo, &command, &extra, Some(&temp))
-                .unwrap();
-            assert_eq!(spec.program, Path::new("/usr/bin/sandbox-exec"));
-            let profile = spec.args[1].to_str().unwrap();
-            assert!(profile.contains("IOSurfaceRootUserClient"));
-            assert!(profile.contains("MachPortRendezvousServer"));
-            if matches!(access, Access::Scoped { .. }) {
-                assert!(profile.contains("DENY_READ_0"));
-                assert!(profile.contains("UNIX_SOCKET_0"));
-                assert!(!profile.contains("(allow network-outbound)"));
-            }
-            let out = manager
-                .runtime
-                .platform()
-                .processes()
-                .piped_command(&spec)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{out:?}");
-            std::fs::remove_dir(&data).unwrap();
-        }
-        let full = manager
-            .preview_spec(&Access::Full, &flow.repo, "true", &extra, None)
-            .unwrap();
-        let run = manager.run_spec(&Access::Full, &flow.repo, "true").unwrap();
-        assert_eq!(full.program, run.program);
-        assert_eq!(full.args, run.args);
-        assert!(manager.runtime.ledger().dispose(&owner).await.is_clean());
-        assert!(!temp.exists());
-        flow.stop().await;
-    }
-
     #[test]
     fn a_preview_runs_inside_the_workspace_only() {
         let root =
@@ -3529,140 +3062,6 @@ while True:
         );
         assert!(check_env(&env("1BAD", "x"), workdir, &protected).is_err());
         assert!(check_env(&env("A B", "x"), workdir, &protected).is_err());
-    }
-
-    #[tokio::test]
-    async fn preview_data_refuses_symlink_parents_and_rechecks_protected_paths() {
-        use crate::manager::flow::{Flow, Options, Reply};
-        let flow = Flow::start(
-            "data-claim",
-            Options::default(),
-            Arc::new(|_| Box::pin(async { Reply::text("") })),
-        )
-        .await;
-        let ledger = flow.manager.runtime.ledger().clone();
-        let owner = preview_data_owner(&flow.conversation);
-        use std::os::unix::fs::{PermissionsExt, symlink};
-        // Preview data is only taken under /tmp, which macOS's temp folder is not.
-        let root = Temp(
-            crate::manager::workers::test_data_root()
-                .join(format!("preview-data-{}", uuid::Uuid::new_v4())),
-        );
-        std::fs::create_dir_all(root.join("parent")).unwrap();
-        std::fs::create_dir(root.join("protected")).unwrap();
-        let path = root.join("parent/data");
-        let env = BTreeMap::from([(
-            brigadier_sandbox::DATA_DIR_ENV.into(),
-            path.to_string_lossy().into_owned(),
-        )]);
-        let protected = [root.join("protected")];
-        check_env(&env, Path::new("/"), &protected).unwrap();
-        // Swap after the early validation, as a thread could while record().await runs.
-        std::fs::remove_dir(root.join("parent")).unwrap();
-        symlink(root.join("protected"), root.join("parent")).unwrap();
-        assert!(
-            create_preview_data(&path, &protected, ledger.clone(), owner.clone())
-                .await
-                .is_err()
-        );
-        assert!(!root.join("protected/data").exists());
-        // Even a symlink pointing to an otherwise allowed parent is refused.
-        assert!(
-            create_preview_data(&path, &[], ledger.clone(), owner.clone())
-                .await
-                .is_err()
-        );
-        assert!(
-            create_preview_data(
-                &root.join("protected/data"),
-                &protected,
-                ledger.clone(),
-                owner.clone()
-            )
-            .await
-            .is_err()
-        );
-        let fresh = root.join("fresh");
-        let data = create_preview_data(&fresh, &protected, ledger.clone(), owner.clone())
-            .await
-            .unwrap();
-        assert_eq!(
-            std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-        let events = flow
-            .manager
-            .core
-            .store()
-            .read_stream_since(crate::model::streams::CLEANUP.into(), 0, 1000)
-            .await
-            .unwrap();
-        let claims = events
-            .iter()
-            .filter_map(|event| match crate::sessions::decode(event).unwrap() {
-                DomainEvent::CleanupRecorded {
-                    owner: held,
-                    artifact: Artifact::PreviewDataDir { identity, .. },
-                } if held == owner => Some(identity),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(claims.len(), 2);
-        assert_eq!(
-            claims[0], None,
-            "durable intent precedes confirmed identity"
-        );
-        assert!(claims[1].is_some());
-        std::fs::write(
-            fresh.join("partial-start"),
-            "a child wrote before recording failed",
-        )
-        .unwrap();
-        drop(data);
-        crate::manager::flow::eventually("rollback removed folder and ledger entry", || {
-            !fresh.exists() && ledger.artifacts(&owner).is_empty()
-        })
-        .await;
-        let mut data = create_preview_data(&fresh, &[], ledger.clone(), owner.clone())
-            .await
-            .unwrap();
-        data.created = false;
-        let artifact = ledger.artifacts(&owner).pop().unwrap();
-        // Retain the original inode so the replacement cannot reuse it.
-        std::fs::rename(&fresh, root.join("original")).unwrap();
-        std::fs::create_dir(&fresh).unwrap();
-        assert!(
-            create_preview_data(&fresh, &[], ledger.clone(), owner.clone())
-                .await
-                .is_err()
-        );
-        let leftovers = ledger.release(&owner, vec![artifact]).await;
-        assert!(leftovers.is_clean());
-        assert!(
-            fresh.is_dir(),
-            "identity mismatch must not delete the replacement"
-        );
-        for name in ["brigadier-pv-new", "brigadier-test-new"] {
-            assert!(
-                create_preview_data(&root.join(name), &[], ledger.clone(), owner.clone())
-                    .await
-                    .is_err()
-            );
-            assert!(!root.join(name).exists());
-        }
-        flow.manager.shutdown().await;
-        flow.manager.core.store().shutdown().await.unwrap();
-        let unrecorded = root.join("record-failed");
-        assert!(
-            create_preview_data(&unrecorded, &[], ledger.clone(), owner.clone())
-                .await
-                .is_err()
-        );
-        assert!(
-            !unrecorded.exists(),
-            "a failed durable record must prevent mkdirat"
-        );
-        flow.stop().await;
     }
 
     #[tokio::test]

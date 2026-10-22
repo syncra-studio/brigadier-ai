@@ -28,7 +28,7 @@ const conversation: Conversation = {
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
   setup: session ? {
     type: "session", repo: "/repo", environment: { type: "localCheckout", branch: "main" },
-    permission: "fullAccess", orchestrator: { provider: "claude", model: null, effort: null },
+    permission: "full", orchestrator: { provider: "claude", model: null, effort: null },
     workersSeeUncommitted: null, planMode: false,
   } : null,
 };

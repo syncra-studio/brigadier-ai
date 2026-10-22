@@ -380,7 +380,7 @@ impl SessionManager {
                 ))));
             }
         }
-        let ask = self.permission(caller) == PermissionLevel::AskForApproval;
+        let ask = self.permission(caller) == PermissionLevel::Ask;
         let send = PeerSend {
             message_id: uuid::Uuid::now_v7().to_string(),
             from: caller.clone(),
@@ -406,7 +406,7 @@ impl SessionManager {
             conv.note_turn_send(&send.message_id).await;
         }
         if ask {
-            // Under Ask for approval it goes once the user presses Send
+            // Under Ask it goes once the user presses Send
             // (SESSION-MESSAGING-PLAN.md §5.6).
             self.open_approval(
                 caller,

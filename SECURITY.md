@@ -29,7 +29,8 @@ still exists there before you report it.
 In scope: anything that lets a worker, a thread, a web page or another local process do more than
 the session's permission level allows. For example:
 
-- escaping the worker sandbox at Ask for approval or Approve for me (macOS);
+- a session doing more than its CLI's own permission mode lets it (Brigadier passes the level
+  straight through and adds no sandbox of its own);
 - reaching the daemon's IPC token or acting as the UI from a worker, or using another task's
   grant;
 - a project's secrets leaking past redaction into what Brigadier records, shows or sends;

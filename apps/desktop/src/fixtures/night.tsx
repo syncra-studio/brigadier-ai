@@ -42,7 +42,7 @@ const conversation: Conversation = {
     type: "session",
     repo: "/tmp/night-fixture",
     environment: { type: "newWorktree", branch: "brigadier/4158464b/session", base: "main" },
-    permission: "approveForMe",
+    permission: "acceptEdits",
     planMode: false,
     workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: null, effort: null },

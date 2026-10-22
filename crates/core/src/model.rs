@@ -139,7 +139,7 @@ pub struct FolderTrustReport {
 
 /// The user's answer for one folder. Trusted: agents work there as the session's permission
 /// level allows, and the CLIs' own trust prompts are answered for it. Not trusted: every
-/// session there runs under Ask for approval.
+/// session there runs under Ask.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderTrust {
@@ -176,20 +176,45 @@ pub struct ProjectPrefs {
     pub branch_prefix: Option<String>,
 }
 
-/// How much a session may do on its own (PLAN.md §5). Workers never push, publish or deploy
-/// at any level: the user starts those.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// How much a session may do without asking, passed straight to its CLI and to its workers'
+/// (see [`brigadier_providers::Access`]): Brigadier adds no sandbox and no permission layer of
+/// its own (G5).
+///
+/// New tags: a level saved by an earlier version (`askForApproval`, `approveForMe`,
+/// `fullAccess`) or anything else unknown reads as the default, [`Self::AcceptEdits`]. Nothing
+/// is migrated.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum PermissionLevel {
-    /// You approve every plan and every landed change, and each step a worker takes outside
-    /// its sandbox. Sandboxed, without network.
-    AskForApproval,
-    /// Brigadier approves on your behalf and stops only for questions only you can answer.
-    /// Sandboxed; the CLI's own reviewer settles what leaves the sandbox.
+    /// The CLI asks before it edits or runs anything not known to be safe.
+    Ask,
+    /// Edits go ahead; the CLI asks for the rest.
     #[default]
-    ApproveForMe,
-    /// Approve for me without the OS sandbox: workers never ask for anything.
-    FullAccess,
+    AcceptEdits,
+    /// Nothing asks and nothing is sandboxed.
+    Full,
+}
+
+impl<'de> Deserialize<'de> for PermissionLevel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some("ask") => Self::Ask,
+            Some("full") => Self::Full,
+            _ => Self::AcceptEdits,
+        })
+    }
+}
+
+impl PermissionLevel {
+    /// The CLI's own permission mode for this level.
+    pub fn access(self) -> brigadier_providers::Access {
+        match self {
+            Self::Ask => brigadier_providers::Access::Ask,
+            Self::AcceptEdits => brigadier_providers::Access::AcceptEdits,
+            Self::Full => brigadier_providers::Access::Full,
+        }
+    }
 }
 
 /// A provider, model and reasoning effort, as picked in the composer.
@@ -656,7 +681,7 @@ pub struct PeerRef {
     rename_all_fields = "camelCase"
 )]
 pub enum PeerState {
-    /// Under Ask for approval: its card waits for the user's Send.
+    /// Under Ask: its card waits for the user's Send.
     WaitingForOk,
     /// The user's Don't send.
     Declined,
@@ -893,8 +918,6 @@ impl Settings {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Permission level for new sessions without an explicit choice.
-    /// Older saved records without this field keep their former default.
-    #[serde(default = "saved_default_permission")]
     pub default_permission: PermissionLevel,
     /// Orchestrator model for projects that have not remembered one. Absent: the first
     /// logged-in provider's default model.
@@ -1161,12 +1184,6 @@ fn default_true() -> bool {
     true
 }
 
-/// Preserve the default of saved settings that predate an explicit permission field.
-/// Fresh stores use [`Settings::default`] instead.
-fn saved_default_permission() -> PermissionLevel {
-    PermissionLevel::FullAccess
-}
-
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
 pub const SETTINGS_VERSION: u32 = 5;
@@ -1182,7 +1199,7 @@ pub struct ModelRef {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            default_permission: PermissionLevel::ApproveForMe,
+            default_permission: PermissionLevel::AcceptEdits,
             default_orchestrator: None,
             default_chat_model: None,
             hibernate_after_minutes: 30,
@@ -1651,7 +1668,7 @@ pub enum RawSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum RawApprovals {
-    /// Brigadier's policy answers what stays inside the session's access; the user the rest.
+    /// The user answers every request (the name is an earlier version's).
     Delegated,
     /// Brigadier declines every request (a read-only session such as an orchestrator).
     DeclineAll,
@@ -2695,7 +2712,7 @@ pub enum DomainEvent {
         #[serde(default)]
         turn_input_id: Option<String>,
         state: PeerState,
-        /// When it was allowed to go: now, or the user's Send under Ask for approval.
+        /// When it was allowed to go: now, or the user's Send under Ask.
         #[serde(default)]
         sent_at_ms: Option<i64>,
         /// Brigadier sent it for this session: its answer to the message it replies to.
@@ -3000,16 +3017,13 @@ mod tests {
     }
 
     #[test]
-    fn fresh_settings_use_approve_for_me_and_saved_permissions_stay() {
+    fn levels_start_at_accept_edits_and_old_saved_levels_are_dropped() {
         let fresh = Settings::default();
-        assert_eq!(fresh.default_permission, PermissionLevel::ApproveForMe);
-        let restored: Settings =
-            serde_json::from_value(serde_json::to_value(&fresh).unwrap()).unwrap();
-        assert_eq!(restored.default_permission, PermissionLevel::ApproveForMe);
+        assert_eq!(fresh.default_permission, PermissionLevel::AcceptEdits);
         for permission in [
-            PermissionLevel::AskForApproval,
-            PermissionLevel::ApproveForMe,
-            PermissionLevel::FullAccess,
+            PermissionLevel::Ask,
+            PermissionLevel::AcceptEdits,
+            PermissionLevel::Full,
         ] {
             let saved: Settings = serde_json::from_value(serde_json::json!({
                 "defaultPermission": permission
@@ -3017,8 +3031,36 @@ mod tests {
             .unwrap();
             assert_eq!(saved.default_permission, permission);
         }
+        assert_eq!(
+            serde_json::to_value(PermissionLevel::AcceptEdits).unwrap(),
+            serde_json::json!("acceptEdits")
+        );
+        // Nothing an earlier version saved carries over, Full access least of all.
+        for old in ["askForApproval", "approveForMe", "fullAccess", "whatever"] {
+            let saved: Settings = serde_json::from_value(serde_json::json!({
+                "defaultPermission": old
+            }))
+            .unwrap();
+            assert_eq!(
+                saved.default_permission,
+                PermissionLevel::AcceptEdits,
+                "{old}"
+            );
+            let setup: Setup = serde_json::from_value(serde_json::json!({
+                "type": "session", "repo": "/r",
+                "environment": { "type": "localCheckout", "branch": "main" },
+                "permission": old,
+                "orchestrator": { "provider": "claude", "model": null, "effort": null },
+                "workersSeeUncommitted": null
+            }))
+            .unwrap();
+            let Setup::Session { permission, .. } = setup else {
+                panic!("a session");
+            };
+            assert_eq!(permission, PermissionLevel::AcceptEdits, "{old}");
+        }
         let legacy: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(legacy.default_permission, PermissionLevel::FullAccess);
+        assert_eq!(legacy.default_permission, PermissionLevel::AcceptEdits);
     }
 
     #[test]

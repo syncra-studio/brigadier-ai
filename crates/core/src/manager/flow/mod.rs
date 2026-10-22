@@ -198,7 +198,7 @@ impl Turn {
         self.ask_tool_approval("Bash", command, Some(grant)).await
     }
 
-    /// The same for a call of `tool` (a prompted MCP tool, such as `run_unsandboxed`).
+    /// The same for a call of `tool`.
     pub async fn ask_tool_approval(
         &self,
         tool: &str,
@@ -210,8 +210,7 @@ impl Turn {
             kind: brigadier_providers::model::ApprovalKind::Command,
             tool: tool.into(),
             command: Some(command.into()),
-            // A prompted MCP tool's request carries the call's own `workdir` argument (none
-            // here); a CLI's Bash, its working directory.
+            // A CLI's Bash request carries its working directory.
             cwd: (tool == "Bash").then(|| self.cwd.display().to_string()),
             paths: Vec::new(),
             reason: Some("It needs the network.".into()),
@@ -383,7 +382,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "set_headline" => ToolCall::Orchestrator(O::SetHeadline(arg(name, args))),
-        "suggest_full_access" => ToolCall::Orchestrator(O::SuggestFullAccess(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
         "offer_session" => ToolCall::Orchestrator(O::OfferSession(arg(name, args))),
@@ -399,8 +397,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
         "save_report" => ToolCall::Orchestrator(O::SaveReport(arg(name, args))),
         "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
-        "run" => ToolCall::Orchestrator(O::Run(arg(name, args))),
-        "run_unsandboxed" => ToolCall::Orchestrator(O::RunUnsandboxed(arg(name, args))),
         "start_preview" if orchestrator => ToolCall::Orchestrator(O::StartPreview(arg(name, args))),
         "stop_preview" if orchestrator => ToolCall::Orchestrator(O::StopPreview(arg(name, args))),
         "preview_log" if orchestrator => ToolCall::Orchestrator(O::PreviewLog(arg(name, args))),
@@ -855,10 +851,7 @@ impl Provider for FakeCli {
                     .flat_map(|server| server.env.iter())
                     .map(|(name, value)| (name.into(), value.into()))
                     .chain([
-                        (
-                            "FAKE_ACCESS".into(),
-                            format!("{:?} auto_review={}", spec.access, spec.auto_review).into(),
-                        ),
+                        ("FAKE_ACCESS".into(), format!("{:?}", spec.access).into()),
                         (
                             "FAKE_ACCOUNT".into(),
                             self.account.clone().unwrap_or_default().into(),
@@ -1541,7 +1534,7 @@ pub(crate) struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            permission: PermissionLevel::FullAccess,
+            permission: PermissionLevel::Full,
             plan_mode: false,
             seed: None,
             store: None,
@@ -2103,8 +2096,6 @@ mod no_push_tests;
 mod overnight_tests;
 #[cfg(unix)]
 mod owed_tests;
-#[cfg(unix)]
-mod own_run_streams_tests;
 #[cfg(unix)]
 mod page_tools_tests;
 #[cfg(unix)]

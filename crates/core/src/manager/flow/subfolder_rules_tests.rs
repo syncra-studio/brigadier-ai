@@ -2,7 +2,7 @@
 //! and a subfolder's listed; its output hook gives it a subfolder's rules once per CLI session,
 //! with the first file it touches there.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use brigadier_providers::ProviderKind;
 
@@ -152,104 +152,3 @@ async fn a_codex_threads_subfolder_rules_come_with_the_first_file_touched_there(
 }
 
 const API_RULE: &str = "Handlers return typed errors.";
-
-/// A thread's `run` and `run_unsandboxed` calls bring a subfolder's rules too (#460): its
-/// `workdir` there, or a folder its command `cd`s to or names, gives them with the call's
-/// result, once, kept with what its hook gave.
-async fn a_runs_subfolder_rules_come_with_its_result(provider: ProviderKind) {
-    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = replies.clone();
-    let flow = Flow::start(
-        &format!("subfolder-rules-run-{provider:?}"),
-        Options {
-            thread: provider,
-            files: vec![
-                ("AGENTS.md", "Use pnpm.\n"),
-                (
-                    "apps/web/CLAUDE.md",
-                    "Web components stay under 200 lines.\n",
-                ),
-                ("apps/web/page.tsx", "export default 1;\n"),
-                ("apps/api/AGENTS.md", "Handlers return typed errors.\n"),
-                ("apps/api/main.ts", "export {};\n"),
-                ("apps/docs/AGENTS.md", "Docs use plain words.\n"),
-            ],
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if !turn.is_orchestrator() {
-                    return Reply::text("Done.");
-                }
-                for args in [
-                    serde_json::json!({ "command": "ls", "workdir": "apps/web" }),
-                    serde_json::json!({ "command": "cat page.tsx", "workdir": "apps/web" }),
-                    serde_json::json!({ "command": "cd apps/api && ls" }),
-                    serde_json::json!({ "command": "echo hello" }),
-                ] {
-                    let reply = turn.call("run", args).await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    log.lock().unwrap().push(reply.text);
-                }
-                Reply::text("Ran them.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Look at the web app.").await;
-    flow.settled().await;
-    let replies = replies.lock().unwrap().clone();
-    assert_eq!(replies.len(), 4, "{replies:?}");
-    let (_, spec) = flow
-        .thread_specs()
-        .last()
-        .expect("the thread started")
-        .clone();
-    let prompt = spec.append_system_prompt.clone().unwrap_or_default();
-    if spec.output_hook.is_none() {
-        // A thread without the hook has every rule up front, so a run brings none.
-        assert!(
-            prompt.contains(WEB_RULE) && prompt.contains(API_RULE),
-            "{prompt}"
-        );
-        assert!(replies.iter().all(|reply| !reply.contains("[Brigadier]")));
-        flow.stop().await;
-        return;
-    }
-    assert!(!prompt.contains(WEB_RULE), "{prompt}");
-    let (ls, cat, cd, echo) = (&replies[0], &replies[1], &replies[2], &replies[3]);
-    assert!(ls.starts_with("[exit 0]\n"), "{ls}");
-    assert!(ls.contains("page.tsx"), "{ls}");
-    assert!(ls.contains(WEB_RULE), "{ls}");
-    assert!(ls.contains("### apps/web/CLAUDE.md"), "{ls}");
-    assert!(!ls.contains(API_RULE), "{ls}");
-    // Once: the same folder again brings nothing.
-    assert!(!cat.contains(WEB_RULE), "{cat}");
-    assert!(cd.contains(API_RULE), "{cd}");
-    assert!(!cd.contains(WEB_RULE), "{cd}");
-    assert!(!echo.contains("[Brigadier]"), "{echo}");
-    assert!(
-        replies
-            .iter()
-            .all(|reply| !reply.contains("Docs use plain words."))
-    );
-    // The hook's bookkeeping is the same: it doesn't give them again.
-    let (_, hook) = newest_thread(&flow);
-    let page = workspace(&flow)
-        .join("apps/web/page.tsx")
-        .display()
-        .to_string();
-    assert_eq!(flow.manager.hook_rules(&hook, &page).await, Some(None));
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn a_claude_threads_run_brings_a_subfolders_rules() {
-    a_runs_subfolder_rules_come_with_its_result(ProviderKind::Claude).await;
-}
-
-#[tokio::test]
-async fn a_codex_threads_run_brings_a_subfolders_rules() {
-    a_runs_subfolder_rules_come_with_its_result(ProviderKind::Codex).await;
-}

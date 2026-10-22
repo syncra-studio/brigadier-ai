@@ -18,7 +18,7 @@ const conversation = {
   lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
   setup: {
     type: "session", repo: "/tmp/setting-cards-fixture", environment: { type: "localCheckout", branch: "main" },
-    permission: "fullAccess", planMode: false, workersSeeUncommitted: null,
+    permission: "full", planMode: false, workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: null, effort: null },
   },
 } as Conversation;
@@ -41,7 +41,7 @@ function Fixture() {
         <main className="bg-background text-foreground mx-auto flex h-screen w-full max-w-thread flex-col gap-3 overflow-y-auto px-5 py-10 text-sm">
           <p className="bg-foreground/5 self-end rounded-2xl px-3 py-2">Check the page in the browser, and ask me before each step.</p>
           <ThreadStep step={{ kind: { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser, which is off." }, position: 2 }} />
-          <ThreadStep step={{ kind: { type: "settingSuggested", change: { setting: "permission", level: "askForApproval" }, reason: "You want to approve each step before it runs." }, position: 3 }} />
+          <ThreadStep step={{ kind: { type: "settingSuggested", change: { setting: "permission", level: "ask" }, reason: "You want to approve each step before it runs." }, position: 3 }} />
           <p>Each waits on your press; nothing changes until then.</p>
         </main>
       </ViewContext.Provider>

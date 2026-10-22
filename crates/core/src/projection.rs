@@ -283,7 +283,7 @@ mod tests {
             setup: Some(Setup::Session {
                 repo: "/repo".into(),
                 environment,
-                permission: PermissionLevel::ApproveForMe,
+                permission: PermissionLevel::AcceptEdits,
                 orchestrator: ModelChoice {
                     provider: ProviderKind::Claude,
                     model: None,

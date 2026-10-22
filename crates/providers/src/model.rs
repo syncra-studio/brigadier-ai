@@ -953,69 +953,45 @@ pub enum ProviderEvent {
     },
 }
 
-/// What a session is allowed to do. The CLI's own OS sandbox enforces it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+/// What a session may do without asking: its permission level, passed straight to its CLI.
+/// Brigadier adds no sandbox and answers nothing on the user's behalf; the CLI's own
+/// permission prompts reach the user as cards.
+///
+/// | Level | Claude Code | Codex |
+/// |---|---|---|
+/// | Ask | `--permission-mode default` | approval `untrusted`, sandbox `workspace-write` |
+/// | Accept edits | `--permission-mode acceptEdits` | approval `on-request`, sandbox `workspace-write` |
+/// | Full access | `--permission-mode bypassPermissions` | approval `never`, sandbox `danger-full-access` |
+///
+/// [`Access::ReadOnly`] is for Brigadier's own one-shot readers (a commit message, a Brain
+/// pass), never a user's level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum Access {
-    /// Full-auto inside the OS sandbox: write only the working directory and `extraRoots`,
-    /// network on. Anything else is an approval request.
-    Workspace {
-        #[ts(as = "Vec<String>")]
-        extra_roots: Vec<PathBuf>,
-    },
-    /// Read-only sandbox: every write or command that needs approval goes to Brigadier.
-    ReadOnly,
-    /// No OS sandbox.
+    /// The CLI asks before it edits or runs anything not known to be safe.
+    Ask,
+    /// Edits in the working folders go ahead; the CLI asks for the rest.
+    AcceptEdits,
+    /// Nothing asks and nothing is sandboxed, like the user's own terminal.
     Full,
-    /// A worker's sandbox, each part set on its own. Everything is readable except
-    /// `denyRead` (where the CLI's sandbox can deny reads).
-    Scoped {
-        /// The working directory is writable. Codex always makes it writable, so a read-only
-        /// Codex worker runs in its scratch folder instead.
-        write_cwd: bool,
-        #[ts(as = "Vec<String>")]
-        writable_roots: Vec<PathBuf>,
-        network: bool,
-        #[ts(as = "Vec<String>")]
-        deny_read: Vec<PathBuf>,
-        /// Unix sockets it may connect to.
-        #[ts(as = "Vec<String>")]
-        unix_sockets: Vec<PathBuf>,
-    },
+    /// Reads only, and never asks: what its rules don't allow is declined to the model.
+    ReadOnly,
 }
 
-impl Access {
-    /// Directories the session may write besides its working directory.
-    pub fn writable_roots(&self) -> &[PathBuf] {
-        match self {
-            Self::Workspace { extra_roots } => extra_roots,
-            Self::Scoped { writable_roots, .. } => writable_roots,
-            Self::ReadOnly | Self::Full => &[],
-        }
-    }
-
-    /// The same access with its writable roots as the file system resolves them
-    /// ([`crate::policy::real_path`]): a CLI that compares paths as text then sees
-    /// `/private/tmp/x` inside a root given as `/tmp/x`.
-    #[must_use]
-    pub fn resolved(&self) -> Self {
-        let real = |roots: &[PathBuf]| -> Vec<PathBuf> {
-            roots
-                .iter()
-                .map(|root| crate::policy::real_path(root).unwrap_or_else(|| root.clone()))
-                .collect()
-        };
-        let mut access = self.clone();
-        match &mut access {
-            Self::Workspace { extra_roots } => *extra_roots = real(extra_roots),
-            Self::Scoped { writable_roots, .. } => *writable_roots = real(writable_roots),
-            Self::ReadOnly | Self::Full => {}
-        }
-        access
+/// Reads any saved access, old shapes included: one that isn't a level of today (an earlier
+/// version's workspace or scoped sandbox) reads as [`Access::AcceptEdits`]. Nothing is
+/// migrated.
+impl<'de> Deserialize<'de> for Access {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(
+            match value.get("type").and_then(serde_json::Value::as_str) {
+                Some("ask") => Self::Ask,
+                Some("full") => Self::Full,
+                Some("readOnly") => Self::ReadOnly,
+                _ => Self::AcceptEdits,
+            },
+        )
     }
 }
 
@@ -1230,10 +1206,6 @@ pub struct McpServer {
     /// tools behind its tool search, and a model that has to look a tool up first tends to
     /// fall back to its built-in ones.
     pub always_load: bool,
-    /// Tools of a trusted server whose calls still go through the session's approvals
-    /// (Codex: `mcp_servers.<id>.tools.<tool>.approval_mode = "prompt"`): a thread's command
-    /// that leaves its sandbox.
-    pub prompt_tools: Vec<String>,
 }
 
 /// The MCP servers and skills of the user's own setup a session goes without
@@ -1309,7 +1281,7 @@ pub struct SessionSpec {
     pub mcp_servers: Vec<McpServer>,
     pub tools: ToolSet,
     /// Folders besides `cwd` the session works in (a thread's workspace): Claude gets each as
-    /// `--add-dir`. They are writable where the working directory is ([`Self::access_with_dirs`]).
+    /// `--add-dir`, Codex as writable roots of its workspace sandbox.
     pub add_dirs: Vec<PathBuf>,
     /// The checkout whose own project setup a thread or worker loads although it works from a
     /// folder of Brigadier's ([`ToolSet::user_setup`]): Claude's `.claude` settings, hooks,
@@ -1353,13 +1325,6 @@ pub struct SessionSpec {
     /// limit (raw sessions, orchestrators, Chats). Claude allows exactly these, or runs without
     /// its Agent tool when it can't; Codex runs without sub-agents.
     pub allowed_models: Option<AllowedModels>,
-    /// A reviewer settles requests to go beyond a sandboxed session's access (Approve for
-    /// me): Claude's own auto mode; for Codex, whose requests always reach Brigadier, the
-    /// caller's reviewer (Codex only gets the feature that lets a command ask for more). What
-    /// the reviewer doesn't allow is declined to the model, which works around it or reports
-    /// it. Otherwise such requests reach Brigadier for the user (Ask for approval). No effect under [`Access::Full`],
-    /// which never asks, or [`Access::ReadOnly`].
-    pub auto_review: bool,
     /// The CLI leaves Co-authored-by trailers that name an AI out of the commits it writes
     /// (the user's setting, for sessions that commit): Claude through its attribution
     /// settings; Codex, which has none, is told in its instructions by the caller.
@@ -1374,92 +1339,6 @@ pub struct SessionSpec {
     /// tool list (and the cached prefix it starts) stays the same; `--disallowedTools` would
     /// change it (BUILD-PLAN B5, a thread's note fork). Codex ignores this.
     pub deny_tools: Option<String>,
-    /// What the session may never write (other sessions' branches, the base, Brigadier's
-    /// bookkeeping; PLAN bug 6). Below Full access the CLI's sandbox grants none of it
-    /// already, and Claude also gets it as `denyWrite` and file-tool deny rules (its file
-    /// tools work outside the OS sandbox); under [`Access::Full`] the CLI runs inside
-    /// Brigadier's allow-all-but-these profile. Empty: nothing is added.
-    pub protection: brigadier_sandbox::Protection,
-}
-
-impl SessionSpec {
-    /// The session's access with [`Self::add_dirs`] writable wherever its working directory
-    /// is: every sandbox that writes its working directory writes them too.
-    #[must_use]
-    pub fn access_with_dirs(&self) -> Access {
-        let mut access = self.access.clone();
-        let roots = match &mut access {
-            Access::Workspace { extra_roots } => extra_roots,
-            Access::Scoped {
-                write_cwd: true,
-                writable_roots,
-                ..
-            } => writable_roots,
-            Access::Scoped { .. } | Access::ReadOnly | Access::Full => return access,
-        };
-        for dir in &self.add_dirs {
-            if !roots.contains(dir) {
-                roots.push(dir.clone());
-            }
-        }
-        access
-    }
-}
-
-/// The rule every approver of a session's requests to leave its sandbox gets (Claude's auto
-/// mode, Brigadier's own reviewer, which settles a Codex session's): a command run outside the sandbox
-/// reaches what [`SessionSpec::protection`] keeps from it, so the approver must refuse it.
-/// `None` when nothing is protected.
-#[must_use]
-pub fn approver_rule(protection: &brigadier_sandbox::Protection) -> Option<String> {
-    if protection.deny.is_empty() && protection.deny_patterns.is_empty() {
-        return None;
-    }
-    let quoted = |paths: &[PathBuf]| {
-        paths
-            .iter()
-            .map(|path| format!("`{}`", path.display()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let mut rule = String::from(
-        "Never allow a command, even one the user asked for (a cleanup included), that deletes, \
-         moves, empties, resets or writes another session's work or Brigadier's own, however it \
-         is written (`rm`, `mv`, `find -delete`, `git worktree remove`, `git worktree prune`, \
-         `git branch -D`, `git update-ref`, `git reset`, `git push --delete`, a script): ",
-    );
-    if !protection.deny.is_empty() {
-        rule.push_str(&format!(
-            "these paths and everything under them: {}",
-            quoted(&protection.deny)
-        ));
-    }
-    if !protection.deny_patterns.is_empty() {
-        if !protection.deny.is_empty() {
-            rule.push_str("; ");
-        }
-        rule.push_str(&format!(
-            "the paths these regular expressions match: {}",
-            protection
-                .deny_patterns
-                .iter()
-                .map(|pattern| format!("`{pattern}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    rule.push_str(
-        "; and every checkout (worktree) of a repository whose git folder is under one of those \
-         paths, its files included.",
-    );
-    if !protection.allow.is_empty() {
-        rule.push_str(&format!(
-            " Only these inside them are the session's own: {}.",
-            quoted(&protection.allow)
-        ));
-    }
-    rule.push_str(" Brigadier removes the others itself once their sessions are done.");
-    Some(rule)
 }
 
 /// The models a worker's own sub-agents may run on (PLAN.md §7): the router's eligible set for
@@ -1572,34 +1451,6 @@ pub enum Artifact {
 #[cfg(test)]
 mod input_tests {
     use super::*;
-
-    #[test]
-    fn an_approver_rule_names_every_protected_path_and_the_session_s_own() {
-        assert_eq!(
-            approver_rule(&brigadier_sandbox::Protection::default()),
-            None
-        );
-        let protection = brigadier_sandbox::Protection {
-            deny: vec![
-                PathBuf::from("/repo/.git/refs/heads/brigadier"),
-                PathBuf::from("/repo/.git/worktrees"),
-            ],
-            deny_patterns: vec!["^/tmp/brigadier-[0-9a-f]{12}(/|$)".into()],
-            allow: vec![PathBuf::from("/repo/.git/worktrees/session-aa")],
-            keep: Vec::new(),
-        };
-        let rule = approver_rule(&protection).expect("rule");
-        for part in [
-            "`/repo/.git/refs/heads/brigadier`",
-            "`/repo/.git/worktrees`",
-            "`^/tmp/brigadier-[0-9a-f]{12}(/|$)`",
-            "own: `/repo/.git/worktrees/session-aa`",
-            "git worktree remove",
-            "even one the user asked for",
-        ] {
-            assert!(rule.contains(part), "{part} in {rule}");
-        }
-    }
 
     #[test]
     fn handoff_follow_up_precedes_file_notes_in_the_same_text_part() {

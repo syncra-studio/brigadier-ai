@@ -66,7 +66,7 @@ const conversation = {
     type: "session",
     repo: "/tmp/flow-fixture",
     environment: { type: "newWorktree", branch: BRANCH, base: "main" },
-    permission: "askForApproval",
+    permission: "ask",
     planMode: false,
     workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: null, effort: null },

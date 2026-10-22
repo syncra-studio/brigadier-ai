@@ -874,7 +874,6 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   list_tasks: "Checking on the workers",
   route_follow_up: "Sorting your follow-up",
   note_for_user: "Noting it for you",
-  suggest_full_access: "Asking for more access",
   suggest_setting: "Suggesting a setting",
   offer_feedback: "Writing up feedback",
   // Until the message's record names where it goes ("Sending message to API work").

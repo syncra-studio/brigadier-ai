@@ -4,7 +4,7 @@ import type { DecisionSource } from "./DecisionSource";
 import type { DecisionWords } from "./DecisionWords";
 
 /**
- * Something decided on the user's behalf (under "Approve for me" and "Full access"), and
+ * Something decided on the user's behalf (under "Accept edits" and "Full access"), and
  * why: the summary card's "Decided for you", and a quiet row in the request's thread.
  */
 export type Decision = { id: string, 

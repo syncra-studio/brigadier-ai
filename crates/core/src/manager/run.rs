@@ -1,146 +1,27 @@
-//! A thread's `run` and `run_unsandboxed` tools (THREAD-PLAN.md Q4; a Claude thread's too,
-//! the user's ruling of 2026-10-07). A Claude thread's `run` is sandboxed by Brigadier's own
-//! Seatbelt profile with the thread's folders ([`SessionManager::seatbelt_spec`]); under
-//! Approve for me its `run_unsandboxed` is decided by Brigadier's reviewer
-//! (`super::escalation`), under Ask for approval by the user, as Codex's is.
-//!
-//! Codex's hooks stay off, so its built-in shell's output reaches the model untrimmed. `run`
-//! is the shell the thread uses for builds, tests and logs instead: Brigadier owns the command,
-//! keeps its whole output (stdout and stderr together, in order) and returns the digest of any
-//! result over [`TRIM_ABOVE`] bytes, a failure's too.
-//!
-//! It keeps the thread's access exactly (docs/evidence/2026-10-07-thread-phase2-contracts.md
-//! §5): at Full access the command runs as it is; otherwise through `codex sandbox` under the
-//! permission profile the thread's own session has, built by the same code
-//! ([`brigadier_providers::codex::sandbox_args`]).
-//!
-//! Leaving the sandbox is `run_unsandboxed`, under Ask for approval only. Codex asks about each
-//! call first (its per-tool `approval_mode` is `prompt`), which reaches the user as a card; and
-//! the call runs only a command approved that way, once ([`RunPasses`]). The tool's grant alone
-//! is not enough: a sandboxed command can read another process's environment (`sysctl
-//! KERN_PROCARGS2` is allowed in Codex's sandbox, checked live on 0.160.1) and so the grant of
-//! the thread's MCP bridge, and it may reach the daemon's socket. Under Approve for me Codex's
-//! auto-reviewer settles such a call inside Codex, with nothing Brigadier could tie the call to,
-//! so that level has no `run_unsandboxed`: the thread widens the sandbox from its own shell
-//! (`with_additional_permissions`, never unsandboxed, see the Codex provider), which the
-//! auto-reviewer settles (its output untrimmed, as all of that shell's is).
-//!
-//! Every command leads its own process group, recorded under the thread's cleanup owner while
-//! it runs, and is killed when it times out, when its call is abandoned and when the thread's
-//! CLI ends (hibernation and stop end the owner's processes too). It is short-lived: what it
-//! leaves running in its group is ended with it (a preview is the way to keep a server).
+//! Brigadier's own plain commands (a worktree's setup script, a preview's helper): each runs
+//! as it is, in its own process group, recorded under its owner in the cleanup ledger while it
+//! runs, and is killed when it times out or its caller goes. Brigadier adds no sandbox: the
+//! thread and workers run their commands with their CLI's own shell (G5).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use brigadier_providers::{Access, Artifact, ProviderKind};
+use brigadier_providers::Artifact;
 use brigadier_sandbox::Platform;
 use tokio::io::AsyncReadExt;
 
 use super::SessionManager;
-use crate::digest::TRIM_ABOVE;
-use crate::model::{ConversationId, PermissionLevel};
-use crate::tools::RunTools;
-use crate::work::OutputSource;
 use crate::{Error, Result};
 
-/// How long a command runs when the call doesn't say.
+/// How long a command runs when its caller doesn't say.
 pub(crate) const RUN_TIMEOUT_DEFAULT: Duration = Duration::from_secs(600);
-/// The longest a command may run (the thread's MCP calls wait as long).
-pub(crate) const RUN_TIMEOUT_MAX: Duration = Duration::from_secs(1800);
 /// How long the output pipes may stay open after the command ended (something it started
 /// elsewhere still holds them).
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 /// The shell commands run in.
 pub(super) const SHELL: &str = "/bin/sh";
-
-/// How long an approved `run_unsandboxed` command waits for its call.
-const PASS_TTL: Duration = Duration::from_secs(120);
-
-/// The command tools a thread on `provider` at `permission` has. Both vendors run builds,
-/// tests, logs and long listings through `run`. A Codex thread leaves its sandbox through
-/// `run_unsandboxed` under Ask for approval only (under Approve for me its own shell asks
-/// Codex's auto-reviewer); a Claude thread has it at both sandboxed levels: Claude's auto mode
-/// declines every command that leaves its sandbox, so under Approve for me Brigadier's
-/// reviewer decides (`super::escalation`). Full access has no sandbox to leave. Not on
-/// Windows, which has no `/bin/sh` and no sandbox `run` can keep. Sandboxed Claude threads
-/// outside macOS use their native CLI shell: Brigadier's Seatbelt wrapper is macOS-only.
-pub(crate) fn run_tools(provider: ProviderKind, permission: PermissionLevel) -> RunTools {
-    run_tools_for_platform(
-        provider,
-        permission,
-        cfg!(windows),
-        cfg!(target_os = "macos"),
-    )
-}
-
-fn run_tools_for_platform(
-    provider: ProviderKind,
-    permission: PermissionLevel,
-    windows: bool,
-    seatbelt: bool,
-) -> RunTools {
-    match (provider, permission) {
-        _ if windows => RunTools::None,
-        (ProviderKind::Claude, permission)
-            if !seatbelt && permission != PermissionLevel::FullAccess =>
-        {
-            RunTools::None
-        }
-        (_, PermissionLevel::FullAccess) => RunTools::Run,
-        (_, PermissionLevel::AskForApproval) => RunTools::WithEscalation,
-        (ProviderKind::Claude, PermissionLevel::ApproveForMe) => RunTools::WithEscalation,
-        (ProviderKind::Codex, PermissionLevel::ApproveForMe) => RunTools::Run,
-    }
-}
-
-/// The `run_unsandboxed` commands approved and not yet run, per conversation: each runs once,
-/// in the working directory it was approved for, within [`PASS_TTL`] of its approval.
-#[derive(Default)]
-pub(crate) struct RunPasses {
-    inner: std::sync::Mutex<std::collections::HashMap<ConversationId, Vec<Pass>>>,
-}
-
-/// One approved command: the command line, its `workdir` argument as approved, and when.
-type Pass = (String, Option<String>, std::time::Instant);
-
-impl RunPasses {
-    /// `command` was approved for the thread of `id`, to run in `workdir` (the call's own
-    /// argument, `None` for the default).
-    pub(crate) fn grant(&self, id: &ConversationId, command: &str, workdir: Option<&str>) {
-        let mut passes = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        passes.entry(id.clone()).or_default().push((
-            command.to_owned(),
-            workdir.map(str::to_owned),
-            std::time::Instant::now(),
-        ));
-    }
-
-    /// Takes the approval of `command` in `workdir` for the thread of `id`, if it has a fresh
-    /// one: the same command in another directory can run another script.
-    pub(crate) fn take(&self, id: &ConversationId, command: &str, workdir: Option<&str>) -> bool {
-        let mut passes = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(list) = passes.get_mut(id) else {
-            return false;
-        };
-        list.retain(|(_, _, at)| at.elapsed() < PASS_TTL);
-        let found = list
-            .iter()
-            .position(|(approved, dir, _)| approved == command && dir.as_deref() == workdir);
-        if let Some(index) = found {
-            list.remove(index);
-        }
-        if list.is_empty() {
-            passes.remove(id);
-        }
-        found.is_some()
-    }
-}
-
-/// The tool name of a thread's escalated command, as its approval requests carry it.
-pub(crate) const RUN_UNSANDBOXED: &str = "run_unsandboxed";
 
 /// How a command ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,237 +34,13 @@ pub(crate) struct Ran {
 }
 
 impl SessionManager {
-    /// `run` (`unsandboxed`: `run_unsandboxed`, which Codex let through): runs `command` for
-    /// the thread of `id` and returns what the model gets.
-    pub(crate) async fn run_tool(
-        &self,
-        id: &ConversationId,
-        command: &str,
-        workdir: Option<&str>,
-        timeout_secs: Option<u64>,
-        name: Option<&str>,
-        unsandboxed: bool,
-    ) -> Result<String> {
-        if command.trim().is_empty() {
-            return Err(Error::Invalid("`command` is empty".into()));
-        }
-        // No git into the user's rebase in progress (#342).
-        if let Some(refused) = self.user_rebase_refusal(id, command).await {
-            return Err(Error::Invalid(refused));
-        }
-        let cli = self
-            .conv(id)?
-            .live_cli()
-            .await
-            .ok_or_else(|| Error::Invalid("the session's thread has ended".into()))?;
-        // A Claude thread at Approve for me asks Brigadier's reviewer once its folder is known.
-        let reviewed = unsandboxed
-            && cli.provider == ProviderKind::Claude
-            && self.permission(id) == PermissionLevel::ApproveForMe;
-        if unsandboxed && !reviewed && !self.run_passes.take(id, command, workdir) {
-            return Err(Error::Invalid(
-                "run_unsandboxed runs only a command the user approved when it was asked, \
-                 once; nothing approved this one"
-                    .into(),
-            ));
-        }
-        let launch = cli
-            .launch
-            .as_ref()
-            .ok_or_else(|| Error::Invalid("only a session's thread runs commands".into()))?;
-        let scratch = self.owned_dir("orch", &id.0);
-        let workspace = launch
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.path.clone());
-        let workdir = run_workdir(workdir, workspace.as_deref(), &scratch)?;
-        if reviewed {
-            self.decide_escalation(
-                id,
-                command,
-                &workdir,
-                workspace.as_deref(),
-                &launch.protection,
-            )
-            .await?;
-        }
-        let timeout = timeout_secs
-            .map_or(RUN_TIMEOUT_DEFAULT, Duration::from_secs)
-            .clamp(Duration::from_secs(1), RUN_TIMEOUT_MAX);
-        let access = if unsandboxed {
-            Access::Full
-        } else {
-            launch.access.clone()
-        };
-        // A Claude thread's sandbox is Brigadier's own Seatbelt profile with its folders;
-        // Codex's is `codex sandbox` with its session's profile.
-        let mut spec = match cli.provider {
-            ProviderKind::Claude if access != Access::Full => {
-                self.seatbelt_spec(&access, &workdir, &shell_command(command)[1..])?
-            }
-            _ => self.run_spec(&access, &workdir, command)?,
-        };
-        // At Full access its commands keep to what its CLI keeps to (PLAN bug 6); a command
-        // the user approved to leave the sandbox runs as approved.
-        if !unsandboxed && launch.access == Access::Full {
-            spec = self
-                .runtime
-                .platform()
-                .sandbox()
-                .protect(spec, &launch.protection)
-                .map_err(|err| Error::Invalid(err.to_string()))?;
-        }
-        brigadier_providers::cli::apply_session_env(
-            &mut spec,
-            &SessionManager::thread_env(&self.thread_temp(id).await?),
-            &[],
-        );
-        // Recorded under the session's background owner, not the CLI's: a command that goes
-        // to the background outlives the CLI.
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let manager = self.arc();
-        let (owner, id_owned) = (super::background_runs::background_owner(id), id.clone());
-        let work_cancel = cancel.clone();
-        let tool = if unsandboxed { RUN_UNSANDBOXED } else { "run" };
-        let output = self.own_command_output(id, tool, command);
-        // The files the command names, read right before it starts and once it ended, tell
-        // its request's record what it changed (#87).
-        let shell = super::shell_changes::ShellKey::Run(command.to_owned());
-        let call = self
-            .capture_shell(id, shell.clone(), command, Some(&workdir), None)
-            .await;
-        let command_owned = command.to_owned();
-        let work = async move {
-            let ran = run_command_streamed(
-                manager.runtime.platform().clone(),
-                &spec,
-                timeout,
-                work_cancel,
-                &owner,
-                manager.runtime.ledger(),
-                Some(output),
-            )
-            .await;
-            // A command whose start read nothing has nothing to read at its end.
-            if let Some(call) = call {
-                manager
-                    .capture_shell(&id_owned, shell, &command_owned, None, Some(Some(call)))
-                    .await;
-            }
-            let ran = ran?;
-            let reply = if ran.output.len() <= TRIM_ABOVE {
-                let output = manager.hide_secrets(&id_owned, ran.output).await;
-                format!("[{}]\n{}", ran.status, String::from_utf8_lossy(&output))
-            } else {
-                manager
-                    .store_output(&id_owned, OutputSource::Run, &ran.status, ran.output, true)
-                    .await?
-                    .1
-            };
-            Ok((ran.status, reply))
-        };
-        let reply = self
-            .in_foreground(id, (tool, name), command, cli.ended.clone(), cancel, work)
-            .await?;
-        // A subfolder's rules come with the result of a call there, as its hook gives them
-        // after its CLI's own (#460).
-        let Some(grant) = launch.hook_grant.as_deref() else {
-            return Ok(reply);
-        };
-        let paths = super::command_paths(command, &workdir)
-            .into_iter()
-            .take(super::COMMAND_PATHS_MAX)
-            .collect();
-        Ok(match self.rules_not_given(id, grant, paths).await {
-            Some(rules) => format!("{reply}\n\n{rules}"),
-            None => reply,
-        })
-    }
-
-    /// What runs `command` in `workdir` held to `access`: the shell itself at full access,
-    /// else `codex sandbox` with the session's profile around it.
-    pub(super) fn run_spec(
-        &self,
-        access: &Access,
-        workdir: &Path,
-        command: &str,
-    ) -> Result<brigadier_sandbox::SpawnSpec> {
+    /// What runs `command` through the shell in `workdir`, as it is.
+    pub(super) fn run_spec(&self, workdir: &Path, command: &str) -> brigadier_sandbox::SpawnSpec {
         let shell = shell_command(command);
-        let env = self.runtime.cli_env();
-        let mut spec = match brigadier_providers::codex::sandbox_args(access, workdir, &shell) {
-            None if *access == Access::Full => {
-                let mut spec = env.spec(Path::new(SHELL));
-                spec.args = shell[1..].iter().map(Into::into).collect();
-                spec
-            }
-            None => {
-                return Err(Error::Invalid(
-                    "this session's access has no sandbox run can keep".into(),
-                ));
-            }
-            Some(args) => {
-                let codex = env
-                    .resolve(ProviderKind::Codex)
-                    .ok_or_else(|| Error::Invalid("Codex is not installed".into()))?;
-                let mut spec = env.spec(&codex);
-                spec.args = args.into_iter().map(Into::into).collect();
-                spec
-            }
-        };
-        spec.cwd = Some(workdir.to_owned());
-        Ok(spec)
-    }
-
-    /// What runs the shell with `shell_args` in `workdir` held to `access` under Brigadier's
-    /// own Seatbelt profile (where Codex's sandbox isn't the one to keep): the access's
-    /// writable folders (`workdir` among them when the access writes its working directory),
-    /// network and denied reads. Full access needs no sandbox: [`Self::run_spec`] runs it.
-    pub(super) fn seatbelt_spec(
-        &self,
-        access: &Access,
-        workdir: &Path,
-        shell_args: &[String],
-    ) -> Result<brigadier_sandbox::SpawnSpec> {
         let mut spec = self.runtime.cli_env().spec(Path::new(SHELL));
-        spec.args = shell_args.iter().map(Into::into).collect();
+        spec.args = shell[1..].iter().map(Into::into).collect();
         spec.cwd = Some(workdir.to_owned());
-        self.runtime
-            .platform()
-            .sandbox()
-            .confine(spec, &seatbelt_policy(access, workdir))
-            .map_err(|err| Error::Invalid(err.to_string()))
-    }
-}
-
-/// The access's filesystem and network policy, shared by commands and GUI previews.
-pub(super) fn seatbelt_policy(access: &Access, workdir: &Path) -> brigadier_sandbox::SandboxPolicy {
-    let (writable_roots, network, deny_read) = match access {
-        Access::Scoped {
-            write_cwd,
-            writable_roots,
-            network,
-            deny_read,
-            ..
-        } => {
-            let mut roots = writable_roots.clone();
-            if *write_cwd {
-                roots.push(workdir.to_owned());
-            }
-            (roots, *network, deny_read.clone())
-        }
-        Access::Workspace { extra_roots } => {
-            let mut roots = extra_roots.clone();
-            roots.push(workdir.to_owned());
-            (roots, true, Vec::new())
-        }
-        Access::ReadOnly | Access::Full => (Vec::new(), false, Vec::new()),
-    };
-    // A root that doesn't exist yet stays: a ref's `.lock` or `packed-refs.lock` is made only
-    // as git takes it, and Seatbelt resolves its existing folders, granting nothing more.
-    brigadier_sandbox::SandboxPolicy {
-        writable_roots,
-        network,
-        deny_read,
+        spec
     }
 }
 
@@ -397,35 +54,8 @@ pub(super) fn shell_command(command: &str) -> Vec<String> {
     ]
 }
 
-/// The folder a command runs in: the workspace by default, else `requested` (relative to the
-/// workspace), which must be inside the workspace or the thread's scratch folder.
-pub(super) fn run_workdir(
-    requested: Option<&str>,
-    workspace: Option<&Path>,
-    scratch: &Path,
-) -> Result<PathBuf> {
-    let base = workspace.unwrap_or(scratch);
-    let wanted = match requested.map(str::trim).filter(|dir| !dir.is_empty()) {
-        None => base.to_owned(),
-        Some(dir) if Path::new(dir).is_absolute() => PathBuf::from(dir),
-        Some(dir) => base.join(dir),
-    };
-    let real = wanted
-        .canonicalize()
-        .map_err(|err| Error::Invalid(format!("workdir {}: {err}", wanted.display())))?;
-    let inside = |root: &Path| root.canonicalize().is_ok_and(|root| real.starts_with(root));
-    if workspace.is_some_and(inside) || inside(scratch) {
-        Ok(real)
-    } else {
-        Err(Error::Invalid(format!(
-            "workdir {} is outside the workspace and your scratch folder",
-            wanted.display()
-        )))
-    }
-}
-
-/// Kills a command's process tree unless it was reaped: a `run` call that is abandoned (its
-/// MCP call cancelled) takes its command with it.
+/// Kills a command's process tree unless it was reaped: a command whose caller is gone goes
+/// with it.
 struct Running {
     platform: Arc<dyn Platform>,
     pid: u32,
@@ -456,8 +86,8 @@ pub(crate) fn hold_timeout(owner: &str, gate: Arc<tokio::sync::Notify>) {
         .insert(owner.to_owned(), gate);
 }
 
-/// Runs `spec` to its end, `timeout`, or `ended` (the thread's CLI ended), whichever comes
-/// first, recorded under `owner` in the cleanup ledger while it runs.
+/// Runs `spec` to its end, `timeout`, or `ended` (its caller went), whichever comes first,
+/// recorded under `owner` in the cleanup ledger while it runs.
 #[cfg(all(test, unix))]
 pub(crate) async fn run_command(
     platform: Arc<dyn Platform>,
@@ -470,7 +100,7 @@ pub(crate) async fn run_command(
     run_command_streamed(platform, spec, timeout, ended, owner, ledger, None).await
 }
 
-/// A pipe chunk delivered into the thread's existing live output buffer.
+/// A pipe chunk delivered to its caller as it comes (a setup script's live output).
 pub(super) type CommandOutput =
     Arc<dyn Fn(Vec<u8>) -> brigadier_providers::BoxFuture<'static, ()> + Send + Sync>;
 
@@ -534,7 +164,7 @@ pub(super) async fn run_command_streamed(
         () = timed_out => {
             stopped(format!("timed out after {} s", timeout.as_secs()))
         }
-        () = ended.cancelled() => stopped("stopped: the thread's session ended".into()),
+        () = ended.cancelled() => stopped("stopped: its caller went away".into()),
     };
     // Reaped (or killed and reaped now); what it left in its group goes too.
     let _ = child.wait().await;
@@ -543,7 +173,7 @@ pub(super) async fn run_command_streamed(
     let mut output = drain(stdout).await;
     let stderr = drain(stderr).await;
     if !stderr.is_empty() {
-        // `codex sandbox`'s own messages (the command's stderr is in stdout).
+        // What the shell itself wrote (the command's stderr is in stdout).
         if !output.is_empty() && !output.ends_with(b"\n") {
             output.push(b'\n');
         }
@@ -622,193 +252,6 @@ pub(super) fn exit_status(status: std::process::ExitStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A folder in the temp directory, removed when dropped however the test ends.
-    struct Temp(PathBuf);
-
-    impl std::ops::Deref for Temp {
-        type Target = Path;
-
-        fn deref(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn every_thread_runs_and_leaves_its_sandbox_where_something_decides() {
-        use RunTools::{None, Run, WithEscalation};
-        // Full access, Approve for me, Ask for approval, in that order.
-        for (windows, seatbelt, claude, codex) in [
-            (true, false, [None, None, None], [None, None, None]),
-            (false, false, [Run, None, None], [Run, Run, WithEscalation]),
-            (
-                false,
-                true,
-                [Run, WithEscalation, WithEscalation],
-                [Run, Run, WithEscalation],
-            ),
-        ] {
-            for (provider, expected) in
-                [(ProviderKind::Claude, claude), (ProviderKind::Codex, codex)]
-            {
-                for (permission, expected) in [
-                    PermissionLevel::FullAccess,
-                    PermissionLevel::ApproveForMe,
-                    PermissionLevel::AskForApproval,
-                ]
-                .into_iter()
-                .zip(expected)
-                {
-                    assert_eq!(
-                        run_tools_for_platform(provider, permission, windows, seatbelt),
-                        expected,
-                        "{provider:?} {permission:?}, windows={windows}, seatbelt={seatbelt}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn a_command_runs_in_the_workspace_or_the_scratch_folder_only() {
-        let root =
-            Temp(std::env::temp_dir().join(format!("brigadier-workdir-{}", uuid::Uuid::new_v4())));
-        let (workspace, scratch) = (root.join("ws"), root.join("orch"));
-        std::fs::create_dir_all(workspace.join("crate")).unwrap();
-        std::fs::create_dir_all(&scratch).unwrap();
-        let real = |path: &Path| path.canonicalize().unwrap();
-        assert_eq!(
-            run_workdir(None, Some(&workspace), &scratch).unwrap(),
-            real(&workspace)
-        );
-        assert_eq!(
-            run_workdir(Some("crate"), Some(&workspace), &scratch).unwrap(),
-            real(&workspace.join("crate"))
-        );
-        assert_eq!(
-            run_workdir(Some(scratch.to_str().unwrap()), Some(&workspace), &scratch).unwrap(),
-            real(&scratch)
-        );
-        assert_eq!(run_workdir(None, None, &scratch).unwrap(), real(&scratch));
-        for outside in ["..", "/", "crate/../../orch/../.."] {
-            assert!(
-                run_workdir(Some(outside), Some(&workspace), &scratch).is_err(),
-                "{outside}"
-            );
-        }
-        assert!(run_workdir(Some("missing"), Some(&workspace), &scratch).is_err());
-    }
-
-    #[test]
-    fn an_approved_command_runs_once_and_only_in_its_conversation() {
-        let passes = RunPasses::default();
-        let (a, b) = (ConversationId("a".into()), ConversationId("b".into()));
-        passes.grant(&a, "curl https://example.com", None);
-        assert!(!passes.take(&b, "curl https://example.com", None));
-        assert!(!passes.take(&a, "curl https://example.org", None));
-        assert!(passes.take(&a, "curl https://example.com", None));
-        assert!(!passes.take(&a, "curl https://example.com", None), "once");
-    }
-
-    #[test]
-    fn an_approved_command_runs_only_in_the_directory_it_was_approved_for() {
-        let passes = RunPasses::default();
-        let a = ConversationId("a".into());
-        passes.grant(&a, "sh script.sh", Some("app"));
-        assert!(!passes.take(&a, "sh script.sh", None));
-        assert!(!passes.take(&a, "sh script.sh", Some("other")));
-        assert!(passes.take(&a, "sh script.sh", Some("app")));
-    }
-
-    /// A scoped Claude thread in a linked worktree: its branch's `.lock` and the shared
-    /// `packed-refs.lock` don't exist until git takes them, and are granted all the same, so
-    /// its commit works and prints no git error; `packed-refs` itself is never granted.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn a_scoped_thread_commits_in_its_linked_worktree() {
-        let root =
-            Temp(std::env::temp_dir().join(format!("brigadier-commit-{}", uuid::Uuid::new_v4())));
-        let (repo, worktree, scratch) = (root.join("repo"), root.join("ws"), root.join("orch"));
-        std::fs::create_dir_all(&repo).unwrap();
-        std::fs::create_dir_all(&scratch).unwrap();
-        let git = |cwd: &Path, args: &[&str]| {
-            let out = crate::test_git_command()
-                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-                .args(args)
-                .current_dir(cwd)
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["commit", "-q", "--allow-empty", "-m", "Start"]);
-        let path = worktree.display().to_string();
-        git(
-            &repo,
-            &["worktree", "add", "-q", "-b", "brigadier/aa/session", &path],
-        );
-        let opened = brigadier_git::Git::new("git".into(), Vec::new())
-            .open(&worktree)
-            .unwrap();
-        let mut writable_roots = vec![scratch.clone(), worktree.clone()];
-        writable_roots.extend(super::super::workers::commit_roots(
-            &opened,
-            Some("brigadier/aa/session"),
-            true,
-        ));
-        let access = Access::Scoped {
-            write_cwd: true,
-            writable_roots,
-            network: false,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        let policy = seatbelt_policy(&access, &worktree);
-        let common = opened.common_dir().to_owned();
-        assert!(
-            policy
-                .writable_roots
-                .contains(&common.join("packed-refs.lock"))
-        );
-        assert!(
-            policy
-                .writable_roots
-                .contains(&common.join("refs/heads/brigadier/aa/session.lock"))
-        );
-        assert!(!policy.writable_roots.contains(&common.join("packed-refs")));
-        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(root.join("platform")),
-        })
-        .unwrap();
-        let spec = brigadier_sandbox::SpawnSpec {
-            program: PathBuf::from(SHELL),
-            args: vec![
-                "-c".into(),
-                "echo a > f && git add f && git -c user.name=t -c user.email=t@example.invalid commit -q -m Work"
-                    .into(),
-            ],
-            cwd: Some(worktree.clone()),
-            ..Default::default()
-        };
-        let spec = platform.sandbox().confine(spec, &policy).unwrap();
-        let out = std::process::Command::new(&spec.program)
-            .args(&spec.args)
-            .current_dir(&worktree)
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(out.status.success() && stderr.is_empty(), "{stderr}");
-    }
 
     #[test]
     fn stderr_joins_stdout_in_the_shell() {

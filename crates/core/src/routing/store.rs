@@ -172,7 +172,7 @@ pub enum StepKind {
     /// A one-shot review.
     Review,
     /// A Codex child thread of a worker's or a thread's, whose use only its rollout holds: the
-    /// auto-review ("guardian") under Approve for me, the only kind seen so far.
+    /// auto-review ("guardian"), the only kind seen so far.
     Guardian,
     /// A project's Brain job.
     Brain,

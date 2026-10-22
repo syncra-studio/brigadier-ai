@@ -66,7 +66,7 @@ const conversation = {
   setup: {
     type: "session", repo: "/tmp/shell-fixture",
     environment: { type: "newWorktree", branch: "brigadier/shell/session", base: "main" },
-    permission: "fullAccess", planMode: false, workersSeeUncommitted: null,
+    permission: "full", planMode: false, workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: "opus", effort: "high" },
   },
 } as unknown as Conversation;

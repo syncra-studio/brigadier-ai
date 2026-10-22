@@ -37,7 +37,7 @@ const conversation = {
   id, kind: "session", projectId: null, title: "Tax rules", pinnedAtMs: null, createdAtMs: start, updatedAtMs: back,
   lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
   setup: {
-    type: "session", orchestrator: { provider: "claude", model: null, effort: null, fast: false }, permission: "askForApproval", planMode: false,
+    type: "session", orchestrator: { provider: "claude", model: null, effort: null, fast: false }, permission: "ask", planMode: false,
     workersSeeUncommitted: null, environment: { type: "localCheckout", repoPath: "/repo", branch: null },
   },
 } as unknown as Conversation;

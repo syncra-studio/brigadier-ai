@@ -91,9 +91,9 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
   const setAsideIds = (ids: readonly string[]) => {
     if (conversation) setAsideCards(conversation.id, ids);
   };
-  // A session draft's pill: Ask for approval in a folder the user doesn't trust.
+  // A session draft's pill: Ask in a folder the user doesn't trust.
   const draftUntrusted = !conversation && resolved.kind === "session" && resolved.repoPath !== null && folderTrust(resolved.project, resolved.repoPath) === false;
-  const permissionLevel = conversation ? sessionPermission : resolved.kind === "session" ? (draftUntrusted ? "askForApproval" : resolved.permission) : null;
+  const permissionLevel = conversation ? sessionPermission : resolved.kind === "session" ? (draftUntrusted ? "ask" : resolved.permission) : null;
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>

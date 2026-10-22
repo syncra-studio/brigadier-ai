@@ -8,7 +8,7 @@ use brigadier_providers::ProviderKind;
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::work::{BackgroundRunState, RequestState, RunState, TaskState};
+use crate::work::{RequestState, RunState, TaskState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -78,10 +78,10 @@ async fn a_hand_over_with_nothing_left_to_say_leaves_the_thread_idle() {
     flow.stop().await;
 }
 
-/// The composer's Stop as the app sends it: the thread's turn first, then each worker. Its turn,
-/// its worker and its background run all stop, and every request ends Stopped (#507).
+/// The composer's Stop as the app sends it: the thread's turn first, then each worker. Its turn
+/// and its worker both stop, and every request ends Stopped (#507).
 #[tokio::test]
-async fn the_composers_stop_stops_the_turn_its_workers_and_its_background_runs() {
+async fn the_composers_stop_stops_the_turn_and_its_workers() {
     let flow = Flow::start(
         "stopped-run-everything",
         Options::default(),
@@ -90,7 +90,7 @@ async fn the_composers_stop_stops_the_turn_its_workers_and_its_background_runs()
                 std::future::pending::<()>().await;
                 return Reply::text("");
             }
-            if !turn.input.contains("Scout and run.") {
+            if !turn.input.contains("Scout it.") {
                 return Reply::text("Fine.");
             }
             let reply = turn
@@ -101,26 +101,19 @@ async fn the_composers_stop_stops_the_turn_its_workers_and_its_background_runs()
                 )
                 .await;
             assert!(!reply.is_error, "{}", reply.text);
-            let reply = turn.call("run", json!({"command": "sleep 60"})).await;
-            assert!(!reply.is_error, "{}", reply.text);
             turn.stopped().await;
             Reply::text("")
         }),
     )
     .await;
-    flow.background_commands();
-    flow.say("Scout and run.").await;
+    flow.say("Scout it.").await;
     let board = flow
-        .until("the worker, the run and the turn to run", |board| {
+        .until("the worker and the turn to run", |board| {
             board.run == RunState::Running
                 && board
                     .tasks
                     .values()
                     .any(|task| task.state == TaskState::Running)
-                && board
-                    .background_runs
-                    .values()
-                    .any(|run| run.state == BackgroundRunState::Running)
         })
         .await;
     let workers: Vec<_> = board.tasks.keys().cloned().collect();
@@ -138,10 +131,6 @@ async fn the_composers_stop_stops_the_turn_its_workers_and_its_background_runs()
                     .tasks
                     .values()
                     .all(|task| task.state == TaskState::Stopped)
-                && board
-                    .background_runs
-                    .values()
-                    .all(|run| run.state != BackgroundRunState::Running)
                 && board
                     .requests
                     .values()

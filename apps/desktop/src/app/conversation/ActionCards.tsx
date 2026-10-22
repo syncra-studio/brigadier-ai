@@ -80,7 +80,7 @@ export function showCard(conversationId: string, cardId: string): void {
 
 /**
  * The decisions waiting for the user in a conversation, oldest first: approvals, open
- * questions, and plans a session under "Ask for approval" waits on.
+ * questions, and plans a session under "Ask" waits on.
  */
 export function usePendingActions(
   conversation: Conversation | null,

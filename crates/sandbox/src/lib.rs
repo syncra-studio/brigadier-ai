@@ -1,11 +1,12 @@
 //! OS abstraction for Brigadier.
 //!
 //! Everything platform-specific that the core needs sits behind [`Platform`]: data paths and the
-//! IPC endpoint, private files, process spawn and control, credential storage, the user's login
-//! shell, and the worker sandbox. macOS is fully implemented. Windows and Linux implement
-//! everything the daemon needs to run (paths, private files, processes, the instance lock) and
-//! report [`Error::Unsupported`] for the worker sandbox, credential storage and login-shell
-//! resolution until their platform phase.
+//! IPC endpoint, private files, process spawn and control, credential storage and the user's
+//! login shell. Brigadier adds no sandbox of its own: the CLIs' own permission modes and
+//! sandboxes hold. macOS is fully implemented. Windows and Linux implement everything the
+//! daemon needs to run (paths, private files, processes, the instance lock) and report
+//! [`Error::Unsupported`] for credential storage and login-shell resolution until their
+//! platform phase.
 
 pub mod clone;
 pub mod footprint;
@@ -71,8 +72,6 @@ pub trait Platform: Send + Sync + 'static {
     fn credentials(&self) -> &dyn CredentialStore;
     /// The user's login shell and the environment it produces.
     fn shell(&self) -> &dyn Shell;
-    /// The OS sandbox used to confine worker processes.
-    fn sandbox(&self) -> &dyn Sandbox;
     /// How hard the machine is working: its heat state and memory pressure.
     fn machine(&self) -> &dyn Machine;
 }
@@ -160,71 +159,6 @@ pub trait Shell: Send + Sync {
     fn login_environment(&self) -> Result<BTreeMap<OsString, OsString>>;
 }
 
-/// What a sandboxed worker may touch.
-#[derive(Debug, Clone, Default)]
-pub struct SandboxPolicy {
-    /// Directories the process may write to (its worktree, its scratch folder).
-    pub writable_roots: Vec<PathBuf>,
-    /// Whether outbound network access is allowed.
-    pub network: bool,
-    /// Paths the process may not read (everything else is readable).
-    pub deny_read: Vec<PathBuf>,
-}
-
-/// What a process may not write, everything else left as in the user's own terminal: other
-/// sessions' branches and Brigadier's bookkeeping (PLAN bug 6). Every child inherits it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Protection {
-    /// Folders and files no write may touch, each with everything under it.
-    pub deny: Vec<PathBuf>,
-    /// Regular expressions over resolved paths no write may touch (folders named by a
-    /// pattern, such as other sessions' temp folders). Anchored by the caller.
-    pub deny_patterns: Vec<String>,
-    /// The process's own paths inside the denied ones, writable all the same (its branch's
-    /// ref, its own folders), each with everything under it. A denied path inside one of
-    /// these (another session's branch in the user's own checkout) stays denied. A denied path inside one of
-    /// these (another session's branch in the user's own checkout) stays denied.
-    pub allow: Vec<PathBuf>,
-    /// Folders the process writes in but may not remove, nor the folders in them up to three
-    /// deep: a CLI's own temp folder, whose layout the CLI relies on while it runs (`rm -rf`
-    /// of it empties files but leaves every folder in place).
-    pub keep: Vec<PathBuf>,
-}
-
-impl Protection {
-    pub fn is_empty(&self) -> bool {
-        self.deny.is_empty() && self.deny_patterns.is_empty() && self.keep.is_empty()
-    }
-}
-
-/// Confines a process to a [`SandboxPolicy`] by rewriting its spawn spec.
-pub trait Sandbox: Send + Sync {
-    /// Rewrites `spec` so that the spawned process runs inside the OS sandbox.
-    fn confine(&self, spec: SpawnSpec, policy: &SandboxPolicy) -> Result<SpawnSpec>;
-
-    /// Preview windows and their helpers, still held to the policy. The Unix socket grants
-    /// are explicit exceptions to a disabled network, not permission to connect anywhere.
-    /// `preview_temp` is the private writable folder where GUI helpers may bind Unix sockets.
-    fn confine_preview(
-        &self,
-        spec: SpawnSpec,
-        policy: &SandboxPolicy,
-        unix_sockets: &[PathBuf],
-        preview_temp: &Path,
-    ) -> Result<SpawnSpec> {
-        let _ = (unix_sockets, preview_temp);
-        self.confine(spec, policy)
-    }
-
-    /// Rewrites `spec` so the process may write anything but `protection`'s denied paths.
-    /// Where the OS can't say "everything but" (Linux and Windows today) the spec is
-    /// unchanged, and the engine's ref check is the only guard.
-    fn protect(&self, spec: SpawnSpec, protection: &Protection) -> Result<SpawnSpec> {
-        let _ = protection;
-        Ok(spec)
-    }
-}
-
 /// Options that change where Brigadier keeps its data.
 #[derive(Debug, Clone, Default)]
 pub struct PlatformOptions {
@@ -271,9 +205,9 @@ pub fn native_for_identifier(
 }
 
 /// Whether the process at the other end of a connected local socket runs inside an OS sandbox
-/// while this process does not: a confined CLI session (a worker, a Brain job), which may
-/// never act as the app, even if it managed to read the IPC token (a Codex worker in a
-/// worktree keeps a sandbox that cannot deny reads). A daemon that is itself sandboxed (one
+/// while this process does not: a CLI session inside its CLI's own sandbox (a Codex session
+/// below Full access), which may never act as the app, even if it managed to read the IPC
+/// token. A daemon that is itself sandboxed (one
 /// started from inside another Brigadier's worker) accepts its sandboxed app.
 ///
 /// Only macOS can tell; elsewhere, or when the socket's peer cannot be read, `false`.

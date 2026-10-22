@@ -12,8 +12,8 @@ import { useApp } from "@/state/store";
 const closedNotices = new Set<string>();
 
 /**
- * The "Full access is on" card above the composer, while a session's workers run without the
- * OS sandbox: the full warning at nine tenths of a card's usual size (its padding, type, icon
+ * The "Full access is on" card above the composer, while a session is on Full access: the full
+ * warning at nine tenths of a card's usual size (its padding, type, icon
  * and buttons; heights rounded to whole pixels, so the thread's footer stays on the pixel grid),
  * rounded like the composer. It steps aside while a question, proposal or approval
  * waits above the composer, so it never pushes that card or the thread's last lines out of
@@ -23,7 +23,7 @@ const closedNotices = new Set<string>();
 export function FullAccessNotice({ conversation }: { conversation: Conversation }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
   const [, setClosed] = useState(0);
-  const full = conversation.setup?.type === "session" && conversation.setup.permission === "fullAccess";
+  const full = conversation.setup?.type === "session" && conversation.setup.permission === "full";
   const { queue, rows } = useQueueRows(conversation.id);
   const queued = rows.length > 0 || (queue?.moved?.length ?? 0) > 0;
   if (!show || !full || queued || closedNotices.has(conversation.id)) return null;

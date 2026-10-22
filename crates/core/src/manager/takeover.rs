@@ -338,8 +338,6 @@ impl SessionManager {
             .await?;
         let provider = task.route.choice.provider;
         let tools = ToolAccess {
-            provider,
-            access: session.access.clone(),
             ended: CancellationToken::new(),
         };
         // Claude finds the session from any folder (spike, check 4), so the terminal opens in

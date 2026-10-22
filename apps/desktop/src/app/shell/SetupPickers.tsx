@@ -73,9 +73,9 @@ export function ProvidersButton() {
 // ----- permission ------------------------------------------------------------------------
 
 export const PERMISSION_ICONS: Record<PermissionLevel, FC<{ className?: string }>> = {
-  askForApproval: HandRaised,
-  approveForMe: ShieldTerminal,
-  fullAccess: ShieldExclamation,
+  ask: HandRaised,
+  acceptEdits: ShieldTerminal,
+  full: ShieldExclamation,
 };
 
 /** Opens the README's section on permission levels in the system browser. */
@@ -89,7 +89,7 @@ export function openPermissionsHelp(): void {
  * The permission pill and menu, opening upward: "How should Brigadier's actions be approved?"
  * with "Learn more", each level with its icon and a one-line summary, a check on the one in
  * use, Full access in orange and confirmed before it turns on. In a narrow composer the pill
- * keeps only its icon. In a folder the user doesn't trust it shows Ask for approval, the only
+ * keeps only its icon. In a folder the user doesn't trust it shows Ask, the only
  * level sessions there run at, and the others can't be picked.
  */
 export function PermissionPicker({
@@ -113,8 +113,8 @@ export function PermissionPicker({
     onOpenChange?.(next);
   };
   const [confirming, setConfirming] = useState(false);
-  const value: PermissionLevel = untrusted ? "askForApproval" : chosen;
-  const full = value === "fullAccess";
+  const value: PermissionLevel = untrusted ? "ask" : chosen;
+  const full = value === "full";
   const Icon = PERMISSION_ICONS[value];
   return (
     <>
@@ -169,18 +169,18 @@ export function PermissionPicker({
             value={value}
             onValueChange={(next) => {
               const level = next as PermissionLevel;
-              if (level === "fullAccess" && !full) setConfirming(true);
+              if (level === "full" && !full) setConfirming(true);
               else onChange(level);
             }}
           >
             {PERMISSION_LEVELS.map((level) => {
               const LevelIcon = PERMISSION_ICONS[level];
-              const orange = level === "fullAccess";
+              const orange = level === "full";
               return (
                 <DropdownMenuRadioItem
                   key={level}
                   value={level}
-                  disabled={untrusted && level !== "askForApproval"}
+                  disabled={untrusted && level !== "ask"}
                   indicator={<Check className="size-icon-md" />}
                   className={cn(
                     "h-auto gap-3 rounded-xl py-1.5 pe-9",
@@ -210,7 +210,7 @@ export function PermissionPicker({
         onCancel={() => setConfirming(false)}
         onConfirm={() => {
           setConfirming(false);
-          onChange("fullAccess");
+          onChange("full");
         }}
       />
     </>
@@ -235,8 +235,8 @@ const FULL_ACCESS_POWERS: { icon: FC<{ className?: string }>; tone: string; titl
 ];
 
 /**
- * The "Turn on Full Access?" dialog: what workers could do without the sandbox, what still
- * asks, and the risks. Only Confirm changes the level; Esc or Cancel keeps it.
+ * The "Turn on Full Access?" dialog: what workers could do without asking, and the risks.
+ * Only Confirm changes the level; Esc or Cancel keeps it.
  */
 export function FullAccessDialog({
   open,
@@ -374,12 +374,12 @@ export function ConversationModelPicker({
   );
 }
 
-/** The level a started session's permission pill shows (Ask for approval in a folder the user doesn't trust); null if it has none. */
+/** The level a started session's permission pill shows (Ask in a folder the user doesn't trust); null if it has none. */
 export function useShownPermission(conversation: Conversation | null): PermissionLevel | null {
   const setup = conversation?.setup;
   const untrusted = useUntrusted(conversation?.projectId ?? null, setup?.type === "session" ? setup.repo : null);
   if (setup?.type !== "session") return null;
-  return untrusted ? "askForApproval" : setup.permission;
+  return untrusted ? "ask" : setup.permission;
 }
 
 /** Whether the user doesn't trust the folder `repo` of the project `projectId`. */
@@ -389,7 +389,7 @@ export function useUntrusted(projectId: string | null, repo: string | null): boo
   );
 }
 
-/** Changes a started session's permission level: the composer's picker, and the thread's notice. */
+/** Changes a started session's permission level: the composer's picker, and a suggested setting's card. */
 export async function setSessionPermission(
   conversation: Conversation,
   permission: PermissionLevel,

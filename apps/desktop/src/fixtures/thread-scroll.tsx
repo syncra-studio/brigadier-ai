@@ -55,7 +55,7 @@ function conversation(id: string, kind: "chat" | "session", title: string): Conv
             type: "session",
             repo: "/tmp/thread-scroll-fixture",
             environment: { type: "newWorktree", branch: "brigadier/scroll/session", base: "main" },
-            permission: "fullAccess",
+            permission: "full",
             planMode: false,
             workersSeeUncommitted: null,
             orchestrator: { provider: "claude", model: "opus", effort: "high" },

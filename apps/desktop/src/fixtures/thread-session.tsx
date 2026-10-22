@@ -91,7 +91,7 @@ const conversation = {
     type: "session",
     repo: "/tmp/thread-fixture",
     environment: { type: "newWorktree", branch, base: "main" },
-    permission: isGrill ? "approveForMe" : isPlan ? "askForApproval" : "fullAccess",
+    permission: isGrill ? "acceptEdits" : isPlan ? "ask" : "full",
     // Plan mode is on until the user says yes to the plan.
     planMode:
       isPlan &&

@@ -12,12 +12,9 @@
 //! - **Scratch folder** outside the repository, which is also the worker's TMPDIR. Everything
 //!   is recorded in the cleanup ledger under `task:<id>` before it is created, including any
 //!   process running inside those folders.
-//! - **Access** per task (B12) and the session's permission level: Full access runs the
-//!   worker like the user's own terminal (no sandbox, nothing asks); Approve for me runs it in
-//!   the OS sandbox and lets the CLI's own reviewer settle what leaves it; Ask for approval
-//!   runs it in the sandbox without network and asks the user for each step outside, once per
-//!   kind of command with "Allow … for this session". The sandbox lets a worker write its
-//!   worktree's git folder and the toolchains' caches, so builds and commits just work.
+//! - **Permissions**: the worker runs at its session's level, passed straight to its CLI as
+//!   its own permission mode (G5). What its CLI asks reaches the user as a card, once per kind
+//!   of command with "Allow … for this session".
 //! - **Instructions**: the role and task prompt, plus the repository's `CLAUDE.md` and
 //!   `AGENTS.md` whichever vendor runs it ([`super::instructions`]).
 //! - **Secrets**: the project's gitignored env files are copied in, and their values are
@@ -32,11 +29,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use brigadier_git::{Oid, PatchOutcome, WorktreeSpec};
-use brigadier_providers::policy::{self, ApprovalMode, Route as PolicyRoute};
+use brigadier_providers::policy;
 use brigadier_providers::{
-    Access, AllowedModels, ApprovalDecision, ApprovalKind, ApprovalRequest, Artifact, Decider,
-    InputFile, Origin, ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput,
-    TurnStatus,
+    AllowedModels, ApprovalDecision, ApprovalKind, ApprovalRequest, Artifact, Decider, InputFile,
+    Origin, ProviderEvent, ProviderKind, SessionSpec, Started, ToolSet, TurnInput, TurnStatus,
 };
 use brigadier_router::QualityTier;
 use tokio::sync::{mpsc, oneshot};
@@ -44,7 +40,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::brains::ReportLearning;
 use super::conversation::{Cli, Envelope, safe_file_name};
-use super::escalation::Settled;
 use super::outputs::outputs_dir;
 use super::refcheck::engine_rewrite;
 use super::usage::TokenOwner;
@@ -125,7 +120,6 @@ pub(crate) struct WorkerSession {
     pub spec: SessionSpec,
     /// Where its CLI runs.
     pub cwd: PathBuf,
-    pub access: Access,
     pub outputs: PathBuf,
     pub redactor: Option<Arc<brigadier_providers::redact::Redactor>>,
     pub allowed_models: AllowedModels,
@@ -151,10 +145,6 @@ struct TaskLiveState {
     /// Its outputs folder.
     outputs: Option<PathBuf>,
     stopping: bool,
-    access: Option<Access>,
-    /// Brigadier's reviewer settles the CLI's requests to go beyond its sandbox (a Codex worker
-    /// at Approve for me, [`super::escalation`]), with what the session may never write.
-    reviewed: Option<brigadier_sandbox::Protection>,
     /// Where the worker's CLI runs (a command without its own cwd runs here).
     cwd: Option<PathBuf>,
     /// The task's worktree, whose file changes the user may allow for the session.
@@ -223,8 +213,6 @@ struct TaskLiveState {
 /// or while it is open in the user's terminal, the terminal's.
 #[derive(Clone)]
 pub(crate) struct ToolAccess {
-    pub provider: ProviderKind,
-    pub access: Access,
     /// Cancelled when the CLI or the terminal ends: its commands end with it.
     pub ended: CancellationToken,
 }
@@ -575,10 +563,8 @@ impl TaskLive {
     /// What the worker's tool calls run with, while its CLI runs headless or in a terminal.
     pub(crate) async fn tool_access(&self) -> Option<ToolAccess> {
         let state = self.state.lock().await;
-        if let (Some(cli), Some(access)) = (&state.cli, &state.access) {
+        if let Some(cli) = &state.cli {
             return Some(ToolAccess {
-                provider: cli.provider,
-                access: access.clone(),
                 ended: cli.ended.clone(),
             });
         }
@@ -767,21 +753,20 @@ impl SessionManager {
             .clone()
     }
 
-    /// The session's permission level. While an overnight run is active nobody is there to
-    /// ask: the run keeps the session's access and approves for the user, so Ask for approval
-    /// counts as Approve for me until the run ends (PLAN.md §10.8). In a folder the user
-    /// doesn't trust it is Ask for approval, overnight too.
+    /// The session's permission level, which its thread and its workers run at. While an
+    /// overnight run is active nobody is there to ask, so Ask counts as Accept edits until the
+    /// run ends (PLAN.md §10.8). In a folder the user doesn't trust it is Ask, overnight too.
     pub(crate) fn permission(&self, id: &ConversationId) -> PermissionLevel {
         if self.repo_trust(id) == Some(false) {
-            return PermissionLevel::AskForApproval;
+            return PermissionLevel::Ask;
         }
         let saved = match self.core.conversation(id).map(|c| c.setup) {
             Ok(Some(Setup::Session { permission, .. })) => permission,
-            _ => PermissionLevel::ApproveForMe,
+            _ => PermissionLevel::default(),
         };
         match saved {
-            PermissionLevel::AskForApproval if self.overnight.active.get(id).is_some() => {
-                PermissionLevel::ApproveForMe
+            PermissionLevel::Ask if self.overnight.active.get(id).is_some() => {
+                PermissionLevel::AcceptEdits
             }
             saved => saved,
         }
@@ -982,7 +967,7 @@ impl SessionManager {
             Some(Setup::Chat { .. })
                 if conversation.kind == ConversationKind::Chat
                     && conversation.tab_chat.is_none()
-                    && access_for(kind, permission).repo == RepoAccess::None => {}
+                    && repo_access_for(kind, permission).repo == RepoAccess::None => {}
             Some(Setup::Chat { .. }) => {
                 return Err(Error::Invalid(
                     "A Chat has no project or repository: its workers only research or operate apps (kind research or operate).".into(),
@@ -1173,7 +1158,7 @@ impl SessionManager {
             title: title.trim().to_owned(),
             kind,
             spec,
-            access: access_for(kind, permission),
+            access: repo_access_for(kind, permission),
             // A waiting task's first model is recorded when it starts.
             attempts: if waits {
                 Vec::new()
@@ -1547,19 +1532,15 @@ impl SessionManager {
         self.prepare_owned_dir(&owner, &test_dir).await?;
         // Its rights in the worktree are those of a worker started there; its start folder
         // and the worktree (added) are writable together or not at all.
-        let access = match (&home, &workspace.worktree) {
-            (Some(_), Some(worktree)) => self.worker_access(task, &workspace, worktree),
-            _ => self.worker_access(task, &workspace, &cwd),
-        };
-        // Under the worker's own access, once its worktree has the checkout's env files.
+        // A worker gets its session's level.
+        let access = self.permission(&task.conversation_id).access();
+        // Once its worktree has the checkout's env files.
         let setup = match (&workspace.worktree, setup) {
             (Some(worktree), true) => Some(
                 self.run_setup_script(
                     &conversation_id,
                     &owner,
                     worktree,
-                    &access,
-                    None,
                     &worker_env(&workspace.scratch),
                     // A stopped worker's processes end with its owner's.
                     tokio_util::sync::CancellationToken::new(),
@@ -1570,7 +1551,6 @@ impl SessionManager {
         };
         repo_note.push_str("\n\n");
         repo_note.push_str(&prompts::environment(&prompts::WorkerEnvironment {
-            access: &access,
             warmed: &workspace.warmed,
             test_dir: &test_dir,
             run_repo: task.run.as_ref().map(|_| workspace.repo.as_path()),
@@ -1704,8 +1684,6 @@ impl SessionManager {
         let redactor = secrets::redactor(secret_values);
         let allowed_models = self.allowed_models(task).await;
         // Its own branch is the only ref it moves; the branch its work lands on is the engine's.
-        // A Full-access worker runs unwrapped (it builds and tests, and a Seatbelt profile
-        // can't nest): the ref check guards the branches it could move.
         // Its branch and the session's, recorded for the ref check, beside its start.
         if let Some(worktree) = workspace.worktree.clone() {
             let manager = self.arc();
@@ -1726,20 +1704,6 @@ impl SessionManager {
                 .await;
             });
         }
-        let worktree = workspace
-            .worktree
-            .as_ref()
-            .filter(|_| access != Access::Full);
-        let protection = worktree.map(|worktree| {
-            let targets: Vec<String> = workspace.target.iter().cloned().collect();
-            self.session_protection(
-                &conversation_id,
-                worktree,
-                workspace.branch.as_deref(),
-                &targets,
-                false,
-            )
-        });
         let spec = SessionSpec {
             cwd: cwd.clone(),
             model: task.route.choice.model.clone(),
@@ -1748,7 +1712,7 @@ impl SessionManager {
             origin,
             // Resumed for follow-ups, fixes and retries.
             ephemeral: false,
-            access: access.clone(),
+            access,
             append_system_prompt: Some(prompt),
             mcp_servers,
             tools: ToolSet::Lean,
@@ -1780,18 +1744,15 @@ impl SessionManager {
             // Workers are handed off, never compacted by their CLI (BUILD-PLAN D2.3).
             auto_compact: false,
             allowed_models: Some(allowed_models.clone()),
-            auto_review: self.permission(&conversation_id) == PermissionLevel::ApproveForMe,
             omit_ai_coauthors,
             output_hook: None,
             stop_hook,
             deny_tools: None,
-            protection: protection.unwrap_or_default(),
         };
         let worktree = workspace.worktree.clone();
         Ok(WorkerSession {
             spec,
             cwd,
-            access,
             outputs,
             redactor,
             allowed_models,
@@ -1825,7 +1786,6 @@ impl SessionManager {
         let WorkerSession {
             spec,
             cwd,
-            access,
             outputs,
             redactor,
             allowed_models,
@@ -1841,10 +1801,6 @@ impl SessionManager {
             return Err(stopped_as_it_started(task));
         }
         let provider = task.route.choice.provider;
-        let reviewed = (provider == ProviderKind::Codex
-            && spec.auto_review
-            && !matches!(spec.access, Access::Full | Access::ReadOnly))
-        .then(|| spec.protection.clone());
         let account = self.runtime.account_for(&task.route.choice);
         let tools_key = crate::routing::meter::tools_key(&spec);
         let Started { session, events } =
@@ -1899,8 +1855,6 @@ impl SessionManager {
                 )));
             }
             state.cli = Some(cli.clone());
-            state.access = Some(access);
-            state.reviewed = reviewed;
             state.cwd = Some(cwd);
             state.worktree = worktree;
             state.outputs = Some(outputs);
@@ -2088,64 +2042,6 @@ impl SessionManager {
             .await
         {
             tracing::warn!(task = %id, error = %err, "could not record the worker's session");
-        }
-    }
-
-    /// B12: what the worker may touch.
-    fn worker_access(&self, task: &Task, workspace: &Workspace, cwd: &Path) -> Access {
-        let access = self.effective_access(task);
-        // Full access: like the user's own terminal.
-        if access.unsandboxed {
-            return Access::Full;
-        }
-        // A worker working from its scratch folder writes there (Codex needs a writable cwd);
-        // one in a worktree writes to the worktree only for write tasks.
-        let in_scratch = cwd == workspace.scratch;
-        let write_cwd = in_scratch || task.kind.writes();
-        let mut writable_roots = if in_scratch {
-            Vec::new()
-        } else {
-            vec![workspace.scratch.clone()]
-        };
-        writable_roots.push(test_data_dir(&task.id));
-        if let Some(worktree) = &workspace.worktree
-            && task.kind == TaskKind::Verify
-        {
-            // Checks write build output inside the checkout; nothing from it lands.
-            writable_roots.push(worktree.clone());
-        }
-        // A writer commits: into its worktree's own git folder (index, HEAD), the repository's
-        // objects, and its own branch's ref and reflog, never another branch's.
-        if task.kind.writes()
-            && let Some(worktree) = &workspace.worktree
-            && let Ok(repo) = self.git.open(worktree)
-        {
-            writable_roots.extend(commit_roots(&repo, workspace.branch.as_deref(), false));
-        }
-        self.sandboxed(write_cwd, writable_roots, access.network)
-    }
-
-    /// The OS sandbox of a worker or thread below Full access: it writes its working
-    /// directory (when `write_cwd`), `writable_roots` and the toolchains' shared caches (builds
-    /// and installs write them), reads everything but Brigadier's private folders, and reaches
-    /// Brigadier's socket.
-    pub(crate) fn sandboxed(
-        &self,
-        write_cwd: bool,
-        mut writable_roots: Vec<PathBuf>,
-        network: bool,
-    ) -> Access {
-        for root in toolchain_roots(self.runtime.cli_env()) {
-            if !writable_roots.contains(&root) {
-                writable_roots.push(root);
-            }
-        }
-        Access::Scoped {
-            write_cwd,
-            writable_roots,
-            network,
-            deny_read: vec![self.runtime.platform().paths().run_dir.clone()],
-            unix_sockets: self.socket_path().into_iter().collect(),
         }
     }
 
@@ -2657,7 +2553,7 @@ impl SessionManager {
         }
     }
 
-    /// Runs the setup script in the thread's new `worktree` under the thread's access.
+    /// Runs the setup script in the thread's new `worktree`.
     async fn run_thread_setup(&self, id: &ConversationId, worktree: &Path) -> String {
         let tmp = match self.thread_temp(id).await {
             Ok(tmp) => tmp,
@@ -2666,20 +2562,12 @@ impl SessionManager {
                 return super::prompts::SETUP_LINE.into();
             }
         };
-        // As the thread's CLI is started for it (`thread_launch`).
-        let scratch = self.owned_dir("orch", &id.0);
-        let workspace = self.planned_workspace(id);
-        let (access, _) = self.thread_access(id, workspace.as_ref(), &scratch, self.permission(id));
-        let protection =
-            self.thread_protection(id, workspace.as_ref(), &scratch, access == Access::Full);
         // The user's Stop ends it.
         let stoppable = self.stoppable(id, "setup");
         self.run_setup_script(
             id,
             &super::background_runs::background_owner(id),
             worktree,
-            &access,
-            Some(&protection),
             &worker_env(&tmp),
             stoppable.cancel.clone(),
         )
@@ -3320,90 +3208,31 @@ impl SessionManager {
         });
     }
 
-    /// B7 for worker approvals: routed by the task's access, then by what the user already
-    /// allowed "for this session" in this conversation; anything else asks the user.
-    /// Under Full access and Approve for me hardly anything gets here: the CLI never asks, or
-    /// its own reviewer answers.
+    /// B7 for worker approvals: what the user already allowed "for this session" in this
+    /// conversation goes; anything else asks the user (the CLI asks only what its level
+    /// leaves to the user).
     async fn route_worker_approval(
         &self,
         live: &Arc<TaskLive>,
         cli: &Arc<Cli>,
         mut request: ApprovalRequest,
     ) {
-        let (access, worktree, reviewed) = {
-            let state = live.state.lock().await;
-            (
-                state.access.clone().unwrap_or(Access::ReadOnly),
-                state.worktree.clone(),
-                state.reviewed.clone(),
-            )
-        };
-        let (route, decider) = self.approval_route(
-            &live.conversation_id,
-            &mut request,
-            &access,
-            worktree.as_deref(),
-            reviewed.is_some(),
-        );
-        match route {
-            // A Codex worker at Approve for me: Brigadier's reviewer settles it, while the CLI
-            // waits.
-            PolicyRoute::AskUser if let Some(protection) = reviewed => {
-                let manager = self.arc();
-                let (live, cli) = (live.clone(), cli.clone());
-                self.spawn(async move {
-                    let unattended = manager.overnight.active.get(&live.conversation_id).is_some();
-                    let decision = match manager
-                        .settle_codex_escalation(
-                            &live.conversation_id,
-                            &request,
-                            worktree.as_deref(),
-                            &protection,
-                            unattended,
-                        )
-                        .await
-                    {
-                        Settled::Answer(decision) => decision,
-                        Settled::Ask(why) => {
-                            request.reason = Some(why);
-                            manager.ask_user_for_worker(&live, &cli, request).await;
-                            return;
-                        }
-                    };
-                    if let Err(err) = cli
-                        .session
-                        .answer(request.id.clone(), decision.clone())
-                        .await
-                    {
-                        tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
-                        return;
-                    }
-                    manager
-                        .record_worker_resolution(&live.id, request.id, decision, Decider::Policy)
-                        .await;
-                });
-            }
-            PolicyRoute::Allow | PolicyRoute::Deny => {
-                let decision = if route == PolicyRoute::Allow {
-                    ApprovalDecision::Allow
-                } else {
-                    ApprovalDecision::Deny {
-                        message: "This session may not do that.".into(),
-                    }
-                };
-                if let Err(err) = cli
-                    .session
-                    .answer(request.id.clone(), decision.clone())
-                    .await
-                {
-                    tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
-                    return;
-                }
-                self.record_worker_resolution(&live.id, request.id, decision, decider)
-                    .await;
-            }
-            PolicyRoute::AskUser => self.ask_user_for_worker(live, cli, request).await,
+        let worktree = live.state.lock().await.worktree.clone();
+        if !self.allowed_before(&live.conversation_id, &mut request, worktree.as_deref()) {
+            self.ask_user_for_worker(live, cli, request).await;
+            return;
         }
+        let decision = ApprovalDecision::Allow;
+        if let Err(err) = cli
+            .session
+            .answer(request.id.clone(), decision.clone())
+            .await
+        {
+            tracing::warn!(task = %live.id, error = %err, "could not answer an approval");
+            return;
+        }
+        self.record_worker_resolution(&live.id, request.id, decision, Decider::User)
+            .await;
     }
 
     /// The user's card for the worker CLI's request, while that CLI runs; the worker shows it
@@ -3428,35 +3257,27 @@ impl SessionManager {
             .await;
     }
 
-    /// Who answers a CLI's approval request in a sandbox with `access` (a worker's or the
-    /// thread's): what stays inside its access is allowed, what the user already allowed
-    /// something similar to in the conversation too; the rest asks the user. A file change
-    /// that asks, all inside the asker's own `workspace`, may be allowed for the session: its
-    /// card offers that (`request.grant`). Where Brigadier's reviewer settles what asks
-    /// (`reviewed`, [`super::escalation`]) no earlier grant answers for it: one for `git
-    /// worktree` would also cover removing another session's worktree.
-    pub(crate) fn approval_route(
+    /// Whether the user already allowed something similar to a CLI's approval request (a
+    /// worker's or the thread's) in the conversation, "for this session". A file change that
+    /// asks, all inside the asker's own `workspace`, may be allowed for the session: its card
+    /// offers that (`request.grant`).
+    pub(crate) fn allowed_before(
         &self,
         conversation_id: &ConversationId,
         request: &mut ApprovalRequest,
-        access: &Access,
         workspace: Option<&Path>,
-        reviewed: bool,
-    ) -> (PolicyRoute, Decider) {
-        let route = policy::route(request, access, ApprovalMode::Delegated);
-        if route == PolicyRoute::AskUser
-            && !reviewed
-            && self
-                .waiters
-                .similar_allowed(conversation_id, request, workspace)
+    ) -> bool {
+        if self
+            .waiters
+            .similar_allowed(conversation_id, request, workspace)
         {
-            return (PolicyRoute::Allow, Decider::User);
+            return true;
         }
         if request.kind == ApprovalKind::FileChange {
             request.grant =
                 workspace.and_then(|workspace| policy::workspace_grant(request, workspace));
         }
-        (route, Decider::Policy)
+        false
     }
 
     /// Passes the user's answer to the worker's CLI; "Allow … for this session" also allows
@@ -5319,87 +5140,6 @@ pub(crate) fn category(kind: TaskKind, design: bool) -> brigadier_router::TaskCa
     }
 }
 
-/// The per-checkout state files git keeps in a checkout's own git folder. A local checkout
-/// (whose own folder is the shared one) is granted these, never the shared folder whole.
-const CHECKOUT_STATE: [&str; 17] = [
-    "HEAD",
-    "index",
-    "ORIG_HEAD",
-    "FETCH_HEAD",
-    "MERGE_HEAD",
-    "MERGE_MSG",
-    "MERGE_MODE",
-    "MERGE_RR",
-    "AUTO_MERGE",
-    "CHERRY_PICK_HEAD",
-    "REVERT_HEAD",
-    "COMMIT_EDITMSG",
-    "logs/HEAD",
-    "rebase-merge",
-    "rebase-apply",
-    "sequencer",
-    "MERGE_AUTOSTASH",
-];
-
-/// The files a commit on `branch` in `repo`'s checkout writes, and nothing of another branch's
-/// (PLAN bug 6): its own git folder (index, HEAD; for a local checkout, those files one by
-/// one), the shared objects, and its own branch's ref, the ref's `.lock` and its reflog. Never
-/// the whole `refs` or `logs`, so `git branch -D` of another session's branch, or an update of
-/// the base, fails with "Operation not permitted"; never the shared folder whole, so its hooks
-/// and config stay out of reach. A commit in a linked worktree also takes (and gives back) the
-/// shared `packed-refs.lock`, or git prints "Unable to create '…/packed-refs.lock': Operation
-/// not permitted" on every commit; `packed-refs` itself stays read-only, and replacing it means
-/// renaming the lock over it. The thread (`pushes`) also writes the remote-tracking refs a push
-/// or fetch updates.
-pub(crate) fn commit_roots(
-    repo: &brigadier_git::Repo,
-    branch: Option<&str>,
-    pushes: bool,
-) -> Vec<PathBuf> {
-    let common = repo.common_dir().to_owned();
-    let own = repo.git_dir().unwrap_or_else(|_| common.clone());
-    let mut roots = Vec::new();
-    if own == common {
-        for name in CHECKOUT_STATE {
-            let path = common.join(name);
-            roots.push(lock_of(&path));
-            roots.push(path);
-        }
-    } else {
-        roots.push(own);
-    }
-    roots.push(common.join("objects"));
-    roots.push(common.join("packed-refs.lock"));
-    if let Some(branch) = branch {
-        let reference = common.join("refs/heads").join(branch);
-        let reflog = common.join("logs/refs/heads").join(branch);
-        // Git makes a missing parent folder, which it couldn't inside a read-only `refs`.
-        for path in [&reference, &reflog] {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-        }
-        roots.push(lock_of(&reference));
-        roots.push(reference);
-        roots.push(reflog);
-    }
-    if pushes {
-        for folder in ["refs/remotes", "logs/refs/remotes"] {
-            let path = common.join(folder);
-            let _ = std::fs::create_dir_all(&path);
-            roots.push(path);
-        }
-    }
-    roots
-}
-
-/// `path` with git's `.lock` suffix, the file git writes first and renames over it.
-fn lock_of(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(".lock");
-    PathBuf::from(name)
-}
-
 /// The cleanup owner of a conversation's worker folder ([`SessionManager::worker_home`]).
 pub(crate) fn worker_home_owner(conversation_id: &ConversationId) -> String {
     format!("workers:{conversation_id}")
@@ -5545,23 +5285,23 @@ fn stopped_state(task: &Task) -> TaskState {
     }
 }
 
-/// B12: repository access, network and sandbox per task kind and permission level. Under
-/// Ask for approval a worker's sandbox has no network: reaching a host asks the user (research
-/// tasks, which live on the web, keep it).
-pub(crate) fn access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
+/// B12: a task's repository access by its kind (a worktree to write, one to read, or none),
+/// with the level it was filed at (its CLI runs at its session's level, passed straight
+/// through).
+pub(crate) fn repo_access_for(kind: TaskKind, permission: PermissionLevel) -> WorkerAccess {
     WorkerAccess {
         repo: match kind {
             TaskKind::Research | TaskKind::Operate => RepoAccess::None,
             TaskKind::Implement | TaskKind::Merge => RepoAccess::Write,
             TaskKind::Scout | TaskKind::Review | TaskKind::Verify => RepoAccess::Read,
         },
-        network: permission != PermissionLevel::AskForApproval || kind == TaskKind::Research,
-        unsandboxed: permission == PermissionLevel::FullAccess,
+        network: true,
+        unsandboxed: permission == PermissionLevel::Full,
     }
 }
 
-/// A worker's temporary files go to its scratch folder, which its sandbox lets it write: other
-/// programs' by `TMPDIR`, zsh's here-documents by `TMPPREFIX` (zsh 5.9 makes them under
+/// A worker's temporary files go to its scratch folder, which its CLI's sandbox lets it write:
+/// other programs' by `TMPDIR`, zsh's here-documents by `TMPPREFIX` (zsh 5.9 makes them under
 /// `/tmp/zsh` by default, and a sandboxed `cat <<EOF` there fails with "can't create temp file
 /// for here document").
 pub(crate) fn worker_env(scratch: &Path) -> Vec<(String, String)> {
@@ -5572,50 +5312,6 @@ pub(crate) fn worker_env(scratch: &Path) -> Vec<(String, String)> {
             scratch.join("zsh").to_string_lossy().into_owned(),
         ),
     ]
-}
-
-/// Folders a sandboxed worker's builds, tests and installs write besides its own: the
-/// toolchains' homes and caches (Rust, Node package managers, the system's caches) and the
-/// system temporary folder, those that exist, and pnpm's store lock folder.
-fn toolchain_roots(env: &brigadier_providers::cli::CliEnv) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for name in [
-        "CARGO_HOME",
-        "RUSTUP_HOME",
-        "CARGO_TARGET_DIR",
-        "PNPM_HOME",
-        "npm_config_cache",
-        "TMPDIR",
-    ] {
-        if let Some(value) = env.var(name).filter(|value| !value.is_empty()) {
-            roots.push(PathBuf::from(value));
-        }
-    }
-    if let Some(home) = env.home() {
-        for rest in [
-            ".cargo",
-            ".rustup",
-            ".npm",
-            ".pnpm-store",
-            ".yarn",
-            ".bun",
-            ".cache",
-            ".local/share/pnpm",
-            "Library/pnpm",
-            "Library/Caches",
-        ] {
-            roots.push(home.join(rest));
-        }
-    }
-    roots.retain(|root| root.is_absolute() && root.is_dir());
-    // pnpm locks its store in a fixed folder of `/tmp` (not `$TMPDIR`), made on first use.
-    #[cfg(unix)]
-    if let Ok(tmp) = Path::new("/tmp").canonicalize() {
-        let uid = nix::unistd::getuid();
-        roots.push(tmp.join(format!("pnpm-store-operation-locks-{uid}")));
-    }
-    roots.dedup();
-    roots
 }
 
 /// The native id of the latest session start among a task's worker events, paging back
@@ -5973,211 +5669,6 @@ mod tests {
         }
     }
 
-    /// Runs git in `cwd`, failing the test when it fails.
-    fn git_ok(cwd: &Path, args: &[&str]) -> String {
-        let out = crate::test_git_command()
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_owned()
-    }
-
-    #[test]
-    fn a_writer_is_granted_its_own_branch_and_never_another_ref() {
-        let dir =
-            Temp(std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4())));
-        let main = dir.join("main");
-        std::fs::create_dir_all(&main).unwrap();
-        git_ok(&main, &["init", "-q", "-b", "main"]);
-        git_ok(&main, &["commit", "-q", "--allow-empty", "-m", "Start"]);
-        git_ok(
-            &main,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "brigadier/aa/task-1",
-                "../task",
-            ],
-        );
-        let tool = brigadier_git::Git::new("git".into(), Vec::new());
-        let common = main.join(".git").canonicalize().unwrap();
-        let roots = |path: &Path, branch: Option<&str>, pushes| {
-            commit_roots(&tool.open(path).unwrap(), branch, pushes)
-                .iter()
-                .map(|root| {
-                    root.strip_prefix(&common)
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(|_| root.clone())
-                })
-                .collect::<Vec<_>>()
-        };
-        let linked = roots(&dir.join("task"), Some("brigadier/aa/task-1"), false);
-        assert_eq!(
-            linked,
-            [
-                "worktrees/task",
-                "objects",
-                "packed-refs.lock",
-                "refs/heads/brigadier/aa/task-1.lock",
-                "refs/heads/brigadier/aa/task-1",
-                "logs/refs/heads/brigadier/aa/task-1",
-            ]
-            .map(PathBuf::from)
-            .to_vec(),
-            "never the whole refs or logs, nor the shared folder whole (its hooks and config)"
-        );
-        let thread = roots(&dir.join("task"), Some("brigadier/aa/task-1"), true);
-        assert!(thread.contains(&PathBuf::from("refs/remotes")));
-        assert!(thread.contains(&PathBuf::from("logs/refs/remotes")));
-        // A local checkout gets its state files one by one, never its git folder whole.
-        let local = roots(&main, Some("main"), false);
-        for granted in [
-            "HEAD",
-            "index",
-            "index.lock",
-            "logs/HEAD",
-            "refs/heads/main",
-        ] {
-            assert!(local.contains(&PathBuf::from(granted)), "{granted}");
-        }
-        for never in ["", "refs", "logs", "packed-refs", "hooks", "config"] {
-            assert!(!local.contains(&PathBuf::from(never)), "{never:?}");
-        }
-    }
-
-    /// What a writer's sandbox lets git do, under Brigadier's own Seatbelt with exactly the
-    /// roots a writer gets (PLAN bug 6): a commit on its own branch works and prints no git
-    /// error; another branch's delete (loose and packed), an update of the base and a rename
-    /// over `packed-refs` fail.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn under_its_sandbox_a_writer_commits_on_its_branch_and_never_moves_another() {
-        let dir =
-            Temp(std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4())));
-        let main = dir.join("main");
-        std::fs::create_dir_all(&main).unwrap();
-        git_ok(&main, &["init", "-q", "-b", "main"]);
-        git_ok(&main, &["commit", "-q", "--allow-empty", "-m", "Start"]);
-        git_ok(&main, &["branch", "brigadier/bb/task-1"]);
-        git_ok(
-            &main,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "brigadier/aa/task-1",
-                "../task",
-            ],
-        );
-        let task = dir.join("task");
-        let tool = brigadier_git::Git::new("git".into(), Vec::new());
-        let mut writable_roots = vec![task.clone()];
-        writable_roots.extend(commit_roots(
-            &tool.open(&task).unwrap(),
-            Some("brigadier/aa/task-1"),
-            false,
-        ));
-        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(dir.join("data")),
-        })
-        .unwrap();
-        let common = main.join(".git").canonicalize().unwrap();
-        let sandboxed = |script: &str| {
-            let spec = brigadier_sandbox::SpawnSpec {
-                program: PathBuf::from("/bin/sh"),
-                args: vec!["-c".into(), script.into()],
-                env: Vec::new(),
-                clear_env: false,
-                cwd: Some(task.clone()),
-                low_priority: false,
-            };
-            let spec = platform
-                .sandbox()
-                .confine(
-                    spec,
-                    &brigadier_sandbox::SandboxPolicy {
-                        writable_roots: writable_roots.clone(),
-                        network: false,
-                        deny_read: Vec::new(),
-                    },
-                )
-                .unwrap();
-            let out = std::process::Command::new(&spec.program)
-                .args(&spec.args)
-                .current_dir(&task)
-                .output()
-                .unwrap();
-            (
-                out.status.success(),
-                String::from_utf8_lossy(&out.stderr).into_owned(),
-            )
-        };
-        let commit = "echo hi > a && git add a && git -c user.name=t -c user.email=t@example.invalid commit -q -m Work";
-        let (ok, stderr) = sandboxed(commit);
-        assert!(
-            ok && stderr.is_empty(),
-            "a commit prints no git error: {stderr}"
-        );
-        let (ok, stderr) = sandboxed(
-            "git -c user.name=t -c user.email=t@example.invalid commit -q --amend -m Again",
-        );
-        assert!(
-            ok && stderr.is_empty(),
-            "an amend of its own branch works: {stderr}"
-        );
-        let other = git_ok(&main, &["rev-parse", "brigadier/bb/task-1"]);
-        let base = git_ok(&main, &["rev-parse", "main"]);
-        let survives = |what: &str| {
-            assert_eq!(
-                git_ok(&main, &["rev-parse", "brigadier/bb/task-1"]),
-                other,
-                "{what}"
-            );
-            assert_eq!(git_ok(&main, &["rev-parse", "main"]), base, "{what}");
-        };
-        let (ok, stderr) = sandboxed("git branch -D brigadier/bb/task-1");
-        assert!(
-            !ok && stderr.contains("Operation not permitted"),
-            "{stderr}"
-        );
-        survives("a loose ref's delete");
-        let (ok, _) = sandboxed("git update-ref refs/heads/main HEAD");
-        assert!(!ok);
-        survives("the base's update");
-        git_ok(&main, &["pack-refs", "--all"]);
-        assert!(!common.join("refs/heads/brigadier/bb/task-1").exists());
-        let (ok, stderr) = sandboxed("git branch -D brigadier/bb/task-1");
-        assert!(!ok, "a packed ref's delete fails too: {stderr}");
-        survives("a packed ref's delete");
-        // Holding the lock is harmless: renaming it over `packed-refs` is refused.
-        let (ok, _) = sandboxed(&format!(
-            "cp '{0}/packed-refs' '{0}/packed-refs.lock' && mv '{0}/packed-refs.lock' '{0}/packed-refs'",
-            common.display()
-        ));
-        assert!(!ok);
-        let _ = std::fs::remove_file(common.join("packed-refs.lock"));
-        // Packing pruned its ref's emptied folder, which a sandboxed git can't make again:
-        // the engine makes it whenever it grants the roots (a CLI's start, each ref check).
-        commit_roots(
-            &tool.open(&task).unwrap(),
-            Some("brigadier/aa/task-1"),
-            false,
-        );
-        let (ok, stderr) = sandboxed(commit.replace("hi", "again").as_str());
-        assert!(ok && stderr.is_empty(), "{stderr}");
-        survives("its own commit");
-    }
-
     #[test]
     fn an_operator_needs_a_model_that_takes_images_and_no_checkout() {
         assert!(needs_of(TaskKind::Operate, &[], &[]).image_input);
@@ -6186,9 +5677,9 @@ mod tests {
             category(TaskKind::Operate, false),
             brigadier_router::TaskCategory::Operate
         );
-        for permission in [PermissionLevel::AskForApproval, PermissionLevel::FullAccess] {
+        for permission in [PermissionLevel::Ask, PermissionLevel::Full] {
             assert_eq!(
-                access_for(TaskKind::Operate, permission).repo,
+                repo_access_for(TaskKind::Operate, permission).repo,
                 RepoAccess::None
             );
         }

@@ -165,15 +165,12 @@ impl SessionManager {
                 self.latest_request(id).await,
             ),
             TokenOwner::Task(id, task) => {
-                let escalation = task.0.starts_with(super::escalation::ESCALATION_OWNER);
-                let review = task.0.starts_with("review:") || escalation;
+                let review = task.0.starts_with("review:");
                 (
                     Some(id.0.clone()),
                     conversation(id).and_then(|c| c.project_id).map(|p| p.0),
                     Some(task.0.clone()),
-                    if escalation {
-                        StepKind::Escalation
-                    } else if review {
+                    if review {
                         StepKind::Review
                     } else {
                         StepKind::Worker
@@ -232,8 +229,8 @@ impl SessionManager {
     }
 
     /// Meters the Codex child threads of `cli`'s thread (a worker's or a session thread's) at
-    /// its turn's end. Under Approve for me Codex's auto-review (the "guardian") runs in a
-    /// child thread whose use the parent's totals leave out; only its rollout holds it. Each
+    /// its turn's end. Codex's auto-review (the "guardian"), where it runs, runs in a child
+    /// thread whose use the parent's totals leave out; only its rollout holds it. Each
     /// child's use is recorded once, as [`StepKind::Guardian`] rows marked with the child's
     /// id, whichever turn's end sees it grow.
     pub(crate) async fn meter_child_threads(&self, cli: &Cli, owner: TokenOwner<'_>) {

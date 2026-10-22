@@ -282,7 +282,7 @@ function session(id: string, projectId: string, title: string): void {
       type: "session",
       repo: `/tmp/peer-fixture/${projectId}`,
       environment: { type: "newWorktree", branch: `brigadier/${id}/session`, base: "main" },
-      permission: "askForApproval",
+      permission: "ask",
       planMode: false,
       workersSeeUncommitted: null,
       orchestrator: { provider: "claude", model: "opus", effort: "high" },

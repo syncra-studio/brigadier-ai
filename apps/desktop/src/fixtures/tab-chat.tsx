@@ -33,7 +33,7 @@ const conversation = {
   setup: {
     type: "session", repo: "/tmp/tab-chat-fixture",
     environment: { type: "newWorktree", branch: "brigadier/tab-chat/session", base: "main" },
-    permission: "fullAccess", planMode: false, workersSeeUncommitted: null,
+    permission: "full", planMode: false, workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: "opus", effort: "high" },
   },
 } as unknown as Conversation;

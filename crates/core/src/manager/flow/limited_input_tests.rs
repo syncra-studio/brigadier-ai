@@ -30,9 +30,8 @@ fn seen(log: &Log) -> Vec<Seen> {
     log.lock().unwrap().clone()
 }
 
-/// A thread that, on "Scout it.", delegates a scout (which reports at once) and, on "Run it.",
-/// runs a command that goes to the background. Its first Claude turn reading `marker` hits its
-/// usage limit, which resets `resets_in_ms` from then. Every thread turn is logged.
+/// A thread that, on "Scout it.", delegates a scout (which reports at once). Its first Claude
+/// turn reading `marker` hits its usage limit, which resets `resets_in_ms` from then. Every thread turn is logged.
 fn limited_on(marker: &'static str, resets_in_ms: Option<i64>, log: &Log) -> Script {
     let (log, limited) = (log.clone(), Arc::new(AtomicBool::new(false)));
     Arc::new(move |turn: Turn| {
@@ -68,13 +67,6 @@ fn limited_on(marker: &'static str, resets_in_ms: Option<i64>, log: &Log) -> Scr
                         json!({"effort": "high", "title": "Look around",
                                "kind": "scout", "spec": "Look around."}),
                     )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("");
-            }
-            if turn.input.contains("Run it.") && !turn.input.contains("finished · ") {
-                let reply = turn
-                    .call("run", json!({"command": "sleep 3; echo ran"}))
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("");
@@ -187,23 +179,6 @@ async fn a_stand_in_reads_the_user_message_a_limited_turn_was_reading() {
     .await;
     flow.say("Look it up.").await;
     let after = read_once_after_the_limit(&flow, &log, "Look it up.").await;
-    assert_eq!(after[0].provider, ProviderKind::Codex, "{after:#?}");
-    flow.stop().await;
-}
-
-/// A background run's result a limited turn was reading goes to the stand-in.
-#[tokio::test]
-async fn a_stand_in_reads_the_background_result_a_limited_turn_was_reading() {
-    let log = Log::default();
-    let flow = Flow::start(
-        "limited-input-background",
-        Options::default(),
-        limited_on("finished · run", None, &log),
-    )
-    .await;
-    flow.background_commands();
-    flow.say("Run it.").await;
-    let after = read_once_after_the_limit(&flow, &log, "finished · run").await;
     assert_eq!(after[0].provider, ProviderKind::Codex, "{after:#?}");
     flow.stop().await;
 }

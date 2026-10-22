@@ -1,7 +1,7 @@
 //! A request's phases, as the delegator runs them: the orchestrator splits a big request into
 //! phases only when they must run one after another, each phase gets one lead, and a lead whose
 //! work is big writes an outline first. The orchestrator gets the outline at once and gives the
-//! go-ahead (the user gives it under "Ask for approval"); it judges the outline itself. A
+//! go-ahead (the user gives it under "Ask"); it judges the outline itself. A
 //! verifier is the orchestrator's call, for big or risky work. Nothing here rejects, re-reviews or counts rounds.
 
 use tokio::sync::oneshot;
@@ -613,7 +613,7 @@ impl SessionManager {
         task.clone()
     }
 
-    /// `approve_outline`: the go-ahead for a lead's outline, or, under "Ask for approval", a
+    /// `approve_outline`: the go-ahead for a lead's outline, or, under "Ask", a
     /// card that asks the user for it.
     pub(crate) async fn approve_outline(
         &self,
@@ -650,7 +650,7 @@ impl SessionManager {
             .corrections
             .map(|c| c.trim().to_owned())
             .filter(|c| !c.is_empty());
-        if self.permission(id) == PermissionLevel::AskForApproval && lead.run.is_none() {
+        if self.permission(id) == PermissionLevel::Ask && lead.run.is_none() {
             let shown = match &corrections {
                 Some(corrections) => format!("{outline}\n\nCorrections:\n{corrections}"),
                 None => outline,

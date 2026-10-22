@@ -8,15 +8,13 @@ import { QuotaResumed } from "@/app/conversation/activity/QuotaResumed";
 import { isTeamStep, TeamStep } from "@/app/conversation/activity/TeamSentence";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
-import { SandboxLimitNotice } from "@/app/conversation/SandboxLimitNotice";
 import { SettingSuggestedCard } from "@/app/conversation/SettingSuggestedCard";
 import { shownChange } from "@/app/conversation/settingCard";
 import { SessionOffer } from "@/app/conversation/SessionOffer";
 
 /**
  * The thread's notices among its work (THREAD-UX-PLAN.md §3.1): a judgement call the lead made,
- * the machine pausing the work, a merge the user asked for, the session's sandbox stopping what
- * the user asked for. Each is one standalone row; the last has its own buttons.
+ * the machine pausing the work, a merge the user asked for. Each is one standalone row.
  */
 
 /**
@@ -30,7 +28,6 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (kind.type === "moment") return <Moment text={kind.text} />;
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
   if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
-  if (kind.type === "fullAccessSuggested") return <SandboxLimitNotice reason={kind.reason} />;
   if (kind.type === "settingSuggested") return shownChange(kind.change) ? <SettingSuggestedCard change={kind.change} reason={kind.reason} /> : null;
   if (kind.type === "feedbackOffered") return <FeedbackOffer id={kind.id} kind={kind.kind} title={kind.title} body={kind.body} />;
   if (kind.type === "sessionOffered") return <SessionOffer id={kind.id} title={kind.title} task={kind.task} />;

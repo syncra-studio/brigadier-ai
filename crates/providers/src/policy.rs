@@ -1,98 +1,11 @@
-//! Brigadier's approval policy for CLI sessions.
+//! Helpers for the approval requests CLI sessions send.
 //!
-//! What a session may do is set by its permission level and enforced by its CLI (PLAN.md §5):
-//! Full access runs without a sandbox and never asks; Approve for me runs inside the CLI's OS
-//! sandbox and lets the CLI's own reviewer settle what leaves it; Ask for approval asks the
-//! user each time a command needs more than the sandbox allows. Requests that still reach
-//! Brigadier are routed by [`route`]; the user's "for this session" answer covers similar later
-//! requests for the rest of the conversation ([`Similar`]).
+//! What a session may do is its permission level, passed straight to its CLI (see
+//! [`crate::Access`]); every request that reaches Brigadier is the user's to answer. The user's
+//! "for this session" answer covers similar later requests for the rest of the conversation
+//! ([`Similar`]).
 
-use crate::model::{Access, ApprovalKind, ApprovalRequest};
-
-/// What Brigadier does with an approval request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Route {
-    /// Answer yes on the user's behalf.
-    Allow,
-    /// Answer no on the user's behalf.
-    Deny,
-    /// Only the user can answer.
-    AskUser,
-}
-
-/// How approvals are answered for a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovalMode {
-    /// Approve for me: allow what stays inside the session's access, ask the user otherwise.
-    Delegated,
-    /// Decline everything (a read-only session such as the orchestrator).
-    DeclineAll,
-}
-
-/// Decides who answers `request`.
-pub fn route(request: &ApprovalRequest, access: &Access, mode: ApprovalMode) -> Route {
-    match mode {
-        ApprovalMode::DeclineAll => Route::Deny,
-        ApprovalMode::Delegated => route_delegated(request, access),
-    }
-}
-
-/// [`route`] under Approve for me.
-fn route_delegated(request: &ApprovalRequest, access: &Access) -> Route {
-    if request.escalation || request.kind == ApprovalKind::Permissions {
-        return Route::AskUser;
-    }
-    // Reaching a host from a sandbox without network (Ask for approval) is the user's call.
-    if request.tool == NETWORK_TOOL {
-        return match access {
-            Access::Scoped { network: true, .. } | Access::Workspace { .. } | Access::Full => {
-                Route::Allow
-            }
-            Access::Scoped { network: false, .. } | Access::ReadOnly => Route::AskUser,
-        };
-    }
-    match access {
-        Access::ReadOnly => Route::AskUser,
-        Access::Workspace { .. } | Access::Full => Route::Allow,
-        // The OS sandbox confines commands; file tools outside it may only write where the
-        // sandbox would let a command write.
-        Access::Scoped {
-            write_cwd,
-            writable_roots,
-            ..
-        } => {
-            if request.kind != ApprovalKind::FileChange {
-                return Route::Allow;
-            }
-            // Compared as the file system resolves them: `/tmp/x` and `/private/tmp/x` are one
-            // folder on macOS.
-            let cwd = request
-                .cwd
-                .as_deref()
-                .and_then(|cwd| real_path(std::path::Path::new(cwd)));
-            let roots: Vec<std::path::PathBuf> = writable_roots
-                .iter()
-                .filter_map(|root| real_path(root))
-                .collect();
-            let writable = |path: &std::path::Path| {
-                real_path(path).is_some_and(|path| {
-                    roots.iter().any(|root| path.starts_with(root))
-                        || (*write_cwd && cwd.as_ref().is_some_and(|cwd| path.starts_with(cwd)))
-                })
-            };
-            if !request.paths.is_empty()
-                && request
-                    .paths
-                    .iter()
-                    .all(|path| writable(std::path::Path::new(path)))
-            {
-                Route::Allow
-            } else {
-                Route::AskUser
-            }
-        }
-    }
-}
+use crate::model::{ApprovalKind, ApprovalRequest};
 
 /// `path` as the file system resolves it, symlinks included (`/tmp` → `/private/tmp` on
 /// macOS), also for a file not created yet: its deepest existing folder is resolved and the
@@ -766,20 +679,6 @@ mod tests {
         }
     }
 
-    fn scoped(root: PathBuf) -> Access {
-        Access::Scoped {
-            write_cwd: false,
-            writable_roots: vec![root],
-            network: false,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        }
-    }
-
-    fn routed(path: &Path, root: PathBuf) -> Route {
-        route(&write(path), &scoped(root), ApprovalMode::Delegated)
-    }
-
     #[test]
     fn a_new_file_resolves_through_its_existing_folders() {
         let dirs = Linked::new("new");
@@ -787,44 +686,6 @@ mod tests {
             real_path(&dirs.link().join("scratch/outputs/a/b.md")),
             Some(dirs.real().join("scratch/outputs/a/b.md"))
         );
-    }
-
-    #[test]
-    fn either_spelling_of_a_linked_root_is_inside_it() {
-        let dirs = Linked::new("spell");
-        let file = "scratch/outputs/navigation.md";
-        // The root as configured (through the link), the file as the CLI resolved it; and the
-        // other way round.
-        assert_eq!(
-            routed(&dirs.real().join(file), dirs.link().join("scratch")),
-            Route::Allow
-        );
-        assert_eq!(
-            routed(&dirs.link().join(file), dirs.real().join("scratch")),
-            Route::Allow
-        );
-        assert_eq!(
-            routed(&dirs.link().join(file), dirs.link().join("scratch")),
-            Route::Allow
-        );
-    }
-
-    #[test]
-    fn a_path_outside_or_climbing_out_is_not() {
-        let dirs = Linked::new("out");
-        let root = dirs.link().join("scratch");
-        assert_eq!(
-            routed(&dirs.real().join("elsewhere.md"), root.clone()),
-            Route::AskUser
-        );
-        assert_eq!(
-            routed(
-                &dirs.link().join("scratch/outputs/../../x.md"),
-                root.clone()
-            ),
-            Route::AskUser
-        );
-        assert_eq!(routed(Path::new("scratch/x.md"), root), Route::AskUser);
     }
 
     fn command(line: &str, cwd: Option<&Path>, escalation: bool) -> ApprovalRequest {
@@ -884,32 +745,6 @@ mod tests {
         similar.allow(&command("git push origin main", None, true));
         assert!(similar.covers(&command("git push -u origin topic", None, true), None));
         assert!(!similar.covers(&command("git reset --hard", None, true), None));
-    }
-
-    #[test]
-    fn network_access_asks_only_from_a_sandbox_without_network() {
-        let request = ApprovalRequest {
-            kind: ApprovalKind::Tool,
-            tool: NETWORK_TOOL.into(),
-            paths: Vec::new(),
-            ..write(Path::new("/"))
-        };
-        let offline = scoped(PathBuf::from("/"));
-        assert_eq!(
-            route(&request, &offline, ApprovalMode::Delegated),
-            Route::AskUser
-        );
-        let online = Access::Scoped {
-            write_cwd: false,
-            writable_roots: Vec::new(),
-            network: true,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        assert_eq!(
-            route(&request, &online, ApprovalMode::Delegated),
-            Route::Allow
-        );
     }
 
     #[test]

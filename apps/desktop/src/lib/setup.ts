@@ -20,23 +20,19 @@ import { loadProviders } from "@/state/actions";
 import { type Availability, modelAvailable, providerOn } from "@/state/providers";
 import { useApp } from "@/state/store";
 
-export const PERMISSION_LEVELS: readonly PermissionLevel[] = [
-  "askForApproval",
-  "approveForMe",
-  "fullAccess",
-];
+export const PERMISSION_LEVELS: readonly PermissionLevel[] = ["ask", "acceptEdits", "full"];
 
 export const PERMISSION_LABELS: Record<PermissionLevel, string> = {
-  askForApproval: "Ask for approval",
-  approveForMe: "Approve for me",
-  fullAccess: "Full access",
+  ask: "Ask",
+  acceptEdits: "Accept edits",
+  full: "Full access",
 };
 
 /** One line each. */
 export const PERMISSION_DETAILS: Record<PermissionLevel, string> = {
-  askForApproval: "Ask before plans, landings and each step outside the sandbox",
-  approveForMe: "Only ask what only you can answer",
-  fullAccess: "Workers run like your own terminal, without asking",
+  ask: "Asks before edits and commands",
+  acceptEdits: "Edits files freely, asks before other commands",
+  full: "Never asks",
 };
 
 /** The permission menu's line in a folder the user doesn't trust. */

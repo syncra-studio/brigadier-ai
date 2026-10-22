@@ -764,29 +764,6 @@ impl CleanupLedger {
         self.remove(owner, artifacts).await
     }
 
-    /// Revoke a failed claim immediately, before another start can reuse it. Its durable
-    /// cleanup continues even when the start future was cancelled.
-    #[cfg(any(target_os = "macos", all(test, unix)))]
-    pub(crate) fn rollback(self: &Arc<Self>, owner: String, artifacts: Vec<Artifact>) {
-        if let Some(known) = self.state().artifacts.get_mut(&owner) {
-            known.retain(|artifact| !artifacts.contains(artifact));
-        }
-        let ledger = self.clone();
-        tokio::spawn(async move {
-            for artifact in artifacts {
-                let leftovers = ledger.release(&owner, vec![artifact.clone()]).await;
-                if !leftovers.is_clean() {
-                    // Keep failed cleanup visible for a later archive or delete.
-                    let mut state = ledger.state();
-                    let known = state.artifacts.entry(owner.clone()).or_default();
-                    if !known.contains(&artifact) {
-                        known.push(artifact);
-                    }
-                }
-            }
-        });
-    }
-
     /// Forgets a recorded artifact that was never created after all: nothing is touched.
     pub async fn unrecord(&self, owner: &str, artifact: Artifact) -> Result<()> {
         self.append(DomainEvent::CleanupRemoved {

@@ -4,55 +4,43 @@ import { test } from "node:test";
 import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 type Rendering = {
-  first: { select: string; notice: string[]; picker: string };
+  first: { select: string; picker: string };
   saved: { select: string; newSession: string; pickedForOne: string; session: string; picker: string };
   confirming: boolean;
-  switched: { session: string; picker: string; notice: string[]; line: string };
-  selection: { type: string; page: string };
+  switched: { session: string; picker: string };
   calls: string[];
 };
 
-// The real page and notice in Chromium over a faked daemon: Configuration saves the default a
-// new session starts at and leaves the started session alone; the notice's button switches the
-// session through the composer's confirmation and path, then gives way; its link opens the page.
-test("Configuration saves the default, and the sandbox notice switches the session and opens Configuration", { timeout: 60000 }, async (t) => {
+// The real page and picker in Chromium over a faked daemon: Configuration saves the default a
+// new session starts at and leaves the started session alone; the session's own picker switches
+// it to Full access through the confirmation.
+test("Configuration saves the default, and the session's picker switches it to Full access", { timeout: 60000 }, async (t) => {
   // The page's dump is HTML: its ">" comes back escaped.
   const dump = await renderFixturePage(t, "access.html?drive=1", "access-result", 8000);
   const rendering = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Rendering;
-  assert.deepEqual(rendering.first, {
-    select: "Ask for approval",
-    notice: ["Switch this session to Full access", "Open Settings > Configuration"],
-    picker: "Ask for approval",
-  });
+  assert.deepEqual(rendering.first, { select: "Ask", picker: "Ask" });
   assert.deepEqual(rendering.saved, {
-    select: "Approve for me",
-    newSession: "approveForMe",
-    pickedForOne: "fullAccess",
-    session: "askForApproval",
-    picker: "Ask for approval",
+    select: "Accept edits",
+    newSession: "acceptEdits",
+    pickedForOne: "full",
+    session: "ask",
+    picker: "Ask",
   });
   assert.equal(rendering.confirming, true);
-  assert.deepEqual(rendering.switched, {
-    session: "fullAccess",
-    picker: "Full access",
-    notice: ["Open Settings > Configuration"],
-    line: "This session has Full access.",
-  });
-  assert.deepEqual(rendering.selection, { type: "settings", page: "configuration" });
-  assert.deepEqual(rendering.calls, ["default approveForMe", "session fullAccess"]);
+  assert.deepEqual(rendering.switched, { session: "full", picker: "Full access" });
+  assert.deepEqual(rendering.calls, ["default acceptEdits", "session full"]);
 });
 
-test("a finished reply keeps the sandbox notice outside its collapsed work, rounded like the offer cards", { timeout: 60000 }, async (t) => {
+test("a finished reply keeps its offer cards outside its collapsed work, and an old Full access suggestion isn't shown", { timeout: 60000 }, async (t) => {
   const dump = await renderFixturePage(t, "access-thread.html", "access-thread-result", 8000);
   const rendering = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&"));
   assert.deepEqual(rendering, {
     state: "done",
     outsideWork: true,
-    buttons: ["Switch this session to Full access", "Open Settings > Configuration"],
-    count: 1,
-    // The notice, the session offer and the suggested setting all round to --radius-question;
-    // the setting is the offer card: its icon in a tile, its buttons not indented.
-    corners: [true, true, true],
+    count: 0,
+    // The session offer and the suggested setting both round to --radius-question; the setting
+    // is the offer card: its icon in a tile, its buttons not indented.
+    corners: [true, true],
     setting: { buttons: ["Turn on", "Open Settings"], tiled: true, indented: false },
   });
 });
@@ -77,18 +65,18 @@ test("Configuration shows its defaults in one card and explains the choices in i
   assert.deepEqual(seen.sections, ["Composer", "Brain"]);
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
-  assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Approve for me"]);
+  assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Accept edits"]);
   assert.deepEqual(seen.sessionsMenu, [["Automatic (Opus 5.5)", "The first signed-in agent’s default model."]]);
   assert.deepEqual(seen.chatsMenu, [["Automatic (Opus 5.5)", "The same model as new sessions."]]);
   assert.deepEqual(
     seen.permissionMenu.map((choice: string[]) => choice[0]),
-    ["Ask for approval", "Approve for me", "Full access"],
+    ["Ask", "Accept edits", "Full access"],
   );
   for (const [level, description] of seen.permissionMenu as string[][]) {
     assert.ok(description && description.length > 40, `${level} explains what it allows`);
   }
   assert.match(seen.permissionMenu[0][1], /safest/i);
-  assert.match(seen.permissionMenu[1][1], /reviewer can be wrong/);
+  assert.match(seen.permissionMenu[1][1], /files can change/);
   assert.match(seen.permissionMenu[2][1], /delete or leak/);
   // The memories have a page of their own now (Memory, under Personal).
   assert.deepEqual(seen.oldLink, { page: { type: "settings", page: "memory" }, inView: true });

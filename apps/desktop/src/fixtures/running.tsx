@@ -19,7 +19,7 @@ import { useApp } from "@/state/store";
 
 const id = "running-fixture";
 const conversation: Conversation = { id, kind: "session", title: "Build the web app", projectId: null,
-  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } }, lifecycle: "active",
+  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } }, lifecycle: "active",
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
 const params = new URLSearchParams(location.search);
 const now = Date.now();

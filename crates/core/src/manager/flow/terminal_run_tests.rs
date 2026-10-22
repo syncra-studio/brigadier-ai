@@ -195,7 +195,7 @@ async fn answered_after(
 
 #[tokio::test]
 async fn at_full_access_the_agent_types_in_its_own_tab_at_once_behind_the_user() {
-    let (flow, shells) = start("terminal-run-full", PermissionLevel::FullAccess).await;
+    let (flow, shells) = start("terminal-run-full", PermissionLevel::Full).await;
     let shown = window(&flow);
     let reply = flow
         .manager
@@ -235,10 +235,7 @@ async fn at_full_access_the_agent_types_in_its_own_tab_at_once_behind_the_user()
 
 #[tokio::test]
 async fn below_full_access_each_command_waits_on_the_users_card() {
-    for level in [
-        PermissionLevel::AskForApproval,
-        PermissionLevel::ApproveForMe,
-    ] {
+    for level in [PermissionLevel::Ask, PermissionLevel::AcceptEdits] {
         let (flow, shells) = start("terminal-run-ask", level).await;
         window(&flow);
         let (reply, asked) = answered(&flow, run("cargo run", None), ApprovalDecision::Allow).await;
@@ -262,7 +259,7 @@ async fn below_full_access_each_command_waits_on_the_users_card() {
 
 #[tokio::test]
 async fn a_users_terminal_named_by_the_model_waits_on_their_card_even_at_full_access() {
-    let (flow, shells) = start("terminal-run-user", PermissionLevel::FullAccess).await;
+    let (flow, shells) = start("terminal-run-user", PermissionLevel::Full).await;
     window(&flow);
     let (reply, _) = answered(
         &flow,
@@ -296,7 +293,7 @@ async fn a_users_terminal_named_by_the_model_waits_on_their_card_even_at_full_ac
 
 #[tokio::test]
 async fn a_busy_terminal_of_the_users_is_never_typed_into() {
-    let (flow, shells) = start("terminal-run-busy", PermissionLevel::FullAccess).await;
+    let (flow, shells) = start("terminal-run-busy", PermissionLevel::Full).await;
     window(&flow);
     let reply = flow
         .manager
@@ -327,11 +324,7 @@ async fn a_busy_terminal_of_the_users_is_never_typed_into() {
 
 #[tokio::test]
 async fn a_command_started_while_the_card_waited_is_never_typed_into() {
-    let (flow, shells) = start(
-        "terminal-run-busy-meanwhile",
-        PermissionLevel::AskForApproval,
-    )
-    .await;
+    let (flow, shells) = start("terminal-run-busy-meanwhile", PermissionLevel::Ask).await;
     window(&flow);
     let busy = |id: &str| {
         let shells = shells.clone();
@@ -382,7 +375,7 @@ async fn a_command_started_while_the_card_waited_is_never_typed_into() {
 
 #[tokio::test]
 async fn with_no_window_nothing_is_typed_and_the_new_shell_goes() {
-    let (flow, shells) = start("terminal-run-no-window", PermissionLevel::FullAccess).await;
+    let (flow, shells) = start("terminal-run-no-window", PermissionLevel::Full).await;
     let reply = flow
         .manager
         .app_tool(flow.conversation.clone(), run("npm run dev", None))
@@ -469,7 +462,7 @@ async fn asked(flow: &Flow, call: AppToolCall, decision: ApprovalDecision) -> (T
 
 #[tokio::test]
 async fn an_agents_tab_closes_at_once_and_one_at_rest_in_its_terminal_too() {
-    let (flow, shells) = start("close-tab-agent", PermissionLevel::FullAccess).await;
+    let (flow, shells) = start("close-tab-agent", PermissionLevel::Full).await;
     let heard = tabs_window(&flow);
     shells.terminals.lock().unwrap().push(TerminalSnapshot {
         id: "terminal-3".into(),
@@ -522,7 +515,7 @@ async fn an_agents_tab_closes_at_once_and_one_at_rest_in_its_terminal_too() {
 #[tokio::test]
 async fn the_users_tab_unsaved_edits_and_a_terminal_that_runs_or_cant_be_told_close_only_on_a_yes()
 {
-    let (flow, shells) = start("close-tab-confirm", PermissionLevel::FullAccess).await;
+    let (flow, shells) = start("close-tab-confirm", PermissionLevel::Full).await;
     let heard = tabs_window(&flow);
     shells.terminals.lock().unwrap().extend([
         TerminalSnapshot {

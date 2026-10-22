@@ -42,7 +42,7 @@ function withSetup(conversation: Conversation): Conversation {
     ...conversation,
     setup: {
       type: "session", repo: "/tmp/summary-card-fixture", environment: { type: "localCheckout", branch: "main" },
-      permission: "askForApproval", planMode: false, workersSeeUncommitted: null,
+      permission: "ask", planMode: false, workersSeeUncommitted: null,
       orchestrator: { provider: "claude", model: null, effort: null },
     },
   } as Conversation;

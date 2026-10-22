@@ -54,9 +54,6 @@ pub enum PendingKind {
     FileChange,
     /// The requested permission profile, echoed back when granted.
     Permissions(Value),
-    /// A trusted server's tool call that still asks first (`approval_mode = "prompt"`),
-    /// answered as an elicitation.
-    McpTool,
 }
 
 #[derive(Debug)]
@@ -361,7 +358,7 @@ impl Parser {
                     .iter()
                     .find_map(|key| params.get(key).and_then(Value::as_str))
                     .unwrap_or(method);
-                // The auto-reviewer's verdict on each request it settles (Approve for me) is
+                // The auto-reviewer's verdict on each request it settles is
                 // routine, not a warning.
                 let level = if method == "guardianWarning" {
                     NoticeLevel::Info

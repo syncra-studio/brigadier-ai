@@ -21,12 +21,12 @@ export function ComposerHint({ target }: { target: ComposerTarget }) {
   // A new worktree starts from its base's last commit: what isn't committed stays out of it.
   const dirty = repo.info?.dirty;
   const local = resolved.environment === "localCheckout";
-  if (resolved.kind !== "session" || (permission !== "fullAccess" && !dirty)) return null;
+  if (resolved.kind !== "session" || (permission !== "full" && !dirty)) return null;
   return (
     <p className="text-muted-foreground px-2 text-xs">
-      {permission === "fullAccess" && (
+      {permission === "full" && (
         <span className="text-full-access">
-          Full access: workers run without the OS sandbox.{" "}
+          Full access: workers run commands without asking.{" "}
         </span>
       )}
       {dirty &&

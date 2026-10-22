@@ -614,12 +614,10 @@ impl SessionManager {
             sweep_dir: Some(dir.clone()),
             auto_compact: true,
             allowed_models: None,
-            auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
-            protection: Default::default(),
         };
         let written = async {
             let Started {

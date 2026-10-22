@@ -341,56 +341,6 @@ impl SessionManager {
         None
     }
 
-    /// Pipe readers resolve the row lazily: the CLI's start event and MCP request arrive on
-    /// different channels. What the command prints before its row is there waits, and goes
-    /// first once the row is found; from then on every chunk belongs to that same call through
-    /// handoff.
-    pub(super) fn own_command_output(
-        &self,
-        id: &ConversationId,
-        tool: &str,
-        command: &str,
-    ) -> super::run::CommandOutput {
-        let (manager, id, tool, command) = (
-            self.me.clone(),
-            id.clone(),
-            tool.to_owned(),
-            command.to_owned(),
-        );
-        let item = std::sync::Arc::new(tokio::sync::Mutex::new((None::<String>, Vec::new())));
-        std::sync::Arc::new(move |bytes| {
-            let (manager, id, tool, command, item) = (
-                manager.clone(),
-                id.clone(),
-                tool.clone(),
-                command.clone(),
-                item.clone(),
-            );
-            Box::pin(async move {
-                let Some(manager) = manager.upgrade() else {
-                    return;
-                };
-                let mut guard = item.lock().await;
-                let (resolved, early) = &mut *guard;
-                if resolved.is_none() {
-                    *resolved = manager.own_command_item(&id, &tool, &command).await;
-                }
-                let Some(item) = resolved.as_deref() else {
-                    let room = OUTPUT_MAX_BYTES.saturating_sub(early.len());
-                    early.extend_from_slice(&bytes[..bytes.len().min(room)]);
-                    return;
-                };
-                if let Ok(conv) = manager.conv(&id) {
-                    if !early.is_empty() {
-                        let early = std::mem::take(early);
-                        manager.command_output_bytes(&conv, item, &early).await;
-                    }
-                    manager.command_output_bytes(&conv, item, &bytes).await;
-                }
-            })
-        })
-    }
-
     pub(super) async fn tool_row(&self, conv: &ConvLive, row: OrchestratorStepKind) {
         if matches!(&row, OrchestratorStepKind::Tool { name, .. } if crate::digest::own_run(name)) {
             self.command_row(conv, row).await;

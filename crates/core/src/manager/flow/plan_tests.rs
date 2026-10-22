@@ -1,6 +1,6 @@
 //! Plans as documents (THREAD-PARITY-PLAN.md §6): the thread proposes its plan on a card
 //! (`propose_plan`), the user's yes builds it and turns plan mode off, their changes send it
-//! back for a revision that replaces it, and a lead's outline under "Ask for approval" is the
+//! back for a revision that replaces it, and a lead's outline under "Ask" is the
 //! same card, whose one answer starts the lead.
 
 use std::sync::{Arc, Mutex};
@@ -297,7 +297,7 @@ async fn changes_send_a_plan_back_and_the_next_proposal_replaces_it() {
     flow.stop().await;
 }
 
-/// The thread's script for a lead under "Ask for approval": it delegates, asks for the
+/// The thread's script for a lead under "Ask": it delegates, asks for the
 /// outline's go-ahead (the user's card), and lands the report.
 fn outline_script(worker_inputs: Arc<Mutex<Vec<String>>>) -> Script {
     script(move |turn| {
@@ -364,7 +364,7 @@ async fn answer_the_outline(name: &str, decision: ApprovalDecision) -> (Board, V
     let flow = Flow::start(
         name,
         Options {
-            permission: PermissionLevel::AskForApproval,
+            permission: PermissionLevel::Ask,
             ..Options::default()
         },
         outline_script(worker_inputs.clone()),
@@ -454,7 +454,7 @@ async fn in_plan_mode_the_users_yes_to_the_plan_starts_the_lead_that_outlined_it
         "plan-mode-lead",
         Options {
             plan_mode: true,
-            permission: PermissionLevel::AskForApproval,
+            permission: PermissionLevel::Ask,
             ..Options::default()
         },
         script(|turn| async move {
@@ -550,7 +550,7 @@ async fn not_now_on_a_plan_with_a_waiting_lead_lets_its_request_end() {
         "plan-not-now-lead",
         Options {
             plan_mode: true,
-            permission: PermissionLevel::AskForApproval,
+            permission: PermissionLevel::Ask,
             ..Options::default()
         },
         script(|turn| async move {
@@ -633,7 +633,7 @@ async fn a_revised_plan_carries_its_leads_outline_and_reaches_the_lead() {
         "plan-mode-revised",
         Options {
             plan_mode: true,
-            permission: PermissionLevel::AskForApproval,
+            permission: PermissionLevel::Ask,
             ..Options::default()
         },
         script(move |turn| {

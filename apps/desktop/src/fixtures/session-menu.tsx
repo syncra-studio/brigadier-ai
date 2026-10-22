@@ -21,7 +21,7 @@ const base: Conversation = {
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
 };
 const setup = (environment: Environment) => ({
-  type: "session", repo: "/tmp/session-menu-fixture", environment, permission: "fullAccess", planMode: false,
+  type: "session", repo: "/tmp/session-menu-fixture", environment, permission: "full", planMode: false,
   workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null },
 }) as unknown as Setup;
 const conversations: Conversation[] = [

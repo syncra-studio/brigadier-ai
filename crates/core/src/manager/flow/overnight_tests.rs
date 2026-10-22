@@ -1442,8 +1442,8 @@ async fn a_bare_goals_plan_keeps_the_users_restrictions() {
     flow.stop().await;
 }
 
-/// An overnight run approves for the user under Ask for approval, but not in a folder the user
-/// doesn't trust: there it stays Ask for approval, so its steps outside the sandbox wait for
+/// An overnight run approves for the user under Ask, but not in a folder the user
+/// doesn't trust: there it stays Ask, so its steps outside the sandbox wait for
 /// the user.
 #[tokio::test]
 async fn a_run_in_an_untrusted_folder_stays_under_ask_for_approval() {
@@ -1471,7 +1471,7 @@ async fn a_run_in_an_untrusted_folder_stays_under_ask_for_approval() {
             Setup::Session {
                 repo,
                 environment,
-                permission: PermissionLevel::AskForApproval,
+                permission: PermissionLevel::Ask,
                 orchestrator,
                 workers_see_uncommitted,
                 plan_mode,
@@ -1488,7 +1488,7 @@ async fn a_run_in_an_untrusted_folder_stays_under_ask_for_approval() {
     start_run(&flow, "/overnight Make a file.", 1).await;
     assert_eq!(
         flow.manager.permission(&flow.conversation),
-        PermissionLevel::ApproveForMe
+        PermissionLevel::AcceptEdits
     );
     flow.manager
         .set_folder_trust(conversation.project_id.clone().unwrap(), None, false)
@@ -1496,7 +1496,7 @@ async fn a_run_in_an_untrusted_folder_stays_under_ask_for_approval() {
         .unwrap();
     assert_eq!(
         flow.manager.permission(&flow.conversation),
-        PermissionLevel::AskForApproval
+        PermissionLevel::Ask
     );
     flow.stop().await;
 }

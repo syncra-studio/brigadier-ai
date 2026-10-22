@@ -17,7 +17,7 @@ export function pendingActionKeys(
   if (!board || board.conversationId !== conversation?.id) return [];
   // Plan mode hands the plan to the user whatever the permission level.
   const decidesPlans = conversation.setup?.type === "session" &&
-    (conversation.setup.permission === "askForApproval" || conversation.setup.planMode);
+    (conversation.setup.permission === "ask" || conversation.setup.planMode);
   const waiting: { key: string; position: number }[] = [];
   for (const approval of Object.values(board.approvals)) {
     if (approval.state.type === "pending") {

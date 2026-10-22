@@ -35,7 +35,7 @@ use crate::model::{
 };
 use crate::now_ms;
 use crate::routing::TokenMeter;
-use crate::tools::{Role, RunTools};
+use crate::tools::Role;
 use crate::work::{ApprovalSubject, CardState, OrchestratorEntry, PlanState, TaskState};
 
 /// About four bytes per token.
@@ -276,8 +276,6 @@ impl Part {
 /// What a thread's CLI was started with, kept for its note fork (BUILD-PLAN B5).
 pub(crate) struct ForkBase {
     pub spec: SessionSpec,
-    /// The thread's command tools, which its Brigadier server lists.
-    pub run: RunTools,
 }
 
 /// What a note fork is told when it calls any tool: the deny hook's reason and Brigadier's
@@ -356,12 +354,10 @@ fn plain_fork_spec(
         sweep_dir: None,
         auto_compact: false,
         allowed_models: None,
-        auto_review: false,
         omit_ai_coauthors: false,
         output_hook: None,
         stop_hook: None,
         deny_tools: None,
-        protection: Default::default(),
     }
 }
 
@@ -470,7 +466,6 @@ impl SessionManager {
                     &owner,
                     Role::NoteFork {
                         conversation_id: id.clone(),
-                        run: base.run,
                     },
                 );
                 let spec = note_fork_spec(&base.spec, native_id, &issued);
@@ -951,7 +946,7 @@ impl SessionManager {
         if let Ok(conversation) = self.core.conversation(id)
             && let Some(Setup::Session { environment, .. }) = &conversation.setup
         {
-            // What applies now: an overnight run works on its own branch under Approve for me.
+            // What applies now: an overnight run works on its own branch under Accept edits.
             let place = match self
                 .overnight
                 .active

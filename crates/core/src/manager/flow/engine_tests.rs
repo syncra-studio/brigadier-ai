@@ -141,7 +141,7 @@ async fn the_first_start_deletes_every_old_conversation() {
         })),
         catalog_line(json!({
             "type": "settingsChanged",
-            "settings": { "defaultPermission": "askForApproval", "onboarded": true },
+            "settings": { "defaultPermission": "ask", "onboarded": true },
         })),
     ]);
     let flow = Flow::start(
@@ -159,7 +159,7 @@ async fn the_first_start_deletes_every_old_conversation() {
     assert_eq!(visible[0].id, flow.conversation);
     gone(&flow, &OLD).await;
     let settings = flow.core.settings();
-    assert_eq!(settings.default_permission, PermissionLevel::AskForApproval);
+    assert_eq!(settings.default_permission, PermissionLevel::Ask);
     assert!(settings.onboarded, "the other settings stay");
     let project = flow
         .core
@@ -252,7 +252,7 @@ async fn later_starts_keep_what_was_made_after_the_first() {
     let mut flow = Flow::start("engine-later", Options::default(), listening(&heard)).await;
     assert_eq!(
         flow.core.settings().default_permission,
-        PermissionLevel::ApproveForMe
+        PermissionLevel::AcceptEdits
     );
     assert_eq!(
         flow.core.engine().as_deref(),
@@ -274,7 +274,7 @@ async fn later_starts_keep_what_was_made_after_the_first() {
         .await
         .unwrap();
     let mut settings = flow.core.settings();
-    settings.default_permission = PermissionLevel::AskForApproval;
+    settings.default_permission = PermissionLevel::Ask;
     flow.core.update_settings(settings).await.unwrap();
     for _ in 0..2 {
         flow.restart().await;
@@ -284,7 +284,7 @@ async fn later_starts_keep_what_was_made_after_the_first() {
         }
         assert_eq!(
             flow.core.settings().default_permission,
-            PermissionLevel::AskForApproval
+            PermissionLevel::Ask
         );
     }
     let kinds = catalog_kinds(&flow).await;

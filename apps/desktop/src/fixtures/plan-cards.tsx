@@ -44,7 +44,7 @@ const session: Conversation = {
     type: "session",
     repo: "/tmp/plan-card-fixture",
     environment: { type: "localCheckout", branch: "fixture" },
-    permission: "askForApproval",
+    permission: "ask",
     planMode: false,
     workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: null, effort: null },
@@ -53,7 +53,7 @@ const session: Conversation = {
 const automatic: Conversation = {
   ...session,
   id: "fixture-automatic",
-  setup: { ...(session.setup as Extract<Setup, { type: "session" }>), permission: "approveForMe" },
+  setup: { ...(session.setup as Extract<Setup, { type: "session" }>), permission: "acceptEdits" },
 };
 
 const states: { id: string; name: string; state: PlanState; automatic?: boolean }[] = [

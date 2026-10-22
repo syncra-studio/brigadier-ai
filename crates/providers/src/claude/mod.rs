@@ -11,13 +11,11 @@
 //!   command runs, see `ConvState::held_peers`);
 //! - `initialize`, `get_usage` and `interrupt` are control requests;
 //! - permission prompts arrive as `can_use_tool` control requests (`--permission-prompt-tool
-//!   stdio`) and Brigadier answers them.
+//!   stdio`), which reach the user as cards.
 //!
-//! The permission mode follows the session's access ([`permission_mode`]): full access runs in
-//! `bypassPermissions` with no sandbox and never asks; with [`SessionSpec::auto_review`]
-//! (Approve for me) Claude's `auto` mode lets its classifier decide what leaves the sandbox,
-//! and declines what it judges unsafe to the model instead of asking; otherwise
-//! (`acceptEdits`) leaving the sandbox asks Brigadier. A read-only session (`dontAsk`) never
+//! The permission mode is the session's level, passed straight through ([`permission_mode`]):
+//! Ask runs in `default`, Accept edits in `acceptEdits`, Full access in `bypassPermissions`.
+//! Brigadier adds no sandbox and no rules of its own. A read-only session (`dontAsk`) never
 //! asks: what its allow rules don't cover is denied.
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Claude setup: their
@@ -30,9 +28,9 @@
 //! folder the user trusts ([`SessionSpec::project`]); the instruction files are left out, as
 //! the session's prompt carries them, and a settings file's command hooks are linked as a copy
 //! that runs each in the project. Brigadier's own `--settings` win over all of these
-//! (permission prompt tool, sandbox, ask and deny rules, the model allowlist). A hook of the
-//! user's that answers a permission request answers it before Brigadier is asked: their own
-//! rule, as in their terminal; the sandbox and deny rules still hold. Every other session
+//! (permission prompt tool, the switched-off servers and skills, the model allowlist). A hook
+//! of the user's that answers a permission request answers it before the user is asked: their
+//! own rule, as in their terminal. Every other session
 //! (reviewers, Brain jobs, Chats, one-shot runs) loads only the project's settings plus
 //! Brigadier's own (`--setting-sources project`), and only Brigadier's MCP servers
 //! (`--strict-mcp-config`).
@@ -318,11 +316,6 @@ impl Claude {
         home_login: bool,
         user_config: Option<&Path>,
     ) -> Vec<String> {
-        // Its extra folders are writable wherever its working directory is.
-        let spec = &SessionSpec {
-            access: spec.access_with_dirs(),
-            ..spec.clone()
-        };
         // A thread or a worker loads the user's settings, the project's and their local ones,
         // with their MCP servers beside Brigadier's; `--settings` wins over all of them. Every
         // other session loads only the project's, and only Brigadier's servers.
@@ -372,24 +365,14 @@ impl Claude {
             }
         }
         args.push("--settings".into());
-        args.push(settings(spec, cwd, &sub_agents, home_login).to_string());
+        args.push(settings(spec, &sub_agents, home_login).to_string());
         args.push("--permission-mode".into());
         args.push(permission_mode(spec).into());
-        // The session's own folders and the roots it may write. Both spellings of a root behind
-        // a symlink (`/tmp` → `/private/tmp`): Claude matches the path as a tool was given it.
-        // `--add-dir <directories...>` is variadic (claude --help, 2.1.292): only flags follow
-        // it here, and turns go on stdin, so no positional argument is taken for a folder.
-        // A writable root that isn't a folder (a branch's ref, its `.lock`, `packed-refs.lock`)
-        // is granted by the sandbox's `allowWrite` alone: given as `--add-dir`, a `.lock` not
-        // there yet can't be made in the sandbox at all (2.1.296, checked by hand), so no
-        // commit takes its branch's lock.
-        let mut dirs: Vec<&PathBuf> = spec.add_dirs.iter().collect();
-        for root in spec.access.writable_roots() {
-            if root.is_dir() && !dirs.contains(&root) {
-                dirs.push(root);
-            }
-        }
-        for root in dirs {
+        // The session's own folders. Both spellings of a folder behind a symlink (`/tmp` →
+        // `/private/tmp`): Claude matches the path as a tool was given it. `--add-dir
+        // <directories...>` is variadic (claude --help, 2.1.292): only flags follow it here, and
+        // turns go on stdin, so no positional argument is taken for a folder.
+        for root in &spec.add_dirs {
             let real = resolved(root);
             args.push("--add-dir".into());
             args.push(root.display().to_string());
@@ -648,43 +631,22 @@ fn main_checkout(git_file: &Path) -> Option<PathBuf> {
 /// Claude's permission mode for a session (see the module docs).
 fn permission_mode(spec: &SessionSpec) -> &'static str {
     match spec.access {
+        Access::Ask => "default",
+        Access::AcceptEdits => "acceptEdits",
         Access::Full => "bypassPermissions",
         // A read-only session never asks: what its allow rules don't cover is denied.
         Access::ReadOnly => "dontAsk",
-        Access::Workspace { .. } | Access::Scoped { .. } if spec.auto_review => "auto",
-        Access::Scoped {
-            write_cwd: false, ..
-        } => "default",
-        Access::Workspace { .. } | Access::Scoped { .. } => "acceptEdits",
     }
-}
-
-/// A permission rule path for an absolute path (`//abs/path/**`).
-fn rule_path(path: &Path) -> String {
-    format!("/{}/**", path.display())
 }
 
 /// Brigadier's settings layer for a session, passed with `--settings` (above project settings).
-fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: bool) -> Value {
-    let mut ask: Vec<String> = Vec::new();
-    // Unless Claude's own reviewer decides (auto mode), leaving the sandbox always goes through
-    // the permission prompt, even if a project rule would allow the command.
-    if spec.access != Access::Full && !spec.auto_review {
-        ask.push("Bash(dangerouslyDisableSandbox:true)".into());
-    }
+fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Value {
     let mut allow: Vec<String> = spec
         .mcp_servers
         .iter()
         .filter(|server| server.trusted)
         .map(|server| format!("mcp__{}", server.name))
         .collect();
-    // A trusted server's tools that still ask (a thread's command leaving its sandbox): an ask
-    // rule wins over the server's allow rule.
-    for server in spec.mcp_servers.iter().filter(|server| server.trusted) {
-        for tool in &server.prompt_tools {
-            ask.push(format!("mcp__{}__{tool}", server.name));
-        }
-    }
     // The user's own servers they switched off for Brigadier: a deny rule keeps their tools
     // from the model (docs/research/phase7-probes.md (a)).
     let mut deny: Vec<String> = spec
@@ -701,133 +663,10 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
             .iter()
             .map(|name| format!("Skill({name})")),
     );
-    let sandbox = match &spec.access {
-        Access::Workspace { extra_roots } => json!({
-            "enabled": true,
-            "failIfUnavailable": true,
-            "autoAllowBashIfSandboxed": true,
-            "allowUnsandboxedCommands": true,
-            "network": { "allowedDomains": ["*"], "allowLocalBinding": true },
-            "filesystem": {
-                "allowWrite": paths(extra_roots),
-            },
-        }),
-        Access::Scoped {
-            write_cwd,
-            writable_roots,
-            network,
-            deny_read,
-            unix_sockets,
-        } => {
-            // Its added folders are writable exactly when its working directory is.
-            let read_only: Vec<&Path> = if *write_cwd {
-                Vec::new()
-            } else {
-                std::iter::once(cwd)
-                    .chain(spec.add_dirs.iter().map(PathBuf::as_path))
-                    .collect()
-            };
-            for dir in &read_only {
-                for tool in ["Edit", "Write", "NotebookEdit"] {
-                    deny.push(format!("{tool}({})", rule_path(dir)));
-                }
-            }
-            for path in deny_read {
-                // Permission rules match the path as the tool was given it: deny both spellings.
-                deny.push(format!("Read({})", rule_path(path)));
-                let real = resolved(path);
-                if real != *path {
-                    deny.push(format!("Read({})", rule_path(&real)));
-                }
-            }
-            let mut filesystem = json!({
-                "allowWrite": paths(writable_roots),
-                "denyRead": paths(deny_read),
-            });
-            let mut deny_write: Vec<PathBuf> =
-                read_only.iter().map(|dir| dir.to_path_buf()).collect();
-            // A writer may commit into a repository's git folder, but not plant hooks or
-            // change its config: those run outside the sandbox the next time the user runs git.
-            // Claude's file tools work outside the OS sandbox: deny them there too.
-            // A checkout among the writable folders (a thread on the user's own checkout) holds
-            // its git folder inside.
-            let writable_dirs = writable_roots.iter().map(PathBuf::as_path).chain(
-                write_cwd
-                    .then(|| std::iter::once(cwd).chain(spec.add_dirs.iter().map(PathBuf::as_path)))
-                    .into_iter()
-                    .flatten(),
-            );
-            let git_dirs: Vec<PathBuf> = writable_dirs
-                .flat_map(|root| [root.to_owned(), root.join(".git")])
-                .filter(|root| is_git_dir(root))
-                .collect();
-            for root in &git_dirs {
-                let root = resolved(root);
-                for tool in ["Edit", "Write", "NotebookEdit"] {
-                    deny.push(format!("{tool}({})", rule_path(&root.join("hooks"))));
-                    deny.push(format!("{tool}(/{})", root.join("config").display()));
-                }
-                deny_write.extend([root.join("hooks"), root.join("config")]);
-            }
-            // Other sessions' branches and the branches its work lands on (PLAN bug 6): its
-            // sandbox grants none of them already, unless a checkout is writable whole (a
-            // thread on the user's own checkout). A deny wins over every allow in Claude's
-            // sandbox, so one that would cover the session's own ref is left to the grant.
-            for path in &spec.protection.deny {
-                if spec
-                    .protection
-                    .allow
-                    .iter()
-                    .any(|own| own.starts_with(path))
-                {
-                    continue;
-                }
-                let path = resolved(path);
-                // A rule names a file exactly and a folder's contents with `/**`.
-                for tool in ["Edit", "Write", "NotebookEdit"] {
-                    deny.push(format!("{tool}(/{})", path.display()));
-                    deny.push(format!("{tool}({})", rule_path(&path)));
-                }
-                deny_write.push(path);
-            }
-            if !deny_write.is_empty() {
-                filesystem["denyWrite"] = json!(paths(&deny_write));
-            }
-            json!({
-                "enabled": true,
-                "failIfUnavailable": true,
-                "autoAllowBashIfSandboxed": true,
-                "allowUnsandboxedCommands": true,
-                // A check's own dev server (a test's Vite) listens on localhost; Codex's
-                // sandbox allows that already.
-                "network": {
-                    "allowedDomains": if *network { json!(["*"]) } else { json!([]) },
-                    "allowUnixSockets": paths(unix_sockets),
-                    "allowLocalBinding": true,
-                },
-                "filesystem": filesystem,
-            })
-        }
-        Access::ReadOnly => json!({
-            "enabled": true,
-            "failIfUnavailable": true,
-            "autoAllowBashIfSandboxed": false,
-            "allowUnsandboxedCommands": false,
-        }),
-        // Like the user's own terminal: `bypassPermissions` asks for nothing.
-        Access::Full => json!({ "enabled": false }),
-    };
     if matches!(spec.tools, ToolSet::Web | ToolSet::Chat | ToolSet::Thread) {
         allow.extend(["WebSearch".to_owned(), "WebFetch".to_owned()]);
     }
     let mut permissions = json!({});
-    if !ask.is_empty() {
-        permissions["ask"] = json!(ask);
-    }
-    // Only full access may run without permission checks.
-    if spec.access != Access::Full {
-        permissions["disableBypassPermissionsMode"] = json!("disable");
-    }
     if !allow.is_empty() {
         permissions["allow"] = json!(allow);
     }
@@ -850,7 +689,6 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
         // refuse).
         "crossSessionInbound": "refuse",
         "permissions": permissions,
-        "sandbox": sandbox,
         // A repository's `AGENTS.md` files load next to its `CLAUDE.md` files (by default
         // Claude reads them only where there is no `CLAUDE.md`), nested ones included once
         // Claude reads a file in their directory.
@@ -913,15 +751,6 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     if spec.tools.user_setup() && settings.get("hooks").is_some() {
         settings["disableAllHooks"] = json!(false);
     }
-    // In auto mode Claude's classifier settles a command that leaves the sandbox: it refuses
-    // what the protection keeps out, whatever the user said. `hard_deny` rules block whatever
-    // the user intends, and `$defaults` keeps the built-in ones; the classifier reads `autoMode`
-    // from `--settings` (docs/en/auto-mode-config, 2.1.296).
-    if permission_mode(spec) == "auto"
-        && let Some(rule) = crate::approver_rule(&spec.protection)
-    {
-        settings["autoMode"] = json!({ "hard_deny": ["$defaults", rule] });
-    }
     // Full access is the user's own choice in Brigadier, so its terminal ("Open in terminal")
     // doesn't ask again with Claude's bypass-mode warning, whose default answer exits. Flag
     // settings count as consent (2.1.294 reads the key from user, local, flag and policy
@@ -939,34 +768,10 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
             env.insert((*name).to_owned(), json!(""));
         }
     }
-    // A Codex the session runs in its sandbox checks TLS certificates through macOS's trust
-    // service, which Claude's sandbox keeps out (only `enableWeakerNetworkIsolation` lets it in,
-    // for every command, and it is a way out for data): each of its requests fails with "error
-    // sending request". Given a CA bundle, Codex checks them itself with the native roots and
-    // the bundle's (codex-cli 0.163.0, #504). A bundle the user gives it already does that.
-    if cfg!(target_os = "macos")
-        && sandbox_network(&spec.access)
-        && std::env::var_os("CODEX_CA_CERTIFICATE").is_none()
-        && std::env::var_os("SSL_CERT_FILE").is_none()
-    {
-        env.insert("CODEX_CA_CERTIFICATE".to_owned(), json!(MACOS_CA_BUNDLE));
-    }
     if !env.is_empty() {
         settings["env"] = Value::Object(env);
     }
     settings
-}
-
-/// macOS's own bundle of the system's root certificates.
-const MACOS_CA_BUNDLE: &str = "/etc/ssl/cert.pem";
-
-/// Whether a session's commands reach the network through Claude's sandbox.
-fn sandbox_network(access: &Access) -> bool {
-    match access {
-        Access::Workspace { .. } => true,
-        Access::Scoped { network, .. } => *network,
-        Access::ReadOnly | Access::Full => false,
-    }
 }
 
 /// A thread's output hook ([`SessionSpec::output_hook`]) as settings `hooks`: the same command
@@ -1101,21 +906,6 @@ fn available_models(allowed: &AllowedModels) -> Option<Vec<String>> {
 /// A model id as `availableModels` compares it: lower case, without its context suffix.
 fn model_key(id: &str) -> String {
     bare(id.trim()).to_ascii_lowercase()
-}
-
-/// Sandbox paths as Seatbelt matches them: resolved through symlinks (`/tmp` and
-/// `/var/folders` are `/private/…` on macOS). A unix-socket rule on the unresolved path never
-/// matches, so the connection is refused.
-fn paths(paths: &[PathBuf]) -> Vec<String> {
-    paths
-        .iter()
-        .map(|path| resolved(path).display().to_string())
-        .collect()
-}
-
-/// Whether `path` is a repository's git folder (its `HEAD` and object store).
-fn is_git_dir(path: &Path) -> bool {
-    path.join("HEAD").is_file() && path.join("objects").is_dir()
 }
 
 fn resolved(path: &Path) -> PathBuf {
@@ -1364,13 +1154,6 @@ impl Provider for Claude {
             }
             crate::cli::apply_session_env(&mut process_spec, &env, &spec.unset_env);
             process_spec.low_priority = spec.low_priority;
-            let homes: Vec<PathBuf> = self
-                .config_dir()
-                .into_iter()
-                .chain(self.main_config.clone())
-                .collect();
-            let process_spec =
-                crate::cli::protect(self.platform.as_ref(), process_spec, &spec, &homes)?;
             let process::Spawned { process, stdout } = process::spawn(
                 self.platform.clone(),
                 &process_spec,
@@ -2267,7 +2050,6 @@ for line in sys.stdin:
                 tool_timeout_secs: Some(60),
                 trusted: true,
                 always_load: true,
-                prompt_tools: Vec::new(),
             }],
             deny_tools: Some(reason.into()),
             ..spec(&dir, &[])
@@ -2575,12 +2357,12 @@ for line in sys.stdin:
         let cwd = Temp::new();
         let spec = spec(cwd.path(), &["claude-opus-5-5"]);
         let models = SubAgents::Any;
-        let own = settings(&spec, cwd.path(), &models, false);
+        let own = settings(&spec, &models, false);
         assert!(
             own.get("env").is_none(),
             "the user's own login is left alone"
         );
-        let account = settings(&spec, cwd.path(), &models, true);
+        let account = settings(&spec, &models, true);
         for name in crate::accounts::auth_vars(ProviderKind::Claude) {
             assert_eq!(account["env"][name], json!(""), "{name}");
         }
@@ -2594,52 +2376,6 @@ for line in sys.stdin:
         .unwrap();
         let flag = &args[args.iter().position(|arg| arg == "--settings").unwrap() + 1];
         assert!(flag.contains("\"CLAUDE_CODE_OAUTH_TOKEN\":\"\""), "{flag}");
-    }
-
-    #[test]
-    fn codex_in_a_networked_sandbox_checks_certificates_without_macos_trust_service() {
-        let cwd = Temp::new();
-        let scoped = |network: bool| Access::Scoped {
-            write_cwd: true,
-            writable_roots: Vec::new(),
-            network,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        let user_bundle = std::env::var_os("CODEX_CA_CERTIFICATE").is_some()
-            || std::env::var_os("SSL_CERT_FILE").is_some();
-        for (access, networked) in [
-            (
-                Access::Workspace {
-                    extra_roots: Vec::new(),
-                },
-                true,
-            ),
-            (scoped(true), true),
-            (scoped(false), false),
-            (Access::ReadOnly, false),
-            (Access::Full, false),
-        ] {
-            let spec = SessionSpec {
-                access: access.clone(),
-                ..spec(cwd.path(), &[])
-            };
-            let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
-            let bundle = settings["env"]["CODEX_CA_CERTIFICATE"].as_str();
-            if cfg!(target_os = "macos") && networked && !user_bundle {
-                assert_eq!(bundle, Some(MACOS_CA_BUNDLE), "{access:?}");
-                assert!(Path::new(MACOS_CA_BUNDLE).is_file());
-            } else {
-                assert_eq!(bundle, None, "{access:?}");
-            }
-        }
-        // An extra account's blank login variables stay beside it.
-        let spec = SessionSpec {
-            access: scoped(true),
-            ..spec(cwd.path(), &[])
-        };
-        let account = settings(&spec, cwd.path(), &SubAgents::Any, true);
-        assert_eq!(account["env"]["CLAUDE_CODE_OAUTH_TOKEN"], json!(""));
     }
 
     fn spec(cwd: &Path, ids: &[&str]) -> SessionSpec {
@@ -2667,12 +2403,10 @@ for line in sys.stdin:
             sweep_dir: None,
             auto_compact: true,
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
-            auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
-            protection: Default::default(),
         }
     }
 
@@ -2723,100 +2457,61 @@ for line in sys.stdin:
         assert_thinking_args(&Claude::control_args());
     }
 
+    /// Each level passes straight through as Claude Code's own permission mode, for a thread
+    /// and a worker alike, and Brigadier adds no sandbox, no ask rule and no lock on bypass
+    /// mode (G5).
     #[test]
-    fn each_permission_level_gets_its_mode_and_rules() {
+    fn each_level_is_claude_codes_own_permission_mode_for_threads_and_workers() {
         let cwd = Temp::new();
-        let cwd = cwd.path();
-        let scoped = Access::Scoped {
-            write_cwd: true,
-            writable_roots: Vec::new(),
-            network: true,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        let with = |access: Access, auto_review: bool| SessionSpec {
-            access,
-            auto_review,
-            ..spec(cwd, &["claude-sonnet-5"])
-        };
+        let native_id = "00000000-0000-4000-8000-000000000000";
         let models = SubAgents::Only(vec!["claude-sonnet-5".to_owned()]);
-        let permissions =
-            |spec: &SessionSpec| settings(spec, cwd, &models, false)["permissions"].clone();
-
-        // Full access: no permission checks, no sandbox, nothing that asks; the model list
-        // still holds.
-        let full = with(Access::Full, false);
-        assert_eq!(permission_mode(&full), "bypassPermissions");
-        assert!(permissions(&full).get("ask").is_none());
-        assert!(
-            permissions(&full)
-                .get("disableBypassPermissionsMode")
-                .is_none()
-        );
-        assert_eq!(
-            settings(&full, cwd, &models, false)["sandbox"]["enabled"],
-            json!(false)
-        );
-        assert_eq!(
-            settings(&full, cwd, &models, false)["availableModels"],
-            json!(["claude-sonnet-5"])
-        );
-        assert_eq!(
-            settings(&full, cwd, &models, false)["skipDangerousModePermissionPrompt"],
-            json!(true)
-        );
-
-        // Approve for me: auto mode decides what leaves the sandbox.
-        let auto = with(scoped.clone(), true);
-        assert_eq!(permission_mode(&auto), "auto");
-        assert!(permissions(&auto).get("ask").is_none());
-        assert_eq!(
-            permissions(&auto)["disableBypassPermissionsMode"],
-            json!("disable")
-        );
-        assert!(
-            settings(&auto, cwd, &models, false)
-                .get("skipDangerousModePermissionPrompt")
-                .is_none()
-        );
-
-        // Ask for approval: leaving the sandbox asks.
-        let ask = with(scoped, false);
-        assert_eq!(permission_mode(&ask), "acceptEdits");
-        assert_eq!(
-            permissions(&ask)["ask"],
-            json!(["Bash(dangerouslyDisableSandbox:true)"])
-        );
-        // A trusted server's tool that leaves the sandbox asks too, though the server is
-        // allowed (an ask rule wins over an allow rule).
-        let server = McpServer {
-            name: "brigadier".into(),
-            transport: McpTransport::Stdio {
-                command: PathBuf::from("/bin/true"),
-                args: Vec::new(),
-                cwd: None,
-            },
-            env: Vec::new(),
-            tool_timeout_secs: None,
-            trusted: true,
-            always_load: true,
-            prompt_tools: vec!["run_unsandboxed".into()],
+        for tools in [ToolSet::Thread, ToolSet::Lean] {
+            for (access, mode) in [
+                (Access::Ask, "default"),
+                (Access::AcceptEdits, "acceptEdits"),
+                (Access::Full, "bypassPermissions"),
+            ] {
+                let spec = SessionSpec {
+                    access,
+                    tools,
+                    ..spec(cwd.path(), &["claude-sonnet-5"])
+                };
+                let args =
+                    Claude::session_args(&spec, cwd.path(), native_id, false, None).expect("args");
+                let modes: Vec<&String> = args
+                    .windows(2)
+                    .filter(|pair| pair[0] == "--permission-mode")
+                    .map(|pair| &pair[1])
+                    .collect();
+                assert_eq!(modes, [mode], "{tools:?} {access:?}");
+                assert!(
+                    args.windows(2)
+                        .any(|pair| pair[0] == "--permission-prompt-tool" && pair[1] == "stdio"),
+                    "its prompts reach Brigadier as cards: {args:?}"
+                );
+                let settings = settings(&spec, &models, false);
+                for key in ["sandbox", "autoMode"] {
+                    assert!(settings.get(key).is_none(), "{access:?}: {settings}");
+                }
+                for key in ["ask", "disableBypassPermissionsMode"] {
+                    assert!(
+                        settings["permissions"].get(key).is_none(),
+                        "{access:?}: {settings}"
+                    );
+                }
+                assert_eq!(settings["availableModels"], json!(["claude-sonnet-5"]));
+                assert_eq!(
+                    settings.get("skipDangerousModePermissionPrompt").is_some(),
+                    access == Access::Full
+                );
+            }
+        }
+        // Brigadier's own readers never ask.
+        let reader = SessionSpec {
+            access: Access::ReadOnly,
+            ..spec(cwd.path(), &["claude-sonnet-5"])
         };
-        let thread = SessionSpec {
-            mcp_servers: vec![server],
-            ..ask.clone()
-        };
-        assert_eq!(
-            permissions(&thread)["ask"],
-            json!([
-                "Bash(dangerouslyDisableSandbox:true)",
-                "mcp__brigadier__run_unsandboxed"
-            ])
-        );
-        assert_eq!(permissions(&thread)["allow"], json!(["mcp__brigadier"]));
-        // Read-only: nothing asks, whatever the review setting.
-        assert_eq!(permission_mode(&with(Access::ReadOnly, true)), "dontAsk");
-        assert_eq!(permission_mode(&with(Access::ReadOnly, false)), "dontAsk");
+        assert_eq!(permission_mode(&reader), "dontAsk");
     }
 
     /// No session asks Claude Code for its own next-message guesses (Q89): a thread's or Chat's
@@ -2878,9 +2573,8 @@ for line in sys.stdin:
         let workspace = Temp::new();
         let ws = workspace.path().to_owned();
         let native_id = "00000000-0000-4000-8000-000000000000";
-        let thread = |access: Access, auto_review: bool| SessionSpec {
+        let thread = |access: Access| SessionSpec {
             access,
-            auto_review,
             tools: ToolSet::Thread,
             skill_plugins: Vec::new(),
             switched_off: Default::default(),
@@ -2888,19 +2582,12 @@ for line in sys.stdin:
             allowed_models: None,
             ..spec(cwd.path(), &[])
         };
-        let scoped = Access::Scoped {
-            write_cwd: true,
-            writable_roots: Vec::new(),
-            network: true,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        for (access, auto_review, mode) in [
-            (Access::Full, false, "bypassPermissions"),
-            (scoped.clone(), true, "auto"),
-            (scoped, false, "acceptEdits"),
+        for (access, mode) in [
+            (Access::Full, "bypassPermissions"),
+            (Access::AcceptEdits, "acceptEdits"),
+            (Access::Ask, "default"),
         ] {
-            let spec = thread(access.clone(), auto_review);
+            let spec = thread(access);
             let args =
                 Claude::session_args(&spec, cwd.path(), native_id, false, None).expect("args");
             let after = |flag: &str| {
@@ -2920,129 +2607,12 @@ for line in sys.stdin:
             // Nothing positional follows the variadic `--add-dir`.
             let last = args.iter().rposition(|arg| arg == "--add-dir").unwrap();
             assert!(args[last + 2].starts_with("--"), "{args:?}");
-            let settings = settings(
-                &SessionSpec {
-                    access: spec.access_with_dirs(),
-                    ..spec.clone()
-                },
-                cwd.path(),
-                &SubAgents::Any,
-                false,
-            );
+            let settings = settings(&spec, &SubAgents::Any, false);
             let allow = settings["permissions"]["allow"].as_array().expect("allow");
             assert!(allow.contains(&json!("WebSearch")) && allow.contains(&json!("WebFetch")));
-            if access == Access::Full {
-                assert_eq!(settings["sandbox"]["enabled"], json!(false));
-            } else {
-                assert_eq!(
-                    settings["sandbox"]["filesystem"]["allowWrite"],
-                    json!([resolved(&ws).display().to_string()]),
-                    "the workspace is writable in the sandbox"
-                );
-            }
         }
-        // A sandbox that keeps its working directory read-only keeps the workspace so too.
-        let read_only = SessionSpec {
-            access: Access::Scoped {
-                write_cwd: false,
-                writable_roots: Vec::new(),
-                network: true,
-                deny_read: Vec::new(),
-                unix_sockets: Vec::new(),
-            },
-            ..thread(Access::Full, false)
-        };
-        assert!(read_only.access_with_dirs().writable_roots().is_empty());
     }
 
-    #[test]
-    fn only_a_writable_root_that_is_a_folder_is_added_as_one() {
-        let cwd = Temp::new();
-        let git = cwd.path().join("repo/.git");
-        let objects = git.join("objects");
-        let refs = git.join("refs/heads/brigadier/aa");
-        std::fs::create_dir_all(&objects).expect("objects");
-        std::fs::create_dir_all(&refs).expect("refs");
-        let own = refs.join("task-1");
-        std::fs::write(&own, "0000000000000000000000000000000000000000\n").expect("ref");
-        let lock = refs.join("task-1.lock");
-        let spec = SessionSpec {
-            access: Access::Scoped {
-                write_cwd: true,
-                writable_roots: vec![objects.clone(), own.clone(), lock.clone()],
-                network: true,
-                deny_read: Vec::new(),
-                unix_sockets: Vec::new(),
-            },
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let args = Claude::session_args(
-            &spec,
-            cwd.path(),
-            "00000000-0000-4000-8000-000000000000",
-            false,
-            None,
-        )
-        .expect("args");
-        let added: Vec<&String> = args
-            .windows(2)
-            .filter(|pair| pair[0] == "--add-dir")
-            .map(|pair| &pair[1])
-            .collect();
-        assert!(added.contains(&&objects.display().to_string()), "{added:?}");
-        for file in [&own, &lock] {
-            let real = resolved(file).display().to_string();
-            assert!(
-                !added
-                    .iter()
-                    .any(|dir| **dir == file.display().to_string() || **dir == real),
-                "{added:?}"
-            );
-        }
-        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
-        let allow = settings["sandbox"]["filesystem"]["allowWrite"]
-            .as_array()
-            .expect("allowWrite");
-        assert!(
-            allow.contains(&json!(resolved(&lock).display().to_string())),
-            "{allow:?}"
-        );
-    }
-
-    #[test]
-    fn only_auto_mode_tells_its_classifier_never_to_allow_the_protected_paths() {
-        let cwd = Temp::new();
-        let protection = brigadier_sandbox::Protection {
-            deny: vec![cwd.path().join("repo/.git/worktrees")],
-            ..Default::default()
-        };
-        let session = |auto_review: bool| SessionSpec {
-            access: Access::Scoped {
-                write_cwd: true,
-                writable_roots: Vec::new(),
-                network: true,
-                deny_read: Vec::new(),
-                unix_sockets: Vec::new(),
-            },
-            auto_review,
-            protection: protection.clone(),
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let auto = settings(&session(true), cwd.path(), &SubAgents::Any, false);
-        let hard_deny = auto["autoMode"]["hard_deny"].as_array().expect("hard_deny");
-        assert_eq!(hard_deny[0], json!("$defaults"), "the built-in rules stay");
-        let rule = hard_deny[1].as_str().expect("rule");
-        let worktrees = cwd.path().join("repo/.git/worktrees");
-        assert!(
-            rule.contains(&format!("`{}`", worktrees.display())),
-            "{rule}"
-        );
-        let asks = settings(&session(false), cwd.path(), &SubAgents::Any, false);
-        assert!(asks.get("autoMode").is_none(), "{asks}");
-    }
-
-    /// Only a thread gets the output hook: one command after every `Bash` call, successful or
-    /// not, its grant in the CLI's environment and never on the command line.
     #[test]
     fn only_a_thread_gets_the_output_hook() {
         let cwd = Temp::new();
@@ -3063,7 +2633,7 @@ for line in sys.stdin:
             output_hook: Some(hook.clone()),
             ..spec(cwd.path(), &[])
         };
-        let hooks = &settings(&thread, cwd.path(), &SubAgents::Any, false)["hooks"];
+        let hooks = &settings(&thread, &SubAgents::Any, false)["hooks"];
         let expected = json!([{
             "matcher": "Bash",
             "hooks": [{
@@ -3104,7 +2674,7 @@ for line in sys.stdin:
                 ..thread.clone()
             };
             assert!(
-                settings(&other, cwd.path(), &SubAgents::Any, false)
+                settings(&other, &SubAgents::Any, false)
                     .get("hooks")
                     .is_none(),
                 "{tools:?}"
@@ -3127,7 +2697,7 @@ for line in sys.stdin:
             }),
             ..spec(cwd.path(), &[])
         };
-        let hooks = &settings(&worker, cwd.path(), &SubAgents::Any, false)["hooks"];
+        let hooks = &settings(&worker, &SubAgents::Any, false)["hooks"];
         assert_eq!(hooks.as_object().map(Map::len), Some(1), "{hooks}");
         assert_eq!(
             hooks["Stop"],
@@ -3145,7 +2715,7 @@ for line in sys.stdin:
         // Without one, no hooks at all.
         let plain = spec(cwd.path(), &[]);
         assert!(
-            settings(&plain, cwd.path(), &SubAgents::Any, false)
+            settings(&plain, &SubAgents::Any, false)
                 .get("hooks")
                 .is_none_or(Value::is_null)
         );
@@ -3173,7 +2743,7 @@ for line in sys.stdin:
             deny_tools: Some(reason.into()),
             ..thread.clone()
         };
-        let hooks = &settings(&fork, cwd.path(), &SubAgents::Any, false)["hooks"];
+        let hooks = &settings(&fork, &SubAgents::Any, false)["hooks"];
         assert_eq!(hooks.as_object().map(Map::len), Some(3), "{hooks}");
         assert_eq!(hooks["PreToolUse"][0]["matcher"], json!("*"));
         let command = hooks["PreToolUse"][0]["hooks"][0]["command"]
@@ -3226,215 +2796,8 @@ for line in sys.stdin:
         };
         assert_eq!(without_settings(&fork), without_settings(&thread));
         // The thread's own `PreToolUse` hook only reads what a `Bash` call names (#87).
-        let hooks = &settings(&thread, cwd.path(), &SubAgents::Any, false)["hooks"];
+        let hooks = &settings(&thread, &SubAgents::Any, false)["hooks"];
         assert_eq!(hooks["PreToolUse"][0]["matcher"], json!("Bash"), "{hooks}");
-    }
-
-    #[test]
-    fn a_writer_may_commit_but_not_change_git_hooks_or_config() {
-        let cwd = Temp::new();
-        let git = cwd.path().join("repo.git");
-        std::fs::create_dir_all(git.join("objects")).expect("objects");
-        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
-        let spec = SessionSpec {
-            access: Access::Scoped {
-                write_cwd: true,
-                writable_roots: vec![git.clone()],
-                network: true,
-                deny_read: Vec::new(),
-                unix_sockets: Vec::new(),
-            },
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let models = SubAgents::Only(vec!["claude-sonnet-5".to_owned()]);
-        let settings = settings(&spec, cwd.path(), &models, false);
-        let filesystem = &settings["sandbox"]["filesystem"];
-        let git = resolved(&git);
-        let deny = settings["permissions"]["deny"]
-            .as_array()
-            .expect("deny rules");
-        for tool in ["Edit", "Write", "NotebookEdit"] {
-            for rule in [
-                format!("{tool}(/{}/**)", git.join("hooks").display()),
-                format!("{tool}(/{})", git.join("config").display()),
-            ] {
-                assert!(deny.contains(&json!(rule)), "{rule}");
-            }
-        }
-        assert_eq!(filesystem["allowWrite"], json!([git.display().to_string()]));
-        assert_eq!(
-            filesystem["denyWrite"],
-            json!([
-                git.join("hooks").display().to_string(),
-                git.join("config").display().to_string(),
-            ])
-        );
-    }
-
-    #[test]
-    fn a_writable_checkout_keeps_its_git_hooks_and_config_out_of_reach() {
-        let cwd = Temp::new();
-        let checkout = cwd.path().join("checkout");
-        let git = checkout.join(".git");
-        std::fs::create_dir_all(git.join("objects")).expect("objects");
-        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
-        let spec = SessionSpec {
-            access: Access::Scoped {
-                write_cwd: true,
-                writable_roots: Vec::new(),
-                network: true,
-                deny_read: Vec::new(),
-                unix_sockets: Vec::new(),
-            },
-            skill_plugins: Vec::new(),
-            switched_off: Default::default(),
-            add_dirs: vec![checkout.clone()],
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
-        let git = resolved(&git);
-        assert_eq!(
-            settings["sandbox"]["filesystem"]["denyWrite"],
-            json!([
-                git.join("hooks").display().to_string(),
-                git.join("config").display().to_string(),
-            ])
-        );
-    }
-
-    #[test]
-    fn only_a_full_access_cli_runs_inside_the_protection_with_its_own_temp_given_back() {
-        let cwd = Temp::new();
-        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(cwd.path().join("data")),
-        })
-        .expect("platform");
-        let protection = brigadier_sandbox::Protection {
-            deny: vec![cwd.path().join("data")],
-            ..Default::default()
-        };
-        let mut process = brigadier_sandbox::SpawnSpec::new("/bin/true");
-        process.env.push((
-            "CLAUDE_CODE_TMPDIR".into(),
-            "/tmp/brigadier-0123456789ab".into(),
-        ));
-        let full = SessionSpec {
-            access: Access::Full,
-            protection: protection.clone(),
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let home = cwd.path().join("home");
-        let wrapped = crate::cli::protect(
-            platform.as_ref(),
-            process.clone(),
-            &full,
-            std::slice::from_ref(&home),
-        )
-        .expect("wrapped");
-        if cfg!(target_os = "macos") {
-            assert_eq!(wrapped.program, Path::new("/usr/bin/sandbox-exec"));
-            let args: Vec<String> = wrapped
-                .args
-                .iter()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect();
-            assert!(
-                args.iter()
-                    .any(|arg| arg.ends_with("/private/tmp/brigadier-0123456789ab"))
-            );
-            assert!(
-                args.iter().any(|arg| arg.contains("vnode-type DIRECTORY")),
-                "kept in place"
-            );
-            assert!(
-                args.iter()
-                    .any(|arg| arg.ends_with(&*home.display().to_string()))
-            );
-        }
-        let scoped = SessionSpec {
-            access: Access::ReadOnly,
-            protection,
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let unwrapped =
-            crate::cli::protect(platform.as_ref(), process, &scoped, &[]).expect("as is");
-        assert_eq!(unwrapped.program, Path::new("/bin/true"));
-    }
-
-    #[test]
-    fn protected_refs_are_denied_except_where_a_deny_would_cover_its_own_branch() {
-        let cwd = Temp::new();
-        let common = cwd.path().join("repo/.git");
-        let own = common.join("refs/heads/brigadier/aa/task-1");
-        let spec = SessionSpec {
-            access: Access::Scoped {
-                write_cwd: true,
-                writable_roots: vec![own.clone()],
-                network: true,
-                deny_read: Vec::new(),
-                unix_sockets: Vec::new(),
-            },
-            protection: brigadier_sandbox::Protection {
-                deny: vec![
-                    common.join("refs/heads/brigadier"),
-                    common.join("refs/heads/main"),
-                    common.join("packed-refs"),
-                ],
-                allow: vec![own.clone()],
-                ..Default::default()
-            },
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
-        let common = resolved(&common);
-        assert_eq!(
-            settings["sandbox"]["filesystem"]["denyWrite"],
-            json!([
-                common.join("refs/heads/main").display().to_string(),
-                common.join("packed-refs").display().to_string(),
-            ]),
-            "a deny wins over every allow: one over its own ref would stop its commits"
-        );
-        let deny = settings["permissions"]["deny"].as_array().expect("deny");
-        for tool in ["Edit", "Write", "NotebookEdit"] {
-            let rule = format!("{tool}(/{})", common.join("packed-refs").display());
-            assert!(deny.contains(&json!(rule)), "{rule}");
-        }
-        assert!(
-            !deny
-                .iter()
-                .any(|rule| rule.as_str().unwrap().contains("refs/heads/brigadier"))
-        );
-    }
-
-    #[test]
-    fn a_reader_started_outside_its_checkout_may_not_edit_the_checkout_either() {
-        let cwd = Temp::new();
-        let checkout = cwd.path().join("checkout");
-        let spec = SessionSpec {
-            access: Access::Scoped {
-                write_cwd: false,
-                writable_roots: Vec::new(),
-                network: true,
-                deny_read: Vec::new(),
-                unix_sockets: Vec::new(),
-            },
-            skill_plugins: Vec::new(),
-            switched_off: Default::default(),
-            add_dirs: vec![checkout.clone()],
-            ..spec(cwd.path(), &["claude-sonnet-5"])
-        };
-        let settings = settings(&spec, cwd.path(), &SubAgents::Any, false);
-        let deny = settings["permissions"]["deny"]
-            .as_array()
-            .expect("deny rules");
-        for dir in [cwd.path(), checkout.as_path()] {
-            assert!(deny.contains(&json!(format!("Edit({})", rule_path(dir)))));
-        }
-        assert_eq!(
-            settings["sandbox"]["filesystem"]["denyWrite"],
-            json!(paths(&[cwd.path().to_owned(), checkout.clone()]))
-        );
     }
 
     /// BUILD-PLAN C5: a Brain job reads and searches only, and its system prompt has no
@@ -3479,7 +2842,7 @@ for line in sys.stdin:
                 tools,
                 ..spec(cwd, &[])
             };
-            let settings = settings(&session, cwd, &SubAgents::Any, false);
+            let settings = settings(&session, &SubAgents::Any, false);
             assert_eq!(settings["disableBundledSkills"], json!(true));
             assert_eq!(settings["disableClaudeAiConnectors"], json!(true));
             assert_eq!(settings["enableArtifact"], json!(false));
@@ -3491,7 +2854,7 @@ for line in sys.stdin:
                 ..spec(cwd, &[])
             };
             assert!(
-                settings(&session, cwd, &SubAgents::Any, false)
+                settings(&session, &SubAgents::Any, false)
                     .get("disableBundledSkills")
                     .is_none()
             );
@@ -3544,7 +2907,7 @@ for line in sys.stdin:
                 auto_compact: true,
                 ..spec(cwd, &[])
             };
-            let settings = settings(&session, cwd, &SubAgents::Any, false);
+            let settings = settings(&session, &SubAgents::Any, false);
             assert_eq!(settings["idleCompaction"], json!(false));
             // Messages from the user's other Claude sessions never come in around Brigadier.
             assert_eq!(settings["crossSessionInbound"], json!("refuse"));
@@ -3559,7 +2922,7 @@ for line in sys.stdin:
         let models = sub_agents(&held, cwd, None);
         assert_eq!(models, SubAgents::Only(vec!["claude-sonnet-5".to_owned()]));
         assert_eq!(
-            settings(&held, cwd, &models, false)["availableModels"],
+            settings(&held, &models, false)["availableModels"],
             json!(["claude-sonnet-5"])
         );
         assert_eq!(
@@ -3570,7 +2933,7 @@ for line in sys.stdin:
         let models = sub_agents(&leaky, cwd, None);
         assert_eq!(models, SubAgents::Off);
         assert!(
-            settings(&leaky, cwd, &models, false)
+            settings(&leaky, &models, false)
                 .get("availableModels")
                 .is_none()
         );
@@ -3661,7 +3024,7 @@ for line in sys.stdin:
             deny_tools: Some("no".into()),
             ..spec(cwd.path(), &[])
         };
-        let hooks = &settings(&worker, cwd.path(), &SubAgents::Any, false)["hooks"];
+        let hooks = &settings(&worker, &SubAgents::Any, false)["hooks"];
         assert!(hooks["PreToolUse"].is_array(), "the other hooks stay");
         let command = hooks["PreCompact"][0]["hooks"][0]["command"]
             .as_str()
@@ -3679,7 +3042,7 @@ for line in sys.stdin:
         );
         let chat = spec(cwd.path(), &[]);
         assert!(
-            settings(&chat, cwd.path(), &SubAgents::Any, false)["hooks"]
+            settings(&chat, &SubAgents::Any, false)["hooks"]
                 .get("PreCompact")
                 .is_none()
         );
@@ -3874,14 +3237,14 @@ for line in sys.stdin:
             ..spec(cwd.path(), &[])
         };
         let models = sub_agents(&worker, cwd.path(), None);
-        let on = settings(&worker, cwd.path(), &models, false);
+        let on = settings(&worker, &models, false);
         assert_eq!(on["disableAllHooks"], json!(false));
         let reviewer = SessionSpec {
             tools: ToolSet::Review,
             ..worker
         };
         assert!(
-            settings(&reviewer, cwd.path(), &models, false)
+            settings(&reviewer, &models, false)
                 .get("disableAllHooks")
                 .is_none()
         );
@@ -3941,7 +3304,6 @@ for line in sys.stdin:
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
-            prompt_tools: Vec::new(),
         };
         let spec = SessionSpec {
             mcp_servers: vec![
@@ -4030,14 +3392,14 @@ for line in sys.stdin:
             },
             ..spec(&dir, &[])
         };
-        let settings = settings_of(&off, &dir);
+        let settings = settings_of(&off);
         let deny = settings["permissions"]["deny"].as_array().expect("deny");
         assert!(deny.contains(&json!("mcp__railway")), "{deny:?}");
         assert!(deny.contains(&json!("mcp__plugin_docs_server")), "{deny:?}");
         assert!(deny.contains(&json!("Skill(docs:write)")), "{deny:?}");
         assert_eq!(settings["skillOverrides"], json!({"review": "off"}));
         // Nothing switched off, nothing added.
-        let plain = settings_of(&spec(&dir, &[]), &dir);
+        let plain = settings_of(&spec(&dir, &[]));
         assert!(plain.get("skillOverrides").is_none());
         assert!(plain["permissions"]["deny"].as_array().is_none_or(|deny| {
             !deny
@@ -4046,7 +3408,7 @@ for line in sys.stdin:
         }));
     }
 
-    fn settings_of(spec: &SessionSpec, dir: &Path) -> Value {
-        settings(spec, dir, &SubAgents::Any, false)
+    fn settings_of(spec: &SessionSpec) -> Value {
+        settings(spec, &SubAgents::Any, false)
     }
 }

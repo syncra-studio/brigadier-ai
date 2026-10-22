@@ -510,6 +510,8 @@ export function buildBlocks(
   for (const step of board.orchestratorSteps) {
     // The user's answer to a feedback or session offer shows on the offer itself.
     if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken") continue;
+    // An old record's suggestion of Full access, from when Brigadier had a sandbox of its own: not shown.
+    if (step.kind.type === "fullAccessSuggested") continue;
     // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
     if (step.kind.type === "tool" && toolName(step.kind.name) === "propose_plan") {
       const written = Object.values(board.plans).some(
@@ -1228,13 +1230,13 @@ export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
 
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
- * and the cards, access notices and feedback offers that stay in view (decisions, failures, what
+ * and the cards, suggested settings and feedback offers that stay in view (decisions, failures, what
  * needs the user), and the dividers of its limits and switches (#506).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || (step.kind.type === "settingSuggested" && step.kind.change.setting !== "mergeOnOwn") || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => (step.kind.type === "settingSuggested" && step.kind.change.setting !== "mergeOnOwn") || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

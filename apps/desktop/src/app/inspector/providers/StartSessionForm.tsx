@@ -28,7 +28,7 @@ export function StartSessionForm() {
   const [cwd, setCwd] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
-  const [access, setAccess] = useState<"workspace" | "readOnly">("workspace");
+  const [access, setAccess] = useState<"acceptEdits" | "readOnly">("acceptEdits");
   const [approvals, setApprovals] = useState<"delegated" | "declineAll">("delegated");
   const [record, setRecord] = useState(false);
   const start = useAction();
@@ -45,7 +45,7 @@ export function StartSessionForm() {
         cwd: cwd.trim(),
         model: model || null,
         effort: effort || null,
-        access: access === "workspace" ? { type: "workspace", extraRoots: [] } : { type: "readOnly" },
+        access: access === "acceptEdits" ? { type: "acceptEdits" } : { type: "readOnly" },
         approvals,
         record,
       }),
@@ -131,11 +131,11 @@ export function StartSessionForm() {
             variant="outline"
             value={access}
             onValueChange={(value) => {
-              if (value === "workspace" || value === "readOnly") setAccess(value);
+              if (value === "acceptEdits" || value === "readOnly") setAccess(value);
             }}
             aria-label="Access"
           >
-            <ToggleGroupItem value="workspace" className="text-xs">
+            <ToggleGroupItem value="acceptEdits" className="text-xs">
               Edit its folder
             </ToggleGroupItem>
             <ToggleGroupItem value="readOnly" className="text-xs">

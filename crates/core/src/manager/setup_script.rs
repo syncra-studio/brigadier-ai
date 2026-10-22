@@ -1,19 +1,15 @@
 //! A new worktree's tracked setup script (`.brigadier/setup`) is plumbing: the engine runs it
-//! once, before the session's first turn or the worker's first command, under that session's
-//! own access and only in a folder the user trusts, then tells the session how it went. A
-//! failure is a fact the session hears, not a gate (#326). Where Brigadier can't hold the
-//! command to the session's access (Windows; a sandboxed session off macOS without Codex),
-//! the session is told to run it itself, as before.
+//! once, before the session's first turn or the worker's first command, as a plain command and
+//! only in a folder the user trusts, then tells the session how it went. A failure is a fact
+//! the session hears, not a gate (#326). On Windows, which has no `/bin/sh`, the session is
+//! told to run it itself.
 
 use std::path::Path;
 use std::time::Duration;
 
-use brigadier_providers::Access;
-use brigadier_sandbox::Protection;
-
 use super::SessionManager;
 use super::prompts::{SETUP_LINE, SETUP_SCRIPT};
-use super::run::{CommandOutput, RUN_TIMEOUT_DEFAULT, run_command_streamed, shell_command};
+use super::run::{CommandOutput, RUN_TIMEOUT_DEFAULT, run_command_streamed};
 use crate::model::ConversationId;
 
 /// How long the setup script may run.
@@ -25,18 +21,14 @@ const TAIL_BYTES: usize = 2000;
 const KEPT_BYTES: usize = 4 * TAIL_BYTES;
 
 impl SessionManager {
-    /// Runs the setup script in the new `worktree` of conversation `id` as `access` allows
-    /// (`protection` kept at Full access), its process recorded under `owner` while it runs,
-    /// with `env`, until it ends or `cancel` (the user's Stop). Returns what the session is
-    /// told.
-    #[allow(clippy::too_many_arguments)]
+    /// Runs the setup script in the new `worktree` of conversation `id`, its process recorded
+    /// under `owner` while it runs, with `env`, until it ends or `cancel` (the user's Stop).
+    /// Returns what the session is told.
     pub(crate) async fn run_setup_script(
         &self,
         id: &ConversationId,
         owner: &str,
         worktree: &Path,
-        access: &Access,
-        protection: Option<&Protection>,
         env: &[(String, String)],
         cancel: tokio_util::sync::CancellationToken,
     ) -> String {
@@ -47,31 +39,7 @@ impl SessionManager {
         let command = format!(
             "if [ -x ./{SETUP_SCRIPT} ]; then exec ./{SETUP_SCRIPT}; else exec /bin/sh ./{SETUP_SCRIPT}; fi"
         );
-        let spec = match access {
-            Access::Full => {
-                self.run_spec(access, worktree, &command)
-                    .and_then(|spec| match protection {
-                        Some(protection) => self
-                            .runtime
-                            .platform()
-                            .sandbox()
-                            .protect(spec, protection)
-                            .map_err(|err| crate::Error::Invalid(err.to_string())),
-                        None => Ok(spec),
-                    })
-            }
-            _ if cfg!(target_os = "macos") => {
-                self.seatbelt_spec(access, worktree, &shell_command(&command)[1..])
-            }
-            _ => self.run_spec(access, worktree, &command),
-        };
-        let mut spec = match spec {
-            Ok(spec) => spec,
-            Err(err) => {
-                tracing::warn!(worktree = %worktree.display(), %err, "can't run the setup script here; the session runs it");
-                return SETUP_LINE.into();
-            }
-        };
+        let mut spec = self.run_spec(worktree, &command);
         brigadier_providers::cli::apply_session_env(&mut spec, env, &[]);
         let started = std::time::Instant::now();
         // The end of what it printed, however much that is.

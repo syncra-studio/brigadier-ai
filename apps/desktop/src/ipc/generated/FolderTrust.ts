@@ -3,7 +3,7 @@
 /**
  * The user's answer for one folder. Trusted: agents work there as the session's permission
  * level allows, and the CLIs' own trust prompts are answered for it. Not trusted: every
- * session there runs under Ask for approval.
+ * session there runs under Ask.
  */
 export type FolderTrust = { 
 /**

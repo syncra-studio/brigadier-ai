@@ -76,7 +76,7 @@ const conversation = {
   createdAtMs: begun, updatedAtMs: begun, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
   setup: session
     ? {
-        type: "session", repo: "/tmp/research-answer-fixture", environment: { type: "local" }, permission: "fullAccess", planMode: false,
+        type: "session", repo: "/tmp/research-answer-fixture", environment: { type: "local" }, permission: "full", planMode: false,
         workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null },
       }
     : { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false } },

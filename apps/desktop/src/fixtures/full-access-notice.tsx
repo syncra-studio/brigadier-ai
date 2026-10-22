@@ -27,7 +27,7 @@ useApp.setState((state) => {
     settings: { ...state.settings, showFullAccessNotice: true },
     conversations: {
       ...state.conversations,
-      [conversation.id]: { ...conversation, setup: { ...conversation.setup, permission: "fullAccess" } },
+      [conversation.id]: { ...conversation, setup: { ...conversation.setup, permission: "full" } },
     },
   };
 });

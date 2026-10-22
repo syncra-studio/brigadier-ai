@@ -252,8 +252,7 @@ class Smoke:
 
     def setup(self):
         settings = self.ipc.call({"method": "getCatalog"})["catalog"]["settings"]
-        settings.update(onboarded=True, introSeen=True, enrichBrain=False, reviewWork=False,
-                        defaultPermission="fullAccess")
+        settings.update(onboarded=True, introSeen=True, enrichBrain=False, defaultPermission="full")
         settings["hiddenModels"] = [{"provider": "claude", "id": i} for i in ("fable", "claude-fable-5", "claude-fable-5-1")]
         self.ipc.call({"method": "updateSettings", "settings": settings})
         missing, status = self.signed_in()
@@ -273,7 +272,7 @@ class Smoke:
                                                      ("C3", "A", a, "claude", claude),
                                                      ("X", "B", b, "codex", codex)):
             setup = {"type": "session", "repo": path, "environment": {"type": "localCheckout", "branch": "main", "createFrom": None},
-                     "permission": "fullAccess", "orchestrator": {"provider": provider, "model": model, "effort": "low"},
+                     "permission": "full", "orchestrator": {"provider": provider, "model": model, "effort": "low"},
                      "planMode": False}
             conv = self.ipc.call({"method": "createConversation", "kind": "session", "projectId": projects[project],
                                   "title": f"Smoke {name}", "setup": setup})["conversation"]["id"]

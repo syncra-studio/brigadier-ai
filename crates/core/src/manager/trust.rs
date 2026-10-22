@@ -8,9 +8,9 @@
 //!   owned by its task. Every entry is recorded in the cleanup ledger, with what it replaced,
 //!   before it is written; Don't trust, the project's removal or the task's end puts back what
 //!   was there. A CLI not set up on this machine is left alone.
-//! - **Not trusted.** Every session on the folder runs under Ask for approval, an overnight
-//!   run's too ([`SessionManager::permission`]); workers launch, resume and open in a
-//!   terminal with Ask's access ([`SessionManager::effective_access`]). A worker at work above
+//! - **Not trusted.** Every session on the folder runs under Ask, an overnight run's too, and
+//!   so do its workers, which launch, resume and open in a terminal at the session's level
+//!   ([`SessionManager::permission`]). A worker at work above
 //!   it is stopped, and the thread told why; an idle one resumes under Ask; the thread's own
 //!   CLI restarts under Ask at its next turn.
 //! - **Not asked yet** (a new project, one from before this question, a folder changed in its
@@ -23,10 +23,10 @@ use std::path::Path;
 use brigadier_providers::trust::{self, TrustCli, Written};
 use brigadier_providers::{Artifact, ProviderKind};
 
-use super::workers::access_for;
+use super::workers::repo_access_for;
 use super::{SessionManager, blocking};
 use crate::model::{ConversationId, FolderTrustReport, PermissionLevel, Project, ProjectId, Setup};
-use crate::work::{Task, WorkerAccess};
+use crate::work::Task;
 use crate::{Error, Result};
 
 /// The ledger owner of the folder trust a project's answer wrote.
@@ -50,16 +50,6 @@ impl SessionManager {
         };
         let project = self.core.project(conversation.project_id.as_ref()?).ok()?;
         Some(project.counts_trusted(repo))
-    }
-
-    /// The access a worker launches with: the task's, or Ask for approval's for its kind
-    /// when the user doesn't trust the folder.
-    pub(crate) fn effective_access(&self, task: &Task) -> WorkerAccess {
-        if self.repo_trust(&task.conversation_id) == Some(false) {
-            access_for(task.kind, PermissionLevel::AskForApproval)
-        } else {
-            task.access
-        }
     }
 
     /// Records the user's answer for the project's folder `path` (its first repository when
@@ -329,8 +319,8 @@ impl SessionManager {
             .collect()
     }
 
-    /// The folder is no longer trusted: a worker whose CLI runs above Ask for approval (its
-    /// access was set when it launched) is stopped mid-turn, and its thread told why; an idle
+    /// The folder is no longer trusted: a worker whose CLI runs above Ask (its level was set
+    /// when it launched) is stopped mid-turn, and its thread told why; an idle
     /// one's CLI closes, to resume under Ask, and its previews, which run with the access it
     /// had, stop. A terminal the user has open goes on: they are at it; it hands back under Ask.
     async fn hold_to_ask(&self, project: &Project, path: &str) {
@@ -339,13 +329,12 @@ impl SessionManager {
                 Ok(Some(Setup::Session { permission, .. })) => permission,
                 _ => continue,
             };
-            let above = saved != PermissionLevel::AskForApproval
-                || self.overnight.active.get(&id).is_some();
+            let above = saved != PermissionLevel::Ask || self.overnight.active.get(&id).is_some();
             for task in self.core.tasks(&id).await.unwrap_or_default() {
                 if task.state.is_final() {
                     continue;
                 }
-                if !above && task.access == access_for(task.kind, PermissionLevel::AskForApproval) {
+                if !above && task.access == repo_access_for(task.kind, PermissionLevel::Ask) {
                     continue;
                 }
                 let live = self.existing_task_live(&task.id);
@@ -372,7 +361,7 @@ impl SessionManager {
                     Ok(()) => {
                         if let Ok(conv) = self.conv(&id) {
                             conv.note(format!(
-                                "[worker] task-{} \"{}\" was stopped: the user no longer trusts this folder, so all work here now runs under Ask for approval. Start it again if it is still needed.",
+                                "[worker] task-{} \"{}\" was stopped: the user no longer trusts this folder, so all work here now runs under Ask. Start it again if it is still needed.",
                                 task.number, task.title
                             ))
                             .await;

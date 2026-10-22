@@ -21,12 +21,10 @@ import { useApp } from "@/state/store";
  * permission menu's line under each level.
  */
 export const LEVEL_COPY: Record<PermissionLevel, string> = {
-  askForApproval:
-    "Works in a sandbox, without the internet, and asks you before each plan and anything outside it. The safest level: work waits for you while you’re away.",
-  approveForMe:
-    "The same sandbox with the internet; a reviewer approves plans and steps outside it for you. The reviewer can be wrong, and the project’s data can be sent out.",
-  fullAccess:
-    "No sandbox: runs commands like your own terminal, without asking, though the lead can’t change other sessions’ branches and folders or Brigadier’s own data. A wrong command or planted instructions can delete or leak any of your other files.",
+  ask: "Asks you before it edits a file or runs a command. The safest level: work waits for you while you’re away.",
+  acceptEdits:
+    "Edits files freely and asks you before other commands. The project’s files can change without a word from you.",
+  full: "Never asks: runs commands like your own terminal. A wrong command or planted instructions can delete or leak any of your files.",
 };
 
 const PERMISSION_LABEL = "Default permission level";
@@ -49,17 +47,16 @@ export const CONFIGURATION_ROWS = {
     label: PERMISSION_LABEL,
     description: "Choose how much new sessions may do without asking",
   },
-  askForApproval: levelRow("askForApproval"),
-  approveForMe: levelRow("approveForMe"),
-  fullAccess: levelRow("fullAccess"),
+  ask: levelRow("ask"),
+  acceptEdits: levelRow("acceptEdits"),
+  full: levelRow("full"),
   startWorkersOnOwn: {
     label: "Start workers on its own",
     description: "Choose whether a session starts helpers when they help, or asks you first",
   },
   fullAccessNotice: {
     label: "Show the Full access notice",
-    description:
-      "A card above the composer while a conversation's workers run without the OS sandbox",
+    description: "A card above the composer while a session is on Full access",
   },
   enrichBrain: {
     label: "Use spare quota to deepen the Brain",
@@ -187,7 +184,7 @@ function PermissionRow({ value }: { value: PermissionLevel }) {
         options={PERMISSION_LEVELS.map((level) => ({
           value: level,
           label:
-            level === "fullAccess" ? (
+            level === "full" ? (
               <Badge className="bg-full-access/15 text-full-access">{PERMISSION_LABELS[level]}</Badge>
             ) : (
               PERMISSION_LABELS[level]

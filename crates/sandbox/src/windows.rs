@@ -1,6 +1,5 @@
 //! Windows: everything the daemon needs to run, with current-user-only ACLs on private files.
-//! The worker sandbox, credential storage and login-shell resolution arrive with the Windows
-//! platform phase.
+//! Credential storage and login-shell resolution arrive with the Windows platform phase.
 #![allow(unsafe_code)]
 
 use std::collections::BTreeMap;
@@ -38,7 +37,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::machine::memory_from_load;
 use crate::{
     AppPaths, CredentialStore, DetachedChild, Machine, MachineLoad, Platform, PrivateFs, Processes,
-    Result, Sandbox, SandboxPolicy, Shell, SpawnSpec, unsupported,
+    Result, Shell, SpawnSpec, unsupported,
 };
 
 const NAME: &str = "windows";
@@ -70,9 +69,6 @@ impl Platform for Windows {
         &Unsupported
     }
     fn shell(&self) -> &dyn Shell {
-        &Unsupported
-    }
-    fn sandbox(&self) -> &dyn Sandbox {
         &Unsupported
     }
     fn machine(&self) -> &dyn Machine {
@@ -454,11 +450,5 @@ impl Shell for Unsupported {
     }
     fn login_environment(&self) -> Result<BTreeMap<OsString, OsString>> {
         unsupported("login shell resolution", NAME)
-    }
-}
-
-impl Sandbox for Unsupported {
-    fn confine(&self, _spec: SpawnSpec, _policy: &SandboxPolicy) -> Result<SpawnSpec> {
-        unsupported("the worker sandbox", NAME)
     }
 }

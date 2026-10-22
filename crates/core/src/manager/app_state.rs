@@ -335,9 +335,9 @@ fn model_words(choice: &ModelChoice) -> String {
 
 fn permission_words(permission: PermissionLevel) -> &'static str {
     match permission {
-        PermissionLevel::AskForApproval => "Ask for approval",
-        PermissionLevel::ApproveForMe => "Approve for me",
-        PermissionLevel::FullAccess => "Full access",
+        PermissionLevel::Ask => "Ask",
+        PermissionLevel::AcceptEdits => "Accept edits",
+        PermissionLevel::Full => "Full access",
     }
 }
 
@@ -482,7 +482,7 @@ mod tests {
         let mut text = String::new();
         window_lines(&mut text, Ok(view));
         terminal_lines(&mut text, &terminals);
-        text.push_str("Composer: model claude-opus-5-5 (Claude Code), effort high · permission Approve for me · 2 messages queued.\n");
+        text.push_str("Composer: model claude-opus-5-5 (Claude Code), effort high · permission Accept edits · 2 messages queued.\n");
         text.push_str("Usage (Claude Code): 5-hour 42% used, resets in 2 h 5 min; weekly 61% used, resets in 3 d 4 h.\n");
         text.push_str(DATA_NOT_INSTRUCTIONS);
         assert!(text.len() <= 2200, "{} bytes:\n{text}", text.len());

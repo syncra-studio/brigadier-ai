@@ -28,7 +28,7 @@ const MIN = 60_000;
 const conversation: Conversation = { id, kind: "session", title: "Add the web interface", projectId: "p1",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
   setup: { type: "session", repo: "/work/todo-app", environment: { type: "newWorktree", branch: "brigadier/web-ui", base: "main", path: "/work/todo-app-web-ui", start: null },
-    permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
+    permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const base = Object.values(night.tasks)[0] as unknown as Task;
 const worker = (taskId: string, number: number, title: string, state: Task["state"], minutes: number): Task => ({ ...base, id: taskId, number, title, conversationId: id, state,
   kind: "implement", role: null, phase: null, run: null, attempts: [], requestId: "r1", gateLink: null, candidate: null, report: null, landed: state === "landed",

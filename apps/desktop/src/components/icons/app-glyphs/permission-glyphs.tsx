@@ -2,7 +2,7 @@ import type { FC, SVGProps } from "react";
 
 /**
  * The permission icons that the icon set lacks: a shield (the outline of
- * apps-sdk-ui's ShieldCheck, MIT) with a prompt inside for Approve for me, and with an
+ * apps-sdk-ui's ShieldCheck, MIT) with a prompt inside for Accept edits, and with an
  * exclamation mark for Full access. Drawn like the set's icons (24-unit grid, current
  * colour), sized by the caller.
  */
@@ -19,7 +19,7 @@ const Shield: FC<GlyphProps & { mark: string }> = ({ mark, ...props }) => (
   </svg>
 );
 
-/** A shield with a prompt (›_): workers act for you, inside the sandbox. */
+/** A shield with a prompt (›_): Accept edits, edits go ahead and other commands ask. */
 export const ShieldTerminal: FC<GlyphProps> = (props) => (
   <Shield
     mark="M7.793 9.793a1 1 0 0 1 1.414 0l2 2a1 1 0 0 1 0 1.414l-2 2a1 1 0 1 1-1.414-1.414L9.086 12.5l-1.293-1.293a1 1 0 0 1 0-1.414ZM12 15a1 1 0 0 1 1-1h3a1 1 0 1 1 0 2h-3a1 1 0 0 1-1-1Z"
@@ -27,7 +27,7 @@ export const ShieldTerminal: FC<GlyphProps> = (props) => (
   />
 );
 
-/** A shield with an exclamation mark: Full access, no sandbox. */
+/** A shield with an exclamation mark: Full access, nothing asks. */
 export const ShieldExclamation: FC<GlyphProps> = (props) => (
   <Shield
     mark="M12 7.5a1 1 0 0 1 1 1V13a1 1 0 1 1-2 0V8.5a1 1 0 0 1 1-1ZM12 14.75a1.25 1.25 0 1 1 0 2.5a1.25 1.25 0 1 1 0-2.5Z"

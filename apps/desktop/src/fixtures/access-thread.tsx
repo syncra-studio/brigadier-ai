@@ -1,7 +1,8 @@
 /**
- * The access notice in a finished production ConversationView, outside its collapsed work, under
- * an offer to start a session and a suggested setting (the three cards share their corners; the
- * setting is the offer card, its icon in a tile and its buttons not indented).
+ * A finished production ConversationView with an offer to start a session and a suggested
+ * setting outside its collapsed work (the two cards share their corners; the setting is the
+ * offer card, its icon in a tile and its buttons not indented), and an old record's Full access
+ * suggestion, which isn't shown.
  */
 import type { OrchestratorStepKind } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
@@ -35,11 +36,10 @@ function probe(css: string) {
 }
 
 const observer = new MutationObserver(() => {
-  const notice = document.querySelector<HTMLElement>('[data-kind="fullAccessSuggested"]');
-  const reply = notice?.closest('[data-slot="aui_assistant-message-root"]');
-  const offer = reply?.querySelector<HTMLElement>('[data-kind="sessionOffered"]');
+  const offer = document.querySelector<HTMLElement>('[data-kind="sessionOffered"]');
+  const reply = offer?.closest('[data-slot="aui_assistant-message-root"]');
   const setting = reply?.querySelector<HTMLElement>('[data-kind="settingSuggested"]');
-  if (!notice || !reply || !offer || !setting) return;
+  if (!offer || !reply || !setting) return;
   observer.disconnect();
   const question = probe("border-radius: var(--radius-question)").radius;
   const tile = setting.querySelector(":scope > div > span");
@@ -48,10 +48,9 @@ const observer = new MutationObserver(() => {
   result.id = "access-thread-result";
   result.textContent = JSON.stringify({
     state: reply.getAttribute("data-state"),
-    outsideWork: notice.closest('[data-slot="request-work"]') === null,
-    buttons: [...notice.querySelectorAll("button")].map((button) => button.textContent?.trim()),
-    count: reply.querySelectorAll('[data-kind="fullAccessSuggested"]').length,
-    corners: [notice, offer, setting].map((card) => getComputedStyle(card).borderTopLeftRadius === question),
+    outsideWork: [offer, setting].every((card) => card.closest('[data-slot="request-work"]') === null),
+    count: document.querySelectorAll('[data-kind="fullAccessSuggested"]').length,
+    corners: [offer, setting].map((card) => getComputedStyle(card).borderTopLeftRadius === question),
     setting: {
       buttons: [...setting.querySelectorAll("button")].map((button) => button.textContent?.trim()),
       tiled: !!tile && getComputedStyle(tile).width === probe("width: var(--spacing-icon-button-md)").width,

@@ -130,7 +130,7 @@ requestId: string | null,
  */
 turnInputId: string | null, state: PeerState, 
 /**
- * When it was allowed to go: now, or the user's Send under Ask for approval.
+ * When it was allowed to go: now, or the user's Send under Ask.
  */
 sentAtMs: number | null, 
 /**

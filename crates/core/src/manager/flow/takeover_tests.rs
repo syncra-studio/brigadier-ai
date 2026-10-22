@@ -794,7 +794,7 @@ async fn a_takeover_expires_the_workers_pending_permission_card() {
     let flow = Flow::start(
         "takeover-card",
         Options {
-            permission: crate::model::PermissionLevel::AskForApproval,
+            permission: crate::model::PermissionLevel::Ask,
             ..Options::default()
         },
         script(move |turn| async move {
@@ -904,8 +904,8 @@ async fn a_read_only_codex_terminal_folder_is_trusted_until_its_task_ends() {
     flow.stop().await;
 }
 
-/// Don't trust: a worker running above Ask for approval is stopped and its thread told why;
-/// a worker opened in a terminal afterwards gets Ask's access (no network, no reviewer).
+/// Don't trust: a worker running above Ask is stopped and its thread told why; a worker
+/// opened in a terminal afterwards runs under Ask.
 #[tokio::test]
 async fn an_untrusted_folder_stops_workers_above_ask_and_opens_terminals_under_it() {
     let (flow, _host, _, _) = start_as(
@@ -939,8 +939,6 @@ async fn an_untrusted_folder_stops_workers_above_ask_and_opens_terminals_under_i
         .project_id
         .unwrap();
     let id = task_id(&flow).await;
-    let before = flow.board().await.tasks[&id].clone();
-    assert!(before.access.network);
     flow.manager
         .set_folder_trust(project, None, false)
         .await
@@ -956,8 +954,7 @@ async fn an_untrusted_folder_stops_workers_above_ask_and_opens_terminals_under_i
         .find(|(name, _)| name == "FAKE_ACCESS")
         .map(|(_, value)| value.to_string_lossy().into_owned())
         .unwrap();
-    assert!(access.contains("network: false"), "{access}");
-    assert!(access.contains("auto_review=false"), "{access}");
+    assert_eq!(access, "Ask");
     host.exit(&terminal);
     flow.stop().await;
 }

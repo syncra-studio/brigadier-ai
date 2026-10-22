@@ -734,7 +734,6 @@ fn give(
         tool_timeout_secs: None,
         trusted: false,
         always_load: false,
-        prompt_tools: Vec::new(),
     });
 }
 

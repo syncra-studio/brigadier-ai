@@ -1,5 +1,5 @@
-//! Linux: everything the daemon needs to run. The worker sandbox, credential storage and
-//! login-shell resolution arrive with the Linux platform phase.
+//! Linux: everything the daemon needs to run. Credential storage and login-shell resolution
+//! arrive with the Linux platform phase.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -12,7 +12,7 @@ use crate::machine::{heat_from_thermal_zones, memory_from_psi};
 use crate::unix::{self, UnixPrivateFs};
 use crate::{
     AppPaths, CredentialStore, DetachedChild, Machine, MachineLoad, Platform, PrivateFs, Processes,
-    Result, Sandbox, SandboxPolicy, Shell, SpawnSpec, unsupported,
+    Result, Shell, SpawnSpec, unsupported,
 };
 
 const NAME: &str = "linux";
@@ -44,9 +44,6 @@ impl Platform for Linux {
         &Unsupported
     }
     fn shell(&self) -> &dyn Shell {
-        &Unsupported
-    }
-    fn sandbox(&self) -> &dyn Sandbox {
         &Unsupported
     }
     fn machine(&self) -> &dyn Machine {
@@ -213,12 +210,6 @@ impl Shell for Unsupported {
     }
     fn login_environment(&self) -> Result<BTreeMap<OsString, OsString>> {
         unsupported("login shell resolution", NAME)
-    }
-}
-
-impl Sandbox for Unsupported {
-    fn confine(&self, _spec: SpawnSpec, _policy: &SandboxPolicy) -> Result<SpawnSpec> {
-        unsupported("the worker sandbox", NAME)
     }
 }
 

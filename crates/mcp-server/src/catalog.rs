@@ -10,11 +10,11 @@ use brigadier_core::tools::{
     LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, NoteProgress,
     OfferFeedback, OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog,
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
-    RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, Role, RouteFollowUp, RunCommand,
-    RunTools, RunUnsandboxed, SaveMemory, SaveReport, SearchTranscript, SetHeadline, SettleStep,
-    SettleWait, ShowSession, StartPreview, StartVerifier, StopPreview, StopWorker, StoreOutput,
-    SubmitOutline, SubmitReport, SuggestFullAccess, SuggestSetting, TabChatCall, TabTools,
-    TerminalRun, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, Role, RouteFollowUp, SaveMemory,
+    SaveReport, SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession, StartPreview,
+    StartVerifier, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
+    SuggestSetting, TabChatCall, TabTools, TerminalRun, ToolCall, WaitForReplies, WorkerCall,
+    WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -169,7 +169,7 @@ specific words; no preamble, no restating the request, no filler (\"This plan wi
 
 const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon as you have \
 judged it. Put what the outline gets wrong, and anything the brief implies, in `corrections`; the brief wins any \
-conflict. Under \"Ask for approval\" this shows the user an \"Implement this plan?\" card and the \
+conflict. Under \"Ask\" this shows the user an \"Implement this plan?\" card and the \
 go-ahead goes once they start it. Returns at once.";
 
 const START_VERIFIER: &str = "Your call, for big or risky work only: start a fresh verifier \
@@ -315,8 +315,8 @@ the account's usage. Check it before you say what is open.",
 );
 
 const READ_TERMINAL: &str = concat!(
-    "Read one of the session's terminals by its id from app_state: what it printed, cut like \
-run's output, with a `read_artifact out-…` id for the rest. Secrets are hidden.",
+    "Read one of the session's terminals by its id from app_state: what it printed, cut like a \
+long command's output, with a `read_artifact out-…` id for the rest. Secrets are hidden.",
     app_data!()
 );
 
@@ -332,9 +332,9 @@ showing it is left as it is.",
 
 const TERMINAL_RUN: &str = concat!(
     "Type a command in a terminal tab the user can watch and take over: a dev server they will \
-try, a sign-in, an interactive tool. Builds, tests and listings stay in your shell (run, \
-your own shell). Left out, `terminal` is your own tab. It runs with the user's full rights, outside \
-the sandbox: below Full access the user says yes on a card first, and a terminal of the user's \
+try, a sign-in, an interactive tool. Builds, tests and listings stay in your own shell. \
+Left out, `terminal` is your own tab. It runs with the user's full rights: below Full access the \
+user says yes on a card first, and a terminal of the user's \
 is typed in only after they say yes, at any level. read_terminal reads what it printed.",
     app_data!()
 );
@@ -357,19 +357,10 @@ user's own tabs only when they ask.",
 
 const SUGGEST_SETTING: &str = "Suggest changing one setting on a card whose one button makes \
 the change, when what the user asked for needs it: this session's permission level \
-(`permission`: ask_for_approval, approve_for_me or full_access) or the Browser setting \
+(`permission`: ask, accept_edits or full_access) or the Browser setting \
 (`browser`: on or off). reason: one line on why it helps with what they asked. Nothing changes until the user presses \
 the button; every other setting is theirs alone. Refused when the setting is already so, during \
 an overnight run, and a second time in one request.";
-
-const SUGGEST_FULL_ACCESS: &str = "Show the user a notice in the thread when something they \
-asked for needs more access than this session's sandbox gives (writing outside the workspace, \
-installing software system-wide, the internet under Ask for approval, an app or device the \
-sandbox blocks): your reason, a button that switches this session to Full access, and a link to \
-Settings > Configuration. reason: one line on what the sandbox stopped and what Full access \
-would let you do. Not for what Full access wouldn't fix (a missing key, a failing test, an \
-outward step only the user takes). Refused when the session already has Full access. Returns at \
-once; the user's switch, if they make it, arrives as a change of this session's setting.";
 
 const OFFER_FEEDBACK: &str = "When the user seems annoyed with Brigadier itself (a bug in \
 the app or in how you or its workers behave; never their own project's code), or asks you to \
@@ -390,19 +381,6 @@ own branch and worktree, in the background. Never start it yourself. task: what 
 to do, complete on its own as its first message (files, the symptom, what done means). title: \
 a short name for the card. The same task once a request.";
 
-const RUN: &str = "Run a shell command and get its result: builds, tests, logs, long \
-listings. It runs with this session's access and sandbox, in `workdir` (the workspace, a folder \
-in it, or your scratch folder). Up to 8 KB of output comes back as it is, more as a digest (the \
-exit status, the error and warning lines, the first and last lines) with an out-… id for \
-read_artifact. A command still going after a minute goes on in the background: the call \
-returns its run-N id and the result comes as a message in this request; never wait for it or \
-run it again. Give a long one a short `name` for what it is for (\"Desktop build\"): the \
-session's Activities show it while it runs.";
-
-const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
-blocked (the network, files outside the workspace): it waits for approval first, decided on \
-your `justification`. Try run first; use this only when the sandbox is what stopped it.";
-
 const START_PREVIEW: &str = "Start something the user wants to see running (a dev server, \
 the app, a docs site) and keep it running: it lives across your turns until you stop it, and \
 answers at once with its first output. Run the command in the foreground (no trailing `&`). It \
@@ -416,16 +394,12 @@ rendered PDF (its file as `target`, ready once it is there), \"test\" a test run
 watches to its result; each is inferred from its command when left out. It stops when you call stop_preview, when the user presses Stop, and when the \
 session is merged (unless `purpose` is \"user\"), archived or deleted; for one-off commands use your shell instead. Users may \
 pause previews; preview_log gives the logs. Running Brigadier itself, use a new \
-BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app. macOS GUI previews below \
-Full access stay confined with private temp space. Chromium/Electron may need `--no-sandbox`; \
-Brigadier still confines their helpers. Mach rendezvous IDs: ai.brigadier.dev, \
-com.github.Electron, org.chromium.Chromium, com.google.chrome.for.testing; other packaged IDs need \
-a dev identity or Full access. Put browser profiles in writable roots.";
+BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app.";
 
 const WORKER_START_PREVIEW: &str = "Start a dev server or app and keep it running, rather \
 than in your shell (never with `&`, nohup or `open`): the user sees it in the session's \
 Activities with its state and a Stop. Run it in the foreground (no trailing `&`). It runs in \
-your worktree (or `workdir` in it or in your scratch folder) with your access, in its own \
+your worktree (or `workdir` in it or in your scratch folder) in its own \
 process group, and answers at once with its first output. A dev app is built and launched as \
 one preview with `kind` \"app\", its binary in the foreground (`<build> && \"<the \
 .app>/Contents/MacOS/<binary>\"`): it reads Building while it compiles, then Starting, then \
@@ -677,8 +651,6 @@ fn browser_call(name: &str, arguments: &Value) -> Option<Result<BrowserToolCall,
 /// checks a change or plan no `ask_thread`.
 pub fn tools_for(role: &Role) -> &'static [Tool] {
     static ORCHESTRATOR: OnceLock<Vec<Tool>> = OnceLock::new();
-    static RUNNER: OnceLock<Vec<Tool>> = OnceLock::new();
-    static ESCALATING: OnceLock<Vec<Tool>> = OnceLock::new();
     static WORKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHECKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static JOB: OnceLock<Vec<Tool>> = OnceLock::new();
@@ -687,24 +659,9 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
     static TAB_FILE: OnceLock<Vec<Tool>> = OnceLock::new();
     match role {
         // A note fork lists the thread's tools, whose calls the host refuses.
-        Role::Orchestrator { run, .. } | Role::NoteFork { run, .. } => match run {
-            RunTools::None => ORCHESTRATOR.get_or_init(|| loading(orchestrator_tools())),
-            RunTools::Run => RUNNER.get_or_init(|| {
-                let mut tools = orchestrator_tools();
-                tools.push(tool("run", RUN, input_schema::<RunCommand>()));
-                loading(tools)
-            }),
-            RunTools::WithEscalation => ESCALATING.get_or_init(|| {
-                let mut tools = orchestrator_tools();
-                tools.push(tool("run", RUN, input_schema::<RunCommand>()));
-                tools.push(tool(
-                    "run_unsandboxed",
-                    RUN_UNSANDBOXED,
-                    input_schema::<RunUnsandboxed>(),
-                ));
-                loading(tools)
-            }),
-        },
+        Role::Orchestrator { .. } | Role::NoteFork { .. } => {
+            ORCHESTRATOR.get_or_init(|| loading(orchestrator_tools()))
+        }
         Role::Worker { checks: false, .. } => WORKER.get_or_init(worker_tools),
         Role::Worker { checks: true, .. } => CHECKER.get_or_init(|| {
             worker_tools()
@@ -811,11 +768,6 @@ fn orchestrator_tools() -> Vec<Tool> {
         ),
         tool("ci_status", CI_STATUS, input_schema::<CiPush>()),
         tool("watch_ci", WATCH_CI, input_schema::<CiPush>()),
-        tool(
-            "suggest_full_access",
-            SUGGEST_FULL_ACCESS,
-            input_schema::<SuggestFullAccess>(),
-        ),
         tool(
             "offer_feedback",
             OFFER_FEEDBACK,
@@ -957,8 +909,6 @@ fn chat_tools() -> Vec<Tool> {
 /// The thread's everyday tools, in the model's list from the start (Q40, BUILD-PLAN C2): a
 /// Claude thread finds the rest with its tool search when it needs one, which keeps every
 /// call's fixed start near plain Claude Code's. Codex reads no such mark and loads them all.
-/// `run` waits too (BUILD-PLAN O5): the thread's own shell keeps outputs up to 30 KB whole, and
-/// no bench run called it.
 pub const THREAD_ALWAYS_LOADED: &[&str] = &[
     "read_artifact",
     "ask_user",
@@ -980,7 +930,6 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
         "store_output",
         "corrected file, fixed deliverable, worker output, Save",
     ),
-    ("run", "shell command, long output, background"),
     ("save_report", "full report, research, long findings, page"),
     (
         "app_state",
@@ -1179,7 +1128,7 @@ pub fn parse_call(
         return call.map(ToolCall::App);
     }
     match role {
-        Role::Orchestrator { run, .. } | Role::NoteFork { run, .. } => {
+        Role::Orchestrator { .. } | Role::NoteFork { .. } => {
             let call = match name {
                 "delegate_task" => OrchestratorCall::DelegateTask(args(name, arguments)?),
                 "message_worker" => OrchestratorCall::MessageWorker(args(name, arguments)?),
@@ -1207,9 +1156,6 @@ pub fn parse_call(
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "ci_status" => OrchestratorCall::CiStatus(args(name, arguments)?),
                 "watch_ci" => OrchestratorCall::WatchCi(args(name, arguments)?),
-                "suggest_full_access" => {
-                    OrchestratorCall::SuggestFullAccess(args(name, arguments)?)
-                }
                 "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
                 "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
                 "offer_session" => OrchestratorCall::OfferSession(args(name, arguments)?),
@@ -1233,10 +1179,6 @@ pub fn parse_call(
                 "wait_for_replies" => OrchestratorCall::WaitForReplies(args(name, arguments)?),
                 "read_session" => OrchestratorCall::ReadSession(args(name, arguments)?),
                 "settle_wait" => OrchestratorCall::SettleWait(args(name, arguments)?),
-                "run" if *run != RunTools::None => OrchestratorCall::Run(args(name, arguments)?),
-                "run_unsandboxed" if *run == RunTools::WithEscalation => {
-                    OrchestratorCall::RunUnsandboxed(args(name, arguments)?)
-                }
                 _ => return Err(unknown()),
             };
             Ok(ToolCall::Orchestrator(call))
@@ -1284,7 +1226,6 @@ pub fn parse_call(
             _ if CHAT_THREAD_TOOLS.contains(&name) => parse_call(
                 &Role::Orchestrator {
                     conversation_id: conversation_id.clone(),
-                    run: RunTools::None,
                 },
                 name,
                 arguments.as_object().cloned(),
@@ -1339,7 +1280,6 @@ mod tests {
     fn descriptions_fit_and_delegate_tasks_fields_are_one_line_each() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::WithEscalation,
         };
         for role in [thread, worker(false), worker(true)] {
             for tool in tools_for(&role) {
@@ -1385,7 +1325,6 @@ mod tests {
     fn route_follow_up_offers_separate_work_as_a_session_of_its_own() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let tool = tools_for(&thread)
             .iter()
@@ -1413,10 +1352,9 @@ mod tests {
     /// tools carry no mark (BUILD-PLAN C2).
     #[test]
     fn a_threads_everyday_tools_load_up_front_and_the_rest_wait_for_the_search() {
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+        {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
             };
             let tools = tools_for(&thread);
             let loaded: Vec<&str> = tools
@@ -1435,7 +1373,7 @@ mod tests {
             sorted.sort_unstable();
             let mut want = expected.clone();
             want.sort_unstable();
-            assert_eq!(sorted, want, "{run:?}");
+            assert_eq!(sorted, want);
             assert!(loaded.len() * 4 < tools.len(), "most wait: {}", tools.len());
             let delegate = tools
                 .iter()
@@ -1485,7 +1423,7 @@ mod tests {
         assert!(START_PREVIEW.contains(
             "use a new BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app"
         ));
-        assert!(START_PREVIEW.contains("Mach rendezvous IDs: ai.brigadier.dev"));
+        assert!(!START_PREVIEW.contains("sandbox") && !START_PREVIEW.contains("confine"));
         // A worker has no read_artifact: its preview tools never point it there.
         for text in [
             WORKER_START_PREVIEW,
@@ -1577,7 +1515,6 @@ mod tests {
         }
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let old = serde_json::json!({ "user_words": "merge it" });
         assert!(parse_call(&thread, "finish_session", old.as_object().cloned()).is_err());
@@ -1591,7 +1528,6 @@ mod tests {
     fn the_thread_searches_the_code_index() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let names: Vec<String> = tools_for(&thread)
             .iter()
@@ -1625,7 +1561,6 @@ mod tests {
     fn delegate_task_needs_an_effort() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let delegate = tools_for(&thread)
             .iter()
@@ -1655,95 +1590,34 @@ mod tests {
         ));
     }
 
-    /// `run` is a Codex thread's, and `run_unsandboxed` only a sandboxed one's; a Claude
-    /// thread (its Bash output is trimmed by its hook) and the hook's own grant have neither.
+    /// The thread and its workers run commands with their CLI's own shell: no thread has
+    /// `run`, `run_unsandboxed` or `suggest_full_access`, and a call of one is an unknown tool
+    /// (G5).
     #[test]
-    fn only_a_codex_thread_runs_commands_through_brigadier() {
-        let thread = |run| Role::Orchestrator {
+    fn no_thread_has_brigadiers_command_or_full_access_tools() {
+        let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run,
         };
-        let names = |role: &Role| -> Vec<String> {
-            tools_for(role)
-                .iter()
-                .map(|tool| tool.name.to_string())
-                .collect()
-        };
-        let command = || {
-            let mut arguments = JsonObject::new();
-            arguments.insert("command".into(), Value::String("cargo test".into()));
-            arguments.insert("timeout_secs".into(), Value::from(60));
-            Some(arguments)
-        };
-        let claude = names(&thread(RunTools::None));
-        assert!(
-            !claude
-                .iter()
-                .any(|name| name == "run" || name == "run_unsandboxed")
-        );
-        assert!(matches!(
-            parse_call(&thread(RunTools::None), "run", command()),
-            Err(ParseError::UnknownTool(_))
-        ));
-        let full = names(&thread(RunTools::Run));
-        assert!(full.contains(&"run".to_owned()));
-        assert!(!full.contains(&"run_unsandboxed".to_owned()));
-        assert!(matches!(
-            parse_call(&thread(RunTools::Run), "run", command()),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::Run(RunCommand {
-                timeout_secs: Some(60),
-                ..
-            })))
-        ));
-        assert!(matches!(
-            parse_call(&thread(RunTools::Run), "run_unsandboxed", command()),
-            Err(ParseError::UnknownTool(_))
-        ));
-        let sandboxed = names(&thread(RunTools::WithEscalation));
-        assert!(sandboxed.contains(&"run".to_owned()));
-        assert!(sandboxed.contains(&"run_unsandboxed".to_owned()));
-        let mut arguments = command().unwrap();
-        arguments.insert(
-            "justification".into(),
-            Value::String("It needs the network.".into()),
-        );
-        assert!(matches!(
-            parse_call(
-                &thread(RunTools::WithEscalation),
-                "run_unsandboxed",
-                Some(arguments)
-            ),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::RunUnsandboxed(_)))
-        ));
+        let mut arguments = JsonObject::new();
+        arguments.insert("command".into(), Value::String("cargo test".into()));
+        arguments.insert("reason".into(), Value::String("r".into()));
+        for name in ["run", "run_unsandboxed", "suggest_full_access"] {
+            assert!(
+                !tools_for(&thread).iter().any(|tool| tool.name == name),
+                "{name}"
+            );
+            assert!(
+                matches!(
+                    parse_call(&thread, name, Some(arguments.clone())),
+                    Err(ParseError::UnknownTool(_))
+                ),
+                "{name}"
+            );
+        }
         let hook = Role::OutputHook {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
         };
         assert!(tools_for(&hook).is_empty());
-        assert!(parse_call(&hook, "run", command()).is_err());
-    }
-
-    /// Every thread can show the Full access notice; the reason it gives is what the user reads.
-    #[test]
-    fn every_thread_can_suggest_full_access() {
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
-            let thread = Role::Orchestrator {
-                conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
-            };
-            assert!(
-                tools_for(&thread)
-                    .iter()
-                    .any(|tool| tool.name == "suggest_full_access"),
-                "{run:?}"
-            );
-            let arguments =
-                serde_json::json!({ "reason": "Installing Homebrew writes outside the project" });
-            assert!(matches!(
-                parse_call(&thread, "suggest_full_access", arguments.as_object().cloned()),
-                Ok(ToolCall::Orchestrator(OrchestratorCall::SuggestFullAccess(args)))
-                    if args.reason == "Installing Homebrew writes outside the project"
-            ));
-        }
     }
 
     /// suggest_setting takes the permission level and the browser; any other setting (merging on
@@ -1752,7 +1626,6 @@ mod tests {
     fn a_suggested_setting_is_one_of_the_few_the_thread_may_suggest() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         for setting in ["permission", "browser"] {
             let arguments = serde_json::json!({ "setting": setting, "value": "on", "reason": "r" });
@@ -1784,10 +1657,9 @@ mod tests {
     /// Every thread can offer a feedback report, found behind the tool search by what it is for.
     #[test]
     fn every_thread_can_offer_feedback() {
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+        {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
             };
             let tool = tools_for(&thread)
                 .iter()
@@ -1797,16 +1669,12 @@ mod tests {
                 .meta
                 .as_ref()
                 .and_then(|meta| meta.0.get("anthropic/searchHint"));
-            assert!(
-                hint.is_some_and(|hint| hint.as_str().unwrap().contains("annoyed")),
-                "{run:?}"
-            );
+            assert!(hint.is_some_and(|hint| hint.as_str().unwrap().contains("annoyed")));
             // The user may send it after the answer is written: the card says whether (#475).
             assert!(
                 tool.description
                     .as_deref()
-                    .is_some_and(|text| text.contains("the card, not your answer, says whether")),
-                "{run:?}"
+                    .is_some_and(|text| text.contains("the card, not your answer, says whether"))
             );
             let arguments = serde_json::json!({
                 "kind": "bug",
@@ -1827,10 +1695,9 @@ mod tests {
     /// what it is for.
     #[test]
     fn every_thread_can_offer_a_session() {
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+        {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
             };
             let tool = tools_for(&thread)
                 .iter()
@@ -1840,10 +1707,7 @@ mod tests {
                 .meta
                 .as_ref()
                 .and_then(|meta| meta.0.get("anthropic/searchHint"));
-            assert!(
-                hint.is_some_and(|hint| hint.as_str().unwrap().contains("out of scope")),
-                "{run:?}"
-            );
+            assert!(hint.is_some_and(|hint| hint.as_str().unwrap().contains("out of scope")));
             let arguments =
                 serde_json::json!({ "task": "Fix the date parser: it drops the time zone." });
             assert!(matches!(
@@ -1906,7 +1770,6 @@ mod tests {
     fn threads_chats_and_their_workers_make_browser_calls_and_no_one_else() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let chat = Role::Chat {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
@@ -1957,7 +1820,6 @@ mod tests {
     fn only_threads_and_chats_make_app_calls() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let chat = Role::Chat {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
@@ -2020,17 +1882,13 @@ mod tests {
                 .map(|tool| tool.name.to_string())
                 .collect()
         };
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+        {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
             };
             let listed = names(&thread);
-            for name in APP_TOOLS
-                .iter()
-                .chain(&["suggest_setting", "suggest_full_access"])
-            {
-                assert!(listed.contains(&(*name).to_owned()), "{run:?}: {name}");
+            for name in APP_TOOLS.iter().chain(&["suggest_setting"]) {
+                assert!(listed.contains(&(*name).to_owned()), "{name}");
             }
             assert!(has_thread_browser_tools(&thread));
             for tool in tools_for(&thread) {
@@ -2118,17 +1976,16 @@ mod tests {
 
     #[test]
     fn every_thread_starts_reads_and_stops_previews() {
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+        {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
             };
             let names: Vec<String> = tools_for(&thread)
                 .iter()
                 .map(|tool| tool.name.to_string())
                 .collect();
             for name in ["start_preview", "stop_preview", "preview_log"] {
-                assert!(names.contains(&name.to_owned()), "{name} {run:?}");
+                assert!(names.contains(&name.to_owned()), "{name}");
             }
             let arguments = serde_json::json!({
                 "command": "python3 -m http.server 8123",
@@ -2204,7 +2061,6 @@ mod tests {
     fn the_thread_messages_other_sessions() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let parse = |name: &str, call: Value| parse_call(&thread, name, call.as_object().cloned());
         let Ok(ToolCall::Orchestrator(OrchestratorCall::MessageSession(sent))) = parse(
@@ -2275,10 +2131,9 @@ mod tests {
             "review_candidate",
             "review_code",
         ];
-        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+        {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
-                run,
             };
             for role in [thread.clone(), worker(false), worker(true)] {
                 for name in gone {
@@ -2304,7 +2159,6 @@ mod tests {
     fn the_thread_tool_list_is_the_catalogs() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::WithEscalation,
         };
         let mut names: Vec<&str> = tools_for(&thread)
             .iter()
@@ -2322,7 +2176,6 @@ mod tests {
     fn propose_merge_is_gone() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::WithEscalation,
         };
         for role in [thread.clone(), worker(false), worker(true)] {
             assert!(
@@ -2368,7 +2221,6 @@ mod tests {
     fn stop_worker_needs_a_reason() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let tool = tools_for(&thread)
             .iter()
@@ -2406,7 +2258,6 @@ mod tests {
         };
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::Run,
         };
         std::fs::write(
             path,

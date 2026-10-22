@@ -6,7 +6,7 @@ import { toast } from "@/state/toasts";
 /*
  * "Trust this folder?": the user's answer for a project's folder. Trusted, agents work
  * there as the session's permission level allows; not trusted, every session there runs under
- * Ask for approval. A folder never asked about (a new project, one from before the question,
+ * Ask. A folder never asked about (a new project, one from before the question,
  * one given another folder) is asked about when the user first enters its project; until then
  * work there runs as if not trusted.
  */

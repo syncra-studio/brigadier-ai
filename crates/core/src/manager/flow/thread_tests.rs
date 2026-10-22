@@ -38,15 +38,14 @@ fn session_worktree(flow: &Flow) -> std::path::PathBuf {
 }
 
 /// At each level and for both vendors, the thread starts with its own tools in its workspace
-/// (the session worktree, made before the CLI starts, #523) and a worker's access for that
-/// level; its scratch folder stays its sweep folder. Its environment sets only its temporary
+/// (the session worktree, made before the CLI starts, #523) at that level; its scratch folder stays its sweep folder. Its environment sets only its temporary
 /// folder: the CLI's own shell timeouts, output limits and background tasks hold (S2).
 #[tokio::test]
 async fn the_thread_works_in_its_workspace_with_the_levels_access() {
     for (permission, thread) in [
-        (PermissionLevel::FullAccess, ProviderKind::Claude),
-        (PermissionLevel::ApproveForMe, ProviderKind::Codex),
-        (PermissionLevel::AskForApproval, ProviderKind::Claude),
+        (PermissionLevel::Full, ProviderKind::Claude),
+        (PermissionLevel::AcceptEdits, ProviderKind::Codex),
+        (PermissionLevel::Ask, ProviderKind::Claude),
     ] {
         let seen: Arc<Mutex<Vec<std::path::PathBuf>>> = Arc::default();
         let log = seen.clone();
@@ -99,41 +98,8 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         ] {
             assert!(!env.contains_key(name), "{name}");
         }
-        match permission {
-            PermissionLevel::FullAccess => {
-                assert_eq!(spec.access, Access::Full);
-                assert!(!spec.auto_review);
-            }
-            level => {
-                let Access::Scoped {
-                    write_cwd,
-                    writable_roots,
-                    network,
-                    ..
-                } = &spec.access
-                else {
-                    panic!("a sandbox under {level:?}: {:?}", spec.access);
-                };
-                assert!(write_cwd);
-                assert!(writable_roots.contains(&worktree));
-                assert!(writable_roots.contains(&scratch));
-                assert!(writable_roots.contains(&tmp));
-                // It commits its tiny edits into the repository's git folder.
-                let common = std::path::PathBuf::from(git(
-                    &worktree,
-                    &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-                ));
-                let common = common.canonicalize().unwrap();
-                assert!(
-                    writable_roots.iter().any(|root| root
-                        .canonicalize()
-                        .is_ok_and(|root| root.starts_with(&common))),
-                    "{writable_roots:?}"
-                );
-                assert_eq!(*network, level == PermissionLevel::ApproveForMe);
-                assert_eq!(spec.auto_review, level == PermissionLevel::ApproveForMe);
-            }
-        }
+        // The level passes straight through as the CLI's own permission mode.
+        assert_eq!(spec.access, permission.access(), "{permission:?}");
         // Nothing of the workspace is under the thread's cleanup owner.
         let owned = flow
             .manager
@@ -153,58 +119,83 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
     }
 }
 
-/// Under Ask for approval, the thread's request to leave its sandbox reaches the user as a
-/// card (no longer declined outright), and the user's answer reaches the thread.
+/// Under Ask, on both CLIs: the thread's CLI runs in its own `default`/`untrusted` mode, its
+/// permission prompt becomes the user's card (Brigadier answers nothing itself), and the
+/// user's answer reaches the CLI, whose turn then goes on to its answer (G5).
 #[tokio::test]
-async fn under_ask_the_threads_request_is_the_users_card() {
-    let answered: Arc<Mutex<Option<ApprovalDecision>>> = Arc::default();
-    let log = answered.clone();
-    let flow = Flow::start(
-        "thread-ask",
-        Options {
-            permission: PermissionLevel::AskForApproval,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                let decision = turn.ask_approval("curl https://example.com", "curl").await;
-                *log.lock().unwrap() = decision;
-                Reply::text("Fetched it.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Fetch example.com.").await;
-    let board = flow
-        .until("the thread's card", |board| {
-            board
-                .approvals
-                .values()
-                .any(|approval| approval.state == CardState::Pending)
-        })
-        .await;
-    let card = board
-        .approvals
-        .values()
-        .find(|approval| approval.state == CardState::Pending)
-        .unwrap();
-    assert!(card.task_id.is_none(), "the thread's own request");
-    assert!(matches!(
-        &card.subject,
-        ApprovalSubject::Cli { request } if request.command.as_deref() == Some("curl https://example.com")
-    ));
-    flow.manager
-        .answer_card(
-            flow.conversation.clone(),
-            card.id.clone(),
-            ApprovalDecision::Allow,
+async fn under_ask_a_cli_permission_prompt_is_a_card_and_its_answer_continues_the_turn() {
+    for thread in [ProviderKind::Claude, ProviderKind::Codex] {
+        let answered: Arc<Mutex<Option<ApprovalDecision>>> = Arc::default();
+        let log = answered.clone();
+        let flow = Flow::start(
+            "thread-ask",
+            Options {
+                permission: PermissionLevel::Ask,
+                thread,
+                ..Options::default()
+            },
+            script(move |turn| {
+                let log = log.clone();
+                async move {
+                    let decision = turn.ask_approval("curl https://example.com", "curl").await;
+                    *log.lock().unwrap() = decision;
+                    Reply::text("Fetched it.")
+                }
+            }),
         )
-        .await
-        .unwrap();
-    flow.settled().await;
-    assert_eq!(*answered.lock().unwrap(), Some(ApprovalDecision::Allow));
-    flow.stop().await;
+        .await;
+        flow.say("Fetch example.com.").await;
+        let board = flow
+            .until("the thread's card", |board| {
+                board
+                    .approvals
+                    .values()
+                    .any(|approval| approval.state == CardState::Pending)
+            })
+            .await;
+        // The CLI waits on the card: nothing answered it.
+        assert_eq!(*answered.lock().unwrap(), None, "{thread:?}");
+        let card = board
+            .approvals
+            .values()
+            .find(|approval| approval.state == CardState::Pending)
+            .unwrap();
+        assert!(card.task_id.is_none(), "the thread's own request");
+        assert!(matches!(
+            &card.subject,
+            ApprovalSubject::Cli { request } if request.command.as_deref() == Some("curl https://example.com")
+        ));
+        flow.manager
+            .answer_card(
+                flow.conversation.clone(),
+                card.id.clone(),
+                ApprovalDecision::Allow,
+            )
+            .await
+            .unwrap();
+        let board = flow.settled().await;
+        assert_eq!(*answered.lock().unwrap(), Some(ApprovalDecision::Allow));
+        assert_eq!(
+            board.approvals[&card.id].state,
+            CardState::Allowed {
+                by: brigadier_providers::Decider::User,
+                similar: false
+            }
+        );
+        // The turn went on past the prompt to its answer.
+        let request = board.requests.values().next().unwrap();
+        assert_eq!(request.state, crate::work::RequestState::Done, "{thread:?}");
+        let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.text.contains("Fetched it.")),
+            "{messages:#?}"
+        );
+        let specs = flow.thread_specs();
+        assert_eq!(specs[0].1.access, Access::Ask, "{thread:?}");
+        flow.stop().await;
+    }
 }
 
 /// The user's Deny with no reason still tells the thread why (an empty one fails its whole
@@ -217,7 +208,7 @@ async fn a_deny_without_a_reason_tells_the_thread_and_the_turn_goes_on() {
     let flow = Flow::start(
         "thread-deny",
         Options {
-            permission: PermissionLevel::AskForApproval,
+            permission: PermissionLevel::Ask,
             ..Options::default()
         },
         script(move |turn| {
@@ -284,7 +275,7 @@ async fn a_session_grant_allows_later_edits_in_the_workspace_only() {
     let flow = Flow::start(
         "thread-session-grant",
         Options {
-            permission: PermissionLevel::AskForApproval,
+            permission: PermissionLevel::Ask,
             ..Options::default()
         },
         script(move |turn| {
@@ -384,29 +375,14 @@ async fn a_session_grant_allows_later_edits_in_the_workspace_only() {
         .unwrap();
     let workspace = session_worktree(&flow);
     edit.paths = vec![workspace.join("later.txt").display().to_string()];
-    assert_eq!(
+    assert!(
         flow.manager
-            .approval_route(
-                &flow.conversation,
-                &mut edit,
-                &brigadier_providers::Access::ReadOnly,
-                Some(&workspace),
-                false
-            )
-            .0,
-        brigadier_providers::policy::Route::Allow
+            .allowed_before(&flow.conversation, &mut edit, Some(&workspace))
     );
-    assert_eq!(
-        flow.manager
-            .approval_route(
-                &flow.conversation,
-                &mut edit,
-                &brigadier_providers::Access::ReadOnly,
-                Some(&flow.repo),
-                false
-            )
-            .0,
-        brigadier_providers::policy::Route::AskUser
+    assert!(
+        !flow
+            .manager
+            .allowed_before(&flow.conversation, &mut edit, Some(&flow.repo))
     );
     assert_eq!(edit.grant, None);
     flow.stop().await;
@@ -499,7 +475,7 @@ async fn a_new_workspace_or_level_resumes_the_thread_with_a_note() {
                     path: Some(moved.display().to_string()),
                     start,
                 },
-                permission: PermissionLevel::ApproveForMe,
+                permission: PermissionLevel::AcceptEdits,
                 orchestrator,
                 workers_see_uncommitted,
                 plan_mode,
@@ -525,8 +501,7 @@ async fn a_new_workspace_or_level_resumes_the_thread_with_a_note() {
     assert_eq!(specs[0].1.cwd, first);
     assert_eq!(specs[1].1.cwd, moved);
     assert_eq!(specs[1].1.access, Access::Full);
-    assert!(matches!(specs[2].1.access, Access::Scoped { .. }));
-    assert!(specs[2].1.auto_review);
+    assert_eq!(specs[2].1.access, Access::AcceptEdits);
 
     let inputs = inputs.lock().unwrap().clone();
     // Nothing is told mid-session (G1): the CLI starts with the new folder and access.
@@ -2017,123 +1992,6 @@ async fn a_feedback_offer_from_an_edited_message_blocks_nothing() {
     flow.stop().await;
 }
 
-/// When the sandbox stops what the user asked for, the thread shows a notice once per request,
-/// with its reason, under the request it serves; at Full access it is refused. Changing the
-/// default level leaves a started session's own level alone.
-#[tokio::test]
-async fn the_thread_suggests_full_access_once_and_never_at_full_access() {
-    let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
-    let log = replies.clone();
-    let flow = Flow::start(
-        "thread-suggest-full-access",
-        Options {
-            permission: PermissionLevel::AskForApproval,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    let call = || {
-                        turn.call(
-                            "suggest_full_access",
-                            json!({"reason": "Installing Homebrew writes outside the project."}),
-                        )
-                    };
-                    let (first, second) = tokio::join!(call(), call());
-                    for reply in [first, second] {
-                        log.lock().unwrap().push((reply.is_error, reply.text));
-                    }
-                }
-                Reply::text("It needs Full access.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Install Homebrew.").await;
-    let board = flow.settled().await;
-    {
-        let replies = replies.lock().unwrap();
-        assert_eq!(
-            replies.iter().filter(|reply| !reply.0).count(),
-            1,
-            "{replies:?}"
-        );
-        assert_eq!(
-            replies
-                .iter()
-                .filter(|reply| reply.0 && reply.1.contains("already shown"))
-                .count(),
-            1,
-            "{replies:?}"
-        );
-    }
-    let shown: Vec<_> = board
-        .orchestrator_steps
-        .iter()
-        .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::FullAccessSuggested { reason } => {
-                Some((reason.clone(), step.request_id.clone()))
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(shown.len(), 1, "{shown:?}");
-    assert_eq!(
-        shown[0].0,
-        "Installing Homebrew writes outside the project."
-    );
-    assert!(shown[0].1.is_some(), "under the user's request");
-
-    // A new default leaves this session at its own level.
-    let mut settings = flow.core.settings();
-    settings.default_permission = PermissionLevel::FullAccess;
-    flow.core.update_settings(settings).await.unwrap();
-    let Some(Setup::Session { permission, .. }) =
-        flow.core.conversation(&flow.conversation).unwrap().setup
-    else {
-        panic!("a session");
-    };
-    assert_eq!(permission, PermissionLevel::AskForApproval);
-
-    // The user switches the session to Full access: there is nothing left to suggest.
-    let Some(Setup::Session {
-        repo,
-        environment,
-        orchestrator,
-        workers_see_uncommitted,
-        plan_mode,
-        ..
-    }) = flow.core.conversation(&flow.conversation).unwrap().setup
-    else {
-        panic!("a session");
-    };
-    flow.manager
-        .set_setup(
-            flow.conversation.clone(),
-            Setup::Session {
-                repo,
-                environment,
-                permission: PermissionLevel::FullAccess,
-                orchestrator,
-                workers_see_uncommitted,
-                plan_mode,
-            },
-        )
-        .await
-        .unwrap();
-    flow.say("Install it now.").await;
-    flow.settled().await;
-    {
-        let replies = replies.lock().unwrap();
-        assert!(
-            replies[2].0 && replies[2].1.contains("already has Full access"),
-            "{replies:?}"
-        );
-    }
-    flow.stop().await;
-}
-
 /// Logs `count` provider notices to the thread's orchestrator log, as a busy turn's events
 /// would (a busy thread logs hundreds between two CLI starts).
 async fn log_busy(flow: &Flow, count: usize) {
@@ -2239,7 +2097,7 @@ async fn a_busy_thread_resumes_its_session_past_a_thousand_logged_events() {
     flow.stop().await;
 }
 
-/// Bug 3: Approve for me → Full access on a busy thread resumes the same session between
+/// Bug 3: Accept edits → Full access on a busy thread resumes the same session between
 /// turns, with the permission note, and no rebirth.
 #[tokio::test]
 async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
@@ -2248,7 +2106,7 @@ async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
     let flow = Flow::start(
         "busy-level",
         Options {
-            permission: PermissionLevel::ApproveForMe,
+            permission: PermissionLevel::AcceptEdits,
             ..Options::default()
         },
         script(move |turn| {
@@ -2264,7 +2122,7 @@ async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
     flow.settled().await;
     let native = first_native_id(&flow).await;
     log_busy(&flow, 1_000).await;
-    set_level(&flow, PermissionLevel::FullAccess).await;
+    set_level(&flow, PermissionLevel::Full).await;
 
     flow.say("Second.").await;
     flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
@@ -2486,12 +2344,8 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
             (&own.name, &own.transport, own.always_load)
         );
         assert_eq!(
-            (
-                &forked.prompt_tools,
-                forked.tool_timeout_secs,
-                forked.trusted
-            ),
-            (&own.prompt_tools, own.tool_timeout_secs, own.trusted)
+            (forked.tool_timeout_secs, forked.trusted),
+            (own.tool_timeout_secs, own.trusted)
         );
     }
     let grant = grant_of(&fork).expect("the fork's grant");
@@ -2504,7 +2358,7 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
     let unchanged = SessionSpec {
         origin: thread.origin.clone(),
         ephemeral: thread.ephemeral,
-        access: thread.access.clone(),
+        access: thread.access,
         mcp_servers: thread.mcp_servers.clone(),
         record_to: thread.record_to.clone(),
         redactor: thread.redactor.clone(),
@@ -2534,590 +2388,8 @@ async fn a_codex_note_fork_is_unchanged() {
     flow.stop().await;
 }
 
-/// A request a script's CLI asked, and the answer it got.
-type Asked = (String, Option<ApprovalDecision>);
-
-/// Brigadier's escalation reviewer in a script: refuses what deletes a branch or a worktree
-/// (the protected set) or a cache folder, gives no verdict on a publish, allows the rest, and
-/// keeps what it was asked.
-fn escalation_reviewer(turn: &super::Turn, asked: &Mutex<Vec<String>>) -> Option<Reply> {
-    if !turn
-        .prompt
-        .starts_with("You review one request of a coding agent")
-    {
-        return None;
-    }
-    asked.lock().unwrap().push(turn.input.clone());
-    Some(Reply::text(
-        // The command itself, not the rule (which names such commands too).
-        if turn.input.contains("```\ngit branch -D")
-            || turn.input.contains("```\ngit worktree remove")
-        {
-            r#"{"allow": false, "protected": true, "reason": "it deletes another session's work"}"#
-        } else if turn.input.contains("```\nrm -rf ~/caches") {
-            r#"{"allow": false, "reason": "it deletes outside the project."}"#
-        } else if turn.input.contains("```\nnpm publish") {
-            "I can't tell."
-        } else {
-            r#"{"allow": true, "reason": "a network read"}"#
-        },
-    ))
-}
-
-/// A Codex escalation whose review ends after the CLI that asked has closed (retired, taken
-/// over) opens no card: its answer would have nowhere to go.
-#[tokio::test]
-async fn a_review_that_outlives_its_cli_opens_no_card() {
-    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let closed = Arc::new(tokio::sync::Notify::new());
-    let reviewed = Arc::new(tokio::sync::Notify::new());
-    let (reviewer_log, gate, done) = (asked.clone(), closed.clone(), reviewed.clone());
-    let flow = Flow::start(
-        "codex-review-outlives",
-        Options {
-            permission: PermissionLevel::ApproveForMe,
-            thread: ProviderKind::Codex,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (asked, gate, done) = (reviewer_log.clone(), gate.clone(), done.clone());
-            async move {
-                if let Some(reply) = escalation_reviewer(&turn, &asked) {
-                    gate.notified().await;
-                    done.notify_one();
-                    return reply;
-                }
-                if turn.is_orchestrator() {
-                    turn.ask_approval("npm publish", "x").await;
-                }
-                Reply::text("")
-            }
-        }),
-    )
-    .await;
-
-    flow.say("Publish.").await;
-    super::eventually("the reviewer to be asked", || {
-        asked.lock().unwrap().len() == 1
-    })
-    .await;
-    flow.manager
-        .conv(&flow.conversation)
-        .unwrap()
-        .close_cli()
-        .await;
-    closed.notify_one();
-    reviewed.notified().await;
-    // The review's verdict ("I can't tell") would be a card.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    assert!(
-        flow.board()
-            .await
-            .approvals
-            .values()
-            .all(|approval| approval.state != CardState::Pending),
-        "{:?}",
-        flow.board().await.approvals
-    );
-    flow.stop().await;
-}
-
-/// Codex at Approve for me: its thread's and its workers' requests to leave the sandbox reach
-/// Brigadier, whose reviewer settles them with the session's protected set, before any
-/// "Allow similar" grant could. What would touch the protected set is declined to the model
-/// with the reason, never a card; what it allows goes through.
-#[tokio::test]
-async fn brigadiers_reviewer_settles_a_codex_sessions_escalations_at_approve_for_me() {
-    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let decisions: Arc<Mutex<Vec<Asked>>> = Arc::default();
-    let (reviewer_log, log) = (asked.clone(), decisions.clone());
-    let flow = Flow::start(
-        "codex-reviewed",
-        Options {
-            permission: PermissionLevel::ApproveForMe,
-            thread: ProviderKind::Codex,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (asked, log) = (reviewer_log.clone(), log.clone());
-            async move {
-                if let Some(reply) = escalation_reviewer(&turn, &asked) {
-                    return reply;
-                }
-                let ask = async |who: &str, command: &str| {
-                    let decision = turn.ask_approval(command, "git").await;
-                    log.lock()
-                        .unwrap()
-                        .push((format!("{who}: {command}"), decision));
-                };
-                if turn.is_orchestrator() {
-                    if turn.input.contains("[task-1") {
-                        return Reply::text("");
-                    }
-                    ask("thread", "git branch -D brigadier/other").await;
-                    ask("thread", "curl https://example.com").await;
-                    let reply = turn
-                        .call(
-                            "delegate_task",
-                            json!({"effort": "high", "title": "Tidy up", "kind": "implement",
-                                   "spec": "Tidy up.", "provider": "codex"}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("");
-                }
-                ask("worker", "git worktree remove --force /elsewhere").await;
-                ask("worker", "curl https://example.com/worker").await;
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    // Earlier "Allow … for this session" answers that would cover both deletions.
-    let command = |command: &str| brigadier_providers::ApprovalRequest {
-        id: String::new(),
-        kind: brigadier_providers::ApprovalKind::Command,
-        tool: "commandExecution".into(),
-        command: Some(command.into()),
-        cwd: None,
-        paths: Vec::new(),
-        reason: None,
-        escalation: true,
-        input: None,
-        grant: None,
-    };
-    for granted in ["git branch --list", "git worktree list"] {
-        flow.manager
-            .waiters
-            .allow_similar(&flow.conversation, &command(granted));
-    }
-    for deletion in [
-        "git branch -D brigadier/other",
-        "git worktree remove --force /elsewhere",
-    ] {
-        assert!(
-            flow.manager
-                .waiters
-                .similar_allowed(&flow.conversation, &command(deletion), None),
-            "{deletion}"
-        );
-    }
-    flow.say("Clean up everything.").await;
-    flow.until("four requests settled", |_| {
-        decisions.lock().unwrap().len() >= 4
-    })
-    .await;
-
-    let decisions = decisions.lock().unwrap().clone();
-    let refused = |message: &str| {
-        message.starts_with(
-            "Brigadier's reviewer would not allow it: it deletes another session's work",
-        )
-    };
-    for (asked, decision) in &decisions {
-        match decision {
-            Some(ApprovalDecision::Deny { message }) => {
-                assert!(asked.contains("-D") || asked.contains("remove"), "{asked}");
-                assert!(refused(message), "{message}");
-            }
-            Some(ApprovalDecision::Allow) => assert!(asked.contains("curl"), "{asked}"),
-            other => panic!("{asked}: {other:?}"),
-        }
-    }
-    let asked = asked.lock().unwrap().clone();
-    // (The worker's next turn, a nudge to report, asks again.)
-    assert!(
-        asked.len() >= 4,
-        "the reviewer saw each request: {:#?}",
-        asked
-            .iter()
-            .map(|input| input.split("```").nth(1))
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        asked
-            .iter()
-            .all(|input| input.contains("Never allow a command, even one the user asked for")),
-        "the protected set reaches the reviewer: {asked:#?}"
-    );
-    let board = flow.board().await;
-    assert!(
-        board.approvals.is_empty(),
-        "no card: {:#?}",
-        board.approvals
-    );
-    flow.stop().await;
-}
-
-/// What Brigadier's reviewer refuses for another reason than the protected set, or gives no
-/// verdict on, is the user's card with the reviewer's word while the user is around, and
-/// declined to the model while an overnight run has nobody to ask.
-#[tokio::test]
-async fn an_unsettled_codex_escalation_is_a_card_unless_nobody_is_there() {
-    use super::super::overnight::policy::ActiveRun;
-    use crate::model::OvernightRunId;
-
-    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let decisions: Arc<Mutex<Vec<Asked>>> = Arc::default();
-    let (reviewer_log, log) = (asked.clone(), decisions.clone());
-    let flow = Flow::start(
-        "codex-unsettled",
-        Options {
-            permission: PermissionLevel::ApproveForMe,
-            thread: ProviderKind::Codex,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (asked, log) = (reviewer_log.clone(), log.clone());
-            async move {
-                if let Some(reply) = escalation_reviewer(&turn, &asked) {
-                    return reply;
-                }
-                if turn.is_orchestrator() {
-                    for command in ["rm -rf ~/caches", "npm publish"] {
-                        let decision = turn.ask_approval(command, "x").await;
-                        log.lock().unwrap().push((command.into(), decision));
-                    }
-                }
-                Reply::text("")
-            }
-        }),
-    )
-    .await;
-
-    // The user is around: each is a card saying why the reviewer didn't settle it.
-    flow.say("Tidy up and publish.").await;
-    let mut reasons = Vec::new();
-    for done in 0..2 {
-        let board = flow
-            .until("the next card", |board| {
-                board
-                    .approvals
-                    .values()
-                    .filter(|approval| approval.state != CardState::Pending)
-                    .count()
-                    == done
-                    && board
-                        .approvals
-                        .values()
-                        .any(|approval| approval.state == CardState::Pending)
-            })
-            .await;
-        let card = board
-            .approvals
-            .values()
-            .find(|approval| approval.state == CardState::Pending)
-            .unwrap();
-        let ApprovalSubject::Cli { request } = &card.subject else {
-            panic!("{:?}", card.subject);
-        };
-        reasons.push(request.reason.clone().unwrap_or_default());
-        flow.manager
-            .answer_card(
-                flow.conversation.clone(),
-                card.id.clone(),
-                ApprovalDecision::Allow,
-            )
-            .await
-            .unwrap();
-    }
-    assert_eq!(
-        reasons[0],
-        "Brigadier's reviewer would not allow it: it deletes outside the project."
-    );
-    assert!(
-        reasons[1].starts_with("Brigadier's reviewer gave no verdict"),
-        "{}",
-        reasons[1]
-    );
-    flow.until("both answered", |_| decisions.lock().unwrap().len() == 2)
-        .await;
-    assert!(
-        decisions
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|(_, decision)| decision == &Some(ApprovalDecision::Allow))
-    );
-
-    // The request ends first: a message sent while it works is a follow-up to it, which the
-    // thread hears once as that and again as a request of its own.
-    flow.settled().await;
-
-    // An overnight run: nobody to ask, so both are declined with the reason.
-    flow.manager.overnight.active.insert(
-        flow.conversation.clone(),
-        ActiveRun {
-            id: OvernightRunId("codex-unsettled-run".into()),
-            segment: 0,
-            generation: 0,
-            rules_hash: String::new(),
-            workspace: None,
-            max_workers: None,
-            winding_down: false,
-            wind_down_at_ms: None,
-        },
-    );
-    flow.say("Again.").await;
-    flow.until("both declined", |_| decisions.lock().unwrap().len() == 4)
-        .await;
-    let decisions = decisions.lock().unwrap().clone();
-    for (command, decision) in &decisions[2..] {
-        let Some(ApprovalDecision::Deny { message }) = decision else {
-            panic!("{command}: {decision:?}");
-        };
-        assert!(
-            message.starts_with("Brigadier's reviewer")
-                && message.contains("nobody is here to ask")
-                && !message.contains(".,"),
-            "{message}"
-        );
-    }
-    assert_eq!(
-        flow.board()
-            .await
-            .approvals
-            .values()
-            .filter(|approval| approval.state == CardState::Pending)
-            .count(),
-        0
-    );
-    flow.stop().await;
-}
-
-/// The CI watch outcomes used by the push-review tests.
-fn ci_watch_for_push_review(result: &str) -> OrchestratorStepKind {
-    OrchestratorStepKind::CiWatch {
-        repo: "o/n".into(),
-        branch: "fix".into(),
-        sha: format!("{result}-sha"),
-        waiting: false,
-        runs: Vec::new(),
-        result: Some(result.into()),
-    }
-}
-
-/// Q61: pushes are the agent's call before watching CI, while it is red and after it passes.
-#[tokio::test]
-async fn ci_push_review_allows_pushes_without_a_watch_and_after_failed_and_passed_watches() {
-    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let decisions: Arc<Mutex<Vec<Asked>>> = Arc::default();
-    let pushes = Arc::new(tokio::sync::Semaphore::new(0));
-    let (reviewer_log, log, gate) = (asked.clone(), decisions.clone(), pushes.clone());
-    let flow = Flow::start(
-        "20261018-1945-issues-run-2-w09-ci-repush",
-        Options {
-            permission: PermissionLevel::ApproveForMe,
-            thread: ProviderKind::Codex,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (asked, log, gate) = (reviewer_log.clone(), log.clone(), gate.clone());
-            async move {
-                if turn.prompt.starts_with("You review one request of a coding agent") {
-                    assert!(turn.prompt.contains("Pushing, opening pull requests, publishing and deploying are the agent's own call"));
-                    asked.lock().unwrap().push(turn.input.clone());
-                    return Reply::text(r#"{"allow": true, "reason": "pushing is the agent's call"}"#);
-                }
-                if turn.is_orchestrator() {
-                    for _ in 0..3 {
-                        gate.acquire().await.unwrap().forget();
-                        let decision = turn.ask_approval("git push origin fix", "git").await;
-                        log.lock().unwrap().push(("git push origin fix".into(), decision));
-                    }
-                }
-                Reply::text("")
-            }
-        }),
-    ).await;
-    git(
-        &flow.repo,
-        &["remote", "add", "origin", "git@github.com:o/n.git"],
-    );
-    flow.say("Fix CI.").await;
-    for (index, result) in [None, Some("failed"), Some("passed")]
-        .into_iter()
-        .enumerate()
-    {
-        if let Some(result) = result {
-            flow.manager
-                .orchestrator_step(&flow.conversation, ci_watch_for_push_review(result))
-                .await;
-        }
-        pushes.add_permits(1);
-        flow.until("the push reviewed", |_| {
-            decisions.lock().unwrap().len() == index + 1
-        })
-        .await;
-    }
-    assert!(
-        decisions
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|(_, decision)| *decision == Some(ApprovalDecision::Allow))
-    );
-    assert!(flow.board().await.approvals.is_empty());
-    let asked = asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 3, "{asked:?}");
-    for seen in asked {
-        assert!(
-            !seen.contains("The user's consent that may cover a push"),
-            "{seen}"
-        );
-        assert!(!seen.contains("The folder's push remotes"), "{seen}");
-    }
-    flow.stop().await;
-}
-
-/// An unrelated message joining a CI fix's turn does not change the reviewer's push rule.
-#[tokio::test]
-async fn ci_push_review_allows_a_push_when_a_user_message_joins_the_ci_fix() {
-    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let decisions: Arc<Mutex<Vec<Option<ApprovalDecision>>>> = Arc::default();
-    let pushes = Arc::new(tokio::sync::Semaphore::new(0));
-    let (reviewer_log, log, gate) = (asked.clone(), decisions.clone(), pushes.clone());
-    let flow = Flow::start(
-        "20261018-1945-issues-run-2-w09-ci-repush-queued",
-        Options {
-            permission: PermissionLevel::ApproveForMe,
-            thread: ProviderKind::Codex,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (asked, log, gate) = (reviewer_log.clone(), log.clone(), gate.clone());
-            async move {
-                if turn.prompt.starts_with("You review one request of a coding agent") {
-                    assert!(turn.prompt.contains("Pushing, opening pull requests, publishing and deploying are the agent's own call"));
-                    asked.lock().unwrap().push(turn.input.clone());
-                    return Reply::text(r#"{"allow": true, "reason": "pushing is the agent's call"}"#);
-                }
-                if turn.is_orchestrator() && turn.input.contains("Fix CI.") {
-                    gate.acquire().await.unwrap().forget();
-                    let decision = turn.ask_approval("git push origin fix", "git").await;
-                    log.lock().unwrap().push(decision);
-                }
-                Reply::text("")
-            }
-        }),
-    ).await;
-    flow.say("Fix CI.").await;
-    flow.until("the turn runs", |board| {
-        board.run == crate::work::RunState::Running
-    })
-    .await;
-    flow.manager
-        .orchestrator_step(&flow.conversation, ci_watch_for_push_review("failed"))
-        .await;
-    flow.say("Include the CI link in your report.").await;
-    flow.until("the message joins the turn", |board| {
-        board
-            .requests
-            .values()
-            .any(|request| request.steered_into.is_some())
-    })
-    .await;
-    pushes.add_permits(1);
-    flow.until("the push reviewed", |_| {
-        !decisions.lock().unwrap().is_empty()
-    })
-    .await;
-    assert_eq!(*decisions.lock().unwrap(), [Some(ApprovalDecision::Allow)]);
-    assert!(flow.board().await.approvals.is_empty());
-    let asked = asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 1, "{asked:?}");
-    assert!(
-        !asked[0].contains("The user's consent that may cover a push"),
-        "{}",
-        asked[0]
-    );
-    flow.stop().await;
-}
-
-/// An unrelated message arriving during review causes no extra review of a CI-watch answer.
-#[tokio::test]
-async fn ci_push_review_does_not_repeat_when_a_user_message_arrives_during_review() {
-    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let decisions: Arc<Mutex<Vec<Option<ApprovalDecision>>>> = Arc::default();
-    let pushes = Arc::new(tokio::sync::Semaphore::new(0));
-    let reviewing = Arc::new(tokio::sync::Semaphore::new(0));
-    let verdict = Arc::new(tokio::sync::Semaphore::new(0));
-    let (reviewer_log, log, gate, started, release) = (
-        asked.clone(),
-        decisions.clone(),
-        pushes.clone(),
-        reviewing.clone(),
-        verdict.clone(),
-    );
-    let flow = Flow::start(
-        "20261018-1945-issues-run-2-w09-ci-repush-mid-review",
-        Options {
-            permission: PermissionLevel::ApproveForMe,
-            thread: ProviderKind::Codex,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let (asked, log, gate, started, release) = (reviewer_log.clone(), log.clone(), gate.clone(), started.clone(), release.clone());
-            async move {
-                if turn.prompt.starts_with("You review one request of a coding agent") {
-                    assert!(turn.prompt.contains("Pushing, opening pull requests, publishing and deploying are the agent's own call"));
-                    let first = {
-                        let mut asked = asked.lock().unwrap();
-                        asked.push(turn.input.clone());
-                        asked.len() == 1
-                    };
-                    if first {
-                        started.add_permits(1);
-                        release.acquire().await.unwrap().forget();
-                    }
-                    return Reply::text(r#"{"allow": true, "reason": "pushing is the agent's call"}"#);
-                }
-                if turn.is_orchestrator() && turn.input.contains("Fix CI.") {
-                    gate.acquire().await.unwrap().forget();
-                    let decision = turn.ask_approval("git push origin fix", "git").await;
-                    log.lock().unwrap().push(decision);
-                }
-                Reply::text("")
-            }
-        }),
-    ).await;
-    flow.say("Fix CI.").await;
-    flow.until("the turn runs", |board| {
-        board.run == crate::work::RunState::Running
-    })
-    .await;
-    flow.manager
-        .orchestrator_step(&flow.conversation, ci_watch_for_push_review("failed"))
-        .await;
-    pushes.add_permits(1);
-    reviewing.acquire().await.unwrap().forget();
-    flow.say("Include the CI link in your report.").await;
-    flow.until("the message joins the turn", |board| {
-        board
-            .requests
-            .values()
-            .any(|request| request.steered_into.is_some())
-    })
-    .await;
-    verdict.add_permits(1);
-    flow.until("the push reviewed", |_| {
-        !decisions.lock().unwrap().is_empty()
-    })
-    .await;
-    assert_eq!(*decisions.lock().unwrap(), [Some(ApprovalDecision::Allow)]);
-    assert!(flow.board().await.approvals.is_empty());
-    let asked = asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 1, "{asked:?}");
-    assert!(
-        !asked[0].contains("The user's consent that may cover a push"),
-        "{}",
-        asked[0]
-    );
-    flow.stop().await;
-}
-
-/// `suggest_setting` (Q90): a card per change, which changes nothing on its own; Full access is
-/// the sandbox notice; a setting that is that way already, or a value it doesn't take, is
+/// `suggest_setting` (Q90): a card per change, Full access included, which changes nothing on
+/// its own; a setting that is that way already, or a value it doesn't take, is
 /// refused, and a setting outside the few it may suggest doesn't parse.
 #[tokio::test]
 async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pressed() {
@@ -3126,7 +2398,7 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
     let flow = Flow::start(
         "thread-suggest-setting",
         Options {
-            permission: PermissionLevel::AskForApproval,
+            permission: PermissionLevel::Ask,
             ..Options::default()
         },
         script(move |turn| {
@@ -3137,8 +2409,8 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
                         ("browser", "off"),
                         ("browser", "off"),
                         ("browser", "on"),
-                        ("permission", "approve_for_me"),
-                        ("permission", "ask_for_approval"),
+                        ("permission", "accept_edits"),
+                        ("permission", "ask"),
                         ("permission", "full_access"),
                         ("browser", "maybe"),
                     ] {
@@ -3183,11 +2455,6 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
         .iter()
         .filter_map(|step| match &step.kind {
             OrchestratorStepKind::SettingSuggested { change, .. } => Some(change.clone()),
-            OrchestratorStepKind::FullAccessSuggested { .. } => {
-                Some(crate::work::SettingChange::Permission {
-                    level: PermissionLevel::FullAccess,
-                })
-            }
             _ => None,
         })
         .collect();
@@ -3196,10 +2463,10 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
         [
             crate::work::SettingChange::Browser { on: false },
             crate::work::SettingChange::Permission {
-                level: PermissionLevel::ApproveForMe
+                level: PermissionLevel::AcceptEdits
             },
             crate::work::SettingChange::Permission {
-                level: PermissionLevel::FullAccess
+                level: PermissionLevel::Full
             },
         ]
     );
@@ -3211,6 +2478,6 @@ async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pres
     else {
         panic!("a session");
     };
-    assert_eq!(permission, PermissionLevel::AskForApproval);
+    assert_eq!(permission, PermissionLevel::Ask);
     flow.stop().await;
 }

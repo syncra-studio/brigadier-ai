@@ -20,7 +20,6 @@ import type { Ranking } from "./Ranking";
 export type Settings = { 
 /**
  * Permission level for new sessions without an explicit choice.
- * Older saved records without this field keep their former default.
  */
 defaultPermission: PermissionLevel, 
 /**

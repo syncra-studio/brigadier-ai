@@ -22,7 +22,7 @@ const start = Date.now() - 20 * 60_000;
 const session = {
   id, kind: "session", projectId: null, title: "Shared MCP and skills", pinnedAtMs: null, createdAtMs: start, updatedAtMs: start,
   lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
-  setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "brigadier/s" }, permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } },
+  setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "brigadier/s" }, permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } },
 } as unknown as Conversation;
 
 const base = Object.values(night.tasks)[0] as unknown as Task;

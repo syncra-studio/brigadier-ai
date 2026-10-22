@@ -121,7 +121,6 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
             tool_timeout_secs: Some(120),
             trusted: true,
             always_load: true,
-            prompt_tools: Vec::new(),
         }],
         tools: ToolSet::Lean,
         add_dirs: Vec::new(),
@@ -137,12 +136,10 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         sweep_dir: None,
         auto_compact: true,
         allowed_models: None,
-        auto_review: false,
         omit_ai_coauthors: false,
         output_hook: None,
         stop_hook: None,
         deny_tools: None,
-        protection: Default::default(),
     };
     let ledger = Arc::new(Recorded(Mutex::default()));
     let started = provider.start(spec, ledger.clone()).await.expect("started");

@@ -1452,7 +1452,7 @@ async fn a_worker_past_the_handoff_size_continues_in_a_fresh_session_that_keeps_
     let flow = Flow::start(
         "handoff",
         Options {
-            permission: crate::model::PermissionLevel::AskForApproval,
+            permission: crate::model::PermissionLevel::Ask,
             ..Options::default()
         },
         script(move |turn| {
@@ -2413,7 +2413,7 @@ async fn a_stopped_snapshot_workers_kept_work_survives_the_ref_check() {
                     branch: "main".into(),
                     create_from: None,
                 },
-                permission: PermissionLevel::FullAccess,
+                permission: PermissionLevel::Full,
                 orchestrator: ModelChoice {
                     provider: ProviderKind::Claude,
                     model: Some("claude-opus-5-5".into()),

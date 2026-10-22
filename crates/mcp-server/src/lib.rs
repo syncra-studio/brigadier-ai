@@ -218,8 +218,6 @@ impl ServerHandler for BrigadierServer {
 mod tests {
     use std::sync::Mutex;
 
-    use brigadier_core::tools::RunTools;
-
     use super::*;
 
     /// A host that only remembers the bad calls it was told of.
@@ -249,7 +247,6 @@ mod tests {
         let host = Counting::default();
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
-            run: RunTools::None,
         };
         let bad = serde_json::json!({"task": "task-2"}).as_object().cloned();
         let err = parse(&host, "g1", &thread, "stop_worker", bad).unwrap_err();

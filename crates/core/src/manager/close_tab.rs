@@ -10,7 +10,7 @@ use brigadier_providers::{ApprovalDecision, ApprovalKind, ApprovalRequest};
 
 use super::SessionManager;
 use super::cards::CardAnswer;
-use super::escalation::OWN_APPROVAL;
+use super::cards::OWN_APPROVAL;
 use crate::app_call::{AppAnswer, AppOp, CHAT_TAB};
 use crate::model::Setup;
 use crate::work::ApprovalSubject;

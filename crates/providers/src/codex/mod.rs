@@ -1,17 +1,15 @@
 //! Codex adapter: `codex app-server` over stdio JSON-RPC, one app-server per session.
 //!
 //! Sessions use `thread/*` and `turn/*` (steer and interrupt included). Approvals are
-//! server requests Brigadier answers. A command Codex asks about runs outside its sandbox once
-//! approved, so every command and file-change approval is an escalation:
+//! server requests that reach the user ([`REVIEWER`]). The session's level passes straight
+//! through as Codex's own approval policy and sandbox ([`approval_policy`], [`sandbox_policy`]):
 //!
-//! - Full access uses `never` with no sandbox: Codex never asks.
-//! - Workspace and scoped access use `on-request`: commands run inside the sandbox without
-//!   asking; Codex asks only to leave it. Those requests always reach Brigadier
-//!   (`approvalsReviewer: user`): with [`SessionSpec::auto_review`] (Approve for me) the caller
-//!   has its own reviewer settle them, since Codex's auto-reviewer doesn't take the rule to keep
-//!   off other sessions' work ([`REVIEWER`]); otherwise they go to the user.
-//! - Read-only access uses `untrusted`: Codex asks before every command, and a read-only
-//!   session (such as an orchestrator) has all of them declined, so nothing runs.
+//! - Ask: `untrusted` in the `workspace-write` sandbox: Codex asks before every command it
+//!   doesn't know to be safe.
+//! - Accept edits: `on-request` in the `workspace-write` sandbox: commands run inside the
+//!   sandbox without asking; Codex asks to leave it.
+//! - Full access: `never` with `danger-full-access`: Codex never asks.
+//! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox.
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Codex setup: their
 //! config, `AGENTS.md`, plugins, hooks and MCP servers, beside Brigadier's. Threads keep the
@@ -29,8 +27,6 @@
 //! writable sandbox in a project the user never trusted makes Codex persist a trust entry for
 //! the project (for a worktree: the user's main checkout), and no per-process override stops it;
 //! so threads start with no sandbox of their own and every turn sets it ([`thread_sandbox`]).
-//! The exception is a session that must not read some folders, started in a folder Brigadier
-//! owns outside any repository: it gets a permission profile instead ([`permission_profile`]).
 //! Should Codex still add an entry for the exact folder of a Brigadier-owned session
 //! ([`SessionSpec::owned_cwd`]), it is recorded and removed with the session through Codex's
 //! config API, only while it is still exactly `trusted`.
@@ -50,8 +46,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brigadier_sandbox::Platform;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
 
@@ -79,22 +75,6 @@ const EXIT_GRACE: Duration = Duration::from_secs(3);
 const NO_AUTO_COMPACT_TOKENS: i64 = 1_000_000_000;
 /// The first version seen to serve `thread/compact/start`.
 const COMPACT_SINCE: &str = "0.156.1";
-/// The permission profile a session with folders it must not read runs under.
-const PROFILE: &str = "brigadier";
-
-/// Under a permission profile with denied reads, codex-cli 0.160.1 runs an approved
-/// `require_escalated` command inside the sandbox all the same (`core/src/tools/sandboxing.rs`,
-/// `sandbox_permissions_preserving_denied_reads`). This feature ("Allow exec tools to request
-/// additional permissions while staying sandboxed", under development, off by default) lets a
-/// command ask for more folders or the network, approved like an escalation and added to the
-/// profile with its denies kept. On only at Approve for me, where Brigadier's reviewer answers:
-/// the app-server leaves the requested paths out of a client's approval request unless the
-/// client opts into its experimental API, which such a session does ([`Rpc::initialize`]).
-const ADDITIONAL_PERMISSIONS_FEATURE: &str = "exec_permission_approvals";
-
-/// What a profiled session at Approve for me is told about leaving its sandbox.
-const ADDITIONAL_PERMISSIONS_HINT: &str = "Leaving the sandbox: here `require_escalated` still runs the command sandboxed. To write outside your writable folders or use the network, run the command with `sandbox_permissions: \"with_additional_permissions\"` and `additional_permissions` naming exactly the paths (file_system read/write) or network it needs; a reviewer approves it.";
-
 /// Built-ins switched off for sessions that must not act on their own (a handoff note, a
 /// one-shot job, a control connection): viewing local images, generating images, Codex's own sub-agents,
 /// goals, the sleep tool, and every shell tool. Without a shell tool there is no command to approve at all,
@@ -302,13 +282,6 @@ impl Codex {
                 vars.extend(session.output_hook.iter().flat_map(|hook| hook.env.clone()));
                 crate::cli::apply_session_env(&mut spec, &vars, &[]);
             }
-            let homes: Vec<PathBuf> = self
-                .codex_home()
-                .into_iter()
-                .chain(self.main_home.clone())
-                .chain(own_home.map(|home| home.dir.clone()))
-                .collect();
-            spec = crate::cli::protect(self.platform.as_ref(), spec, session, &homes)?;
         }
         let redactor = session.and_then(|session| session.redactor.clone());
         let process::Spawned { process, stdout } = process::spawn(
@@ -341,7 +314,7 @@ impl Codex {
             .await?;
         let reader = tokio::spawn(control_reader(rpc.clone(), stdout));
         let result = async {
-            rpc.initialize(false).await?;
+            rpc.initialize().await?;
             work(&rpc).await
         }
         .await;
@@ -495,7 +468,6 @@ fn terminal_command(
     native_id: &str,
     cwd: PathBuf,
     mut config: Map<String, Value>,
-    profiled: bool,
     env: &CliEnv,
 ) -> TerminalCommand {
     let mut args: Vec<String> = vec![
@@ -522,24 +494,23 @@ fn terminal_command(
     for (key, value) in &config {
         args.extend(["-c".into(), format!("{key}={}", toml_value(value))]);
     }
-    match &spec.access {
+    // The terminal's `-a` takes only `on-request` and `never` (0.163.0): Ask's `untrusted` goes
+    // in as config.
+    match spec.access {
         Access::Full => args.push("--dangerously-bypass-approvals-and-sandbox".into()),
-        access => {
-            // A profile sets the sandbox itself; the legacy mode would replace it.
-            if !profiled {
-                let mode = match access {
-                    Access::ReadOnly => "read-only",
-                    _ => "workspace-write",
-                };
-                args.extend(["-s".into(), mode.into()]);
-            }
-            if spec.auto_review && !matches!(access, Access::ReadOnly) {
-                args.push("--approve-for-me".into());
-            } else {
-                // The terminal's `-a` takes only `on-request` and `never` (0.160.1).
-                args.extend(["-a".into(), "on-request".into()]);
-            }
+        Access::ReadOnly => args.extend(["-s", "read-only", "-a", "on-request"].map(String::from)),
+        Access::AcceptEdits => {
+            args.extend(["-s", "workspace-write", "-a", "on-request"].map(String::from));
         }
+        Access::Ask => args.extend(
+            [
+                "-s",
+                "workspace-write",
+                "-c",
+                "approval_policy=\"untrusted\"",
+            ]
+            .map(String::from),
+        ),
     }
     let mut process = env.spec(&program);
     crate::cli::apply_session_env(&mut process, &variables, &spec.unset_env);
@@ -831,24 +802,6 @@ impl Provider for Codex {
 
     fn start(&self, spec: SessionSpec, ledger: Arc<dyn Ledger>) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
-            // Codex resolves its working directory (below) and so the paths it writes: its
-            // writable roots must be resolved too, in the thread's config and in every turn's
-            // sandbox policy alike, or it asks to write inside them.
-            // A thread's workspace (`add_dirs`) is one of them.
-            let spec = SessionSpec {
-                access: spec.access_with_dirs().resolved(),
-                ..spec
-            };
-            if let Access::Scoped {
-                write_cwd: false, ..
-            } = spec.access
-            {
-                return Err(Error::Invalid(
-                    "Codex cannot keep its working directory read-only in a workspace sandbox; \
-                     start a read-only Codex worker in its scratch folder"
-                        .into(),
-                ));
-            }
             let cwd = spec.cwd.canonicalize().map_err(|err| {
                 Error::Invalid(format!("working directory {}: {err}", spec.cwd.display()))
             })?;
@@ -907,34 +860,11 @@ impl Provider for Codex {
                 .filter(|server| server.trusted)
                 .map(|server| server.name.clone())
                 .collect();
-            // Trusted servers with tools that still ask first.
-            let prompting: HashSet<String> = spec
-                .mcp_servers
-                .iter()
-                .filter(|server| server.trusted && !server.prompt_tools.is_empty())
-                .map(|server| server.name.clone())
-                .collect();
-            tokio::spawn(read_loop(
-                rpc.clone(),
-                stdout,
-                shared.clone(),
-                trusted,
-                prompting,
-            ));
+            tokio::spawn(read_loop(rpc.clone(), stdout, shared.clone(), trusted));
 
-            let profile = permission_profile(&spec, &cwd);
-            let profiled = profile.is_some();
             let started = tokio::time::timeout(
                 START_TIMEOUT,
-                open_thread(
-                    &rpc,
-                    &spec,
-                    &cwd,
-                    profile,
-                    own_home.as_ref(),
-                    self,
-                    ledger.as_ref(),
-                ),
+                open_thread(&rpc, &spec, &cwd, own_home.as_ref(), self, ledger.as_ref()),
             )
             .await
             .map_err(|_| Error::Timeout("Codex to start the thread"))
@@ -958,8 +888,8 @@ impl Provider for Codex {
                 compacts: version_at_least(&thread.cli_version, COMPACT_SINCE),
                 rpc,
                 shared,
-                access: spec.access.clone(),
-                profiled,
+                access: spec.access,
+                writable_roots: writable_roots(&spec),
                 effort: spec.effort.clone(),
             });
             session
@@ -1057,25 +987,19 @@ impl Provider for Codex {
                 ));
             };
             let native_id = native_id.clone();
-            let spec = SessionSpec {
-                access: spec.access_with_dirs().resolved(),
-                ..spec
-            };
             let program = self.binary()?;
             let cwd = cwd.canonicalize().map_err(|err| {
                 Error::Invalid(format!("working directory {}: {err}", cwd.display()))
             })?;
-            let profile = permission_profile(&spec, &cwd);
-            let profiled = profile.is_some();
             // Brigadier archived the thread when it closed it; the terminal would ask first.
             let config = self
                 .control(async |rpc: &Rpc| {
                     unarchive_thread(rpc, &native_id).await?;
-                    thread_config(rpc, &spec, &cwd, profile).await
+                    thread_config(rpc, &spec, &cwd).await
                 })
                 .await?;
             Ok(terminal_command(
-                program, &spec, &native_id, cwd, config, profiled, &self.env,
+                program, &spec, &native_id, cwd, config, &self.env,
             ))
         })
     }
@@ -1201,17 +1125,13 @@ async fn open_thread(
     rpc: &Rpc,
     spec: &SessionSpec,
     cwd: &Path,
-    profile: Option<Value>,
     own_home: Option<&ThreadHome>,
     codex: &Codex,
     ledger: &dyn Ledger,
 ) -> Result<Opened> {
     let images_root = codex.images_root();
     let home = codex.account_home();
-    let profiled = profile.is_some();
-    // Where a command may ask for more folders or the network (the feature, see
-    // [`profile_config`]), Brigadier's reviewer must read what it asks for.
-    rpc.initialize(profiled && spec.auto_review).await?;
+    rpc.initialize().await?;
     // A thread whose hook can't run (no home of its own could be made, or Codex didn't trust
     // it) still runs: its instructions list the rules it would bring, and it is told to read
     // them itself.
@@ -1240,7 +1160,7 @@ async fn open_thread(
             tracing::warn!(%error, "Codex didn't take Brigadier's skills");
         }
     }
-    let config = thread_config(rpc, spec, cwd, profile).await?;
+    let config = thread_config(rpc, spec, cwd).await?;
     // Only a folder Brigadier created may have its trust entry recorded and undone. Codex keys
     // trust on the main checkout for a worktree, which is the user's: watched, never touched.
     // A thread with a home of its own writes trust into that home's copy of the config only.
@@ -1259,12 +1179,7 @@ async fn open_thread(
     } else {
         trusted_projects(rpc, cwd).await?
     };
-    let mut instructions = match &spec.append_system_prompt {
-        Some(prompt) if profiled && spec.auto_review => {
-            Some(format!("{prompt}\n\n{ADDITIONAL_PERMISSIONS_HINT}"))
-        }
-        other => other.clone(),
-    };
+    let mut instructions = spec.append_system_prompt.clone();
     if unhooked && let Some(prompt) = instructions.as_mut() {
         prompt.push_str("\n\n");
         prompt.push_str(NO_RULES_HOOK);
@@ -1274,8 +1189,8 @@ async fn open_thread(
     let start = p::ThreadStartParams {
         cwd: Some(cwd.display().to_string()),
         model: spec.model.clone(),
-        sandbox: thread_sandbox(&spec.access),
-        approval_policy: Some(approval_policy(&spec.access)),
+        sandbox: thread_sandbox(spec.access),
+        approval_policy: Some(approval_policy(spec.access)),
         approvals_reviewer: Some(REVIEWER),
         developer_instructions: instructions,
         config: Some(config),
@@ -1284,26 +1199,21 @@ async fn open_thread(
     };
     let (thread, model) = match opening(spec, start) {
         Opening::Start(params) => {
-            let started: Profiled<p::ThreadStartResponse> =
-                rpc.call("thread/start", &params).await?;
-            let started = started.checked(profiled)?;
+            let started: p::ThreadStartResponse = rpc.call("thread/start", &params).await?;
             (started.thread, started.model)
         }
         Opening::Resume(params) => {
             // Brigadier archived it when it last closed the thread.
             unarchive_thread(rpc, &params.thread_id).await?;
-            let resumed: Profiled<p::ThreadResumeResponse> =
-                rpc.call("thread/resume", &params).await?;
-            let resumed = resumed.checked(profiled)?;
+            let resumed: p::ThreadResumeResponse = rpc.call("thread/resume", &params).await?;
             (resumed.thread, resumed.model)
         }
         Opening::Fork(params) => {
             let archived = unarchive_thread(rpc, &params.thread_id).await?;
-            let forked: Profiled<p::ThreadForkResponse> = rpc.call("thread/fork", &params).await?;
+            let forked: p::ThreadForkResponse = rpc.call("thread/fork", &params).await?;
             if archived {
                 archive_thread(rpc, &params.thread_id).await?;
             }
-            let forked = forked.checked(profiled)?;
             (forked.thread, forked.model)
         }
     };
@@ -1475,12 +1385,7 @@ fn web_search(tools: ToolSet) -> Option<&'static str> {
 /// Per-thread config: Brigadier's MCP servers on, the user's off but in a session with their
 /// setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
 /// session's permission profile.
-async fn thread_config(
-    rpc: &Rpc,
-    spec: &SessionSpec,
-    cwd: &Path,
-    profile: Option<Value>,
-) -> Result<Map<String, Value>> {
+async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<String, Value>> {
     let effective: Value = rpc
         .call(
             "config/read",
@@ -1525,30 +1430,15 @@ async fn thread_config(
     if let Some(mode) = web_search(spec.tools) {
         config.insert("web_search".into(), json!(mode));
     }
-    if let Some(profile) = profile {
-        // Profiles and the legacy sandbox settings don't compose: set only the profile.
-        profile_config(&mut config, profile, spec.auto_review);
-        return Ok(config);
-    }
-    let network = match &spec.access {
-        Access::Workspace { .. } => Some(true),
-        Access::Scoped { network, .. } => Some(*network),
-        Access::ReadOnly | Access::Full => None,
-    };
-    if let Some(network) = network {
-        let scoped = matches!(spec.access, Access::Scoped { .. });
+    if matches!(spec.access, Access::Ask | Access::AcceptEdits) {
         config.insert(
             "sandbox_workspace_write".into(),
             json!({
-                "network_access": network,
-                "writable_roots": spec
-                    .access
-                    .writable_roots()
+                "network_access": true,
+                "writable_roots": writable_roots(spec)
                     .iter()
                     .map(|root| root.display().to_string())
                     .collect::<Vec<_>>(),
-                "exclude_slash_tmp": scoped,
-                "exclude_tmpdir_env_var": scoped,
             }),
         );
     }
@@ -1694,12 +1584,6 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
         if server.trusted {
             config["default_tools_approval_mode"] = json!("approve");
         }
-        // `mcp_servers.<id>.tools.<tool>.approval_mode` ("Per-tool approval behavior override
-        // for one MCP tool on this server", Codex config reference): `prompt` sends the call
-        // through the session's approvals.
-        for tool in &server.prompt_tools {
-            config["tools"][tool.as_str()] = json!({ "approval_mode": "prompt" });
-        }
         servers.insert(server.name.clone(), config);
     }
     // The user's own servers they switched off for Brigadier, a project's copied ones too
@@ -1708,112 +1592,6 @@ fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
         servers.insert(name.clone(), json!({ "enabled": false }));
     }
     servers
-}
-
-/// A profiled session's thread config: its permission profile, and at Approve for me
-/// ([`SessionSpec::auto_review`]) the feature that lets a command widen it.
-///
-/// The feature is a dotted key: Codex applies a thread's config after the app-server's own
-/// overrides, one key path at a time (codex-cli 0.160.1, `config/src/overrides.rs`), so a
-/// `features` table would replace the one the app-server's `--disable` flags built and turn the
-/// user's hooks, plugins and sub-agents back on (checked with `codex features list`).
-fn profile_config(config: &mut Map<String, Value>, profile: Value, auto_review: bool) {
-    config.insert("default_permissions".into(), json!(PROFILE));
-    config.insert("permissions".into(), json!({ PROFILE: profile }));
-    if auto_review {
-        config.insert(
-            format!("features.{ADDITIONAL_PERMISSIONS_FEATURE}"),
-            json!(true),
-        );
-    }
-}
-
-/// The permission profile of a scoped session with folders it must not read, when Codex can
-/// take one ([`can_deny_reads`]).
-///
-/// Codex's legacy sandbox settings cannot deny reads. A permission profile can, and the OS
-/// sandbox enforces it: a denied read fails with "Operation not permitted" (verified against
-/// Codex 0.156.1 on macOS). Profiles are set when the thread opens; turns then set no sandbox
-/// policy of their own, which would bring back the legacy settings.
-fn permission_profile(spec: &SessionSpec, cwd: &Path) -> Option<Value> {
-    let Access::Scoped { deny_read, .. } = &spec.access else {
-        return None;
-    };
-    if deny_read.is_empty() || !can_deny_reads(spec.owned_cwd, cwd) {
-        return None;
-    }
-    scoped_profile(&spec.access)
-}
-
-/// The permission profile that holds a command to `access` (scoped only): what a session with
-/// folders it must not read runs under ([`permission_profile`]), and what a thread's `run`
-/// tool runs its commands under ([`sandbox_args`]).
-fn scoped_profile(access: &Access) -> Option<Value> {
-    let Access::Scoped {
-        writable_roots,
-        network,
-        deny_read,
-        unix_sockets,
-        ..
-    } = access
-    else {
-        return None;
-    };
-    let real = |path: &PathBuf| {
-        path.canonicalize()
-            .unwrap_or_else(|_| path.clone())
-            .display()
-            .to_string()
-    };
-    // Everything readable, the working directory (always writable for Codex) and the roots
-    // writable, `/tmp` and `$TMPDIR` read-only as in the legacy scoped sandbox.
-    let mut filesystem = Map::new();
-    filesystem.insert(":root".into(), json!("read"));
-    filesystem.insert(":workspace_roots".into(), json!("write"));
-    for root in writable_roots {
-        filesystem.insert(real(root), json!("write"));
-    }
-    // The folder and everything under it: a path deny alone loses to a narrower grant inside
-    // it (an approved `with_additional_permissions` read of one file), a glob deny doesn't
-    // (codex-cli 0.160.1, `protocol/src/permissions.rs`: the most specific entry wins).
-    for path in deny_read {
-        let path = real(path);
-        filesystem.insert(format!("{path}/**"), json!("deny"));
-        filesystem.insert(path, json!("deny"));
-    }
-    let sockets: Map<String, Value> = unix_sockets
-        .iter()
-        .map(|socket| (real(socket), json!("allow")))
-        .collect();
-    Some(json!({
-        "filesystem": filesystem,
-        "network": { "enabled": network, "unix_sockets": sockets },
-    }))
-}
-
-/// The `codex` arguments that run `command` in `workdir` held to `access` exactly as a Codex
-/// session with that access is: `codex sandbox` (codex-cli 0.160.1, `codex sandbox --help`:
-/// "Run commands within a Codex-provided sandbox", `-P/--permission-profile`, `-C/--cd`,
-/// `-c key=value` parsed as TOML) under the session's own permission profile
-/// ([`scoped_profile`]): Codex's Seatbelt policy, with the same writable roots, network, denied
-/// reads and unix sockets, and the command's exit status as its own. `None` for an access that
-/// has no sandbox to keep (full access runs a command as it is).
-pub fn sandbox_args(access: &Access, workdir: &Path, command: &[String]) -> Option<Vec<String>> {
-    let profile = scoped_profile(&access.resolved())?;
-    let mut args = vec![
-        "sandbox".to_owned(),
-        "-P".to_owned(),
-        PROFILE.to_owned(),
-        "-C".to_owned(),
-        workdir.display().to_string(),
-        "-c".to_owned(),
-        format!("default_permissions={}", toml_string(PROFILE)),
-        "-c".to_owned(),
-        format!("permissions.{PROFILE}={}", toml_value(&profile)),
-        "--".to_owned(),
-    ];
-    args.extend(command.iter().cloned());
-    Some(args)
 }
 
 /// A JSON value as a TOML inline value, for a `-c` override (strings, booleans, numbers,
@@ -1839,63 +1617,18 @@ fn toml_value(value: &Value) -> String {
     }
 }
 
-/// Whether a Codex session started in `cwd` can be kept from reading folders
-/// ([`Access::Scoped`]'s `deny_read`): only in a folder Brigadier owns outside any repository.
-/// A thread opened with a writable permission profile makes Codex persist a trust entry in
-/// `~/.codex/config.toml` for the repository it runs in (for a worktree: the user's main
-/// checkout), so a worker in a worktree keeps the legacy sandbox, which cannot deny reads.
-pub fn can_deny_reads(owned_cwd: bool, cwd: &Path) -> bool {
-    owned_cwd && !cwd.ancestors().any(|dir| dir.join(".git").exists())
-}
-
-/// A thread response with the permission profile Codex reports active (a field its schema
-/// doesn't declare yet).
-#[derive(Deserialize)]
-struct Profiled<R> {
-    #[serde(flatten)]
-    response: R,
-    #[serde(rename = "activePermissionProfile", default)]
-    active_profile: Option<ActiveProfile>,
-}
-
-#[derive(Deserialize)]
-struct ActiveProfile {
-    id: String,
-}
-
-impl<R> Profiled<R> {
-    /// Fails closed when the session asked for its profile and Codex didn't apply it (an older
-    /// Codex, or a `sandbox_mode` in the user's config, which turns profiles off): nothing
-    /// would keep it out of the folders it must not read.
-    fn checked(self, profiled: bool) -> Result<R> {
-        let active = self.active_profile.map(|profile| profile.id);
-        if profiled && active.as_deref() != Some(PROFILE) {
-            return Err(Error::Invalid(format!(
-                "Codex did not apply Brigadier's permission profile (active: {}), so it cannot \
-                 keep this session out of Brigadier's private folders",
-                active.as_deref().unwrap_or("none")
-            )));
-        }
-        Ok(self.response)
-    }
-}
-
-/// When Codex asks: never under full access, to leave the sandbox otherwise, before every
-/// command when read-only.
-fn approval_policy(access: &Access) -> p::AskForApproval {
+/// When Codex asks, by level (see the module docs).
+fn approval_policy(access: Access) -> p::AskForApproval {
     match access {
-        Access::ReadOnly => p::AskForApproval::Untrusted,
+        Access::Ask | Access::ReadOnly => p::AskForApproval::Untrusted,
+        Access::AcceptEdits => p::AskForApproval::OnRequest,
         Access::Full => p::AskForApproval::Never,
-        Access::Workspace { .. } | Access::Scoped { .. } => p::AskForApproval::OnRequest,
     }
 }
 
-/// Who answers Codex's approval requests: Brigadier, at every level ("Configures who approval
+/// Who answers Codex's approval requests: the user, at every level ("Configures who approval
 /// requests are routed to for review … Defaults to `user`", the app-server's JSON Schema,
-/// codex-cli 0.162.1). At Approve for me Brigadier's own reviewer settles them: Codex's
-/// `auto_review` doesn't apply `auto_review.extra_policy` in 0.162.1, so its reviewer never
-/// got the rule to keep off other sessions' work and approved deleting it (SESSION-FIXES-PLAN
-/// bug 6, "Gap left"). Always named, so a reviewer set in the user's own config never applies.
+/// codex-cli 0.162.1). Always named, so a reviewer set in the user's own config never applies.
 const REVIEWER: p::ApprovalsReviewer = p::ApprovalsReviewer::User;
 
 /// The sandbox a thread starts with. Only read-only is set here: starting a thread with a
@@ -1904,34 +1637,21 @@ const REVIEWER: p::ApprovalsReviewer = p::ApprovalsReviewer::User;
 /// `-c projects.….trust_level` override does not prevent. Every turn sets the full sandbox
 /// policy instead ([`sandbox_policy`]), which holds for that turn and the ones after it; nothing
 /// runs in a thread outside a turn.
-fn thread_sandbox(access: &Access) -> Option<p::SandboxMode> {
+fn thread_sandbox(access: Access) -> Option<p::SandboxMode> {
     match access {
         Access::ReadOnly => Some(p::SandboxMode::ReadOnly),
-        Access::Workspace { .. } | Access::Scoped { .. } | Access::Full => None,
+        Access::Ask | Access::AcceptEdits | Access::Full => None,
     }
 }
 
-fn sandbox_policy(access: &Access) -> p::SandboxPolicy {
+/// Codex's own sandbox at `access`: `workspace-write` (the working directory and
+/// `writable_roots`, with the network) below Full access, none at Full access.
+fn sandbox_policy(access: Access, writable_roots: &[PathBuf]) -> p::SandboxPolicy {
     match access {
-        Access::Workspace { extra_roots } => p::SandboxPolicy::WorkspaceWrite {
+        Access::Ask | Access::AcceptEdits => p::SandboxPolicy::WorkspaceWrite {
             exclude_slash_tmp: false,
             exclude_tmpdir_env_var: false,
             network_access: true,
-            writable_roots: extra_roots
-                .iter()
-                .map(|root| p::AbsolutePathBuf(root.display().to_string()))
-                .collect(),
-        },
-        // Exactly the working directory and the roots: `/tmp` and `$TMPDIR` stay read-only (a
-        // worker's TMPDIR is its scratch folder, one of the roots).
-        Access::Scoped {
-            writable_roots,
-            network,
-            ..
-        } => p::SandboxPolicy::WorkspaceWrite {
-            exclude_slash_tmp: true,
-            exclude_tmpdir_env_var: true,
-            network_access: *network,
             writable_roots: writable_roots
                 .iter()
                 .map(|root| p::AbsolutePathBuf(root.display().to_string()))
@@ -1942,6 +1662,17 @@ fn sandbox_policy(access: &Access) -> p::SandboxPolicy {
         },
         Access::Full => p::SandboxPolicy::DangerFullAccess,
     }
+}
+
+/// The folders a session's workspace sandbox writes besides its working directory: its extra
+/// folders ([`SessionSpec::add_dirs`]), as the file system resolves them. Codex resolves its
+/// working directory and so the paths it writes; a root given as `/tmp/x` would not hold
+/// `/private/tmp/x`.
+fn writable_roots(spec: &SessionSpec) -> Vec<PathBuf> {
+    spec.add_dirs
+        .iter()
+        .map(|dir| crate::policy::real_path(dir).unwrap_or_else(|| dir.clone()))
+        .collect()
 }
 
 /// Codex's fast service tier ("Fast"), as `model/list` names it.
@@ -2161,9 +1892,7 @@ impl Rpc {
         }
     }
 
-    /// `experimental`: opts into the app-server's experimental API, whose command approvals
-    /// carry the folders and network the command asks for (`additionalPermissions`).
-    async fn initialize(&self, experimental: bool) -> Result<()> {
+    async fn initialize(&self) -> Result<()> {
         let _: Value = self
             .call(
                 "initialize",
@@ -2173,10 +1902,7 @@ impl Rpc {
                         title: Some("Brigadier".into()),
                         version: env!("CARGO_PKG_VERSION").into(),
                     },
-                    capabilities: experimental.then(|| p::InitializeCapabilities {
-                        experimental_api: true,
-                        ..Default::default()
-                    }),
+                    capabilities: None,
                 },
             )
             .await?;
@@ -2278,8 +2004,8 @@ pub struct CodexSession {
     rpc: Arc<Rpc>,
     shared: Arc<Shared>,
     access: Access,
-    /// Its sandbox is a permission profile set when the thread opened.
-    profiled: bool,
+    /// What its workspace sandbox writes besides its working directory.
+    writable_roots: Vec<PathBuf>,
     effort: Option<String>,
 }
 
@@ -2334,8 +2060,8 @@ impl CodexSession {
                     input: Self::input(input)?,
                     effort,
                     summary: Some(p::ReasoningSummary::Auto),
-                    sandbox_policy: (!self.profiled).then(|| sandbox_policy(&self.access)),
-                    approval_policy: Some(approval_policy(&self.access)),
+                    sandbox_policy: Some(sandbox_policy(self.access, &self.writable_roots)),
+                    approval_policy: Some(approval_policy(self.access)),
                     approvals_reviewer: Some(REVIEWER),
                     ..Default::default()
                 },
@@ -2471,8 +2197,6 @@ impl ProviderSession for CodexSession {
                 }),
                 // An elicitation's answer (`mcpServer/elicitation/request`); declined, the
                 // model reads "user rejected MCP tool call".
-                PendingKind::McpTool if allow => json!({ "action": "accept", "content": {} }),
-                PendingKind::McpTool => json!({ "action": "decline" }),
             };
             self.rpc.respond(rpc_id, result).await?;
             // A decline carries no words (the app-server's approval responses, 0.162.1), so
@@ -2584,7 +2308,6 @@ async fn read_loop(
     mut stdout: mpsc::Receiver<String>,
     shared: Arc<Shared>,
     trusted: HashSet<String>,
-    prompting: HashSet<String>,
 ) {
     let mut parser = Parser::live().with_private_logs(rpc.process.private_logs());
     parser.own_mcp = shared.own_mcp.clone();
@@ -2617,25 +2340,6 @@ async fn read_loop(
                     kind,
                 }) => {
                     lock(&shared.approvals).insert(approval_id, (rpc_id, kind));
-                }
-                Output::Control(Control::Elicitation {
-                    rpc_id,
-                    server,
-                    tool_approval,
-                    tool,
-                    arguments,
-                    ..
-                }) if tool_approval && prompting.contains(&server) => {
-                    // A trusted server's tool that still asks (a thread's `run_unsandboxed`):
-                    // the session's approvals decide, as for a command that leaves the
-                    // sandbox. Under Approve for me Codex's auto-reviewer settles it and
-                    // nothing arrives here (checked live on 0.160.1).
-                    let (request, approval_id) = tool_approval_request(&rpc_id, tool, &arguments);
-                    lock(&shared.approvals).insert(approval_id, (rpc_id, PendingKind::McpTool));
-                    shared
-                        .events
-                        .send(ProviderEvent::ApprovalRequested { request })
-                        .await;
                 }
                 Output::Control(Control::Elicitation {
                     rpc_id,
@@ -2686,37 +2390,6 @@ async fn read_loop(
                 .flatten(),
         })
         .await;
-}
-
-/// The approval request for a trusted server's tool call that asks first: a command that
-/// leaves the sandbox when its arguments carry one (`command`, `workdir`, `justification`, as
-/// a thread's `run_unsandboxed` has).
-fn tool_approval_request(
-    rpc_id: &Value,
-    tool: Option<String>,
-    arguments: &Value,
-) -> (ApprovalRequest, String) {
-    let text = |key: &str| {
-        arguments
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    };
-    let approval_id = format!("codex-{rpc_id}");
-    let command = text("command");
-    let request = ApprovalRequest {
-        id: approval_id.clone(),
-        kind: ApprovalKind::Command,
-        tool: tool.unwrap_or_else(|| "mcp tool".into()),
-        grant: command.as_deref().and_then(crate::policy::command_prefix),
-        command: command.clone(),
-        cwd: text("workdir"),
-        paths: Vec::new(),
-        reason: text("justification"),
-        escalation: true,
-        input: command.or_else(|| Some(crate::clip(&arguments.to_string(), 2000))),
-    };
-    (request, approval_id)
 }
 
 fn exit_message(process: &CliProcess) -> String {
@@ -2818,12 +2491,10 @@ mod tests {
             sweep_dir: None,
             auto_compact: true,
             allowed_models,
-            auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
-            protection: Default::default(),
         }
     }
 
@@ -2932,7 +2603,6 @@ mod tests {
                 env: Vec::new(),
                 tool_timeout_secs: None,
                 trusted: true,
-                prompt_tools: Vec::new(),
                 always_load: false,
             });
             let servers = mcp_config(&effective, &session);
@@ -3180,8 +2850,8 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_keeps_codexs_own_tools_and_sub_agents_and_writes_its_workspace() {
-        let mut thread = spec(ToolSet::Thread, None);
+    fn a_thread_keeps_codexs_own_tools_and_sub_agents() {
+        let thread = spec(ToolSet::Thread, None);
         let args = app_server_args(Some(&thread));
         let disabled: Vec<&str> = args
             .windows(2)
@@ -3201,158 +2871,92 @@ mod tests {
             !overrides.iter().any(|value| value.starts_with("agents.")),
             "{args:?}"
         );
-        thread.add_dirs = vec![PathBuf::from("/work/session")];
-        // Full access: no sandbox at all.
-        assert!(matches!(
-            sandbox_policy(&thread.access_with_dirs()),
-            p::SandboxPolicy::DangerFullAccess
-        ));
-        assert!(matches!(
-            approval_policy(&thread.access),
-            p::AskForApproval::Never
-        ));
-        // A sandboxed thread writes its workspace.
-        thread.access = Access::Scoped {
-            write_cwd: true,
-            writable_roots: vec![PathBuf::from("/data/orch/c1")],
-            network: true,
-            deny_read: Vec::new(),
-            unix_sockets: Vec::new(),
-        };
-        let p::SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
-            sandbox_policy(&thread.access_with_dirs())
-        else {
-            panic!("a workspace sandbox");
-        };
-        let roots: Vec<&str> = writable_roots.iter().map(|root| root.0.as_str()).collect();
-        assert_eq!(roots, ["/data/orch/c1", "/work/session"]);
-        assert!(matches!(
-            approval_policy(&thread.access),
-            p::AskForApproval::OnRequest
-        ));
-        assert!(matches!(REVIEWER, p::ApprovalsReviewer::User));
     }
 
-    /// A thread's `run` holds its command to the session's own permission profile through
-    /// `codex sandbox`; full access has no sandbox to keep.
+    /// Each level passes straight through as Codex's own approval policy and sandbox, for a
+    /// thread and a worker alike, in the app-server and in a terminal (G5). Below Full access
+    /// the workspace sandbox writes the session's extra folders; the user answers every
+    /// request.
     #[test]
-    fn run_keeps_the_sessions_profile_through_codex_sandbox() {
-        let command = [
-            "/bin/sh".to_owned(),
-            "-c".to_owned(),
-            "cargo test".to_owned(),
-        ];
-        assert!(sandbox_args(&Access::Full, Path::new("/w"), &command).is_none());
-        let access = Access::Scoped {
-            write_cwd: true,
-            writable_roots: vec![PathBuf::from("/data/orch/c1"), PathBuf::from("/work/s")],
-            network: false,
-            deny_read: vec![PathBuf::from("/data/run")],
-            unix_sockets: vec![PathBuf::from("/data/run/brigadierd.sock")],
-        };
-        let args = sandbox_args(&access, Path::new("/work/s/crate"), &command).expect("args");
-        // The same profile a session with this access opens with.
-        let session = SessionSpec {
-            access: access.clone(),
-            ..spec(ToolSet::Thread, None)
-        };
-        let profile = scoped_profile(&session.access.resolved()).expect("a profile");
-        assert_eq!(
-            args,
-            [
-                "sandbox",
-                "-P",
-                PROFILE,
-                "-C",
-                "/work/s/crate",
-                "-c",
-                "default_permissions=\"brigadier\"",
-                "-c",
-                &format!("permissions.brigadier={}", toml_value(&profile)),
-                "--",
-                "/bin/sh",
-                "-c",
-                "cargo test",
-            ]
-        );
-        let table = &args[8];
-        for part in [
-            "\":root\" = \"read\"",
-            "\":workspace_roots\" = \"write\"",
-            "\"/work/s\" = \"write\"",
-            "\"/data/run\" = \"deny\"",
-            // A narrower grant inside it can't reopen it.
-            "\"/data/run/**\" = \"deny\"",
-            "\"enabled\" = false",
-            "\"unix_sockets\" = {\"/data/run/brigadierd.sock\" = \"allow\"}",
-        ] {
-            assert!(table.contains(part), "{part} in {table}");
+    fn each_level_is_codexs_own_approval_policy_and_sandbox_for_threads_and_workers() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-codex-levels-{}", std::process::id()));
+        let workspace = dir.join("session");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let real = workspace.canonicalize().unwrap().display().to_string();
+        let env = CliEnv::from_vars([("PATH".into(), "/usr/bin".into())]);
+        for tools in [ToolSet::Thread, ToolSet::Lean] {
+            for (access, approval, sandbox, flags) in [
+                (
+                    Access::Ask,
+                    "untrusted",
+                    "workspace-write",
+                    "-s workspace-write -c approval_policy=\"untrusted\"",
+                ),
+                (
+                    Access::AcceptEdits,
+                    "on-request",
+                    "workspace-write",
+                    "-s workspace-write -a on-request",
+                ),
+                (
+                    Access::Full,
+                    "never",
+                    "danger-full-access",
+                    "--dangerously-bypass-approvals-and-sandbox",
+                ),
+            ] {
+                let mut session = spec(tools, None);
+                session.access = access;
+                session.add_dirs = vec![workspace.clone()];
+                assert_eq!(
+                    serde_json::to_value(approval_policy(access)).unwrap(),
+                    json!(approval),
+                    "{tools:?} {access:?}"
+                );
+                assert_eq!(thread_sandbox(access), None, "every turn sets it");
+                let policy = sandbox_policy(access, &writable_roots(&session));
+                match (&policy, sandbox) {
+                    (p::SandboxPolicy::DangerFullAccess, "danger-full-access") => {}
+                    (
+                        p::SandboxPolicy::WorkspaceWrite {
+                            writable_roots,
+                            network_access,
+                            ..
+                        },
+                        "workspace-write",
+                    ) => {
+                        let roots: Vec<&str> =
+                            writable_roots.iter().map(|root| root.0.as_str()).collect();
+                        assert_eq!(roots, [real.as_str()]);
+                        assert!(*network_access);
+                    }
+                    _ => panic!("{access:?}: {policy:?}"),
+                }
+                let command = terminal_command(
+                    "/usr/local/bin/codex".into(),
+                    &session,
+                    "thread-1",
+                    "/tmp".into(),
+                    Map::new(),
+                    &env,
+                );
+                let line = command.args.join(" ");
+                assert!(line.contains(flags), "{access:?}: {line}");
+                assert!(!line.contains("--approve-for-me"), "{line}");
+            }
         }
-    }
-
-    /// A profiled session at Approve for me turns on one more feature, and only that one: the
-    /// features the app-server switched off stay off.
-    #[test]
-    fn a_profiled_session_adds_its_feature_without_replacing_the_disabled_ones() {
-        let mut config = Map::new();
-        profile_config(&mut config, json!({}), true);
+        assert_eq!(REVIEWER, p::ApprovalsReviewer::User);
+        // Brigadier's own readers: read-only, and Codex asks before anything not known safe.
         assert_eq!(
-            config.get("features.exec_permission_approvals"),
-            Some(&json!(true))
+            thread_sandbox(Access::ReadOnly),
+            Some(p::SandboxMode::ReadOnly)
         );
-        assert!(!config.contains_key("features"), "{config:?}");
-        assert_eq!(config.get("default_permissions"), Some(&json!(PROFILE)));
-        let mut config = Map::new();
-        profile_config(&mut config, json!({}), false);
-        assert!(!config.keys().any(|key| key.starts_with("features")));
-    }
-
-    /// A prompt-mode tool call reaches the client as an elicitation (shape seen live on
-    /// codex-cli 0.160.1 under `approvals_reviewer: user`); it becomes an escalation request
-    /// for the command, answered accept or decline.
-    #[test]
-    fn a_prompted_tool_call_is_an_escalation_for_its_command() {
-        let line = json!({ "id": 7, "method": "mcpServer/elicitation/request", "params": {
-            "threadId": "t1", "turnId": "u1", "serverName": "brigadier", "mode": "form",
-            "_meta": {
-                "codex_approval_kind": "mcp_tool_call",
-                "tool_description": "Like run, but outside the sandbox",
-                "tool_params": {
-                    "command": "curl -sI https://example.com",
-                    "workdir": "/work/s",
-                    "justification": "It needs the network.",
-                },
-            },
-            "message": "Allow the brigadier MCP server to run tool \"run_unsandboxed\"?",
-            "requestedSchema": { "type": "object", "properties": {} },
-        }});
-        let mut parser = Parser::live();
-        let outputs = parser.feed(&line.to_string());
-        let [
-            Output::Control(Control::Elicitation {
-                rpc_id,
-                server,
-                tool_approval: true,
-                tool,
-                arguments,
-                ..
-            }),
-        ] = outputs.as_slice()
-        else {
-            panic!("{outputs:?}");
-        };
-        assert_eq!(server, "brigadier");
-        let (request, id) = tool_approval_request(rpc_id, tool.clone(), arguments);
-        assert_eq!(id, "codex-7");
-        assert_eq!(request.tool, "run_unsandboxed");
         assert_eq!(
-            request.command.as_deref(),
-            Some("curl -sI https://example.com")
+            serde_json::to_value(approval_policy(Access::ReadOnly)).unwrap(),
+            json!("untrusted")
         );
-        assert_eq!(request.cwd.as_deref(), Some("/work/s"));
-        assert_eq!(request.reason.as_deref(), Some("It needs the network."));
-        assert!(request.escalation);
-        assert_eq!(request.kind, ApprovalKind::Command);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Missing or signed out, the status points at Connect in plain words: no command to run,
@@ -3404,7 +3008,6 @@ mod tests {
             tool_timeout_secs: None,
             trusted: false,
             always_load: false,
-            prompt_tools: Vec::new(),
         }
     }
 
@@ -3533,7 +3136,6 @@ mod tests {
             "thread-1",
             "/tmp".into(),
             config,
-            false,
             &env,
         );
         let line = command.args.join(" ");

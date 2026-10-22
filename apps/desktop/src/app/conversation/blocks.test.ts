@@ -521,7 +521,7 @@ test("the lead's suggested setting shows as its card, and its tool call doesn't"
   assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), shown, "never folded away");
 });
 
-test("the lead's suggestion of Full access shows as its notice, and its tool call doesn't", () => {
+test("an old record's suggestion of Full access and its tool call show nothing", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, requests: {}, workerSteps: [],
     orchestratorSteps: [
@@ -530,11 +530,7 @@ test("the lead's suggestion of Full access shows as its notice, and its tool cal
     ] };
   const shown = sequence(buildBlocks([user], {}, false, replay, [])[0]!).flatMap((entry) =>
     entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
-  assert.deepEqual(shown, [{ type: "fullAccessSuggested", reason: "Installing Homebrew writes outside the project." }]);
-  // Once the lead answers, the actionable notice stays outside the collapsed work.
-  const entries = sequence(buildBlocks([user], {}, false, replay, [])[0]!);
-  const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
-  assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), shown);
+  assert.deepEqual(shown, []);
 });
 
 test("the lead's feedback offer stays in view as its card; its tool call and the user's answer show no row", () => {

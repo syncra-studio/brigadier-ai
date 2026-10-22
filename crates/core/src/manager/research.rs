@@ -264,12 +264,10 @@ impl SessionManager {
             sweep_dir: Some(scratch.clone()),
             auto_compact: true,
             allowed_models: None,
-            auto_review: false,
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
-            protection: Default::default(),
         };
         let account = self.runtime.launch_account(runs_on, spec.model.as_deref());
         let meter = TokenMeter::default().on_account(account.account.clone());

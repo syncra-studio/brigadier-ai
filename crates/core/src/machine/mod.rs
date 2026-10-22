@@ -293,9 +293,6 @@ pub(crate) mod tests {
         fn shell(&self) -> &dyn brigadier_sandbox::Shell {
             self.0.shell()
         }
-        fn sandbox(&self) -> &dyn brigadier_sandbox::Sandbox {
-            self.0.sandbox()
-        }
         fn machine(&self) -> &dyn brigadier_sandbox::Machine {
             self.0.machine()
         }

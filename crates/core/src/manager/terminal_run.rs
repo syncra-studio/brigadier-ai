@@ -1,8 +1,8 @@
 //! `terminal_run` (Q90): the thread types a command in a terminal tab the user can watch and
 //! take over (a dev server they will poke at, a login, an interactive tool), instead of
-//! running it headless with `run`. In-app shells are plain shells with the user's full rights,
-//! outside any sandbox, so:
-//! - below Full access every command asks first on a card, as `run_unsandboxed` does;
+//! running it headless in its own shell. In-app shells are plain shells with the user's full
+//! rights, outside any sandbox, so:
+//! - below Full access every command asks first on a card;
 //! - a terminal of the user's is typed in only after they confirm it on a card, at every
 //!   level: its id comes from `app_state`, so naming it is no sign the user asked;
 //! - a terminal running something is never typed into: the agent's own busy one gets a new
@@ -17,7 +17,7 @@ use brigadier_providers::{ApprovalDecision, ApprovalKind, ApprovalRequest};
 
 use super::SessionManager;
 use super::cards::CardAnswer;
-use super::escalation::OWN_APPROVAL;
+use super::cards::OWN_APPROVAL;
 use super::takeover::{TerminalHost, TerminalSnapshot};
 use crate::app_call::{AppAnswer, AppOp, OpenTarget};
 use crate::model::{PermissionLevel, Setup};
@@ -104,7 +104,7 @@ impl SessionManager {
         let cwd = target
             .as_ref()
             .map_or_else(|| checkout.clone(), |terminal| terminal.cwd.clone());
-        let full_access = self.permission(id) == PermissionLevel::FullAccess;
+        let full_access = self.permission(id) == PermissionLevel::Full;
         if !own || !full_access {
             self.confirm_terminal(id, &command, &cwd, own).await?;
         }

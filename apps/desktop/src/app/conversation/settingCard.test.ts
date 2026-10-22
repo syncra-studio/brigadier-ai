@@ -15,16 +15,16 @@ Object.defineProperty(globalThis, "window", { configurable: true, value: { local
 const { isMade, makeChange, settingPage, settingWords, shownChange } = await import("./settingCard");
 const { useApp } = await import("@/state/store");
 
-const LABELS = { askForApproval: "Ask for approval", approveForMe: "Approve for me", fullAccess: "Full access" } as const;
-const session = { id: "s1", setup: { type: "session", permission: "askForApproval" } } as unknown as Conversation;
+const LABELS = { ask: "Ask", acceptEdits: "Accept edits", full: "Full access" } as const;
+const session = { id: "s1", setup: { type: "session", permission: "ask" } } as unknown as Conversation;
 
 test("each suggested change reads in plain words and opens its own Settings page", () => {
-  assert.deepEqual(settingWords({ setting: "permission", level: "approveForMe" }, LABELS), {
-    title: "Switch this session to Approve for me", button: "Switch to Approve for me", done: "This session is on Approve for me.",
+  assert.deepEqual(settingWords({ setting: "permission", level: "acceptEdits" }, LABELS), {
+    title: "Switch this session to Accept edits", button: "Switch to Accept edits", done: "This session is on Accept edits.",
   });
   assert.equal(settingWords({ setting: "browser", on: true }, LABELS).title, "Turn on the built-in browser");
   assert.deepEqual((["permission", "browser"] as const).map((setting) =>
-    settingPage(setting === "permission" ? { setting, level: "approveForMe" } : { setting, on: true })), ["configuration", "browser"]);
+    settingPage(setting === "permission" ? { setting, level: "acceptEdits" } : { setting, on: true })), ["configuration", "browser"]);
   // Merging on its own came from an older Brigadier: that setting is gone, and it has no card.
   assert.equal(shownChange({ setting: "mergeOnOwn", on: true }), false);
   assert.equal(shownChange({ setting: "browser", on: true }), true);
@@ -52,8 +52,8 @@ test("a suggested change applies only on its press, and then reads as made", asy
   assert.equal(isMade(browser, useApp.getState().settings, session), true);
 
   const switched: [string, PermissionLevel][] = [];
-  const level = { setting: "permission", level: "approveForMe" } as const;
+  const level = { setting: "permission", level: "acceptEdits" } as const;
   assert.equal(isMade(level, useApp.getState().settings, session), false);
   await makeChange(level, session, async (conversation, to) => { switched.push([conversation.id, to]); });
-  assert.deepEqual(switched, [["s1", "approveForMe"]], "the session's own level, as its picker sets it");
+  assert.deepEqual(switched, [["s1", "acceptEdits"]], "the session's own level, as its picker sets it");
 });

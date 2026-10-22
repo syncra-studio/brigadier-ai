@@ -103,7 +103,7 @@ async fn an_idle_thread_gets_no_turn_from_engine_events() {
     let Some(Setup::Session { permission, .. }) = &mut setup else {
         panic!("a session");
     };
-    *permission = PermissionLevel::FullAccess;
+    *permission = PermissionLevel::Full;
     flow.manager
         .set_setup(a.clone(), setup.unwrap())
         .await

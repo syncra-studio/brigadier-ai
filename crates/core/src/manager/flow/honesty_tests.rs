@@ -213,65 +213,6 @@ async fn commentary_between_two_calls_reaches_the_user() {
     flow.stop().await;
 }
 
-/// A request over with only a line said mid-work simply ends: nothing asks the thread again
-/// for an answer, and no closing line is added.
-#[tokio::test]
-async fn a_request_over_on_a_line_said_mid_work_simply_ends() {
-    const LINE: &str = "Now the full suites, once, on the session branch.";
-    let inputs = Log::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "honesty-line-ends",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains("[run-1 finished") {
-                    turn.emit(said(LINE)).await;
-                    turn.emit(calls("code_search")).await;
-                    return Reply::text("");
-                }
-                let reply = turn
-                    .call("run", json!({ "command": "sleep 3; echo ok" }))
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("")
-            }
-        }),
-    )
-    .await;
-    flow.background_commands();
-    flow.say("Run the full checks.").await;
-    flow.until("the request to end", |board| {
-        !board.requests.is_empty()
-            && board
-                .requests
-                .values()
-                .all(|request| request.state == RequestState::Done)
-    })
-    .await;
-    let board = flow.settled().await;
-    let request = board.latest_request().unwrap().id.clone();
-    assert_eq!(board.requests.len(), 1);
-    assert_eq!(shown(&flow).await, [(LINE.to_owned(), Some(request))]);
-    assert_eq!(
-        inputs.lock().unwrap().len(),
-        2,
-        "{:#?}",
-        inputs.lock().unwrap()
-    );
-    assert!(
-        !board
-            .notices
-            .iter()
-            .any(|notice| notice.text.contains("without an answer")),
-        "{:?}",
-        board.notices
-    );
-    flow.stop().await;
-}
-
 /// The API session works on its user's request; the sender's message is steered in and the
 /// turn answers the user only. Returns the sender's replies as its turns read them.
 async fn mixed_reply(name: &str) -> (Flow, Vec<String>) {

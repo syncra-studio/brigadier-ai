@@ -72,7 +72,7 @@ function conversation(id: string, title: string, kind: "chat" | "session"): Conv
     setup: kind === "chat"
       ? { type: "chat", model: { provider: "codex", model: null, effort: null, fast: false } }
       : {
-          type: "session", repo: "/tmp/work-blocks-fixture", environment: { type: "local" }, permission: "fullAccess", planMode: false,
+          type: "session", repo: "/tmp/work-blocks-fixture", environment: { type: "local" }, permission: "full", planMode: false,
           workersSeeUncommitted: null, orchestrator: { provider: "codex", model: null, effort: null },
         },
   } as unknown as Conversation;

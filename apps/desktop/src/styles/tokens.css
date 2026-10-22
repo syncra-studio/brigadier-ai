@@ -647,7 +647,7 @@
   /* Amber: budget warnings, pending cards, notices. */
   --warning: oklch(0.769 0.165 62);
   --warning-foreground: oklch(0.215 0.003 var(--tint));
-  /* Orange: the Full access permission level (no OS sandbox). */
+  /* Orange: the Full access permission level (never asks). */
   --full-access: oklch(0.72 0.19 45);
   --full-access-foreground: oklch(0.215 0.003 var(--tint));
   /* Claude's brand colour, for its mark only. */

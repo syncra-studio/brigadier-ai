@@ -1,7 +1,7 @@
 //! "Decided for you" and "Waiting on you": what the session's summary tells the user about
 //! the work Brigadier runs on their behalf (built in, always on).
 //!
-//! - **Decided for you.** Under "Approve for me" and "Full access", each decision Brigadier
+//! - **Decided for you.** Under "Accept edits" and "Full access", each decision Brigadier
 //!   takes in the user's place is logged with why: a plan approved, sent back for revision or
 //!   turned down; a change landed after its checks, sent back with their findings, held
 //!   because it couldn't be verified, or handed to the orchestrator; a permission a worker
@@ -41,7 +41,7 @@ const LINE_CHARS: usize = 300;
 const WHY_CHARS: usize = 600;
 
 impl SessionManager {
-    /// Logs a decision Brigadier took on the user's behalf. Under "Ask for approval" the user
+    /// Logs a decision Brigadier took on the user's behalf. Under "Ask" the user
     /// takes them, so nothing is logged.
     pub(crate) async fn decided_for_you(
         &self,
@@ -51,7 +51,7 @@ impl SessionManager {
         what: String,
         why: String,
     ) {
-        if self.permission(conversation_id) == PermissionLevel::AskForApproval {
+        if self.permission(conversation_id) == PermissionLevel::Ask {
             return;
         }
         self.record_decision(

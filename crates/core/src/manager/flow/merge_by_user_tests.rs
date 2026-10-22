@@ -60,13 +60,6 @@ async fn session(name: &str) -> (Flow, Log) {
                     log(format!("head: {head}"));
                     return Reply::text("More notes are in.");
                 }
-                if turn.input.contains("Run the long one.") {
-                    let reply = turn
-                        .call("run", json!({ "command": "sleep 60; echo late" }))
-                        .await;
-                    log(format!("run: {} {}", reply.is_error, reply.text));
-                    return Reply::text("It runs.");
-                }
                 if turn.input.contains("Draft it.") {
                     std::fs::write(turn.cwd.join("DRAFT.md"), "draft\n").unwrap();
                     return Reply::text("Drafted, not committed.");
@@ -778,34 +771,6 @@ async fn close_workspace_right_after_a_turn_waits_for_its_sweep() {
     );
     conv.end_scratch_sweep().await;
     closing.await.unwrap().unwrap();
-    assert!(!path.exists());
-    flow.stop().await;
-}
-
-/// A command the thread left running in the background keeps its request working: Close
-/// workspace stops it and closes, without waiting for it to end (Codex review of #180).
-#[tokio::test]
-async fn close_workspace_stops_a_background_run_and_closes() {
-    let (flow, _) = session("merge-close-background").await;
-    flow.say("Add notes.").await;
-    quiet(&flow).await;
-    let path = workspace(&flow).0.unwrap();
-    flow.background_commands();
-    flow.say("Run the long one.").await;
-    flow.until("the run in the background, the turn over", |board| {
-        board
-            .background_runs
-            .values()
-            .any(|run| run.state == crate::work::BackgroundRunState::Running)
-            && board.run == RunState::Idle
-    })
-    .await;
-    let started = std::time::Instant::now();
-    flow.manager
-        .close_workspace(&flow.conversation)
-        .await
-        .unwrap();
-    assert!(started.elapsed() < std::time::Duration::from_secs(10));
     assert!(!path.exists());
     flow.stop().await;
 }

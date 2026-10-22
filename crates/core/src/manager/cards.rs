@@ -21,6 +21,10 @@ use crate::work::{
 };
 use crate::{Error, Result, now_ms};
 
+/// The id of an approval Brigadier asks itself (no CLI waits on it, as for closing a tab):
+/// its answer goes to the call waiting on the card.
+pub(crate) const OWN_APPROVAL: &str = "brigadier-escalation:";
+
 /// What a waiting card receives.
 #[derive(Debug, Clone)]
 pub(crate) enum CardAnswer {

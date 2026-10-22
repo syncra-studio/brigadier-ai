@@ -1,4 +1,4 @@
-//! Under Ask for approval a message to another session waits for the user's Send on a card
+//! Under Ask a message to another session waits for the user's Send on a card
 //! (SESSION-MESSAGING-PLAN.md §5.6): Send delivers it exactly as written, Don't send declines
 //! it, a restart keeps the card, and a target gone or archived meanwhile refuses it.
 
@@ -15,7 +15,7 @@ use crate::work::{ApprovalSubject, CardId, CardState, RequestState};
 
 fn ask() -> Options {
     Options {
-        permission: PermissionLevel::AskForApproval,
+        permission: PermissionLevel::Ask,
         ..Options::default()
     }
 }
