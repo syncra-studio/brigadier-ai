@@ -42,6 +42,8 @@
  *               h-settings-band               the band atop a Settings page, under the titlebar
  *               max-h-action-list             a worker's expanded run of actions (9 rows)
  *               max-h-command-list            the composer's / menu (10 rows and a half, then scrolls)
+ *               max-h-code-folded             a folded code block (10 of its rows)
+ *               w-code-gutter, w-code-gutter-lg  a code block's line numbers: in the card, in its larger view
  *               h-kbd, min-w-kbd              keyboard hints
  *               min-w-menu                    popover / dropdown minimum width
  *               min-h-composer                composer input minimum height
@@ -135,7 +137,8 @@
  *               shadow-summary (the pinned summary), shadow-thumb (a switch's thumb),
  *               shadow-page (the page surface),
  *               shadow-side-panel (the side panel over the thread), shadow-panel-tab (its
- *               active tab), shadow-session-tab (a session tab's active hairline and shadow)
+ *               active tab), shadow-session-tab (a session tab's active hairline and shadow),
+ *               shadow-code-sticky (a code block's header stuck to the top of the thread)
  *   Motion      ease-summary-shift, ease-summary-card (the pinned summary), ease-sidebar (the
  *               sidebar opening and closing), ease-panel (the side panel), ease-enter (a section's list opening or closing),
  *               ease-standard (a disclosure chevron turning)
@@ -170,6 +173,14 @@
   --spacing-rail-list: min(70vh, 40rem);
   /* The composer grows with its text up to a quarter of the window, then scrolls. */
   --spacing-composer-max: 25dvh;
+  /* A folded code block shows ten of its rows (lh: its own line height); the gutter of its line
+     numbers in the card and in its larger view. */
+  --spacing-code-folded: 10lh;
+  --spacing-code-gutter: calc(var(--spacing) * 12);
+  --spacing-code-gutter-lg: calc(var(--spacing) * 14);
+  /* An expanded code block's header stuck to the top of the thread: a hairline under it and the
+     tooltip's soft shadow. */
+  --shadow-code-sticky: 0 1px 0 var(--border), var(--shadow-tooltip);
   /* The Full access card above the composer: nine tenths of a card's padding, gaps, icon and
      buttons, its heights on whole pixels so the thread's floating footer stays on the pixel
      grid. */

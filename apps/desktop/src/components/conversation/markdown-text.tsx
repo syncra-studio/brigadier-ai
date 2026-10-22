@@ -177,6 +177,29 @@ function cleanLinks(node: MdNode): void {
 
 const remarkCleanLinks = () => (tree: MdNode) => cleanLinks(tree);
 
+type Positioned = MdNode & {
+  position?: { start: { offset?: number }; end: { offset?: number } };
+  data?: { hProperties?: Record<string, unknown> };
+};
+
+/** A fence's closing line, at the end of its block's source. */
+const CLOSING_FENCE = /\n[ \t]*(?:`{3,}|~{3,})[ \t]*$/;
+
+/** Marks each fenced block whose closing fence hasn't come yet: `data-open` on its `code`. */
+function markOpenFences(node: Positioned, source: string): void {
+  if (node.type === "code") {
+    const raw = source.slice(node.position?.start.offset ?? 0, node.position?.end.offset ?? 0);
+    if (/^[ \t]*(?:`{3,}|~{3,})/.test(raw) && !CLOSING_FENCE.test(raw)) {
+      node.data = { ...node.data, hProperties: { ...node.data?.hProperties, dataOpen: true } };
+    }
+    return;
+  }
+  node.children?.forEach((child) => markOpenFences(child, source));
+}
+
+/** While text streams, a code block still being written says so (`CodeBlock`'s "Writing…"). */
+const remarkOpenFences = () => (tree: MdNode, file: { toString(): string }) => markOpenFences(tree, String(file));
+
 /**
  * The pace streaming text shows at: it trails what has arrived, steered so whatever waits
  * shows in about a second (never slower than a character a second), and the shown text
@@ -227,7 +250,13 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
 
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={[remarkGfm, remarkCleanLinks, ...(breaks ? [remarkUserText] : []), ...(plainLeads ? [remarkPlainLeads] : [])]}
+      remarkPlugins={[
+        remarkGfm,
+        remarkCleanLinks,
+        ...(breaks ? [remarkUserText] : []),
+        ...(plainLeads ? [remarkPlainLeads] : []),
+        ...(streaming ? [remarkOpenFences] : []),
+      ]}
       rehypePlugins={rehypePlugins}
       // Only text that still streams is revealed as it arrives. Settled text shows whole at
       // once, also when it mounts again (the stored reply replacing the streamed one, a work
@@ -831,181 +860,185 @@ const Table: FC<React.ComponentProps<"table">> = ({ className, ...props }) => {
   );
 };
 
-export const defaultComponents = memoizeMarkdownComponents({
-  h1: ({ className, ...props }) => (
-    <h1
-      className={cn(
-        "aui-md-h1 mt-5 mb-2 scroll-m-20 text-xl font-semibold first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  h2: ({ className, ...props }) => (
-    <h2
-      className={cn(
-        "aui-md-h2 mt-5 mb-2 scroll-m-20 text-lg font-semibold first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  h3: ({ className, ...props }) => (
-    <h3
-      className={cn(
-        "aui-md-h3 mt-4 mb-1.5 scroll-m-20 text-base font-semibold first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  h4: ({ className, ...props }) => (
-    <h4
-      className={cn(
-        "aui-md-h4 mt-3.5 mb-1 scroll-m-20 text-base font-medium first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  h5: ({ className, ...props }) => (
-    <h5
-      className={cn(
-        "aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  h6: ({ className, ...props }) => (
-    <h6
-      className={cn(
-        "aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  p: ({ className, ...props }) => (
-    <p
-      className={cn(
-        "aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  a: MarkdownLink,
-  blockquote: ({ className, ...props }) => (
-    <blockquote
-      className={cn(
-        "aui-md-blockquote border-muted-foreground/30 text-muted-foreground my-3 border-s-2 ps-4",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  ul: ({ className, ...props }) => (
-    <ul
-      className={cn(
-        "aui-md-ul marker:text-muted-foreground my-3 ms-5 list-disc [&>li]:mt-1",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  ol: ({ className, ...props }) => (
-    <ol
-      className={cn(
-        "aui-md-ol marker:text-muted-foreground my-3 ms-5 list-decimal [&>li]:mt-1",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  // An image in an answer opens in the image viewer.
-  img: ({ src, alt, className }) =>
-    typeof src === "string" && src ? (
-      <ImagePreview url={src} name={alt || "Image"}>
-        <button type="button" aria-label={`View ${alt || "image"}`} className="aui-md-img my-3 block cursor-zoom-in">
-          <img src={src} alt={alt ?? ""} className={cn("max-h-80 max-w-full rounded-lg", className)} />
-        </button>
-      </ImagePreview>
-    ) : null,
-  hr: ({ className, ...props }) => (
-    <hr
-      className={cn("aui-md-hr border-muted-foreground/20 my-3", className)}
-      {...props}
-    />
-  ),
-  table: Table,
-  th: ({ className, ...props }) => (
-    <th
-      className={cn(
-        "aui-md-th border-border border-b px-3 py-2 text-start font-semibold [[align=center]]:text-center [[align=right]]:text-right",
-        TABLE_CELL,
-        // The last header keeps clear of the table's hover buttons (Expand table, Copy table).
-        "last:pe-16",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  td: ({ className, ...props }) => (
-    <td
-      className={cn(
-        "aui-md-td px-3 py-2 text-start align-top [[align=center]]:text-center [[align=right]]:text-right",
-        TABLE_CELL,
-        className,
-      )}
-      {...props}
-    />
-  ),
-  tr: ({ className, ...props }) => (
-    <tr
-      className={cn("aui-md-tr border-border/60 border-b last:border-b-0", className)}
-      {...props}
-    />
-  ),
-  li: ({ className, ...props }) => (
-    <li className={cn("aui-md-li leading-relaxed", className)} {...props} />
-  ),
-  strong: ({ className, ...props }) => (
-    <strong
-      className={cn("aui-md-strong font-semibold", className)}
-      {...props}
-    />
-  ),
-  sup: ({ className, ...props }) => (
-    <sup
-      className={cn("aui-md-sup [&>a]:text-xs [&>a]:no-underline", className)}
-      {...props}
-    />
-  ),
-  pre: ({ className, ...props }) => (
-    <pre
-      className={cn(
-        "aui-md-pre border-border/50 bg-code-surface text-code overflow-x-auto rounded-t-none rounded-b-xl border border-t-0 p-3.5 font-mono",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  code: function Code({ className, ...props }) {
-    const isCodeBlock = useIsMarkdownCodeBlock();
-    const named = !isCodeBlock && typeof props.children === "string" ? codePath(props.children) : null;
-    if (named) return <CodeFile named={named} className={className} {...props} />;
-    return (
-      <code
+export const defaultComponents = {
+  ...memoizeMarkdownComponents({
+    h1: ({ className, ...props }) => (
+      <h1
         className={cn(
-          !isCodeBlock &&
-            "aui-md-inline-code bg-muted text-code-inline rounded-md px-1.5 py-0.5 font-mono",
+          "aui-md-h1 mt-5 mb-2 scroll-m-20 text-xl font-semibold first:mt-0 last:mb-0",
           className,
         )}
         {...props}
       />
-    );
-  },
+    ),
+    h2: ({ className, ...props }) => (
+      <h2
+        className={cn(
+          "aui-md-h2 mt-5 mb-2 scroll-m-20 text-lg font-semibold first:mt-0 last:mb-0",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    h3: ({ className, ...props }) => (
+      <h3
+        className={cn(
+          "aui-md-h3 mt-4 mb-1.5 scroll-m-20 text-base font-semibold first:mt-0 last:mb-0",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    h4: ({ className, ...props }) => (
+      <h4
+        className={cn(
+          "aui-md-h4 mt-3.5 mb-1 scroll-m-20 text-base font-medium first:mt-0 last:mb-0",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    h5: ({ className, ...props }) => (
+      <h5
+        className={cn(
+          "aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    h6: ({ className, ...props }) => (
+      <h6
+        className={cn(
+          "aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    p: ({ className, ...props }) => (
+      <p
+        className={cn(
+          "aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    a: MarkdownLink,
+    blockquote: ({ className, ...props }) => (
+      <blockquote
+        className={cn(
+          "aui-md-blockquote border-muted-foreground/30 text-muted-foreground my-3 border-s-2 ps-4",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    ul: ({ className, ...props }) => (
+      <ul
+        className={cn(
+          "aui-md-ul marker:text-muted-foreground my-3 ms-5 list-disc [&>li]:mt-1",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    ol: ({ className, ...props }) => (
+      <ol
+        className={cn(
+          "aui-md-ol marker:text-muted-foreground my-3 ms-5 list-decimal [&>li]:mt-1",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    // An image in an answer opens in the image viewer.
+    img: ({ src, alt, className }) =>
+      typeof src === "string" && src ? (
+        <ImagePreview url={src} name={alt || "Image"}>
+          <button type="button" aria-label={`View ${alt || "image"}`} className="aui-md-img my-3 block cursor-zoom-in">
+            <img src={src} alt={alt ?? ""} className={cn("max-h-80 max-w-full rounded-lg", className)} />
+          </button>
+        </ImagePreview>
+      ) : null,
+    hr: ({ className, ...props }) => (
+      <hr
+        className={cn("aui-md-hr border-muted-foreground/20 my-3", className)}
+        {...props}
+      />
+    ),
+    table: Table,
+    th: ({ className, ...props }) => (
+      <th
+        className={cn(
+          "aui-md-th border-border border-b px-3 py-2 text-start font-semibold [[align=center]]:text-center [[align=right]]:text-right",
+          TABLE_CELL,
+          // The last header keeps clear of the table's hover buttons (Expand table, Copy table).
+          "last:pe-16",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    td: ({ className, ...props }) => (
+      <td
+        className={cn(
+          "aui-md-td px-3 py-2 text-start align-top [[align=center]]:text-center [[align=right]]:text-right",
+          TABLE_CELL,
+          className,
+        )}
+        {...props}
+      />
+    ),
+    tr: ({ className, ...props }) => (
+      <tr
+        className={cn("aui-md-tr border-border/60 border-b last:border-b-0", className)}
+        {...props}
+      />
+    ),
+    li: ({ className, ...props }) => (
+      <li className={cn("aui-md-li leading-relaxed", className)} {...props} />
+    ),
+    strong: ({ className, ...props }) => (
+      <strong
+        className={cn("aui-md-strong font-semibold", className)}
+        {...props}
+      />
+    ),
+    sup: ({ className, ...props }) => (
+      <sup
+        className={cn("aui-md-sup [&>a]:text-xs [&>a]:no-underline", className)}
+        {...props}
+      />
+    ),
+    pre: ({ className, ...props }) => (
+      <pre
+        className={cn(
+          "aui-md-pre border-border/50 bg-code-surface text-code overflow-x-auto rounded-t-none rounded-b-xl border border-t-0 p-3.5 font-mono",
+          className,
+        )}
+        {...props}
+      />
+    ),
+    code: function Code({ className, ...props }) {
+      const isCodeBlock = useIsMarkdownCodeBlock();
+      const named = !isCodeBlock && typeof props.children === "string" ? codePath(props.children) : null;
+      if (named) return <CodeFile named={named} className={className} {...props} />;
+      return (
+        <code
+          className={cn(
+            !isCodeBlock &&
+              "aui-md-inline-code bg-muted text-code-inline rounded-md px-1.5 py-0.5 font-mono",
+            className,
+          )}
+          {...props}
+        />
+      );
+    },
+  }),
+  // Not memoized here: that drops `node`, which the block reads (its place in the text, whether
+  // it is still being written). The code override around it is memoized on the node already.
   CodeHeader,
   SyntaxHighlighter: CodeBlock,
-});
+};
