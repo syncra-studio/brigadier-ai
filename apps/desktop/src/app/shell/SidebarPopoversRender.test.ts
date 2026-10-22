@@ -42,6 +42,9 @@ test("sidebar: usage list, a provider's page, and the help menu", { timeout: 600
   assert.deepEqual(seen.help, ["Send feedback…", "Keyboard shortcuts"]);
   assert.deepEqual(seen.shortcuts, { type: "settings", page: "shortcuts" });
   assert.equal(seen.feedback, true);
+  // A click with no pointer before it (an accessibility press, a driven click) opens Help as the
+  // foot's other icons open (#474).
+  assert.deepEqual(seen.helpByClick, ["Send feedback…", "Keyboard shortcuts"]);
 
   // Drawn with the app's shared parts (#385): the usage list is a shared popover with menu rows
   // and a menu label, its amber the shared warning; Help is a shared menu with its rows.

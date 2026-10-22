@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import { TooltipIconButton } from "@/components/controls";
 import { footMenuPlacement } from "@/app/shell/sidebar/nav";
@@ -19,10 +19,21 @@ export function HelpMenu() {
   // Send feedback opens once the menu has closed, so its note keeps the keyboard rather than the
   // closing menu handing it back to Help.
   const toFeedback = useRef(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <DropdownMenu>
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
-        <TooltipIconButton look="strip" side={open ? "top" : "right"} tooltip="Help">
+        <TooltipIconButton
+          look="strip"
+          side={open ? "top" : "right"}
+          tooltip="Help"
+          // The menu opens as the pointer goes down. A click with no pointer before it (an
+          // accessibility press, which VoiceOver and driven clicks send) opens it too, as the
+          // foot's other icons open on a click (#474).
+          onClick={() => {
+            if (!menuOpen) setMenuOpen(true);
+          }}
+        >
           <HelpIcon />
         </TooltipIconButton>
       </DropdownMenuTrigger>

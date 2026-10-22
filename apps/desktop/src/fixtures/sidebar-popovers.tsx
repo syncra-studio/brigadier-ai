@@ -285,6 +285,12 @@ function Fixture() {
       seen.feedback = useFeedbackUi.getState().open;
       useFeedbackUi.setState({ open: false });
       await wait(200);
+      // A click with no pointer before it (an accessibility press, a driven click) opens Help too (#474).
+      helpButton()?.click();
+      await wait(200);
+      seen.helpByClick = all('[role="menuitem"]').map(text);
+      all('[role="menuitem"]').find((item) => text(item) === "Keyboard shortcuts")?.click();
+      await wait(200);
       setCanon(true);
       await wait(300);
       look.canon = {
