@@ -62,7 +62,7 @@ install_brigadier() {
     if ! read -r answer </dev/tty; then fail 'A terminal is needed to confirm the replacement.'; fi
     case "$answer" in y|Y|yes|YES) ;; *) printf 'Nothing was installed.\n'; return ;; esac
   fi
-  if pgrep -f "^$target/Contents/MacOS/(brigadier|brigadierd)( |$)" >/dev/null; then
+  if pgrep -f "^$target/Contents/MacOS/(brigadier-app|brigadier|brigadierd)( |$)" >/dev/null; then
     fail 'Brigadier is still running. Quit it first.'
   fi
 

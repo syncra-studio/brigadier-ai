@@ -1,4 +1,4 @@
-//! Launch smoke check (`brigadier --smoke`).
+//! Launch smoke check (`brigadier-app --smoke`).
 //!
 //! The webview drives the run (it is the one that paints): it reports first interactive paint,
 //! fires a synthetic event burst through the daemon's normal write path, times every probe from

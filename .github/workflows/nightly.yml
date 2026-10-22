@@ -209,7 +209,7 @@ jobs:
       - name: Launch smoke check
         run: |
           if [ "$UNIVERSAL" = true ]; then dir=target/universal-apple-darwin/release; else dir=target/release; fi
-          tools/ci/smoke.sh "$dir/bundle/macos/Brigadier.app/Contents/MacOS/brigadier"
+          tools/ci/smoke.sh "$dir/bundle/macos/Brigadier.app/Contents/MacOS/brigadier-app"
 
       - name: Smoke report
         if: always()
@@ -330,12 +330,12 @@ jobs:
           - name: Windows
             os: windows-latest
             tauri-args: --bundles nsis
-            app: ../dev-drive/target/release/brigadier.exe
+            app: ../dev-drive/target/release/brigadier-app.exe
             bundle: ../dev-drive/target/release/bundle
           - name: Linux
             os: ubuntu-24.04
             tauri-args: --bundles deb
-            app: target/release/brigadier
+            app: target/release/brigadier-app
     runs-on: ${{ matrix.os }}
     env:
       # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.

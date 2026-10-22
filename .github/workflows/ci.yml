@@ -201,7 +201,7 @@ jobs:
       - name: Windows browser capture tests
         if: runner.os == 'Windows'
         run: |
-          cargo test --locked -p brigadier-desktop --bin brigadier browser_agent:: -- --test-threads=1 --nocapture
+          cargo test --locked -p brigadier-desktop --bin brigadier-app browser_agent:: -- --test-threads=1 --nocapture
 
   rust-tests:
     name: Rust tests (Linux)
@@ -352,7 +352,7 @@ jobs:
         # compiles once for the two.
         run: pnpm tauri build --bundles deb -- -p brigadier-desktop -p brigadier-daemon
       - name: Launch smoke check
-        run: tools/ci/smoke.sh target/release/brigadier
+        run: tools/ci/smoke.sh target/release/brigadier-app
       - name: Smoke report
         if: always()
         run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"

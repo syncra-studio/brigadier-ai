@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn exec_paths_are_quoted_for_desktop_entries() {
         assert_eq!(
-            exec_arg("/opt/Brigadier/brigadier"),
-            "\"/opt/Brigadier/brigadier\""
+            exec_arg("/opt/Brigadier/brigadier-app"),
+            "\"/opt/Brigadier/brigadier-app\""
         );
         assert_eq!(
             exec_arg("/home/a b/Brigadier.AppImage"),

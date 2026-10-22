@@ -20,7 +20,7 @@ const BURST_TIMEOUT_MS = 15_000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Launch smoke check (`brigadier --smoke`): measures idle RSS, fires a synthetic event burst
+ * Launch smoke check (`brigadier-app --smoke`): measures idle RSS, fires a synthetic event burst
  * through the daemon's normal write path, times every probe from ingest to paint (painted in
  * the Inspector's event list), and hands the measurements to the shell, which evaluates the
  * §4 budgets and quits.

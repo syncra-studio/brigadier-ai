@@ -1667,7 +1667,7 @@ mod tests {
         );
         assert!(dev_app.contains("`env.BRIGADIER_DATA_DIR` set to a fresh folder under /tmp"));
         assert!(dev_app.contains("`pnpm tauri:debug-app && \""));
-        assert!(dev_app.contains("Brigadier Dev.app/Contents/MacOS/brigadier\"`"));
+        assert!(dev_app.contains("Brigadier Dev.app/Contents/MacOS/brigadier-app\"`"));
 
         let mut ui = task("claude", Some("lead"));
         ui.areas = vec![

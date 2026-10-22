@@ -75,19 +75,19 @@
     }
 
     if (Test-Path -LiteralPath $target -PathType Leaf) { Fail "$target is a file, not a folder." }
-    if (Test-Path -LiteralPath (Join-Path $target 'brigadier.exe')) {
+    if ((Test-Path -LiteralPath (Join-Path $target 'brigadier-app.exe')) -or (Test-Path -LiteralPath (Join-Path $target 'brigadier.exe'))) {
       Write-Host 'Quit Brigadier and let its running sessions finish before replacing it.'
       try { $answer = Read-Host "Replace $target? [y/N]" } catch { Fail 'A terminal is needed to confirm the replacement.' }
       if ($answer -notmatch '^(y|yes)$') { Write-Host 'Nothing was installed.'; return }
     }
-    $running = Get-Process -Name brigadier, brigadierd -ErrorAction SilentlyContinue |
+    $running = Get-Process -Name brigadier-app, brigadier, brigadierd -ErrorAction SilentlyContinue |
       Where-Object { $_.Path -and $_.Path.StartsWith("$target\", [StringComparison]::OrdinalIgnoreCase) }
     if ($running) { Fail 'Brigadier is still running. Quit it first.' }
 
     # The per-user installer needs no administrator permission. /D= comes last, unquoted.
     $run = Start-Process -FilePath $setup -ArgumentList '/S', "/D=$target" -Wait -PassThru
     if ($run.ExitCode -ne 0) { Fail "The installer failed (exit code $($run.ExitCode))." }
-    if (-not (Test-Path -LiteralPath (Join-Path $target 'brigadier.exe'))) { Fail "The installer left no Brigadier in $target." }
+    if (-not (Test-Path -LiteralPath (Join-Path $target 'brigadier-app.exe'))) { Fail "The installer left no Brigadier in $target." }
     Write-Host "Installed Brigadier in $target. Open it from the Start menu to begin; it updates itself from now on."
   } finally {
     # scratch is a private folder made above, never a caller-supplied path.

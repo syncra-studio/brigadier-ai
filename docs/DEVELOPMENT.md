@@ -88,7 +88,7 @@ on Windows build the same debug app without a bundle, and smoke-check it:
 
 ```sh
 cd apps/desktop && pnpm tauri build --debug --no-bundle --config src-tauri/tauri.dev.conf.json
-cd ../.. && BRIGADIER_DATA_DIR="$(cygpath -w "$(mktemp -d)")" target/debug/brigadier.exe --smoke
+cd ../.. && BRIGADIER_DATA_DIR="$(cygpath -w "$(mktemp -d)")" target/debug/brigadier-app.exe --smoke
 ```
 
 A debug build misses the smoke check's timing budgets (startup, runtime stalls); CI judges a
@@ -157,11 +157,11 @@ The smoke check launches the app and judges it against the performance budgets (
 
 ```sh
 pnpm tauri:debug-app
-BRIGADIER_DATA_DIR=$(mktemp -d) "target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier" --smoke
+BRIGADIER_DATA_DIR=$(mktemp -d) "target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier-app" --smoke
 ```
 
 For a test build, use `pnpm tauri:debug-app` and `target/debug/bundle/macos/Brigadier Dev.app`
-(on Windows, `target/debug/brigadier.exe`: see [Windows](#windows)).
+(on Windows, `target/debug/brigadier-app.exe`: see [Windows](#windows)).
 Never smoke-test a bundle with the release identity (`ai.brigadier.app`) on a throwaway data
 directory if you also use that identity for real. The check needs the logged-in desktop
 session: inside a sandbox that blocks the window server, or over SSH, it says so and exits
@@ -378,7 +378,7 @@ CARGO_BUILD_JOBS=4 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN
 These are the nightly Windows job's release settings (no cross-crate LTO); on a 32 GB machine 4
 jobs keep the build under 80% of memory. Tauri downloads NSIS and the WebView2 bootstrapper into
 `%LOCALAPPDATA%\tauri` on the first bundle. The installer is
-`target/release/bundle/nsis/Brigadier_<version>_x64-setup.exe`. It holds `brigadier.exe` and
+`target/release/bundle/nsis/Brigadier_<version>_x64-setup.exe`. It holds `brigadier-app.exe` (the app) and
 `brigadierd.exe` (the daemon, which is also the agents' `BROWSER` on Windows) with the icons of
 `icons/icon.ico`, and embeds the WebView2 bootstrapper, which installs the runtime only where it
 is missing. The macOS-only computer-use helper isn't in it.

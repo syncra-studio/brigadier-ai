@@ -235,11 +235,11 @@ function Get-AppEntry([string]$folder) {
 }
 $APP_ENTRY = $null; $APP_ID = $null
 # Removed already (Settings › Apps): its uninstaller leaves the folder while the data is in it.
-if ($APP -and -not $APP_EXPLICIT -and -not (Test-Path -LiteralPath "$APP\brigadier.exe")) { $APP = $null }
+if ($APP -and -not $APP_EXPLICIT -and -not (Test-Path -LiteralPath "$APP\brigadier-app.exe")) { $APP = $null }
 if ($APP -and (Test-Path -LiteralPath $APP)) {
   if (-not (Test-NoLinks $APP)) { Stop-Uninstall 'app folder path contains a link or unsafe component' }
   $APP = [IO.Path]::GetFullPath($APP).TrimEnd('\')
-  if (-not (Test-Path -LiteralPath "$APP\brigadier.exe" -PathType Leaf)) { Stop-Uninstall 'app folder holds no brigadier.exe' }
+  if (-not (Test-Path -LiteralPath "$APP\brigadier-app.exe" -PathType Leaf)) { Stop-Uninstall 'app folder holds no brigadier-app.exe' }
   $APP_ENTRY = Get-AppEntry $APP
   if (-not $APP_ENTRY) { Stop-Uninstall 'app folder is not the installation of -AppId (no matching uninstall entry)' }
   $APP_ID = Get-FileId $APP
@@ -294,8 +294,8 @@ function Wait-Gone([int]$processId) {
 # in its installed folder, never by its process name alone.
 $APP_RUNNING = $false
 if ($APP_ENTRY) {
-  $apps = Get-CimInstance Win32_Process -Filter "Name = 'brigadier.exe'" |
-    Where-Object { $_.ExecutablePath -and (Same $_.ExecutablePath "$APP\brigadier.exe") }
+  $apps = Get-CimInstance Win32_Process -Filter "Name = 'brigadier-app.exe'" |
+    Where-Object { $_.ExecutablePath -and (Same $_.ExecutablePath "$APP\brigadier-app.exe") }
   foreach ($process in $apps) {
     $processId = [int]$process.ProcessId
     if ($DryRun) { Say "DRY RUN: quit app PID $processId ($APP)"; continue }
@@ -563,7 +563,7 @@ if ($APP_ENTRY -and (Test-Path -LiteralPath $APP)) {
     for ($i = 0; $i -lt 600 -and ((Test-Path -LiteralPath "$APP\uninstall.exe") -or (Test-Path -LiteralPath $APP_ENTRY)); $i++) {
       Start-Sleep -Milliseconds 100
     }
-    if ((Test-Path -LiteralPath "$APP\brigadier.exe") -or (Test-Path -LiteralPath $APP_ENTRY)) { Uncertain "the app's uninstaller left $APP in place" }
+    if ((Test-Path -LiteralPath "$APP\brigadier-app.exe") -or (Test-Path -LiteralPath $APP_ENTRY)) { Uncertain "the app's uninstaller left $APP in place" }
     else { Removed "app $APP (its uninstaller)" }
   }
 }
