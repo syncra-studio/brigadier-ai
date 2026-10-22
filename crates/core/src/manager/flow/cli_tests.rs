@@ -13,8 +13,19 @@ use brigadier_cli::protocol::{
 use brigadier_providers::ProviderKind;
 use serde_json::{Value, json};
 
-use super::{Flow, Options, Reply, Script, Turn};
+use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
 use crate::tools::Role;
+
+/// A flow whose Claude CLIs keep session files, which `read` of a session reads.
+fn with_session_files() -> Options {
+    Options {
+        behavior: Arc::new(FakeBehavior {
+            session_file: true,
+            ..FakeBehavior::default()
+        }),
+        ..Options::default()
+    }
+}
 
 /// What the sessions' `brigadier` calls answered, by name.
 type Answers = Arc<Mutex<HashMap<String, Value>>>;
@@ -205,8 +216,9 @@ fn looking(answers: Answers) -> Script {
 #[tokio::test]
 async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     let answers = Answers::default();
-    let flow = Flow::start("cli-reads", Options::default(), looking(answers.clone())).await;
-    let docs = flow.add_session("Docs", None, ProviderKind::Codex).await;
+    let flow = Flow::start("cli-reads", with_session_files(), looking(answers.clone())).await;
+    // Claude, whose fake keeps a session file for `read`.
+    let docs = flow.add_session("Docs", None, ProviderKind::Claude).await;
     let elsewhere = flow
         .add_session("Elsewhere", Some("other"), ProviderKind::Claude)
         .await;
@@ -331,7 +343,7 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     let other = &answers["show other"];
     assert_eq!(other["kind"], "session");
     assert_eq!(other["id"], short(&docs.0));
-    assert_eq!(other["agent"], "codex");
+    assert_eq!(other["agent"], "claude");
     assert_eq!(other["checkout"], "worktree");
     assert_eq!(other["base"], "main");
     assert_eq!(other["workers"][0]["id"], short(&theirs.id.0));
@@ -415,7 +427,7 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
             Reply::text("Noted.")
         })
     });
-    let flow = Flow::start("cli-read-back", Options::default(), script).await;
+    let flow = Flow::start("cli-read-back", with_session_files(), script).await;
     flow.say("Run them.").await;
     flow.settled().await;
     let caller = crate::manager::cli::CliCaller {
@@ -465,7 +477,8 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
     );
     assert_eq!(last["hasMore"], true);
 
-    // `--screen`: the request, the newest 200 of its commands, its answer; older ones left out.
+    // `--screen`: the request, then the newest 200 items after it (its commands and answer);
+    // older ones left out.
     let screen = read(me.clone(), None, true).await;
     let shown = texts(&screen);
     assert!(
@@ -477,9 +490,9 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
         .iter()
         .filter(|text| text.starts_with("command "))
         .collect();
-    assert_eq!(commands.len(), 200);
-    assert_eq!(commands[0], &format!("command echo {}", RUNS - 200));
-    assert_eq!(commands[199], &format!("command echo {}", RUNS - 1));
+    assert_eq!(commands.len(), 199);
+    assert_eq!(commands[0], &format!("command echo {}", RUNS - 199));
+    assert_eq!(commands[198], &format!("command echo {}", RUNS - 1));
     assert_eq!(screen["hasMore"], true);
 
     // A worker's `--last N` past one page of its events reads back as far as asked.

@@ -16,12 +16,11 @@ use brigadier_cli::protocol::{
     ReadOutput, ReadView, SessionRow, SessionState, SessionsOutput, ShowOutput, WorkerRow,
     WorkerState, WorkersOutput,
 };
+use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, ProviderKind};
 
 use super::SessionManager;
-use crate::model::{
-    Conversation, ConversationId, Environment, Lifecycle, MessageRole, Setup, TaskId,
-};
+use crate::model::{Conversation, ConversationId, Environment, Lifecycle, Setup, TaskId};
 use crate::tools::Role;
 use crate::work::{ConversationActivity, DiffStat, RunState, Task, TaskState};
 
@@ -263,23 +262,6 @@ fn items(entries: &[crate::model::RawEntry]) -> Vec<Item> {
         .filter(|(at, entry)| item_id(&entry.event).is_none_or(|id| latest.get(&id) == Some(at)))
         .filter_map(|(_, entry)| event_item(&entry.event, entry.at_ms))
         .collect()
-}
-
-fn message_item(message: &crate::model::Message) -> Item {
-    Item {
-        kind: ItemKind::Message,
-        role: Some(match message.role {
-            MessageRole::User => cli::Role::User,
-            MessageRole::Assistant => cli::Role::Assistant,
-            MessageRole::System => cli::Role::System,
-            MessageRole::Peer => cli::Role::Peer,
-        }),
-        text: message.text.clone(),
-        output: None,
-        status: None,
-        exit: None,
-        at_ms: message.created_at_ms,
-    }
 }
 
 pub(super) fn failed(err: impl std::fmt::Display) -> CliReply {
@@ -641,8 +623,7 @@ impl SessionManager {
             Target::Session(conversation) => {
                 let activity = self.cli_activity().await;
                 let state = session_state(&conversation, activity.get(&conversation.id));
-                let (items, has_more) =
-                    self.cli_session_items(&conversation.id, view, last).await?;
+                let (items, has_more) = self.cli_session_items(&conversation.id, view, last)?;
                 ReadOutput {
                     kind: Kind::Session,
                     id: short(&conversation.id.0),
@@ -667,120 +648,57 @@ impl SessionManager {
         Ok(CliReply::ok(&output))
     }
 
-    /// A session's items: its last answer, its last `last` messages, commands and tools, or
-    /// its latest request with the thread's own commands and tools in it.
-    async fn cli_session_items(
+    /// A session's items as its CLI keeps them: its thread from the CLI's session file, which
+    /// the live stream extends while it runs (STRIP-DOWN-PLAN G11). Its last answer, its last
+    /// `last` items, or its latest turn: the user's message and the newest items after it.
+    fn cli_session_items(
         &self,
         id: &ConversationId,
         view: ReadView,
         last: Option<u32>,
     ) -> crate::Result<(Vec<Item>, bool)> {
-        let limit = last.unwrap_or(LOOK_BACK);
-        let page = self.core.list_messages(id.clone(), None, limit).await?;
-        let messages = page.messages;
+        let thread = self.thread_view(id)?;
+        // The session's own items: a subagent's are inside its call.
+        let own: Vec<&FileEntry> = thread
+            .entries
+            .iter()
+            .filter(|entry| entry.parent.is_none())
+            .collect();
+        let item = |entry: &&FileEntry| event_item(&entry.event, entry.at_ms.unwrap_or_default());
         Ok(match view {
             ReadView::Items => {
-                let n = limit as usize;
-                let mut items: Vec<Item> = messages.iter().map(message_item).collect();
-                // The commands and tools of the requests these messages belong to: older ones
-                // are older than every message here, so they can't be among the last `n`.
-                let mut requests: Vec<&str> = Vec::new();
-                for request in messages.iter().filter_map(|m| m.request_id.as_deref()) {
-                    if !requests.contains(&request) {
-                        requests.push(request);
-                    }
-                }
-                let mut older_steps = false;
-                for request in requests {
-                    let (steps, older) = self.cli_request_steps(id, request, n).await;
-                    older_steps |= older;
-                    items.extend(steps);
-                }
-                items.sort_by_key(in_order);
-                let skip = items.len().saturating_sub(n);
-                (
-                    items[skip..].to_vec(),
-                    skip > 0 || older_steps || page.has_more,
-                )
+                let items: Vec<Item> = own.iter().filter_map(item).collect();
+                let skip = items
+                    .len()
+                    .saturating_sub(last.unwrap_or(LOOK_BACK) as usize);
+                (items[skip..].to_vec(), skip > 0)
             }
-            ReadView::Last => match messages
-                .iter()
-                .rposition(|message| message.role == MessageRole::Assistant)
-            {
-                Some(at) => (vec![message_item(&messages[at])], at > 0 || page.has_more),
-                None => (Vec::new(), page.has_more),
+            ReadView::Last => match own.iter().rposition(|entry| is_answer(&entry.event)) {
+                Some(at) => (item(&own[at]).into_iter().collect(), at > 0),
+                None => (Vec::new(), false),
             },
             ReadView::Screen => {
-                let from = messages
+                let from = own
                     .iter()
-                    .rposition(|message| message.role == MessageRole::User)
+                    .rposition(|entry| {
+                        matches!(
+                            entry.event,
+                            ProviderEvent::Message {
+                                role: brigadier_providers::model::Role::User,
+                                ..
+                            }
+                        )
+                    })
                     .unwrap_or(0);
-                let mut items: Vec<Item> = messages[from..].iter().map(message_item).collect();
-                let mut older_steps = false;
-                if let Some(request) = messages
-                    .get(from)
-                    .and_then(|message| message.request_id.as_deref())
-                {
-                    let (steps, older) = self
-                        .cli_request_steps(id, request, LOOK_BACK as usize)
-                        .await;
-                    older_steps = older;
-                    items.extend(steps);
-                    items.sort_by_key(in_order);
+                let mut items: Vec<Item> = own[from..].iter().filter_map(item).collect();
+                // The message and the newest of what came after it.
+                let cut = items.len().saturating_sub(LOOK_BACK as usize + 1);
+                if cut > 0 {
+                    items.drain(1..=cut);
                 }
-                (items, from > 0 || older_steps || page.has_more)
+                (items, from > 0 || cut > 0)
             }
         })
-    }
-
-    /// The thread's own commands and tools of `request`, the newest `keep` of them, and
-    /// whether older ones were left out. A thread with none reads as none.
-    async fn cli_request_steps(
-        &self,
-        id: &ConversationId,
-        request: &str,
-        keep: usize,
-    ) -> (Vec<Item>, bool) {
-        let Ok(board) = self.core.board(id).await else {
-            return (Vec::new(), false);
-        };
-        let positions: Vec<i64> = board
-            .orchestrator_steps
-            .iter()
-            .filter(|step| {
-                step.request_id.as_deref() == Some(request)
-                    && matches!(
-                        &step.kind,
-                        crate::work::OrchestratorStepKind::Tool {
-                            log_seq: Some(_),
-                            ..
-                        }
-                    )
-            })
-            .map(|step| step.position)
-            .collect();
-        let older = positions.len() > keep;
-        if keep == 0 || positions.is_empty() {
-            return (Vec::new(), older);
-        }
-        // From just after the last one left out, page by page to the newest.
-        let mut after = older.then(|| positions[positions.len() - keep - 1]);
-        let mut entries = Vec::new();
-        loop {
-            let Ok(page) = self.thread_items(id, request, None, after, LOOK_BACK).await else {
-                break;
-            };
-            entries.extend(page.entries);
-            match page.next {
-                Some(next) => after = Some(next),
-                None => break,
-            }
-        }
-        let steps = items(&entries)
-            .into_iter()
-            .filter(|item| item.kind != ItemKind::Message)
-            .collect();
-        (steps, older)
     }
 
     /// A worker's transcript: its last message, its last `last` items, or its latest turn. Its
@@ -847,18 +765,7 @@ impl SessionManager {
     }
 }
 
-/// Where an item goes among a session's: by time, and within one millisecond a request first,
-/// then the commands and tools it ran, then the answer.
-fn in_order(item: &Item) -> (i64, u8) {
-    let rank = match (item.kind, item.role) {
-        (ItemKind::Message, Some(cli::Role::User)) => 0,
-        (ItemKind::Message, _) => 2,
-        _ => 1,
-    };
-    (item.at_ms, rank)
-}
-
-/// An assistant message: what `read` shows as a worker's last answer.
+/// An assistant message: what `read` shows as a session's or worker's last answer.
 fn is_answer(event: &ProviderEvent) -> bool {
     matches!(
         event,

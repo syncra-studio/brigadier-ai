@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use brigadier_providers::model::{
-    Artifact, ModelCatalog, ModelInfo, ProviderStatus, QuotaSnapshot, QuotaSource, Role as Speaker,
-    SessionSpec, TurnInput, TurnStatus,
+    Artifact, ItemStatus, ModelCatalog, ModelInfo, ProviderStatus, QuotaSnapshot, QuotaSource,
+    Role as Speaker, SessionSpec, TurnInput, TurnStatus,
 };
 use brigadier_providers::{
     ApprovalDecision, BoxFuture, Ledger, Provider, ProviderEvent, ProviderKind, ProviderSession,
@@ -60,6 +60,8 @@ pub(crate) struct Turn {
     pub native_id: String,
     /// Its CLI session's transcript ([`transcribe`]).
     transcript: PathBuf,
+    /// Its session file in Claude Code's shape ([`FakeBehavior::session_file`]).
+    session_file: Option<PathBuf>,
     grant: String,
     /// What its CLI was started with on top of the user's environment, as its commands see it.
     env: Vec<(String, String)>,
@@ -351,6 +353,32 @@ impl Turn {
     }
 
     pub async fn emit(&self, event: ProviderEvent) {
+        // Claude keeps a finished command in its session file: its Bash call, then the result.
+        if let (
+            Some(file),
+            ProviderEvent::Command {
+                item_id,
+                command,
+                status: ItemStatus::Completed,
+                output,
+                ..
+            },
+        ) = (&self.session_file, &event)
+        {
+            session_line(
+                file,
+                serde_json::json!({"type": "assistant", "message": {
+                    "id": format!("msg_{}", uuid::Uuid::new_v4().simple()), "role": "assistant",
+                    "content": [{"type": "tool_use", "id": item_id, "name": "Bash",
+                        "input": {"command": command}}]}}),
+            );
+            session_line(
+                file,
+                serde_json::json!({"type": "user", "message": {"role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": item_id,
+                        "content": output.clone().unwrap_or_default()}]}}),
+            );
+        }
         let _ = self.events.send(event).await;
     }
 
@@ -1054,6 +1082,7 @@ impl ProviderSession for FakeSession {
                 account: self.account.clone(),
                 native_id: self.native_id.clone(),
                 transcript: self.transcript.clone(),
+                session_file: self.session_file.clone(),
                 grant: self.grant.clone(),
                 env: self.env.clone(),
                 host,
