@@ -1050,8 +1050,8 @@ worse than today's rebirth.
   reseed code. With `rebirth.rs` gone, its last-consumer leftovers go in the same step (§4 table):
   `decisions.rs`, `constraints.rs`, `keep_note_decisions`, the `orch:<id>` log, `export.rs` and the Brain's
   event-store sync.
-  - A usage limit stops the turn and shows "Resumes at"; it never restarts quietly. **Pending Q11 (§9):** if the
-    user says yes, the turn continues visibly at the reset (MA5) instead of staying stopped.
+  - A usage limit shows the "Resumes at" card, then the session continues visibly at the reset — a divider +
+    the same turn resumed (MA5) — like the plain CLI (Q11, §9).
   - Sessions open at upgrade are archived.
 - **Done when:** `git grep -n 'rebirth\|briefing\|BRIGADIER_REBIRTH_TOKENS\|OrchestratorLogged'` finds only
   docs, and the S22 tests pass with no flag.
@@ -1426,20 +1426,20 @@ sessions with token economy. Each has a measurable bar against the best rival to
 
 ### 9.6 Open decisions and what waits on the user
 
-**OPEN (user):**
-- **Q9. Notify an idle parent when a worker finishes?** With the parent's turn ended and no `wait` running,
-  one batched message: "Worker *title*: finished · *excerpt*", a result of what the thread started (G1), never
-  twice. Recommended: **yes**; without it "nothing stuck" depends on the parent remembering to wait. (O1)
-- **Q10. A warm note before the cache expires?** A second push in one generation. Recommended: **no**, until
-  the battery shows notes pay off on cold seams. (L3)
-- **Q11. Resume visibly at the reset when every account is out?** The plain CLI waits and continues by itself at
-  the reset; a stop there does less than the plain CLI. Recommended: **yes** (MA5). It conflicts with S23's "a
-  usage limit stops the turn … never restarts quietly", which is marked pending Q11.
-- **Q12. The "carry on" note after an account switch?** It is engine-written text inside the user's own turn,
-  like the CLI's own auto-continue. Recommended: **yes**. (MA2)
-- **Q13. Ship `/brigade` into Codex through the shared plugin folder?** Then it also shows in plain terminal
-  sessions. Recommended: **yes**: the skill says it needs the app, so it acts only when `brigadier` is on
-  `PATH`. (X2; §8, item 7)
+**Decided (10-22):**
+- **Q9. Notify an idle parent when a worker finishes?** Yes. With the parent's turn ended and no `wait`
+  running, one batched message: "Worker *title*: finished · *excerpt*", a result of what the thread started
+  (G1), never twice. (O1)
+- **Q10. A warm note before the cache expires?** No. Revisit only if the nightly battery shows it pays off on
+  cold seams. (L3)
+- **Q11. Resume visibly at the reset when every account is out?** Yes (MA5). The "Resumes at" card, then the
+  session continues visibly at the reset — a divider + the same turn resumed — like the plain CLI. This
+  replaces "a usage limit stops the turn … never restarts quietly" everywhere.
+- **Q12. The "carry on" note after an account switch?** Yes: the one visible "carry on" line after an account
+  switch stays. It is engine-written text inside the user's own turn, like the CLI's own auto-continue. (MA2)
+- **Q13. Ship `/brigade` into Codex through the shared plugin folder?** Yes: it ships into Codex through the
+  shared plugin folder; it may appear in plain-terminal Codex sessions and says it needs the app. (X2; §8,
+  item 7)
 
 **Waiting on you:**
 - A terms check of multi-account auto-switch before marketing it.
