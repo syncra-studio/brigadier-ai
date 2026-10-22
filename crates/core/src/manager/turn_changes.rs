@@ -487,7 +487,22 @@ impl SessionManager {
                     .map_err(git_error)?;
                 let base = repo.file_blobs(&base_tree).map_err(git_error)?;
                 let end = repo.file_blobs(&end_tree).map_err(git_error)?;
-                if !keep && repo.checkout_blob(&path).map_err(git_error)?.as_ref() != end.get(&path)
+                // A renamed file's old path, which Undo of the whole file brings back.
+                let source = match (&chosen, base.contains_key(&path)) {
+                    (None, false) if !keep => repo
+                        .rename_source(&base_tree, &end_tree, &path)
+                        .map_err(git_error)?,
+                    _ => None,
+                };
+                if !keep
+                    && std::iter::once(&path)
+                        .chain(&source)
+                        .map(|each| {
+                            Ok(repo.checkout_blob(each).map_err(git_error)?.as_ref()
+                                != end.get(each))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                        .contains(&true)
                 {
                     return Ok((false, false, false));
                 }
@@ -567,11 +582,24 @@ impl SessionManager {
                     }
                 };
                 if !keep {
-                    repo.restore_file_blobs(&BTreeMap::from([(path.clone(), target.clone())]))
-                        .map_err(git_error)?;
+                    let mut restore = BTreeMap::from([(path.clone(), target.clone())]);
+                    if let Some(source) = &source {
+                        restore.insert(source.clone(), base.get(source).cloned());
+                    }
+                    repo.restore_file_blobs(&restore).map_err(git_error)?;
                 }
                 repo.review_turn_file(&session, turn.number, keep, &path, target.clone())
                     .map_err(git_error)?;
+                if let Some(source) = &source {
+                    repo.review_turn_file(
+                        &session,
+                        turn.number,
+                        keep,
+                        source,
+                        base.get(source).cloned(),
+                    )
+                    .map_err(git_error)?;
+                }
                 let complete = target.as_ref()
                     == if keep {
                         end.get(&path)

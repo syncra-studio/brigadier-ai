@@ -1,6 +1,7 @@
 //! Turn trees retained by session refs, independent of the user's index.
 
 use std::collections::BTreeSet;
+use std::fs;
 
 use crate::{DiffStat, Error, Oid, Repo, Result, command::TempIndex, parse};
 
@@ -11,6 +12,8 @@ pub struct TurnDiff {
     pub stat: DiffStat,
     /// Binary-capable patch for this turn's own files.
     pub patch: String,
+    /// This turn's own paths, a rename's old path too.
+    pub paths: Vec<String>,
     /// Changes introduced by each merged branch (branch name, else its commit id).
     pub merged: Vec<MergedDiff>,
 }
@@ -127,6 +130,8 @@ impl Repo {
             self.snapshot_ref(&format!("{}-head", Self::turn_ref(session, turn, false)?))?;
         let last = self.snapshot_ref(&format!("{}-head", Self::turn_ref(session, turn, true)?))?;
         let mut excluded = BTreeSet::new();
+        // Each merged path's last merge: what the parent changed in it after that is its own.
+        let mut merged_at = std::collections::BTreeMap::new();
         let mut merged = Vec::new();
         if let (Some(first), Some(last)) = (first, last) {
             let range = format!("{}..{}", first.0, last.0);
@@ -147,6 +152,9 @@ impl Repo {
                 let parent = Oid(ids[1].into());
                 let merge_paths = self.diff_scope(&parent, &merge)?.1;
                 excluded.extend(merge_paths.iter().cloned());
+                for path in &merge_paths {
+                    merged_at.insert(path.clone(), merge.clone());
+                }
                 let mut assigned = BTreeSet::new();
                 for source in &ids[2..] {
                     let tip = Oid((*source).into());
@@ -193,11 +201,37 @@ impl Repo {
             .into_iter()
             .filter(|path| !excluded.contains(path))
             .collect();
-        let stat = filter_stat(stat, &paths);
-        let patch = self.diff_paths(&start, &end, &paths)?;
+        let mut stat = filter_stat(stat, &paths);
+        let mut patch = self.diff_paths(&start, &end, &paths)?;
+        let mut paths = paths;
+        let mut merges: Vec<&Oid> = Vec::new();
+        for merge in merged_at.values() {
+            if !merges.contains(&merge) {
+                merges.push(merge);
+            }
+        }
+        for merge in merges {
+            let changed = self.diff_scope(merge, &end)?.1;
+            let after: Vec<String> = merged_at
+                .iter()
+                .filter(|(path, at)| *at == merge && changed.contains(*path))
+                .map(|(path, _)| path.clone())
+                .collect();
+            if after.is_empty() {
+                continue;
+            }
+            let more = filter_stat(self.diff_stat(merge, &end)?, &after);
+            stat.files.extend(more.files);
+            stat.files.sort_by(|a, b| a.path.cmp(&b.path));
+            stat.insertions += more.insertions;
+            stat.deletions += more.deletions;
+            patch.push_str(&self.diff_paths(merge, &end, &after)?);
+            paths.extend(after);
+        }
         Ok(TurnDiff {
             stat,
             patch,
+            paths,
             merged,
         })
     }
@@ -229,6 +263,17 @@ impl Repo {
         self.diff_stat(&parent, &self.snapshot_tree()?)
     }
 
+    /// Where `path` came from when git sees it renamed between two trees.
+    pub fn rename_source(&self, from: &Oid, to: &Oid, path: &str) -> Result<Option<String>> {
+        Ok(self
+            .tree_changes(from, to, &BTreeSet::new())?
+            .into_iter()
+            .find_map(|change| match change.kind {
+                crate::ChangeKind::Renamed { from } if change.path == path => Some(from),
+                _ => None,
+            }))
+    }
+
     /// Files changed after the turn, to name before asking to restore the start tree.
     pub fn changes_after_turn(&self, session: &str, turn: u64) -> Result<Vec<String>> {
         Ok(self
@@ -256,6 +301,18 @@ impl Repo {
         }
         let target = self.turn_tree(session, turn, false)?;
         let paths = self.diff_scope(&current, &target)?.1;
+        // A file the start tree brings back may be on disk again, ignored, so in no snapshot:
+        // the checkout below would write over it.
+        let (now, then) = (self.file_blobs(&current)?, self.file_blobs(&target)?);
+        if let Some(path) = paths.iter().find(|path| {
+            !now.contains_key(*path)
+                && then.contains_key(*path)
+                && fs::symlink_metadata(self.root().join(path)).is_ok()
+        }) {
+            return Err(Error::Invalid(format!(
+                "{path} is in the way (an ignored file); move it first"
+            )));
+        }
         let index = TempIndex::new()?;
         self.index_cmd(&index, &["read-tree", &current.0])?;
         self.index_cmd(&index, &["update-index", "--refresh"])?;
@@ -410,6 +467,40 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_file_names_where_it_came_from() {
+        let (_dir, repo) = fixture("rename-source");
+        let start = repo.snapshot_turn("s1", 1, false).unwrap();
+        fs::rename(repo.root.join("rename"), repo.root.join("renamed")).unwrap();
+        let end = repo.snapshot_turn("s1", 1, true).unwrap();
+        assert_eq!(
+            repo.rename_source(&start, &end, "renamed")
+                .unwrap()
+                .as_deref(),
+            Some("rename")
+        );
+        assert_eq!(repo.rename_source(&start, &end, "binary").unwrap(), None);
+    }
+
+    #[test]
+    fn revert_leaves_an_ignored_file_in_the_way_alone() {
+        let (_dir, repo) = fixture("revert-ignored");
+        repo.snapshot_turn("s1", 1, false).unwrap();
+        // The turn deletes a tracked file and ignores its path; the user makes it again.
+        fs::remove_file(repo.root.join("delete")).unwrap();
+        fs::write(repo.root.join(".gitignore"), "ignored\ndelete\n").unwrap();
+        repo.commit_changes("Turn", true).unwrap();
+        repo.snapshot_turn("s1", 1, true).unwrap();
+        fs::write(repo.root.join("delete"), "the user's own\n").unwrap();
+        let expected = repo.snapshot_tree().unwrap();
+        let err = repo.revert_turn("s1", 1, &expected).unwrap_err();
+        assert!(err.to_string().contains("delete"), "{err}");
+        assert_eq!(
+            fs::read_to_string(repo.root.join("delete")).unwrap(),
+            "the user's own\n"
+        );
+    }
+
+    #[test]
     fn retained_refs_survive_worktree_removal_and_delete_is_session_scoped() {
         let (_dir, repo) = fixture("cleanup");
         repo.snapshot_turn("s1", 1, false).unwrap();
@@ -426,6 +517,30 @@ mod tests {
         );
         assert!(repo.turn_tree("s2", 1, false).is_ok());
         assert!(session_refs("../s2").is_err());
+    }
+
+    #[test]
+    fn parent_edits_after_a_merge_to_a_merged_file_stay_on_its_card() {
+        let (_dir, repo) = fixture("merge-then-edit");
+        fs::write(repo.root.join("shared"), "base\n").unwrap();
+        repo.commit_changes("Shared", true).unwrap();
+        repo.cmd(&["checkout", "-b", "worker"], false).unwrap();
+        fs::write(repo.root.join("shared"), "base\nworker\n").unwrap();
+        repo.commit_changes("Worker", true).unwrap();
+        repo.cmd(&["checkout", "main"], false).unwrap();
+        repo.snapshot_turn("s1", 1, false).unwrap();
+        repo.cmd(&["merge", "--no-ff", "worker", "-m", "Merge worker"], false)
+            .unwrap();
+        fs::write(repo.root.join("shared"), "base\nworker\nparent\n").unwrap();
+        repo.snapshot_turn("s1", 1, true).unwrap();
+        let diff = repo.turn_diff("s1", 1).unwrap();
+        let paths: Vec<_> = diff.stat.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["shared"]);
+        assert_eq!((diff.stat.insertions, diff.stat.deletions), (1, 0));
+        assert!(diff.patch.contains("+parent"), "{}", diff.patch);
+        assert!(!diff.patch.contains("+worker"), "{}", diff.patch);
+        assert_eq!(diff.merged.len(), 1);
+        assert!(diff.merged[0].patch.contains("+worker"));
     }
 
     #[test]

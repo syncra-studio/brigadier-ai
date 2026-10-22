@@ -206,8 +206,26 @@ impl SessionManager {
                     .retain(|file| own.stat.files.iter().any(|own| own.path == file.path));
                 review.insertions = own.stat.insertions;
                 review.deletions = own.stat.deletions;
-                review.patch = own.patch;
-                review.full_files = false;
+                // What merges brought in isn't the turn's own: the patch keeps its own paths,
+                // with the review's options.
+                if !own.merged.is_empty() {
+                    review.patch = if own.paths.is_empty() {
+                        String::new()
+                    } else {
+                        repo.review_patch_of(
+                            &from,
+                            &to,
+                            if review.full_files {
+                                WHOLE_FILES
+                            } else {
+                                CONTEXT
+                            },
+                            ignore_whitespace,
+                            &own.paths,
+                        )
+                        .map_err(git_error)?
+                    };
+                }
             }
             Ok(review)
         })

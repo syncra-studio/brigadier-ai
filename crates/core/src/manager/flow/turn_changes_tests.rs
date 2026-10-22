@@ -197,6 +197,22 @@ async fn a_merge_groups_its_files_under_the_branch_and_keeps_only_parent_edits()
         .unwrap();
     assert_eq!(review.files.len(), 1);
     assert!(!review.patch.contains("+worker"));
+    // The review's own options still hold for the turn's own files.
+    let whole = flow
+        .manager
+        .review_diff(
+            &flow.conversation,
+            ReviewScope::LastTurn {
+                request_id: Some(request.id.clone()),
+            },
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(whole.full_files);
+    assert!(whole.patch.contains("+parent"), "{}", whole.patch);
+    assert!(!whole.patch.contains("+worker"), "{}", whole.patch);
     flow.stop().await;
 }
 
@@ -347,5 +363,55 @@ async fn steering_keeps_one_snapshot_pair_for_the_whole_cli_turn() {
     );
     assert!(refs.contains("turn-1-end"));
     assert!(!refs.contains("turn-2-start"));
+    flow.stop().await;
+}
+
+/// Undo of a file the turn renamed puts it back where it was, not just away (Stage 2 review).
+#[tokio::test]
+async fn undoing_a_renamed_file_brings_back_its_old_path() {
+    let text = "a line that stays\nand another\n";
+    let flow = Flow::start(
+        "20261022-0805-take-over-5-sessions-w61-rename",
+        Options {
+            files: vec![("original.txt", text)],
+            ..Default::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                std::fs::rename(turn.cwd.join("original.txt"), turn.cwd.join("renamed.txt"))
+                    .unwrap();
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    flow.say("Rename it.").await;
+    flow.settled().await;
+    let id = flow.conversation.clone();
+    let pending = flow
+        .manager
+        .pending_changes(id.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        pending
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["renamed.txt"]
+    );
+    let outcome = flow
+        .manager
+        .undo_pending_changes(id.clone(), Some("renamed.txt".into()), None)
+        .await
+        .unwrap();
+    assert!(outcome.held.is_empty(), "{:?}", outcome.held);
+    let (checkout, _) = flow.manager.changes_checkout(&id).unwrap();
+    assert!(!checkout.join("renamed.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("original.txt")).unwrap(),
+        text
+    );
     flow.stop().await;
 }

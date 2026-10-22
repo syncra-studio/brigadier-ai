@@ -1720,6 +1720,18 @@ impl Repo {
         context: u32,
         ignore_whitespace: bool,
     ) -> Result<String> {
+        self.review_patch_of(from, to, context, ignore_whitespace, &[])
+    }
+
+    /// [`Self::review_patch`] of `paths` only; every path when none are given.
+    pub fn review_patch_of(
+        &self,
+        from: &Oid,
+        to: &Oid,
+        context: u32,
+        ignore_whitespace: bool,
+        paths: &[String],
+    ) -> Result<String> {
         valid_oid(from)?;
         valid_oid(to)?;
         let context = format!("--unified={context}");
@@ -1735,6 +1747,10 @@ impl Repo {
             args.push("--ignore-all-space");
         }
         args.extend([from.0.as_str(), to.0.as_str(), "--"]);
+        if !paths.is_empty() {
+            args.insert(0, "--literal-pathspecs");
+            args.extend(paths.iter().map(String::as_str));
+        }
         Ok(String::from_utf8_lossy(&self.cmd(&args, true)?).into_owned())
     }
 
