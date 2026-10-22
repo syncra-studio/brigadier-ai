@@ -2215,6 +2215,8 @@ mod claim_evidence_tests;
 #[cfg(unix)]
 mod clean_up_tests;
 #[cfg(unix)]
+mod cli_tests;
+#[cfg(unix)]
 mod commit_on_pass_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[cfg(unix)]

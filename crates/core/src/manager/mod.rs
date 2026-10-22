@@ -30,6 +30,7 @@ mod cards;
 mod checks;
 mod ci;
 mod clean_up;
+mod cli;
 mod close_tab;
 mod closing;
 mod cold;
@@ -156,6 +157,7 @@ use crate::{Core, Error, Result};
 
 pub(crate) use background_runs::background_run_number;
 pub use brains::{BrainCounters, IndexRunStats};
+pub use cli::CliCaller;
 pub use closing::Turn;
 pub use conversation::SendOutcome;
 pub(crate) use conversation::interrupted_by_quit;
