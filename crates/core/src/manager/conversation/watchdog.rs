@@ -41,10 +41,6 @@ fn waiting_on_board(board: &crate::board::Board, request: &Option<String>) -> bo
         .values()
         .any(|c| c.state == CardState::Pending)
         || board.questions.values().any(|c| c.is_open())
-        || board
-            .plans
-            .values()
-            .any(|p| matches!(p.state, crate::work::PlanState::Proposed))
         || board.tasks.values().any(|t| {
             t.request_id == *request
                 && (t.quota_wait.is_some()

@@ -1488,7 +1488,6 @@ fn read_beside(request: &Request) -> bool {
             | Request::PrepareTurnRevert { .. }
             | Request::RevertTurn { .. }
             | Request::GetPendingChanges { .. }
-            | Request::GetRunDiff { .. }
             | Request::GetReviewDiff { .. }
             | Request::GetWorkspaceTree { .. }
             | Request::ListWorkspaceFolder { .. }
@@ -2248,22 +2247,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 "an answer or a merge click comes through a client's connection".into(),
             )));
         }
-        Request::DecidePlan {
-            conversation_id,
-            card_id,
-            approve,
-            message,
-        } => {
-            heap(|| sessions.decide_plan(conversation_id, card_id, approve, message)).await?;
-            Response::DecidePlan
-        }
-        Request::PutOffPlan {
-            conversation_id,
-            card_id,
-        } => {
-            heap(|| sessions.put_off_plan(conversation_id, card_id)).await?;
-            Response::PutOffPlan
-        }
         Request::WriteUpFeedback { text } => Response::WriteUpFeedback {
             write_up: heap(|| sessions.write_up_feedback(&text)).await?,
         },
@@ -2305,108 +2288,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::CloseWorkspace { conversation_id } => Response::CloseWorkspace {
             text: heap(|| sessions.close_workspace(&conversation_id)).await?,
         },
-        Request::ProposeOvernight {
-            conversation_id,
-            command_id,
-            words,
-            plan,
-        } => Response::ProposeOvernight {
-            run: Box::new(
-                heap(|| sessions.propose_overnight(conversation_id, command_id, words, plan))
-                    .await?,
-            ),
-        },
-        Request::StartOvernight {
-            conversation_id,
-            run_id,
-            command_id,
-            revision,
-        } => Response::StartOvernight {
-            run: Box::new(
-                heap(|| sessions.start_overnight(conversation_id, run_id, command_id, revision))
-                    .await?,
-            ),
-        },
-        Request::StopOvernight {
-            conversation_id,
-            run_id,
-            command_id,
-        } => Response::StopOvernight {
-            run: Box::new(
-                heap(|| sessions.stop_overnight(conversation_id, run_id, command_id)).await?,
-            ),
-        },
-        Request::SteerOvernight {
-            conversation_id,
-            run_id,
-            command_id,
-            words,
-        } => Response::SteerOvernight {
-            run: Box::new(
-                heap(|| sessions.steer_overnight(conversation_id, run_id, command_id, words))
-                    .await?,
-            ),
-        },
-        Request::ContinueOvernight {
-            conversation_id,
-            run_id,
-            command_id,
-            words,
-        } => Response::ContinueOvernight {
-            run: Box::new(
-                heap(|| sessions.continue_overnight(conversation_id, run_id, command_id, words))
-                    .await?,
-            ),
-        },
-        Request::MergeOvernight {
-            conversation_id,
-            run_id,
-            command_id,
-            verified_commit,
-        } => Response::MergeOvernight {
-            run: Box::new(
-                heap(|| {
-                    sessions.merge_overnight(conversation_id, run_id, command_id, verified_commit)
-                })
-                .await?,
-            ),
-        },
-        Request::GetRunDiff {
-            conversation_id,
-            run_id,
-        } => Response::GetRunDiff {
-            diff: heap(|| sessions.run_diff_stat(&conversation_id, &run_id)).await?,
-        },
-        Request::PendingOvernightNotifications => Response::PendingOvernightNotifications {
-            notifications: heap(|| sessions.pending_overnight_notifications())
-                .await
-                .into_iter()
-                .map(|(conversation_id, run_id, notification)| {
-                    brigadier_ipc::protocol::PendingRunNotification {
-                        conversation_id,
-                        run_id,
-                        notification,
-                    }
-                })
-                .collect(),
-        },
-        Request::FailOvernightNotification {
-            conversation_id,
-            run_id,
-            notification_id,
-            error,
-        } => {
-            heap(|| {
-                sessions.fail_overnight_notification(
-                    conversation_id,
-                    run_id,
-                    notification_id,
-                    error,
-                )
-            })
-            .await?;
-            Response::FailOvernightNotification
-        }
         Request::AppAnswer { id, result } => {
             sessions.app_answer(&id, result);
             Response::AppAnswer
@@ -2418,15 +2299,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => {
             sessions.browser_paused(&conversation_id, &tab, paused);
             Response::BrowserPaused
-        }
-        Request::AckOvernightNotification {
-            conversation_id,
-            run_id,
-            notification_id,
-        } => {
-            heap(|| sessions.ack_overnight_notification(conversation_id, run_id, notification_id))
-                .await?;
-            Response::AckOvernightNotification
         }
         Request::StopTask { task_id } => {
             heap(|| sessions.stop_task_by_user(task_id)).await?;
@@ -2446,13 +2318,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::RestoreKeptWork { task_id } => Response::RestoreKeptWork {
             outcome: heap(|| sessions.restore_kept_work(task_id)).await?,
         },
-        Request::ResolveWaiting {
-            conversation_id,
-            id,
-        } => {
-            heap(|| sessions.resolve_waiting(conversation_id, id)).await?;
-            Response::ResolveWaiting
-        }
         Request::Hibernate { id } => Response::Hibernate {
             conversation: Box::new(heap(|| sessions.hibernate(id)).await?),
         },
@@ -2886,7 +2751,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 clients: u32::try_from(daemon.metrics.clients().saturating_sub(1))
                     .unwrap_or(u32::MAX),
                 running: heap(|| idle::running(daemon)).await,
-                overnight: daemon.sessions.overnight_active(),
             },
         },
         Request::ScanStorage { app } => Response::ScanStorage {

@@ -1,8 +1,7 @@
 import type { FC } from "react";
 
 import { isLive, turnTime, waitsOnCard } from "@/app/conversation/blocks";
-import type { PhaseView } from "@/app/conversation/phaseView";
-import { headerLabel, phaseLabel, useElapsed, useTicking } from "@/app/conversation/requestTime";
+import { headerLabel, useTicking } from "@/app/conversation/requestTime";
 import type { BlockMeta } from "@/app/conversation/RequestBlock";
 import { interruptedByQuit } from "@/app/conversation/turnError";
 import { useAuiState } from "@/components/conversation";
@@ -16,8 +15,6 @@ import { cn } from "@/lib/utils";
  */
 export const WorkHeader: FC<{
   meta: BlockMeta;
-  /** An overnight run's block: its header comes from the run and its plan. */
-  phase: PhaseView | null;
   open: boolean;
   foldable: boolean;
   /** Its messages wait for quota, and no worker of it runs meanwhile. */
@@ -30,10 +27,9 @@ export const WorkHeader: FC<{
   /** Its calls the user denied: "{n} denied actions" on the right, which shows the first. */
   denied: number;
   onDenied: () => void;
-}> = ({ meta, phase, open, foldable, quota, answering, answerAtMs, onToggle, denied, onDenied }) => {
-  const phaseElapsed = useElapsed(phase?.startedAtMs ?? 0, phase?.endedAtMs ?? null, !!phase && !phase.settled);
-  const now = useTicking(!phase && isLive(meta.state));
-  const elapsed = phase ? phaseElapsed : turnTime(meta, now, answerAtMs);
+}> = ({ meta, open, foldable, quota, answering, answerAtMs, onToggle, denied, onDenied }) => {
+  const now = useTicking(isLive(meta.state));
+  const elapsed = turnTime(meta, now, answerAtMs);
   // Waiting on its own question card, the turn still reads as working.
   const onCard = !answering && waitsOnCard(meta);
   const state = answering ? "done" : onCard ? "working" : meta.state;
@@ -41,7 +37,7 @@ export const WorkHeader: FC<{
     const status = s.message.status;
     return status?.type === "incomplete" && status.reason === "error" && interruptedByQuit(String(status.error ?? ""));
   });
-  const label = phase ? phaseLabel(phase, elapsed) : headerLabel(state, elapsed, quota, interrupted);
+  const label = headerLabel(state, elapsed, quota, interrupted);
   const text = (
     <span
       data-slot="request-work-label"

@@ -308,7 +308,7 @@ impl SessionManager {
 
     /// The branches Brigadier works on, each with a checkout of its repository: every
     /// session's (an archived one's too, for its restore) and the base it merges into, its
-    /// tasks' (a finished task's kept branch too) and its overnight runs'.
+    /// tasks' (a finished task's kept branch too).
     /// Only sessions of the target's repository are looked at (their folder named alike; a
     /// linked checkout of it is told apart later, by git).
     async fn engine_branches(
@@ -372,11 +372,6 @@ impl SessionManager {
                         .chain(kept)
                         .map(|branch| (repo.clone(), branch)),
                 );
-            }
-            for run in board.runs.values() {
-                if let Some(workspace) = &run.workspace {
-                    branches.push((PathBuf::from(repo), workspace.branch.clone()));
-                }
             }
         }
         branches

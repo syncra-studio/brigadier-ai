@@ -154,10 +154,8 @@ impl Projection {
             | DomainEvent::TaskUpdated { .. }
             | DomainEvent::ApprovalUpdated { .. }
             | DomainEvent::QuestionUpdated { .. }
-            | DomainEvent::PlanUpdated { .. }
             | DomainEvent::ReviewUpdated { .. }
             | DomainEvent::IntegratedCheckUpdated { .. }
-            | DomainEvent::HeadlineSet { .. }
             | DomainEvent::MergeRefusalSet { .. }
             | DomainEvent::McpServersUpdated { .. }
             | DomainEvent::ThreadCommitsSeen { .. }
@@ -170,7 +168,6 @@ impl Projection {
             | DomainEvent::PreviewUpdated { .. }
             | DomainEvent::PreviewsCleared { .. }
             | DomainEvent::BackgroundCleared { .. }
-            | DomainEvent::OvernightUpdated { .. }
             | DomainEvent::QueueChanged { .. }
             | DomainEvent::WorkerEvent { .. }
             | DomainEvent::OutputKept { .. }
@@ -194,8 +191,6 @@ impl Projection {
             | DomainEvent::BrainJobUpdated { .. }
             | DomainEvent::MemoryUpdated { .. }
             | DomainEvent::DecidedForYou { .. }
-            | DomainEvent::WaitingOnYou { .. }
-            | DomainEvent::WaitingResolved { .. }
             | DomainEvent::PeerMessageSent { .. }
             | DomainEvent::PeerMessageReceived { .. }
             | DomainEvent::PeerMessageState { .. }

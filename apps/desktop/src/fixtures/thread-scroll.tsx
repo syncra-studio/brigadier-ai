@@ -17,7 +17,6 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/conversation/ConversationView";
-import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
 import { roomFor } from "@/components/conversation";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
@@ -90,26 +89,15 @@ function messages(id: string, turns: number, report: boolean): Message[] {
   return list;
 }
 
-// The plan session of 2026-10-10 while phase 1 builds: its capsule shows over the composer.
-const planId = planned.conversationId;
-let planBoard = emptyBoard(planId);
-const planMessages: Message[] = [];
-for (const envelope of (planned.events as unknown as EventEnvelope[]).filter((event) => event.atMs <= 1791603900000)) {
-  planBoard = applyToBoard(planBoard, envelope);
-  if (envelope.event.type === "messageAppended") planMessages.push({ ...envelope.event.message, seq: envelope.streamSeq });
-}
-
 const conversations: Record<string, Conversation> = {
   long: conversation("long", "session", "A long session"),
   other: conversation("other", "chat", "Another chat"),
   working: conversation("working", "chat", "A chat still answering"),
-  [planId]: conversation(planId, "session", "Times and lang flags"),
 };
 const stored: Record<string, Message[]> = {
   long: messages("long", 36, true),
   other: messages("other", 8, false),
   working: messages("working", 1, false).slice(0, 1),
-  [planId]: planMessages,
 };
 const blobs = new Map<string, string>();
 for (const list of Object.values(stored)) {
@@ -145,15 +133,15 @@ function view(id: string): View {
     conversation: conversations[id]!,
     context: null,
     messages: { messages: stored[id] ?? [], hasMore: false },
-    tasks: [], approvals: [], questions: [], plans: [], requests: requests(id), workerSteps: [], orchestratorSteps: [],
-    machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
+    tasks: [], approvals: [], questions: [], requests: requests(id), workerSteps: [], orchestratorSteps: [],
+    machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: [], paused: false },
     run: running ? "running" : "idle",
     runRequest: running ? "working-r0" : null,
     head: stored[id]?.at(-1)?.id ?? null,
     ratings: {},
     streaming: running ? { messageId: "working-answer", text: paragraph(0, 0), requestId: "working-r0" } : null,
-    notices: [], memories: [], overnight: [], previews: [],
+    notices: [], memories: [], previews: [],
   } as unknown as View;
 }
 
@@ -222,8 +210,6 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
     }
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
-    case "getRunDiff":
-      return { method: req.method, diff: null };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
     default:
@@ -720,10 +706,13 @@ const steps = {
   },
   /** With the capsule above the composer: the gaps are to the capsule's top. */
   async capsule() {
-    // A shorter window, so the plan's thread runs past the view and its bottom is a real one.
+    // A shorter window, so its bottom is a real one.
     $("#thread-scroll-main")!.style.paddingBottom = `${SHRINK_PX}px`;
-    await open(planId);
-    useBoard.setState({ board: { ...planBoard, loaded: true, head: planMessages.at(-1)?.id ?? null } });
+    await open("long");
+    // Its last request works on, with what it changed so far: the capsule shows.
+    const before = useBoard.getState().board!;
+    const last = Object.values(before.requests).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1)!;
+    useBoard.setState({ board: { ...before, requests: { ...before.requests, [last.id]: { ...last, state: { type: "working" }, endedAtMs: null } } } });
     await settle(400);
     await userScroll(max());
     await settle(250);
@@ -732,6 +721,7 @@ const steps = {
     await userScroll(max() - 200);
     await settle(250);
     const above = buttonState();
+    useBoard.setState({ board: before });
     $("#thread-scroll-main")!.style.paddingBottom = "";
     await settle(200);
     return { atBottom, button: above };

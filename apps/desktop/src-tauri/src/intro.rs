@@ -41,9 +41,9 @@ const QUICK_FADE: f64 = 0.3;
 const ENDED_EVENT: &str = "intro-ended";
 
 /// Whether this launch holds the main window for the intro: the first launch on macOS, when
-/// the window opens for the user (not under `--smoke`, not to host a notification).
-pub fn should_hold(first_launch: bool, smoke: bool, opened_for_notification: bool) -> bool {
-    cfg!(target_os = "macos") && first_launch && !smoke && !opened_for_notification
+/// the window opens for the user (not under `--smoke`).
+pub fn should_hold(first_launch: bool, smoke: bool) -> bool {
+    cfg!(target_os = "macos") && first_launch && !smoke
 }
 
 /// Holds the main window clear from launch (the caller hides it in the config, so it never

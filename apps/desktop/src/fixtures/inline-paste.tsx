@@ -47,7 +47,6 @@ mockIPC(async (command, payload) => {
       return { method: req.method, outcome: { type: "sent", message } };
     }
     case "getPullRequest": return { method: req.method, pullRequest: null };
-    case "getRunDiff": return { method: req.method, diff: null };
     case "listFiles": return { method: req.method, files: [], truncated: false };
     case "workerThread": return { method: req.method, view: { entries: [], turns: [] } };
     default: return { method: req.method };
@@ -59,4 +58,4 @@ useApp.setState((state) => ({
   threads: Object.fromEntries(Object.entries(state.threads).map(([id, thread]) => [id, { ...thread, items: [] }])),
   summaryShown: {},
 }));
-useBoard.setState(({ board }) => board ? { board: { ...board, tasks: {}, requests: {}, plans: {}, approvals: {}, waiting: {}, orchestratorSteps: [], run: "idle", runRequest: null } } : {});
+useBoard.setState(({ board }) => board ? { board: { ...board, tasks: {}, requests: {}, approvals: {}, orchestratorSteps: [], run: "idle", runRequest: null } } : {});

@@ -27,7 +27,6 @@ mockIPC((command, payload) => {
   calls.push(req);
   // A sent message stays on its way: the fixture only records it.
   if (req.method === "sendMessage") return new Promise(() => {});
-  if (req.method === "getRunDiff") return { method: req.method, diff: null };
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "listFiles") return { method: req.method, files: [], truncated: false };
   return { method: req.method };

@@ -199,7 +199,6 @@ impl SessionManager {
                 TaskExtra {
                     request: task.request_id.clone(),
                     role: task.role,
-                    phase: task.phase,
                     rerun: Some(rerun),
                     integrations: task.integrations.clone(),
                     ..TaskExtra::default()

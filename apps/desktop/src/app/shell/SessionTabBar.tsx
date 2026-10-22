@@ -376,9 +376,7 @@ const BrowserTab = lazy(() => import("../side-panel/BrowserTab").then((module) =
 const SideChatTab = lazy(() => import("../side-panel/SideChatTab").then((module) => ({ default: module.SideChatTab })));
 const MainTerminalTab = lazy(() => import("../side-panel/MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("../side-panel/MockupTab").then((module) => ({ default: module.MockupView })));
-const SessionJobTab = lazy(() => import("../side-panel/JobTab").then((module) => ({ default: module.SessionJobTab })));
 const SourcesTab = lazy(() => import("../side-panel/SourcesTab").then((module) => ({ default: module.SourcesTab })));
-const PlanTab = lazy(() => import("../side-panel/PlanTab").then((module) => ({ default: module.PlanTab })));
 const PastedTextView = lazy(() => import("@/components/conversation/elements/pasted-text").then((module) => ({ default: module.PastedTextView })));
 const ConflictTab = lazy(() => import("../side-panel/ConflictTab").then((module) => ({ default: module.ConflictTab })));
 const PageTabView = lazy(() => import("../side-panel/pages/PageTabView").then((module) => ({ default: module.PageTabView })));
@@ -432,10 +430,9 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
-                : tab.kind === "plan" ? <PlanTab plan={tab.plan} />
                 : tab.kind === "pasted" ? <PastedTextView n={tab.n} paste={tab.paste} />
                 : tab.kind === "panel" ? tab.view.type === "output" ? <OutputTab conversationId={conversationId} view={tab.view} />
-                  : tab.view.type === "sources" ? <SourcesTab conversationId={conversationId} /> : <SessionJobTab conversationId={conversationId} />
+                  : <SourcesTab conversationId={conversationId} />
                 : tab.kind === "conflict" ? <ConflictTab conversationId={conversationId} tab={tab} />
                 : (
                   <TabWithChat conversationId={conversationId} tab={tab}>

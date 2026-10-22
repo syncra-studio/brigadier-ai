@@ -36,7 +36,6 @@ use crate::model::{
     Conversation, ConversationId, Environment, KeptBranch, Lifecycle, Project, ProjectId, Setup,
     streams,
 };
-use crate::overnight::OvernightRun;
 use crate::storage::{
     CleanBadge, CleanCategory, CleanItem, KeptLine, ProjectUsage, SessionFolderUsage, SharedPart,
     SharedUsage,
@@ -162,7 +161,6 @@ struct Records {
     projects: Vec<Project>,
     conversations: Vec<Conversation>,
     tasks: HashMap<ConversationId, Vec<Task>>,
-    runs: HashMap<ConversationId, Vec<OvernightRun>>,
     owners: Vec<(String, Vec<Artifact>, bool)>,
     kept: Vec<(String, KeptBranch)>,
     /// Conversations with a turn, waiting work or a worker running now.
@@ -204,14 +202,6 @@ impl Records {
         self.tasks.iter().find_map(|(conversation, tasks)| {
             let task = tasks.iter().find(|task| task.id.0 == id)?;
             Some((self.conversation(&conversation.0)?, task))
-        })
-    }
-
-    /// The overnight run `id` and its session, while the session exists.
-    fn run(&self, id: &str) -> Option<(&Conversation, &OvernightRun)> {
-        self.runs.iter().find_map(|(conversation, runs)| {
-            let run = runs.iter().find(|run| run.id.0 == id)?;
-            Some((self.conversation(&conversation.0)?, run))
         })
     }
 
@@ -443,7 +433,6 @@ impl SessionManager {
     async fn storage_records(&self) -> Result<Records> {
         let catalog = self.core.catalog();
         let mut tasks = HashMap::new();
-        let mut runs = HashMap::new();
         let mut running = HashSet::new();
         let mut scratch_idle = HashSet::new();
         for conversation in &catalog.conversations {
@@ -454,10 +443,6 @@ impl SessionManager {
             }
             if let Ok(board) = self.core.board(&conversation.id).await {
                 tasks.insert(conversation.id.clone(), board.sorted_tasks());
-                runs.insert(
-                    conversation.id.clone(),
-                    board.runs.values().cloned().collect(),
-                );
             }
         }
         Ok(Records {
@@ -466,7 +451,6 @@ impl SessionManager {
             projects: catalog.projects,
             conversations: catalog.conversations,
             tasks,
-            runs,
             owners: self.runtime.ledger().owners(),
             kept: self.kept_branches().await?,
             running,
@@ -525,8 +509,6 @@ impl SessionManager {
                         Some(("task", id)) => records.task(id).is_some(),
                         // A landed worker's session, kept for its review's findings.
                         Some(("review-hold", id)) => records.task(id).is_some(),
-                        // A run's worktree serves Continue and Merge while its session exists.
-                        Some(("overnight", id)) => records.run(id).is_some(),
                         // Commit-message writers, Brain jobs, raw sessions: alive while one of
                         // their processes still runs.
                         _ => artifacts.iter().any(|artifact| match artifact {
@@ -1214,9 +1196,6 @@ fn project_of(records: &Records, worktrees: &Path, action: &Action) -> Option<Pr
             Some(("task" | "review-hold", id)) => records
                 .task(id)
                 .and_then(|(conversation, _)| conversation.project_id.clone()),
-            Some(("overnight", id)) => records
-                .run(id)
-                .and_then(|(conversation, _)| conversation.project_id.clone()),
             Some((_, id)) => of_conversation(id),
             None => None,
         };
@@ -1748,23 +1727,6 @@ impl Scanner<'_> {
                     None,
                     "Its session is archived.",
                 ));
-            }
-            for run in self
-                .records
-                .runs
-                .get(&conversation.id)
-                .into_iter()
-                .flatten()
-            {
-                if let Some(workspace) = &run.workspace {
-                    candidates.push((
-                        PathBuf::from(repo),
-                        workspace.branch.clone(),
-                        workspace.base.clone(),
-                        None,
-                        "Its session is archived.",
-                    ));
-                }
             }
         }
         for (repo, kept) in &self.records.kept {

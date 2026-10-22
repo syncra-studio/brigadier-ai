@@ -736,12 +736,6 @@ impl ConvLive {
         }
     }
 
-    /// Closes `cli` between turns, if it is still the conversation's and nothing runs: the
-    /// next turn starts it again (resuming it). Returns once it has ended.
-    pub(crate) async fn retire_cli(&self, cli: &Arc<Cli>) {
-        self.retire_cli_for(cli, None).await;
-    }
-
     /// The same, recording `cause` as why the next CLI starts when this one closes.
     pub(crate) async fn retire_cli_for(&self, cli: &Arc<Cli>, cause: Option<WriteCause>) {
         let taken = {
@@ -1013,25 +1007,6 @@ impl ConvLive {
             .count()
     }
 
-    /// A turn runs, or a message of `request` waits for one.
-    pub(super) async fn works_for(&self, request: &str) -> bool {
-        let state = self.state.lock().await;
-        state.busy
-            || state
-                .inbox
-                .iter()
-                .any(|(_, of)| of.as_deref() == Some(request))
-    }
-
-    /// An overnight run ended: what was owed to its requests (`run-<short id>-…`) is over.
-    /// Nothing the run left in the inbox for them wakes the orchestrator later.
-    pub async fn forget_run_requests(&self, prefix: &str) {
-        let mut state = self.state.lock().await;
-        state
-            .inbox
-            .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
-    }
-
     /// Whether no turn runs and nothing waits for one.
     #[cfg(test)]
     pub(super) async fn idle(&self) -> bool {
@@ -1143,14 +1118,6 @@ impl SessionManager {
                 )));
             }
         }
-        if conversation.kind == ConversationKind::Session
-            && queue_index.is_none()
-            && let Some(outcome) = self
-                .overnight_message(&id, &text, &attachments, &mentions)
-                .await?
-        {
-            return Ok(outcome);
-        }
         let queue_index = queue_index.filter(|_| !steer);
         let paused = queue_index.is_some() && self.core.board(&id).await?.queue.paused;
         let conv = self.conv(&id)?;
@@ -1222,11 +1189,6 @@ impl SessionManager {
         drop(state);
         self.kick(&conv);
         Ok(SendOutcome::Sent(message))
-    }
-
-    pub(super) async fn prepare_proposal_turn(&self, conv: &Arc<ConvLive>, message: Message) {
-        conv.state.lock().await.pending.push(message);
-        self.kick(conv);
     }
 
     /// Changes a queued message, as the user wrote it again: counted like a new message, so a
@@ -2278,18 +2240,6 @@ impl SessionManager {
             self.core.conversation(id).map(|c| c.lifecycle),
             Ok(Lifecycle::Archived)
         );
-        // Nothing wakes the orchestrator for an overnight run that has ended: its report
-        // was the last word, and Continue starts a new segment with requests of its own.
-        if let Some(request) = &request
-            && self
-                .core
-                .board(id)
-                .await
-                .is_ok_and(|board| super::requests::ended_run_request(&board, request))
-        {
-            crate::logging::private_trace!(self.tab_chat_logs(id), info, "dropped a message for an overnight run that has ended"; conversation = %id, request, label = %envelope.label);
-            return None;
-        }
         let mut state = conv.state.lock().await;
         if let Some(task) = &envelope.task_id {
             state.announcing.remove(task);
@@ -3386,18 +3336,6 @@ impl SessionManager {
                 ordered.push(InputPart::Text("\n\n".into()));
             }
             ordered.append(&mut inline);
-        }
-        if let Ok(board) = self.core.board(&conv.id).await
-            && let Some(run) = board
-                .runs
-                .values()
-                .find(|run| run.state == crate::overnight::OvernightState::Proposed)
-        {
-            if run.predecessor.is_some() {
-                parts.push(format!("[overnight proposal {} revision {}] This continues an earlier run on its branch: its phases, and those already verified, come from that run, so don't call propose_overnight. Only the user's Start begins it; until then you may only read.", run.id, run.revision));
-            } else {
-                parts.push(format!("[overnight proposal {} revision {}] This is preparation only. Read the user's brief and referenced plan with read-only scouts if necessary. Use propose_overnight to put its actual phases/criteria/Rules on this same proposal, keeping original phase numbers. Include every phase the user's words select (\"phases 1-3\"), also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. Do not invent scope or start implementation. For a bare goal keep phases empty (Phase 0 plans after Start). Only the user's Start begins the run. The user's full agreement and latest corrections, verbatim:\n{}", run.id, run.revision, run.words));
-            }
         }
         // A tab's chat answers about its tab; a side chat about the conversation beside it,
         // as it stands now.

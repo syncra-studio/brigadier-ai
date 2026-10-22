@@ -8,15 +8,13 @@ use brigadier_providers::{McpServerState, McpStatus};
 use crate::knowledge::MemoryChange;
 use crate::model::ConversationId;
 use crate::model::{
-    DomainEvent, MessageRole, Notice, OvernightRunId, PeerState, Rating, ReplyHold,
-    StreamingMessage,
+    DomainEvent, MessageRole, Notice, PeerState, Rating, ReplyHold, StreamingMessage,
 };
-use crate::overnight::OvernightRun;
 use crate::thread_view::{CliTurn, TurnEnd};
 use crate::work::{
     Approval, CardId, CardState, Compaction, ConversationActivity, Decision, MessageQueue,
-    OrchestratorStep, OrchestratorStepKind, Plan, PlanState, Question, RunState, TabState, Task,
-    TaskId, UserRequest, WaitingItem, WorkerStep,
+    OrchestratorStep, OrchestratorStepKind, Question, RunState, TabState, Task, TaskId,
+    UserRequest, WorkerStep,
 };
 
 /// Notices kept per conversation.
@@ -30,7 +28,6 @@ pub(crate) const KINDS: &[&str] = &[
     "task.updated",
     "approval.updated",
     "question.updated",
-    "plan.updated",
     "integrated_check.updated",
     "thread.seen",
     "thread.files",
@@ -51,9 +48,6 @@ pub(crate) const KINDS: &[&str] = &[
     "conversation.branch",
     "memory.updated",
     "decision.made",
-    "waiting.updated",
-    "waiting.resolved",
-    "overnight.updated",
     "peer.sent",
     "peer.received",
     "peer.state",
@@ -143,7 +137,6 @@ pub(crate) struct Board {
     pub(crate) tasks: HashMap<TaskId, Task>,
     pub(crate) approvals: HashMap<CardId, Approval>,
     pub(crate) questions: HashMap<CardId, Question>,
-    pub(crate) plans: HashMap<CardId, Plan>,
     pub(crate) requests: HashMap<String, UserRequest>,
     /// Every worker step, in stream order.
     pub(crate) worker_steps: Vec<WorkerStep>,
@@ -178,15 +171,6 @@ pub(crate) struct Board {
     pub(crate) memories: Vec<MemoryChange>,
     /// What was decided on the user's behalf, in stream order.
     pub(crate) decisions: Vec<Decision>,
-    /// What only the user can do and is not done yet, by id.
-    pub(crate) waiting: HashMap<String, WaitingItem>,
-    /// The key of every item ever listed, open or over: a restart lists only what a report
-    /// could not, never again what the user marked done.
-    pub(crate) waits_listed: HashSet<String>,
-    /// Its overnight runs, a segment each.
-    pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
-    /// The thread's headline for the session now (`set_headline`).
-    pub(crate) headline: Option<crate::work::SessionHeadline>,
     /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
     /// model's), with the daemon process that heard them ([`crate::boot_id`]).
     pub(crate) mcp_servers: HashMap<Option<String>, (String, crate::model::AgentMcpServers)>,
@@ -258,12 +242,6 @@ impl Board {
             .values()
             .filter(|approval| approval.state == CardState::Pending)
             .map(|approval| approval.id.clone())
-            .chain(
-                self.plans
-                    .values()
-                    .filter(|plan| plan.state == PlanState::Proposed)
-                    .map(|plan| plan.id.clone()),
-            )
             .collect();
         let questions: Vec<_> = self
             .questions
@@ -445,18 +423,6 @@ impl Board {
                 let mut question = question.clone();
                 question.position = position;
                 self.questions.insert(question.id.clone(), question);
-            }
-            DomainEvent::PlanUpdated { plan } => {
-                let position = self
-                    .plans
-                    .get(&plan.id)
-                    .map_or(stream_seq, |known| known.position);
-                let mut plan = plan.clone();
-                plan.position = position;
-                self.plans.insert(plan.id.clone(), plan);
-            }
-            DomainEvent::HeadlineSet { headline, .. } => {
-                self.headline = headline.clone();
             }
             DomainEvent::McpServersUpdated {
                 task_id,
@@ -804,19 +770,6 @@ impl Board {
                 ));
                 self.decisions.push(decision);
             }
-            // An item from a source Brigadier no longer has stays out of the list.
-            DomainEvent::WaitingOnYou { item }
-                if item.source == crate::work::WaitingSource::Retired => {}
-            DomainEvent::WaitingOnYou { item } => {
-                self.waits_listed.insert(item.key.clone());
-                self.waiting.insert(item.id.clone(), item.clone());
-            }
-            DomainEvent::WaitingResolved { id, .. } => {
-                self.waiting.remove(id);
-            }
-            DomainEvent::OvernightUpdated { run } => {
-                self.runs.insert(run.id.clone(), (**run).clone());
-            }
             DomainEvent::CompactionUpdated { compaction } => {
                 let position = self
                     .compactions
@@ -951,22 +904,10 @@ impl Board {
             .max_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms).then(a.id.cmp(&b.id)))
     }
 
-    pub(crate) fn sorted_waiting(&self) -> Vec<WaitingItem> {
-        let mut waiting: Vec<WaitingItem> = self.waiting.values().cloned().collect();
-        waiting.sort_by(|a, b| a.created_at_ms.cmp(&b.created_at_ms).then(a.id.cmp(&b.id)));
-        waiting
-    }
-
     pub(crate) fn sorted_compactions(&self) -> Vec<Compaction> {
         let mut compactions: Vec<Compaction> = self.compactions.values().cloned().collect();
         compactions.sort_by_key(|compaction| compaction.position);
         compactions
-    }
-
-    pub(crate) fn sorted_plans(&self) -> Vec<Plan> {
-        let mut plans: Vec<Plan> = self.plans.values().cloned().collect();
-        plans.sort_by_key(|plan| plan.position);
-        plans
     }
 
     /// The MCP servers of `task_id`'s agent (`None`: the conversation's own model), as this
@@ -1032,18 +973,6 @@ impl Board {
                 hold: record.hold.clone(),
             })
             .collect()
-    }
-
-    /// Its overnight runs, oldest first.
-    pub(crate) fn sorted_runs(&self) -> Vec<OvernightRun> {
-        let mut runs: Vec<OvernightRun> = self.runs.values().cloned().collect();
-        runs.sort_by(|a, b| a.created_at_ms.cmp(&b.created_at_ms).then(a.id.cmp(&b.id)));
-        runs
-    }
-
-    /// The run that owns the session now (started and not finished), if any.
-    pub(crate) fn active_run(&self) -> Option<&OvernightRun> {
-        self.runs.values().find(|run| run.state.is_active())
     }
 }
 
@@ -1367,8 +1296,6 @@ mod shared_states_tests {
         #[serde(default)]
         approvals: Vec<CardId>,
         #[serde(default)]
-        plans: Vec<CardId>,
-        #[serde(default)]
         questions: Vec<CardId>,
         #[serde(default)]
         servers: Vec<Server>,
@@ -1402,7 +1329,7 @@ mod shared_states_tests {
                     turn_open: case.turn.open,
                     tasks: case.tasks,
                     titles: Vec::new(),
-                    approvals: case.approvals.into_iter().chain(case.plans).collect(),
+                    approvals: case.approvals.into_iter().collect(),
                     questions: case.questions,
                     sign_ins: sign_ins(&servers),
                     failed: false,

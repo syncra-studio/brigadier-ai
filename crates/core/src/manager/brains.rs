@@ -1404,19 +1404,6 @@ impl SessionManager {
                     format!("Asked the user: {}\nThey answered: {answer}", question.text),
                 ))
             }
-            DomainEvent::PlanUpdated { plan } => {
-                let decided = match &plan.state {
-                    crate::work::PlanState::Approved { .. } => "approved",
-                    crate::work::PlanState::Rejected { .. } => "rejected",
-                    crate::work::PlanState::PutOff => "put off for now",
-                    _ => return None,
-                };
-                Some((
-                    "decision",
-                    plan.request_id.clone(),
-                    format!("The plan \"{}\" was {decided}.", plan.title),
-                ))
-            }
             _ => None,
         }
     }

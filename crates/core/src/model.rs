@@ -13,7 +13,7 @@ use brigadier_router::{
 
 use crate::knowledge::{BrainJob, MemoryChange, RebirthThresholds};
 use crate::work::{
-    Approval, AttachmentRef, Compaction, MessageQueue, OrchestratorEntry, OrchestratorStep, Plan,
+    Approval, AttachmentRef, Compaction, MessageQueue, OrchestratorEntry, OrchestratorStep,
     Question, RunState, Task, UserRequest, WorkerStep,
 };
 use serde::{Deserialize, Serialize};
@@ -976,8 +976,7 @@ pub struct Settings {
     /// What a message sent while an answer works does; ⌥Enter does the opposite for one
     /// message.
     pub follow_up: FollowUp,
-    /// When a finished request raises a desktop notification. Overnight runs tell the user
-    /// with their report's notification instead.
+    /// When a finished request raises a desktop notification.
     pub notify_finished: NotifyFinished,
     /// Approvals and questions waiting for the user raise a desktop notification.
     #[serde(default = "default_true")]
@@ -1422,7 +1421,6 @@ pub struct ConversationView {
     pub tasks: Vec<Task>,
     pub approvals: Vec<Approval>,
     pub questions: Vec<Question>,
-    pub plans: Vec<Plan>,
     /// Every request of the conversation, oldest first.
     pub requests: Vec<UserRequest>,
     /// Every worker step, in the order they happened.
@@ -1439,8 +1437,6 @@ pub struct ConversationView {
     pub compactions: Vec<Compaction>,
     /// What was decided on the user's behalf, in the order it was decided.
     pub decisions: Vec<crate::work::Decision>,
-    /// What only the user can do and is not done yet, oldest first.
-    pub waiting: Vec<crate::work::WaitingItem>,
     pub queue: MessageQueue,
     pub run: RunState,
     /// The request the running turn serves.
@@ -1456,14 +1452,9 @@ pub struct ConversationView {
     /// What a Chat's model saved to the Personal Brain (its Memory chips): the latest change
     /// per memory, in the order they were saved; one the user removed is `forgotten`.
     pub memories: Vec<crate::knowledge::MemoryChange>,
-    /// Its overnight runs, a segment each, oldest first.
-    pub overnight: Vec<crate::overnight::OvernightRun>,
     /// Its previews, oldest first.
     #[serde(default)]
     pub previews: Vec<crate::work::Preview>,
-    /// What the session is doing now, in the thread's words; none once the user wrote since.
-    #[serde(default)]
-    pub headline: Option<crate::work::SessionHeadline>,
     /// The ended previews the user dismissed from the Background rows (Q94), by id.
     #[serde(default)]
     pub background_cleared: Vec<String>,
@@ -2490,9 +2481,6 @@ pub enum DomainEvent {
     QuestionUpdated {
         question: Question,
     },
-    PlanUpdated {
-        plan: Plan,
-    },
     /// An older Brigadier's one-shot review started or ended. Nothing records it now; stored
     /// ones are read and skipped.
     ReviewUpdated {
@@ -2505,12 +2493,6 @@ pub enum DomainEvent {
     IntegratedCheckUpdated {
         #[ts(type = "unknown")]
         check: serde_json::Value,
-    },
-    /// The thread set the session's headline (`set_headline`), or it was cleared (none) by
-    /// the user's next message.
-    HeadlineSet {
-        conversation_id: ConversationId,
-        headline: Option<crate::work::SessionHeadline>,
     },
     /// An older Brigadier's refusal of a merge into the base, or its end. Nothing records it
     /// now; stored ones are read and skipped.
@@ -2660,19 +2642,6 @@ pub enum DomainEvent {
     DecidedForYou {
         decision: crate::work::Decision,
     },
-    /// Something only the user can do was listed, or reworded (full snapshot).
-    WaitingOnYou {
-        item: crate::work::WaitingItem,
-    },
-    /// An overnight run was proposed, started or changed (full snapshot).
-    OvernightUpdated {
-        run: Box<crate::overnight::OvernightRun>,
-    },
-    /// A "Waiting on you" item is done.
-    WaitingResolved {
-        id: String,
-        by: crate::work::ResolvedBy,
-    },
     /// This session sent a message to another (SESSION-MESSAGING-PLAN.md §4), or under Ask
     /// for approval asked the user to send it. The text is whole: its start, and the rest in
     /// `blob` when it is too large to keep inline.
@@ -2821,10 +2790,8 @@ impl DomainEvent {
             Self::TaskUpdated { .. } => "task.updated",
             Self::ApprovalUpdated { .. } => "approval.updated",
             Self::QuestionUpdated { .. } => "question.updated",
-            Self::PlanUpdated { .. } => "plan.updated",
             Self::ReviewUpdated { .. } => "review.updated",
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
-            Self::HeadlineSet { .. } => "headline.set",
             Self::MergeRefusalSet { .. } => "merge.refusal",
             Self::McpServersUpdated { .. } => "mcp_servers.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
@@ -2844,9 +2811,6 @@ impl DomainEvent {
             Self::BrainJobUpdated { .. } => "brain.job",
             Self::MemoryUpdated { .. } => "memory.updated",
             Self::DecidedForYou { .. } => "decision.made",
-            Self::WaitingOnYou { .. } => "waiting.updated",
-            Self::WaitingResolved { .. } => "waiting.resolved",
-            Self::OvernightUpdated { .. } => "overnight.updated",
             Self::PeerMessageSent { .. } => "peer.sent",
             Self::PeerMessageReceived { .. } => "peer.received",
             Self::PeerMessageState { .. } => "peer.state",

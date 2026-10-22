@@ -3,7 +3,7 @@
 //!
 //! Its working directory stays its own scratch folder (`orch/<id>`), which keeps `--resume`
 //! working. The code it works on is its *workspace*, given to the CLI as an extra folder: the
-//! session's checkout, or an overnight run's worktree while the run is active. The workspace
+//! session's checkout. The workspace
 //! is never recorded under the thread's cleanup-ledger owner, so ending the thread's processes
 //! (hibernation, rebirth, fallback) never reaches what runs there.
 //!
@@ -75,9 +75,9 @@ impl ThreadLaunch {
 }
 
 impl SessionManager {
-    /// The thread's workspace as recorded now, without making anything: an active overnight
-    /// run's worktree, else the session's checkout (`None` for a new-worktree session whose
-    /// worktree isn't made yet, and for a Chat).
+    /// The thread's workspace as recorded now, without making anything: the session's
+    /// checkout (`None` for a new-worktree session whose worktree isn't made yet, and for a
+    /// Chat).
     pub(crate) fn recorded_workspace(&self, id: &ConversationId) -> Option<ThreadWorkspace> {
         let conversation = self.core.conversation(id).ok()?;
         let Some(Setup::Session {
@@ -87,18 +87,6 @@ impl SessionManager {
             return None;
         };
         let repo = PathBuf::from(repo);
-        if let Some(run) = self
-            .overnight
-            .active
-            .get(id)
-            .and_then(|active| active.workspace)
-        {
-            return Some(ThreadWorkspace {
-                path: PathBuf::from(run.path),
-                branch: run.branch,
-                repo,
-            });
-        }
         match environment {
             Environment::LocalCheckout { branch } => Some(ThreadWorkspace {
                 path: repo.clone(),
@@ -141,9 +129,8 @@ impl SessionManager {
         })
     }
 
-    /// The thread's effective workspace (THREAD-PLAN.md Q1, Q10): the overnight run's worktree
-    /// while a run is active, else the session's checkout, its own worktree made first when
-    /// it has none yet. `None` for a Chat.
+    /// The thread's effective workspace (THREAD-PLAN.md Q1, Q10): the session's checkout, its
+    /// own worktree made first when it has none yet. `None` for a Chat.
     pub(crate) async fn effective_workspace(
         &self,
         id: &ConversationId,
@@ -246,16 +233,10 @@ impl SessionManager {
             .project_id
             .as_ref()
             .and_then(|id| self.core.project(id).ok());
-        let run = self
-            .overnight
-            .active
-            .get(&conversation.id)
-            .and_then(|active| active.workspace);
         let mut prompt = super::prompts::thread(
             conversation,
             project.as_ref(),
             preferences,
-            run.as_ref(),
             workspace.map(ThreadWorkspace::told).as_deref(),
             provider,
             self.core.settings().start_workers_on_own,
@@ -424,18 +405,6 @@ impl SessionManager {
         let _scan = self.thread_scans.lock().await;
         self.scan_branch(id, &workspace.repo, &workspace.branch, None, in_turn)
             .await;
-    }
-
-    /// The same for `branch` of `repo` (an overnight run's, before its merge).
-    pub(crate) async fn scan_thread_branch(
-        &self,
-        id: &ConversationId,
-        repo: &Path,
-        branch: &str,
-        in_turn: bool,
-    ) {
-        let _scan = self.thread_scans.lock().await;
-        self.scan_branch(id, repo, branch, None, in_turn).await;
     }
 
     /// A landing moved `branch` from `from` to `tip`. What the thread committed before it, up

@@ -184,8 +184,7 @@ async fn the_first_start_deletes_every_old_conversation() {
             .unwrap();
         assert!(events.is_empty(), "{id} keeps {} events", events.len());
     }
-    // Nothing of them resumed: no landing redone, no run carried on.
-    assert!(!flow.manager.overnight_active());
+    // Nothing of them resumed: no landing redone.
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(
         heard.lock().unwrap().is_empty(),
@@ -205,7 +204,7 @@ async fn the_first_start_deletes_every_old_conversation() {
 
 /// Records only the earlier engine wrote (a run in Phase 0, a whole-phase verifier, a
 /// per-phase injection and rebirth) still read: a conversation holding them whose delete
-/// can't finish at once keeps a board, so the next launch can still release its run and tasks.
+/// can't finish at once keeps a board, so the next launch can still release its tasks.
 #[tokio::test]
 async fn the_earlier_engines_own_records_still_read() {
     let heard: Heard = Arc::default();
@@ -227,12 +226,9 @@ async fn the_earlier_engines_own_records_still_read() {
     .await;
     let session = ConversationId(OLD[3].into());
     let board = flow.core.board(&session).await.expect("its board reads");
-    assert_eq!(board.runs.len(), 1, "its run");
-    let task = &board.tasks[&crate::model::TaskId("01a108f3-9296-70a4-a507-9d369072785a".into())];
-    assert_eq!(
-        task.run.as_ref().map(|context| context.role),
-        Some(crate::overnight::RunRole::Check)
-    );
+    assert!(board.tasks.contains_key(&crate::model::TaskId(
+        "01a108f3-9296-70a4-a507-9d369072785a".into()
+    )));
     // An injection and a rebirth of an earlier run's phase.
     let injection = serde_json::from_str::<crate::work::InjectionKind>("\"phase\"");
     assert_eq!(injection.ok(), Some(crate::work::InjectionKind::Run));
@@ -337,7 +333,6 @@ async fn a_first_start_cut_off_deletes_only_what_it_listed() {
         Some(super::super::engine::ENGINE)
     );
     assert!(flow.core.engine_switch().is_none());
-    assert!(!flow.manager.overnight_active());
     assert!(
         heard.lock().unwrap().is_empty(),
         "{:?}",
@@ -415,7 +410,6 @@ async fn an_old_conversation_whose_delete_fails_resumes_nothing() {
             );
         }
     }
-    assert!(!flow.manager.overnight_active());
     assert!(
         heard.lock().unwrap().is_empty(),
         "{:?}",

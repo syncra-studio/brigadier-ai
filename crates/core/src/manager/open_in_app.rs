@@ -9,9 +9,8 @@ use std::time::Duration;
 
 use super::SessionManager;
 use crate::app_call::{AppAnswer, AppOp, DiffScope, OpenTarget, OutputOf};
-use crate::model::{CardId, Setup, TaskId};
+use crate::model::{Setup, TaskId};
 use crate::tools::{OpenDiffScope, OpenInApp, OpenInAppTarget};
-use crate::work::ApprovalSubject;
 use crate::{ConversationId, Error, Result};
 
 /// How long the window may take to open it.
@@ -82,12 +81,6 @@ impl SessionManager {
                 };
                 (OpenTarget::Diff { scope }, words.to_owned())
             }
-            OpenInAppTarget::Progress => {
-                if !session {
-                    return Err(tabs_only("the Progress tab"));
-                }
-                (OpenTarget::Progress, "the Progress tab".to_owned())
-            }
             OpenInAppTarget::Output { id: wanted } => {
                 if !session {
                     return Err(tabs_only("an Output tab"));
@@ -144,51 +137,6 @@ impl SessionManager {
                 };
                 let words = format!("{}'s panel", found.title);
                 (OpenTarget::Worker { task }, words)
-            }
-            OpenInAppTarget::Plan { id: wanted } => {
-                if !session {
-                    return Err(tabs_only("a plan"));
-                }
-                let board = self.core.board(id).await?;
-                let card = CardId(wanted.trim().to_owned());
-                if let Some(plan) = board.plans.get(&card) {
-                    if plan
-                        .body
-                        .as_deref()
-                        .is_none_or(|body| body.trim().is_empty())
-                    {
-                        return Err(Error::Invalid(format!(
-                            "plan {} has no text to read; open the Progress tab instead",
-                            card.0
-                        )));
-                    }
-                    let words = format!("the plan \"{}\"", plan.title);
-                    (
-                        OpenTarget::Plan {
-                            id: card.0,
-                            outline: false,
-                            title: plan.title.clone(),
-                        },
-                        words,
-                    )
-                } else if let Some(ApprovalSubject::Outline { title, .. }) =
-                    board.approvals.get(&card).map(|approval| &approval.subject)
-                {
-                    let words = format!("the outline \"{title}\"");
-                    (
-                        OpenTarget::Plan {
-                            id: card.0,
-                            outline: true,
-                            title: title.clone(),
-                        },
-                        words,
-                    )
-                } else {
-                    return Err(Error::Invalid(format!(
-                        "there is no plan or outline {} in this session",
-                        card.0
-                    )));
-                }
             }
             OpenInAppTarget::Page { id: page_id } => {
                 if !session {
@@ -320,16 +268,16 @@ mod tests {
         );
         assert_eq!(
             opened_words(
-                "the Progress tab",
+                "the branch's changes",
                 Some("panel:reviews"),
                 false,
                 false,
                 false
             ),
-            "Opened the Progress tab (tab panel:reviews) behind the user's tab, marked new."
+            "Opened the branch's changes (tab panel:reviews) behind the user's tab, marked new."
         );
         assert!(
-            opened_words("the Progress tab", None, false, false, true)
+            opened_words("the branch's changes", None, false, false, true)
                 .ends_with("The user isn't on this session now, so it waits there for them.")
         );
         assert!(

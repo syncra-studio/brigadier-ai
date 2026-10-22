@@ -23,7 +23,6 @@ mockIPC((command, payload) => {
   if (req.method === "deleteQueued") return { method: req.method, queue: { items: [], paused: false } };
   if (req.method === "startSession") return { method: req.method, conversation: { ...useApp.getState().conversations[id], id: "new-session" }, outcome: { type: "sent", message } };
   if (req.method === "sendMessage") return new Promise((resolve) => { respond = (outcome) => resolve({ method: req.method, outcome }); });
-  if (req.method === "getRunDiff") return { method: req.method, diff: null };
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
   if (req.method === "listFiles") return { method: req.method, files: [], truncated: false };
   return { method: req.method };

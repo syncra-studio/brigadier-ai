@@ -40,8 +40,8 @@ beforeEach(() => {
     if (req.method === "getConversation") {
       asked.push("view");
       const view = {
-        conversation, messages: pageOf(null, req.limit ?? 200), tasks: [], approvals: [], questions: [], plans: [], requests: [],
-        overnight: [], workerSteps: [], orchestratorSteps: [], decisions: [], waiting: [], compactions: [], ratings: {}, notices: [], memories: [],
+        conversation, messages: pageOf(null, req.limit ?? 200), tasks: [], approvals: [], questions: [], requests: [],
+        workerSteps: [], orchestratorSteps: [], decisions: [], compactions: [], ratings: {}, notices: [], memories: [],
       } as unknown as ConversationView;
       return { method: req.method, view };
     }

@@ -36,7 +36,7 @@ use crate::model::{
 use crate::now_ms;
 use crate::routing::TokenMeter;
 use crate::tools::Role;
-use crate::work::{ApprovalSubject, CardState, OrchestratorEntry, PlanState, TaskState};
+use crate::work::{ApprovalSubject, CardState, OrchestratorEntry, TaskState};
 
 /// About four bytes per token.
 const BYTES_PER_TOKEN: usize = 4;
@@ -959,25 +959,13 @@ impl SessionManager {
         if let Ok(conversation) = self.core.conversation(id)
             && let Some(Setup::Session { environment, .. }) = &conversation.setup
         {
-            // What applies now: an overnight run works on its own branch under Accept edits.
-            let place = match self
-                .overnight
-                .active
-                .get(id)
-                .and_then(|active| active.workspace)
-            {
-                Some(run) => format!(
-                    "the overnight run's branch `{}` (from `{}`)",
-                    run.branch, run.base
-                ),
-                None => match environment {
-                    Environment::LocalCheckout { branch } => {
-                        format!("local checkout on `{branch}`")
-                    }
-                    Environment::NewWorktree { branch, base, .. } => {
-                        format!("worktree on `{branch}` (from `{base}`)")
-                    }
-                },
+            let place = match environment {
+                Environment::LocalCheckout { branch } => {
+                    format!("local checkout on `{branch}`")
+                }
+                Environment::NewWorktree { branch, base, .. } => {
+                    format!("worktree on `{branch}` (from `{base}`)")
+                }
             };
             text.push_str(&format!(
                 "Environment: {place}. Permission: {:?}.{}\n",
@@ -1034,13 +1022,6 @@ impl SessionManager {
                 one_line(&what, 300)
             ));
         }
-        for item in board.sorted_waiting() {
-            items += 1;
-            text.push_str(&format!(
-                "Waiting for the user to do (listed under Waiting on you): {}\n",
-                one_line(&item.what, 300)
-            ));
-        }
         if !board.queue.items.is_empty() {
             text.push_str("The user's queued messages (they reach you later, one by one):\n");
             for item in &board.queue.items {
@@ -1051,30 +1032,6 @@ impl SessionManager {
                         &crate::sessions::display_text(&item.text, &item.attachments),
                         300
                     )
-                ));
-            }
-        }
-        let mut plans = board.sorted_plans();
-        plans.retain(|plan| matches!(plan.state, PlanState::Proposed | PlanState::Approved { .. }));
-        if let Some(plan) = plans.last() {
-            items += 1;
-            let state = match &plan.state {
-                PlanState::Proposed => "waiting for the user",
-                _ => "its phases",
-            };
-            text.push_str(&format!("Plan \"{}\" ({state}):\n", plan.title));
-            for (number, step) in plan.steps.iter().enumerate() {
-                let task = step
-                    .task_id
-                    .as_ref()
-                    .and_then(|task| board.tasks.get(task))
-                    .map(|task| format!(" → task-{}", task.number))
-                    .unwrap_or_default();
-                text.push_str(&format!(
-                    "  {}. {}{task} ({:?})\n",
-                    number + 1,
-                    step.title,
-                    step.stage
                 ));
             }
         }

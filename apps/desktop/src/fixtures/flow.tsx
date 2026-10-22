@@ -18,7 +18,7 @@ import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
 import { TitlebarNav } from "@/components/shared";
 import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarFoot } from "@/app/shell/SidebarFoot";
-import { revealPlan, useSummary } from "@/app/conversation/summaryState";
+import { useSummary } from "@/app/conversation/summaryState";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import "@/fixtures/cliView";
@@ -30,13 +30,11 @@ import type {
   Message,
   OrchestratorStep,
   OrchestratorStepKind,
-  Plan,
   ProviderEvent,
   RawEntry,
   Request,
   Task,
   UserRequest,
-  WaitingItem,
 } from "@/ipc/generated";
 import { useActivity } from "@/state/activity";
 import { type Board, emptyBoard, useBoard } from "@/state/board";
@@ -178,10 +176,8 @@ function task(fields: Partial<Task> & Pick<Task, "id" | "number" | "title" | "st
     landed: null,
     blockedReason: null,
     error: null,
-    run: null,
     report: null,
     role: "lead",
-    phase: null,
     quotaWait: null,
     subject: null,
     messages: [],
@@ -192,7 +188,7 @@ function task(fields: Partial<Task> & Pick<Task, "id" | "number" | "title" | "st
 }
 
 const tasks: Record<string, Task> = {
-  t1: task({ id: "t1", number: 1, title: "Fix the README typo", state: "landed", requestId: "r1", position: 3, spec: "Fix the typo “pnpm instal” in README.md’s install section.", createdAtMs: ago(2390), updatedAtMs: ago(2215), phase: null }),
+  t1: task({ id: "t1", number: 1, title: "Fix the README typo", state: "landed", requestId: "r1", position: 3, spec: "Fix the typo “pnpm instal” in README.md’s install section.", createdAtMs: ago(2390), updatedAtMs: ago(2215) }),
   t2: task({
     id: "t2",
     number: 2,
@@ -200,14 +196,13 @@ const tasks: Record<string, Task> = {
     state: done ? "landed" : "running",
     requestId: "r2",
     position: 12,
-    phase: 1,
     createdAtMs: ago(done ? 1250 : 115),
     updatedAtMs: done ? ago(700) : ago(2),
   }),
 };
 if (done) {
-  tasks["t3"] = task({ id: "t3", number: 3, title: "Verify phase 1", role: "verifier", phase: 1, state: "done", requestId: "r2", position: 20, kind: "verify", spec: "Check phase 1 against its done-when and review its diff.", createdAtMs: ago(690), updatedAtMs: ago(520) });
-  tasks["t4"] = task({ id: "t4", number: 4, title: "Keep the theme and test it", phase: 2, state: "landed", requestId: "r2", position: 24, spec: "Keep the theme choice across restarts and add tests for the switch.", createdAtMs: ago(500), updatedAtMs: ago(60) });
+  tasks["t3"] = task({ id: "t3", number: 3, title: "Verify phase 1", role: "verifier", state: "done", requestId: "r2", position: 20, kind: "verify", spec: "Check phase 1 against its done-when and review its diff.", createdAtMs: ago(690), updatedAtMs: ago(520) });
+  tasks["t4"] = task({ id: "t4", number: 4, title: "Keep the theme and test it", state: "landed", requestId: "r2", position: 24, spec: "Keep the theme choice across restarts and add tests for the switch.", createdAtMs: ago(500), updatedAtMs: ago(60) });
 }
 
 function step(position: number, requestId: string, kind: OrchestratorStepKind, at: number): OrchestratorStep {
@@ -239,27 +234,6 @@ if (done) {
     step(27, "r2", { type: "landed", taskIds: ["t4"], commits: 1, branch: BRANCH, head: "b7c8d9e" }, ago(50)),
   );
 }
-
-const plan = {
-  id: "p1",
-  conversationId: id,
-  requestId: "r2",
-  position: 13,
-  title: "Dark mode toggle",
-  risky: false,
-  state: { type: "approved", by: "orchestrator" },
-  reviewSkipReason: null,
-  gate: null,
-  revises: null,
-  responses: [],
-  reviewNotes: [],
-  createdAtMs: ago(done ? 1245 : 110),
-  decidedAtMs: ago(done ? 1180 : 70),
-  steps: [
-    { title: "Theme setting and switch", detail: "The setting in the store and the switch in Appearance.", taskId: "t2", stage: done ? "done" : "building", startedAtMs: ago(done ? 1250 : 115), endedAtMs: done ? ago(510) : null, outline: null },
-    { title: "Keep the theme and test it", detail: "Keep the choice across restarts; tests for the switch.", taskId: done ? "t4" : null, stage: done ? "done" : "pending", startedAtMs: done ? ago(500) : null, endedAtMs: done ? ago(50) : null, outline: null },
-  ],
-} as unknown as Plan;
 
 const GATE_CURL =
   "/Users/me/Library/Application Support/Brigadier/gate/bin/git -c core.hooksPath=/dev/null -c credential.helper= ls-remote https://github.com/radix-ui/primitives";
@@ -314,13 +288,6 @@ const pending: Record<string, Approval> = approvals
         },
         "t2",
       ),
-    }
-  : {};
-
-const waiting: Record<string, WaitingItem> = done
-  ? {
-      w1: { id: "w1", requestId: "r2", source: { type: "orchestrator" }, key: "push", what: `Push ${BRANCH} when you’re happy with it`, createdAtMs: ago(20) } as WaitingItem,
-      w2: { id: "w2", requestId: "r2", source: { type: "orchestrator" }, key: "icon", what: "Pick an icon for the Theme row (two options are in the report)", createdAtMs: ago(19) } as WaitingItem,
     }
   : {};
 
@@ -399,11 +366,9 @@ useBoard.setState({
   board: {
     ...emptyBoard(id),
     tasks,
-    plans: { p1: plan },
     requests,
     orchestratorSteps,
     approvals: pending,
-    waiting,
     activity: done ? {} : { t2: "Running pnpm test settings" },
     transcripts: { t2: { entries: leadTranscript, hasMore: false, loading: false } },
     loaded: true,
@@ -434,7 +399,7 @@ useActivity.setState({
 });
 
 const calls: unknown[] = [];
-Object.assign(window, { flow: { useApp, useBoard, useSummary, revealPlan, calls } });
+Object.assign(window, { flow: { useApp, useBoard, useSummary, calls } });
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
@@ -459,8 +424,6 @@ mockIPC((command, payload) => {
     }
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
-    case "getRunDiff":
-      return { method: req.method, diff: null };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
     case "workerThread":

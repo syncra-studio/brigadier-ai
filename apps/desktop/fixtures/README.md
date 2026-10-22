@@ -1,49 +1,3 @@
-# Plan cards
-
-Run `pnpm dev --port 1426` in `apps/desktop`, then open
-`http://localhost:1426/fixtures/plan-cards.html`. All data is synthetic; commands are
-recorded in `window.planFixtureCalls` and never reach a daemon. This entry is absent
-from the production build. Set `window.planFixtureFailNext = true` to exercise a
-recoverable command error.
-
-The gallery renders normal approval/review/revision/rejection and all three approval
-origins, overnight proposals (including bare goals, invalid restrictions and power
-risks), preparation, planning, work, limits, wind-down, reporting, partial completion
-and full completion. A started run reads as its progress over a timeline of its phases;
-the active phase is marked on it. Expand criteria, use Show N more, open a worker,
-and exercise Start/Stop/Merge/Continue/Read report against the fixture actions.
-
-Normal plans render as the summary context card's Plan section, each in a card of its own here.
-Use `?summary=1` for the actual pinned summary and its thread links. Check a wide
-window and a 320px window: the plan is a section of the context card, the run's card sits
-beneath it, and View plan opens the floating summary at narrow widths. Earlier revision links
-open the current card, whose history folds. The summary fixture holds only normal plans; the application adapter uses real run records when present.
-
-Tab through folds, worker/report links and buttons, and use
-Enter or Space to activate them. The `/overnight` menu item only prepares a draft.
-Normal approval/rejection still sends `decidePlan`; automatic normal proposals have
-no user Start or approval control. Stop settles after one successful fixture call;
-Continue creates another proposal and requires Start.
-
-# The night of 2026-10-03
-
-`http://localhost:1426/fixtures/night.html` renders the real thread and side panel of the first
-overnight run from its stored events (`src/fixtures/boards/overnight-2026-10-03.json`, made by
-`scripts/extract-board-fixture.mjs` from a copy of the database; each decision's `short`, the words
-the daemon's board gives it, comes from what the Rust test `the_nights_fixture_carries_the_boards_short_words`
-prints, and the run's `reportText`, its report as the daemon renders it again, from what
-`the_night_of_october_3_reads_in_twenty_seconds` prints with `--nocapture`). Requests are answered in the
-page and never reach a daemon; a worker's transcript is not in the fixture. Open Phase 2's header:
-it shows seven rows (the plan, four workers, one judgement call, the lead's reply), where the app
-showed 53 before one row per task. Open a row's chevron for its checks round by round, and the
-run card's Phase 2 for its steps.
-
-The page has the app's window layout (rail, sidebar, top bar), so the summary sits where it does in the
-app. Query switches: `sidebar=0` (sidebar closed); `run=live` (the run still working)
-or `run=none` (a normal session, whose plan is the context card's Plan section); `plans=N` (N more
-plans: the latest shows, the rest sit under Earlier plans).
-`window.night` holds the stores and `revealPlan`/`revealOvernight` for probes.
-
 # Worker activity
 
 `http://localhost:1426/fixtures/worker-activity.html` holds synthetic board data and serves
@@ -118,11 +72,10 @@ a daemon. This entry is absent from the production build.
 
 # Decision card keys
 
-`/fixtures/card-keys.html` mounts the production merge question, "Implement this plan?" and a
-phase plan's rail link, one fresh mount per case, and drives them with the browser's real keys
-and clicks: a consequential card lights nothing at first, every question card takes Enter only
-when focused (a plain question lit at once too), a digit only lights, and the phase plan takes no
-Enter. It writes JSON into `#card-keys-result`;
+`/fixtures/card-keys.html` mounts the production merge question and a plain question, one fresh
+mount per case, and drives them with the browser's real keys and clicks: a consequential card
+lights nothing at first, every question card takes Enter only when focused (a plain question lit
+at once too), and a digit only lights. It writes JSON into `#card-keys-result`;
 `CardKeysRender.test.ts` checks it. IPC stays mocked. This entry is absent from the production
 build.
 
@@ -213,15 +166,6 @@ level in use and its icon; `/perm` and Enter open the permission menu above the 
 `/model` and Enter open the model picker the same way; ↑ on the focused pill opens the permission menu
 too. It writes what it saw as JSON into `#composer-permissions-result`;
 `ComposerPermissionsRender.test.ts` checks it. This entry is absent from the production build.
-
-# Rating a plan
-
-`/fixtures/plan-rating.html` is a session with a plan and a rated answer, the context card's Plan
-section beside it with a thumbs button on its title row ("Rate this plan": Good plan, Bad plan); once rated its
-menu adds Clear rating, and so does the rated answer's Feedback menu. Ratings sent come back on the
-board as the daemon's events would. It writes what it saw as JSON into `#plan-rating-result`;
-`PlanRatingRender.test.ts` checks it. `stop=1` holds the page for a screenshot. This entry is absent
-from the production build.
 
 # Source panel menu
 

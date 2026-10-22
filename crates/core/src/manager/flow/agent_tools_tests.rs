@@ -1,9 +1,8 @@
-//! The agents' own tools for the work that has a component of its own (thread-truth grill,
-//! 10-21): the session's headline. Checks and reviews are plain commands the thread runs in its
+//! Checks and reviews are plain commands the thread runs in its
 //! own shell (STRIP-DOWN-PLAN.md S4, S5): no check or review tool, no build lease. Brigadier starts
 //! none of that work by itself; it stores what the tools say and sends it as events.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde_json::json;
 
@@ -17,68 +16,6 @@ where
     Fut: std::future::Future<Output = Reply> + Send + 'static,
 {
     Arc::new(move |turn| Box::pin(f(turn)))
-}
-
-/// `set_headline` stores the session's headline, detail line and whether it tells of a failure,
-/// and sends them as an event; an empty one is refused, and the user's next message clears it.
-#[tokio::test]
-async fn the_threads_headline_stays_until_the_users_next_message() {
-    let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
-    let log = replies.clone();
-    let flow = Flow::start(
-        "thread-headline",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if turn.is_orchestrator() && turn.input.contains("Start the server") {
-                    for arguments in [
-                        json!({ "headline": "  " }),
-                        json!({ "headline": "The build failed", "failed": true }),
-                        json!({
-                            "headline": "Starting   the dev server",
-                            "detail": "Next: open the window",
-                        }),
-                    ] {
-                        let reply = turn.call("set_headline", arguments).await;
-                        log.lock().unwrap().push((reply.is_error, reply.text));
-                    }
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-
-    flow.say("Start the server").await;
-    let board = flow.settled().await;
-    let said = std::mem::take(&mut *replies.lock().unwrap());
-    assert!(said[0].0, "an empty headline is refused: {said:?}");
-    assert!(!said[1].0 && !said[2].0, "{said:?}");
-    let headline = board.headline.clone().expect("the headline is stored");
-    assert_eq!(headline.text, "Starting the dev server");
-    assert_eq!(headline.detail.as_deref(), Some("Next: open the window"));
-    assert!(
-        !headline.failed,
-        "a headline tells of no failure unless the thread says so"
-    );
-    let events = flow.events().await;
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            crate::model::DomainEvent::HeadlineSet {
-                headline: Some(said),
-                ..
-            } if said.text == "The build failed" && said.failed
-        )),
-        "sent as an event, with whether it tells of a failure"
-    );
-
-    // The turn ending leaves it; the user's next message clears it.
-    flow.say("Thanks").await;
-    let board = flow.settled().await;
-    assert_eq!(board.headline, None);
-    flow.stop().await;
 }
 
 /// The project's full checks, as `tools/full-checks.sh`: they print what ran and fail.

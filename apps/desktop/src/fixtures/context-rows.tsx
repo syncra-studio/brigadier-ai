@@ -1,8 +1,7 @@
 /**
  * The production context card of a worktree session with something in every section, in the
  * reference order: the project and its branch row, the workers (two at work, one done), what
- * runs in the background and the sources; under it, the Job card of the plan's phase at work
- * (Q88). For screenshots and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
+ * runs in the background and the sources. For screenshots and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
  * The rows read the session's own CLI items and its workers' rows (S14). `?waiting=1` has its
  * workers wait on the user (a permission, a question, a sign-in); `?limit=usage` or
  * `?limit=credits` gives its last turn that limit, with the session's wait for it (MA5).
@@ -12,16 +11,14 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { JobStack } from "@/app/conversation/JobStack";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { ResumesAtCard } from "@/app/conversation/cards/ResumesAtCard";
-import { SessionJobTab } from "@/app/side-panel/JobTab";
 import { SourcesTab } from "@/app/side-panel/SourcesTab";
 import { AgentsPanelContext, type AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { Conversation, FileEntry, Plan, QuotaWait, Request, Task, ThreadTurn, WorkerWait } from "@/ipc/generated";
+import type { Conversation, FileEntry, QuotaWait, Request, Task, ThreadTurn, WorkerWait } from "@/ipc/generated";
 import { rowOf, showRows } from "@/fixtures/workerRows";
 import { emptyBoard, useBoard } from "@/state/board";
 import { openPanelTab, sessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
@@ -42,7 +39,7 @@ const conversation: Conversation = { id, kind: "session", title: "Add the web in
     permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const base = Object.values(night.tasks)[0] as unknown as Task;
 const worker = (taskId: string, number: number, title: string, state: Task["state"], minutes: number): Task => ({ ...base, id: taskId, number, title, conversationId: id, state,
-  kind: "implement", role: null, phase: null, run: null, attempts: [], requestId: "r1", gateLink: null, candidate: null, report: null, landed: state === "landed",
+  kind: "implement", role: null, attempts: [], requestId: "r1", gateLink: null, candidate: null, report: null, landed: state === "landed",
   quotaWait: null, blockedReason: null, review: null, createdAtMs: now - minutes * MIN, updatedAtMs: now }) as unknown as Task;
 const working = Number(params.get("workers") ?? 2);
 const names = ["Web page", "API routes", "Styles", "Tests", "Readme"];
@@ -50,16 +47,7 @@ const tasks = Object.fromEntries([
   ...names.slice(0, working).map((name, index) => worker(`task-${index + 2}`, index + 2, name, "running", 6 - index)),
   worker("task-1", 1, "Data model", "landed", 20),
 ].map((task) => [task.id, task]));
-const plan = { ...(Object.values(night.plans)[0] as unknown as Plan), id: "plan-1", conversationId: id, requestId: "r1", position: 1, title: "Add a web interface to the todo app",
-  body: "# Add a web interface\n\nA page that lists, adds and completes todos.", state: { type: "approved", by: "user" } } as Plan;
-const { settled: _settled, ...open } = plan.steps[0]!;
-plan.steps = [
-  { ...plan.steps[0]!, title: "Data model and storage", taskId: "task-1", number: 1 },
-  // Phase 2 began after the first phase.
-  { ...open, title: "API routes", taskId: "task-3", number: 2, startedAtMs: now - 4.5 * MIN, endedAtMs: null },
-  { ...open, title: "The web page", taskId: "task-2", number: 3, endedAtMs: null },
-];
-useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [plan.id]: plan } } });
+useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks } });
 // The session's own CLI: what it called and fetched, its MCP servers, the dev server it runs in
 // the background, and its workers' rows.
 const tool = (itemId: string, name: string, input: unknown, at: number): FileEntry =>
@@ -112,9 +100,8 @@ mockIPC((command, payload) => {
   return { method: req.method };
 });
 
-// `tab=sources` opens the Sources tab, `tab=progress` the Job card's, for a screenshot.
+// `tab=sources` opens the Sources tab, for a screenshot.
 if (params.get("tab") === "sources") openPanelTab(id, { type: "sources" }, "Sources");
-if (params.get("tab") === "progress") openPanelTab(id, { type: "reviews" }, "Progress");
 
 const card = () => document.querySelector<HTMLElement>('[data-slot="summary-card"]');
 /** The "Resumes at" card's words. */
@@ -133,19 +120,10 @@ async function drive(): Promise<string> {
   seen.odd = rows.filter((row) => Math.round(row.getBoundingClientRect().height) !== 28).map((row) => row.outerHTML.slice(0, 300));
   seen.workers = [...card()!.querySelectorAll('[aria-label="Session workers"] [data-slot^="workers-summary"]')].map((row) => row.textContent);
   const height = card()!.getBoundingClientRect().height;
-  seen.planInCard = card()!.querySelectorAll('[data-card="plan"]').length;
-  const job = document.querySelector<HTMLElement>('[aria-label="Context"] [data-slot="job-card"]');
-  seen.job = job?.querySelector('[data-slot="job-progress"] span.truncate')?.textContent ?? null;
-  // The job's card comes right after the context card.
-  seen.jobAfterCard = card()?.nextElementSibling?.querySelector('[data-slot="job-card"]') === job;
   const project = card()!.querySelector('[data-slot="summary-section"]')!;
   seen.project = [...project.querySelectorAll('[data-slot="summary-row"]')].map((row) => row.textContent?.replace(/\s+/g, " ").trim());
   seen.branchTip = project.querySelector('[data-row="branch"]')?.getAttribute("title");
   seen.findingsInCard = card()!.querySelectorAll('[data-slot*="finding"]').length;
-  // The whole card is one open button laid over its content (the action buttons are siblings).
-  job?.parentElement?.querySelector<HTMLButtonElement>(':scope > [data-slot="job-card-open"]')?.click();
-  await frame();
-  seen.jobOpens = sessionTabs(id).active;
   seen.branchIsButton = project.querySelector('[data-row="branch"]')?.tagName === "BUTTON";
   seen.grew = card()!.getBoundingClientRect().height !== height;
   // Sources: what the session used, the first three, then View all for its searches and pages.
@@ -181,7 +159,7 @@ function FrontTab() {
   const tabs = useSessionTabsOf(id);
   const front = tabs.tabs.find((candidate) => candidate.id === tabs.active);
   if (front?.kind !== "panel") return null;
-  return front.view.type === "sources" ? <SourcesTab conversationId={id} /> : front.view.type === "reviews" ? <SessionJobTab conversationId={id} /> : null;
+  return front.view.type === "sources" ? <SourcesTab conversationId={id} /> : null;
 }
 
 function Fixture() {
@@ -200,7 +178,7 @@ function Fixture() {
       <main className="bg-background text-foreground relative flex h-screen w-full min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="h-titlebar flex items-center px-5 text-sm font-medium">Add the web interface</header>
-          <PinnedSummary conversation={conversation} cards={<><JobStack conversationId={id} /><ResumesAtCard conversationId={id} /></>} />
+          <PinnedSummary conversation={conversation} cards={<ResumesAtCard conversationId={id} />} />
           <FrontTab />
         </div>
       </main>

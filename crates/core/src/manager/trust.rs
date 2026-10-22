@@ -8,7 +8,7 @@
 //!   owned by its task. Every entry is recorded in the cleanup ledger, with what it replaced,
 //!   before it is written; Don't trust, the project's removal or the task's end puts back what
 //!   was there. A CLI not set up on this machine is left alone.
-//! - **Not trusted.** Every session on the folder runs under Ask, an overnight run's too, and
+//! - **Not trusted.** Every session on the folder runs under Ask, and
 //!   so do its workers, which launch, resume and open in a terminal at the session's level
 //!   ([`SessionManager::permission`]). A worker at work above
 //!   it is stopped, and the thread told why; an idle one resumes under Ask; the thread's own
@@ -329,7 +329,7 @@ impl SessionManager {
                 Ok(Some(Setup::Session { permission, .. })) => permission,
                 _ => continue,
             };
-            let above = saved != PermissionLevel::Ask || self.overnight.active.get(&id).is_some();
+            let above = saved != PermissionLevel::Ask;
             for task in self.core.tasks(&id).await.unwrap_or_default() {
                 if task.state.is_final() {
                     continue;

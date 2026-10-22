@@ -10,7 +10,6 @@ use serde_json::json;
 
 use super::{Flow, Options, Reply, Scratch, Script, Turn};
 use crate::manager::workers::test_data_dir;
-use crate::work::PhaseStage;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -43,18 +42,15 @@ where
     (passed, folders.try_iter().collect())
 }
 
-/// A session whose lead waits for the go-ahead on its outline: a live task, so its test data
-/// folder is there. Sends the session's folder and that one.
+/// A session whose worker is mid-turn: a live task, so its test data folder is there. Sends
+/// the session's folder and that one.
 async fn waiting_lead(name: &str, sent: &Sender<PathBuf>) -> Flow {
     let flow = Flow::start(
         name,
-        Options {
-            plan_mode: true,
-            ..Options::default()
-        },
+        Options::default(),
         script(|turn| async move {
             if turn.is_orchestrator() {
-                if !turn.input.contains("[outline") {
+                if !turn.input.contains("[report") {
                     let reply = turn
                         .call(
                             "delegate_task",
@@ -66,22 +62,18 @@ async fn waiting_lead(name: &str, sent: &Sender<PathBuf>) -> Flow {
                 }
                 return Reply::text("");
             }
-            let reply = turn
-                .call("submit_outline", json!({"outline": "1. Create one.txt"}))
-                .await;
-            assert!(!reply.is_error, "{}", reply.text);
-            Reply::text("Waiting for the go-ahead.")
+            std::future::pending::<()>().await;
+            Reply::text("")
         }),
     )
     .await;
     flow.say("Add one.txt.").await;
     let board = flow
-        .until("the outline waits for the user", |board| {
-            board.plans.values().any(|plan| {
-                plan.steps
-                    .iter()
-                    .any(|step| step.stage == PhaseStage::AwaitingGoAhead)
-            })
+        .until("the worker works", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == crate::work::TaskState::Running)
         })
         .await;
     let folder = test_data_dir(&Flow::task(&board, 1).id);

@@ -213,7 +213,6 @@ impl SessionManager {
             .values()
             .filter(|request| {
                 matches!(request.state, RequestState::Working | RequestState::Waiting)
-                    && !super::requests::ended_run_request(&board, &request.id)
             })
             .map(|request| (request.id.as_str(), request.started_at_ms))
             .collect();

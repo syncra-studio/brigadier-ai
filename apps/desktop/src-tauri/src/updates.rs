@@ -1,13 +1,13 @@
 //! Nightly updates. Only a build that carries an updater configuration looks for them: the
 //! signed nightly, whose workflow (.github/workflows/nightly.yml) adds it. Debug builds, local
-//! release builds, smoke launches and the overnight notification host never do.
+//! release builds and smoke launches never do.
 //!
 //! A minute after launch and then every four hours it reads the nightly feed. A newer build is
 //! only offered: the window shows an update pill and nothing is downloaded. A click on it
 //! downloads and checks the build, and the pill turns into "Restart to update". The update is
 //! installed when the app quits after that (by that pill or any other way), once the daemon has
-//! stopped. Without the click, quitting installs nothing. When an overnight run keeps the daemon
-//! going it isn't installed: the next launch offers it again.
+//! stopped. Without the click, quitting installs nothing. When the daemon doesn't stop it isn't
+//! installed: the next launch offers it again.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -27,8 +27,8 @@ const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 pub const EVENT: &str = "app-update";
 
 /// Whether this launch looks for updates.
-pub fn enabled(debug: bool, configured: bool, smoke: bool, host: bool) -> bool {
-    !debug && configured && !smoke && !host
+pub fn enabled(debug: bool, configured: bool, smoke: bool) -> bool {
+    !debug && configured && !smoke
 }
 
 /// Whether the build carries the updater's configuration (its feed and public key).
@@ -331,23 +331,13 @@ mod tests {
 
     #[test]
     fn only_a_configured_release_build_looks_for_updates() {
-        assert!(enabled(false, true, false, false));
+        assert!(enabled(false, true, false));
+        assert!(!enabled(true, true, false), "a debug build never updates");
         assert!(
-            !enabled(true, true, false, false),
-            "a debug build never updates"
-        );
-        assert!(
-            !enabled(false, false, false, false),
+            !enabled(false, false, false),
             "a build without the feed never updates"
         );
-        assert!(
-            !enabled(false, true, true, false),
-            "a smoke launch never updates"
-        );
-        assert!(
-            !enabled(false, true, false, true),
-            "the notification host never updates"
-        );
+        assert!(!enabled(false, true, true), "a smoke launch never updates");
     }
 
     #[test]
@@ -495,7 +485,7 @@ mod tests {
         assert_eq!(downloads.load(Ordering::Acquire), 2, "tried again");
     }
 
-    /// A daemon an overnight run keeps going leaves the update uninstalled.
+    /// A daemon that keeps going leaves the update uninstalled.
     #[test]
     fn a_running_daemon_keeps_the_update_out() {
         let updates = Updates::new();

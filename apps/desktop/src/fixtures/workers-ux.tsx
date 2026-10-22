@@ -42,7 +42,7 @@ const report: Report = {
 };
 function worker(taskId: string, number: number, title: string): Task {
   return { ...base, id: taskId, number, title, conversationId: id, state: done ? "done" : "running",
-    kind: "scout", role: null, phase: null, run: null, gateLink: null, plan: null, subject: null,
+    kind: "scout", role: null, gateLink: null, plan: null, subject: null,
     requestId: "r2", position: 12 + number, spec: "Inspect every project file, including Git metadata. Read only; do not change any files. Summarize the contents and verify Git status.",
     createdAtMs: now - (number === 1 ? 75000 : 64000), updatedAtMs: now - 60000,
     route: { ...base.route, choice: { provider: "codex", model: "gpt-6.1-sol", effort: "high" } },
@@ -71,7 +71,7 @@ if (stress) events.push(
 events.unshift({ type: "message", itemId: "brief", role: "user", text: tasks.t1.spec });
 const entries: RawEntry[] = events.map((event, index) => ({ streamSeq: index + 1, atMs: now - 60000 + index * 100, event }));
 leadTranscript.splice(0, leadTranscript.length, ...entries);
-useBoard.setState({ board: { ...board, tasks, plans: {}, approvals: {}, waiting: {}, questions: {}, decisions: [], thinking: [], machineSteps: [], orchestratorSteps: [],
+useBoard.setState({ board: { ...board, tasks, approvals: {}, questions: {}, decisions: [], thinking: [], machineSteps: [], orchestratorSteps: [],
   workerSteps: [
     { taskId: "t1", requestId: "r2", kind: "started", position: 13, atMs: tasks.t1.createdAtMs },
     { taskId: "t2", requestId: "r2", kind: "started", position: 14, atMs: tasks.t2.createdAtMs },

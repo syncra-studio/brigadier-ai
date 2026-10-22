@@ -692,8 +692,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "taskUpdated":
     case "approvalUpdated":
     case "questionUpdated":
-    case "planUpdated":
-    case "headlineSet":
     case "mcpServersUpdated":
     case "threadCommitsSeen":
     case "threadFilesSeen":
@@ -703,17 +701,14 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "previewUpdated":
     case "previewsCleared":
     case "backgroundCleared":
-    case "overnightUpdated":
     case "workerEvent":
     case "outputKept":
     case "orchestratorLogged":
     // A Chat's Memory chips live on its board; Brain jobs in the Inspector's Brain tab.
     case "memoryUpdated":
     case "brainJobUpdated":
-    // "Decided for you" and "Waiting on you" live on the board.
+    // "Decided for you" lives on the board.
     case "decidedForYou":
-    case "waitingOnYou":
-    case "waitingResolved":
     // The rail's update button reads these (state/updates).
     case "updatesChanged":
     // Connect's progress (state/connect).

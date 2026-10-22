@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 
 import type { BlockState } from "@/app/conversation/blocks";
-import type { PhaseView } from "@/app/conversation/phaseView";
 import { formatDuration } from "@/lib/format";
 
 /** Now, ticking each second while `live`. */
@@ -42,11 +41,3 @@ export function headerLabel(state: BlockState, elapsed: number, quota = false, i
   }
 }
 
-/**
- * An overnight run's header: "Overnight · Windows support — Phase 2 of 3 · Fix · 1h 4m" while it
- * works, "— ◐ 1 of 3 phases done · 6h 12m" once over; ticking only while it works.
- */
-export function phaseLabel(phase: PhaseView, elapsed: number): string {
-  const state = phase.mark ? `${phase.mark} ${phase.word}` : phase.word;
-  return phase.startedAtMs === null ? `${phase.title} — ${state}` : `${phase.title} — ${state} · ${formatDuration(elapsed)}`;
-}

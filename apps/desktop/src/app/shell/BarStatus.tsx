@@ -370,7 +370,7 @@ export function KeepAwakeMenu() {
                 With the lid closed too
               </span>
               <span id={`${lidId}-hint`} className="text-muted-foreground text-xs">
-                {keepAwake === "off" && !status.forRun
+                {keepAwake === "off"
                   ? "Takes effect once keeping awake is on"
                   : lidClosedHint(status, settingUp)}
               </span>

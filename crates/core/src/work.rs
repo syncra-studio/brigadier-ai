@@ -925,13 +925,6 @@ pub struct Task {
     /// Its part in the request's flow; absent for scouts, research and older tasks.
     #[serde(default)]
     pub role: Option<WorkerRole>,
-    /// The phase of the request's plan it works on (from 1), when the request has phases.
-    #[serde(default)]
-    pub phase: Option<u32>,
-    /// The overnight run it works for: then it runs under the run's rules (the session's
-    /// access, nothing on the never-list, the run's branch), whatever else the session says.
-    #[serde(default)]
-    pub run: Option<crate::overnight::RunTaskContext>,
     /// What the orchestrator sent the worker after its spec (`message_worker`), oldest first:
     /// changes to the task that its review checks the work against too.
     #[serde(default)]
@@ -1130,7 +1123,8 @@ pub enum ApprovalSubject {
     },
     /// An action the orchestrator asked the user to approve.
     Action { action: String, details: String },
-    /// Ask: start a phase from its lead's outline ("Implement this plan?").
+    /// Ask: start a phase from its lead's outline. Only in recorded conversations: leads post no
+    /// outlines any more.
     Outline {
         task_id: TaskId,
         title: String,
@@ -1329,220 +1323,6 @@ impl Question {
     pub fn is_open(&self) -> bool {
         self.answer.is_none() && self.answered_at_ms.is_none()
     }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanStep {
-    pub title: String,
-    pub detail: Option<String>,
-    /// The task carrying out this step, once delegated: the phase's lead.
-    pub task_id: Option<TaskId>,
-    /// Where the phase stands.
-    #[serde(default)]
-    pub stage: PhaseStage,
-    #[serde(default)]
-    pub started_at_ms: Option<i64>,
-    #[serde(default)]
-    pub ended_at_ms: Option<i64>,
-    /// The lead's outline, once it wrote one.
-    #[serde(default)]
-    pub outline: Option<String>,
-    /// Its number in the source plan (an overnight run's phase keeps the plan's own number,
-    /// whatever the user selected); its place in the list, from 1, when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub number: Option<u32>,
-    /// How the thread judged it, once it settled it (an overnight run's steps).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub settled: Option<StepSettlement>,
-}
-
-impl PlanStep {
-    /// Its number in the source plan: [`Self::number`], else `index + 1`.
-    pub fn number_at(&self, index: usize) -> u32 {
-        self.number.unwrap_or(index as u32 + 1)
-    }
-}
-
-/// The thread's judgement of a plan step (`settle_step`): its outcome, what it found, what is
-/// left, and the run branch's tip when it settled.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct StepSettlement {
-    pub outcome: StepOutcome,
-    /// What it changed, how each "done when" was checked and what the review found.
-    pub summary: String,
-    /// What is left of it, one line each (a blocked step: what only the user can do).
-    pub left: Vec<String>,
-    /// The run branch's tip when it settled.
-    pub tip: Option<String>,
-    pub at_ms: i64,
-    /// For a step settled done: each "done when" criterion with the evidence that met it at
-    /// that tip (BUILD-PLAN E2), one line each.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[ts(skip)]
-    pub evidence: Vec<String>,
-    /// What review an older Brigadier recorded for it; none now.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub review: Option<String>,
-    /// For a step settled done: what it had no evidence for at that tip (failed or pending
-    /// full checks, unmet criteria), one line each. The thread's call stands (#251).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[ts(skip)]
-    pub unevidenced: Vec<String>,
-}
-
-/// How a settled step ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum StepOutcome {
-    /// Its whole scope is done and every "done when" is met, its work landed.
-    Done,
-    /// Some of it is done; the rest is left.
-    Partial,
-    /// What is left needs the user.
-    Blocked,
-}
-
-/// Where a phase of a request stands, for the "Phase n / m" pill and the side panel's plan.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum PhaseStage {
-    #[default]
-    Pending,
-    /// Its lead reads the code and writes the outline.
-    Outlining,
-    /// The outline waits for the go-ahead (the user's, under Ask). Its plan
-    /// review runs in the background meanwhile; stores from before that read their outline
-    /// review stage as this.
-    #[serde(alias = "outlineReview")]
-    AwaitingGoAhead,
-    /// Its lead builds it.
-    Building,
-    /// A fresh verifier checks it.
-    Verifying,
-    /// Its commits are being landed.
-    Landing,
-    Done,
-    Failed,
-    /// Left out by the user's restrictions (an overnight run's "skip" or "only").
-    Skipped,
-}
-
-/// Who approved a plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum PlanApprover {
-    User,
-    /// The orchestrator split the request into phases; each lead's outline gets its own
-    /// go-ahead.
-    Orchestrator,
-}
-
-/// Plans approved by Brigadier or after a review, before phases, read as the orchestrator's.
-impl<'de> Deserialize<'de> for PlanApprover {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match String::deserialize(deserializer)?.as_str() {
-            "user" => Self::User,
-            _ => Self::Orchestrator,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum PlanState {
-    /// Waiting for the user's decision (a plan proposed before phases, under Ask for
-    /// approval).
-    Proposed,
-    Approved {
-        by: PlanApprover,
-    },
-    Rejected {
-        message: Option<String>,
-    },
-    /// The user said "Not now": nothing waits on it any more, and the thread proposes it
-    /// again when they want it.
-    PutOff,
-    /// A newer plan replaced it.
-    Superseded,
-}
-
-/// A plan's state as any version stored it: plans that were in review or being revised
-/// before phases read as superseded, since nothing reviews plans any more.
-#[derive(Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-enum StoredPlanState {
-    Proposed,
-    InReview,
-    Approved { by: PlanApprover },
-    Rejected { message: Option<String> },
-    PutOff,
-    Superseded,
-    Revising,
-}
-
-impl<'de> Deserialize<'de> for PlanState {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match StoredPlanState::deserialize(deserializer)? {
-            StoredPlanState::Proposed => Self::Proposed,
-            StoredPlanState::Approved { by } => Self::Approved { by },
-            StoredPlanState::Rejected { message } => Self::Rejected { message },
-            StoredPlanState::PutOff => Self::PutOff,
-            StoredPlanState::InReview | StoredPlanState::Superseded | StoredPlanState::Revising => {
-                Self::Superseded
-            }
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Plan {
-    pub id: CardId,
-    pub conversation_id: ConversationId,
-    /// The user request it belongs to.
-    #[serde(default)]
-    pub request_id: Option<String>,
-    pub position: i64,
-    pub title: String,
-    /// The plan as the user reads it, in markdown: a title, a one-line summary, then its
-    /// sections (`propose_plan`). Absent for a plan of phases alone (`plan_phases`).
-    #[serde(default)]
-    pub body: Option<String>,
-    /// Its phases, in order.
-    pub steps: Vec<PlanStep>,
-    pub state: PlanState,
-    pub created_at_ms: i64,
-    pub decided_at_ms: Option<i64>,
-}
-
-/// What the session is doing now, in the thread's own words (`set_headline`): the Job card's
-/// headline and one detail line under it. It stays until the user's next message or the
-/// thread's next headline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionHeadline {
-    /// "Starting the dev server".
-    pub text: String,
-    /// One line under it: "Next: open the window".
-    pub detail: Option<String>,
-    /// The words tell of a failure that still stands: the Job card's mark is a failure's. Else
-    /// none is, even for a failure from before them: the thread has judged it.
-    #[serde(default)]
-    pub failed: bool,
-    pub at_ms: i64,
 }
 
 /// The base's upstream at a session's merge (#224): the merge isn't pushed to it.
@@ -2274,69 +2054,6 @@ pub struct Decision {
 pub struct DecisionWords {
     pub what: String,
     pub why: String,
-}
-
-/// Where something only the user can do came from, which also says when it is over without
-/// them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum WaitingSource {
-    /// A card nobody answered for long: it is over when the card is answered or expires.
-    Card { card_id: CardId },
-    /// A worker's report listed it under `needs_user`: it is over when the task is stopped,
-    /// or a later report of it no longer lists it.
-    Task { task_id: TaskId },
-    /// The checks of a task's change can't run until the user does it (its verifier's
-    /// `needs_user`): it is over when the task lands or ends, or a later round of its checks
-    /// no longer lists it.
-    Landing { task_id: TaskId },
-    /// The orchestrator noted it (`note_for_user`).
-    Orchestrator,
-    /// An overnight run refused something only the user may do (an outward command, leaving
-    /// the sandbox, landing despite failed checks): it stays listed for the run's report
-    /// until the user marks it done.
-    Run {
-        run_id: crate::model::OvernightRunId,
-        task_id: Option<TaskId>,
-    },
-    /// A source Brigadier no longer has (a removed feature's): read back as this from old
-    /// data, and never listed.
-    #[serde(other)]
-    #[ts(skip)]
-    Retired,
-}
-
-/// Something only the user can do, on an overnight run's "Waiting on you" list until it is
-/// over without them (the run's end included) or they mark it done. Its request waits while
-/// it is open; other work goes on. A session lists nothing: its thread says it in its answer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct WaitingItem {
-    pub id: String,
-    /// The user request it holds up.
-    #[serde(default)]
-    pub request_id: Option<String>,
-    pub source: WaitingSource,
-    /// Its source and normalized text: an open item with the same key is the same item.
-    pub key: String,
-    /// What the user must do, in one line.
-    pub what: String,
-    pub created_at_ms: i64,
-}
-
-/// Who marked a "Waiting on you" item done.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum ResolvedBy {
-    /// The user clicked Done.
-    User,
-    /// It was over without them: its card settled, its task stopped or landed, or the
-    /// worker no longer listed it.
-    Brigadier,
 }
 
 // ----- compactions -----------------------------------------------------------------------
@@ -3436,54 +3153,6 @@ mod tests {
         .expect("an old report");
         assert!(report.done_when.is_empty() && report.risks.is_empty());
         assert!(report.needs_user.is_empty());
-    }
-
-    #[test]
-    fn a_phase_stored_in_outline_review_reads_as_awaiting_its_go_ahead() {
-        let stage: PhaseStage =
-            serde_json::from_value(serde_json::json!("outlineReview")).expect("an old stage");
-        assert_eq!(stage, PhaseStage::AwaitingGoAhead);
-        assert_eq!(
-            serde_json::to_value(stage).unwrap(),
-            serde_json::json!("awaitingGoAhead")
-        );
-    }
-
-    #[test]
-    fn a_plan_stored_before_phases_still_reads() {
-        let old = |state: serde_json::Value| -> Plan {
-            serde_json::from_value(serde_json::json!({
-                "id": "p1",
-                "conversationId": "c1",
-                "position": 3,
-                "title": "Rework the API",
-                "steps": [{ "title": "Change it", "detail": null, "taskId": null }],
-                "risky": true,
-                "gate": { "round": 1, "members": [{ "taskId": "t2", "role": "review" }] },
-                "revises": "p0",
-                "responses": [],
-                "reviewNotes": ["fine"],
-                "reviewSkipReason": null,
-                "state": state,
-                "createdAtMs": 1,
-                "decidedAtMs": null,
-            }))
-            .expect("an old plan")
-        };
-        let in_review = old(serde_json::json!({ "type": "inReview", "taskId": "t1" }));
-        assert_eq!(in_review.state, PlanState::Superseded);
-        assert_eq!(in_review.steps[0].stage, PhaseStage::Pending);
-        let revising = old(serde_json::json!({ "type": "revising" }));
-        assert_eq!(revising.state, PlanState::Superseded);
-        for by in ["review", "brigadier"] {
-            let approved = old(serde_json::json!({ "type": "approved", "by": by }));
-            assert_eq!(
-                approved.state,
-                PlanState::Approved {
-                    by: PlanApprover::Orchestrator
-                }
-            );
-        }
     }
 }
 

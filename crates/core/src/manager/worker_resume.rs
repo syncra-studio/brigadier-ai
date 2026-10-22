@@ -1,19 +1,14 @@
 //! A worker whose CLI ends before it reports resumes itself (SESSION-FIXES-PLAN.md Q4): the
 //! same CLI session, model, account and worktree, told it was interrupted. Another model takes
 //! a task over only for a limit, a logout or an outage (`fallback`), never for a crash. A task
-//! that dies again before it reports stops, and the thread hears both exits. An overnight
-//! run's state comes first: a run ending inside its allowance resumes the worker only to hand
-//! off, and past its cutoff nothing resumes.
+//! that dies again before it reports stops, and the thread hears both exits.
 
 use std::sync::Arc;
 
 use super::SessionManager;
 use super::conversation::Envelope;
-use super::overnight::{Interrupted, interrupted, interrupted_hand_off};
 use super::worker_handoff::Handover;
 use super::workers::{ASKED_THE_ORCHESTRATOR, ASKED_THE_THREAD, TaskLive};
-use crate::now_ms;
-use crate::overnight::OvernightRun;
 use crate::work::{InjectionKind, Task, TaskState};
 use crate::{Error, Result};
 use brigadier_providers::{Origin, TurnInput};
@@ -39,22 +34,6 @@ pub(crate) fn exit_words(code: Option<i32>, signal: Option<i32>, stderr: Option<
 }
 
 impl SessionManager {
-    /// The overnight run `task` belongs to, as it is now; `None` for a task of no run (and
-    /// for one whose run is gone, which [`interrupted`] reads as ended).
-    async fn run_of_task(&self, task: &Task) -> Option<Option<OvernightRun>> {
-        let context = task.run.as_ref()?;
-        let board = self.core.board(&task.conversation_id).await.ok();
-        Some(board.and_then(|board| board.runs.get(&context.run_id).cloned()))
-    }
-
-    /// What may become of `task`, interrupted now.
-    pub(crate) async fn interrupted_verdict(&self, task: &Task) -> Interrupted {
-        match self.run_of_task(task).await {
-            None => Interrupted::Resume,
-            Some(run) => interrupted(run.as_ref(), now_ms()),
-        }
-    }
-
     /// The worker's CLI ended with no report and no cut-off (`exit`: how it ended). `from` is
     /// the CLI session it ended in ([`TaskLive::generation`]). Runs outside the worker's event
     /// pump. Boxed: the worker it starts can come back here, and a recursive future must name
@@ -92,14 +71,7 @@ impl SessionManager {
         else {
             return;
         };
-        let note = match self.interrupted_verdict(&task).await {
-            Interrupted::Resume => INTERRUPTED.to_owned(),
-            Interrupted::HandOff { reason } => interrupted_hand_off(&reason),
-            Interrupted::Keep { reason } => {
-                self.keep_interrupted(&task, &reason).await;
-                return;
-            }
-        };
+        let note = INTERRUPTED.to_owned();
         if let Err(err) = self.resume_interrupted(live, &task, note).await {
             // Its session couldn't be resumed: a fresh session of the same model carries on
             // from the handoff files, which still beats another vendor.
@@ -176,7 +148,6 @@ impl SessionManager {
         else {
             return;
         };
-        self.release_run_task(&task.id);
         let n = task.number;
         self.deliver(
             &task.conversation_id,
@@ -192,17 +163,9 @@ impl SessionManager {
         .await;
     }
 
-    /// After a restart, a task whose worker ran: by its run's state, it resumes (in the
-    /// background), resumes only to hand off, or stops with its work kept.
+    /// After a restart, a task whose worker ran resumes (in the background).
     pub(crate) async fn resume_after_restart(&self, task: &Task) {
-        let note = match self.interrupted_verdict(task).await {
-            Interrupted::Resume => INTERRUPTED.to_owned(),
-            Interrupted::HandOff { reason } => interrupted_hand_off(&reason),
-            Interrupted::Keep { reason } => {
-                self.keep_interrupted(task, &reason).await;
-                return;
-            }
-        };
+        let note = INTERRUPTED.to_owned();
         let live = self.task_live(task);
         let manager = self.arc();
         let task = task.clone();
@@ -251,8 +214,6 @@ impl SessionManager {
         match task.state {
             // The user's resume starts its session again (`resume_task`).
             TaskState::Paused => {}
-            // The go-ahead resumes its session (`go_ahead` sends it as a message).
-            TaskState::Blocked if Self::waits_for_go_ahead(task) => {}
             TaskState::Blocked => {
                 let asked = task.blocked_reason.as_deref().and_then(|why| {
                     why.strip_prefix(ASKED_THE_THREAD)
@@ -270,20 +231,6 @@ impl SessionManager {
             }
             _ => {}
         }
-    }
-
-    /// An interrupted run task that may not resume (its run is past its cutoff, stopped or
-    /// over): it stops with the run's reason, its work kept with it for the report.
-    pub(crate) async fn keep_interrupted(&self, task: &Task, reason: &str) {
-        let _ = self
-            .update_task(&task.conversation_id, &task.id, |t| {
-                t.error = Some(format!(
-                    "Interrupted, and not resumed: {reason}. Its work is kept."
-                ));
-            })
-            .await;
-        self.dispose_task(task, TaskState::Stopped).await;
-        self.release_run_task(&task.id);
     }
 }
 

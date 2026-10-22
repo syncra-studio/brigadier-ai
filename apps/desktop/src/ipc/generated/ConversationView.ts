@@ -11,19 +11,15 @@ import type { MessagePage } from "./MessagePage";
 import type { MessageQueue } from "./MessageQueue";
 import type { Notice } from "./Notice";
 import type { OrchestratorStep } from "./OrchestratorStep";
-import type { OvernightRun } from "./OvernightRun";
 import type { PeerMessage } from "./PeerMessage";
-import type { Plan } from "./Plan";
 import type { Preview } from "./Preview";
 import type { Question } from "./Question";
 import type { Rating } from "./Rating";
 import type { RunState } from "./RunState";
-import type { SessionHeadline } from "./SessionHeadline";
 import type { StreamingMessage } from "./StreamingMessage";
 import type { Task } from "./Task";
 import type { ThinkingSegment } from "./ThinkingSegment";
 import type { UserRequest } from "./UserRequest";
-import type { WaitingItem } from "./WaitingItem";
 import type { WorkerStep } from "./WorkerStep";
 
 /**
@@ -38,7 +34,7 @@ context: ContextUsage | null,
 /**
  * The newest page of messages.
  */
-messages: MessagePage, tasks: Array<Task>, approvals: Array<Approval>, questions: Array<Question>, plans: Array<Plan>, 
+messages: MessagePage, tasks: Array<Task>, approvals: Array<Approval>, questions: Array<Question>, 
 /**
  * Every request of the conversation, oldest first.
  */
@@ -63,11 +59,7 @@ compactions: Array<Compaction>,
 /**
  * What was decided on the user's behalf, in the order it was decided.
  */
-decisions: Array<Decision>, 
-/**
- * What only the user can do and is not done yet, oldest first.
- */
-waiting: Array<WaitingItem>, queue: MessageQueue, run: RunState, 
+decisions: Array<Decision>, queue: MessageQueue, run: RunState, 
 /**
  * The request the running turn serves.
  */
@@ -91,17 +83,9 @@ notices: Array<Notice>,
  */
 memories: Array<MemoryChange>, 
 /**
- * Its overnight runs, a segment each, oldest first.
- */
-overnight: Array<OvernightRun>, 
-/**
  * Its previews, oldest first.
  */
 previews: Array<Preview>, 
-/**
- * What the session is doing now, in the thread's words; none once the user wrote since.
- */
-headline: SessionHeadline | null, 
 /**
  * The ended previews the user dismissed from the Background rows (Q94), by id.
  */

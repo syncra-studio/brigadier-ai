@@ -391,8 +391,8 @@ pub const COMMANDS: &[Command] = &[
         summary: "Read and act in the Brigadier app.",
         details: "`state` lists this session's tabs and terminals; `read-terminal \
                   <terminal>` reads one; `open <what> [<target>]` shows the user `file \
-                  <path>`, `diff last-turn|branch|uncommitted`, `progress`, `output <id>`, \
-                  `url <url>`, `worker <id>`, `plan <id>` or `page <id>`; `terminal-run \
+                  <path>`, `diff last-turn|branch|uncommitted`, `output <id>`, `url <url>`, \
+                  `worker <id>` or `page <id>`; `terminal-run \
                   <command…>` types a command in a terminal tab; `show-session <id>` shows \
                   another session; `close-tab <tab>` closes a tab.",
         args: &[

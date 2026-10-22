@@ -20,14 +20,14 @@ use brigadier_core::{
     ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
     FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
     ForkPlace, GitHubSignIn, GitState, Mention, MergeUndo, Message, MessageMatches, MessagePage,
-    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges, ProbeBurst,
-    Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
-    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
-    ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
-    RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
-    SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
-    TaskId, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity,
-    UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    MessageQueue, OrchestratorPage, PendingChanges, ProbeBurst, Project, ProjectCandidate,
+    ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals,
+    RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion,
+    RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings,
+    SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
+    SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome,
+    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -876,17 +876,6 @@ pub enum Request {
         #[ts(optional)]
         input: Option<brigadier_core::work::AnswerInput>,
     },
-    DecidePlan {
-        conversation_id: ConversationId,
-        card_id: CardId,
-        approve: bool,
-        message: Option<String>,
-    },
-    /// "Not now" on a proposed plan: it stops waiting for the user, and the thread says so.
-    PutOffPlan {
-        conversation_id: ConversationId,
-        card_id: CardId,
-    },
     /// Send feedback: the user's note as reports in Brigadier's issue forms, checked against
     /// its existing issues. Fails when no writer can run.
     WriteUpFeedback {
@@ -928,65 +917,6 @@ pub enum Request {
     CloseWorkspace {
         conversation_id: ConversationId,
     },
-    /// Proposes an overnight run from the user's words and the plan read from them (`None`:
-    /// a bare goal). Nothing runs until `startOvernight`. Every overnight command carries a
-    /// client-chosen `commandId`; sending one again changes nothing.
-    ProposeOvernight {
-        conversation_id: ConversationId,
-        command_id: String,
-        words: String,
-        plan: Option<ProposedPlan>,
-    },
-    /// The user's Start, naming the proposal revision they saw.
-    StartOvernight {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-        command_id: String,
-        revision: u32,
-    },
-    /// The user's Stop: drops a proposal, or winds a started run down now.
-    StopOvernight {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-        command_id: String,
-    },
-    /// The user's words changing a run's restrictions ("until 09:00 instead").
-    SteerOvernight {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-        command_id: String,
-        words: String,
-    },
-    /// Proposes the next segment of a finished run, with a new deadline from `words`.
-    ContinueOvernight {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-        command_id: String,
-        words: String,
-    },
-    /// The user's Merge of a run's verified work: `verifiedCommit` is the tip the card showed;
-    /// only it (never later, unverified commits) merges into the run's base.
-    MergeOvernight {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-        command_id: String,
-        verified_commit: String,
-    },
-    /// What a run's branch changed since its base: up to the branch tip while it works, up to
-    /// the verified tip once it finished.
-    GetRunDiff {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-    },
-    /// Notifications of finished overnight runs the app hasn't shown yet.
-    PendingOvernightNotifications,
-    /// A native submission was refused; retain the report and pending notification.
-    FailOvernightNotification {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-        notification_id: String,
-        error: String,
-    },
     /// The app ran an agent's app call (`appCall`): what came of it.
     AppAnswer {
         id: String,
@@ -998,12 +928,6 @@ pub enum Request {
         conversation_id: ConversationId,
         tab: String,
         paused: bool,
-    },
-    /// The app successfully submitted a run's notification to the OS.
-    AckOvernightNotification {
-        conversation_id: ConversationId,
-        run_id: OvernightRunId,
-        notification_id: String,
     },
     /// The user's Stop for one worker: stops it for good (its unfinished changes are kept,
     /// see `Task.kept`), shows "Stopped by the user", and tells the thread at once.
@@ -1026,12 +950,6 @@ pub enum Request {
     /// Restores a task's kept patch (`KeptWork::Diff`) as a new branch on its target branch.
     RestoreKeptWork {
         task_id: TaskId,
-    },
-    /// The user did something only they could do (Done on a "Waiting on you" item); the
-    /// orchestrator hears it.
-    ResolveWaiting {
-        conversation_id: ConversationId,
-        id: String,
     },
     /// A page of a worker's live transcript.
     ListWorkerEvents {
@@ -1795,8 +1713,6 @@ pub enum Response {
     },
     AnswerCard,
     AnswerQuestion,
-    DecidePlan,
-    PutOffPlan,
     WriteUpFeedback {
         write_up: FeedbackWriteUp,
     },
@@ -1826,35 +1742,8 @@ pub enum Response {
     CloseWorkspace {
         text: String,
     },
-    ProposeOvernight {
-        run: Box<OvernightRun>,
-    },
-    StartOvernight {
-        run: Box<OvernightRun>,
-    },
-    StopOvernight {
-        run: Box<OvernightRun>,
-    },
-    SteerOvernight {
-        run: Box<OvernightRun>,
-    },
-    ContinueOvernight {
-        run: Box<OvernightRun>,
-    },
-    MergeOvernight {
-        run: Box<OvernightRun>,
-    },
-    GetRunDiff {
-        /// Absent before the run has a branch, and for a finished run with nothing verified.
-        diff: Option<DiffStat>,
-    },
-    PendingOvernightNotifications {
-        notifications: Vec<PendingRunNotification>,
-    },
     AppAnswer,
     BrowserPaused,
-    AckOvernightNotification,
-    FailOvernightNotification,
     StopTask,
     StopWorkers {
         /// The tasks stopped, oldest first.
@@ -1865,7 +1754,6 @@ pub enum Response {
     RestoreKeptWork {
         outcome: RestoreOutcome,
     },
-    ResolveWaiting,
     ListWorkerEvents {
         page: WorkerPage,
     },
@@ -2264,10 +2152,6 @@ pub struct KeepAwakeStatus {
     /// Sleep is being prevented now.
     pub active: bool,
     pub lid_closed: LidClosed,
-    /// An overnight run keeps the computer awake (and going with the lid closed, when it can)
-    /// until it ends, whatever the settings say.
-    #[serde(default)]
-    pub for_run: bool,
     /// Keeping awake also keeps the screen on here (not on Linux: the desktop decides).
     #[serde(default)]
     pub screen_on: bool,
@@ -2281,23 +2165,12 @@ pub struct KeepAwakeStatus {
 /// Whether a daemon is in use, as `getDaemonActivity` answers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct PendingRunNotification {
-    pub conversation_id: ConversationId,
-    pub run_id: OvernightRunId,
-    pub notification: brigadier_core::overnight::RunNotification,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct DaemonActivity {
     /// App connections other than the one asking.
     pub clients: u32,
     /// What runs, said plainly (a turn or a worker, a terminal, a Brain job, …); empty when
     /// nothing does.
     pub running: Vec<String>,
-    /// An overnight run is under way: quitting the app leaves the daemon running.
-    #[serde(default)]
-    pub overnight: bool,
 }
 
 /// Staying awake with the lid closed.

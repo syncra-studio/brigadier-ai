@@ -16,8 +16,6 @@ import type {
   Mention,
   MessageMatches,
   MessageQueue,
-  OvernightRun,
-  ProposedPlan,
   QueuedMessage,
   Project,
   ProjectPatch,
@@ -499,7 +497,7 @@ export async function listProjectFiles(
   return { files, truncated };
 }
 
-/** Rates an answer (a message id, or `task:<id>` for a worker's report) or a plan (`plan:<id>`); null clears the rating. */
+/** Rates an answer (a message id, or `task:<id>` for a worker's report); null clears the rating. */
 export async function rateMessage(
   conversationId: string,
   subject: string,
@@ -1146,100 +1144,12 @@ export async function closeWorkspace(conversationId: string): Promise<string> {
   return text;
 }
 
-export async function decidePlan(
-  conversationId: string,
-  cardId: string,
-  approve: boolean,
-  message: string | null,
-): Promise<void> {
-  await request({ method: "decidePlan", conversationId, cardId, approve, message });
-}
-
 /**
  * The user's answer to the thread's feedback offer: opened on GitHub (`sent`, with what became of
  * its reports, kept for the card after a restart) or dismissed.
  */
 export async function answerFeedbackOffer(conversationId: string, offerId: string, sent: boolean, results?: FeedbackSent[]): Promise<void> {
   await request({ method: "answerFeedbackOffer", conversationId, offerId, sent, ...(results && { results }) });
-}
-
-/** "Not now" on a proposed plan: it stops waiting for the user, and the thread says so. */
-export async function putOffPlan(conversationId: string, cardId: string): Promise<void> {
-  await request({ method: "putOffPlan", conversationId, cardId });
-}
-
-/**
- * Overnight runs. Each command carries a fresh id, so a retried one changes nothing; Start
- * names the proposal revision the user saw.
- */
-export async function proposeOvernight(
-  conversationId: string,
-  words: string,
-  plan: ProposedPlan | null,
-): Promise<OvernightRun> {
-  const commandId = crypto.randomUUID();
-  const { run } = await request({
-    method: "proposeOvernight",
-    conversationId,
-    commandId,
-    words,
-    plan,
-  });
-  return run;
-}
-
-export async function startOvernight(
-  conversationId: string,
-  runId: string,
-  revision: number,
-): Promise<OvernightRun> {
-  const commandId = crypto.randomUUID();
-  const { run } = await request({
-    method: "startOvernight",
-    conversationId,
-    runId,
-    commandId,
-    revision,
-  });
-  return run;
-}
-
-export async function stopOvernight(conversationId: string, runId: string): Promise<OvernightRun> {
-  const commandId = crypto.randomUUID();
-  const { run } = await request({ method: "stopOvernight", conversationId, runId, commandId });
-  return run;
-}
-
-export async function steerOvernight(
-  conversationId: string,
-  runId: string,
-  words: string,
-): Promise<OvernightRun> {
-  const commandId = crypto.randomUUID();
-  const { run } = await request({
-    method: "steerOvernight",
-    conversationId,
-    runId,
-    commandId,
-    words,
-  });
-  return run;
-}
-
-export async function continueOvernight(
-  conversationId: string,
-  runId: string,
-  words: string,
-): Promise<OvernightRun> {
-  const commandId = crypto.randomUUID();
-  const { run } = await request({
-    method: "continueOvernight",
-    conversationId,
-    runId,
-    commandId,
-    words,
-  });
-  return run;
 }
 
 /** The user's Stop for one worker: the thread hears the user stopped it. */

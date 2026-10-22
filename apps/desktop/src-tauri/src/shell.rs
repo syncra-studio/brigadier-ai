@@ -653,7 +653,7 @@ pub fn quit(app: &AppHandle, code: i32) {
 /// Asks the window to save its pages' pending edits and waits for its answer, at most
 /// [`FLUSH_TIMEOUT`].
 async fn flush_pages(app: &AppHandle) {
-    if crate::overnight_notifications::is_host() || main_window(app).is_none() {
+    if main_window(app).is_none() {
         return;
     }
     let _held = FLUSH_GATE.lock().await;
@@ -744,26 +744,10 @@ fn wait_on_runtime<T: Send + 'static>(
 }
 
 async fn stop_daemon(app: &AppHandle) {
-    if crate::overnight_notifications::is_host() {
-        return;
-    }
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
     let bridge = state.bridge.clone();
-    // An overnight run owns the daemon until it ends: the app goes, the run goes on
-    // (PLAN.md §10.10).
-    if let Ok(Ok(brigadier_ipc::protocol::Response::GetDaemonActivity { activity })) =
-        tokio::time::timeout(
-            QUIT_TIMEOUT,
-            bridge.request(brigadier_ipc::protocol::Request::GetDaemonActivity),
-        )
-        .await
-        && activity.overnight
-    {
-        tracing::info!("an overnight run is under way; brigadierd keeps running");
-        return;
-    }
     if bridge.shutdown_daemon(QUIT_TIMEOUT).await {
         tracing::info!("brigadierd drained and acknowledged the quit");
         DAEMON_STOPPED.store(true, Ordering::Release);

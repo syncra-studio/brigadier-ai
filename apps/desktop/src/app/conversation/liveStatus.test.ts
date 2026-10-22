@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { answeredHead, elapsedWords, type StatusInput, threadStatus } from "@/app/conversation/liveStatus";
 import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
-import type { OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
+import type { OrchestratorStep, ProviderEvent, Question, Task, UserRequest } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { applyToBoard, type Board, boardFromView, doingOf, emptyBoard, type ShownApproval, workerNote } from "@/state/board";
 
@@ -13,7 +13,7 @@ let next = 0;
 const task = (patch: Partial<Task> = {}): Task => {
   next += 1;
   return { ...base, id: `t${next}`, requestId: "r1", state: "running", createdAtMs: next, updatedAtMs: next,
-    attempts: [], quotaWait: null, blockedReason: null, candidate: null, run: null, ...patch };
+    attempts: [], quotaWait: null, blockedReason: null, candidate: null, ...patch };
 };
 const byId = <T extends { id: string }>(items: T[]) => Object.fromEntries(items.map((item) => [item.id, item]));
 
@@ -118,9 +118,7 @@ test("only a card or a question for the user reads as needing them", () => {
   assert.equal(head(input({ approvals: byId([allowed]) }))?.tone, "busy");
   const question = { id: "q", requestId: "r1", answer: null, answeredAtMs: null } as unknown as Question;
   assert.deepEqual(head(input({ questions: byId([question]) }, { state: "waiting" })), { text: "Waiting for your answer", tone: "needsYou", waitsOn: "answer" });
-  // An overnight run's list or a question in the lead's text: nothing reads as needing them.
-  const item = { id: "w", requestId: "r1", what: "Sign in to GitHub" } as unknown as WaitingItem;
-  assert.equal(head(input({ waiting: { w: item } }, { state: "waiting" })), null);
+  // A question in the lead's text: nothing reads as needing them.
   assert.equal(head(input({}, { state: "waiting" })), null);
   // A change ready to land waits for the user once the lead's turn is over.
   assert.equal(head(input({ tasks: byId([task({ state: "readyToLand" })]) }, { state: "waiting" }))?.text, "Waiting for your approval");
@@ -200,7 +198,7 @@ test("an integration's live line names its action, and a worker's progress note 
   // The same words again in that new attempt show; a refresh of the board keeps them.
   const again = apply(retried, toolCall("note_progress", { note: "Scene 4 of 12: pricing section" }), 60);
   assert.equal(workerNote(again, worker.id), "Scene 4 of 12: pricing section");
-  const view = { conversation: { id: "c" }, tasks: [], approvals: [], questions: [], plans: [], overnight: [], requests: [], waiting: [], compactions: [], notices: [], memories: [] } as never;
+  const view = { conversation: { id: "c" }, tasks: [], approvals: [], questions: [], requests: [], compactions: [], notices: [], memories: [] } as never;
   assert.equal(boardFromView(view, again, []).notes?.[worker.id]?.text, "Scene 4 of 12: pricing section");
   // A note with no text, or input that isn't JSON yet, changes nothing.
   assert.equal(apply(designing, toolCall("note_progress", { note: "  " })).notes, undefined);

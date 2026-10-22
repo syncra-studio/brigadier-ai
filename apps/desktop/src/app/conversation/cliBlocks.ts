@@ -40,7 +40,7 @@ const bare = toolName;
 const SHELL_TOOLS = new Set(["Bash", "run", "run_unsandboxed"]);
 
 /** Calls whose trace is a card or a row of their own, which the session file doesn't hold. */
-const WITHOUT_ROW = new Set(["propose_plan", "wait_for_replies"]);
+const WITHOUT_ROW = new Set(["wait_for_replies"]);
 
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|bmp|tiff|heic)$/i;
 
@@ -359,10 +359,6 @@ function place(blocks: readonly Block[], times: readonly (readonly [number, numb
         break;
     }
   }
-  // "Writing plan" stands in for a plan only until the plan itself arrives.
-  for (const block of blocks) {
-    if (block.cards.some((card) => card.type === "plan")) block.cards = block.cards.filter((card) => card.type !== "writingPlan");
-  }
 }
 
 /**
@@ -454,11 +450,6 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         return;
       }
       default: {
-        // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
-        if (event.type === "toolCall" && bare(event.name) === "propose_plan" && event.status === "inProgress") {
-          current.cards.push({ type: "writingPlan", id: `writing:${position}`, position, keep: true });
-          return;
-        }
         const kind = toolStep(entry, ended === "stopped");
         if (kind) current.orchestratorSteps.push({ kind, position, ...(entry.atMs !== undefined && { atMs: entry.atMs }), requestId: current.key });
       }

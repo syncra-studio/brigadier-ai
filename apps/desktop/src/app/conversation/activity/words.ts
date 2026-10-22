@@ -98,12 +98,6 @@ export function isPlumbing(name: string): boolean {
 const OTHER: Record<string, [doing: string, done: string]> = {
   search_transcript: ["Searching earlier messages", "Searched earlier messages"],
   store_output: ["Keeping a file for you", "Kept a file for you"],
-  plan_phases: ["Planning the work", "Planned the work"],
-  propose_plan: ["Writing plan", "Wrote a plan"],
-  propose_overnight: ["Planning the work", "Planned the work"],
-  approve_outline: ["Checking a worker’s outline", "Checked a worker’s outline"],
-  settle_step: ["Finishing a phase", "Finished a phase"],
-  end_run: ["Ending the run", "Ended the run"],
   request_review: ["Asking for a review", "Asked for a review"],
   // Its name before request_review, on older rows.
   review_code: ["Asking for a review", "Asked for a review"],
@@ -112,7 +106,6 @@ const OTHER: Record<string, [doing: string, done: string]> = {
   ask_thread: ["Asking a question", "Asked a question"],
   // Its name before #66, in older transcripts.
   ask_orchestrator: ["Asking a question", "Asked a question"],
-  submit_outline: ["Sending an outline", "Sent an outline"],
   note_progress: ["Noting its progress", "Noted its progress"],
   list_sessions: ["Looking for sessions", "Looked for sessions"],
   read_session: ["Reading another session", "Read another session"],

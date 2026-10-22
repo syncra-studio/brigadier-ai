@@ -82,7 +82,7 @@ fn board_over(board: &crate::board::Board) -> bool {
 
 impl SessionManager {
     /// The shared check of whether session `id`'s thread scratch may go now: an open session,
-    /// not closing, with no overnight run, every request over (none works or waits), and
+    /// not closing, every request over (none works or waits), and
     /// nothing of its driver holding the thread. Returns its driver.
     pub(crate) async fn scratch_sweepable(&self, id: &ConversationId) -> Option<Arc<ConvLive>> {
         let conversation = self.core.conversation(id).ok()?;
@@ -90,7 +90,6 @@ impl SessionManager {
             || conversation.deleting
             || conversation.lifecycle == Lifecycle::Archived
             || self.is_closing(id)
-            || self.overnight.active.get(id).is_some()
         {
             return None;
         }
@@ -133,7 +132,7 @@ impl SessionManager {
         }
         // No turn starts now: look again, in case one ran between the check and the hold.
         let swept = match self.core.board(id).await {
-            Ok(board) if board_over(&board) && self.overnight.active.get(id).is_none() => {
+            Ok(board) if board_over(&board) => {
                 conv.scratch_used.store(false, Ordering::SeqCst);
                 self.sweep_reserved(id, &conv).await.map(Some)
             }

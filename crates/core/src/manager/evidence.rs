@@ -41,22 +41,10 @@ type BlobReader = Arc<dyn Fn(&BlobHash) -> Option<Vec<u8>> + Send + Sync>;
 pub(crate) struct Sources {
     roots: Vec<PathBuf>,
     blobs: BlobReader,
-    /// Files are read from this commit of this checkout instead (an accepted tip), never from
-    /// the folders.
-    commit: Option<(PathBuf, String)>,
 }
 
 impl Sources {
-    /// The same sources, with a cited file read as it is in commit `tip` of the checkout at
-    /// `dir`: what isn't committed there doesn't count.
-    pub(crate) fn at_commit(self, dir: PathBuf, tip: String) -> Self {
-        Self {
-            commit: Some((dir, tip)),
-            ..self
-        }
-    }
-
-    /// `path` read from the commit or the first folder that has it, or why it can't be.
+    /// `path` read from the first folder that has it, or why it can't be.
     fn read(&self, path: &str) -> std::result::Result<String, String> {
         use std::path::Component;
         let relative = Path::new(path);
@@ -66,29 +54,6 @@ impl Sources {
                 .any(|part| matches!(part, Component::ParentDir))
         {
             return Err(format!("{path} is outside the checkout"));
-        }
-        if let Some((dir, tip)) = &self.commit {
-            let object = format!("{tip}:{path}");
-            let git = |args: &[&str]| {
-                std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(dir)
-                    .args(args)
-                    .output()
-                    .ok()
-                    .filter(|output| output.status.success())
-                    .map(|output| output.stdout)
-            };
-            // Its size first: a big file is never read whole.
-            let size = git(&["cat-file", "-s", &object])
-                .and_then(|out| String::from_utf8_lossy(&out).trim().parse::<u64>().ok())
-                .ok_or_else(|| format!("{path} isn't in the tip's commit"))?;
-            if size > READ_MAX {
-                return Err(format!("{path} can't be read"));
-            }
-            let bytes = git(&["cat-file", "blob", &object])
-                .ok_or_else(|| format!("{path} can't be read"))?;
-            return Ok(String::from_utf8_lossy(&bytes).into_owned());
         }
         let Some(file) = self
             .roots
@@ -248,12 +213,6 @@ pub(crate) fn quoted_lines(text: &str) -> Vec<(String, String)> {
     found
 }
 
-/// Whether a "done when" line names criterion `id` (`p2-c1`) as a word.
-pub(crate) fn names_criterion(line: &str, id: &str) -> bool {
-    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-        .any(|word| word.eq_ignore_ascii_case(id))
-}
-
 /// A line of a worker's report without its `[evidence: …]` tags, and what they cite with
 /// their words.
 pub(crate) fn evidence_tags(line: &str) -> (String, Vec<(String, String)>) {
@@ -313,7 +272,6 @@ impl SessionManager {
         Sources {
             roots,
             blobs: Arc::new(move |hash| blobs.get_blocking(hash).ok().flatten()),
-            commit: None,
         }
     }
 
@@ -363,22 +321,6 @@ impl SessionManager {
             };
             if !stored && !read {
                 missing.push(line.clone());
-            }
-        }
-        if task.role == Some(crate::work::WorkerRole::Verifier)
-            && let (Some(context), Some(number), Some(board)) = (&task.run, task.phase, &board)
-            && let Some(phase) = board
-                .runs
-                .get(&context.run_id)
-                .and_then(|run| run.phases.iter().find(|phase| phase.number == number))
-        {
-            for criterion in &phase.done_when {
-                if !lines
-                    .iter()
-                    .any(|line| names_criterion(line, &criterion.id))
-                {
-                    missing.push(format!("{} (not listed): {}", criterion.id, criterion.text));
-                }
             }
         }
         missing
@@ -437,58 +379,7 @@ mod tests {
         Sources {
             roots: vec![root.to_owned()],
             blobs: Arc::new(move |asked| (asked.as_str() == hash).then(|| output.to_vec())),
-            commit: None,
         }
-    }
-
-    /// Read at a commit, a quote counts only as the file is committed there: not an edit left
-    /// uncommitted, not a file only in the folder, and never a path out of the checkout.
-    #[test]
-    fn at_a_commit_only_what_is_committed_there_holds() {
-        let dir = std::env::temp_dir().join(format!("brigadier-evidence-{}", uuid::Uuid::new_v4()));
-        let _temp = Temp(dir.clone());
-        std::fs::create_dir_all(&dir).unwrap();
-        let git = |args: &[&str]| {
-            let out = crate::test_git_command()
-                .arg("-C")
-                .arg(&dir)
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{out:?}");
-            String::from_utf8_lossy(&out.stdout).trim().to_owned()
-        };
-        git(&["init", "-q"]);
-        std::fs::write(dir.join("a.txt"), "first line\nRetries stop at three\n").unwrap();
-        git(&["add", "a.txt"]);
-        git(&["commit", "-qm", "a"]);
-        let tip = git(&["rev-parse", "HEAD"]);
-        // Edited and a new file, neither committed.
-        std::fs::write(dir.join("a.txt"), "first line\nRetries never stop\n").unwrap();
-        std::fs::write(dir.join("b.txt"), "Only in the folder here\n").unwrap();
-        let reader = sources(&dir, b"").at_commit(dir.clone(), tip);
-        let holds =
-            |cite: &str, quote: &str| reader.check(&source(cite, quote, None)).unwrap().holds;
-        assert!(holds("a.txt:2", "Retries stop at three"));
-        assert!(!holds("a.txt:2", "Retries never stop"));
-        assert!(!holds("b.txt:1", "Only in the folder here"));
-        assert!(!holds("../a.txt:2", "Retries stop at three"));
-        // Read from the folder, the uncommitted edit is what is there.
-        let folder = sources(&dir, b"");
-        assert!(
-            folder
-                .check(&source("a.txt:2", "Retries never stop", None))
-                .unwrap()
-                .holds
-        );
     }
 
     struct Temp(PathBuf);
@@ -540,8 +431,6 @@ mod tests {
             [("README.md:3".to_owned(), "Retries stop".to_owned())]
         );
         assert!(quoted_lines("README.md:3 says so").is_empty());
-        assert!(names_criterion("[met] p2-c1: out-1", "p2-c1"));
-        assert!(!names_criterion("[met] p2-c10: out-1", "p2-c1"));
     }
 
     #[test]

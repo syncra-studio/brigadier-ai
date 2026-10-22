@@ -183,13 +183,9 @@ pub struct DelegateTask {
     /// routing rules can name. A mockup or image generation counts as design by itself.
     #[serde(default)]
     pub design: bool,
-    /// For a task that works on a phase of the request's plan (`plan_phases`): that phase's
-    /// number (1 is the first). The user follows the plan's progress by it.
-    #[serde(default, alias = "step")]
-    pub phase: Option<u32>,
-    /// Its part in the request: "lead" (one per phase, the default for implement tasks),
-    /// "parallel" (a stream of its own files next to the lead) or "fix" (what a phase's
-    /// verifier left, or what a landed task left unfixed).
+    /// Its part in the request: "lead" (the default for implement tasks), "parallel" (a stream
+    /// of its own files next to the lead) or "fix" (what a verifier left, or what a landed task
+    /// left unfixed).
     #[serde(default)]
     pub role: Option<WorkerRole>,
     /// True for an implement task that builds a mockup the user asked for: a static preview of
@@ -325,28 +321,6 @@ pub struct AttachProof {
     /// page's URL, the device ("iPhone 16 simulator"), the file or the command.
     #[serde(default)]
     pub taken_on: Option<String>,
-}
-
-/// `start_verifier`: a verifier of a reported implement task, or with `fresh` one that gets
-/// only the request, the constraints, the criteria and the candidate commit.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StartVerifier {
-    /// The task, e.g. "task-3". Without it, `fresh` verifies your own work at `commit`.
-    #[serde(default)]
-    pub task: Option<String>,
-    /// A fresh verifier: no outline, report or context of the build, only the original
-    /// request, the user's constraints, the acceptance criteria and the candidate commit.
-    #[serde(default)]
-    pub fresh: bool,
-    /// Your own candidate commit to verify (a fresh verifier with no task); your checkout's
-    /// HEAD when absent. With a task, its last commit is the candidate.
-    #[serde(default)]
-    pub commit: Option<String>,
-    /// The acceptance criteria, word for word from the request or its plan (a fresh
-    /// verifier only).
-    #[serde(default)]
-    pub done_when: Vec<String>,
 }
 
 /// `stop_worker`: stop a worker for good, saying why.
@@ -674,55 +648,6 @@ pub struct RecordNodes {
     pub nodes: Vec<NodeInput>,
 }
 
-/// One phase of a request's plan.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PlanStepInput {
-    /// The phase, in a few words.
-    pub title: String,
-    /// Its scope and "done when", if the title is not enough.
-    #[serde(default)]
-    pub detail: Option<String>,
-}
-
-/// `plan_phases`: split a big request into phases that must run one after another. Each
-/// phase gets one lead; nothing is reviewed or approved here.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PlanPhases {
-    /// What the request achieves.
-    pub title: String,
-    /// The phases, in order.
-    pub phases: Vec<PlanStepInput>,
-}
-
-/// `propose_plan`: the thread's plan, as a document on a card the user reads and decides on.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ProposePlan {
-    /// What gets built, in a few words ("Add a --version flag"): the card's title.
-    pub title: String,
-    /// The plan in markdown: `# Title`, one summary sentence, then `## Changes`, `## Checks`
-    /// and `## Assumptions`, each a short list.
-    pub body: String,
-    /// Only for work in parts that must run one after another: the phases, in order, each
-    /// built by its own lead. Leave it out for work of one part.
-    #[serde(default)]
-    pub phases: Option<Vec<PlanStepInput>>,
-}
-
-/// `approve_outline`: let a lead build from its outline, with your corrections.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ApproveOutline {
-    /// The lead's task, e.g. "task-3".
-    pub task: String,
-    /// What the lead must change in its outline: what you found wrong in it and anything the
-    /// brief implies. Leave it out when the outline is right as it is.
-    #[serde(default)]
-    pub corrections: Option<String>,
-}
-
 /// `request_approval`: ask the user to approve what only they may decide (money, credentials,
 /// destroying something outside the session's own work).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -810,8 +735,7 @@ pub struct FinishSession {
 pub enum NoteKind {
     /// A judgement call you made on the user's behalf: it shows under "Decided for you".
     Decided,
-    /// During an overnight run, something only the user can do: it shows in the run's
-    /// "Waiting on you" list. Refused outside a run (say it in the answer instead).
+    /// Something only the user can do: refused (say it in the answer instead).
     Waiting,
 }
 
@@ -880,96 +804,6 @@ pub struct OfferFeedback {
     pub asked: bool,
 }
 
-/// `set_headline`: what the session is doing now, in the thread's words, for the Job card.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SetHeadline {
-    /// A few plain words on what happens now ("Starting the dev server", "The build failed").
-    pub headline: String,
-    /// One short line under it, usually what comes next ("Next: open the window").
-    #[serde(default)]
-    pub detail: Option<String>,
-    /// True when the words tell of a failure that still stands ("The build failed").
-    #[serde(default)]
-    pub failed: bool,
-}
-
-/// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
-/// has judged the step's whole scope and every "done when" (its own edits too).
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SettleStep {
-    /// The step's number in the run's plan (the source plan's phase number).
-    pub phase: u32,
-    pub outcome: crate::work::StepOutcome,
-    /// What the step changed and how each "done when" was checked, in a few sentences.
-    pub summary: String,
-    /// For a partial or blocked step: what is left, one line each (for blocked, exactly what
-    /// only the user can do).
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub left: Vec<String>,
-    /// Your own evidence for criteria the reports don't bind to the tip: "[met] p2-c1: out-…"
-    /// for a check you ran at the tip, one per line.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub done_when: Vec<String>,
-}
-
-/// `end_run`: the thread ends its overnight run early: the plan is done, or all that is left
-/// needs the user.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EndRun {
-    pub outcome: EndRunOutcome,
-    /// Why, in a sentence.
-    pub why: String,
-}
-
-/// Why the thread ends its run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum EndRunOutcome {
-    /// Every selected step is settled.
-    Done,
-    /// What is left needs the user.
-    NeedsUser,
-}
-
-/// `propose_overnight`: interpret a user's unstarted proposal; it cannot Start a run.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ProposeOvernight {
-    pub run_id: String,
-    pub revision: u32,
-    pub name: String,
-    pub goal: String,
-    /// Rules and settled decisions from the source, verbatim.
-    pub rules: String,
-    /// Source phase numbers, scope, dependencies and done-when, without invented work.
-    pub phases: Vec<OvernightPhaseInput>,
-    #[serde(default)]
-    pub sources: Vec<OvernightSourceInput>,
-}
-
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OvernightPhaseInput {
-    pub number: Option<u32>,
-    pub name: String,
-    pub scope: String,
-    pub done_when: Vec<String>,
-    #[serde(default)]
-    pub depends_on: Vec<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OvernightSourceInput {
-    pub path: String,
-    pub sections: Option<String>,
-}
-
 /// A tool call from an orchestrator.
 #[derive(Debug, Clone)]
 pub enum OrchestratorCall {
@@ -986,10 +820,6 @@ pub enum OrchestratorCall {
     QueryBrain(QueryBrain),
     Remember(Remember),
     SearchTranscript(SearchTranscript),
-    PlanPhases(PlanPhases),
-    ProposePlan(ProposePlan),
-    ApproveOutline(ApproveOutline),
-    StartVerifier(StartVerifier),
     AttachProof(AttachProof),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
@@ -999,11 +829,7 @@ pub enum OrchestratorCall {
     WatchCi(CiPush),
     SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
-    SetHeadline(SetHeadline),
     ListTasks,
-    SettleStep(SettleStep),
-    EndRun(EndRun),
-    ProposeOvernight(ProposeOvernight),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
@@ -1022,18 +848,12 @@ pub const THREAD_TOOLS: &[&str] = &[
     "query_brain",
     "remember",
     "search_transcript",
-    "plan_phases",
-    "propose_plan",
     "attach_proof",
     "request_approval",
     "note_for_user",
     "ci_status",
     "watch_ci",
     "offer_feedback",
-    "set_headline",
-    "settle_step",
-    "end_run",
-    "propose_overnight",
     "code_search",
     "code_refs",
     "project_map",
@@ -1077,10 +897,6 @@ impl OrchestratorCall {
             Self::QueryBrain(_) => "query_brain",
             Self::Remember(_) => "remember",
             Self::SearchTranscript(_) => "search_transcript",
-            Self::PlanPhases(_) => "plan_phases",
-            Self::ProposePlan(_) => "propose_plan",
-            Self::ApproveOutline(_) => "approve_outline",
-            Self::StartVerifier(_) => "start_verifier",
             Self::AttachProof(_) => "attach_proof",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
@@ -1090,11 +906,7 @@ impl OrchestratorCall {
             Self::WatchCi(_) => "watch_ci",
             Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
-            Self::SetHeadline(_) => "set_headline",
             Self::ListTasks => "list_tasks",
-            Self::SettleStep(_) => "settle_step",
-            Self::EndRun(_) => "end_run",
-            Self::ProposeOvernight(_) => "propose_overnight",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
@@ -1137,17 +949,6 @@ pub enum QuestionAbout {
     Consent,
     #[default]
     Product,
-}
-
-/// `submit_outline`: a lead's plan for its phase, written after reading the code. The lead then
-/// waits for the go-ahead.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SubmitOutline {
-    /// The outline: the steps in order with the files each touches, how each "done when"
-    /// will be checked, risks, and any question for the orchestrator with your
-    /// recommendation.
-    pub outline: String,
 }
 
 /// `note_progress`: where a worker is in its plan, shown under its name while it works.
@@ -1384,7 +1185,6 @@ fn empty_item(item: &str) -> bool {
 #[derive(Debug, Clone)]
 pub enum WorkerCall {
     AskOrchestrator(AskOrchestrator),
-    SubmitOutline(SubmitOutline),
     SubmitReport(SubmitReport),
     QueryBrain(QueryBrain),
     CodeSearch(CodeSearch),
@@ -1401,7 +1201,6 @@ impl WorkerCall {
     pub fn name(&self) -> &'static str {
         match self {
             Self::AskOrchestrator(_) => "ask_thread",
-            Self::SubmitOutline(_) => "submit_outline",
             Self::SubmitReport(_) => "submit_report",
             Self::QueryBrain(_) => "query_brain",
             Self::CodeSearch(_) => "code_search",
@@ -1579,16 +1378,12 @@ pub enum OpenInAppTarget {
     },
     /// Your changes, in the Review tab.
     Diff { scope: OpenDiffScope },
-    /// The Progress tab: the job step by step, with its reviews and checks.
-    Progress,
     /// What a preview prints ("preview-1").
     Output { id: String },
     /// A page on the web, or a preview's address.
     Url { url: String },
     /// A worker's panel in the Workers sidebar (only ever in front).
     Worker { task: String },
-    /// A plan you proposed, or an outline waiting for the user's start, by its card id.
-    Plan { id: String },
     /// A page, by its id.
     Page { id: String },
 }

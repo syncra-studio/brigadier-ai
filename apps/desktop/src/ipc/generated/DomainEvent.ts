@@ -21,9 +21,7 @@ import type { ModelFallback } from "./ModelFallback";
 import type { Notice } from "./Notice";
 import type { OrchestratorEntry } from "./OrchestratorEntry";
 import type { OrchestratorStep } from "./OrchestratorStep";
-import type { OvernightRun } from "./OvernightRun";
 import type { PeerState } from "./PeerState";
-import type { Plan } from "./Plan";
 import type { Preview } from "./Preview";
 import type { Project } from "./Project";
 import type { ProjectId } from "./ProjectId";
@@ -39,9 +37,7 @@ import type { RawSession } from "./RawSession";
 import type { RawSessionId } from "./RawSessionId";
 import type { RawState } from "./RawState";
 import type { ReplyHold } from "./ReplyHold";
-import type { ResolvedBy } from "./ResolvedBy";
 import type { RunState } from "./RunState";
-import type { SessionHeadline } from "./SessionHeadline";
 import type { Settings } from "./Settings";
 import type { Setup } from "./Setup";
 import type { StoredOutput } from "./StoredOutput";
@@ -52,7 +48,6 @@ import type { ThreadRead } from "./ThreadRead";
 import type { ThreadSearch } from "./ThreadSearch";
 import type { UpdatesView } from "./UpdatesView";
 import type { UserRequest } from "./UserRequest";
-import type { WaitingItem } from "./WaitingItem";
 import type { WorkerStep } from "./WorkerStep";
 import type { Workspace } from "./Workspace";
 import type { WorkspaceId } from "./WorkspaceId";
@@ -72,7 +67,7 @@ requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */
-subject: string, rating: Rating, } | { "type": "ratingCleared", subject: string, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "planUpdated", plan: Plan, } | { "type": "reviewUpdated", review: unknown, } | { "type": "integratedCheckUpdated", check: unknown, } | { "type": "headlineSet", conversationId: ConversationId, headline: SessionHeadline | null, } | { "type": "mergeRefusalSet", refusal: unknown, } | { "type": "mcpServersUpdated", conversationId: ConversationId, taskId: string | null, provider: ProviderKind, servers: Array<McpServerState>, atStart: boolean, boot: string, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, 
+subject: string, rating: Rating, } | { "type": "ratingCleared", subject: string, } | { "type": "branchSwitched", conversationId: ConversationId, head: string, } | { "type": "conversationNotice", conversationId: ConversationId, notice: Notice, } | { "type": "taskUpdated", task: Task, } | { "type": "approvalUpdated", approval: Approval, } | { "type": "questionUpdated", question: Question, } | { "type": "reviewUpdated", review: unknown, } | { "type": "integratedCheckUpdated", check: unknown, } | { "type": "mergeRefusalSet", refusal: unknown, } | { "type": "mcpServersUpdated", conversationId: ConversationId, taskId: string | null, provider: ProviderKind, servers: Array<McpServerState>, atStart: boolean, boot: string, } | { "type": "threadCommitsSeen", conversationId: ConversationId, branch: string, tip: string, 
 /**
  * The thread made the commits from this one to `tip` itself (in its turn, or with its
  * trailer): the record of who wrote them, since a commit it makes on the user's own
@@ -119,7 +114,7 @@ artifact: string | null,
  * configuration, lockfiles, toolchains and declared inputs); none when an input
  * couldn't be identified.
  */
-fingerprint?: string, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "backgroundCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "outputKept", taskId: TaskId, itemId: string, file: KeptFile, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "waitingOnYou", item: WaitingItem, } | { "type": "overnightUpdated", run: OvernightRun, } | { "type": "waitingResolved", id: string, by: ResolvedBy, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
+fingerprint?: string, } | { "type": "threadLooked", conversationId: ConversationId, reads: Array<ThreadRead>, searches: Array<ThreadSearch>, } | { "type": "previewUpdated", preview: Preview, } | { "type": "previewsCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "backgroundCleared", conversationId: ConversationId, ids: Array<string>, } | { "type": "queueChanged", conversationId: ConversationId, queue: MessageQueue, } | { "type": "workerEvent", taskId: TaskId, event: ProviderEvent, } | { "type": "outputKept", taskId: TaskId, itemId: string, file: KeptFile, } | { "type": "orchestratorLogged", conversationId: ConversationId, entry: OrchestratorEntry, } | { "type": "draftPinned", scope: string, attachments: Array<AttachmentRef>, } | { "type": "brainJobUpdated", job: BrainJob, } | { "type": "memoryUpdated", conversationId: ConversationId, memory: MemoryChange, } | { "type": "decidedForYou", decision: Decision, } | { "type": "peerMessageSent", messageId: string, to: ConversationId, text: string, blob: string | null, replyTo: string | null, chainId: string, hop: number, 
 /**
  * The sender's request whose turn sent it.
  */

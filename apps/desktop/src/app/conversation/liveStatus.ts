@@ -26,7 +26,7 @@ export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; wai
 export type ThreadStatusView = { head: StatusHead | null };
 
 export type StatusInput = {
-  board: Pick<Board, "tasks" | "approvals" | "questions" | "plans" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages">;
+  board: Pick<Board, "tasks" | "approvals" | "questions" | "requests" | "run" | "runRequest" | "doing" | "streaming" | "orchestratorSteps" | "peerMessages">;
   requestIds: readonly string[];
   state: BlockState;
   /** A live thinking snippet shows at the end of the work. */
@@ -83,10 +83,9 @@ function needsYou({ board, requestIds }: StatusInput, leadRunning: boolean, work
   }
   // The user works in a worker's own session: the request waits until they close it.
   if (workers.some((task) => task.state === "takenOver")) return { text: "Working in your terminal", tone: "needsYou" };
-  // The lead reviews a proposed plan and lands a ready change itself while its turn runs.
+  // The lead lands a ready change itself while its turn runs.
   if (leadRunning) return null;
-  if (Object.values(board.plans).some((plan) => ours(plan.requestId) && plan.state.type === "proposed")
-    || workers.some((task) => task.state === "readyToLand" && !task.run)) {
+  if (workers.some((task) => task.state === "readyToLand")) {
     return { text: "Waiting for your approval", tone: "needsYou" };
   }
   return null;

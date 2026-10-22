@@ -22,9 +22,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(60);
 /// What runs now, said plainly; empty when nothing does.
 pub async fn running(daemon: &Daemon) -> Vec<String> {
     let mut running = Vec::new();
-    if daemon.sessions.overnight_active() {
-        running.push("an overnight run".to_owned());
-    } else if daemon.sessions.agents_working().await {
+    if daemon.sessions.agents_working().await {
         running.push("a turn or a worker".to_owned());
     }
     running.extend(daemon.sessions.brain_work());

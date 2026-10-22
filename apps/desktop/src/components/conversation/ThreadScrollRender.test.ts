@@ -194,17 +194,3 @@ test("a conversation opened for the first time shows its replies whole, never pl
   assert.deepEqual({ shown, empty, placeholders }, { shown: true, empty: 0, placeholders: 0 });
   assert.ok(rows > 0);
 });
-
-// #337: a card's view loads on first use, late from a busy dev server; until it shows, the plan's
-// thread doesn't yet fill the view.
-test("the capsule's gaps are read once the plan's card shows, however late its view loads", { timeout: 90000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1&only=capsule", "thread-scroll-result", 60000, {
-    slow: { url: "/cards/CardBody.tsx", ms: 2500 },
-  })) as { error?: string; capsule: { atBottom: { capsule: boolean; capsuleInStack: number | null; lastGap: number; distance: number }; button: Button } };
-  assert.equal(seen.error, undefined);
-  const { atBottom, button } = seen.capsule;
-  near(atBottom.capsuleInStack, 0, "capsule at the top of the footer");
-  assert.equal(atBottom.distance, 0);
-  near(atBottom.lastGap, 32, "last content to the capsule");
-  near(button.aboveStack, 16, "button above the capsule");
-});

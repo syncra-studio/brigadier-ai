@@ -1,7 +1,7 @@
 import { createContext, type FC, useContext } from "react";
 
 import { DetailsFold } from "@/app/conversation/DetailsFold";
-import { splitReport } from "@/app/conversation/phaseView";
+import { splitReport } from "@/app/conversation/blocks";
 import { MarkdownBlock, MessageText, type TextMessagePartProps } from "@/components/conversation";
 
 /**

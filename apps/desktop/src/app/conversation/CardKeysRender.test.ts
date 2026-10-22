@@ -7,10 +7,10 @@ type Seen = Record<string, unknown> & { calls: unknown[]; error?: string };
 const square = (text: string) => ({ text, size: [20, 20], radius: 6, border: 1 });
 const merge = (answer: string, input: string) => ({ method: "answerQuestion", cardId: "merge", answers: [answer], input });
 
-test("every question card takes Enter only on the focused card and lights nothing until the user moves to an answer; the phase plan's rail takes no Enter", { timeout: 90000 }, async (t) => {
+test("every question card takes Enter only on the focused card and lights nothing until the user moves to an answer", { timeout: 90000 }, async (t) => {
   const results = JSON.parse(await renderFixtureLive(t, "card-keys.html", "card-keys-result", 60000)) as Record<string, Seen>;
   for (const [name, seen] of Object.entries(results)) assert.equal(seen.error, undefined, `${name}: ${seen.error}`);
-  const { mountEnter, arrowEnter, click, enterOutside, plainEnterOutside, plainEnterFocused, digitUnfocused, digitFocused, phasePlan, implementPlan, notNow, closeAsk, closeMerge, escapeAsk } = results as Record<string, Seen>;
+  const { mountEnter, arrowEnter, click, enterOutside, plainEnterOutside, plainEnterFocused, digitUnfocused, digitFocused, closeAsk, closeMerge, escapeAsk } = results as Record<string, Seen>;
 
   // The dangerous one: the merge card focuses itself with its recommended answer, yet nothing
   // is lit, the pointer passing over lights nothing, and an Enter right after mount sends nothing.
@@ -53,19 +53,6 @@ test("every question card takes Enter only on the focused card and lights nothin
   assert.deepEqual(digitUnfocused!.calls, []);
   assert.deepEqual(digitFocused!.lit, [1], "1 on the focused card lights the first answer");
   assert.deepEqual(digitFocused!.calls, [], "and sends nothing");
-
-  assert.deepEqual(phasePlan!.targets, ["body", "rail"]);
-  assert.deepEqual(phasePlan!.beforeEscape, [], "Enter never decides the phase plan");
-  assert.deepEqual(phasePlan!.calls, [{ method: "dismiss" }], "while its Esc still puts it aside");
-
-  assert.deepEqual(implementPlan!.lit, []);
-  // "Yes, implement this plan" alone: an empty square.
-  assert.deepEqual(implementPlan!.markers, [square("")]);
-  assert.deepEqual(implementPlan!.afterEnter, [], "Enter right after mount builds nothing");
-  assert.deepEqual(implementPlan!.calls, [{ method: "decidePlan", cardId: "document", approve: true, message: null }]);
-  // "Not now" puts the plan off with the daemon, not just aside on the rail.
-  assert.equal(notNow!.label, "Not now");
-  assert.deepEqual(notNow!.calls, [{ method: "putOffPlan", cardId: "document" }]);
 
   // × on a question reads Skip and answers it, so the request stops waiting (issue #239);
   // a merge card's × is its "Not yet". Esc still only puts the card aside.

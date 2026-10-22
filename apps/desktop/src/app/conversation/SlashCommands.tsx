@@ -18,7 +18,6 @@ import {
   Document,
   InfoCircle,
   Lightbulb,
-  Moon,
   Pencil,
   Pin,
   SettingsSlider,
@@ -230,18 +229,6 @@ export const SlashCommands: FC<{
       });
     }
     if (conversation.kind === "session") {
-      list.push({
-        id: "overnight",
-        label: "Overnight",
-        description: "Describe a plan and when it should be ready",
-        icon: <Moon />,
-        run: () => {
-          aui.composer().setText("/overnight ");
-          requestAnimationFrame(() =>
-            document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus(),
-          );
-        },
-      });
       list.push({
         id: "init",
         label: "Init",

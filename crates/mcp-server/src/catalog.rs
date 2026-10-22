@@ -4,14 +4,12 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AnswerWorker, ApproveOutline, AskOrchestrator, AttachProof, CHAT_THREAD_TOOLS, ChatCall,
-    CiPush, CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall, LandPhase,
-    MessageWorker, NoteForUser, NoteProgress, OfferFeedback, OrchestratorCall, PlanPhases,
-    ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, RecordNodes, Remember,
-    ReportRef, RequestApproval, RerunTask, Role, RouteFollowUp, SaveMemory, SaveReport,
-    SearchTranscript, SetHeadline, SettleStep, StartVerifier, StopWorker, StoreOutput,
-    SubmitOutline, SubmitReport, SuggestSetting, THREAD_TOOLS, TabChatCall, TabTools, ToolCall,
-    WorkerCall, WritePage, WriteTabFile,
+    AnswerWorker, AskOrchestrator, AttachProof, CHAT_THREAD_TOOLS, ChatCall, CiPush, CodeRefs,
+    CodeSearch, DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
+    NoteProgress, OfferFeedback, OrchestratorCall, QueryBrain, ReadArtifact, ReadPage, RecordNodes,
+    Remember, ReportRef, RequestApproval, RerunTask, Role, RouteFollowUp, SaveMemory, SaveReport,
+    SearchTranscript, StopWorker, StoreOutput, SubmitReport, SuggestSetting, THREAD_TOOLS,
+    TabChatCall, TabTools, ToolCall, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -30,7 +28,7 @@ report or the user's next message arrives.
 When: parts that can run at once, very long jobs, work needing tools you lack (a look at a \
 running app), or the user's ask. Independent parts (separate questions, writers on separate \
 files) start in one batch, several calls in one message, each one job with its own \"done \
-when\"; dependent parts run one after another (plan_phases). A long job across back end and \
+when\"; dependent parts run one after another. A long job across back end and \
 UI goes to one worker per layer, split along a data contract (the field names) in both briefs. \
 Meanwhile do your own part.
 
@@ -129,65 +127,12 @@ tools you called), including what is no longer in your context. Returns the best
 passages with their dates: a message shows its number (#N), a step of your own work shows as \
 a thread step, never a message number, with where its whole output is kept.";
 
-const PLAN_PHASES: &str = "Split a big request into phases that must run one after another \
-(each builds on the one before). Most requests are one phase: then skip this and delegate the \
-lead. Records the phases for the user's progress pill; nothing is reviewed or approved here. \
-Then delegate phase 1's lead (delegate_task, kind implement, phase 1), and each next phase once \
-the one before it has landed.";
-
-const PROPOSE_PLAN: &str = "Put your plan before the user, as a document on a card they read and \
-then accept (\"Yes, implement this plan\") or send back with the changes they want. Use it when \
-plan mode is on, or when the user asks for a plan. Look first (read the code yourself, or a scout \
-for more), so the plan names the real files and symbols; ask_user before it only what only the user \
-can decide. Call it once: the card is your answer. A yes comes back as a \
-message: build it then. Changes come back too: propose the revised plan again.
-
-Write the body in markdown, in this shape:
-# A short title: what gets built, in a few words
-One sentence: what changes, in the user's terms.
-## Changes
-- One bullet per change: the file and symbol in `code` and what changes there, in one line.
-## Checks
-- How the work is verified: the tests added or run, the commands, what to look at in the app.
-## Assumptions
-- Each choice you made that the user might make otherwise: defaults, edge cases, what is left out.
-
-Each bullet is one short line: the reader scans it. Detail the code will show anyway (error \
-messages, exit codes, every case a test covers) stays out unless the user must decide it. Plain, \
-specific words; no preamble, no restating the request, no filler (\"This plan will…\", \
-\"robust\", \"seamless\"). Most plans fit in 8 to 15 lines; bigger work may need more, but never pad.";
-
-const APPROVE_OUTLINE: &str = "Give a lead the go-ahead on its outline as soon as you have \
-judged it. Put what the outline gets wrong, and anything the brief implies, in `corrections`; the brief wins any \
-conflict. Under \"Ask\" this shows the user an \"Implement this plan?\" card and the \
-go-ahead goes once they start it. Returns at once.";
-
-const START_VERIFIER: &str = "Your call, for big or risky work only: start a fresh verifier \
-on top of a reported implement task's commits. It checks every \"done when\" for real, fixes \
-and commits what fails, and reports. Land the verifier's task then (its commits hold the lead's), not \
-the lead's. Small work needs none: land the lead. With fresh: true it gets only the original \
-request, the user's constraints, done_when and the candidate commit (a task's, or commit for your \
-own work) and tries to break it. Returns at once.";
-
 const ATTACH_PROOF: &str = "Attach a screenshot or short recording you made of the change \
 (PNG, JPEG, GIF, WebP, MP4, MOV or WebM, at most 11 MB), or a log or test run's output (.log or \
 .txt, at most 1 MB, with `kind`), to your reply: the user sees it under the reply, the merge \
 message's proof. Always give a short `caption` of what it shows (\"Added a todo with a due \
 date\"), and `preview` when it was taken of one of your previews; a browser_screenshot \
 knows its page. Brigadier keeps a copy, so a temporary file is fine.";
-
-const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
-its number, once you have judged its whole scope and every \"done when\" (your own edits \
-too) and nothing of it still runs or waits to land. Done: all of it is met and landed; partial: \
-some is left for a later run; blocked: what is left needs the user. Done should rest on \
-evidence for every criterion at the tip (its report's, or yours in `done_when`) and the full \
-checks passing there; what has none is said in the result and marked in the morning report, \
-not refused. A step settled done moves the tip the user's Merge takes, once every \
-step before it is done too.";
-
-const END_RUN: &str = "Only during an overnight run: end it now, because every selected step \
-is settled (done) or all that is left needs the user (needsUser). Brigadier then ends the run \
-cleanly and writes its report; you write the user's morning answer.";
 
 const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decide: spending \
 money, handling credentials yourself (a token, a password, the keychain directly), or destroying \
@@ -223,8 +168,7 @@ worktree and branch after the merge. You may instead merge with git yourself.";
 
 const NOTE_FOR_USER: &str = "Keep the user's session summary current: kind \"decided\" for a \
 judgement call you made on their behalf that they'd want to know, with why (\"Decided for \
-you\"); kind \"waiting\", during an overnight run only, for what only the user can do (a key, \
-a sign-in), in one line. Brigadier lists its own decisions and the workers' needs itself: don't \
+you\"). Brigadier lists its own decisions and the workers' needs itself: don't \
 repeat them. Returns at once.";
 
 const CI_STATUS: &str = "After a push of yours (`git push`), say which commit and branch went \
@@ -242,19 +186,12 @@ branches), by Brigadier's own records, and says what went and what \
 stayed and why. Brigadier already cleans up after you; never delete branches, worktrees or temp \
 folders by hand.";
 
-const SET_HEADLINE: &str = "Say what the session is doing now, for the user's Job card: \
-`headline` in a few plain words (\"Starting the dev server\", \"The build failed\", \"It's up \
-again\"), `detail`, one short line under it, usually what comes next (\"Next: open the \
-window\"), and `failed` true when the words tell of a failure that still stands. Call it when \
-what you are doing changes, not for every step; it replaces the last one and stays until the \
-user's next message. Returns at once.";
-
 const SUGGEST_SETTING: &str = "Suggest changing one setting on a card whose one button makes \
 the change, when what the user asked for needs it: this session's permission level \
 (`permission`: ask, accept_edits or full_access) or the Browser setting \
 (`browser`: on or off). reason: one line on why it helps with what they asked. Nothing changes until the user presses \
-the button; every other setting is theirs alone. Refused when the setting is already so, during \
-an overnight run, and a second time in one request.";
+the button; every other setting is theirs alone. Refused when the setting is already so, and a \
+second time in one request.";
 
 const OFFER_FEEDBACK: &str = "When the user seems annoyed with Brigadier itself (a bug in \
 the app or in how you or its workers behave; never their own project's code), or asks you to \
@@ -319,12 +256,6 @@ about this project (its modules, earlier findings, decisions, conventions, contr
 user's preferences, each with where it came from. Fast and cheap: ask it before reading widely. \
 It answers with what holds now; set `history` to also see earlier versions. When it says there \
 are more results, ask again with `page`.";
-
-const SUBMIT_OUTLINE: &str = "Leads only, when the work is multi-step or risky: after \
-reading the code, send your outline (the steps in order with the files each touches, how you \
-will check each \"done when\", risks, and any question with your recommendation), then end your \
-turn. The go-ahead, with any corrections, arrives as your next message; build nothing before \
-it. Small work needs no outline: just do it.";
 
 const SUBMIT_REPORT: &str = "Submit your final structured report. Call it exactly once, as \
 your last action, when the task is done or cannot be done. The thread reads only this \
@@ -424,24 +355,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             SEARCH_TRANSCRIPT,
             input_schema::<SearchTranscript>(),
         ),
-        tool("plan_phases", PLAN_PHASES, input_schema::<PlanPhases>()),
-        tool("propose_plan", PROPOSE_PLAN, input_schema::<ProposePlan>()),
-        tool(
-            "approve_outline",
-            APPROVE_OUTLINE,
-            input_schema::<ApproveOutline>(),
-        ),
-        tool(
-            "start_verifier",
-            START_VERIFIER,
-            input_schema::<StartVerifier>(),
-        ),
         tool("attach_proof", ATTACH_PROOF, input_schema::<AttachProof>()),
-        tool(
-            "propose_overnight",
-            "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases: the thread plans it once the run starts. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",
-            input_schema::<ProposeOvernight>(),
-        ),
         tool(
             "request_approval",
             REQUEST_APPROVAL,
@@ -465,10 +379,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             OFFER_FEEDBACK,
             input_schema::<OfferFeedback>(),
         ),
-        tool("set_headline", SET_HEADLINE, input_schema::<SetHeadline>()),
         tool("list_tasks", LIST_TASKS, no_arguments()),
-        tool("settle_step", SETTLE_STEP, input_schema::<SettleStep>()),
-        tool("end_run", END_RUN, input_schema::<EndRun>()),
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
@@ -485,11 +396,6 @@ fn orchestrator_tools() -> Vec<Tool> {
 fn worker_tools() -> Vec<Tool> {
     vec![
         tool("ask_thread", ASK_THREAD, input_schema::<AskOrchestrator>()),
-        tool(
-            "submit_outline",
-            SUBMIT_OUTLINE,
-            input_schema::<SubmitOutline>(),
-        ),
         tool(
             "note_progress",
             NOTE_PROGRESS,
@@ -545,7 +451,6 @@ fn chat_tools() -> Vec<Tool> {
 /// call's fixed start near plain Claude Code's. Codex reads no such mark and loads them all.
 pub const THREAD_ALWAYS_LOADED: &[&str] = &[
     "note_for_user",
-    "set_headline",
     "query_brain",
     "remember",
     "code_search",
@@ -659,7 +564,6 @@ const DELEGATE_TASK_FIELDS: &[(&str, &str)] = &[
         "design",
         "True when it makes designs or images: design files (Pencil's .pen), mockups, generated images.",
     ),
-    ("phase", "The plan phase it works on (plan_phases), from 1."),
     (
         "role",
         "lead (an implement task's default), parallel (its own files next to the lead), verifier, fix, merge or reviewer.",
@@ -743,9 +647,6 @@ pub fn parse_call(
                 "ask_thread" | "ask_orchestrator" if !checks => {
                     WorkerCall::AskOrchestrator(args::<AskOrchestrator>(name, arguments)?)
                 }
-                "submit_outline" if !checks => {
-                    WorkerCall::SubmitOutline(args::<SubmitOutline>(name, arguments)?)
-                }
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
                 "query_brain" => WorkerCall::QueryBrain(args::<QueryBrain>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
@@ -811,10 +712,6 @@ fn thread_call(name: &str, arguments: Value) -> Result<ToolCall, ParseError> {
         "search_transcript" => {
             OrchestratorCall::SearchTranscript(args::<SearchTranscript>(name, arguments)?)
         }
-        "plan_phases" => OrchestratorCall::PlanPhases(args(name, arguments)?),
-        "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
-        "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
-        "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
         "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
         "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
         "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
@@ -824,11 +721,7 @@ fn thread_call(name: &str, arguments: Value) -> Result<ToolCall, ParseError> {
         "watch_ci" => OrchestratorCall::WatchCi(args(name, arguments)?),
         "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
         "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
-        "set_headline" => OrchestratorCall::SetHeadline(args(name, arguments)?),
         "list_tasks" => OrchestratorCall::ListTasks,
-        "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
-        "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
-        "propose_overnight" => OrchestratorCall::ProposeOvernight(args(name, arguments)?),
         "code_search" => OrchestratorCall::CodeSearch(args(name, arguments)?),
         "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
         "project_map" => OrchestratorCall::ProjectMap,
@@ -962,7 +855,7 @@ mod tests {
     fn the_rules_left_out_of_the_threads_instructions_are_in_their_tools() {
         for said in [
             "start in one batch, several calls in one message, each one job with its own",
-            "dependent parts run one after another (plan_phases)",
+            "dependent parts run one after another",
             "how to check each part by its own checks only (never the full suite or an app build; screenshots only if the user asked)",
             "With `include_request` Brigadier adds the user's request verbatim",
             "nor name a /tmp path",
@@ -1011,36 +904,6 @@ mod tests {
             .is_ok(),
             "{shown}"
         );
-    }
-
-    #[test]
-    fn phases_are_planned_and_outlines_approved_without_review_rounds() {
-        let tools = orchestrator_tools();
-        let names: Vec<_> = tools.iter().map(|tool| tool.name.to_string()).collect();
-        assert!(names.contains(&"plan_phases".to_owned()));
-        assert!(names.contains(&"approve_outline".to_owned()));
-        // The plan the user decides is a document in a fixed shape, short lines first.
-        let propose = tools
-            .iter()
-            .find(|tool| tool.name == "propose_plan")
-            .unwrap();
-        let shape = propose.description.as_deref().unwrap();
-        for part in [
-            "## Changes",
-            "## Checks",
-            "## Assumptions",
-            "one short line",
-        ] {
-            assert!(shape.contains(part), "{part}");
-        }
-        let approve = tools
-            .iter()
-            .find(|tool| tool.name == "approve_outline")
-            .unwrap();
-        let description = approve.description.as_deref().unwrap();
-        assert!(!description.contains("review"), "{description}");
-        assert!(description.contains("Implement this plan?"));
-        assert!(names.contains(&"start_verifier".to_owned()));
     }
 
     #[test]

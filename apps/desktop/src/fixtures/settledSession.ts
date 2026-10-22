@@ -48,7 +48,6 @@ export function settledSession(
   let lastRequest: string | null = null;
   for (const envelope of events) {
     const { event } = envelope;
-    if (event.type === "waitingOnYou" || event.type === "waitingResolved") continue;
     if (event.type === "requestUpdated") {
       lastRequest = event.request.id;
       if (event.request.state.type === "waiting") {

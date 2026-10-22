@@ -105,7 +105,7 @@ async fn a_turn_without_a_report_is_held_once_and_a_reported_one_ends() {
 }
 
 #[tokio::test]
-async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
+async fn a_worker_waiting_on_its_background_job_ends_its_turn() {
     let log: Log = Arc::default();
     let seen_by = log.clone();
     let flow = Flow::start(
@@ -115,13 +115,6 @@ async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
             let log = seen_by.clone();
             async move {
                 if turn.is_orchestrator() {
-                    if turn.input.contains("[outline task-") {
-                        let reply = turn
-                            .call("approve_outline", json!({"task": "task-1"}))
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                        return Reply::text("");
-                    }
                     if turn.earlier == 0 {
                         let reply = turn
                             .call(
@@ -156,13 +149,6 @@ async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
                         || async move { t.stop_decision(false).await.is_some() },
                     )
                     .await;
-                    let reply = turn
-                        .call("submit_outline", json!({"outline": "1. Build it."}))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    let outline = turn.stop_decision(false).await;
-                    log.lock().unwrap().push(("outline".into(), outline));
-                    return Reply::text("Waiting for the go-ahead.");
                 }
                 report(&turn).await
             }
@@ -179,7 +165,6 @@ async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
     .await;
     flow.settled().await;
     assert!(seen(&log, "no job").is_some(), "no job: the turn is held");
-    assert_eq!(seen(&log, "outline"), None);
     flow.stop().await;
 }
 

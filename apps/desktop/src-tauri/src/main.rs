@@ -25,7 +25,7 @@ mod intro;
 mod browser_ui;
 mod launcher;
 mod login_item;
-mod overnight_notifications;
+mod notifications;
 mod shell;
 mod simulator;
 mod smoke;
@@ -115,29 +115,26 @@ fn pages_flushed(token: u64) {
 
 #[tauri::command]
 async fn ipc_request(state: State<'_, AppState>, request: Request) -> Result<Response, IpcError> {
-    if matches!(request, Request::StartOvernight { .. }) {
-        overnight_notifications::ask_permission();
-    }
     state.bridge.request(request).await
 }
 
 /// Whether Brigadier may show notifications, without asking (a run's card says when not).
 #[tauri::command]
-async fn notification_permission() -> overnight_notifications::Permission {
-    overnight_notifications::permission().await
+async fn notification_permission() -> notifications::Permission {
+    notifications::permission().await
 }
 
 /// Asks the system to let Brigadier show notifications (Settings › General), and answers what
 /// the user chose once they did (still not asked after a minute without an answer).
 #[tauri::command]
-async fn ask_notification_permission() -> overnight_notifications::Permission {
-    overnight_notifications::ask_and_wait().await
+async fn ask_notification_permission() -> notifications::Permission {
+    notifications::ask_and_wait().await
 }
 
 /// Opens the system's notification settings at Brigadier.
 #[tauri::command]
 fn open_notification_settings(app: tauri::AppHandle) -> Result<(), String> {
-    overnight_notifications::open_settings(&app)
+    notifications::open_settings(&app)
 }
 
 #[tauri::command]
@@ -258,7 +255,7 @@ fn open_folders(app: &tauri::AppHandle, paths: impl IntoIterator<Item = std::pat
 
 /// The app's options whose value is the next argument: that value is never a folder to open
 /// (a relaunch with `--brigadier-data-dir` offered its own data folder as a project).
-const VALUE_OPTIONS: [&str; 2] = ["--brigadier-data-dir", "--overnight-notification"];
+const VALUE_OPTIONS: [&str; 1] = ["--brigadier-data-dir"];
 
 /// The folders among a launch's arguments, relative ones resolved against `cwd`.
 fn folder_args(
@@ -631,22 +628,12 @@ fn main() {
     }
 
     let args: Vec<_> = std::env::args().collect();
-    overnight_notifications::configure(&args);
-    let intent = overnight_notifications::host_id(&args);
     let smoke = args.iter().any(|arg| arg == "--smoke");
     let mut context = tauri::generate_context!();
     let data_dir = args
         .windows(2)
         .find(|pair| pair[0] == "--brigadier-data-dir")
         .map(|pair| std::path::PathBuf::from(&pair[1]));
-    #[cfg(target_os = "macos")]
-    let data_dir = data_dir.or_else(|| {
-        if std::env::var_os("BRIGADIER_DATA_DIR").is_none() {
-            overnight_notifications::activation_data_dir()
-        } else {
-            None
-        }
-    });
     // Nor does a debug build use the installed app's data: without a data directory of its
     // own it gets a throwaway one.
     let data_dir = data_dir.or_else(|| {
@@ -704,8 +691,8 @@ fn main() {
         }
     }
     // The first launch's intro shows the window itself, once the page is ready (intro.rs).
-    let hold_for_intro = intro::should_hold(first_launch, smoke, intent.is_some());
-    if intent.is_some() || hold_for_intro {
+    let hold_for_intro = intro::should_hold(first_launch, smoke);
+    if hold_for_intro {
         for window in &mut context.config_mut().app.windows {
             window.visible = false;
         }
@@ -715,7 +702,6 @@ fn main() {
         cfg!(debug_assertions),
         updates::configured(context.config()),
         smoke,
-        intent.is_some(),
     );
     tracing::info!(on = check_updates, "nightly updates");
     let builder = tauri::Builder::default();
@@ -726,10 +712,6 @@ fn main() {
     };
     let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            if overnight_notifications::host_id(&args).is_some() {
-                return;
-            }
-            overnight_notifications::leave_host();
             shell::show_main(app);
             open_folders(
                 app,
@@ -740,26 +722,6 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            // Remember the installed/bundled host, under this exact daemon data directory.
-            if let Ok(exe) = std::env::current_exe() {
-                #[cfg(target_os = "macos")]
-                let bundled = exe
-                    .parent()
-                    .and_then(|path| path.parent())
-                    .is_some_and(|path| path.file_name().is_some_and(|name| name == "Contents"));
-                #[cfg(not(target_os = "macos"))]
-                let bundled = !tauri::is_dev();
-                if bundled {
-                    let _ = std::fs::create_dir_all(&platform.paths().data_dir);
-                    let _ = std::fs::write(
-                        platform
-                            .paths()
-                            .data_dir
-                            .join("overnight-notification-host"),
-                        exe.to_string_lossy().as_bytes(),
-                    );
-                }
-            }
             browser::set_data_dir(&platform.paths().data_dir);
             let launcher = Launcher::new(platform.clone(), daemon_env);
             let bridge = Bridge::start(
@@ -776,16 +738,10 @@ fn main() {
                 info,
                 cold_start_ms: Mutex::new(None),
             });
-            overnight_notifications::install(app.handle(), intent.clone());
-            if intent.is_some() {
-                shell::hide_main(app.handle());
-            }
             if hold_for_intro {
                 intro::hold(app.handle());
             }
-            if intent.is_none()
-                && let Ok(cwd) = std::env::current_dir()
-            {
+            if let Ok(cwd) = std::env::current_dir() {
                 open_folders(app.handle(), folder_args(std::env::args().skip(1), &cwd));
             }
             #[cfg(target_os = "macos")]
@@ -956,7 +912,6 @@ fn main() {
         RunEvent::Exit => shell::quit_on_exit(app),
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
-            overnight_notifications::leave_host();
             shell::user_came_to_it();
             shell::show_main(app);
         }

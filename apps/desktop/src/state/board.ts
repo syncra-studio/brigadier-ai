@@ -22,16 +22,13 @@ import type {
   Notice,
   OrchestratorLogEntry,
   OrchestratorStep,
-  OvernightRun,
   PeerMessage,
   PeerState,
-  Plan,
   Preview,
   ProviderEvent,
   Question,
   RawEntry,
   RunState,
-  SessionHeadline,
   StreamingMessage,
   ThinkingSegment,
   Task,
@@ -39,7 +36,6 @@ import type {
   UserRequest,
   Rating,
   RebirthThresholds,
-  WaitingItem,
   WorkerStep,
 } from "@/ipc/generated";
 
@@ -81,17 +77,12 @@ export type Board = {
   tasks: Record<string, Task>;
   approvals: Record<string, ShownApproval>;
   questions: Record<string, Question>;
-  plans: Record<string, Plan>;
   /** The thread's previews (a dev server, the app it runs for the user), by id. */
   previews: Record<string, Preview>;
-  /** What the session is doing now, in the thread's words (set_headline); null once the user wrote since. */
-  headline: SessionHeadline | null;
   /** The ended previews the user dismissed from the Background rows (Q94), by id. */
   backgroundCleared: string[];
   /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
   mcpServers: Record<string, AgentMcpServers>;
-  /** Overnight runs, a segment each, by id. */
-  overnight: Record<string, OvernightRun>;
   /** What each user message set in motion, by request id (the message's id). */
   requests: Record<string, UserRequest>;
   /** Every worker step (started, finished, …), in stream order. */
@@ -102,8 +93,6 @@ export type Board = {
   machineSteps: MachineStep[];
   /** What was decided on the user's behalf, in stream order. */
   decisions: Decision[];
-  /** What only the user can do and is not done yet, by id. */
-  waiting: Record<string, WaitingItem>;
   /** A Chat's context compactions, by id. */
   compactions: Record<string, Compaction>;
   /** The user's ratings of answers, by subject (a message id, or `task:<id>`). */
@@ -349,18 +338,14 @@ export function emptyBoard(conversationId: string): Board {
     tasks: {},
     approvals: {},
     questions: {},
-    plans: {},
     previews: {},
-    headline: null,
     backgroundCleared: [],
     mcpServers: {},
-    overnight: {},
     requests: {},
     workerSteps: [],
     orchestratorSteps: [],
     machineSteps: [],
     decisions: [],
-    waiting: {},
     compactions: {},
     ratings: {},
     queue: EMPTY_QUEUE,
@@ -401,13 +386,10 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "taskUpdated",
   "approvalUpdated",
   "questionUpdated",
-  "planUpdated",
-  "headlineSet",
   "mcpServersUpdated",
   "previewUpdated",
   "previewsCleared",
   "backgroundCleared",
-  "overnightUpdated",
   "queueChanged",
   "runStateChanged",
   "requestUpdated",
@@ -422,8 +404,6 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "ratingCleared",
   "memoryUpdated",
   "decidedForYou",
-  "waitingOnYou",
-  "waitingResolved",
   "peerMessageSent",
   "peerMessageReceived",
   "peerMessageState",
@@ -462,22 +442,17 @@ export function boardFromView(
     tasks: byId(view.tasks),
     approvals: byId(view.approvals.filter(shownApproval)),
     questions: byId(view.questions),
-    plans: byId(view.plans),
     // A daemon from before previews sends none.
     previews: byId(view.previews ?? []),
-    // Nor one from before the thread wrote a headline.
-    headline: view.headline ?? null,
     // Nor one from before the merge rule.
     backgroundCleared: view.backgroundCleared ?? [],
     // Nor one from before agents told their MCP servers.
     mcpServers: Object.fromEntries((view.mcpServers ?? []).map((agent) => [mcpAgentKey(agent.taskId), agent])),
-    overnight: byId(view.overnight),
     requests: byId(view.requests),
     workerSteps: view.workerSteps,
     orchestratorSteps: view.orchestratorSteps,
     machineSteps: view.machineSteps ?? [],
     decisions: view.decisions,
-    waiting: byId(view.waiting),
     compactions: byId(view.compactions),
     ratings: view.ratings,
     queue: view.queue,
@@ -654,10 +629,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, approvals: placed(board.approvals, event.approval, envelope, board) };
     case "questionUpdated":
       return { ...board, questions: placed(board.questions, event.question, envelope, board) };
-    case "planUpdated":
-      return { ...board, plans: placed(board.plans, event.plan, envelope, board) };
-    case "headlineSet":
-      return { ...board, headline: event.headline };
     case "mcpServersUpdated": {
       const key = mcpAgentKey(event.taskId);
       const { [key]: _gone, ...others } = board.mcpServers;
@@ -677,8 +648,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, previews: Object.fromEntries(Object.entries(board.previews).filter(([id, preview]) =>
         previewActive(preview.state) || !event.ids.includes(id),
       )) };
-    case "overnightUpdated":
-      return { ...board, overnight: { ...board.overnight, [event.run.id]: event.run } };
     case "requestUpdated":
       return { ...board, requests: { ...board.requests, [event.request.id]: event.request } };
     case "workerStepped":
@@ -748,13 +717,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       const known = board.peerMessages[event.messageId];
       if (!known || known.settled) return board;
       return { ...board, peerMessages: { ...board.peerMessages, [event.messageId]: { ...known, settled: true } } };
-    }
-    case "waitingOnYou":
-      return { ...board, waiting: { ...board.waiting, [event.item.id]: event.item } };
-    case "waitingResolved": {
-      if (!board.waiting[event.id]) return board;
-      const { [event.id]: _done, ...waiting } = board.waiting;
-      return { ...board, waiting };
     }
     case "compactionUpdated":
       return { ...board, compactions: placed(board.compactions, event.compaction, envelope, board) };
@@ -831,8 +793,6 @@ const TOOL_DOING: Readonly<Record<string, string>> = {
   store_output: "Keeping a file for you",
   // Remembering is silent by design.
   remember: "Thinking",
-  plan_phases: "Planning the phases",
-  approve_outline: "Reading a worker's outline",
   request_approval: "Asking for your approval",
   land_phase: "Landing a worker's commits",
   finish_session: "Merging the session",

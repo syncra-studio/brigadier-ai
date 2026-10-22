@@ -14,7 +14,7 @@ use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
     ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, MockupPart,
     OrchestratorStep, OrchestratorStepKind, QuestionItem, QuestionKind, QuestionOption, Task,
-    TaskId, TaskKind, WaitingSource, WorkerRole,
+    TaskId, TaskKind, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -68,11 +68,7 @@ impl SessionManager {
     ) -> Result<String> {
         match call {
             OrchestratorCall::DelegateTask(mut args) => {
-                // In plan mode a lead may outline the work (it stops at its outline); nothing
-                // merges.
-                if args.kind.writes() {
-                    crate::heap(|| self.check_overnight_proposal(id)).await?;
-                }
+                // In plan mode nothing merges.
                 if args.kind == TaskKind::Merge {
                     crate::heap(|| self.check_plan_mode(id)).await?;
                 }
@@ -122,17 +118,8 @@ impl SessionManager {
                         ));
                     }
                     // With no task, the worker merges the session's base into the session
-                    // branch: only a new worktree has a base, and a run's branch merges only
-                    // its verified work.
+                    // branch: only a new worktree has a base.
                     (None, TaskKind::Merge) => {
-                        if self.overnight.active.get(id).is_some() {
-                            return Err(Error::Invalid(
-                                "an overnight run is going: its branch takes no merge of the \
-                                 base; a merge task needs `subject`, the task whose work \
-                                 conflicts with the run's branch"
-                                    .into(),
-                            ));
-                        }
                         if !matches!(
                             self.core.conversation(id)?.setup,
                             Some(Setup::Session {
@@ -196,10 +183,6 @@ impl SessionManager {
                     return Err(Error::Invalid(
                         "the subject task has nothing to review yet".into(),
                     ));
-                }
-                if let Some(phase) = args.phase {
-                    let request = crate::heap(|| self.request_for(id, None)).await;
-                    crate::heap(|| self.phase_step(id, request, phase)).await?;
                 }
                 let effort = match args.effort.trim().to_lowercase().as_str() {
                     effort @ ("low" | "medium" | "high") => effort.to_owned(),
@@ -280,7 +263,6 @@ impl SessionManager {
                         needs,
                         super::workers::TaskExtra {
                             role,
-                            phase: args.phase,
                             target,
                             end_state,
                             mockup,
@@ -293,12 +275,6 @@ impl SessionManager {
                     )
                 })
                 .await?;
-                // A lead of a phase takes it over (a new lead redoes it).
-                if let Some(phase) = args.phase
-                    && role == Some(WorkerRole::Lead)
-                {
-                    crate::heap(|| self.assign_phase(&task, phase)).await?;
-                }
                 crate::heap(|| {
                     self.orchestrator_step(
                         id,
@@ -509,18 +485,6 @@ impl SessionManager {
             OrchestratorCall::SearchTranscript(args) => {
                 crate::heap(|| self.search_transcript_tool(id, args)).await
             }
-            OrchestratorCall::PlanPhases(args) => crate::heap(|| self.plan_phases(id, args)).await,
-            OrchestratorCall::ProposePlan(args) => {
-                crate::heap(|| self.propose_plan(id, args)).await
-            }
-            OrchestratorCall::ApproveOutline(args) => {
-                crate::heap(|| self.approve_outline(id, args)).await
-            }
-            OrchestratorCall::StartVerifier(args) => {
-                // A verifier changes code: in plan mode nothing does.
-                crate::heap(|| self.check_plan_mode(id)).await?;
-                crate::heap(|| self.verify_task(id, args)).await
-            }
             OrchestratorCall::AttachProof(args) => {
                 crate::heap(|| self.attach_proof(id, args)).await
             }
@@ -557,14 +521,6 @@ impl SessionManager {
             }
             OrchestratorCall::OfferFeedback(args) => {
                 crate::heap(|| self.offer_feedback(id, args)).await
-            }
-            OrchestratorCall::SetHeadline(args) => {
-                crate::heap(|| self.set_headline(id, args)).await
-            }
-            OrchestratorCall::SettleStep(args) => crate::heap(|| self.settle_step(id, args)).await,
-            OrchestratorCall::EndRun(args) => crate::heap(|| self.end_run_now(id, args)).await,
-            OrchestratorCall::ProposeOvernight(args) => {
-                crate::heap(|| self.interpret_overnight(id, args)).await
             }
             // What the thread finds in the index counts as its own search (`super::reads`).
             OrchestratorCall::CodeSearch(args) => {
@@ -818,10 +774,6 @@ impl SessionManager {
             WorkerCall::AskOrchestrator(args) => {
                 self.worker_question(&conversation_id, &task_id, args).await
             }
-            WorkerCall::SubmitOutline(args) => {
-                self.submit_outline(&conversation_id, &task_id, args.outline)
-                    .await
-            }
             // The app shows the note from the call itself, in the worker's live events.
             WorkerCall::NoteProgress(args) => {
                 if args.note.trim().is_empty() {
@@ -894,7 +846,6 @@ impl SessionManager {
     /// In plan mode nothing changes until the user turns it off: landing, merging and
     /// finishing are refused, whatever the permission level.
     async fn check_plan_mode(&self, id: &ConversationId) -> Result<()> {
-        self.check_overnight_proposal(id).await?;
         if self.plan_mode(id) {
             return Err(Error::Invalid(
                 "Plan mode is on: change nothing yet. Scouts and research may look around, and a lead may write its outline (it stops there). Merge tasks, landing and finish_session work again once the user turns plan mode off.".into(),
@@ -903,9 +854,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// `note_for_user`: a judgement call for "Decided for you", or, in an overnight run,
-    /// something only the user can do for its "Waiting on you", under the request the
-    /// orchestrator serves (refused outside a run).
+    /// `note_for_user`: a judgement call for "Decided for you", under the request the
+    /// orchestrator serves; something only the user can do is said in the answer instead.
     pub(crate) async fn note_for_user(
         &self,
         id: &ConversationId,
@@ -929,50 +879,10 @@ impl SessionManager {
                 .await;
                 Ok("Noted under Decided for you.".into())
             }
-            NoteKind::Waiting => {
-                let added = self
-                    .wait_on_user(id, request, WaitingSource::Orchestrator, what)
-                    .await?;
-                Ok(if added {
-                    "Listed under the run's Waiting on you; carry on with anything that doesn't depend on it."
-                } else {
-                    "It is already listed under the run's Waiting on you."
-                }
-                .into())
-            }
+            NoteKind::Waiting => Err(Error::Invalid(
+                "Say it in your answer instead: nothing is listed for the user. Write what only they can do as one line, \"You'll need to: …\", and ask a decision on a card (ask_user).".into(),
+            )),
         }
-    }
-
-    /// `set_headline`: the session's headline and its one detail line, stored and sent as an
-    /// event for the Job card. The user's next message clears it.
-    pub(crate) async fn set_headline(
-        &self,
-        id: &ConversationId,
-        args: crate::tools::SetHeadline,
-    ) -> Result<String> {
-        let text = one_line(&args.headline, HEADLINE_MAX);
-        if text.is_empty() {
-            return Err(Error::Invalid("`headline` is empty".into()));
-        }
-        let detail = args
-            .detail
-            .map(|detail| one_line(&detail, HEADLINE_MAX * 2))
-            .filter(|detail| !detail.is_empty());
-        self.core
-            .record_conversation(
-                id,
-                vec![DomainEvent::HeadlineSet {
-                    conversation_id: id.clone(),
-                    headline: Some(crate::work::SessionHeadline {
-                        text,
-                        detail,
-                        failed: args.failed,
-                        at_ms: crate::now_ms(),
-                    }),
-                }],
-            )
-            .await?;
-        Ok("Headline set.".into())
     }
 
     /// `suggest_setting`: a card in the thread with one settings change and a button that makes
@@ -1040,11 +950,6 @@ impl SessionManager {
                 "The setting is that way already: nothing to suggest.".into(),
             ));
         }
-        if self.overnight.active.get(id).is_some() {
-            return Err(Error::Invalid(
-                "An overnight run is going and nobody can press the button: list it with note_for_user, kind waiting.".into(),
-            ));
-        }
         let request = self.request_for(id, None).await;
         let conv = self.conv(id)?;
         let _notice = conv.full_access_notice.lock().await;
@@ -1073,8 +978,7 @@ impl SessionManager {
     /// the user sends or dismisses (the thread judges they are annoyed, or that they asked;
     /// this only plumbs). One offer per incident: none while a card of the latest request that
     /// offered any is unanswered or dismissed unless they asked for this one, one in a request
-    /// unless they asked (then up to [`FEEDBACK_OFFERS_MAX`], each title once, #483), and none
-    /// in an overnight run. An offer
+    /// unless they asked (then up to [`FEEDBACK_OFFERS_MAX`], each title once, #483). An offer
     /// from an attempt the user asked to redo, or from a message they edited away, counts for nothing.
     pub(crate) async fn offer_feedback(
         &self,
@@ -1085,11 +989,6 @@ impl SessionManager {
         if title.is_empty() || body.is_empty() {
             return Err(Error::Invalid(
                 "`title` and `body` must both be written".into(),
-            ));
-        }
-        if self.overnight.active.get(id).is_some() {
-            return Err(Error::Invalid(
-                "An overnight run is going and nobody is there to send it: don't offer feedback now.".into(),
             ));
         }
         let request = self.request_for(id, None).await;
@@ -1300,19 +1199,6 @@ impl SessionManager {
                 })
             })
             .collect()
-    }
-}
-
-/// The orchestrator's provider/model/effort override.
-/// The most a headline may hold; its detail line holds twice that.
-const HEADLINE_MAX: usize = 80;
-
-/// `text` on one line, its whitespace collapsed, cut at `max` characters.
-fn one_line(text: &str, max: usize) -> String {
-    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    match joined.char_indices().nth(max) {
-        Some((at, _)) => format!("{}…", joined[..at].trim_end()),
-        None => joined,
     }
 }
 

@@ -40,12 +40,9 @@ impl SessionManager {
     }
 
     /// What works now that maintenance must wait for, said plainly; `None` when nothing does.
-    /// Turns, workers, landings, overnight runs and Brain jobs also write when they start and
+    /// Turns, workers, landings and Brain jobs also write when they start and
     /// when they end, which the store counts ([`brigadier_store::Store::writes_admitted`]).
     pub async fn busy_for_maintenance(&self) -> Option<&'static str> {
-        if self.overnight_active() {
-            return Some("an overnight run");
-        }
         if self.agents_working().await {
             return Some("a turn or a worker");
         }

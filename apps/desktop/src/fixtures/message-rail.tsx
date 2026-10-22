@@ -70,11 +70,11 @@ function view(id: string): View {
     conversation: conversations[id]!,
     context: null,
     messages: { messages: list.slice(first), hasMore: first > 0 },
-    tasks: [], approvals: [], questions: [], plans: [], requests: [], workerSteps: [], orchestratorSteps: [],
-    machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
+    tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [],
+    machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: list.at(-1)?.id ?? null, ratings: {}, streaming: null,
-    notices: [], memories: [], overnight: [], previews: [],
+    notices: [], memories: [], previews: [],
   } as unknown as View;
 }
 
@@ -101,8 +101,6 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
       return { method: req.method, view: view(req.id) };
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
-    case "getRunDiff":
-      return { method: req.method, diff: null };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
     default:

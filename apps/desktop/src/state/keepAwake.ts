@@ -43,7 +43,7 @@ export async function setKeepAwakeLidClosed(on: boolean): Promise<void> {
 
 /**
  * Lets the computer keep working with the lid closed, behind one administrator password,
- * without changing the setting: an overnight run uses it for as long as it runs.
+ * without changing the setting.
  */
 export async function setUpLidClosed(): Promise<KeepAwakeStatus> {
   useKeepAwake.setState({ settingUp: true });
@@ -81,7 +81,7 @@ export function keepAwakeState(
   if (!status) return { awake: false, text: "Checking…" };
   if (status.active) {
     const lid = status.lidClosed === "active" ? ", even with the lid closed" : "";
-    return { awake: true, text: status.forRun ? `Awake for the overnight run${lid}` : `Awake now${lid}` };
+    return { awake: true, text: `Awake now${lid}` };
   }
   switch (keepAwake) {
     case "agents":
@@ -102,9 +102,7 @@ export function lidClosedHint(status: KeepAwakeStatus | null, settingUp: boolean
     case "lowBattery":
       return "The battery is low, so closing the lid sleeps the computer; plug it in";
     case "active":
-      return status.forRun
-        ? "The overnight run keeps going with the lid closed until it ends; keep it plugged in"
-        : "Sleep is off, even with the lid closed; keep it plugged in";
+      return "Sleep is off, even with the lid closed; keep it plugged in";
     case "ready":
       return "Applied whenever the computer is kept awake; best plugged in";
     default:

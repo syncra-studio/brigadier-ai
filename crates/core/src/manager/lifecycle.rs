@@ -29,7 +29,6 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{
     Conversation, ConversationId, ConversationKind, Environment, Lifecycle, Setup, streams,
 };
-use crate::overnight::OvernightRun;
 use crate::work::{InjectionKind, OrchestratorStepKind, RequestState, Task, TaskState};
 use crate::{Error, Result, now_ms};
 
@@ -242,8 +241,7 @@ impl SessionManager {
                         .await;
                         continue;
                     }
-                    // Its CLI session resumes, once its overnight run's state allows it
-                    // (SESSION-FIXES-PLAN.md Q4).
+                    // Its CLI session resumes (SESSION-FIXES-PLAN.md Q4).
                     TaskState::Running | TaskState::Starting
                         if conversation.lifecycle == Lifecycle::Active
                             && task.native_session.is_some() =>
@@ -274,8 +272,6 @@ impl SessionManager {
             if conversation.lifecycle != Lifecycle::Archived {
                 self.rewatch_pr(&conversation.id).await;
             }
-            // What waits for the user matches the tasks and reports as they are now.
-            self.reconcile_waiting(&conversation.id).await;
             // Nothing runs any more: what was working is over or waits for the user.
             self.settle_requests(&conversation.id).await;
         }
@@ -437,12 +433,7 @@ impl SessionManager {
             let Some(since) = conv.idle_since_ms().await else {
                 continue;
             };
-            // An overnight run's session stays up while the run lasts (PLAN.md §10.10).
-            if since > cutoff
-                || conv.is_busy().await
-                || self.has_running_workers(&conv.id).await
-                || self.overnight.active.get(&conv.id).is_some()
-            {
+            if since > cutoff || conv.is_busy().await || self.has_running_workers(&conv.id).await {
                 continue;
             }
             if let Err(err) = self.hibernate(conv.id.clone()).await {
@@ -454,9 +445,6 @@ impl SessionManager {
     /// Whether any conversation has a turn in progress, work waiting for one, or a worker
     /// that hasn't finished: what keeping the computer awake "while agents work" means.
     pub async fn agents_working(&self) -> bool {
-        if self.overnight_active() {
-            return true;
-        }
         let convs: Vec<_> = self.convs_lock().values().cloned().collect();
         for conv in convs {
             if conv.is_busy().await || self.has_running_workers(&conv.id).await {
@@ -464,12 +452,6 @@ impl SessionManager {
             }
         }
         false
-    }
-
-    /// Whether an overnight run is under way: it is work (the daemon stays up, the computer
-    /// awake) even between its phases, while it waits for quota or writes its report.
-    pub fn overnight_active(&self) -> bool {
-        !self.overnight.active.all().is_empty()
     }
 
     pub(super) async fn has_running_workers(&self, id: &ConversationId) -> bool {
@@ -568,15 +550,7 @@ impl SessionManager {
         for fenced in sides.iter().chain([&id]) {
             self.close_fence(fenced);
         }
-        let archived = match self.fence_runs(&id).await {
-            Ok(runs) => self
-                .core
-                .mark_archived(id.clone())
-                .await
-                .map(|archived| (archived, runs)),
-            Err(err) => Err(err),
-        };
-        let (archived, runs) = match archived {
+        let archived = match self.core.mark_archived(id.clone()).await {
             Ok(archived) => archived,
             Err(err) => {
                 for fenced in sides.iter().chain([&id]) {
@@ -587,7 +561,7 @@ impl SessionManager {
         };
         let manager = self.arc();
         self.start_cleanup(id.clone(), async move {
-            manager.finish_archive(&id, runs).await;
+            manager.finish_archive(&id).await;
         });
         Ok(archived)
     }
@@ -595,17 +569,14 @@ impl SessionManager {
     /// The cleanup of an archive: once the work that passed the fence has finished, its side
     /// chats go, everything it runs stops, and what it created is removed. The cleanup mark
     /// goes last, so a restart finishes a cleanup cut off at any step.
-    pub(super) async fn finish_archive(&self, id: &ConversationId, runs: Vec<OvernightRun>) {
+    pub(super) async fn finish_archive(&self, id: &ConversationId) {
         let drained = self.drain(id).await;
         self.delete_side_chats(id).await;
         let Ok(conversation) = self.core.conversation(id) else {
             return;
         };
         self.wind_down(&conversation).await;
-        self.close_runs(runs, true).await;
-        // Their reports keep their "Waiting on you" lists now: the lists end with the runs.
         self.settle_requests(id).await;
-        self.release_conversation_runs(id).await;
         if !drained {
             // What that work makes after this is removed once it has finished: the mark stays
             // until then.
@@ -653,14 +624,7 @@ impl SessionManager {
             }
             crate::logging::private_trace!(self.tab_chat_logs(id), info, "finishing an archive's cleanup"; conversation = %id);
             self.close_fence(id);
-            let runs = match self.fence_runs(id).await {
-                Ok(runs) => runs,
-                Err(err) => {
-                    crate::logging::private_trace!(self.tab_chat_logs(id), warn, "could not fence the archived session's runs"; conversation = %id, error = %err);
-                    Vec::new()
-                }
-            };
-            self.finish_archive(id, runs).await;
+            self.finish_archive(id).await;
         })
     }
 
@@ -826,11 +790,6 @@ impl SessionManager {
                 "This session has no worktree of its own to remove.".into(),
             ));
         };
-        if self.overnight.active.get(id).is_some() {
-            return Err(Error::Invalid(
-                "An overnight run is going in this session: stop it first.".into(),
-            ));
-        }
         self.quiet_for_close(id).await?;
         // No turn starts from here until the folder is gone: a message or a worker's report
         // that comes meanwhile waits for the turn after, in a fresh worktree. The sweep right
@@ -1239,10 +1198,7 @@ impl SessionManager {
         for fenced in sides.iter().chain([&id]) {
             self.close_fence(fenced);
         }
-        let marked = match self.fence_runs(&id).await {
-            Ok(_) => self.core.mark_deleting(id.clone()).await,
-            Err(err) => Err(err),
-        };
+        let marked = self.core.mark_deleting(id.clone()).await;
         if let Err(err) = marked {
             // Still there: an archived one stays closed; one that works goes on working.
             if conversation.lifecycle != Lifecycle::Archived {
@@ -1368,14 +1324,11 @@ impl SessionManager {
         self.tab_chats.forget_page(&id);
         let drained = self.drain(&id).await;
         self.delete_side_chats(&id).await;
-        let runs = self.fence_runs(&id).await?;
         self.wind_down(&conversation).await;
         if !drained {
             crate::logging::private_trace!(self.tab_chat_logs(&id), warn, "work of a deleted conversation is still going; deleting it once that ends"; conversation = %id);
             return Ok(false);
         }
-        self.close_runs(runs, false).await;
-        let runs = self.release_conversation_runs(&id).await;
         let tasks = self.core.tasks(&id).await.unwrap_or_default();
         self.forget_worker_rows(&id, &tasks);
         // A repository that is gone (moved or removed by the user) has no branches left to
@@ -1398,14 +1351,6 @@ impl SessionManager {
                     .owns(Path::new(repo), branch)
             {
                 branches.push(branch.clone());
-            }
-            // Its runs' branches, once their worktrees are gone (one per run; Continue keeps it).
-            for run in &runs {
-                if let Some(workspace) = &run.workspace
-                    && !branches.contains(&workspace.branch)
-                {
-                    branches.push(workspace.branch.clone());
-                }
             }
             let (git, repo) = (self.git.clone(), PathBuf::from(repo));
             for branch in &branches {
@@ -1430,7 +1375,6 @@ impl SessionManager {
                 &self.runtime.ledger().branch_ownership(),
                 &conversation,
                 &tasks,
-                &runs,
             ))
             .await;
         }
@@ -1479,20 +1423,6 @@ impl SessionManager {
 }
 
 impl SessionManager {
-    /// A closing conversation's run worktrees go (see [`Self::release_run_worktrees`]). Its
-    /// runs, as they stand now.
-    async fn release_conversation_runs(
-        &self,
-        id: &ConversationId,
-    ) -> Vec<crate::overnight::OvernightRun> {
-        let runs: Vec<_> = match self.core.board(id).await {
-            Ok(board) => board.runs.values().cloned().collect(),
-            Err(_) => return Vec::new(),
-        };
-        self.release_run_worktrees(&runs).await;
-        runs
-    }
-
     /// The routing store lets go of a deleted conversation: its turns and its tasks' outcomes.
     async fn forget_routing(&self, id: &ConversationId, tasks: &[Task]) {
         let Some(store) = self.runtime.routing_store().cloned() else {

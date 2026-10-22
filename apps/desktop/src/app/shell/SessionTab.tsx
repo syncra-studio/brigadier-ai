@@ -4,7 +4,7 @@ import { MockupTabStatus } from "@/app/conversation/MockupTab";
 import { BrowserTabIcon } from "@/app/conversation/BrowserTabIcon";
 import { TabMenu } from "@/app/shell/TabMenu";
 import { FileTypeIcon, MockupTabIcon } from "@/components/conversation";
-import { ChatCompose, DiffGlyph, Dock, Document, FileDocument, Globe, Lightbulb, ShieldCheck, Terminal, X } from "@/components/icons";
+import { ChatCompose, DiffGlyph, Dock, Document, FileDocument, Globe, Terminal, X } from "@/components/icons";
 import type { useDragReorder } from "@/hooks/use-drag-reorder";
 import { cn } from "@/lib/utils";
 import { keepTabOpen, type SessionTab as Tab, selectTab } from "@/state/sessionTabs";
@@ -92,9 +92,8 @@ export function SessionTab({
             : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
             : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
             : tab.kind === "mockup" ? <MockupTabIcon conversationId={conversationId} />
-            : tab.kind === "plan" ? <Lightbulb className="size-icon-sm shrink-0" />
             : tab.kind === "pasted" ? <FileDocument className="size-icon-sm shrink-0" />
-            : tab.kind === "panel" ? tab.view.type === "output" ? <Terminal className="size-icon-sm shrink-0" /> : tab.view.type === "sources" ? <Globe className="size-icon-sm shrink-0" /> : <ShieldCheck className="size-icon-sm shrink-0" /> : (
+            : tab.kind === "panel" ? tab.view.type === "output" ? <Terminal className="size-icon-sm shrink-0" /> : <Globe className="size-icon-sm shrink-0" /> : (
             <DiffGlyph className="size-icon-sm shrink-0" />
           )}
           <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic", tab.kind === "conflict" && tab.view !== "compare" && "text-destructive")}>

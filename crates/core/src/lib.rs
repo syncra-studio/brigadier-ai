@@ -18,7 +18,6 @@ mod logging;
 mod machine;
 pub mod manager;
 pub mod model;
-pub mod overnight;
 pub mod pages;
 mod projection;
 pub mod routing;
@@ -35,7 +34,6 @@ pub use computer::*;
 pub use feedback::*;
 pub use knowledge::*;
 pub use model::*;
-pub use overnight::*;
 pub use sessions::{Core, MAX_ATTACHMENT_BYTES, ProbeBurst};
 pub use work::*;
 

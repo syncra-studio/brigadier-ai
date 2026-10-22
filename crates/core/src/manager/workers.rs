@@ -58,9 +58,9 @@ use crate::runtime::{is_delta, merge_delta};
 use crate::sessions::McpUpdate;
 use crate::tools::Role;
 use crate::work::{
-    ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink, GateOwner,
-    InjectionKind, OrchestratorStepKind, QuestionKind, QuotaWait, RepoAccess, Report, Route, Task,
-    TaskId, TaskKind, TaskState, TaskWorkspace, WaitingSource, WorkerAccess, WorkerRole,
+    ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink, InjectionKind,
+    OrchestratorStepKind, QuestionKind, QuotaWait, RepoAccess, Report, Route, Task, TaskId,
+    TaskKind, TaskState, TaskWorkspace, WorkerAccess, WorkerRole,
 };
 use crate::{Error, Result, now_ms};
 
@@ -735,13 +735,6 @@ impl TaskLive {
         self.state.lock().await.busy
     }
 
-    /// Whether its worker still needs its place in an overnight run: a turn runs, or one is
-    /// coming when its background jobs end.
-    async fn holds_run_slot(&self) -> bool {
-        let state = self.state.lock().await;
-        state.busy || state.background_waiting
-    }
-
     /// After a deliberate close (hibernation) the worker may be started again.
     pub async fn allow_revival(&self) {
         let mut state = self.state.lock().await;
@@ -771,36 +764,27 @@ impl SessionManager {
             .clone()
     }
 
-    /// The session's permission level, which its thread and its workers run at. While an
-    /// overnight run is active nobody is there to ask, so Ask counts as Accept edits until the
-    /// run ends (PLAN.md §10.8). In a folder the user doesn't trust it is Ask, overnight too.
+    /// The session's permission level, which its thread and its workers run at. In a folder
+    /// the user doesn't trust it is Ask.
     pub(crate) fn permission(&self, id: &ConversationId) -> PermissionLevel {
         if self.repo_trust(id) == Some(false) {
             return PermissionLevel::Ask;
         }
-        let saved = match self.core.conversation(id).map(|c| c.setup) {
+        match self.core.conversation(id).map(|c| c.setup) {
             Ok(Some(Setup::Session { permission, .. })) => permission,
             _ => PermissionLevel::default(),
-        };
-        match saved {
-            PermissionLevel::Ask if self.overnight.active.get(id).is_some() => {
-                PermissionLevel::AcceptEdits
-            }
-            saved => saved,
         }
     }
 
-    /// Whether the session is in plan mode (see [`Setup::Session`]). Never during an
-    /// overnight run: the user's Start approved its reviewed plans.
+    /// Whether the session is in plan mode (see [`Setup::Session`]).
     pub(crate) fn plan_mode(&self, id: &ConversationId) -> bool {
-        self.overnight.active.get(id).is_none()
-            && matches!(
-                self.core.conversation(id).map(|c| c.setup),
-                Ok(Some(Setup::Session {
-                    plan_mode: true,
-                    ..
-                }))
-            )
+        matches!(
+            self.core.conversation(id).map(|c| c.setup),
+            Ok(Some(Setup::Session {
+                plan_mode: true,
+                ..
+            }))
+        )
     }
 
     /// How many workers each provider runs now, so parallel work spreads across vendors.
@@ -994,55 +978,6 @@ impl SessionManager {
             }
             None => return Err(Error::Invalid("tasks belong to a session".into())),
         }
-        let active_run = self.overnight.active.get(conversation_id);
-        // Work filed under an overnight run that has ended starts nothing: read from the board,
-        // so this holds after a restart and once the run's in-memory state is gone.
-        let filed_under = match (&extra.request, &subject) {
-            (Some(request), _) => Some(request.clone()),
-            (None, Some(subject)) => subject.request_id.clone(),
-            (None, None) => self.request_for(conversation_id, None).await,
-        };
-        if let Some(request) = &filed_under
-            && self
-                .core
-                .board(conversation_id)
-                .await
-                .is_ok_and(|board| super::requests::ended_run_request(&board, request))
-        {
-            return Err(Error::Invalid(
-                "The overnight run has ended; nothing new starts for it. If more is wanted, tell the user that Continue on the run's card starts a new segment on the same branch.".into(),
-            ));
-        }
-        if subject.is_none()
-            && active_run
-                .as_ref()
-                .is_some_and(|active| active.workspace.is_none())
-        {
-            return Err(Error::Invalid(
-                "The overnight run's branch and worktree are still being made; try again in a moment.".into(),
-            ));
-        }
-        // An ending run starts no new work; checks of what it already did may still finish.
-        if subject.is_none()
-            && extra.run.is_none()
-            && active_run.as_ref().is_some_and(|active| {
-                active.winding_down
-                    || active
-                        .wind_down_at_ms
-                        .is_some_and(|at| crate::now_ms() >= at)
-            })
-        {
-            return Err(Error::Invalid(
-                "The overnight run is ending: no new work starts now. Finish the current step; what is left goes into the morning report.".into(),
-            ));
-        }
-        let run = match extra.run {
-            Some(run) => Some(run),
-            None => super::overnight::policy::ActiveRun::context_for(
-                active_run.as_ref(),
-                subject.as_ref(),
-            ),
-        };
         let design = makes_designs(extra.design, extra.mockup.as_ref(), &needs);
         let category = extra.category.unwrap_or_else(|| category(kind, design));
         let areas = areas.unwrap_or_else(|| brigadier_router::infer_areas(&spec));
@@ -1154,28 +1089,13 @@ impl SessionManager {
             super::reruns::mark_route(&mut route, rerun);
         }
         let number = self.core.next_task_number(conversation_id).await?;
-        // A plan's reviewer belongs to the plan's request, even when a restart reopens an
-        // older plan's review after newer requests.
-        let plan_request = match &gate_link {
-            Some(GateLink {
-                owner: GateOwner::Plan { plan_id },
-                ..
-            }) => self
-                .core
-                .board(conversation_id)
-                .await
-                .ok()
-                .and_then(|board| board.plans.get(plan_id)?.request_id.clone()),
-            _ => None,
-        };
-        let request_id = match (&subject, plan_request, extra.request) {
+        let request_id = match (&subject, extra.request) {
             // A plain worker belongs to its session, never to one of its requests: its turns
             // hold none of them open.
             _ if extra.plain.is_some() => None,
-            (_, _, Some(request)) => Some(request),
-            (Some(subject), _, None) => subject.request_id.clone(),
-            (None, Some(request), None) => Some(request),
-            (None, None, None) => self.request_for(conversation_id, None).await,
+            (_, Some(request)) => Some(request),
+            (Some(subject), None) => subject.request_id.clone(),
+            (None, None) => self.request_for(conversation_id, None).await,
         };
         let names = self
             .core
@@ -1245,7 +1165,6 @@ impl SessionManager {
             candidate: None,
             gate_link,
             role: extra.role,
-            phase: extra.phase,
             landing: None,
             landing_from: None,
             landed: None,
@@ -1253,7 +1172,6 @@ impl SessionManager {
             kept: None,
             outputs: Vec::new(),
             request_id,
-            run,
             messages: Vec::new(),
             rework_rounds: 0,
             native_session: None,
@@ -1427,23 +1345,11 @@ impl SessionManager {
         first: TurnInput,
     ) -> Result<()> {
         // A new worker waits for serious heat or critical memory pressure (PLAN.md §10.7).
-        // An overnight run's worker starts once its run has a worker free (§10.7). A new
-        // session doesn't start at all once its run winds down (§10.9); a resumed one may
-        // still hand off.
         if matches!(origin, Origin::New) {
             self.hold_while_strained(task).await?;
-            self.admit_new_run_task(task).await?;
-            // The machine may have heated up while it waited for a run's slot.
-            while task.run.is_some() && self.machine_strained() {
-                self.release_run_task(&task.id);
-                self.hold_while_strained(task).await?;
-                self.admit_new_run_task(task).await?;
-            }
-        } else {
-            self.admit_run_task(task).await?;
         }
         // Held until its CLI session is registered, where the session's cleanup finds it.
-        let launched = match self.enter(&task.conversation_id) {
+        match self.enter(&task.conversation_id) {
             Ok(fence) => {
                 let launched = self
                     .launch_admitted(live, task, subject, origin, first, &fence)
@@ -1457,11 +1363,7 @@ impl SessionManager {
                 }
             }
             Err(err) => Err(err),
-        };
-        if launched.is_err() {
-            self.release_run_task(&task.id);
         }
-        launched
     }
 
     /// The worker's CLI session for `task` as its headless process runs it (and a terminal
@@ -1630,8 +1532,6 @@ impl SessionManager {
         repo_note.push_str(&prompts::environment(&prompts::WorkerEnvironment {
             warmed: &workspace.warmed,
             test_dir: &test_dir,
-            run_repo: task.run.as_ref().map(|_| workspace.repo.as_path()),
-            branch: workspace.branch.as_deref(),
             low_priority: true,
             setup: setup.as_deref(),
         }));
@@ -1695,10 +1595,6 @@ impl SessionManager {
             if scripted {
                 extra.push_str(prompts::SCRIPTED_UI_COMPUTER);
             }
-        }
-        if self.held_by_plan_mode(task).await {
-            extra.push_str("\n\n");
-            extra.push_str(super::phases::PLAN_MODE_HOLD);
         }
         let prompt = prompts::worker_system(&native);
         // A new CLI session hears its task first; a resumed or forked one has it already.
@@ -2060,18 +1956,8 @@ impl SessionManager {
                     .is_ok_and(|now| now.state.is_final()))
     }
 
-    /// Why a worker can't be resumed; a run lists it under What got in the way.
+    /// Why a worker can't be resumed.
     async fn cannot_resume(&self, task: &Task) -> Error {
-        if let Some(context) = &task.run {
-            self.note_obstacle(
-                &task.conversation_id,
-                &context.run_id,
-                crate::overnight::ObstacleKind::ResumeFailed,
-                "A worker's session couldn't be resumed, so its work started over.",
-                Some(task.number),
-            )
-            .await;
-        }
         Error::Invalid(format!(
             "task-{} cannot be resumed; delegate a new task",
             task.number
@@ -2228,22 +2114,12 @@ impl SessionManager {
                 merge: None,
             });
         }
-        // An overnight run's work lands on the run's branch, recorded with the task so it
-        // stays there whatever happens to the run later.
-        let run_branch = match &task.run {
-            Some(run) => Some(self.run_target(&task.conversation_id, run).await?),
-            None => None,
-        };
         let Some(Setup::Session { environment, .. }) = &conversation.setup else {
             return Err(Error::Invalid("a Chat's tasks have no repository".into()));
         };
-        let target = match &run_branch {
-            Some(branch) => branch.clone(),
-            None => {
-                self.ensure_target(&task.conversation_id, &repo, environment)
-                    .await?
-            }
-        };
+        let target = self
+            .ensure_target(&task.conversation_id, &repo, environment)
+            .await?;
         // Reviews and checks look at the candidate commit; a merge task continues from the
         // conflicting task's work (kept as a WIP commit on its branch) and merges the target
         // into it, or from the session branch and merges the base into it.
@@ -2302,19 +2178,6 @@ impl SessionManager {
             (_, None) if task.fresh_commit.is_some() => {
                 let commit = Oid(task.fresh_commit.clone().unwrap_or_default());
                 (commit.clone(), commit, false)
-            }
-            // A run's workers start from its branch's tip, never the user's uncommitted files.
-            _ if run_branch.is_some() => {
-                let (git, repo_path, branch) = (self.git.clone(), repo.clone(), target.clone());
-                let tip = blocking(move || {
-                    git.open(&repo_path)
-                        .map_err(git_error)?
-                        .branch_tip(&branch)
-                        .map_err(git_error)?
-                        .ok_or_else(|| Error::Invalid(format!("branch {branch} does not exist")))
-                })
-                .await?;
-                (tip.clone(), tip, false)
             }
             _ => {
                 let (base, on_snapshot) = self
@@ -2970,10 +2833,8 @@ impl SessionManager {
             (state.stopping, state.generation, state.cli.is_some())
         };
         cli.ended.cancel();
-        // A fresh session that already took the task over keeps its run's worker slot, and
-        // tells its own MCP servers.
+        // A fresh session that already took the task over tells its own MCP servers.
         if !replaced {
-            self.release_run_task(&live.id);
             self.agent_mcp_servers(
                 &live.conversation_id,
                 Some(&live.id),
@@ -3170,11 +3031,6 @@ impl SessionManager {
             self.meter_child_threads(cli, TokenOwner::Task(&live.conversation_id, &live.id))
                 .await;
             self.worker_turn_completed(live, cli, status).await;
-            // No turn followed (a nudge or retry would have started one): an overnight run's
-            // worker slot is free for another task.
-            if !live.holds_run_slot().await {
-                self.release_run_task(&live.id);
-            }
         }
     }
 
@@ -3280,10 +3136,6 @@ impl SessionManager {
                 return;
             }
         }
-        // A lead that sent its outline ends its turn to wait for the go-ahead.
-        if Self::waits_for_go_ahead(&task) {
-            return;
-        }
         // Its own background job (a command or sub-agent) still runs: the job's end starts its
         // next turn, so it waits, unless it waits silently too long.
         if background && status == TurnStatus::Completed {
@@ -3355,9 +3207,6 @@ impl SessionManager {
                 manager
                     .worker_turn_completed(&live, &cli, TurnStatus::Completed)
                     .await;
-                if !live.holds_run_slot().await {
-                    manager.release_run_task(&live.id);
-                }
                 return;
             }
         });
@@ -3595,7 +3444,6 @@ impl SessionManager {
             || task.state == TaskState::Paused
             || task.report.is_some()
             || task.error.is_some()
-            || Self::waits_for_go_ahead(&task)
         {
             return None;
         }
@@ -3779,9 +3627,6 @@ impl SessionManager {
                 task.number
             )));
         }
-        if self.held_by_plan_mode(&task).await {
-            return Err(Error::Invalid(super::phases::PLAN_MODE_HOLD.into()));
-        }
         // A new file no report names is left out of the landing, and a [met] with no evidence
         // is a claim: the report is taken, each marked for the thread to judge (#249).
         let unreported = self
@@ -3959,18 +3804,6 @@ impl SessionManager {
         let task = self.update_task(conversation_id, task_id, reported).await?;
         drop(settled);
         live.state.lock().await.nudged = true;
-        // What only the user can do is listed for them ("Waiting on you"); a later report
-        // that no longer lists an item ends it. A gate member's go to its gate.
-        if !reviewing {
-            self.sync_waiting(
-                &task,
-                WaitingSource::Task {
-                    task_id: task.id.clone(),
-                },
-                &report.needs_user,
-            )
-            .await;
-        }
         // A write task's claims are knowledge only once its work lands (see `landed`).
         if !task.kind.writes() {
             self.learn_report(&task, &report, Some(live.learning.clone()));
@@ -4278,46 +4111,8 @@ impl SessionManager {
         if let Some(held) = self.hold_for_terminal(task, &text).await {
             return Ok((held, false));
         }
-        // An idle worker of an overnight run starts a turn only with a free worker slot: when
-        // its run has none, the message waits for one rather than holding up the caller.
-        if task.run.is_some()
-            && !task.state.is_final()
-            && !self.task_live(task).busy().await
-            && let super::overnight::admission::Slot::Full { cap } =
-                self.try_admit_run_task(task)?
-        {
-            let manager = self.arc();
-            let (conversation_id, waiting, from) =
-                (conversation_id.clone(), task.clone(), from.to_owned());
-            self.spawn(async move {
-                if manager.admit_run_task(&waiting).await.is_err() {
-                    return;
-                }
-                let Ok(now) = manager.task_by_id(&conversation_id, &waiting.id).await else {
-                    manager.release_run_task(&waiting.id);
-                    return;
-                };
-                if let Err(err) = manager
-                    .message_worker_admitted(&conversation_id, &now, text, &from, answers)
-                    .await
-                {
-                    tracing::warn!(task = %now.id, error = %err, "could not deliver a message that waited for a worker");
-                }
-                manager.release_if_idle(&now).await;
-            });
-            return Ok((
-                format!(
-                    "task-{} waits for a free worker (the run works with at most {cap} at once); your message reaches it then.",
-                    task.number
-                ),
-                false,
-            ));
-        }
-        let sent = self
-            .message_worker_admitted(conversation_id, task, text, from, answers)
-            .await;
-        self.release_if_idle(task).await;
-        sent
+        self.message_worker_admitted(conversation_id, task, text, from, answers)
+            .await
     }
 
     /// [`Self::message_worker`], admitted.
@@ -4765,26 +4560,7 @@ impl SessionManager {
 
     /// Resumes a paused worker.
     pub async fn resume_task(&self, task_id: TaskId) -> Result<()> {
-        // A paused worker of an overnight run continues only with a free worker slot.
-        let conversation_id = self.conversation_of_task(&task_id).await?;
-        let task = self.task_by_id(&conversation_id, &task_id).await?;
-        if let super::overnight::admission::Slot::Full { .. } = self.try_admit_run_task(&task)? {
-            // It shows that it waits for a worker, and continues on its own.
-            let manager = self.arc();
-            self.spawn(async move {
-                if manager.admit_run_task(&task).await.is_err() {
-                    return;
-                }
-                if let Err(err) = manager.resume_admitted(task.id.clone()).await {
-                    tracing::warn!(task = %task.id, error = %err, "could not resume a task that waited for a worker");
-                }
-                manager.release_if_idle(&task).await;
-            });
-            return Ok(());
-        }
-        let resumed = self.resume_admitted(task_id).await;
-        self.release_if_idle(&task).await;
-        resumed
+        self.resume_admitted(task_id).await
     }
 
     /// [`Self::resume_task`], admitted.
@@ -4989,10 +4765,6 @@ impl SessionManager {
         for done in &ends {
             self.dispose_task(done, TaskState::Done).await;
         }
-        if task.role == Some(WorkerRole::Verifier) {
-            self.set_phase_stage(task, crate::work::PhaseStage::Done)
-                .await;
-        }
     }
 
     /// Ends a task: unfinished changes are kept (B15), then everything recorded under
@@ -5043,7 +4815,6 @@ impl SessionManager {
                 tracing::warn!(task = %task.id, error = %err, "could not record the task's end");
             }
         }
-        self.task_ended_waiting(task, state).await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
         // Its CLI's session folder goes with what the task leaves (BUILD-PLAN D2.2).
@@ -5247,8 +5018,6 @@ pub(crate) fn needs_of(
 pub(crate) struct TaskExtra {
     /// Its id, chosen before it starts (a review someone waits for is waited for first).
     pub id: Option<TaskId>,
-    /// Its overnight run context, instead of the one the session's active run gives.
-    pub run: Option<crate::overnight::RunTaskContext>,
     /// The routing category, instead of the one its kind maps to (a phase's judge routes as
     /// orchestration).
     pub category: Option<brigadier_router::TaskCategory>,
@@ -5257,8 +5026,6 @@ pub(crate) struct TaskExtra {
     pub request: Option<String>,
     /// Its part in the request's flow.
     pub role: Option<WorkerRole>,
-    /// The phase of the request's plan it works on.
-    pub phase: Option<u32>,
     /// An operate task's target and end state.
     pub target: Option<String>,
     pub end_state: Option<String>,

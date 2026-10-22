@@ -313,7 +313,7 @@ impl SessionManager {
     /// them again: the cause may be gone, and the hand-off cap still ends a model that keeps
     /// failing), and a context window too small asks for a bigger one.
     pub(crate) async fn task_question(&self, task: &Task) -> TaskQuestion {
-        let (avoid, distinct_from) = self.checker_avoid(task).await;
+        let (avoid, distinct_from) = (None, Vec::new());
         let exclude: Vec<Exclusion> = task
             .attempts
             .iter()

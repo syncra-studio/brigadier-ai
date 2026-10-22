@@ -9,7 +9,6 @@
  */
 import type { OrchestratorStep } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
-import { openPanelTab } from "@/state/sessionTabs";
 
 const params = new URLSearchParams(location.search);
 history.replaceState(null, "", `${location.pathname}?view=done&summary=0&approvals=0`);
@@ -68,12 +67,6 @@ useBoard.setState(({ board }) =>
       }
     : {},
 );
-
-// ?open=reviews: the Progress tab in front, for a look.
-if (params.get("open") === "reviews") {
-  const conversationId = useBoard.getState().board?.conversationId;
-  if (conversationId) openPanelTab(conversationId, { type: "reviews" }, "Progress");
-}
 
 const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? "";
 const all = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)];

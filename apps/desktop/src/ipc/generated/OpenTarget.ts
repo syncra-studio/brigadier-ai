@@ -6,4 +6,4 @@ import type { TaskId } from "./TaskId";
 /**
  * What `open_in_app` opens, checked and named by the daemon.
  */
-export type OpenTarget = { "kind": "file", path: string, line: number | null, } | { "kind": "diff", scope: DiffScope, } | { "kind": "progress" } | { "kind": "output", source: OutputOf, id: string, title: string, } | { "kind": "url", url: string, } | { "kind": "worker", task: TaskId, } | { "kind": "plan", id: string, outline: boolean, title: string, } | { "kind": "page", id: string, title: string, } | { "kind": "terminal", tab: string, cwd: string, };
+export type OpenTarget = { "kind": "file", path: string, line: number | null, } | { "kind": "diff", scope: DiffScope, } | { "kind": "output", source: OutputOf, id: string, title: string, } | { "kind": "url", url: string, } | { "kind": "worker", task: TaskId, } | { "kind": "page", id: string, title: string, } | { "kind": "terminal", tab: string, cwd: string, };

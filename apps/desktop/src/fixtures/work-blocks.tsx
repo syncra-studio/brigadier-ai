@@ -36,7 +36,6 @@ import type {
   ConversationView as View,
   Message,
   OrchestratorStep,
-  Plan,
   Question,
   QueuedMessage,
   Request,
@@ -50,7 +49,6 @@ import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import { fixtureClick } from "@/fixtures/input";
 import { loadConversation, openConversation } from "@/state/actions";
 import { type Board, type ShownApproval, useBoard } from "@/state/board";
-import { closeTab, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -117,12 +115,12 @@ function view(): View {
   return {
     conversation: conversations[ID]!, context: null,
     messages: { messages: daemon.messages, hasMore: false },
-    tasks: [], approvals: [], questions: [], plans: [], requests: Object.values(daemon.requests), workerSteps: [],
-    orchestratorSteps: daemon.steps, machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
+    tasks: [], approvals: [], questions: [], requests: Object.values(daemon.requests), workerSteps: [],
+    orchestratorSteps: daemon.steps, machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: drive === "queue" ? [queued] : [], paused: false },
     run: daemon.run, runRequest: daemon.run === "running" ? "r1" : null,
     head: daemon.messages.at(-1)?.id ?? null, ratings: {}, streaming: null,
-    notices: [], memories: [], overnight: [], previews: [],
+    notices: [], memories: [], previews: [],
   } as unknown as View;
 }
 
@@ -503,47 +501,6 @@ async function driveHidden(): Promise<object> {
   return { shown, gone: !one("[data-slot=request-fold]", turn() ?? document) };
 }
 
-/** A turn that ends in a plan keeps its work open; the user's choice outlives the turn's remount. */
-async function drivePlan(): Promise<object> {
-  await settle(600);
-  const plan = {
-    id: "plan", conversationId: ID, requestId: "r1", position: 1.5, title: "Round half-up",
-    body: "# Round half-up\n\nUse half-up rounding in `round`.\n\n## Steps\n\n1. Change `round`.\n2. Add a test.", steps: [],
-    state: { type: "proposed" }, createdAtMs: begun + 10_000, decidedAtMs: null,
-  } as unknown as Plan;
-  daemon.run = "idle";
-  change(() => ({ run: "idle", runRequest: null, plans: { plan } }));
-  request("r1", { state: { type: "done" }, endedAtMs: begun + 10_000, worked: [{ fromMs: begun, toMs: begun + 10_000 }] });
-  await settle();
-  const ended = seen();
-  one<HTMLButtonElement>("button[data-slot=request-work-header]", turn() ?? document)?.click();
-  await settle();
-  const closed = seen();
-  // Gone and back (a thread switch): the turn stays as the user left it.
-  app.render(<></>);
-  await settle();
-  app.render(<Page />);
-  await settle(600);
-  const remounted = seen();
-  // Full screen, the plan is its own tab in the tab bar, never the right panel.
-  const full = [...document.querySelectorAll<HTMLButtonElement>("[data-slot=plan-card] button")].find((button) => text(button) === "Open full screen");
-  full?.click();
-  await settle();
-  const planTab = () => one('[role=tabpanel][aria-label="Round half-up"] [data-slot=plan-tab]');
-  // The tab's view loads its code the first time one opens: the tab shows nothing until then.
-  if (full) await appear(planTab);
-  const tabs = sessionTabs(ID);
-  const panel = planTab();
-  const opened = {
-    canOpen: one("[data-slot=plan-card] [role=button]") !== null,
-    active: tabs.active, kinds: tabs.tabs.map((tab) => tab.kind), shown: text(panel)?.includes("Add a test.") ?? false,
-    // The conversation's own tabs: the Workers panel's tab is not one.
-    tab: text(one('[role=tab][aria-selected=true]:not([id^="right-sidebar-"])')), rightPanel: one('[data-slot="right-sidebar"] [data-pane="plan"]') !== null,
-  };
-  if (tabs.active !== "chat") closeTab(ID, tabs.active);
-  return { ended, closed, remounted, opened };
-}
-
 /** A finished turn with a call the user denied: "1 denied action" in its header shows it. */
 async function driveDenied(): Promise<object> {
   await settle(600);
@@ -898,35 +855,6 @@ async function driveUpdate(): Promise<object> {
   };
 }
 
-/** A step as if it came just now. */
-const now = (step: OrchestratorStep): OrchestratorStep => ({ ...step, atMs: Date.now() });
-
-/** A plan approved: its request works again, and the new steps show under the plan card as they come. */
-async function driveImplement(): Promise<object> {
-  await settle(600);
-  const plan = {
-    id: "plan", conversationId: ID, requestId: "r1", position: 1.5, title: "Round half-up",
-    body: "# Round half-up\n\nUse half-up rounding in `round`.", steps: [],
-    state: { type: "proposed" }, createdAtMs: begun + 10_000, decidedAtMs: null,
-  } as unknown as Plan;
-  daemon.run = "idle";
-  change(() => ({ run: "idle", runRequest: null, plans: { plan } }));
-  request("r1", { state: { type: "done" }, endedAtMs: begun + 10_000, worked: [{ fromMs: begun, toMs: begun + 10_000 }] });
-  await settle();
-  const before = text(turn()) ?? "";
-  // Approved: the same request works on.
-  change(() => ({ run: "running", runRequest: "r1", plans: { plan: { ...plan, state: { type: "approved" } } as unknown as Plan } }));
-  request("r1", { state: { type: "working" }, endedAtMs: null, worked: [{ fromMs: begun, toMs: begun + 10_000 }, { fromMs: Date.now(), toMs: null }] });
-  // Its new steps come now, after the plan.
-  steps([...daemon.steps, now(tool("impl-read", 3.1, "Read", "/repo/src/cli.ts", "completed")), now(tool("impl-edit", 3.2, "apply_patch", "/repo/src/cli.ts", "inProgress"))]);
-  await settle();
-  const block = turn() ?? document.body;
-  const card = one("[data-slot=plan-card], [data-card=plan], [data-slot=action-card]", block);
-  const after = text(block) ?? "";
-  const planAt = after.indexOf("Round half-up");
-  return { before, after, card: !!card, under: planAt >= 0 && after.lastIndexOf("cli.ts") > planAt, new: !before.includes("cli.ts") };
-}
-
 async function driveQueue(): Promise<object> {
   await settle(600);
   // The composer's editor comes in its own chunk after a plain field and takes the focus a beat
@@ -970,7 +898,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : driveTurn())
+void (drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

@@ -1,7 +1,7 @@
 /* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Focusable stand-ins for the window's parts give a key a target outside the card. */
 /**
- * The production decision cards a stray key must not answer (BUILD-PLAN A5): a merge question,
- * "Implement this plan?" and a phase plan's rail link, each mounted fresh and driven with the
+ * The production decision cards a stray key must not answer (BUILD-PLAN A5): a merge question
+ * and a plain question, each mounted fresh and driven with the
  * browser's real keys and clicks (`fixtureInput`) so focus decides where a key lands. IPC is
  * mocked and records every answer; no daemon or credentials.
  */
@@ -11,7 +11,7 @@ import { createRoot } from "react-dom/client";
 import { type PendingAction, PendingActionCard } from "@/app/conversation/ActionCards";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
-import type { Plan, Question, Request } from "@/ipc/generated";
+import type { Question, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 
 const conversationId = "card-keys-fixture";
@@ -48,23 +48,16 @@ const mergeLeftLit: Question = { ...merge, id: "merge-left-lit" };
 const closeAsk: Question = { ...ask, id: "close-ask" };
 const closeMerge: Question = { ...merge, id: "close-merge" };
 const escapeAsk: Question = { ...ask, id: "escape-ask" };
-const plan = (id: string, body: string | null): Plan => ({
-  id, conversationId, requestId: null, position: 1, title: "Windows support", body,
-  steps: [], state: { type: "proposed" }, createdAtMs: 0, decidedAtMs: null,
-});
 useBoard.setState({
   board: {
     ...emptyBoard(conversationId),
     loaded: true,
     questions: { merge, ask, keep, typed, "merge-left-lit": mergeLeftLit, "close-ask": closeAsk, "close-merge": closeMerge, "escape-ask": escapeAsk },
-    plans: { document: plan("document", "Handle drive letters, then run the platform checks."), phases: plan("phases", null) },
   },
 });
 
 type Call =
   | { method: "answerQuestion"; cardId: string; answers: string[]; input: string | undefined }
-  | { method: "decidePlan"; cardId: string; approve: boolean; message: string | null }
-  | { method: "putOffPlan"; cardId: string }
   | { method: "dismiss" };
 const calls: Call[] = [];
 mockIPC((command, payload) => {
@@ -74,8 +67,6 @@ mockIPC((command, payload) => {
   if (req.method === "getDictation") {
     return { method: req.method, dictation: { available: true, model: "speech.bin", modelBytes: 1, installed: true, downloading: false, languages: [] } };
   }
-  if (req.method === "decidePlan") calls.push({ method: req.method, cardId: req.cardId, approve: req.approve, message: req.message });
-  if (req.method === "putOffPlan") calls.push({ method: req.method, cardId: req.cardId });
   return { method: req.method };
 });
 
@@ -288,33 +279,6 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     await settle();
     seen.lit = lit();
   }),
-  phasePlan: await run(async (seen, since) => {
-    mount({ type: "plan", id: "phases" });
-    await until("the plan's rail link", () => document.querySelector("[data-slot=plan-row]") !== null);
-    seen.targets = [focused()];
-    await key("Enter");
-    region("rail").focus();
-    (seen.targets as unknown[]).push(focused());
-    await key("Enter");
-    await settle();
-    seen.beforeEscape = since();
-    // The card's keys are live: Esc puts it off for later.
-    await key("Escape");
-    await until("Esc to put it aside", () => calls.at(-1)?.method === "dismiss");
-  }),
-  implementPlan: await run(async (seen, since) => {
-    await mountCard({ type: "plan", id: "document" });
-    seen.lit = lit();
-    seen.markers = markers();
-    await key("Enter");
-    await settle();
-    seen.afterEnter = since();
-    // A deliberate pick on the focused card builds it.
-    await key("ArrowDown");
-    const from = calls.length;
-    await key("Enter");
-    await until("the plan's decision", sent(from));
-  }),
   // × on a question skips it, so the asker hears and carries on; on a merge card, × is "Not yet".
   closeAsk: await run(async (seen) => {
     await mountCard({ type: "question", id: "close-ask" });
@@ -338,15 +302,6 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     await key("Escape");
     await until("Esc to put it aside", () => calls.at(-1)?.method === "dismiss");
     await settle();
-  }),
-  // With nothing typed, the plan's button reads "Not now" and puts the plan off.
-  notNow: await run(async (seen) => {
-    await mountCard({ type: "plan", id: "document" });
-    const button = [...document.querySelectorAll<HTMLButtonElement>("[data-slot=action-card] button")].find((each) => each.textContent === "Not now");
-    seen.label = button?.textContent ?? null;
-    const from = calls.length;
-    await fixtureClick(button!);
-    await until("Not now", sent(from));
   }),
 };
 const result = document.createElement("pre");

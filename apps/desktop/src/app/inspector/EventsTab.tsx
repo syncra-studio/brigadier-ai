@@ -124,16 +124,12 @@ function summary(event: DomainEvent): string {
       return `${event.approval.subject.type} ${event.approval.state.type}`;
     case "questionUpdated":
       return event.question.answer === null ? "asked" : "answered";
-    case "planUpdated":
-      return `“${event.plan.title}” ${event.plan.state.type}`;
     case "integratedCheckUpdated":
     case "reviewUpdated":
     case "mergeRefusalSet":
     case "unreviewedChanged":
       // Only in old stored events: the checks, reviews and merge refusals they told of are gone.
       return "";
-    case "headlineSet":
-      return event.headline === null ? "headline cleared" : event.headline.text;
     case "mcpServersUpdated":
       return `${event.taskId ?? "lead"} · ${event.provider}: ${event.servers.map((server) => `${server.name} ${server.status}`).join(", ") || "none"}`;
     case "threadCommitsSeen":
@@ -152,8 +148,6 @@ function summary(event: DomainEvent): string {
       return `${event.ids.join(", ")} left Background`;
     case "previewUpdated":
       return `${event.preview.id} ${event.preview.state.type}`;
-    case "overnightUpdated":
-      return `“${event.run.name}” ${event.run.state} r${event.run.revision}`;
     case "queueChanged":
       return `${event.queue.items.length} queued${event.queue.paused ? ", paused" : ""}`;
     case "workerEvent":
@@ -182,10 +176,6 @@ function summary(event: DomainEvent): string {
       return `${event.memory.forgotten ? "forgot" : "saved"} “${event.memory.text.slice(0, 80)}”`;
     case "decidedForYou":
       return event.decision.what;
-    case "waitingOnYou":
-      return event.item.what;
-    case "waitingResolved":
-      return `done by ${event.by}`;
     case "peerMessageSent":
       return `to ${event.to}: ${event.state.type}`;
     case "peerMessageReceived":

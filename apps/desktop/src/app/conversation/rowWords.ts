@@ -77,8 +77,7 @@ export function taskState(task: Task): RowState {
     case "landing":
       return { word: "Landing", tone: "live" };
     case "readyToLand":
-      // In a run nobody waits for the user: the run's lead decides what a held change does.
-      return task.run ? { word: "Held", tone: "warning" } : { word: "Ready to land", tone: "warning" };
+      return { word: "Ready to land", tone: "warning" };
     case "landed":
       return { word: "Landed", tone: "done" };
     case "done":

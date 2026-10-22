@@ -40,14 +40,11 @@ test("a new attempt uses its own start time", () => {
   assert.equal(line(worker, "Editing 2 files").first, "Editing 2 files · 30s");
 });
 
-test("landing reads Landing; ready to land keeps its warning tone, including Held during a run", () => {
+test("landing reads Landing; ready to land keeps its warning tone", () => {
   assert.deepEqual(taskState(task({ state: "landing" })), { word: "Landing", tone: "live" });
-  assert.deepEqual(taskState(task({ state: "readyToLand", run: null })), { word: "Ready to land", tone: "warning" });
-  assert.ok(base.run);
-  const held = task({ state: "readyToLand", run: base.run });
-  assert.deepEqual(taskState(held), { word: "Held", tone: "warning" });
-  assert.equal(taskWaitWords(held), "Held");
-  assert.match(line(held).first, /^Held · /);
+  const ready = task({ state: "readyToLand" });
+  assert.deepEqual(taskState(ready), { word: "Ready to land", tone: "warning" });
+  assert.equal(taskWaitWords(ready), "Ready to land");
 });
 
 test("settled workers freeze elapsed at attempt end and do not subscribe to the clock", () => {
@@ -90,10 +87,9 @@ test("a user pause says Paused and freezes at updatedAtMs without keeping the cl
   assert.equal(taskActivityTicks(task({ state: "paused", blockedReason: "Waiting for a dependency" })), true);
 });
 
-test("a worker of a request's flow is named by its part and phase, the outline reviewer too", () => {
-  assert.equal(workerName({}, task({ role: "lead", phase: 1 })), "Break down the overnight");
-  assert.equal(workerName({}, task({ role: "reviewer", phase: 2 })), "Break down the overnight");
-  assert.equal(workerName({}, task({ role: "reviewer", phase: null })), "Break down the overnight");
+test("a worker of a request's flow is named by its part, the outline reviewer too", () => {
+  assert.equal(workerName({}, task({ role: "lead" })), "Break down the overnight");
+  assert.equal(workerName({}, task({ role: "reviewer" })), "Break down the overnight");
 });
 
 test("a worker in the user's terminal waits on the user, in plain words everywhere", () => {

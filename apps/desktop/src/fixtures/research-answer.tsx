@@ -126,11 +126,11 @@ function view(): View {
   return {
     conversation, context: null,
     messages: { messages, hasMore: false },
-    tasks: [], approvals: [], questions: [], plans: [], requests: [request], workerSteps: [],
-    orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
+    tasks: [], approvals: [], questions: [], requests: [request], workerSteps: [],
+    orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: "a1", ratings: {}, streaming: null,
-    notices: [], memories: [], overnight: [], previews: previews ? [server(5173), ...(previews > 1 ? [server(3000)] : [])] : [],
+    notices: [], memories: [], previews: previews ? [server(5173), ...(previews > 1 ? [server(3000)] : [])] : [],
   } as unknown as View;
 }
 

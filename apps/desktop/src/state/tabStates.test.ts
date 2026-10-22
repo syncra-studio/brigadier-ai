@@ -14,7 +14,6 @@ type Case = {
   run?: RunState;
   tasks?: [string, TaskState][];
   approvals?: string[];
-  plans?: string[];
   questions?: string[];
   servers?: { name: string; status: McpStatus }[];
   quotaWait?: boolean;
@@ -37,7 +36,6 @@ function activityOf(each: Case, id: string) {
     on({ type: "runStateChanged", conversationId: id, state: each.run ?? "idle" }),
     ...(each.tasks ?? []).map(([task, state]) => on({ type: "taskUpdated", task: { id: task, conversationId: id, kind: "write", state, title: task } })),
     ...(each.approvals ?? []).map((card) => on({ type: "approvalUpdated", approval: { id: card, conversationId: id, state: { type: "pending" } } })),
-    ...(each.plans ?? []).map((card) => on({ type: "planUpdated", plan: { id: card, conversationId: id, state: { type: "proposed" } } })),
     ...(each.questions ?? []).map((card) => on({ type: "questionUpdated", question: { id: card, conversationId: id, answer: null } })),
     on({ type: "mcpServersUpdated", conversationId: id, taskId: null, provider: "claude", atStart: false, boot: "b",
       servers: (each.servers ?? []).map((server) => ({ ...server, tools: [], transport: null })) }),

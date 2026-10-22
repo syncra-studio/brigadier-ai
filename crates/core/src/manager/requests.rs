@@ -16,14 +16,12 @@ use std::collections::HashSet;
 
 use super::SessionManager;
 use super::conversation::{ConvLive, Envelope};
-use super::decisions::waiting_run;
 use super::prompts;
 use super::workers::relanding_pending;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind};
-use crate::overnight::{OvernightRun, OvernightState};
 use crate::work::{
-    CardState, OrchestratorStepKind, PlanState, QuestionKind, RequestState, Task, TaskId, TaskState,
+    CardState, OrchestratorStepKind, QuestionKind, RequestState, Task, TaskId, TaskState,
 };
 
 impl SessionManager {
@@ -229,16 +227,9 @@ impl SessionManager {
 
     /// Brings every request of the conversation up to date with what runs and waits.
     pub(crate) async fn settle_requests(&self, conversation_id: &ConversationId) {
-        let Ok(mut board) = self.core.board(conversation_id).await else {
+        let Ok(board) = self.core.board(conversation_id).await else {
             return;
         };
-        // What waited on a card that is answered now is over.
-        if self.settle_waits(conversation_id, &board).await {
-            let Ok(now) = self.core.board(conversation_id).await else {
-                return;
-            };
-            board = now;
-        }
         if board.requests.is_empty() {
             return;
         }
@@ -254,11 +245,7 @@ impl SessionManager {
             let mut wait = None;
             // Peer waits remain outstanding while the thread works or streams its answer.
             let awaited = self.awaited_peers(&board, id);
-            let state = if let Some(state) = ended_run_state(&board, request) {
-                // An overnight run's request is over with the run: its report is the answer,
-                // and nothing that comes later works or waits for it again.
-                state
-            } else if activity.running.as_deref() == Some(id)
+            let state = if activity.running.as_deref() == Some(id)
                 || (activity.carried.contains(id) && outcome.is_none())
                 || runs_in(&board, id)
                 || (jobs.is_some() && outcome.is_none())
@@ -539,21 +526,12 @@ pub(super) fn owed_a_turn(board: &Board, request: &str) -> bool {
     })
 }
 
-/// Whether a task of the request is blocked on the thread's answer. A lead whose outline is
-/// on a proposed plan's card waits for the user's yes instead, and that card holds nothing up
-/// (THREAD-PARITY-PLAN §8.5); nor does a plan the user put off, whose lead waits until they
-/// want it.
+/// Whether a task of the request is blocked on the thread's answer.
 fn blocked_on_the_thread(board: &Board, request: &str) -> bool {
-    let proposed = board.plans.values().any(|plan| {
-        plan.request_id.as_deref() == Some(request)
-            && matches!(plan.state, PlanState::Proposed | PlanState::PutOff)
-            && plan.body.is_some()
-    });
-    board.tasks.values().any(|task| {
-        task.request_id.as_deref() == Some(request)
-            && task.state == TaskState::Blocked
-            && !(proposed && SessionManager::waits_for_go_ahead(task))
-    })
+    board
+        .tasks
+        .values()
+        .any(|task| task.request_id.as_deref() == Some(request) && task.state == TaskState::Blocked)
 }
 
 /// Whether a task of the request reported a fix Brigadier checks and lands on its own, once
@@ -563,32 +541,6 @@ fn relanding_in(board: &Board, request: &str) -> bool {
         .tasks
         .values()
         .any(|task| task.request_id.as_deref() == Some(request) && relanding_pending(task))
-}
-
-/// The overnight run a request belongs to: its requests are named `run-<short run id>-…`.
-pub(crate) fn run_of_request<'a>(board: &'a Board, request: &str) -> Option<&'a OvernightRun> {
-    board
-        .runs
-        .values()
-        .find(|run| request.starts_with(&format!("run-{}-", run.id.short())))
-}
-
-/// Whether the request belongs to an overnight run that has ended (or is writing its report):
-/// nothing new starts or wakes the orchestrator for it.
-pub(crate) fn ended_run_request(board: &Board, request: &str) -> bool {
-    run_of_request(board, request)
-        .is_some_and(|run| run.state == OvernightState::Reporting || run.state.is_final())
-}
-
-/// The state a request of a finished run keeps for good: how it ended, or done.
-fn ended_run_state(board: &Board, request: &crate::work::UserRequest) -> Option<RequestState> {
-    if !run_of_request(board, &request.id).is_some_and(|run| run.state.is_final()) {
-        return None;
-    }
-    Some(match &request.state {
-        RequestState::Stopped | RequestState::Failed { .. } => request.state.clone(),
-        _ => RequestState::Done,
-    })
 }
 
 /// A worker of the request is paused until a model it may use is free.
@@ -625,16 +577,10 @@ fn open_question_cards(board: &Board, request: &str) -> bool {
 }
 
 /// What only the user can do holds the request up (a card, a worker's question, a paused or
-/// held worker, an overnight run's "Waiting on you" item), quota and the thread's own question
-/// cards aside. A session lists no items, and one listed before it stopped makes nothing wait.
-/// A proposed plan holds nothing up either: its card is the request's answer, and the user's
-/// yes makes the request work again (THREAD-PARITY-PLAN §6).
+/// held worker), quota and the thread's own question cards aside.
 fn waits_on_user(board: &Board, request: &str) -> bool {
     let of = |id: &Option<String>| id.as_deref() == Some(request);
-    board.waiting.values().any(|item| {
-        of(&item.request_id)
-            && waiting_run(&item.source, item.request_id.as_deref(), board).is_some()
-    }) || board
+    board
         .approvals
         .values()
         .any(|a| of(&a.request_id) && a.state == CardState::Pending)
@@ -794,50 +740,15 @@ mod tests {
         task
     }
 
-    /// A "Waiting on you" item of `request`, from a worker's report.
-    fn item_of(request: &str, task: &str) -> crate::work::WaitingItem {
-        crate::work::WaitingItem {
-            id: format!("w-{request}"),
-            request_id: Some(request.into()),
-            source: crate::work::WaitingSource::Task {
-                task_id: TaskId(task.into()),
-            },
-            key: String::new(),
-            what: "Add STRIPE_KEY to .env".into(),
-            created_at_ms: 0,
-        }
-    }
-
-    /// A session's request listed for the user before sessions stopped listing anything is
-    /// not waiting for it; an overnight run's still is. Quota, a takeover, a paused worker
-    /// and an open card make either wait (THREAD-PARITY-PLAN §5 Q6).
+    /// Quota, a takeover, a paused worker and an open card make a request wait
+    /// (THREAD-PARITY-PLAN §5 Q6).
     #[test]
-    fn only_a_runs_list_and_what_truly_holds_it_make_a_request_wait() {
+    fn what_truly_holds_a_request_makes_it_wait() {
         let wait = |board: &Board, request: &str| SessionManager::waiting_on(board, request);
         let mut board = Board::default();
         let reported = task_of("r1", TaskState::Reported);
-        board
-            .waiting
-            .insert("w-r1".into(), item_of("r1", &reported.id.0));
         board.tasks.insert(reported.id.clone(), reported);
         assert_eq!(wait(&board, "r1"), None);
-
-        let run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
-        let phase = format!("run-{}-phase-1-g1", run.id.short());
-        let mut lead = task_of(&phase, TaskState::Reported);
-        lead.run = Some(crate::overnight::RunTaskContext {
-            run_id: run.id.clone(),
-            segment: 1,
-            generation: 1,
-            role: crate::overnight::RunRole::Worker,
-            rules_hash: String::new(),
-        });
-        board.runs.insert(run.id.clone(), run);
-        board
-            .waiting
-            .insert(format!("w-{phase}"), item_of(&phase, &lead.id.0));
-        board.tasks.insert(lead.id.clone(), lead);
-        assert_eq!(wait(&board, &phase), Some(Wait::User));
 
         let held = |state: TaskState, quota: bool| {
             let mut board = board.clone();
@@ -896,39 +807,6 @@ mod tests {
         assert_eq!(wait(&merging, "r1"), None);
     }
 
-    #[test]
-    fn a_finished_runs_requests_stay_over_and_wake_nothing() {
-        let mut run = OvernightRun::for_test(ConversationId("c".into()), "Speed", Vec::new());
-        let phase = format!("run-{}-phase-2-g1", run.id.short());
-        let mut board = Board::default();
-        board.runs.insert(run.id.clone(), run.clone());
-        // A running run's phase request lives as usual.
-        assert!(run_of_request(&board, &phase).is_some());
-        assert!(!ended_run_request(&board, &phase));
-        assert_eq!(
-            ended_run_state(&board, &request(&phase, RequestState::Working)),
-            None
-        );
-        // Writing its report: nothing new starts for it any more.
-        run.state = OvernightState::Reporting;
-        board.runs.insert(run.id.clone(), run.clone());
-        assert!(ended_run_request(&board, &phase));
-        // Finished: its requests are done for good, whatever waits or comes later, and keep
-        // a stop.
-        run.state = OvernightState::Finished;
-        board.runs.insert(run.id.clone(), run.clone());
-        assert_eq!(
-            ended_run_state(&board, &request(&phase, RequestState::Waiting)),
-            Some(RequestState::Done)
-        );
-        assert_eq!(
-            ended_run_state(&board, &request(&phase, RequestState::Stopped)),
-            Some(RequestState::Stopped)
-        );
-        // The user's own requests in the same session are not the run's.
-        assert!(run_of_request(&board, "01a0fefa-user-message").is_none());
-        assert!(!ended_run_request(&board, "01a0fefa-user-message"));
-    }
     use crate::model::ConversationId;
 
     #[test]

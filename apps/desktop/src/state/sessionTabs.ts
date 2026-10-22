@@ -4,7 +4,6 @@ import { persist } from "zustand/middleware";
 import { notePaneClose } from "@/state/closedPanes";
 import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
 import type { AttachmentRef, ReviewScope } from "@/ipc/generated";
-import type { PlanDocRef } from "@/state/planDoc";
 
 /**
  * A session's tabs over its main area: Chat (the conversation, always first and never
@@ -123,12 +122,6 @@ export type LegacyDocumentTab = {
   savedPath: string | null; relativePath: string | null;
 };
 export type MockupTabState = { kind: "mockup"; id: typeof MOCKUP_TAB; opener: string | null };
-/** A plan read full screen, opened from its card: one tab per plan. */
-export type PlanTabState = {
-  kind: "plan"; id: string; opener: string | null; plan: PlanDocRef;
-  /** The plan's title as last seen, for the tab before the plan loads. */
-  title: string;
-};
 /**
  * A conflicted file during a merge: its conflicts marked in place (Accept Current, Incoming,
  * Both), both sides compared whole, or the merge editor. One tab per file and view.
@@ -139,11 +132,9 @@ export type ConflictTabState = {
 export type ConflictView = "conflict" | "compare" | "merge";
 /**
  * A view of the session's own records, opened from a row of its context card or the thread's end:
- * its job step by step (Q88), or every source it used.
+ * every source it used.
  */
 export type PanelView =
-  /** The Job card's tab: the job at work and each earlier merge's. */
-  | { type: "reviews" }
   /** Every source the session used: attachments, links, integrations, its searches and the pages it opened. */
   | { type: "sources" }
   /** What something in the context card's Background prints: a preview's log or a CLI's background command's output. */
@@ -161,7 +152,7 @@ export type PastedTabState = { kind: "pasted"; id: string; opener: string | null
  * comes to the front.
  */
 export type AgentMark = { agentOpened?: boolean; unseen?: boolean };
-export type SessionTab = (FileTab | ReviewTabState | PanelTabState | PastedTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState) & AgentMark;
+export type SessionTab = (FileTab | ReviewTabState | PanelTabState | PastedTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | NewTabState | ConflictTabState) & AgentMark;
 
 /** Whether an agent opened `tab`: by an app call, or with the browser tool. */
 export function isAgentTab(tab: SessionTab): boolean {
@@ -642,15 +633,6 @@ export function closeMockupTab(conversationId: string, moment: string): void {
   closeTab(conversationId, MOCKUP_TAB);
 }
 
-/** Shows plan `plan` in its own tab: the tab already showing it, else a new one after the tab in front. */
-export function openPlanTab(conversationId: string, plan: PlanDocRef, title: string): string {
-  const id = `plan:${plan.type}:${plan.id}`;
-  update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
-    ? { ...current, active: id, tabs: current.tabs.map((tab) => tab.id === id && tab.kind === "plan" ? { ...tab, title } : tab) }
-    : { tabs: insertAfterActive(current, { kind: "plan", id, opener: current.active, plan, title }), active: id });
-  return id;
-}
-
 /** Shows `view` in its own tab: the tab already showing it, else a new one after the tab in front. */
 export function openPanelTab(conversationId: string, view: PanelView, title: string): string {
   const id = view.type === "output" ? `panel:output:${view.source}:${view.id}` : `panel:${view.type}`;
@@ -819,6 +801,8 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
       if (tab.kind === "pasted" && !tab.paste) return [];
       // The old Review tab of every change and its scope picker is gone.
       if (tab.kind === "review" && !REVIEW_TARGETS.has(tab.target.type)) return [];
+      // A plan's own tab and the Job card's tab are gone with them.
+      if ((tab.kind as string) === "plan" || (tab.kind === "panel" && (tab.view.type as string) === "reviews")) return [];
       // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.
       if (tab.kind === "browser" && !/^https?:/i.test(tab.url)) return [{ ...tab, url: "" }];
       if (tab.kind !== "document") return [tab];

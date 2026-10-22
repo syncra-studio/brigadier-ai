@@ -417,24 +417,16 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "query_brain" => ToolCall::Worker(W::QueryBrain(arg(name, args))),
         "remember" => ToolCall::Orchestrator(O::Remember(arg(name, args))),
         "search_transcript" => ToolCall::Orchestrator(O::SearchTranscript(arg(name, args))),
-        "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
-        "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
-        "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
         "attach_proof" => ToolCall::Orchestrator(O::AttachProof(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
-        "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
-        "set_headline" => ToolCall::Orchestrator(O::SetHeadline(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
         "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
-        "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),
-        "end_run" => ToolCall::Orchestrator(O::EndRun(arg(name, args))),
         "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
-        "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
         "note_progress" => ToolCall::Worker(W::NoteProgress(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
@@ -2239,17 +2231,14 @@ mod near_limit_tests;
 #[cfg(unix)]
 mod no_push_tests;
 #[cfg(unix)]
-mod overnight_tests;
 #[cfg(unix)]
 mod owed_tests;
 #[cfg(unix)]
 mod page_tools_tests;
 #[cfg(unix)]
-mod phase_acceptance_tests;
 #[cfg(unix)]
 mod plain_merge_tests;
 #[cfg(unix)]
-mod plan_tests;
 #[cfg(unix)]
 mod pr_card_tests;
 #[cfg(unix)]

@@ -35,7 +35,7 @@ export function taskWaitWords(task: Task): string | null {
     const reason = task.blockedReason?.trim();
     return reason ? (/^waiting\b/i.test(reason) ? reason : `Waiting: ${reason}`) : "Waiting";
   }
-  if (task.state === "readyToLand") return task.run ? "Held" : "Ready to land";
+  if (task.state === "readyToLand") return "Ready to land";
   return null;
 }
 

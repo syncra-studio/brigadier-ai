@@ -1,13 +1,13 @@
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
-            .file("src/overnight_notifications.m")
+            .file("src/notifications.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
-            .compile("brigadier_run_notifications");
+            .compile("brigadier_notifications");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
         println!("cargo:rustc-link-lib=framework=Foundation");
-        println!("cargo:rerun-if-changed=src/overnight_notifications.m");
+        println!("cargo:rerun-if-changed=src/notifications.m");
         cc::Build::new()
             .file("src/login_item.m")
             .flag("-fobjc-arc")

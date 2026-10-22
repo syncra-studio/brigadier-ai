@@ -43,7 +43,6 @@ const task: Task = {
   number: 1,
   state: "running",
   attempts: [],
-  run: null,
   candidate: null,
   report: null,
   requestId: null,
@@ -231,8 +230,8 @@ mockIPC(
         if (terminalId === req.terminalId) shells.delete(key);
     if (req.method === "getConversation") return { method: req.method, view: {
       conversation: useApp.getState().conversations[req.id], messages: { messages: [], hasMore: false },
-      tasks: [], approvals: [], questions: [], plans: [], overnight: [], requests: [], workerSteps: [], orchestratorSteps: [],
-      machineSteps: [], decisions: [], waiting: [], compactions: [], ratings: {}, queue: emptyBoard(req.id).queue,
+      tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [],
+      machineSteps: [], decisions: [], compactions: [], ratings: {}, queue: emptyBoard(req.id).queue,
       run: "idle", runRequest: null, head: null, context: null, streaming: null, thinking: [], notices: [], memories: [], previews: [],
     } };
     if (req.method === "readFile") return { method: req.method, file: { text: "# Fixture file\n", size: 15, truncated: false } };

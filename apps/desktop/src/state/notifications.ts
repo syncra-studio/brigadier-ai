@@ -9,9 +9,7 @@ import {
 import { useApp } from "@/state/store";
 
 /**
- * Whether Brigadier may show notifications, for Settings › General › Notifications and the
- * overnight run cards (a run tells the user when it finishes with one, so the card says when
- * they're off).
+ * Whether Brigadier may show notifications, for Settings › General › Notifications.
  */
 export const useNotifications = create<{ permission: NotificationPermission | null }>(() => ({
   permission: null,

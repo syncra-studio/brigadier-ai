@@ -10,7 +10,6 @@ use brigadier_providers::model::Origin;
 use serde_json::json;
 use tokio::sync::Notify;
 
-use super::super::phases::WAITING_FOR_GO_AHEAD;
 use super::super::workers::ASKED_THE_THREAD;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::work::TaskState;
@@ -176,76 +175,6 @@ async fn a_worker_waiting_on_its_question_is_asked_again_and_resumes_after_a_kil
         .await;
     let task = Flow::task(&board, 1);
     assert_ne!(task.state, TaskState::Stopped, "{task:#?}");
-    assert_resumed_whole(&flow, &log);
-    flow.stop().await;
-}
-
-/// A lead whose outline waited for its go-ahead when the daemon died: it still waits, and the
-/// go-ahead resumes its own session.
-#[tokio::test]
-async fn a_lead_waiting_for_its_go_ahead_still_waits_after_a_kill() {
-    let log = Log::default();
-    let mut flow = Flow::start(
-        "restart-outline",
-        Options::default(),
-        logged(
-            &log,
-            |turn| async move {
-                if turn.input.contains("Go ahead with task-1.") {
-                    let reply = turn
-                        .call("approve_outline", json!({"task": "task-1"}))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Started it.");
-                }
-                // The user's own words: a later message for that request names it too.
-                if turn.input.starts_with("Do it.") {
-                    return delegate(&turn, "implement").await;
-                }
-                // Its outline, and anything else, waits for the user here.
-                Reply::text("")
-            },
-            |turn, n| async move {
-                if n == 0 {
-                    turn.tool_output(PLANTED);
-                    let reply = turn
-                        .call("submit_outline", json!({"outline": "1. Write ticket.txt"}))
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Waiting for the go-ahead.");
-                }
-                assert!(turn.input.contains("Go ahead"), "{}", turn.input);
-                turn.write("ticket.txt", "VT-88213\n");
-                turn.git(&["add", "ticket.txt"]);
-                turn.git(&["commit", "-qm", "Add the ticket"]);
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": format!("Wrote it. {PLANTED}"),
-                               "changes": ["ticket.txt"]}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("Reported.")
-            },
-        ),
-    )
-    .await;
-    flow.say("Do it.").await;
-    flow.until("the outline to wait", |board| {
-        board
-            .tasks
-            .values()
-            .any(|task| task.blocked_reason.as_deref() == Some(WAITING_FOR_GO_AHEAD))
-    })
-    .await;
-    flow.crash().await;
-    let board = flow.board().await;
-    let task = Flow::task(&board, 1);
-    assert_eq!(task.state, TaskState::Blocked, "{task:#?}");
-    assert_eq!(task.blocked_reason.as_deref(), Some(WAITING_FOR_GO_AHEAD));
-    flow.say("Go ahead with task-1.").await;
-    flow.until("the lead's report", task_reported).await;
     assert_resumed_whole(&flow, &log);
     flow.stop().await;
 }

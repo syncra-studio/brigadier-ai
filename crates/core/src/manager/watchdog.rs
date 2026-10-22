@@ -1,7 +1,6 @@
 //! Reports real worker silence to the thread, which decides whether to message, stop or
 //! replace the worker. Commands and tool calls are never interrupted for taking time.
 //! A CLI process that has gone away is recovered automatically after the plumbing grace.
-//! Unanswered cards are still listed under "Waiting on you" for overnight runs.
 
 pub(crate) mod progress;
 
@@ -13,15 +12,11 @@ use std::time::Duration;
 use brigadier_providers::{ErrorKind, NoticeLevel, ProviderEvent};
 
 use super::SessionManager;
-use super::decisions::waiting_run;
 use super::workers::TaskLive;
 use crate::board::Board;
 use crate::model::{ConversationId, Lifecycle};
 use crate::now_ms;
-use crate::work::{
-    ApprovalSubject, AttemptEnd, CardId, CardState, PlanState, QuestionKind, Task, TaskId,
-    TaskState, WaitingSource,
-};
+use crate::work::{AttemptEnd, CardState, Task, TaskId, TaskState};
 
 /// The silence before a report, in seconds; every other threshold follows from it.
 const UNIT_SECS: u64 = 3 * 60;
@@ -35,8 +30,6 @@ pub(crate) struct Timing {
     pub command: i64,
     pub server: i64,
     pub build: i64,
-    /// A card unanswered this long waits on the user.
-    pub card: i64,
     /// What a hand-off or a result being recorded may take before a task without a running
     /// CLI, or a member that ended without its result, counts as stuck.
     pub grace: i64,
@@ -67,7 +60,6 @@ impl Timing {
             command: unit * 5 / 3,
             server: unit * 2 / 3,
             build: unit * 10,
-            card: unit * 10,
             grace: (unit * 2 / 3).max(1_000),
             tick: Duration::from_millis(tick),
         }
@@ -175,110 +167,6 @@ fn card_open(board: &Board, task: &TaskId) -> bool {
     })
 }
 
-/// A card the user left unanswered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StuckCard {
-    pub card_id: CardId,
-    pub request_id: Option<String>,
-    /// What the user is to do, in plain words.
-    pub what: String,
-}
-
-/// The cards of `board` unanswered for `after` at `now` that were never listed for the user
-/// (once they mark one done, it isn't listed again).
-pub(crate) fn stuck_cards(board: &Board, now: i64, after: i64) -> Vec<StuckCard> {
-    let listed = |card: &CardId| {
-        let prefix = format!("card:{card}|");
-        board
-            .waits_listed
-            .iter()
-            .any(|key| key.starts_with(&prefix))
-    };
-    let old = |created: i64| now - created >= after;
-    let task_name = |task: &Option<TaskId>| {
-        task.as_ref()
-            .and_then(|id| board.tasks.get(id))
-            .map_or_else(|| "a worker".to_owned(), |t| format!("task-{}", t.number))
-    };
-    let mut stuck = Vec::new();
-    for approval in board.approvals.values() {
-        if approval.state != CardState::Pending
-            || !old(approval.created_at_ms)
-            || listed(&approval.id)
-        {
-            continue;
-        }
-        let what = match &approval.subject {
-            ApprovalSubject::Cli { request } => format!(
-                "Allow or decline what {} asked for: {}",
-                if approval.task_id.is_some() {
-                    task_name(&approval.task_id)
-                } else {
-                    "the session".to_owned()
-                },
-                request.command.as_deref().unwrap_or(&request.tool)
-            ),
-            ApprovalSubject::OutwardCommand { argv, .. } => {
-                format!("Allow or decline the command: {}", argv.join(" "))
-            }
-            ApprovalSubject::Landing { task_id, .. } => format!(
-                "Approve or decline landing {}",
-                task_name(&Some(task_id.clone()))
-            ),
-            ApprovalSubject::FinishSession { branch, base, .. } => {
-                format!("Approve or decline merging {branch} into {base}")
-            }
-            ApprovalSubject::Action { action, .. } => format!("Approve or decline: {action}"),
-            ApprovalSubject::Outline { title, .. } => {
-                format!("Start or decline the plan “{title}”")
-            }
-            ApprovalSubject::PeerMessage { title, .. } => {
-                format!("Send or don't send the message to “{title}”")
-            }
-            ApprovalSubject::Browser { question, .. } => format!("Allow or decline: {question}"),
-        };
-        stuck.push(StuckCard {
-            card_id: approval.id.clone(),
-            request_id: approval.request_id.clone(),
-            what,
-        });
-    }
-    for question in board.questions.values() {
-        if question.answer.is_some()
-            || question.answered_at_ms.is_some()
-            || !old(question.created_at_ms)
-            || listed(&question.id)
-        {
-            continue;
-        }
-        let what = match &question.kind {
-            QuestionKind::Orchestrator => format!("Answer the question: {}", question.text),
-            QuestionKind::UncommittedChanges { .. } => {
-                "Answer whether workers see your uncommitted changes".to_owned()
-            }
-            QuestionKind::Merge { base, .. } => format!("Answer whether to merge into {base}"),
-        };
-        stuck.push(StuckCard {
-            card_id: question.id.clone(),
-            request_id: question.request_id.clone(),
-            what,
-        });
-    }
-    // A plan in review waits for its reviewers, not the user.
-    for plan in board.plans.values() {
-        if plan.state != PlanState::Proposed || !old(plan.created_at_ms) || listed(&plan.id) {
-            continue;
-        }
-        stuck.push(StuckCard {
-            card_id: plan.id.clone(),
-            request_id: plan.request_id.clone(),
-            what: format!("Approve or decline the plan \u{201c}{}\u{201d}", plan.title),
-        });
-    }
-    stuck.sort_by(|a, b| a.card_id.0.cmp(&b.card_id.0));
-    stuck
-}
-
 impl SessionManager {
     /// Starts the watchdog's rounds.
     pub(super) fn start_watchdog(&self) {
@@ -327,8 +215,6 @@ impl SessionManager {
                     self.watch_worker(live, task, &board, timing, now).await;
                 }
             }
-            self.watch_cards(&conversation_id, &board, timing, now)
-                .await;
         }
     }
 
@@ -474,38 +360,6 @@ impl SessionManager {
         )
         .await;
     }
-
-    /// Lists the cards of an overnight run the user left unanswered for long under its
-    /// "Waiting on you" (a session's card is in front of the user already).
-    async fn watch_cards(
-        &self,
-        conversation_id: &ConversationId,
-        board: &Board,
-        timing: &Timing,
-        now: i64,
-    ) {
-        for card in stuck_cards(board, now, timing.card) {
-            let source = WaitingSource::Card {
-                card_id: card.card_id.clone(),
-            };
-            if waiting_run(&source, card.request_id.as_deref(), board).is_none() {
-                continue;
-            }
-            let added = self
-                .wait_on_user(conversation_id, card.request_id.clone(), source, &card.what)
-                .await;
-            match added {
-                Ok(true) => {
-                    // The app shows it as a desktop notification too.
-                    tracing::info!(conversation = %conversation_id, card = %card.card_id, "a card waits on the user");
-                }
-                Ok(false) => {}
-                Err(err) => {
-                    tracing::warn!(conversation = %conversation_id, error = %err, "could not list a card for the user");
-                }
-            }
-        }
-    }
 }
 
 /// Marks a watchdog action on a worker under way, until it is over.
@@ -545,16 +399,13 @@ mod tests {
     #[test]
     fn the_thresholds_scale_with_one_unit() {
         let t = timing();
-        assert_eq!(
-            (t.silent, t.command, t.grace, t.card),
-            (3 * MIN, 5 * MIN, 2 * MIN, 30 * MIN)
-        );
+        assert_eq!((t.silent, t.command, t.grace), (3 * MIN, 5 * MIN, 2 * MIN));
         assert_eq!(t.grace, 2 * MIN);
         assert_eq!(t.tick, Duration::from_secs(45));
         let fast = Timing::scaled(60);
         assert_eq!(
-            (fast.silent, fast.command, fast.card, fast.grace),
-            (MIN, 100_000, 10 * MIN, 40_000)
+            (fast.silent, fast.command, fast.grace),
+            (MIN, 100_000, 40_000)
         );
         assert_eq!(fast.tick, Duration::from_secs(15));
         assert_eq!(Timing::scaled(1).tick, Duration::from_secs(5));
@@ -747,65 +598,6 @@ mod tests {
             ..seen.clone()
         };
         assert!(!due(&fresh));
-    }
-
-    fn approval(id: &str, created: i64, state: CardState) -> crate::work::Approval {
-        crate::work::Approval {
-            id: CardId(id.into()),
-            conversation_id: ConversationId("c1".into()),
-            task_id: None,
-            request_id: Some("r1".into()),
-            position: 0,
-            subject: ApprovalSubject::Action {
-                action: "Deploy to staging".into(),
-                details: String::new(),
-            },
-            state,
-            created_at_ms: created,
-            resolved_at_ms: None,
-        }
-    }
-
-    #[test]
-    fn a_card_waits_on_the_user_once_after_half_an_hour() {
-        let mut board = Board::default();
-        for card in [
-            approval("a1", 0, CardState::Pending),
-            approval("a2", 10 * MIN, CardState::Pending),
-            approval(
-                "a3",
-                0,
-                CardState::Expired {
-                    reason: "The task ended".into(),
-                },
-            ),
-        ] {
-            board.approvals.insert(card.id.clone(), card);
-        }
-        let stuck = stuck_cards(&board, 30 * MIN, 30 * MIN);
-        assert_eq!(
-            stuck,
-            [StuckCard {
-                card_id: CardId("a1".into()),
-                request_id: Some("r1".into()),
-                what: "Approve or decline: Deploy to staging".into(),
-            }]
-        );
-        // Listed once (and marked done by the user since): never again.
-        let source = WaitingSource::Card {
-            card_id: CardId("a1".into()),
-        };
-        board
-            .waits_listed
-            .insert(super::super::decisions::waiting_key(
-                &source,
-                &stuck[0].what,
-            ));
-        assert!(stuck_cards(&board, 31 * MIN, 30 * MIN).is_empty());
-        // a2 is half an hour old by then.
-        let later = stuck_cards(&board, 40 * MIN, 30 * MIN);
-        assert_eq!(later.len(), 1);
-        assert_eq!(later[0].card_id, CardId("a2".into()));
     }
 
     #[test]

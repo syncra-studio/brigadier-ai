@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import { pendingActionKeys } from "@/app/conversation/pendingActions";
-import type { Conversation, OvernightRun, Plan, Question, Setup } from "@/ipc/generated";
+import type { Conversation, Question, Setup } from "@/ipc/generated";
 import type { ShownApproval } from "@/state/board";
 
 type Session = Extract<Setup, { type: "session" }>;
@@ -13,14 +13,6 @@ const setup: Session = {
   orchestrator: { provider: "claude", model: null, effort: null },
 };
 const conversation: Pick<Conversation, "id" | "setup"> = { id: night.conversationId, setup };
-const plan: Plan = {
-  ...Object.values(night.plans as unknown as Record<string, Plan>)[0]!,
-  id: "plan", position: 2, state: { type: "proposed" },
-};
-const run: OvernightRun = {
-  ...Object.values(night.overnight as unknown as Record<string, OvernightRun>)[0]!,
-  id: "night", state: "proposed",
-};
 const approval: ShownApproval = {
   id: "approval", conversationId: conversation.id, taskId: null, requestId: null,
   position: 3, subject: { type: "action", action: "Continue", details: "" },
@@ -33,28 +25,17 @@ const question: Question = {
 };
 const board = {
   conversationId: conversation.id, approvals: { approval }, questions: { question },
-  plans: { plan }, overnight: { night: run },
 };
 
-test("Full access asks questions and approvals; a proposed overnight run stays in its Job card", () => {
+test("Full access asks questions and approvals", () => {
   assert.deepEqual(pendingActionKeys(conversation, board), ["question:question", "approval:approval"]);
 });
 
-test("Ask and plan mode include proposed plans in their original order", () => {
+test("Ask and plan mode ask the same, in their original order", () => {
   for (const change of [{ permission: "ask" as const }, { planMode: true }]) {
     assert.deepEqual(pendingActionKeys({ ...conversation, setup: { ...setup, ...change } }, board),
-      ["question:question", "plan:plan", "approval:approval"]);
+      ["question:question", "approval:approval"]);
   }
-});
-
-test("a plan written as a document, and a lead's outline, ask the user under any permission", () => {
-  const outline: ShownApproval = {
-    ...approval, id: "outline", position: 4,
-    subject: { type: "outline", taskId: "task", title: "Add a flag", outline: "Edit main.rs" },
-  };
-  assert.deepEqual(pendingActionKeys(conversation, {
-    ...board, plans: { plan: { ...plan, body: "# Add a flag\n\nOne line." } }, approvals: { approval, outline },
-  }), ["question:question", "plan:plan", "approval:approval", "outline:outline"]);
 });
 
 test("settled decisions leave the rail", () => {

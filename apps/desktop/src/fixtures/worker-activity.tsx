@@ -18,8 +18,8 @@ const base = Object.values(night.tasks)[0] as unknown as Task;
 // One request, not answered yet: its finished worker stays in the strip.
 const conversationId = "worker-fixture";
 const task = (id: string, number: number, state: Task["state"], blockedReason: string | null = null): Task => ({
-  ...base, id, number, title: `Check ${id}`, conversationId, state, blockedReason, role: null, phase: null,
-  run: null, attempts: [], requestId: "r1", gateLink: null, candidate: null, report: null, quotaWait: null,
+  ...base, id, number, title: `Check ${id}`, conversationId, state, blockedReason, role: null,
+  attempts: [], requestId: "r1", gateLink: null, candidate: null, report: null, quotaWait: null,
   createdAtMs: 8000, updatedAtMs: 80000,
 });
 const tasks = { active: task("active", 1, "running"), blocked: task("blocked", 2, "blocked", "Waiting for plan review"),

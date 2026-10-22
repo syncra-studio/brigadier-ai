@@ -12,7 +12,6 @@ import { useShallow } from "zustand/react/shallow";
 import { showCard } from "@/app/conversation/ActionCards";
 import { rowName } from "@/app/conversation/activity/workerState";
 import { gitCommandsKey, mcpKey, pullRequestKey, usedMcpServers, webUse } from "@/app/conversation/cliFacts";
-import { shownRun, useOvernightCards, useRunDiff } from "@/app/conversation/overnightAdapter";
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { AllLinksPopover } from "@/app/conversation/AllLinksPopover";
 import { BranchRow } from "@/app/conversation/BranchRow";
@@ -431,20 +430,16 @@ function SessionSummaryContent({
   active: boolean;
   cards: ReactNode;
 }) {
-  const overnight = useOvernightCards(conversation.id);
   const project = useApp((s) =>
     conversation.projectId
       ? (s.projects[conversation.projectId]?.name ?? null)
       : null,
   );
-  const run = shownRun(overnight);
   const setup =
     conversation.setup?.type === "session" ? conversation.setup : null;
   const worktree = setup?.environment.type === "newWorktree";
-  const sessionDiff = useSessionDiff(conversation.id, worktree && !run);
-  const runDiff = useRunDiff(conversation.id, run?.id ?? null);
-  // During and after a run the card shows the run's branch: that is where the work is.
-  const diff = run ? runDiff : (sessionDiff?.stat ?? null);
+  const sessionDiff = useSessionDiff(conversation.id, worktree);
+  const diff = sessionDiff?.stat ?? null;
   const pullRequest = usePullRequest(conversation.id);
   // Before a session has its folder and branch, its card is a chat's: never an empty space.
   if (!setup) return <ChatSummaryContent conversation={conversation} active={active} />;
@@ -462,7 +457,7 @@ function SessionSummaryContent({
             title={<span title={checkout}>{project ?? setup.repo}</span>}
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
-            <BranchRow branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
+            <BranchRow branch={setup.environment.branch} diff={diff} />
             {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />

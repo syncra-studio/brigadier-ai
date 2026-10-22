@@ -47,12 +47,7 @@ impl SessionManager {
         for conversation in &catalog.conversations {
             let board = self.core.board(&conversation.id).await.unwrap_or_default();
             let tasks = board.sorted_tasks();
-            records.extend(branch_records(
-                &owned,
-                conversation,
-                &tasks,
-                board.runs.values(),
-            ));
+            records.extend(branch_records(&owned, conversation, &tasks));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {

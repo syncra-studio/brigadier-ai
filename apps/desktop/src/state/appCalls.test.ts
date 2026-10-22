@@ -61,11 +61,9 @@ const EVERY_CALL: AppOp[] = [
   { app: "state" },
   { app: "open", target: { kind: "file", path: "src/main.rs", line: 3 }, show: true },
   { app: "open", target: { kind: "diff", scope: "lastTurn" }, show: true },
-  { app: "open", target: { kind: "progress" }, show: true },
   { app: "open", target: { kind: "output", source: "preview", id: "preview-1", title: "Dev app" }, show: true },
   { app: "open", target: { kind: "url", url: "http://127.0.0.1:5173/" }, show: true },
   { app: "open", target: { kind: "worker", task: "task-1" }, show: true },
-  { app: "open", target: { kind: "plan", id: "card-1", outline: false, title: "The plan" }, show: true },
   { app: "open", target: { kind: "page", id: "page-1", title: "Notes" }, show: true },
   { app: "open", target: { kind: "terminal", tab: "terminal:agent-1", cwd: "/repo" }, show: true },
   { app: "endRequest", request: "req-1" },
@@ -132,10 +130,10 @@ test("open_in_app opens in front only when asked to show and the user is on the 
   assert.equal(a.agentOpened, true);
   assert.equal(a.unseen, true, "it has its dot");
 
-  const shown = await opened(session, { kind: "progress" }, true);
-  assert.deepEqual(shown, { app: "opened", tab: "panel:reviews", front: true, kept: false });
-  assert.equal(sessionTabs(session).active, "panel:reviews");
-  assert.equal(sessionTabs(session).tabs.find((tab) => tab.id === "panel:reviews")!.unseen, undefined, "seen in front");
+  const shown = await opened(session, { kind: "output", source: "preview", id: "preview-1", title: "Dev app" }, true);
+  assert.deepEqual(shown, { app: "opened", tab: "panel:output:preview:preview-1", front: true, kept: false });
+  assert.equal(sessionTabs(session).active, "panel:output:preview:preview-1");
+  assert.equal(sessionTabs(session).tabs.find((tab) => tab.id === "panel:output:preview:preview-1")!.unseen, undefined, "seen in front");
 
   selectTab(session, "file:src/a.rs");
   assert.equal(sessionTabs(session).tabs.find((tab) => tab.id === "file:src/a.rs")!.unseen, undefined, "brought to the front, its dot goes");

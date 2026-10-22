@@ -18,7 +18,7 @@ test("every worker uses a short plain unique job name, regardless of role", () =
   assert.equal(new Set(names).size, names.length);
   assert.ok(names.every((name) => !/task-\d+|Phase \d/.test(name)));
   assert.equal(shortWorkerName("Build search results with pagination"), "Build search results");
-  assert.equal(workerName({}, { ...byNumber(1), title: "File summary", role: "lead", phase: 1 }), "File summary");
+  assert.equal(workerName({}, { ...byNumber(1), title: "File summary", role: "lead" }), "File summary");
 });
 
 test("worker names follow the board's tasks: worked out once per record, again for a changed one (issue 401)", () => {

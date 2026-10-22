@@ -1,6 +1,5 @@
 import { MessagePrimitive, useAuiState, jumpInThread } from "@/components/conversation";
 import { type FC, Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
 
 import { ActivityItems } from "@/app/conversation/ActivityItems";
 import { AnswerActions } from "@/app/conversation/AnswerActions";
@@ -10,7 +9,6 @@ import { ContinuedFrom } from "@/app/conversation/ContinuedFrom";
 import { JoinedAnswer } from "@/app/conversation/JoinedAnswer";
 import { JoinedAnswerActions } from "@/app/conversation/JoinedAnswerActions";
 import { ModelChanged } from "@/app/conversation/ModelChanged";
-import { PhaseOutcome } from "@/app/conversation/PhaseOutcome";
 import { ReplyText } from "@/app/conversation/ReplyText";
 import { AnswerDetails } from "@/app/conversation/ReportText";
 import { entryKey, loadCardBody, SequenceEntry } from "@/app/conversation/SequenceEntry";
@@ -34,17 +32,14 @@ import {
   answerIndex,
   answeringIndex,
   blockFinished,
-  endsWithPlan,
   blockSequence,
   foldsAway,
   isFinal,
   isLive,
-  isRunRequest,
   reopenedSince,
   type SequenceEntry as Entry,
   updateIndices,
 } from "@/app/conversation/blocks";
-import { phaseViewOf } from "@/app/conversation/phaseView";
 import { AnsweredStatus, type ThreadStatusProps } from "@/app/conversation/ThreadStatus";
 import { useTurnChanged } from "@/app/conversation/ChangesCard";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
@@ -145,9 +140,6 @@ export const RequestBlock: FC = () => {
   const quotaWait = useViewConversation()?.quotaWait ?? null;
   const requestIds = meta?.requestIds;
   const changed = useTurnChanged(requestIds ?? []);
-  const phase = useBoard(
-    useShallow((s) => (meta && s.board && isRunRequest(meta.requestId) ? phaseViewOf(s.board.overnight, s.board.plans, meta.requestId) : null)),
-  );
   const workersActive = useBoard((s) =>
     Object.values(s.board?.tasks ?? {}).some(
       (task) => task.requestId !== null && !!requestIds?.includes(task.requestId) && !isFinal(task),
@@ -165,18 +157,16 @@ export const RequestBlock: FC = () => {
   }, [hasCards]);
   if (!meta) return null;
 
-  // A run's block is live until the run is over, whatever still waits on the user: that waits in the panel.
-  const live = phase ? !phase.settled : isLive(meta.state);
+  const live = isLive(meta.state);
   const last = meta.texts.length - 1;
   const sequence = blockSequence(meta);
-  const finished = blockFinished(meta.state, phase);
+  const finished = blockFinished(meta.state);
   // Its work folds the moment its CLI starts the final answer, though the request may still wait
   // (for another session's reply, say); with a CLI that doesn't say, once the request is done.
   // Until then a reply streams in place.
-  const answering = !finished && !phase && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
+  const answering = !finished && live && !workersActive ? answeringIndex(meta.texts, sequence) : null;
   const done = finished || answering !== null;
-  // A run over folds to its outcome; the thread's replies during it go into the fold.
-  const answer = answering ?? (endsWithPlan(sequence) ? null : answerIndex(meta.texts, finished && !phase));
+  const answer = answering ?? answerIndex(meta.texts, finished);
   const answerAtMs = answer === null ? undefined : meta.texts[answer]?.answerAtMs;
   const updates = updateIndices(meta.texts, answer);
   // Decide which peer send is still in flight where the live row state is known.
@@ -193,11 +183,8 @@ export const RequestBlock: FC = () => {
   const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
   const parts = allParts.slice(before.length);
   const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
-  // A turn that ends in a plan keeps its work open, the plan read with the steps that led to it.
-  const open = fold.open ?? endsWithPlan(sequence);
-  const outcome = done ? (phase?.outcome ?? null) : null;
+  const open = fold.open ?? false;
   const header =
-    phase !== null ||
     foldable ||
     meta.state === "stopped" ||
     meta.state === "failed" ||
@@ -209,7 +196,6 @@ export const RequestBlock: FC = () => {
   const liveThought = sequence.findLast((entry) => entry.kind === "thinking" && entry.live);
   const status: ThreadStatusProps = {
     requestIds: meta.requestIds,
-    // A live run works on, whatever the thread's last turn came to.
     state: isLive(meta.state) ? meta.state : "working",
     thinkingLive: !!liveThought,
     compacting: meta.compactions.some((compaction) => compaction.inTurn && compaction.state === "running"),
@@ -225,8 +211,7 @@ export const RequestBlock: FC = () => {
       data-state={meta.state}
       className="group/answer gap-answer-actions-gap relative flex flex-col px-2"
     >
-      {/* A run picks its models itself: not a change the user made. */}
-      {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
+      <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />
       {/* A step still running when the user stopped the turn reads "Stopped …". */}
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
       {/* A feedback offer waits for the turn that made it to end: never mid-turn (#486). */}
@@ -240,7 +225,6 @@ export const RequestBlock: FC = () => {
         {header && (
           <WorkHeader
             meta={meta}
-            phase={phase}
             open={open}
             foldable={foldable}
             quota={quotaWait !== null && meta.state === "working" && !workersActive}
@@ -301,7 +285,6 @@ export const RequestBlock: FC = () => {
                 <SequenceEntry entry={entry} streaming={false} />
               </div>
             ))}
-            {outcome && <PhaseOutcome>{outcome}</PhaseOutcome>}
             {answer !== null && (
               <div
                 data-slot="aui_assistant-message-content"
@@ -310,7 +293,7 @@ export const RequestBlock: FC = () => {
                 data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
               >
-                <AnswerDetails.Provider value={!!phase || changed}>
+                <AnswerDetails.Provider value={changed}>
                   <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer)} />
                 </AnswerDetails.Provider>
               </div>
@@ -332,7 +315,6 @@ export const RequestBlock: FC = () => {
       </div>
       </TurnEnded.Provider>
       </StoppedBy.Provider>
-      {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
       {!live && <TurnEnd meta={meta} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
@@ -340,7 +322,7 @@ export const RequestBlock: FC = () => {
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />
       )}
-      {!live && last >= 0 && !phase && (
+      {!live && last >= 0 && (
         <AnswerActions
           session={meta.session}
           rework={meta.rework}

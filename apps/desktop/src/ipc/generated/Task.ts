@@ -17,7 +17,6 @@ import type { QuotaWait } from "./QuotaWait";
 import type { Report } from "./Report";
 import type { Rerun } from "./Rerun";
 import type { Route } from "./Route";
-import type { RunTaskContext } from "./RunTaskContext";
 import type { Takeover } from "./Takeover";
 import type { TaskId } from "./TaskId";
 import type { TaskKind } from "./TaskKind";
@@ -133,15 +132,6 @@ requestId: string | null,
  * Its part in the request's flow; absent for scouts, research and older tasks.
  */
 role: WorkerRole | null, 
-/**
- * The phase of the request's plan it works on (from 1), when the request has phases.
- */
-phase: number | null, 
-/**
- * The overnight run it works for: then it runs under the run's rules (the session's
- * access, nothing on the never-list, the run's branch), whatever else the session says.
- */
-run: RunTaskContext | null, 
 /**
  * What the orchestrator sent the worker after its spec (`message_worker`), oldest first:
  * changes to the task that its review checks the work against too.

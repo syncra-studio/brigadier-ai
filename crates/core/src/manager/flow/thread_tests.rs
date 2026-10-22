@@ -1506,7 +1506,6 @@ async fn the_users_stop_reaches_the_running_turn_and_the_stopped_worker_is_refus
                 for (tool, args) in [
                     ("message_worker", json!({"task": "task-1", "text": "Keep going."})),
                     ("answer_worker", json!({"task": "task-2", "answer": "Yes.", "why": "It asked."})),
-                    ("approve_outline", json!({"task": "task-2"})),
                 ] {
                     let reply = turn.call(tool, args).await;
                     assert!(reply.is_error, "{tool}: {}", reply.text);
@@ -1543,7 +1542,7 @@ async fn the_users_stop_reaches_the_running_turn_and_the_stopped_worker_is_refus
     assert_eq!(stopped.len(), 1);
     flow.settled().await;
     let heard = heard.lock().unwrap().clone();
-    assert_eq!(heard.len(), 6, "{heard:?}");
+    assert_eq!(heard.len(), 5, "{heard:?}");
     assert_eq!(
         heard[0],
         "[worker] The user stopped task-1 \"Fix uploads\". You didn't stop it and nothing \
@@ -1555,17 +1554,17 @@ async fn the_users_stop_reaches_the_running_turn_and_the_stopped_worker_is_refus
         "{}",
         heard[1]
     );
-    for (refusal, number) in heard[2..5].iter().zip([1, 2, 2]) {
+    for (refusal, number) in heard[2..4].iter().zip([1, 2]) {
         assert!(
             refusal.contains(&format!("task-{number} was stopped by the user.")),
             "{refusal}"
         );
     }
     assert_eq!(
-        heard[5].matches("(stopped by the user)").count(),
+        heard[4].matches("(stopped by the user)").count(),
         2,
         "{}",
-        heard[5]
+        heard[4]
     );
     // Told once each, in the turn: nothing waits for the next one.
     flow.say("What now?").await;

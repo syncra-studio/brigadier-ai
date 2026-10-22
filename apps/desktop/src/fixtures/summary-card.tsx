@@ -69,11 +69,11 @@ function view(id: string): View {
   return {
     conversation: useApp.getState().conversations[id], context: null,
     messages: { messages: stored, hasMore: false },
-    tasks: [], approvals: [], questions: [], plans: [], requests: [], workerSteps: [], orchestratorSteps: [],
-    machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
+    tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [],
+    machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: stored.at(-1)?.id ?? null, ratings: {}, streaming: null,
-    notices: [], memories: [], overnight: [], previews: [],
+    notices: [], memories: [], previews: [],
   } as unknown as View;
 }
 
@@ -87,8 +87,6 @@ mockIPC((command, payload) => {
       return { method: req.method, page: { items: [], hasMore: false } };
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
-    case "getRunDiff":
-      return { method: req.method, diff: null };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
     default:

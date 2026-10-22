@@ -31,9 +31,9 @@ let slow: boolean;
 function view(id: string): ConversationView {
   return {
     conversation: conversation(id), context: null, messages: { messages: [message(id, 1), message(id, 2)], hasMore: false },
-    tasks: [], approvals: [], questions: [], plans: [], requests: [], queue: { items: [], paused: false }, run: runs[id] ?? "idle",
+    tasks: [], approvals: [], questions: [], requests: [], queue: { items: [], paused: false }, run: runs[id] ?? "idle",
     runRequest: null, head: null, workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [],
-    decisions: [], waiting: [], ratings: {}, streaming: null, notices: [], memories: [], overnight: [],
+    decisions: [], ratings: {}, streaming: null, notices: [], memories: [],
   } as unknown as ConversationView;
 }
 

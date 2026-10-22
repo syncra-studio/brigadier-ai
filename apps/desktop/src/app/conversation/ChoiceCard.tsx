@@ -24,14 +24,14 @@ function clickInput(event: MouseEvent): AnswerInput {
 }
 
 /**
- * The card shared by questions and "Implement this plan?": numbered answers (1–9 light, ↑/↓
+ * A question's card: numbered answers (1–9 light, ↑/↓
  * move, Enter picks the lit one; a pick shows its dot, then goes), then the free-text row
  * with Skip, which turns into Submit once something is typed (Next, before a round's last
  * question; ←/→ page through the round). Esc puts it aside; ×, with `onClose`, does that.
  *
  * Enter picks the lit answer only from the focused card, never from elsewhere in the window: a
  * click in the thread and Enter answers nothing. Every answer may change code or be hard to undo
- * (a merge, building a plan), so nothing is lit until the user moves to an answer, even when the
+ * (a merge), so nothing is lit until the user moves to an answer, even when the
  * card took focus on its own: ↑/↓ or 1–9 light one (the pointer passing over lights nothing),
  * and the recommended answer is only marked. A click on an answer picks it.
  */
@@ -61,7 +61,7 @@ export function ChoiceCard({
   footer,
   stagger,
 }: {
-  name: "question" | "plan";
+  name: "question";
   title: ReactNode;
   /** A few words over the question (a round's title). */
   kind?: ReactNode;
@@ -205,7 +205,7 @@ export function ChoiceCard({
       ref={card}
       container="request"
       tabIndex={0}
-      aria-label={name === "plan" ? "Implement this plan?" : "Question"}
+      aria-label="Question"
       data-action={name}
       onKeyDown={onKeyDown}
     >
@@ -237,8 +237,7 @@ export function ChoiceCard({
                   key={choice.label}
                   role="radio"
                   aria-checked={index === highlight}
-                  // "Yes, implement this plan" alone: an empty square.
-                  number={name === "plan" ? null : index + 1}
+                  number={index + 1}
                   label={choice.label}
                   description={choice.description ?? undefined}
                   recommended={choice.recommended}
@@ -254,7 +253,7 @@ export function ChoiceCard({
           <ActionFreeText
             ref={field}
             value={typed}
-            aria-label={name === "plan" ? "What should change" : "Your answer"}
+            aria-label="Your answer"
             placeholder={placeholder}
             marker={choices.length > 0}
             highlighted={choices.length > 0 && highlight === -1}

@@ -22,7 +22,7 @@ type Activity = {
   tasks: Readonly<Record<string, TaskState>>;
   /** Their titles, by id. */
   titles?: Readonly<Record<string, string>>;
-  /** Its CLI's permission prompts and plans waiting for the user. */
+  /** Its CLI's permission prompts waiting for the user. */
   approvals: ReadonlySet<string>;
   /** Unanswered questions. */
   questions: ReadonlySet<string>;
@@ -213,11 +213,6 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
           event.approval.state.type === "pending",
         ),
       };
-    case "planUpdated":
-      return {
-        ...current,
-        approvals: toggled(current.approvals, event.plan.id, event.plan.state.type === "proposed"),
-      };
     case "questionUpdated":
       return {
         ...current,
@@ -237,8 +232,6 @@ function conversationOf({ event }: EventEnvelope): string | null {
       return event.task.conversationId;
     case "approvalUpdated":
       return event.approval.conversationId;
-    case "planUpdated":
-      return event.plan.conversationId;
     case "questionUpdated":
       return event.question.conversationId;
     default:
@@ -280,7 +273,7 @@ export function applyActivityNews(news: ThreadNews): void {
 }
 
 /**
- * What a sidebar row shows: a pill while it waits for the user (a permission prompt or plan, a
+ * What a sidebar row shows: a pill while it waits for the user (a permission prompt, a
  * question, an MCP sign-in, or its last turn failed), else a spinner while its CLI works, and
  * how many of its workers run.
  */

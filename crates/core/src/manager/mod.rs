@@ -77,10 +77,8 @@ mod mcp_auth;
 mod memory_guard;
 mod outcomes;
 mod outputs;
-pub mod overnight;
 mod page_tools;
 mod past_projects;
-mod phases;
 mod plain_workers;
 mod preview;
 mod preview_ready;
@@ -196,10 +194,6 @@ pub struct SessionManager {
     /// Held while a session is let into a project's own checkout (who works there looked for,
     /// then the session recorded), so two can't both be let in.
     local_checkouts: tokio::sync::Mutex<()>,
-    /// Held while a plan is proposed (checked against the plans as they are, then recorded
-    /// and the open ones replaced) and while a review result decides a plan, so the two
-    /// can't interleave.
-    plans: tokio::sync::Mutex<()>,
     /// Held while an open uncommitted-changes question is looked for and one opened, so two
     /// delegations at once open one card (#179).
     uncommitted_asks: tokio::sync::Mutex<()>,
@@ -238,9 +232,6 @@ pub struct SessionManager {
     /// Held while a task is read, changed and recorded (`update_task`), so two writers can't
     /// each write back a copy that lacks the other's change.
     task_writes: tokio::sync::Mutex<()>,
-    /// Held while "Waiting on you" items are read, added and resolved, so one is never added
-    /// twice.
-    waiting: tokio::sync::Mutex<()>,
     /// Tasks being stopped: a landing that fails meanwhile (its worktree going away under
     /// it) is no news for the orchestrator.
     stopping: Mutex<HashSet<TaskId>>,
@@ -257,7 +248,6 @@ pub struct SessionManager {
     #[cfg(debug_assertions)]
     faults: fault::Faults,
     research: research::Research,
-    overnight: overnight::Runs,
     /// How long a worker's question waits before its safe default may stand in, in ms (an
     /// hour; tests shorten it).
     question_timeout_ms: std::sync::atomic::AtomicU64,
@@ -430,7 +420,6 @@ impl SessionManager {
             cli_asks: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
             local_checkouts: tokio::sync::Mutex::new(()),
-            plans: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),
             thread_scans: tokio::sync::Mutex::new(()),
             turn_snapshots: turn_changes::TurnSnapshots::default(),
@@ -448,7 +437,6 @@ impl SessionManager {
             agents_browse_here: std::sync::Mutex::default(),
             feedback_sign_in: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
-            waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
             reruns_starting: tokio::sync::Mutex::new(()),
             user_stops: Mutex::new(HashSet::new()),
@@ -459,7 +447,6 @@ impl SessionManager {
             #[cfg(debug_assertions)]
             faults: fault::Faults::default(),
             research: research::Research::default(),
-            overnight: overnight::Runs::default(),
             question_timeout_ms: std::sync::atomic::AtomicU64::new(
                 workers::QUESTION_TIMEOUT.as_millis() as u64,
             ),
@@ -496,10 +483,7 @@ impl SessionManager {
         crate::heap(|| manager.archive_open_at_upgrade()).await;
         // Before any session's instructions are written, which carry the preference.
         crate::heap(|| manager.carry_short_replies()).await;
-        crate::heap(|| manager.recover_active_runs()).await;
         crate::heap(|| manager.recover()).await;
-        crate::heap(|| manager.resume_runs()).await;
-        manager.start_overnight_clock();
         crate::heap(|| manager.open_brains()).await;
         manager.start_hibernation_timer();
         manager.start_watchdog();

@@ -85,21 +85,6 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
   assert.equal(seen.html, "<div><p>Fixed the rounding: <code>round</code> now rounds half-up, and the tests pass.</p></div>");
 });
 
-test("a turn that ends in a plan keeps its work open, and the user's choice outlives a remount", { timeout: 120000 }, async (t) => {
-  const seen = await drive<Record<"ended" | "closed" | "remounted", Seen> & { opened: Record<string, unknown> }>(t, "drive=plan");
-  assert.match(seen.ended.header ?? "", /^Worked for/);
-  // Closed, its fold is gone; remounted, it stays closed where the plan would open it.
-  assert.deepEqual([seen.ended.fold, seen.closed.fold, seen.remounted.fold], ["open", "gone", "gone"]);
-  // A chat has no tabs: its plan doesn't offer to open.
-  assert.deepEqual(seen.opened, { canOpen: false, active: "chat", kinds: [], shown: false, tab: null, rightPanel: false });
-});
-
-test("a session's plan opens full screen in its own tab, not the right panel", { timeout: 120000 }, async (t) => {
-  // The tab's code slow to come, as from a busy machine's server (#380).
-  const seen = await drive<{ opened: Record<string, unknown> }>(t, "drive=plan&kind=session", { slow: { url: "/PlanTab.tsx", ms: 1500 } });
-  assert.deepEqual(seen.opened, { canOpen: true, active: "plan:plan:plan", kinds: ["plan"], shown: true, tab: "Round half-up", rightPanel: false });
-});
-
 test("a turn's denied calls are counted in its header, which opens the work to the first", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ before: { denied: string | null; fold: string }; fold: string; row: string | null }>(t, "drive=denied");
   assert.deepEqual(seen.before, { denied: "1 denied action", fold: "gone" });
@@ -264,8 +249,3 @@ test("a worker the thread starts is a team sentence among its work, folded with 
   assert.equal(seen.workerDone.card, false, JSON.stringify(seen));
 });
 
-test("a plan approved: its request's new steps show under the plan as they come", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ under: boolean; new: boolean }>(t, "drive=implement&kind=session");
-  assert.equal(seen.new, true, JSON.stringify(seen));
-  assert.equal(seen.under, true, JSON.stringify(seen));
-});

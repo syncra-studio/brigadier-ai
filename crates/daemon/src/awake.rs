@@ -1,6 +1,5 @@
 //! Keeps the computer awake, screen on: while agents work, always, or never (the `keepAwake`
-//! setting), and optionally with the lid closed (`keepAwakeLidClosed`). An overnight run holds
-//! both until it ends, whatever the settings say, and leaves them as they were saved.
+//! setting), and optionally with the lid closed (`keepAwakeLidClosed`).
 //!
 //! - macOS: `caffeinate -d -i -s -w <pid>` holds the display, idle and system sleep assertions
 //!   and ends with the daemon. No assertion stops a closed lid from sleeping the computer, so
@@ -43,8 +42,6 @@ struct State {
     /// first needed.
     #[cfg(target_os = "macos")]
     authorized: Option<bool>,
-    /// Held for an overnight run rather than for the settings.
-    for_run: bool,
     error: Option<String>,
     /// Shut down: nothing keeps the computer awake any more, whatever the settings say.
     stopped: bool,
@@ -91,18 +88,13 @@ impl Awake {
 
     async fn hold(&self, state: &mut State) {
         let settings = self.core.settings();
-        // An overnight run keeps the computer awake whatever the setting (PLAN.md §10.10):
-        // the user left it to work; the setting stays as they saved it.
-        let run = self.sessions.overnight_active();
-        let wanted = run
-            || match settings.keep_awake {
-                KeepAwake::Off => false,
-                KeepAwake::Always => true,
-                KeepAwake::Agents => self.sessions.agents_working().await,
-            };
+        let wanted = match settings.keep_awake {
+            KeepAwake::Off => false,
+            KeepAwake::Always => true,
+            KeepAwake::Agents => self.sessions.agents_working().await,
+        };
         let wanted = wanted && !state.stopped;
-        let lid_wanted = lid_wanted(wanted, run, settings.keep_awake_lid_closed);
-        state.for_run = wanted && run;
+        let lid_wanted = wanted && settings.keep_awake_lid_closed;
         state.error = None;
 
         let running = state.blocker.as_mut().is_some_and(Blocker::running);
@@ -121,7 +113,7 @@ impl Awake {
         }
 
         #[cfg(target_os = "macos")]
-        self.apply_lid(state, lid_wanted, !run).await;
+        self.apply_lid(state, lid_wanted).await;
     }
 
     /// Lets the lid option work without asking again, behind one administrator prompt.
@@ -147,21 +139,18 @@ impl Awake {
         let mut state = self.state.lock().await;
         state.stopped = true;
         state.blocker = None;
-        // A run still under way restarts with the next daemon (the supervisor's), which holds
-        // the lid again: a shut lid mustn't sleep the computer in between.
         #[cfg(target_os = "macos")]
         if let Some(held) = state.lid.take()
-            && let Err(err) =
-                lid::restore(&self.data_dir, held, !self.sessions.overnight_active()).await
+            && let Err(err) = lid::restore(&self.data_dir, held).await
         {
             tracing::warn!(error = %err, "could not restore sleep");
         }
     }
 
-    /// `sleep_closed`: once sleep is back on, sleep now if the lid is already shut, as closing
-    /// it would have (not while a run is under way, unless the battery is low).
+    /// Once sleep is back on, it sleeps now if the lid is already shut, as closing it would
+    /// have.
     #[cfg(target_os = "macos")]
-    async fn apply_lid(&self, state: &mut State, wanted: bool, sleep_closed: bool) {
+    async fn apply_lid(&self, state: &mut State, wanted: bool) {
         let low = if wanted || state.lid.is_some() {
             battery::read().await.and_then(|battery| battery.low())
         } else {
@@ -175,8 +164,7 @@ impl Awake {
         let wanted = wanted && low.is_none();
         if !wanted {
             if let Some(held) = state.lid.take()
-                && let Err(err) =
-                    lid::restore(&self.data_dir, held, sleep_closed || low.is_some()).await
+                && let Err(err) = lid::restore(&self.data_dir, held).await
             {
                 tracing::warn!(error = %err, "could not restore sleep");
                 state.error = Some(format!("Could not restore sleep: {err}"));
@@ -210,10 +198,6 @@ impl Awake {
 
 /// Whether to keep going with the lid closed: whenever the computer is kept awake for a run,
 /// else as the lid setting says.
-fn lid_wanted(awake: bool, run: bool, setting: bool) -> bool {
-    awake && (run || setting)
-}
-
 /// Whether the blocker itself holds the lid (Linux's inhibitor does; elsewhere it doesn't).
 fn blocker_lid(lid_wanted: bool) -> bool {
     cfg!(target_os = "linux") && lid_wanted
@@ -253,7 +237,6 @@ async fn status(state: &mut State) -> KeepAwakeStatus {
     KeepAwakeStatus {
         active: state.blocker.is_some(),
         lid_closed,
-        for_run: state.for_run && state.blocker.is_some(),
         screen_on: cfg!(any(target_os = "macos", windows)),
         #[cfg(target_os = "macos")]
         on_battery: battery.is_some_and(|battery| battery.on_battery),
@@ -654,14 +637,10 @@ if [ "$(cat "$2" 2>/dev/null)" = "$1" ]; then /usr/bin/sudo -n /usr/bin/pmset di
             .ok()
     }
 
-    /// Enables sleep again. With `sleep_closed`, also sleeps now if the lid is already closed
-    /// without an external display: restoring the setting alone doesn't, as macOS looks at
-    /// the lid only when it opens or closes.
-    pub async fn restore(
-        data_dir: &Path,
-        mut held: Held,
-        sleep_closed: bool,
-    ) -> Result<(), String> {
+    /// Enables sleep again, and sleeps now if the lid is already closed without an external
+    /// display: restoring the setting alone doesn't, as macOS looks at the lid only when it
+    /// opens or closes.
+    pub async fn restore(data_dir: &Path, mut held: Held) -> Result<(), String> {
         if !held.owned {
             return Ok(());
         }
@@ -672,9 +651,7 @@ if [ "$(cat "$2" 2>/dev/null)" = "$1" ]; then /usr/bin/sudo -n /usr/bin/pmset di
         pmset_disablesleep(false).await?;
         let _ = std::fs::remove_file(marker(data_dir));
         tracing::info!("sleep restored");
-        if sleep_closed {
-            sleep_if_lid_closed().await;
-        }
+        sleep_if_lid_closed().await;
         Ok(())
     }
 
@@ -846,15 +823,6 @@ mod tests {
     #[test]
     fn keeps_the_screen_on_and_the_computer_awake() {
         assert_eq!(CAFFEINATE, ["-d", "-i", "-s"]);
-    }
-
-    #[test]
-    fn a_run_keeps_going_with_the_lid_closed_whatever_the_setting() {
-        assert!(lid_wanted(true, true, false));
-        assert!(lid_wanted(true, false, true));
-        assert!(!lid_wanted(true, false, false));
-        // Nothing keeps the computer awake (shut down, say): neither does the lid.
-        assert!(!lid_wanted(false, true, true));
     }
 
     #[test]

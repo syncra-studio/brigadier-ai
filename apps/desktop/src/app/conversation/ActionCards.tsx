@@ -9,8 +9,6 @@ import { useShallow } from "zustand/react/shallow";
 
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { inField, useCardKeys } from "@/app/conversation/cardKeys";
-import { ImplementPlanAction } from "@/app/conversation/ImplementPlanAction";
-import { PlanAction } from "@/app/conversation/PlanAction";
 import { QuestionAction } from "@/app/conversation/QuestionAction";
 import { ReplyButton } from "@/app/conversation/ReplyButton";
 import { StepCounter } from "@/app/conversation/StepCounter";
@@ -79,8 +77,8 @@ export function showCard(conversationId: string, cardId: string): void {
 }
 
 /**
- * The decisions waiting for the user in a conversation, oldest first: approvals, open
- * questions, and plans a session under "Ask" waits on.
+ * The decisions waiting for the user in a conversation, oldest first: approvals and open
+ * questions.
  */
 export function usePendingActions(
   conversation: Conversation | null,
@@ -127,26 +125,6 @@ export function PendingActionCard({
           <QuestionAction
             key={action.id}
             id={action.id}
-            onDismiss={onDismiss}
-            footer={footer}
-            stagger={follows}
-          />
-        );
-      case "plan":
-        return (
-          <PlanAction
-            key={action.id}
-            id={action.id}
-            onDismiss={onDismiss}
-            footer={footer}
-            stagger={follows}
-          />
-        );
-      case "outline":
-        return (
-          <ImplementPlanAction
-            key={action.id}
-            docRef={{ type: "outline", id: action.id }}
             onDismiss={onDismiss}
             footer={footer}
             stagger={follows}

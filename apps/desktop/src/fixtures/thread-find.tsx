@@ -132,11 +132,11 @@ function view(): View {
     conversation,
     context: null,
     messages: { messages: stored.slice(first), hasMore: first > 0 },
-    tasks: [], approvals: [], questions: [], plans: [], requests, workerSteps: [], orchestratorSteps: steps,
-    machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
+    tasks: [], approvals: [], questions: [], requests, workerSteps: [], orchestratorSteps: steps,
+    machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: stored.at(-1)?.id ?? null, ratings: {}, streaming: null,
-    notices: [], memories: [], overnight: [], previews: [],
+    notices: [], memories: [], previews: [],
   } as unknown as View;
 }
 
@@ -191,8 +191,6 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
     }
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
-    case "getRunDiff":
-      return { method: req.method, diff: null };
     case "listFiles":
       return { method: req.method, files: [], truncated: false };
     default:

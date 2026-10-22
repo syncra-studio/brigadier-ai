@@ -78,7 +78,7 @@ mockIPC((command, payload) => {
         case "getKeepAwake":
           return {
             method: req.method,
-            status: { active: false, forRun: false, screenOn: false, lidClosed: "ready" },
+            status: { active: false, screenOn: false, lidClosed: "ready" },
           };
         default:
           return { method: req.method };

@@ -18,7 +18,6 @@ use super::disk::{branch_standing, delete_branch_checked, same_path_in};
 use super::{SessionManager, blocking};
 use crate::ledger::BranchOwnership;
 use crate::model::{Conversation, ConversationId, Environment, KeptBranch, ProjectId, Setup};
-use crate::overnight::OvernightRun;
 use crate::storage::{
     BranchChoice, FreeUpProjectsReport, ProjectRemoval, RemovalBranch, RemovalConversation,
     RemovalWorktree, RemoveProjectReport, UnlandedBranch,
@@ -311,12 +310,7 @@ impl SessionManager {
             };
             let board = self.core.board(id).await.unwrap_or_default();
             let tasks = board.sorted_tasks();
-            records.extend(branch_records(
-                &owned,
-                &conversation,
-                &tasks,
-                board.runs.values(),
-            ));
+            records.extend(branch_records(&owned, &conversation, &tasks));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -331,12 +325,6 @@ impl SessionManager {
                 tasks
                     .iter()
                     .filter_map(|task| task.workspace.as_ref()?.worktree.as_ref())
-                    .chain(
-                        board
-                            .runs
-                            .values()
-                            .filter_map(|run| Some(&run.workspace.as_ref()?.path)),
-                    )
                     .map(PathBuf::from),
             );
         }
@@ -388,12 +376,7 @@ impl SessionManager {
                     running,
                 });
             }
-            records.extend(branch_records(
-                &owned,
-                conversation,
-                &tasks,
-                board.runs.values(),
-            ));
+            records.extend(branch_records(&owned, conversation, &tasks));
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -408,7 +391,6 @@ impl SessionManager {
                 .iter()
                 .map(|kind| format!("{kind}:{}", conversation.id))
                 .collect();
-            mine.extend(board.runs.values().map(super::overnight::run_owner));
             for task in &tasks {
                 mine.insert(format!("task:{}", task.id));
                 if let Some(path) = task.workspace.as_ref().and_then(|w| w.worktree.as_ref()) {
@@ -647,13 +629,12 @@ pub(super) fn settle_branches(
     (kept, failures)
 }
 
-/// The Brigadier branches a conversation created: its session branch, its tasks' branches and
-/// its overnight runs' branches, each with the branch its work goes to.
-pub(super) fn branch_records<'r>(
+/// The Brigadier branches a conversation created: its session branch and its tasks' branches,
+/// each with the branch its work goes to.
+pub(super) fn branch_records(
     owned: &BranchOwnership,
     conversation: &Conversation,
     tasks: &[Task],
-    runs: impl IntoIterator<Item = &'r OvernightRun>,
 ) -> Vec<BranchRecord> {
     let Some(Setup::Session {
         repo, environment, ..
@@ -681,10 +662,6 @@ pub(super) fn branch_records<'r>(
                 branch,
                 workspace.target.as_ref().unwrap_or(session_target),
             ))
-        }))
-        .chain(runs.into_iter().filter_map(|run| {
-            let workspace = run.workspace.as_ref()?;
-            Some(record(&workspace.branch, &workspace.base))
         }))
         .filter(|record| owned.owns(&record.repo, &record.name))
         .collect()

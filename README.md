@@ -111,9 +111,8 @@ rough edges.
 - **Sessions.** One thread per task, on its own branch and worktree. It reads and runs things,
   makes small changes itself, starts workers for the rest, and merges the result (with a Revert
   button).
-- **Overnight runs.** Type `/overnight` with a plan and when it should be ready. The session works
-  through the plan phase by phase until it's done or the deadline comes, then leaves a morning
-  report and a notification.
+- **Overnight runs.** Ask a session to work until a time ("until 07:00"). It plans its workers
+  to finish before the deadline and leaves a report.
 - **Sessions that message each other.** A session's thread can send a message to another
   session, in the same project or another one, and the reply comes back to it on its own. Both
   sides show the exchange. Under Ask, each message waits for your Send.

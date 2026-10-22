@@ -42,12 +42,10 @@ import type { MessagePage } from "./MessagePage";
 import type { MessageQueue } from "./MessageQueue";
 import type { Node } from "./Node";
 import type { OrchestratorPage } from "./OrchestratorPage";
-import type { OvernightRun } from "./OvernightRun";
 import type { Page } from "./Page";
 import type { PageSummary } from "./PageSummary";
 import type { PageWriteOutcome } from "./PageWriteOutcome";
 import type { PendingChanges } from "./PendingChanges";
-import type { PendingRunNotification } from "./PendingRunNotification";
 import type { ProbeBurst } from "./ProbeBurst";
 import type { Project } from "./Project";
 import type { ProjectCandidate } from "./ProjectCandidate";
@@ -140,7 +138,7 @@ watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "c
 /**
  * Why the user's chosen model didn't write it, when it didn't.
  */
-note: string | null, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "decidePlan" } | { "method": "putOffPlan" } | { "method": "writeUpFeedback", writeUp: FeedbackWriteUp, } | { "method": "fileFeedback", 
+note: string | null, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "writeUpFeedback", writeUp: FeedbackWriteUp, } | { "method": "fileFeedback", 
 /**
  * Whether `gh` is signed in; when it isn't, `results` is empty.
  */
@@ -156,15 +154,11 @@ signedIn: boolean,
 /**
  * The GitHub login, when `gh` could say it.
  */
-login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn, } | { "method": "waitGitHubSignIn" } | { "method": "cancelGitHubSignIn" } | { "method": "answerFeedbackOffer" } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
-/**
- * Absent before the run has a branch, and for a finished run with nothing verified.
- */
-diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifications: Array<PendingRunNotification>, } | { "method": "appAnswer" } | { "method": "browserPaused" } | { "method": "ackOvernightNotification" } | { "method": "failOvernightNotification" } | { "method": "stopTask" } | { "method": "stopWorkers", 
+login: string | null, } | { "method": "startGitHubSignIn", signIn: GitHubSignIn, } | { "method": "waitGitHubSignIn" } | { "method": "cancelGitHubSignIn" } | { "method": "answerFeedbackOffer" } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "appAnswer" } | { "method": "browserPaused" } | { "method": "stopTask" } | { "method": "stopWorkers", 
 /**
  * The tasks stopped, oldest first.
  */
-taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "resolveWaiting" } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
+taskIds: Array<TaskId>, } | { "method": "pauseTask" } | { "method": "resumeTask" } | { "method": "restoreKeptWork", outcome: RestoreOutcome, } | { "method": "listWorkerEvents", page: WorkerPage, } | { "method": "listOrchestratorLog", page: OrchestratorPage, } | { "method": "getThreadMetrics", metrics: ThreadMetrics, } | { "method": "readArtifact", text: ArtifactText, } | { "method": "saveArtifact" } | { "method": "openArtifact", 
 /**
  * The copy to open.
  */

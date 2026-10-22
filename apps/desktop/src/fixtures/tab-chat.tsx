@@ -63,8 +63,8 @@ const page: Page = { id: PAGE, content: { title: "Launch plan", emoji: null, bod
 const asked: Request[] = [];
 const view = (id: string) => ({
   conversation: useApp.getState().conversations[id], messages: { messages: [], hasMore: false },
-  tasks: [], approvals: [], questions: [], plans: [], overnight: [], requests: [], workerSteps: [], orchestratorSteps: [],
-  machineSteps: [], decisions: [], waiting: [], compactions: [], ratings: {}, queue: emptyBoard(id).queue,
+  tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [],
+  machineSteps: [], decisions: [], compactions: [], ratings: {}, queue: emptyBoard(id).queue,
   run: "idle", runRequest: null, head: null, context: null, streaming: null, thinking: [], notices: [], memories: [], previews: [],
 });
 

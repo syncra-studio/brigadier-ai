@@ -28,7 +28,6 @@ fn window(flow: &Flow) -> Arc<Mutex<Vec<AppOp>>> {
             let tab = match target {
                 OpenTarget::File { path, .. } => Some(format!("file:{path}")),
                 OpenTarget::Diff { .. } => Some("review".into()),
-                OpenTarget::Progress => Some("panel:reviews".into()),
                 _ => None,
             };
             let answer = AppAnswer::Opened {
@@ -102,8 +101,6 @@ async fn open_in_app_sends_a_checked_target_and_says_where_it_opened() {
         "{}",
         reply.text
     );
-    let reply = open(&flow, OpenInAppTarget::Progress, true).await;
-    assert!(!reply.is_error, "{}", reply.text);
     assert_eq!(
         *heard.lock().unwrap(),
         vec![
@@ -126,10 +123,6 @@ async fn open_in_app_sends_a_checked_target_and_says_where_it_opened() {
                     scope: DiffScope::Uncommitted
                 },
                 show: false
-            },
-            AppOp::Open {
-                target: OpenTarget::Progress,
-                show: true
             },
         ]
     );
@@ -170,12 +163,6 @@ async fn what_the_session_doesnt_have_never_reaches_the_window() {
             "there is no worker nobody",
         ),
         (
-            OpenInAppTarget::Plan {
-                id: "card-9".into(),
-            },
-            "there is no plan or outline card-9",
-        ),
-        (
             OpenInAppTarget::Url {
                 url: "file:///etc/hosts".into(),
             },
@@ -209,7 +196,15 @@ async fn what_the_session_doesnt_have_never_reaches_the_window() {
 #[tokio::test]
 async fn with_no_window_open_in_app_fails_in_plain_words() {
     let flow = Flow::start("open-in-app-no-window", Options::default(), quiet()).await;
-    let reply = open(&flow, OpenInAppTarget::Progress, true).await;
+    let reply = open(
+        &flow,
+        OpenInAppTarget::File {
+            path: "README.md".into(),
+            line: None,
+        },
+        true,
+    )
+    .await;
     assert!(reply.is_error);
     assert_eq!(
         reply.text,

@@ -19,15 +19,6 @@ impl SessionManager {
         &self,
         id: &ConversationId,
     ) -> Option<(std::path::PathBuf, String)> {
-        if self
-            .overnight
-            .active
-            .get(id)
-            .and_then(|active| active.workspace)
-            .is_some()
-        {
-            return None;
-        }
         match self.core.conversation(id).ok()?.setup? {
             Setup::Session {
                 repo,

@@ -1,5 +1,5 @@
 //! Cards the user answers: approvals (CLI requests, landings, finishing a session,
-//! orchestrator actions), questions and plans.
+//! orchestrator actions) and questions.
 //!
 //! A card is an event on the conversation stream; whoever waits for its answer holds a
 //! waiter. Answering a card is a UI-only request: no grant can reach it. Cards still pending
@@ -16,8 +16,8 @@ use super::SessionManager;
 use super::conversation::{Envelope, SendOutcome};
 use crate::model::{ConversationId, DomainEvent, Setup};
 use crate::work::{
-    AnswerOrigin, Approval, ApprovalSubject, CardId, CardState, InjectionKind, Plan, PlanApprover,
-    PlanState, Question, QuestionItem, QuestionKind, TaskId,
+    AnswerOrigin, Approval, ApprovalSubject, CardId, CardState, InjectionKind, Question,
+    QuestionItem, QuestionKind, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -647,182 +647,6 @@ impl SessionManager {
         }
     }
 
-    /// Records a plan card.
-    pub(crate) async fn store_plan(&self, plan: &Plan) -> Result<()> {
-        self.core
-            .record_conversation(
-                &plan.conversation_id,
-                vec![DomainEvent::PlanUpdated { plan: plan.clone() }],
-            )
-            .await?;
-        self.settle_requests(&plan.conversation_id).await;
-        Ok(())
-    }
-
-    /// The user approved or rejected a plan.
-    pub async fn decide_plan(
-        &self,
-        conversation_id: ConversationId,
-        card_id: CardId,
-        approve: bool,
-        message: Option<String>,
-    ) -> Result<()> {
-        let plan = self
-            .change_plan(&conversation_id, &card_id, |plan| {
-                if plan.state != PlanState::Proposed {
-                    return Err(Error::Invalid("this plan was already decided".into()));
-                }
-                plan.state = if approve {
-                    PlanState::Approved {
-                        by: PlanApprover::User,
-                    }
-                } else {
-                    PlanState::Rejected {
-                        message: message.clone(),
-                    }
-                };
-                plan.decided_at_ms = Some(now_ms());
-                Ok(())
-            })
-            .await?;
-        // Approving a plan leaves plan mode, the same as accepting the plan to implement it.
-        if approve
-            && let Some(mut setup) = self.core.conversation(&conversation_id)?.setup
-            && let Setup::Session { plan_mode, .. } = &mut setup
-            && *plan_mode
-        {
-            *plan_mode = false;
-            self.core.set_setup(conversation_id.clone(), setup).await?;
-        }
-        let steps: Vec<String> = plan
-            .steps
-            .iter()
-            .enumerate()
-            .map(|(number, step)| format!("{}. {}", number + 1, step.title))
-            .collect();
-        self.learn_user_decision(
-            &conversation_id,
-            format!("plan:{}", plan.id),
-            format!(
-                "The user {} the plan \"{}\"",
-                if approve { "approved" } else { "rejected" },
-                plan.title
-            ),
-            format!(
-                "{}\nSteps:\n{}",
-                message
-                    .as_deref()
-                    .map(|m| format!("Their note: {m}"))
-                    .unwrap_or_default(),
-                steps.join("\n")
-            ),
-        );
-        // A lead that outlined in plan mode has its go-ahead in the user's yes: one answer.
-        let mut started = Vec::new();
-        if approve {
-            let board = self.core.board(&conversation_id).await?;
-            let mut waiting: Vec<_> = board
-                .tasks
-                .values()
-                .filter(|task| {
-                    task.request_id == plan.request_id
-                        && task.state == crate::work::TaskState::Blocked
-                        && task.blocked_reason.as_deref()
-                            == Some(super::phases::WAITING_FOR_GO_AHEAD)
-                })
-                .cloned()
-                .collect();
-            waiting.sort_by_key(|task| task.number);
-            // The plan the user said yes to may differ from the outline: revised on their
-            // changes, or with checks and assumptions the outline left out. It wins.
-            let approved = plan.body.as_deref().map(|body| {
-                format!("The plan the user approved, which wins over your outline:\n{body}")
-            });
-            for lead in waiting {
-                match self.go_ahead(&lead, approved.clone()).await {
-                    Ok(()) => started.push(format!("task-{}", lead.number)),
-                    Err(err) => {
-                        tracing::warn!(task = %lead.id, error = %err, "could not start an outline");
-                    }
-                }
-            }
-        }
-        let text = if approve {
-            let how = if !started.is_empty() {
-                format!(
-                    "Brigadier gave {} the go-ahead on its outline: it builds now.",
-                    started.join(" and ")
-                )
-            } else if plan.steps.len() > 1 {
-                "Delegate each phase's lead in order (delegate_task, kind implement, `phase` its number), each once the one before it has landed.".to_owned()
-            } else {
-                "Delegate its lead with `phase: 1` (delegate_task, kind implement), or make a tiny change yourself.".to_owned()
-            };
-            format!(
-                "[decision] The user chose \u{201c}Yes, implement this plan\u{201d} for \u{201c}{}\u{201d}, and plan mode is off. Build it now, as the plan says. {how}",
-                plan.title
-            )
-        } else {
-            match message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
-                Some(changes) => format!(
-                    "[decision] The user did not take the plan \u{201c}{}\u{201d} as it is. What they want changed: \u{201c}{changes}\u{201d}. Revise the plan to match and propose it again with propose_plan; build nothing yet.",
-                    plan.title
-                ),
-                None => format!(
-                    "[decision] The user did not take the plan \u{201c}{}\u{201d}. Build nothing; wait for what they say next.",
-                    plan.title
-                ),
-            }
-        };
-        self.deliver_for(
-            &conversation_id,
-            Envelope {
-                kind: InjectionKind::Decision,
-                label: "plan decision".into(),
-                task_id: None,
-                text,
-            },
-            plan.request_id.clone(),
-        )
-        .await;
-        Ok(())
-    }
-
-    /// The user said "Not now" to a proposed plan: nothing waits on it any more (the sidebar
-    /// stops saying so, and its card stays off the rail after a restart), and the thread says
-    /// so in a line.
-    pub async fn put_off_plan(
-        &self,
-        conversation_id: ConversationId,
-        card_id: CardId,
-    ) -> Result<()> {
-        let plan = self
-            .change_plan(&conversation_id, &card_id, |plan| {
-                if plan.state != PlanState::Proposed {
-                    return Err(Error::Invalid("this plan was already decided".into()));
-                }
-                plan.state = PlanState::PutOff;
-                plan.decided_at_ms = Some(now_ms());
-                Ok(())
-            })
-            .await?;
-        self.deliver_for(
-            &conversation_id,
-            Envelope {
-                kind: InjectionKind::Decision,
-                label: "plan decision".into(),
-                task_id: None,
-                text: format!(
-                    "[decision] The user chose \u{201c}Not now\u{201d} for the plan \u{201c}{}\u{201d}. Build nothing. Say in one short line that the plan waits until they want it, then wait for what they say next; when they want it, propose it again with propose_plan.",
-                    plan.title
-                ),
-            },
-            plan.request_id.clone(),
-        )
-        .await;
-        Ok(())
-    }
-
     /// Expires cards nobody can wait for any more (after a restart).
     pub(crate) async fn expire_stale_cards(&self, conversation_id: &ConversationId) {
         let Ok(board) = self.core.board(conversation_id).await else {
@@ -842,22 +666,8 @@ impl SessionManager {
                 // The landing that asked is gone; `recover` tells the orchestrator to accept
                 // the task again.
                 ApprovalSubject::Landing { .. } => {}
-                // Nothing would start on a click any more: the orchestrator asks again.
-                ApprovalSubject::Outline { title, .. } => {
-                    self.deliver_for(
-                        conversation_id,
-                        Envelope {
-                            kind: InjectionKind::Decision,
-                            label: "outline".into(),
-                            task_id: approval.task_id.clone(),
-                            text: format!(
-                                "[not decided] The user had not answered whether to start the plan “{title}” when Brigadier restarted. Call approve_outline again if its lead still waits."
-                            ),
-                        },
-                        approval.request_id.clone(),
-                    )
-                    .await;
-                }
+                // Leads post no outlines any more: nothing starts on it.
+                ApprovalSubject::Outline { .. } => {}
                 // A merge approval from before merging was asked for in words: nothing merges on
                 // it, and merge cards are retired (BUILD-PLAN A4).
                 ApprovalSubject::FinishSession { branch, base, .. } => {

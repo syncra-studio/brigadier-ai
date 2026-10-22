@@ -83,8 +83,6 @@ async fn a_sessions_worker_and_thread_list_nothing_for_the_user_and_the_request_
         "{heard}"
     );
     // Nothing is listed, nothing waits, and the decision is noted.
-    assert!(board.waiting.is_empty(), "{:#?}", board.waiting);
-    assert!(board.waits_listed.is_empty(), "{:#?}", board.waits_listed);
     let request = board.latest_request().unwrap();
     assert_eq!(request.state, RequestState::Done, "{request:#?}");
     assert!(

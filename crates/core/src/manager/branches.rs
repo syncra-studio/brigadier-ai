@@ -20,8 +20,8 @@ use super::conversation::ConvLive;
 use crate::board::Board;
 use crate::model::{ConversationId, ConversationKind, MessageRole};
 use crate::sessions::{branch_of, display_text, one_line, parent_of};
-use crate::work::{ApprovalSubject, AttachmentRef, CardState, PlanState, QuestionKind};
-use crate::{Error, Result, now_ms};
+use crate::work::{ApprovalSubject, AttachmentRef, CardState, QuestionKind};
+use crate::{Error, Result};
 
 /// Characters of the user's message quoted when the orchestrator is told of a switch.
 const NOTE_PREVIEW_CHARS: usize = 200;
@@ -239,21 +239,6 @@ impl SessionManager {
             }
         }
         let of = |id: &Option<String>| id.as_deref() == Some(request);
-        // Its plans close first.
-        for plan in board.plans.values() {
-            if of(&plan.request_id) && plan.state == PlanState::Proposed {
-                let closed = self
-                    .change_plan(&conv.id, &plan.id, |plan| {
-                        plan.state = PlanState::Superseded;
-                        plan.decided_at_ms = Some(now_ms());
-                        Ok(())
-                    })
-                    .await;
-                if let Err(err) = closed {
-                    tracing::warn!(card = %plan.id, error = %err, "could not close a plan");
-                }
-            }
-        }
         for task in tasks {
             if let Err(err) = self.stop_task(task.id.clone()).await {
                 tracing::warn!(task = %task.id, error = %err, "could not stop a task for an edit");
@@ -278,9 +263,6 @@ impl SessionManager {
                 self.withdraw_question(question).await;
             }
         }
-        // What its answer so far waited for (a note, a finished worker's blocker) is over:
-        // the new answer lists what it needs.
-        self.rework_waiting(&conv.id, request).await;
         Ok(preview)
     }
 }

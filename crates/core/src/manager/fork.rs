@@ -213,8 +213,6 @@ impl SessionManager {
             |request: &Option<String>| request.as_ref().is_some_and(|id| requests.contains(id));
         let carried = |task: &TaskId| tasks.contains(&format!("task:{task}"));
         let mut kept = Vec::new();
-        // The plans copied so far: a rating of one (`plan:<id>`) comes with it.
-        let mut plans: HashSet<String> = HashSet::new();
         let mut after = 0;
         loop {
             let page = self
@@ -252,10 +250,6 @@ impl SessionManager {
                     DomainEvent::QuestionUpdated { question } if of(&question.request_id) => {
                         DomainEvent::QuestionUpdated { question }
                     }
-                    DomainEvent::PlanUpdated { plan } if of(&plan.request_id) => {
-                        plans.insert(format!("plan:{}", plan.id));
-                        DomainEvent::PlanUpdated { plan }
-                    }
                     DomainEvent::WorkerStepped { step }
                         if of(&step.request_id) && carried(&step.task_id) =>
                     {
@@ -270,16 +264,12 @@ impl SessionManager {
                         DomainEvent::DecidedForYou { decision }
                     }
                     DomainEvent::MessageRated { subject, rating }
-                        if parents.contains_key(subject.as_str())
-                            || tasks.contains(&subject)
-                            || plans.contains(&subject) =>
+                        if parents.contains_key(subject.as_str()) || tasks.contains(&subject) =>
                     {
                         DomainEvent::MessageRated { subject, rating }
                     }
                     DomainEvent::RatingCleared { subject }
-                        if parents.contains_key(subject.as_str())
-                            || tasks.contains(&subject)
-                            || plans.contains(&subject) =>
+                        if parents.contains_key(subject.as_str()) || tasks.contains(&subject) =>
                     {
                         DomainEvent::RatingCleared { subject }
                     }

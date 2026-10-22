@@ -786,16 +786,6 @@ impl Core {
                 },
             ),
         ];
-        // The user wrote again: the thread's headline was about what came before.
-        if self.board(&id).await?.headline.is_some() {
-            events.push((
-                streams::conversation(&id),
-                DomainEvent::HeadlineSet {
-                    conversation_id: id.clone(),
-                    headline: None,
-                },
-            ));
-        }
         let untitled = matches!(
             conversation.title.as_str(),
             NEW_SESSION_TITLE | NEW_CHAT_TITLE
@@ -1367,7 +1357,6 @@ impl Core {
             tasks: board.sorted_tasks(),
             approvals: board.sorted_approvals(),
             questions: board.sorted_questions(),
-            plans: board.sorted_plans(),
             requests: board.sorted_requests(),
             queue: board.queue.clone(),
             run: board.run,
@@ -1379,14 +1368,11 @@ impl Core {
             thinking: board.thinking.clone(),
             compactions: board.sorted_compactions(),
             decisions: board.decisions.clone(),
-            waiting: board.sorted_waiting(),
             ratings: board.ratings.clone(),
             streaming: board.streaming.clone(),
             notices: board.notices.clone(),
             memories: board.memories.clone(),
-            overnight: board.sorted_runs(),
             previews: board.sorted_previews(),
-            headline: board.headline.clone(),
             background_cleared: board.sorted_background_cleared(),
             mcp_servers: board.current_mcp_servers(),
             peer_messages: board.sorted_peer_messages(),
@@ -3360,14 +3346,26 @@ mod tests {
             .unwrap();
         let retired = all
             .iter()
-            .filter(|event| ["computer.acted", "background_run.updated"].contains(&&*event.kind))
+            .filter(|event| {
+                [
+                    "computer.acted",
+                    "waiting.updated",
+                    "background_run.updated",
+                ]
+                .contains(&&*event.kind)
+            })
             .map(|event| decode(event).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(retired, [DomainEvent::Retired, DomainEvent::Retired]);
+        assert_eq!(
+            retired,
+            [
+                DomainEvent::Retired,
+                DomainEvent::Retired,
+                DomainEvent::Retired
+            ]
+        );
         core.conversation_view(id.clone(), 10).await.unwrap();
-        let board = core.board(&id).await.unwrap();
-        assert!(board.waiting.is_empty());
-        assert!(board.sorted_waiting().is_empty());
+        core.board(&id).await.unwrap();
     }
 
     #[tokio::test]

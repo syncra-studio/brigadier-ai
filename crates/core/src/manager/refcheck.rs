@@ -353,8 +353,7 @@ impl SessionManager {
     }
 
     /// Records the session's own refs in the repository of `checkout`: a worktree session's
-    /// branch (the thread's) and its base, a local checkout's branch (the user's: a base), an
-    /// overnight run's branch (the thread's).
+    /// branch (the thread's) and its base, a local checkout's branch (the user's: a base).
     pub(crate) fn record_session_refs(&self, conversation: &ConversationId, checkout: &Path) {
         use crate::model::{Environment, Setup};
         if let Ok(record) = self.core.conversation(conversation)
@@ -369,14 +368,6 @@ impl SessionManager {
                     self.record_base(checkout, base, conversation);
                 }
             }
-        }
-        if let Some(run) = self
-            .overnight
-            .active
-            .get(conversation)
-            .and_then(|active| active.workspace)
-        {
-            self.record_branch(checkout, &run.branch, conversation, None);
         }
     }
 

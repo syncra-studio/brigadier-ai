@@ -11,7 +11,6 @@
   { "name": "a running run with no open turn is not work", "run": "running", "settled": "ready", "expect": "ready", "status": "ready" },
   { "name": "a worker alone is not work", "tasks": [["t1", "running"]], "expect": null, "status": null },
   { "name": "a permission prompt needs you, over an open turn", "turn": { "open": true }, "run": "running", "approvals": ["a1"], "expect": "needsYou", "status": "needsYou", "reason": "approval" },
-  { "name": "a proposed plan needs you", "plans": ["p1"], "settled": "ready", "expect": "needsYou", "status": "needsYou", "reason": "approval" },
   { "name": "a question needs you", "questions": ["q1"], "expect": "needsYou", "status": "needsYou", "reason": "question" },
   { "name": "a question over a failed turn names the question", "turn": { "lastEnd": "failed" }, "questions": ["q1"], "expect": "needsYou", "status": "needsYou", "reason": "question" },
   { "name": "an MCP server of the CLI that wants a sign-in needs you", "servers": [{ "name": "linear", "status": "needs-auth" }], "expect": "needsYou", "status": "needsYou", "reason": "sign-in" },

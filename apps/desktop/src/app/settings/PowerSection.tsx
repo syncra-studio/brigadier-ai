@@ -28,11 +28,7 @@ export function PowerSection() {
       <SettingsCard>
         <SettingsRow
           label={GENERAL_ROWS.keepAwake.label}
-          description={
-            status?.forRun
-              ? "An overnight run keeps the computer awake, screen on, until it ends; then this applies again"
-              : GENERAL_ROWS.keepAwake.description
-          }
+          description={GENERAL_ROWS.keepAwake.description}
           error={keepAwakeAction.error}
         >
           <SettingsSelect

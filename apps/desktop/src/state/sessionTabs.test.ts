@@ -16,7 +16,7 @@ Object.defineProperty(globalThis, "window", { configurable: true, value: { local
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs,
   replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, closeMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs,
-  sideChatName, sideChatTitle, openPlanTab, openPastedTab } = await import("./sessionTabs");
+  sideChatName, sideChatTitle, openPastedTab } = await import("./sessionTabs");
 const { tabTitle } = await import("./sessionTabTitle");
 const { documentText, documentIsSaved } = await import("./documentDrafts");
 const { ensurePage, migrateDrafts } = await import("./pageTabs");
@@ -402,24 +402,6 @@ test("closing the other tabs keeps Chat and the tab in front; from Chat it leave
   assert.equal(sessionTabs("others").active, CHAT_TAB);
   assert.equal(reopenTab("others"), true);
   assert.deepEqual(sessionTabs("others").tabs.map((tab) => tab.id), [second]);
-});
-
-test("a plan opened full screen is its own tab after the one in front, and opening it again brings that tab back", () => {
-  const browser = openBrowserTab("plans", "https://example.com");
-  selectTab("plans", CHAT_TAB);
-  const plan = openPlanTab("plans", { type: "plan", id: "p1" }, "Round half-up");
-  assert.deepEqual(sessionTabs("plans").tabs.map((tab) => tab.id), [plan, browser]);
-  assert.equal(sessionTabs("plans").active, plan);
-  assert.deepEqual(sessionTabs("plans").tabs[0], { kind: "plan", id: plan, opener: CHAT_TAB, plan: { type: "plan", id: "p1" }, title: "Round half-up" });
-  selectTab("plans", browser);
-  assert.equal(openPlanTab("plans", { type: "plan", id: "p1" }, "Round half-up, revised"), plan);
-  assert.equal(sessionTabs("plans").tabs.length, 2, "one tab per plan");
-  assert.equal(sessionTabs("plans").active, plan);
-  const reopened = sessionTabs("plans").tabs[0]!;
-  assert.equal(reopened.kind === "plan" && reopened.title, "Round half-up, revised");
-  const outline = openPlanTab("plans", { type: "outline", id: "p1" }, "Outline");
-  assert.notEqual(outline, plan, "an outline and a plan with the same id are different tabs");
-  closeTab("plans", outline); closeTab("plans", plan); closeTab("plans", browser);
 });
 
 test("a page already open in a Browser tab is brought to the front, not opened again (issues 418, 425)", () => {

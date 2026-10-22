@@ -106,9 +106,4 @@ impl SessionManager {
         self.set_task_blocked(&task.id, None).await;
         Ok(())
     }
-
-    /// Whether serious heat or critical memory pressure holds new workers now.
-    pub(crate) fn machine_strained(&self) -> bool {
-        self.machine.guard.current().workers_held()
-    }
 }

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use brigadier_core::{
     AccountsView, ApprovalSubject, CardState, ConversationId, DomainEvent, NotifyFinished,
-    Question, QuotaWarning, RequestState, Settings, UserRequest, WaitingItem, WaitingSource,
+    Question, QuotaWarning, RequestState, Settings, UserRequest,
 };
 use brigadier_ipc::app::BridgeEvent;
 use brigadier_ipc::protocol::{
@@ -602,14 +602,6 @@ fn allowed(kind: Kind, settings: &Settings, in_front: bool) -> bool {
 
 /// The notification an event asks for, if any.
 fn notice_for(event: &EventEnvelope) -> Option<Notice> {
-    if let Some(item) = stuck_card(event) {
-        return Some(Notice {
-            key: item.id,
-            kind: Kind::NeedsYou,
-            title: Title::Fixed("Waiting on you".to_owned()),
-            body: item.what,
-        });
-    }
     if let Some((id, what)) = pending_approval(event) {
         return Some(Notice {
             key: format!("approval:{id}"),
@@ -741,8 +733,8 @@ impl NotificationKeys {
 }
 
 /// A request an event says is over, done or failed, as the daemon settles requests from what
-/// runs and waits. Not one the user stopped, one steered into another's answer (that one
-/// tells), or an overnight run's (its report's notification tells).
+/// runs and waits. Not one the user stopped, or one steered into another's answer (that one
+/// tells).
 fn finished_request(event: &EventEnvelope) -> Option<UserRequest> {
     let raw = event.event.0.get();
     // Most events aren't about requests: skip decoding them.
@@ -756,8 +748,7 @@ fn finished_request(event: &EventEnvelope) -> Option<UserRequest> {
         request.state,
         RequestState::Done | RequestState::Failed { .. }
     );
-    (over && request.steered_into.is_none() && !brigadier_core::is_run_request(&request.id))
-        .then_some(request)
+    (over && request.steered_into.is_none()).then_some(request)
 }
 
 /// Weekly quota an event says is about to be lost unused.
@@ -819,21 +810,6 @@ fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
     Some((approval.id.0, what))
 }
 
-/// The "Waiting on you" item an event lists for an unanswered card, if it lists one.
-fn stuck_card(event: &EventEnvelope) -> Option<WaitingItem> {
-    let raw = event.event.0.get();
-    // Most events aren't about waiting items: skip decoding them.
-    if !raw.contains("\"waitingOnYou\"") {
-        return None;
-    }
-    match serde_json::from_str(raw).ok()? {
-        DomainEvent::WaitingOnYou { item } if matches!(item.source, WaitingSource::Card { .. }) => {
-            Some(item)
-        }
-        _ => None,
-    }
-}
-
 async fn read_frames(mut reader: Reader, frames: mpsc::Sender<Result<ServerFrame, String>>) {
     loop {
         let frame = match reader.read::<ServerFrame>().await {
@@ -888,19 +864,6 @@ mod tests {
         }
     }
 
-    fn waiting(source: WaitingSource) -> DomainEvent {
-        DomainEvent::WaitingOnYou {
-            item: WaitingItem {
-                id: "w1".into(),
-                request_id: None,
-                source,
-                key: "k".into(),
-                what: "Answer the card".into(),
-                created_at_ms: 0,
-            },
-        }
-    }
-
     #[test]
     fn starting_a_github_sign_in_waits_as_long_as_the_daemon_may_take() {
         // The daemon's `gh auth status` (two minutes at most), then its one-time code (30 s).
@@ -922,22 +885,6 @@ mod tests {
             notice.body,
             "Work (Claude Code) has 35% of its weekly quota left; it resets in 9 h."
         );
-    }
-
-    #[test]
-    fn only_stuck_cards_notify() {
-        let card = waiting(WaitingSource::Card {
-            card_id: CardId("c1".into()),
-        });
-        assert_eq!(
-            stuck_card(&envelope(&card)).map(|item| item.what),
-            Some("Answer the card".to_owned())
-        );
-        let task = waiting(WaitingSource::Task {
-            task_id: TaskId("task-1".into()),
-        });
-        assert!(stuck_card(&envelope(&task)).is_none());
-        assert!(stuck_card(&envelope(&waiting(WaitingSource::Orchestrator))).is_none());
     }
 
     fn approval(subject: ApprovalSubject, state: CardState) -> DomainEvent {
@@ -980,7 +927,6 @@ mod tests {
             reason: "The worker stopped.".into(),
         };
         assert!(pending_approval(&envelope(&approval(outline, answered))).is_none());
-        assert!(pending_approval(&envelope(&waiting(WaitingSource::Orchestrator))).is_none());
     }
 
     fn request(id: &str, state: RequestState) -> DomainEvent {
@@ -1023,7 +969,7 @@ mod tests {
             notice_for(&envelope(&request("m1", failed))).unwrap().body,
             "Stopped with an error: The model is overloaded."
         );
-        // Still working or waiting, stopped by the user, or an overnight run's: no notice.
+        // Still working or waiting, or stopped by the user: no notice.
         for state in [
             RequestState::Working,
             RequestState::Waiting,
@@ -1031,7 +977,6 @@ mod tests {
         ] {
             assert!(notice_for(&envelope(&request("m1", state))).is_none());
         }
-        assert!(notice_for(&envelope(&request("run-ab12-g1", RequestState::Done))).is_none());
         let DomainEvent::RequestUpdated {
             request: mut steered,
         } = request("m2", RequestState::Done)

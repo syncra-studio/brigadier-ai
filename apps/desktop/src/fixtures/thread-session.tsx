@@ -9,10 +9,7 @@
  *   (`settledSession`: no "Waiting on you", the merge asked on a card); `recorded=1` replays it
  *   as stored.
  * - `session=plan`: a plan-mode session of 2026-10-10 on a small CLI
- *   (`boards/thread-plan-2026-10-10.events.json`): the plan written, proposed as a document and
- *   built by two workers, one per phase. `at=1791603728000` is while it writes the plan,
- *   `at=1791603740000` while "Implement this plan?" waits, `at=1791603900000` while phase 1
- *   builds.
+ *   (`boards/thread-plan-2026-10-10.events.json`), built by two workers.
  *
  * Query: `sidebar=0` (closed); `summary=1` (the side panel pinned); `at=<ms>`
  * (only the events up to that time, a live moment of the session); `done=1` (the turn that waits
@@ -92,10 +89,7 @@ const conversation = {
     repo: "/tmp/thread-fixture",
     environment: { type: "newWorktree", branch, base: "main" },
     permission: isGrill ? "acceptEdits" : isPlan ? "ask" : "full",
-    // Plan mode is on until the user says yes to the plan.
-    planMode:
-      isPlan &&
-      !events.some((envelope) => envelope.event.type === "planUpdated" && envelope.event.plan.state.type === "approved"),
+    planMode: isPlan,
     workersSeeUncommitted: null,
     orchestrator: { provider: "claude", model: "opus", effort: "high" },
   },
@@ -140,8 +134,6 @@ if (!("__TAURI_INTERNALS__" in window)) {
     switch (req.method) {
       case "getPullRequest":
         return { method: req.method, pullRequest: null };
-      case "getRunDiff":
-        return { method: req.method, diff: null };
       case "listFiles":
         return { method: req.method, files: tabFixture ? ["README.md", "src/app.tsx", "src/styles.css"] : [], truncated: false };
       case "readFile":

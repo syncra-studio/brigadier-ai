@@ -351,9 +351,6 @@ impl SessionManager {
     /// hear of the merge as of a local one, and the thread that its remote branch may still
     /// hold the commits the merge rewrote.
     pub(super) async fn reconcile_pr_merge(&self, id: &ConversationId, request: Option<&str>) {
-        if self.overnight.active.get(id).is_some() {
-            return;
-        }
         let Ok(conv) = self.conv(id) else {
             return;
         };

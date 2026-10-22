@@ -486,8 +486,7 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                 _ => {
                     let Some((what, target)) = words.split_first() else {
                         return Err(error(
-                            "missing <what>: file, diff, progress, output, url, worker, plan \
-                             or page",
+                            "missing <what>: file, diff, output, url, worker or page",
                         ));
                     };
                     let target = target.join(" ");
@@ -513,16 +512,14 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                                 return Err(error("open diff: last-turn, branch or uncommitted"));
                             }
                         },
-                        "progress" => json!({"kind": "progress"}),
                         "output" => json!({"kind": "output", "id": needs("id")?}),
                         "url" => json!({"kind": "url", "url": needs("url")?}),
                         "worker" => json!({"kind": "worker", "task": needs("id")?}),
-                        "plan" => json!({"kind": "plan", "id": needs("id")?}),
                         "page" => json!({"kind": "page", "id": needs("id")?}),
                         other => {
                             return Err(error(&format!(
-                                "open: {other:?} is not one of: file, diff, progress, output, \
-                                 url, worker, plan, page"
+                                "open: {other:?} is not one of: file, diff, output, url, \
+                                 worker, page"
                             )));
                         }
                     };

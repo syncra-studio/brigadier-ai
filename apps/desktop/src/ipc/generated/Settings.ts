@@ -122,8 +122,7 @@ keepAwakeLidClosed: boolean,
  */
 followUp: FollowUp, 
 /**
- * When a finished request raises a desktop notification. Overnight runs tell the user
- * with their report's notification instead.
+ * When a finished request raises a desktop notification.
  */
 notifyFinished: NotifyFinished, 
 /**

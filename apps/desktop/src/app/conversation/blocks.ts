@@ -15,7 +15,6 @@ import type {
   OrchestratorStep,
   OrchestratorStepKind,
   PeerMessage,
-  Plan,
   Question,
   RequestState,
   Task,
@@ -222,7 +221,6 @@ export type BoardDigest = {
   workerSteps?: readonly WorkerStep[];
   approvals: Readonly<Record<string, Approval>>;
   questions: Readonly<Record<string, Question>>;
-  plans: Readonly<Record<string, Plan>>;
   orchestratorSteps: readonly OrchestratorStep[];
   machineSteps: readonly MachineStep[];
   decisions: readonly Decision[];
@@ -337,18 +335,6 @@ export function judgementCall(decision: Decision): boolean {
 /** An overnight run's own request (or its report's): the thread's turns, tasks and reports during the run. */
 export function isRunRequest(requestId: string | null): boolean {
   return requestId?.startsWith("run-") ?? false;
-}
-
-function keepPlan(plan: Plan): boolean {
-  switch (plan.state.type) {
-    case "proposed":
-    case "rejected":
-    case "putOff":
-      return true;
-    case "approved":
-    case "superseded":
-      return false;
-  }
 }
 
 /**
@@ -474,52 +460,6 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       requestId: question.requestId,
       card: { type: "question", id: question.id, position: question.position, keep: false },
       atMs: question.createdAtMs,
-    });
-  }
-  // A plan the user reads as a document (one proposed with a body, or a lead's outline) stays
-  // in the thread in any state, where it was proposed; a request's newest one stays in view, and
-  // the revisions it replaced fold into the work.
-  const documents: (BoardItem & { position: number })[] = [];
-  for (const plan of Object.values(board.plans)) {
-    if (!plan.body) continue;
-    documents.push({
-      kind: "card",
-      position: plan.position,
-      requestId: plan.requestId,
-      card: { type: "plan", id: plan.id, position: plan.position, keep: false },
-      atMs: plan.createdAtMs,
-    });
-  }
-  for (const approval of Object.values(board.approvals)) {
-    if (approval.subject.type !== "outline") continue;
-    documents.push({
-      kind: "card",
-      position: approval.position,
-      requestId: approval.requestId,
-      card: { type: "outline", id: approval.id, position: approval.position, keep: false },
-      atMs: approval.createdAtMs,
-    });
-  }
-  const newest = new Map<string | null, BlockCard>();
-  for (const item of documents) {
-    if (item.kind !== "card") continue;
-    const shown = newest.get(item.requestId);
-    if (!shown || shown.position < item.card.position) newest.set(item.requestId, item.card);
-  }
-  for (const card of newest.values()) card.keep = true;
-  items.push(...documents);
-  for (const plan of Object.values(board.plans)) {
-    if (plan.body) continue;
-    // A session's plan of phases alone lives in the side panel and the composer's phase pill;
-    // only one that waits on a decision shows in the thread. A superseded plan no longer
-    // shows; a plan of an overnight run's request keeps its row.
-    if (plan.state.type === "superseded" || (!isRunRequest(plan.requestId) && !keepPlan(plan))) continue;
-    items.push({
-      kind: "card",
-      position: plan.position,
-      requestId: plan.requestId,
-      card: { type: "plan", id: plan.id, position: plan.position, keep: keepPlan(plan) },
-      atMs: plan.createdAtMs,
     });
   }
   return items.toSorted((a, b) => a.position - b.position).map(({ position: _position, ...item }) => item);
@@ -688,13 +628,13 @@ function waves(entries: SequenceEntry[]): SequenceEntry[] {
 
 /**
  * Whether a block is finished, so its work folds under "Worked for …" with an answer below it:
- * a run's once the run has settled, a request's once it is done. A working request shows its
+ * once its request is done. A working request shows its
  * replies in place, also one written after its work with no worker left: Brigadier may still
  * wake its thread (a review, a held merge, a CI result), and a line written mid-way ("Diff looks
  * right.") is no answer.
  */
-export function blockFinished(state: BlockState, run: { settled: boolean } | null = null): boolean {
-  return run ? run.settled : state === "done";
+export function blockFinished(state: BlockState): boolean {
+  return state === "done";
 }
 
 /**
@@ -734,21 +674,22 @@ export function reopenedSince(worked: readonly WorkSpan[], answerAtMs: number | 
   return answerAtMs !== undefined && last !== undefined && last.toMs === null && last.fromMs > answerAtMs;
 }
 
+/**
+ * An answer split at its `### Details` heading: what shows, and the details the thread folds
+ * (the checks run, workers and models, provider usage). Null when it has none.
+ */
+export function splitReport(text: string): { head: string; details: string } | null {
+  // The heading as a model writes it too: `## Details`, `#### Details`, `### Details:`.
+  const at = text.search(/^#{2,4}[ \t]+Details:?[ \t]*$/m);
+  const end = at < 0 ? -1 : text.indexOf("\n", at);
+  if (end < 0) return null;
+  const details = text.slice(end + 1).trim();
+  return details ? { head: text.slice(0, at).trimEnd(), details } : null;
+}
+
 /** The update lines under a finished block's answer: the replies after it, by index. */
 export function updateIndices(texts: readonly unknown[], answer: number | null): number[] {
   return answer === null ? [] : texts.map((_, index) => index).filter((index) => index > answer);
-}
-
-/**
- * Whether a block ends with a plan the user reads (a kept plan or outline card after its last
- * reply): the plan is its answer, and a line written before it folds into the work.
- */
-export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
-  for (const entry of sequence.toReversed()) {
-    if (entry.kind === "text") return false;
-    if (entry.kind === "card" && entry.card.keep && (entry.card.type === "plan" || entry.card.type === "outline")) return true;
-  }
-  return false;
 }
 
 /**

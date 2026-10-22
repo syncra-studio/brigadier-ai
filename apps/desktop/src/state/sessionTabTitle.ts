@@ -23,7 +23,6 @@ export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "sideChat") return sideChatName(tab, tabs);
   if (tab.kind === "page") return tab.title || "Untitled page";
   if (tab.kind === "mockup") return "Mockup";
-  if (tab.kind === "plan") return tab.title || "Plan";
   if (tab.kind === "panel") return tab.title;
   if (tab.kind === "pasted") return pastedTextLabel(tab.n);
   if (tab.kind === "conflict") {

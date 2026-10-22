@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /**
  * A line and a bar for work counted in units (a download, a feedback upload): the line
  * says what is at work and what is left, the bar fills by the share done, and once it ends a
- * receipt takes its place. The Job card's stages are `JobProgress`'s.
+ * receipt takes its place.
  */
 
 export type ProgressOutcomeStatus = "success" | "partial" | "failed" | "cancelled";

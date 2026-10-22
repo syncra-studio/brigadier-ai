@@ -66,8 +66,6 @@ pub enum OpenTarget {
     Diff {
         scope: DiffScope,
     },
-    /// The Progress tab: the job step by step, with its reviews and checks.
-    Progress,
     /// What a preview prints, in an Output tab.
     Output {
         source: OutputOf,
@@ -81,12 +79,6 @@ pub enum OpenTarget {
     /// A worker's panel in the Workers sidebar: never behind, so only in front.
     Worker {
         task: TaskId,
-    },
-    /// A plan (or a lead's outline) read full screen.
-    Plan {
-        id: String,
-        outline: bool,
-        title: String,
     },
     Page {
         id: String,

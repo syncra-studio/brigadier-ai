@@ -20,7 +20,6 @@ import { ChatActions, RenameDialog } from "@/app/shell/ChatActions";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { PastedTextPane } from "@/app/side-panel/PastedTextPane";
-import { JobStack } from "@/app/conversation/JobStack";
 import { ResumesAtCard } from "@/app/conversation/cards/ResumesAtCard";
 import { reworkableRequest } from "@/app/conversation/rework";
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
@@ -373,7 +372,6 @@ const EMPTY_DIGEST: BoardDigest = {
   tasks: {},
   approvals: {},
   questions: {},
-  plans: {},
   orchestratorSteps: [],
   machineSteps: [],
   decisions: [],
@@ -440,7 +438,6 @@ export function ConversationView({
             workerSteps: s.board.workerSteps,
             approvals: s.board.approvals,
             questions: s.board.questions,
-            plans: s.board.plans,
             orchestratorSteps: s.board.orchestratorSteps,
             machineSteps: s.board.machineSteps,
             decisions: s.board.decisions,
@@ -988,16 +985,11 @@ export const Welcome: FC = () => {
 };
 
 /**
- * The cards under a session's context card, and in its place while it is hidden: its Job card
- * and its "Resumes at" card (MA5).
+ * The cards under a session's context card, and in its place while it is hidden: its "Resumes
+ * at" card (MA5).
  */
 function SessionCards({ conversationId }: { conversationId: string }) {
-  return (
-    <>
-      <JobStack conversationId={conversationId} />
-      <ResumesAtCard conversationId={conversationId} />
-    </>
-  );
+  return <ResumesAtCard conversationId={conversationId} />;
 }
 
 const THREAD_COMPONENTS: ThreadComponents = {

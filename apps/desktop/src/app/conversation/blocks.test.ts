@@ -12,7 +12,6 @@ import {
   blockFinished,
   type BoardDigest,
   blockSequence,
-  endsWithPlan,
   foldsAway,
   foldTurns,
   heldForWait,
@@ -20,16 +19,16 @@ import {
   judgementCall,
   peerOf,
   reopenedSince,
+  splitReport,
   type SequenceEntry,
   type ThreadNode,
   updateIndices,
   withoutUpdateMark,
 } from "@/app/conversation/blocks";
 import { cliBlocks } from "@/app/conversation/cliBlocks";
-import { splitReport } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
 import { fixtureView } from "@/fixtures/cliView";
-import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, OvernightRun, PeerMessage, Plan, StreamingMessage, Task, UserRequest, WorkerStep } from "@/ipc/generated";
+import type { Decision, EventEnvelope, MachineStep, Message, OrchestratorStep, PeerMessage, StreamingMessage, Task, UserRequest, WorkerStep } from "@/ipc/generated";
 import { applyToBoard, type Board, emptyBoard } from "@/state/board";
 
 /**
@@ -47,15 +46,14 @@ function blocksOf(
 }
 
 // The board of the first real overnight run (2026-10-03), from its stored events
-// (scripts/extract-board-fixture.mjs), in the shape a run has now: one request for the whole run,
-// its phases the steps of its plan. Before one row per task, its Phase 1 showed 41 rows and its
-// Phase 2 53, most of them "started working" and "finished" lines of checkers.
+// (scripts/extract-board-fixture.mjs): one request for the whole run. Before one row per task,
+// its Phase 1 showed 41 rows and its Phase 2 53, most of them "started working" and "finished"
+// lines of checkers.
 const tasks = night.tasks as unknown as Record<string, Task>;
 const board: BoardDigest = {
   tasks,
   approvals: {},
   questions: {},
-  plans: night.plans as unknown as Record<string, Plan>,
   orchestratorSteps: night.orchestratorSteps as unknown as OrchestratorStep[],
   machineSteps: [],
   decisions: night.decisions as unknown as Decision[],
@@ -117,12 +115,6 @@ test("a decision never folds into a summary of reads", () => {
   }
 });
 
-test("a revised plan shows as its newest revision, never as the one it superseded", () => {
-  const plans = runBlock().cards.filter((card) => card.type === "plan").map((card) => card.id);
-  assert.ok(plans.includes("01a0ff89-d905-7753-bb7f-b310c324a8f6"));
-  assert.ok(!plans.includes("01a0ff87-8cf8-718a-82fb-39e32231ffa6"));
-});
-
 test("an older task's row counts every check it had", () => {
   const router = byNumber(26);
   assert.equal(taskState(router).word, "Landed");
@@ -164,13 +156,14 @@ test("the whole-phase checks of phase 1 open from one row, with the verifier, re
 });
 
 /**
- * Phase 2's records replayed as a normal session's request: the same tasks, checks and plans,
- * with no run, one task held for the user, and a second, separate plan.
+ * Phase 2's records replayed as a normal session's request: the same tasks and checks, with no
+ * run and one task held for the user.
  */
 function normalSession() {
-  const run = Object.values(night.overnight)[0] as unknown as OvernightRun;
-  // Phase 2's records: its tasks, and what the run's request did from when it began.
-  const began = board.plans[run.planId ?? ""]?.steps[1]?.startedAtMs ?? 0;
+  // Phase 2's records: its tasks, and what the run's request did from when it began, as stored.
+  const run = Object.values(night.overnight)[0] as unknown as { planId: string | null };
+  const plans = night.plans as unknown as Record<string, { steps: { startedAtMs: number | null }[] }>;
+  const began = plans[run.planId ?? ""]?.steps[1]?.startedAtMs ?? 0;
   assert.ok(began > 0);
   const request = "normal-1";
   const ofPhase = (requestId: string | null, atMs: number) => requestId === RUN_REQUEST && atMs >= began;
@@ -180,30 +173,11 @@ function normalSession() {
       task.id,
       {
         ...task,
-        requestId: task.phase === 2 ? request : task.requestId,
-        run: null,
+        requestId: (task as Task & { phase?: number | null }).phase === 2 ? request : task.requestId,
         ...(task.id === held ? { state: "readyToLand" as const, landed: null } : {}),
       },
     ]),
   );
-  const approved = Object.values(board.plans).find(
-    (plan) => ofPhase(plan.requestId, plan.createdAtMs) && plan.state.type === "approved",
-  );
-  assert.ok(approved);
-  const normalPlans: Record<string, Plan> = Object.fromEntries(
-    Object.values(board.plans).map((plan) => [
-      plan.id,
-      { ...plan, requestId: ofPhase(plan.requestId, plan.createdAtMs) ? request : plan.requestId },
-    ]),
-  );
-  normalPlans.separate = {
-    ...approved,
-    id: "separate",
-    requestId: request,
-    title: "A separate plan",
-    position: approved.position + 1,
-    steps: [],
-  };
   const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Fix the three causes" };
   // Only Phase 2's records: the CLI's one turn here would take Phase 1's (no turn names its run) by time.
   const ofRequest = <T extends { requestId: string | null }>(records: Record<string, T>) =>
@@ -211,7 +185,6 @@ function normalSession() {
   const normal: BoardDigest = {
     ...board,
     tasks: ofRequest(normalTasks),
-    plans: ofRequest(normalPlans),
     orchestratorSteps: board.orchestratorSteps
       .filter((step) => ofPhase(step.requestId, step.atMs))
       .map((step) => ({ ...step, requestId: request })),
@@ -224,18 +197,13 @@ function normalSession() {
   return { block, normalTasks, held };
 }
 
-test("a normal session includes helper workers and keeps approved plans out of the thread", () => {
+test("a normal session includes helper workers", () => {
   const { block, normalTasks, held } = normalSession();
   const rows = block.rows.flatMap((row) => (row.type === "task" ? [row.taskId] : []));
   // Every worker, including each reviewer and verifier.
   assert.deepEqual(
     rows.map((id) => normalTasks[id]?.number),
     Object.values(normalTasks).filter((task) => task.requestId === block.key).map((task) => task.number),
-  );
-  // Approved plans at work show in the side panel and the phase pill, not in the thread.
-  assert.deepEqual(
-    block.cards.filter((card) => card.type === "plan").map((card) => card.id),
-    [],
   );
   // A task held for the user says so on its row, and its checks still open from it.
   const task = normalTasks[held]!;
@@ -263,7 +231,6 @@ test("machine rows show in their request's block, each on its own line", () => {
   const digest: BoardDigest = {
     ...board,
     tasks: {},
-    plans: {},
     orchestratorSteps: [],
     decisions: [],
     machineSteps: [step("waitingToCool", 1, null), step("paused", 2, "cargo test"), step("resumed", 3, "cargo test"), step("waitingToCool", 4, "cargo test", "memory")],
@@ -283,60 +250,6 @@ test("machine rows show in their request's block, each on its own line", () => {
   ]);
 });
 
-const planDigest = (plans: Plan[], steps: OrchestratorStep[]): BoardDigest => ({
-  ...board,
-  tasks: {},
-  plans: Object.fromEntries(plans.map((p) => [p.id, p])),
-  orchestratorSteps: steps,
-  decisions: [],
-});
-
-test("a plan shows as its document: writing it, then the newest revision in view and the plan as the answer", () => {
-  const request = "plan-request";
-  const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Add a --version flag" };
-  const opening = { ...messages[0]!, id: "opening", seq: 321, createdAtMs: messages[0]!.createdAtMs + 1, role: "assistant" as const, requestId: request, parentId: request, text: "I'll look at the CLI first." };
-  const writing: OrchestratorStep = {
-    requestId: request,
-    position: 400,
-    atMs: user.createdAtMs + 5,
-    kind: { type: "tool", itemId: "call-1", name: "mcp__brigadier__propose_plan", detail: null, status: "inProgress", throughPosition: 400 },
-  };
-  const plan = (id: string, position: number, state: Plan["state"]): Plan => ({
-    id,
-    conversationId: user.conversationId,
-    requestId: request,
-    position,
-    title: "Add a --version flag",
-    body: "# Add a --version flag\n\nPrint the version.\n\n## Changes\n- `src/main.rs`",
-    steps: [],
-    state,
-    createdAtMs: user.createdAtMs + position,
-    decidedAtMs: null,
-  });
-  const done = requestOf(request, user.createdAtMs);
-  const cardsOf = (d: BoardDigest) => {
-    const block = blocksOf([user, opening], d, { requests: done }).find((candidate) => candidate.key === request);
-    assert.ok(block);
-    return { block, cards: block.cards.map((card) => [card.type, card.id, card.keep]) };
-  };
-  // While the call runs: "Writing plan", and nothing yet the answer.
-  assert.deepEqual(cardsOf(planDigest([], [writing])).cards, [["writingPlan", "writing:2", true]]);
-  // Sent back and proposed again: the newest stays in view, the older folds; the plan is the answer.
-  const wrote = { ...writing, kind: { ...writing.kind, status: "completed" as const } };
-  const { block, cards } = cardsOf(
-    planDigest([plan("p1", 401, { type: "rejected", message: "smaller" }), plan("p2", 405, { type: "proposed" })], [wrote]),
-  );
-  assert.deepEqual(cards, [["plan", "p1", false], ["plan", "p2", true]]);
-  assert.ok(endsWithPlan(sequence(block)));
-  // Once a reply comes after it (the work it started), that reply is the answer again.
-  const after = { ...opening, id: "after", seq: 500, createdAtMs: user.createdAtMs + 500, text: "Done." };
-  const later = blocksOf([user, opening, after], planDigest([plan("p2", 405, { type: "approved", by: "user" })], [wrote]), { requests: done }).find((b) => b.key === request);
-  assert.ok(later);
-  assert.ok(!endsWithPlan(sequence(later)));
-  // The plan arrived before its call reported done: the plan alone.
-  assert.deepEqual(cardsOf(planDigest([plan("p1", 401, { type: "proposed" })], [writing])).cards, [["plan", "p1", true]]);
-});
-
 test("a late event's update line shows under the answer, never as a new answer", () => {
   const request = "late-request";
   const user = { ...messages[0]!, id: request, seq: 600, requestId: request, text: "Add the Configuration page" };
@@ -349,7 +262,6 @@ test("a late event's update line shows under the answer, never as a new answer",
   const digest: BoardDigest = {
     ...board,
     tasks: {},
-    plans: {},
     orchestratorSteps: [],
     decisions: [],
   };
@@ -387,7 +299,6 @@ test("an ending that opens with Update: is the answer, not an update line under 
   const digest: BoardDigest = {
     ...board,
     tasks: {},
-    plans: {},
     orchestratorSteps: [],
     decisions: [],
   };
@@ -420,7 +331,6 @@ test("a working request shows a reply written after its work in place: only a do
   const landed: Task = { ...byNumber(1), id: "one", requestId: request, position: 601, state: "landed" };
   const digest: BoardDigest = {
     ...board,
-    plans: {},
     decisions: [],
     tasks: { one: landed },
     orchestratorSteps: [
@@ -450,9 +360,6 @@ test("a working request shows a reply written after its work in place: only a do
   const answer = answerIndex(done.texts, blockFinished(done.state));
   assert.equal(done.texts[answer!]!.text, "Merged the note into main.");
   assert.ok(sequence(done).some((entry) => entry.kind === "text" && entry.index === 0 && foldsAway(entry, answer)));
-  // A run's block follows its run, whatever its request says.
-  assert.equal(blockFinished("working", { settled: true }), true);
-  assert.equal(blockFinished("done", { settled: false }), false);
 });
 
 test("a run's decision shows in the thread unless its kind says it is a phase's outcome", () => {
@@ -467,7 +374,7 @@ test("a run's decision shows in the thread unless its kind says it is a phase's 
 });
 
 test("a run's report shows, and copies, as its message was written", () => {
-  const run = Object.values(night.overnight)[0] as unknown as OvernightRun;
+  const run = Object.values(night.overnight)[0] as unknown as { reportMessageId: string | null };
   const id = run.reportMessageId ?? "";
   const stored = messages.find((message) => message.id === id)?.text ?? "";
   assert.ok(stored.startsWith("**Faster, leaner overnight runs**"));
@@ -489,7 +396,7 @@ test("workers started together are one row, which says they finished once they a
     { taskId: "one", requestId: "life", kind: "landed", position: 6, atMs: 50 },
   ];
   const rows = (workerSteps: WorkerStep[]) => {
-    const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two }, orchestratorSteps: [], workerSteps };
+    const replay: BoardDigest = { ...board, decisions: [], tasks: { one, two }, orchestratorSteps: [], workerSteps };
     return sequence(blocksOf([user], replay)[0]!).flatMap((entry) => entry.kind === "row" ? [entry.row] : []);
   };
   const all = rows(steps);
@@ -506,7 +413,7 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const one = { ...byNumber(1), id: "one", requestId: "team", position: 2 };
   const two = { ...byNumber(1), id: "two", requestId: "team", position: 3 };
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: { one, two },
+  const replay: BoardDigest = { ...board, decisions: [], tasks: { one, two },
     orchestratorSteps: [
       teamStep(4, { type: "created", taskId: "one" }),
       teamStep(5, { type: "messaged", taskId: "one", text: "Use the new table." }),
@@ -528,7 +435,7 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
 test("the lead's suggested setting shows as its card, and its tool call doesn't", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const change = { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser." } as const;
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, workerSteps: [],
+  const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
       teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__suggest_setting", detail: null, status: "completed", throughPosition: 0 }),
       teamStep(3, change),
@@ -542,7 +449,7 @@ test("the lead's suggested setting shows as its card, and its tool call doesn't"
 
 test("an old record's suggestion of Full access and its tool call show nothing", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, workerSteps: [],
+  const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
       teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__suggest_full_access", detail: null, status: "completed", throughPosition: 0 }),
       teamStep(3, { type: "fullAccessSuggested", reason: "Installing Homebrew writes outside the project." }),
@@ -555,7 +462,7 @@ test("an old record's suggestion of Full access and its tool call show nothing",
 test("the lead's feedback offer stays in view as its card; its tool call and the user's answer show no row", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const offer = { type: "feedbackOffered", id: "f1", kind: "bug", title: "Stop leaves the tab spinning", body: "After Stop the tab spins." } as const;
-  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, workerSteps: [],
+  const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
       teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__offer_feedback", detail: null, status: "completed", throughPosition: 0 }),
       teamStep(3, offer),
@@ -603,8 +510,7 @@ test("a turn still waiting on the user keeps itself and every later turn out of 
 
 // The user's session of 2026-10-09 (a grill, then the right sidebar and tabs built), from its
 // stored events. Its last request ended twice, the same merge question each time: once when the
-// work landed, again after a late review's fix landed, while two "Waiting on you" items kept it
-// waiting, unfolded.
+// work landed, again after a late review's fix landed, while it was kept waiting, unfolded.
 const grill = JSON.parse(
   readFileSync(new URL("../../fixtures/boards/thread-grill-2026-10-09.events.json", import.meta.url), "utf8"),
 ) as { conversationId: string; events: EventEnvelope[] };
@@ -622,8 +528,7 @@ function grillBlocks(events: readonly EventEnvelope[]) {
 test("a request whose ending was written again shows only the newest, the first in its fold", () => {
   const merge = { branch: "brigadier/9a2b00c9/session", base: "main" };
   const { board: settled, blocks } = grillBlocks(settledSession(grill.conversationId, grill.events, merge));
-  // Nothing is listed for the user, and the request is done while the merge card waits.
-  assert.deepEqual(settled.waiting, {});
+  // The request is done while the merge card waits.
   const last = blocks.at(-1);
   assert.ok(last);
   assert.equal(last.state, "done");
@@ -640,10 +545,9 @@ test("a request whose ending was written again shows only the newest, the first 
   assert.deepEqual(shown.filter((entry) => entry.kind === "text").map((entry) => entry.kind === "text" && entry.index), [answer]);
   const first = last.texts.findIndex((text) => text === endings[0]);
   assert.ok(sequence(last).some((entry) => entry.kind === "text" && entry.index === first && foldsAway(entry, answer)));
-  // As recorded, the items kept it waiting: nothing was the answer, and nothing folded.
+  // As recorded, it kept waiting: nothing was the answer, and nothing folded.
   const before = grillBlocks(grill.events);
   assert.equal(blockFinished(before.blocks.at(-1)!.state), false);
-  assert.equal(Object.keys(before.board.waiting).length, 2);
   assert.equal(answerIndex(before.blocks.at(-1)!.texts, false), null);
 });
 
@@ -662,6 +566,15 @@ test("an answer with a Details section shows its head and folds the rest", () =>
   });
   // Without one, the answer shows whole.
   assert.equal(splitReport("Merged into `main`."), null);
+  // Only the heading itself folds: a line that merely mentions it doesn't, nor an empty fold.
+  assert.equal(splitReport("See ### Details below.\n"), null);
+  assert.equal(splitReport("Done.\n\n### Details\n"), null);
+  assert.equal(splitReport("Done.\n\n### Details"), null);
+  // A model's own heading folds too, at another level or with a colon (#198).
+  for (const heading of ["## Details", "#### Details", "### Details:"]) {
+    assert.deepEqual(splitReport(`Done.\n\n${heading}\n- tests pass\n`), { head: "Done.", details: "- tests pass" }, heading);
+  }
+  assert.equal(splitReport("Done.\n\n# Details\n- tests\n"), null);
 });
 
 const branchMessage = (id: string, parentId: string | null, role: Message["role"]): Message =>
@@ -684,7 +597,7 @@ const record = (messageId: string, position: number, requestId: string, state: P
   sentAtMs: position * 1000, settled: false, position, automatic: false,
 });
 const peerDigest = (peerMessages: PeerMessage[] = [], orchestratorSteps: OrchestratorStep[] = []): BoardDigest => ({
-  tasks: {}, approvals: {}, questions: {}, plans: {}, decisions: [], machineSteps: [], compactions: {}, orchestratorSteps,
+  tasks: {}, approvals: {}, questions: {}, decisions: [], machineSteps: [], compactions: {}, orchestratorSteps,
   peerMessages: Object.fromEntries(peerMessages.map((peer) => [peer.messageId, peer])),
 });
 const requestsOf = (...records: UserRequest[]) => ({ requests: Object.fromEntries(records.map((request) => [request.id, request])) });

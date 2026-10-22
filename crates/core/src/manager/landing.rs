@@ -33,7 +33,7 @@ use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{
     AnswerOrigin, DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind,
-    MergeInputs, MergedUpstream, OrchestratorStepKind, PhaseStage, QuestionKind, Task, TaskState,
+    MergeInputs, MergedUpstream, OrchestratorStepKind, QuestionKind, Task, TaskState,
 };
 use crate::{Error, Result};
 
@@ -565,7 +565,6 @@ impl SessionManager {
                 // that work ends with it.
                 for done in crate::heap(|| self.landed_with(task)).await {
                     crate::heap(|| self.dispose_task(&done, TaskState::Done)).await;
-                    crate::heap(|| self.set_phase_stage(&done, PhaseStage::Done)).await;
                 }
                 format!(
                     "[nothing to land task-{}] It has no commits to land.{}",
@@ -772,14 +771,6 @@ impl SessionManager {
                 add(t);
                 subject = t.subject.clone();
             }
-            if let Some(phase) = task.phase {
-                for t in board.tasks.values() {
-                    if t.request_id == task.request_id && t.phase == Some(phase) && t.kind.writes()
-                    {
-                        add(t);
-                    }
-                }
-            }
         }
         reported.sort();
         reported.dedup();
@@ -856,9 +847,6 @@ impl SessionManager {
             )
         })
         .await;
-        for landed in &tasks {
-            crate::heap(|| self.set_phase_stage(landed, PhaseStage::Done)).await;
-        }
         // The task branches are fully on the target now; they were Brigadier's, so they go
         // too. A merge's conflicting task whose work was rebuilt without its litter landed
         // as that rebuild: a branch at a rewritten commit counts as merged once its
@@ -1121,154 +1109,6 @@ impl SessionManager {
             .await;
     }
 
-    /// The app's explicit Merge of this run's verified SHA, independent of session setup.
-    /// Workers have no IPC/MCP route to this action. The base must still be the reviewed base
-    /// (or this lineage's last Merge), and git rechecks its tip and checkout under its lock.
-    pub async fn merge_overnight(
-        &self,
-        id: ConversationId,
-        run_id: crate::model::OvernightRunId,
-        command_id: String,
-        verified_commit: String,
-    ) -> Result<crate::overnight::OvernightRun> {
-        use crate::overnight::{AppliedCommand, OvernightState, RunMerge};
-        let _held = self.overnight.changes.lock().await;
-        let board = self.core.board(&id).await?;
-        let mut run = board
-            .runs
-            .get(&run_id)
-            .cloned()
-            .ok_or_else(|| Error::NotFound(format!("overnight run {run_id}")))?;
-        if run.commands.iter().any(|command| command.id == command_id) {
-            return Ok(run);
-        }
-        if run.state != OvernightState::Finished {
-            return Err(Error::Invalid(
-                "This run must finish before its verified work can merge.".into(),
-            ));
-        }
-        if run.verified_commit.as_deref() != Some(&verified_commit) {
-            return Err(Error::Invalid(
-                "The verified tip changed; look again before merging.".into(),
-            ));
-        }
-        let workspace = run
-            .workspace
-            .clone()
-            .ok_or_else(|| Error::Invalid("This run has no branch to merge.".into()))?;
-        if verified_commit == workspace.base_commit {
-            return Err(Error::Invalid("Nothing new is verified to merge.".into()));
-        }
-        let lineage: Vec<_> = board
-            .runs
-            .values()
-            .filter(|other| {
-                other
-                    .workspace
-                    .as_ref()
-                    .is_some_and(|w| w.branch == workspace.branch)
-            })
-            .collect();
-        if lineage.iter().any(|other| other.state.is_active()) {
-            return Err(Error::Invalid(
-                "A continuation is still running on this branch; let it finish first.".into(),
-            ));
-        }
-        let open: Vec<_> = board
-            .tasks
-            .values()
-            .filter(|task| {
-                task.kind.writes()
-                    && !task.state.is_final()
-                    && task.run.as_ref().is_some_and(|context| {
-                        lineage.iter().any(|other| other.id == context.run_id)
-                    })
-            })
-            .map(|task| format!("task-{}", task.number))
-            .collect();
-        if !open.is_empty() {
-            return Err(Error::Invalid(format!(
-                "This run's write tasks are still open: {}. Land or stop them first.",
-                open.join(", ")
-            )));
-        }
-        let expected_base = lineage
-            .iter()
-            .filter_map(|other| other.merged.as_ref())
-            .max_by_key(|merged| merged.at_ms)
-            .map_or_else(
-                || workspace.base_commit.clone(),
-                |merged| merged.commit.clone(),
-            );
-        let Some(Setup::Session { repo, .. }) = self.core.conversation(&id)?.setup else {
-            return Err(Error::Invalid("This run has no repository.".into()));
-        };
-        // What the thread committed itself on the run branch is recorded as its own first.
-        self.scan_thread_branch(
-            &id,
-            Path::new(&repo),
-            &workspace.branch,
-            self.thread_turn_running(&id).await,
-        )
-        .await;
-        let git = self.git.clone();
-        let approved = verified_commit.clone();
-        let into = workspace.base.clone();
-        let landed = blocking(move || {
-            let repo = git.open(Path::new(&repo)).map_err(git_error)?;
-            let tip = Oid(approved);
-            let branch_tip = repo.branch_tip(&workspace.branch).map_err(git_error)?
-                .ok_or_else(|| Error::Invalid("The run branch is gone.".into()))?;
-            if !repo.ancestor(&tip, &branch_tip).map_err(git_error)? {
-                return Err(Error::Invalid("The verified commit is no longer on the run branch.".into()));
-            }
-            let base_tip = repo.branch_tip(&workspace.base).map_err(git_error)?
-                .ok_or_else(|| Error::Invalid("The base branch is gone.".into()))?;
-            // Reconcile a crash after git landed but before the run recorded it.
-            if base_tip == tip || (base_tip.0 == expected_base && repo.ancestor(&tip, &base_tip).map_err(git_error)?) {
-                return Ok(base_tip);
-            }
-            if base_tip.0 != expected_base
-                && !repo.ancestor(&base_tip, &tip).map_err(git_error)?
-            {
-                return Err(Error::Invalid(format!("`{}` moved since this work was verified. Nothing merged. Once the run has ended, the session can bring the new `{}` in with a regular merge of it into the session branch, if the user asks.", workspace.base, workspace.base)));
-            }
-            // A base already included in this phase-verified candidate is safe. Otherwise
-            // its change must be verified again before it merges.
-            let approved_base_tip = base_tip;
-            let message = format!("Merge verified overnight work into {}", workspace.base);
-            let (commit, base_tip) = match repo.prepare_merge_commit(&workspace.base, &tip, &message).map_err(git_error)? {
-                MergeOutcome::Ready { commit, base_tip, .. } => (commit, base_tip),
-                MergeOutcome::Conflicts { paths } => return Err(Error::Invalid(format!("The run's verified work conflicts with `{}` in: {}. Nothing merged. Once the run has ended, the session can resolve it with a regular merge of `{}` into the session branch, if the user asks.", workspace.base, paths.join(", "), workspace.base))),
-            };
-            if base_tip != approved_base_tip {
-                return Err(Error::Invalid("The base moved while preparing the merge; look again. Nothing merged.".into()));
-            }
-            match repo.land(&LandRequest { branch: workspace.base, expected_tip: base_tip, commit }).map_err(git_error)? {
-                LandOutcome::Landed { new_tip } => Ok(new_tip),
-                LandOutcome::Blocked(block) => Err(Error::Invalid(format!("Nothing merged: {block}"))),
-            }
-        }).await?;
-        run.merged = Some(RunMerge {
-            verified_commit,
-            commit: landed.0,
-            into,
-            at_ms: crate::now_ms(),
-        });
-        run.commands.push(AppliedCommand {
-            id: command_id,
-            at_ms: crate::now_ms(),
-        });
-        self.record_runs(
-            &id,
-            vec![crate::model::DomainEvent::OvernightUpdated {
-                run: Box::new(run.clone()),
-            }],
-        )
-        .await?;
-        Ok(run)
-    }
-
     /// `finish_session`: merges the session branch into its base now, as the thread judged the
     /// user asked for it. It merges what has landed; workers still running are named in its
     /// result. Nothing gates it: no review, no checks, no consent.
@@ -1277,11 +1117,6 @@ impl SessionManager {
         id: &ConversationId,
         message: Option<String>,
     ) -> Result<String> {
-        if self.overnight.active.get(id).is_some() {
-            return Err(Error::Invalid(
-                "An overnight run is going in this session: nothing merges into the base until it ends, and then only its verified work, by the user's Merge.".into(),
-            ));
-        }
         let conversation = self.core.conversation(id)?;
         let Some(Setup::Session {
             repo,
@@ -1631,11 +1466,6 @@ impl SessionManager {
     /// The user clicked "Merge into main" (BUILD-PLAN A4): the click is recorded with where it
     /// came from, and the thread is told to merge.
     pub async fn merge_session(&self, id: &ConversationId, origin: AnswerOrigin) -> Result<String> {
-        if self.overnight.active.get(id).is_some() {
-            return Err(Error::Invalid(
-                "An overnight run is going in this session: its verified work merges by Merge on the run's card.".into(),
-            ));
-        }
         let Some(Setup::Session {
             repo,
             environment: Environment::NewWorktree { base, branch, .. },
@@ -1972,16 +1802,12 @@ fn bare(path: &str) -> String {
     Path::new(path).to_string_lossy().into_owned()
 }
 
-/// "Landed task-3 “Add the flag” on `main`", for "Decided for you". An overnight run's tasks
-/// all land on its branch, which the run's card and report already name, so theirs stop at
-/// the title.
+/// "Landed task-3 “Add the flag” on `main`", for "Decided for you".
 fn landed_line(task: &Task, target: &str) -> String {
-    let landed = format!("Landed task-{} \u{201c}{}\u{201d}", task.number, task.title);
-    if task.run.is_some() {
-        landed
-    } else {
-        format!("{landed} on `{target}`")
-    }
+    format!(
+        "Landed task-{} \u{201c}{}\u{201d} on `{target}`",
+        task.number, task.title
+    )
 }
 
 /// How a merge worker merges `other` into its branch, whose side is `ours` (Q2).
@@ -2204,8 +2030,8 @@ mod tests {
     }
 
     #[test]
-    fn a_runs_landing_line_leaves_out_the_branch_its_report_already_names() {
-        let mut task: Task = serde_json::from_value(serde_json::json!({
+    fn a_landing_line_names_the_task_and_where_it_landed() {
+        let task: Task = serde_json::from_value(serde_json::json!({
             "id": "t1",
             "conversationId": "c1",
             "number": 3,
@@ -2224,20 +2050,6 @@ mod tests {
         assert_eq!(
             landed_line(&task, "main"),
             "Landed task-3 \u{201c}Add avg2\u{201d} on `main`"
-        );
-        task.run = Some(
-            serde_json::from_value(serde_json::json!({
-                "runId": "r1",
-                "segment": 1,
-                "generation": 1,
-                "role": "worker",
-                "rulesHash": ""
-            }))
-            .expect("a run context"),
-        );
-        assert_eq!(
-            landed_line(&task, "overnight/2026-10-04-textkit-1234"),
-            "Landed task-3 \u{201c}Add avg2\u{201d}"
         );
     }
 }

@@ -6,7 +6,6 @@ import {
   openForAgent,
   openPageTab,
   openPanelTab,
-  openPlanTab,
   openReviewTab,
   openTerminalTab,
   REVIEW_TAB,
@@ -50,15 +49,11 @@ function open(conversationId: string, target: Exclude<OpenTarget, { kind: "worke
     case "diff":
       openReviewTab(conversationId, diffTarget(target.scope));
       return REVIEW_TAB;
-    case "progress":
-      return openPanelTab(conversationId, { type: "reviews" }, "Progress");
     case "output":
       return openPanelTab(conversationId, { type: "output", source: target.source, id: target.id }, target.title);
     case "url":
       // The tab already showing the page, not another one of it (#418).
       return there?.id ?? openBrowserTab(conversationId, target.url, true);
-    case "plan":
-      return openPlanTab(conversationId, { type: target.outline ? "outline" : "plan", id: target.id }, target.title);
     case "page":
       return openPageTab(conversationId, target.id, target.title);
     case "terminal":
@@ -66,15 +61,13 @@ function open(conversationId: string, target: Exclude<OpenTarget, { kind: "worke
   }
 }
 
-/** Whether `tab` is where `target` opens: the same file, diff, panel, page or plan, or a Browser tab on the same address. */
+/** Whether `tab` is where `target` opens: the same file, diff, panel or page, or a Browser tab on the same address. */
 function shows(tab: SessionTab, target: OpenTarget): boolean {
   switch (target.kind) {
     case "file": return tab.id === `file:${target.path}`;
     case "diff": return tab.id === REVIEW_TAB;
-    case "progress": return tab.id === "panel:reviews";
     case "output": return tab.id === `panel:output:${target.source}:${target.id}`;
     case "url": return tab.kind === "browser" && sameAddress(tab.url, target.url);
-    case "plan": return tab.id === `plan:${target.outline ? "outline" : "plan"}:${target.id}`;
     case "page": return tab.kind === "page" && tab.pageId === target.id;
     case "terminal": return tab.id === target.tab;
     case "worker": return false;

@@ -31,7 +31,7 @@ macro_rules! thread_voice {
     () => {
         "
 - To the user: the outcome in the first line, then at most about five short lines, unless they ask for more or their preferences say otherwise. Never quote a reviewer's or verifier's text to the user: name what it found in a few words. Name a worker by its title, never as task-N.
-- Plans, handoff notes, task specs, exact commands and error text, and evidence the user needs to decide stay complete; commit messages follow the project's style. An overnight run's morning answer is at most three lines: what got done, what is left, and what waits on the user."
+- Plans, handoff notes, task specs, exact commands and error text, and evidence the user needs to decide stay complete; commit messages follow the project's style."
     };
 }
 
@@ -221,7 +221,6 @@ pub(crate) fn thread(
     conversation: &Conversation,
     project: Option<&Project>,
     preferences: &[String],
-    run: Option<&crate::overnight::RunWorkspace>,
     workspace: Option<&str>,
     provider: ProviderKind,
     start_workers: bool,
@@ -235,15 +234,14 @@ pub(crate) fn thread(
         (Some(Setup::Session { .. }), Some(project)) => project.counts_trusted(repo),
         _ => true,
     };
-    let (environment, permission) = setting_texts(conversation, trusted, run);
-    let local = run.is_none()
-        && matches!(
-            &conversation.setup,
-            Some(Setup::Session {
-                environment: Environment::LocalCheckout { .. },
-                ..
-            })
-        );
+    let (environment, permission) = setting_texts(conversation, trusted);
+    let local = matches!(
+        &conversation.setup,
+        Some(Setup::Session {
+            environment: Environment::LocalCheckout { .. },
+            ..
+        })
+    );
     let own_commits = own_commits(local);
     let project = project.map_or("(no project)", |p| p.name.as_str());
     let workspace = workspace.map_or_else(|| "(none yet)".to_owned(), workspace_text);
@@ -280,7 +278,6 @@ How to work:
 - Brigadier's commands (previews, its browser, cards for the user, the app, pages, other sessions to read): `brigadier --help`.
 - {APP_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once; when they ask you to report something to its developers, call it with asked true.
-- {HEADLINE_RULE}
 - Brigadier's tools return at once: what they start reports back later as a message from Brigadier. Your workers don't report: you wait on them with `brigadier wait` (the brigade skill says how).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
@@ -351,15 +348,6 @@ macro_rules! late_event {
 /// sentence only when the user must know, never a rewritten ending. "Update:" stays as the
 /// marker the app finds a late note by (and hides).
 pub(crate) const LATE_EVENT: &str = late_event!();
-
-macro_rules! headline_rule {
-    () => {
-        "When what you are doing changes, say it with set_headline for the user's Job card: a few plain words (\"Starting the dev server\"), and one line of what comes next. Not for every step."
-    };
-}
-
-/// The thread writes the session's headline (thread-truth grill J2).
-pub(crate) const HEADLINE_RULE: &str = headline_rule!();
 
 macro_rules! separate_follow_up {
     () => {
@@ -439,12 +427,8 @@ fn workspace_text(workspace: &str) -> String {
 }
 
 /// What the orchestrator's instructions say about where accepted work lands and its
-/// permission level: the session's own, or an overnight run's while one is active.
-pub(crate) fn setting_texts(
-    conversation: &Conversation,
-    trusted: bool,
-    run: Option<&crate::overnight::RunWorkspace>,
-) -> (String, String) {
+/// permission level.
+pub(crate) fn setting_texts(conversation: &Conversation, trusted: bool) -> (String, String) {
     let (environment, permission) = match &conversation.setup {
         Some(Setup::Session {
             environment,
@@ -461,18 +445,7 @@ pub(crate) fn setting_texts(
     } else {
         PermissionLevel::Ask
     };
-    // An overnight run works on its own branch and approves its plans for the user (PLAN
-    // §10.8).
-    match run {
-        Some(run) => (
-            format!(
-                "Overnight run: the user started an overnight run and is away. Landed work goes onto the run's own branch `{}` (from `{}`), never on the user's branch; only the user merges verified work, in the morning. Never call finish_session.",
-                run.branch, run.base
-            ),
-            "For this run only, Brigadier approves plans and changes on the user's behalf. You and the workers never do what only the user may do: spending, credentials, contacting anyone, and changes outside the run's branch. Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.".to_owned(),
-        ),
-        None => (environment_text(environment), permission_text(permission)),
-    }
+    (environment_text(environment), permission_text(permission))
 }
 
 fn environment_text(environment: &Environment) -> String {
@@ -489,13 +462,13 @@ fn environment_text(environment: &Environment) -> String {
 fn permission_text(permission: PermissionLevel) -> String {
     match permission {
         PermissionLevel::Ask => {
-            "Ask. The user gives each outline's go-ahead (approve_outline shows them a plan card)."
+            "Ask."
         }
         PermissionLevel::AcceptEdits => {
-            "Accept edits. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements)."
+            "Accept edits. Ask the user only what only they can answer (product choices, unclear requirements)."
         }
         PermissionLevel::Full => {
-            "Full access. You give outlines their go-ahead on the user's behalf. Ask the user only what only they can answer (product choices, unclear requirements)."
+            "Full access. Ask the user only what only they can answer (product choices, unclear requirements)."
         }
     }
     .to_owned()
@@ -783,14 +756,9 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str) -> String 
         (TaskKind::Operate, _) => operate_rules(task),
         _ => String::new(),
     };
-    // An overnight run's Waiting on you holds only what its done-when needs (PLAN.md §10.11).
-    // In a session the user is there, and the thread tells them in its answer: workers check
-    // by hand themselves (THREAD-PARITY-PLAN §5 Q6).
-    let needs_user = if task.run.is_some() {
-        "If a \"done when\" criterion can't be met without something only the user can do (a credential, a sign-in, an account, a paid signup), list exactly that under needs_user and finish everything else around it. Anything optional the user could add goes under risks, not needs_user."
-    } else {
-        "A \"check it in the app\" or \"test it by hand\" step is yours, never the user's: run the app (its dev server, or a headless browser driving it, or the project's scripted UI checks) and check it yourself. What truly can't be checked goes under risks as \"Not checked: …\", never under needs_user.\n- needs_user is only for a key, an account or a paid signup that blocks part of the task: don't stall on it; stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it."
-    };
+    // The user is there, and the thread tells them in its answer: workers check by hand
+    // themselves (THREAD-PARITY-PLAN §5 Q6).
+    let needs_user = "A \"check it in the app\" or \"test it by hand\" step is yours, never the user's: run the app (its dev server, or a headless browser driving it, or the project's scripted UI checks) and check it yourself. What truly can't be checked goes under risks as \"Not checked: …\", never under needs_user.\n- needs_user is only for a key, an account or a paid signup that blocks part of the task: don't stall on it; stub it (read it from an environment variable or config), list it under needs_user and finish everything else around it.";
     format!(
         r#"Today is {today}.
 
@@ -872,16 +840,11 @@ fn operate_rules(task: &Task) -> String {
     )
 }
 
-/// What a worker is told about where and how it runs: what was prepared and, in an overnight
-/// run, that nobody is there to ask (PLAN.md §10.8).
+/// What a worker is told about where and how it runs: what was prepared.
 pub(crate) struct WorkerEnvironment<'a> {
     /// Folders copied in from the user's checkout.
     pub warmed: &'a [String],
     pub test_dir: &'a std::path::Path,
-    /// The user's own checkout, for a run task.
-    pub run_repo: Option<&'a std::path::Path>,
-    /// The worker's own branch.
-    pub branch: Option<&'a str>,
     /// It runs at low OS priority.
     pub low_priority: bool,
     /// What it is told about its new worktree's setup script: how the engine's run of it
@@ -935,16 +898,6 @@ pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
         "Your test data folder, for whatever a test or a smoke run writes outside the checkout (an app's data folder, a test database): {}. Never use an app's real data folder.",
         env.test_dir.display()
     ));
-    if let Some(repo) = env.run_repo {
-        lines.push(format!(
-            "This is an overnight run and nobody is there to answer before the morning. Leave out what only the user may do (credentials, signups or spending, contacting anyone) and don't change the user's own checkout ({}); list such steps in the report and finish the rest.",
-            repo.display()
-        ));
-        lines.push(format!(
-            "Change only your own branch ({}): leave other branches and tags alone. To look at another commit, unpack it into your scratch folder (`git archive <commit> | tar -x -C <folder>`).",
-            env.branch.map_or_else(|| "you have none".to_owned(), |branch| format!("`{branch}`"))
-        ));
-    }
     if env.low_priority {
         lines.push("You already run at low priority: don't use `nice`.".into());
     }
@@ -1141,13 +1094,11 @@ fn output_line(output: &ArtifactRef, title: &str) -> String {
     )
 }
 
-/// How a report's "needs the user" list is headed: an overnight run's are listed for the user
-/// (a gate member's go to its gate); in a session the thread says them in its answer.
+/// How a report's "needs the user" list is headed: a gate member's go to its gate; the thread
+/// says the rest in its answer.
 fn needs_user_title(task: &Task) -> &'static str {
     if task.gate_link.is_some() {
         "Needs the user"
-    } else if task.run.is_some() {
-        "Needs the user (already listed for them under Waiting on you)"
     } else {
         "Needs the user (say it in your answer)"
     }
@@ -1185,8 +1136,6 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     list("Done when", &report.done_when, &mut text);
     list("Open questions", &report.open_questions, &mut text);
     list("Risks", &report.risks, &mut text);
-    // An overnight run's are listed for the user (a gate member's go to its gate); in a
-    // session the thread says them in its answer.
     list(needs_user_title(task), &report.needs_user, &mut text);
     // What it taught the Brain: its decisions and what it learned, kept as its claims,
     // unverified (SESSION-FIXES-PLAN.md Q6.6, BUILD-PLAN A11). A review's report isn't kept.
@@ -1779,8 +1728,6 @@ mod environment_tests {
                 "apps/desktop/node_modules".to_owned(),
             ],
             test_dir: Path::new("/tmp/brigadier-test-12345678"),
-            run_repo: run.then_some(Path::new("/Users/me/project")),
-            branch: Some("brigadier/abc/task-3"),
             low_priority: run,
             setup: None,
         })
@@ -1799,9 +1746,6 @@ mod environment_tests {
             assert!(!text.contains("sandbox"), "{text}");
             assert!(!text.contains("approv"), "{text}");
         }
-        assert!(run.contains("nobody is there to answer"));
-        assert!(run.contains("/Users/me/project"));
-        assert!(run.contains("`brigadier/abc/task-3`"));
         assert!(run.contains("don't use `nice`"));
     }
 
@@ -1813,7 +1757,6 @@ mod environment_tests {
             &session("acceptEdits"),
             None,
             &[],
-            None,
             None,
             ProviderKind::Codex,
             false,
@@ -1837,46 +1780,42 @@ mod environment_tests {
     #[test]
     fn a_claude_thread_names_brigadiers_tools_as_it_calls_them() {
         for permission in ["ask", "acceptEdits", "full"] {
-            for run in [None, Some(&workspace())] {
-                let prompt = |provider| {
-                    thread(
-                        &session(permission),
-                        None,
-                        &[],
-                        run,
-                        Some("/work/session @ brigadier/flow"),
-                        provider,
-                        true,
-                    )
-                };
-                let claude = prompt(ProviderKind::Claude);
-                let codex = prompt(ProviderKind::Codex);
-                assert!(claude.contains(
-                    "with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch"
-                ));
-                // Both run commands in their CLI's own shell, at every level.
-                assert!(claude.contains("Use your own CLI shell"));
-                assert!(codex.contains("Use your own CLI shell"));
-                for text in [&claude, &codex] {
-                    assert!(!text.contains("run_unsandboxed"), "{permission}");
-                    assert!(!text.contains("suggest_full_access"), "{permission}");
-                    assert!(!text.contains("sandbox"), "{permission}");
-                }
-                assert!(claude.contains("keep it with mcp__brigadier__remember citing"));
-                assert!(!codex.contains("mcp__brigadier__"));
-                assert!(!claude.contains("@run") && !claude.contains("@remember"));
-                // No tool with an underscore is named bare in Claude's.
-                for name in THREAD_TOOLS.iter().filter(|name| name.contains('_')) {
-                    let bare = claude.match_indices(name).filter(|(at, _)| {
-                        let before = claude[..*at].chars().next_back();
-                        let after = claude[at + name.len()..].chars().next();
-                        let word = |c: Option<char>| {
-                            c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-                        };
-                        !word(before) && !word(after)
-                    });
-                    assert_eq!(bare.count(), 0, "{name} named bare for Claude");
-                }
+            let prompt = |provider| {
+                thread(
+                    &session(permission),
+                    None,
+                    &[],
+                    Some("/work/session @ brigadier/flow"),
+                    provider,
+                    true,
+                )
+            };
+            let claude = prompt(ProviderKind::Claude);
+            let codex = prompt(ProviderKind::Codex);
+            assert!(claude.contains(
+                "with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch"
+            ));
+            // Both run commands in their CLI's own shell, at every level.
+            assert!(claude.contains("Use your own CLI shell"));
+            assert!(codex.contains("Use your own CLI shell"));
+            for text in [&claude, &codex] {
+                assert!(!text.contains("run_unsandboxed"), "{permission}");
+                assert!(!text.contains("suggest_full_access"), "{permission}");
+                assert!(!text.contains("sandbox"), "{permission}");
+            }
+            assert!(claude.contains("keep it with mcp__brigadier__remember citing"));
+            assert!(!codex.contains("mcp__brigadier__"));
+            assert!(!claude.contains("@run") && !claude.contains("@remember"));
+            // No tool with an underscore is named bare in Claude's.
+            for name in THREAD_TOOLS.iter().filter(|name| name.contains('_')) {
+                let bare = claude.match_indices(name).filter(|(at, _)| {
+                    let before = claude[..*at].chars().next_back();
+                    let after = claude[at + name.len()..].chars().next();
+                    let word =
+                        |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                    !word(before) && !word(after)
+                });
+                assert_eq!(bare.count(), 0, "{name} named bare for Claude");
             }
         }
         assert_eq!(
@@ -1892,50 +1831,13 @@ mod environment_tests {
         );
     }
 
-    #[test]
-    fn a_runs_thread_hears_what_only_the_user_may_do_and_nothing_of_a_sandbox() {
-        let run = workspace();
-        let prompt = |permission: &str, start_workers: bool| {
-            thread(
-                &session(permission),
-                None,
-                &[],
-                Some(&run),
-                None,
-                ProviderKind::Claude,
-                start_workers,
-            )
-        };
-        let full = prompt("full", true);
-        let edits = prompt("acceptEdits", true);
-        for text in [&full, &edits] {
-            assert!(text.contains("You and the workers never do what only the user may do"));
-            assert!(!text.contains("sandbox"), "{text}");
-        }
-        // Short replies reach a run's thread, and its phase-end replies, whatever the old
-        // setting said (the voice is fixed).
-        assert!(full.contains("An overnight run's morning answer is at most three lines"));
-        let asks = prompt("full", false);
-        assert!(asks.contains("An overnight run's morning answer is at most three lines"));
-        assert!(asks.contains("How to write:"));
-        assert!(asks.contains("Name a worker by its title"));
-    }
-
     /// UI audit M6: a session's own worktree keeps the thread's commits with the trailer; the
     /// user's own checkout gets none unless they ask, and then no trailer.
     #[test]
     fn the_thread_commits_on_its_worktree_but_not_on_the_users_checkout() {
         let worktree = worktree_session("full");
         let prompt = |conversation: &Conversation| {
-            thread(
-                conversation,
-                None,
-                &[],
-                None,
-                Some("/work/session @ main"),
-                ProviderKind::Claude,
-                true,
-            )
+            thread(conversation, None, &[], None, ProviderKind::Claude, true)
         };
         let own = prompt(&worktree);
         assert!(own.contains(&format!("git commit --trailer \"{THREAD_TRAILER}\"")));
@@ -1956,129 +1858,99 @@ mod environment_tests {
     fn the_thread_does_normal_work_itself_and_keeps_extra_care_for_big_jobs() {
         for permission in ["ask", "acceptEdits", "full"] {
             for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-                for run in [None, Some(&workspace())] {
-                    let prompt = thread(
-                        &session(permission),
-                        None,
-                        &[],
-                        run,
-                        Some("/work/session @ brigadier/flow"),
-                        provider,
-                        true,
-                    );
-                    assert!(prompt.starts_with(THREAD_OPENING));
-                    // Normal work at any size it can hold is the thread's own (BUILD-PLAN B1);
-                    // a code question is answered with the file:line it rests on (B3).
-                    assert!(prompt.contains("Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change."));
-                    assert!(
-                        prompt
-                            .contains("quoting the file:line each point rests on (src/cart.ts:42)")
-                    );
-                    assert!(prompt.contains("Never start a worker for what reading answers."));
-                    for gone in [
-                        "Make a small change yourself",
-                        "about 100 changed lines",
-                        "Delegate everything bigger",
-                        "start a scout",
-                    ] {
-                        assert!(!prompt.contains(gone), "{gone}");
-                    }
-                    // How workers run is the brigade skill's to say (S15): the instructions
-                    // only point at it.
-                    assert!(prompt.contains(BRIGADE));
-                    assert!(!prompt.contains("How you handle workers"));
-                    assert!(!prompt.contains("land_phase"));
-                    assert!(!prompt.contains("2 to 4 research workers"));
-                    assert!(prompt.contains(&callable(MOCKUPS, provider)));
-                    assert!(prompt.contains("Never answer \"I can't\""));
-                    assert!(
-                        prompt
-                            .contains("read the code, make the change, run its checks and commit")
-                    );
-                    assert!(!prompt.contains("the size above"));
-                    // On the user's own checkout the thread's changes stay uncommitted unless
-                    // they ask, and carry no trailer; an overnight run's branch is its own.
-                    assert_eq!(
-                        prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")),
-                        run.is_some()
-                    );
-                    assert_eq!(
-                        prompt.contains("This is the user's own checkout: don't commit your changes unless the user asks. Leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\""),
-                        run.is_none()
-                    );
-                    assert!(prompt.contains("How to write code:"));
-                    // The full checks before a merge, a second look at a large or risky change
-                    // with the CLIs' own means (S5), extra care only for a big job (B1, B2).
-                    assert!(
-                        prompt.contains("Before a merge, run the project's full checks yourself")
-                    );
-                    assert!(prompt.contains("in your shell before your final answer"));
-                    assert!(prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell"));
-                    assert!(!prompt.contains("Reviews by the other vendor scale with risk"));
-                    assert!(!prompt.contains("risky mark"));
-                    assert!(!prompt.contains("start_verifier"));
-                    assert!(!prompt.contains("Each landing and commit of yours queues"));
-                    for name in [
-                        "query_brain",
-                        "remember",
-                        "code_search",
-                        "note_for_user",
-                        "ci_status",
-                    ] {
-                        assert!(prompt.contains(&tool(name, provider)), "{name}");
-                    }
-                    // The user is asked only on cards, in rounds; the merge too.
-                    assert!(
-                        prompt
-                            .contains("only with `brigadier ask` (never a question in your text)")
-                    );
-                    assert!(prompt.contains("When the user invites questions"));
-                    // The thread speaks when it judges it useful (#248).
-                    assert!(prompt.contains("a short one before or between tool calls too"));
-                    assert!(!prompt.contains("[quiet]"));
-                    assert!(!prompt.contains("Never write text before"));
-                    assert!(!prompt.contains("in your reply, or with ask_user"));
-                    // The old fixed pipeline is gone.
-                    for step in [
-                        "one loop per request",
-                        "1. Brief.",
-                        "3. Outline.",
-                        "6. Verify.",
-                        "7. Land with",
-                        "8. Then start the next phase",
-                        "You only talk",
-                        "There are no review rounds",
-                    ] {
-                        assert!(!prompt.contains(step), "{step}");
-                    }
-                    // Vendor-specific parts are picked here, never named in the text; the one
-                    // command a thread runs for a second look is the exception.
-                    let lower = prompt.replace("`codex review`", "").to_lowercase();
-                    for name in ["claude", "codex", "delegator", "chatgpt", "openai"] {
-                        assert!(!lower.contains(name), "{name} in {permission} {provider:?}");
-                    }
+                let prompt = thread(
+                    &session(permission),
+                    None,
+                    &[],
+                    Some("/work/session @ brigadier/flow"),
+                    provider,
+                    true,
+                );
+                assert!(prompt.starts_with(THREAD_OPENING));
+                // Normal work at any size it can hold is the thread's own (BUILD-PLAN B1);
+                // a code question is answered with the file:line it rests on (B3).
+                assert!(prompt.contains("Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change."));
+                assert!(
+                    prompt.contains("quoting the file:line each point rests on (src/cart.ts:42)")
+                );
+                assert!(prompt.contains("Never start a worker for what reading answers."));
+                for gone in [
+                    "Make a small change yourself",
+                    "about 100 changed lines",
+                    "Delegate everything bigger",
+                    "start a scout",
+                ] {
+                    assert!(!prompt.contains(gone), "{gone}");
+                }
+                // How workers run is the brigade skill's to say (S15): the instructions
+                // only point at it.
+                assert!(prompt.contains(BRIGADE));
+                assert!(!prompt.contains("How you handle workers"));
+                assert!(!prompt.contains("land_phase"));
+                assert!(!prompt.contains("2 to 4 research workers"));
+                assert!(prompt.contains(&callable(MOCKUPS, provider)));
+                assert!(prompt.contains("Never answer \"I can't\""));
+                assert!(
+                    prompt.contains("read the code, make the change, run its checks and commit")
+                );
+                assert!(!prompt.contains("the size above"));
+                // On the user's own checkout the thread's changes stay uncommitted unless
+                // they ask, and carry no trailer.
+                assert!(!prompt.contains(&format!("--trailer \"{THREAD_TRAILER}\"")));
+                assert!(prompt.contains("This is the user's own checkout: don't commit your changes unless the user asks. Leave them uncommitted and end your answer with one line saying so, for example \"Changed 1 file, not committed.\""));
+                assert!(prompt.contains("How to write code:"));
+                // The full checks before a merge, a second look at a large or risky change
+                // with the CLIs' own means (S5), extra care only for a big job (B1, B2).
+                assert!(prompt.contains("Before a merge, run the project's full checks yourself"));
+                assert!(prompt.contains("in your shell before your final answer"));
+                assert!(prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell"));
+                assert!(!prompt.contains("Reviews by the other vendor scale with risk"));
+                assert!(!prompt.contains("risky mark"));
+                assert!(!prompt.contains("start_verifier"));
+                assert!(!prompt.contains("Each landing and commit of yours queues"));
+                for name in [
+                    "query_brain",
+                    "remember",
+                    "code_search",
+                    "note_for_user",
+                    "ci_status",
+                ] {
+                    assert!(prompt.contains(&tool(name, provider)), "{name}");
+                }
+                // The user is asked only on cards, in rounds; the merge too.
+                assert!(
+                    prompt.contains("only with `brigadier ask` (never a question in your text)")
+                );
+                assert!(prompt.contains("When the user invites questions"));
+                // The thread speaks when it judges it useful (#248).
+                assert!(prompt.contains("a short one before or between tool calls too"));
+                assert!(!prompt.contains("[quiet]"));
+                assert!(!prompt.contains("Never write text before"));
+                assert!(!prompt.contains("in your reply, or with ask_user"));
+                // The old fixed pipeline is gone.
+                for step in [
+                    "one loop per request",
+                    "1. Brief.",
+                    "3. Outline.",
+                    "6. Verify.",
+                    "7. Land with",
+                    "8. Then start the next phase",
+                    "You only talk",
+                    "There are no review rounds",
+                ] {
+                    assert!(!prompt.contains(step), "{step}");
+                }
+                // Vendor-specific parts are picked here, never named in the text; the one
+                // command a thread runs for a second look is the exception.
+                let lower = prompt.replace("`codex review`", "").to_lowercase();
+                for name in ["claude", "codex", "delegator", "chatgpt", "openai"] {
+                    assert!(!lower.contains(name), "{name} in {permission} {provider:?}");
                 }
             }
         }
-        let codex = thread(
-            &session("ask"),
-            None,
-            &[],
-            None,
-            None,
-            ProviderKind::Codex,
-            true,
-        );
+        let codex = thread(&session("ask"), None, &[], None, ProviderKind::Codex, true);
         assert!(codex.contains("Use your own CLI shell for builds, tests, logs and listings"));
-        let claude = thread(
-            &session("ask"),
-            None,
-            &[],
-            None,
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let claude = thread(&session("ask"), None, &[], None, ProviderKind::Claude, true);
         assert!(claude.contains("Use your own CLI shell for builds, tests, logs and listings"));
         // The CLI's own shell timeouts and background tasks hold: no word of a ceiling.
         assert!(!claude.contains("two minutes"));
@@ -2193,7 +2065,6 @@ mod environment_tests {
             &session("full"),
             None,
             &[],
-            Some(&workspace()),
             Some("/work/session @ brigadier/flow"),
             ProviderKind::Claude,
             true,
@@ -2222,21 +2093,10 @@ mod environment_tests {
         assert!(COMPUTER_USE.contains("in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end."));
     }
 
-    /// Q61: an overnight run's never-list keeps spending, credentials, contacting anyone and
-    /// changes outside its branch, not pushing; a worker pushes when its task asks; a local checkout's landed commits are the
-    /// workers', never the user's own (#93).
+    /// A worker pushes when its task asks; a local checkout's landed commits are the workers',
+    /// never the user's own (#93).
     #[test]
     fn git_is_the_threads_call_and_the_approvals_stay() {
-        let run = crate::overnight::RunWorkspace {
-            base: "main".into(),
-            base_commit: "abc".into(),
-            branch: "overnight/2026-10-18-x".into(),
-            path: "/tmp/run".into(),
-        };
-        let overnight = setting_texts(&session("acceptEdits"), true, Some(&run)).1;
-        assert!(overnight.contains("You and the workers never do what only the user may do: spending, credentials, contacting anyone, and changes outside the run's branch."));
-        assert!(!overnight.contains("pushing"));
-        assert!(!overnight.contains("a push,"));
         let local = environment_text(&Environment::LocalCheckout {
             branch: "main".into(),
         });
@@ -2249,24 +2109,19 @@ mod environment_tests {
         assert!(worker.contains("Push, publish, deploy or open pull requests when your task asks for it. git and gh on the sign-in the user set up are fine. Never spend money, handle credentials yourself (a token, a password, the keychain directly), or delete anything outside your own work"));
     }
 
-    /// The level is named plainly, with who gives outlines their go-ahead, and nothing of a
-    /// sandbox or of switching to Full access (G5).
+    /// The level is named plainly, and nothing of a sandbox or of switching to Full access (G5).
     #[test]
-    fn the_permission_level_says_who_gives_the_go_ahead_and_nothing_of_a_sandbox() {
-        let text = |permission: &str| setting_texts(&session(permission), true, None).1;
-        assert!(text("full").starts_with("Full access. You give outlines their go-ahead"));
-        assert!(text("acceptEdits").starts_with("Accept edits. You give outlines their go-ahead"));
-        assert!(text("ask").starts_with("Ask. The user gives each outline's go-ahead"));
+    fn the_permission_level_is_named_plainly_and_nothing_of_a_sandbox() {
+        let text = |permission: &str| setting_texts(&session(permission), true).1;
+        assert!(text("full").starts_with("Full access. Ask the user only"));
+        assert!(text("acceptEdits").starts_with("Accept edits. Ask the user only"));
+        assert_eq!(text("ask"), "Ask.");
         for level in ["ask", "acceptEdits", "full"] {
             assert!(!text(level).contains("sandbox"), "{level}");
             assert!(!text(level).contains("suggest_full_access"), "{level}");
         }
         // An untrusted folder's session runs under Ask whatever its level.
-        assert!(
-            setting_texts(&session("full"), false, None)
-                .1
-                .starts_with("Ask.")
-        );
+        assert!(setting_texts(&session("full"), false).1.starts_with("Ask."));
     }
 
     /// #108, #52: no throwaway file goes to the user, and a document the
@@ -2277,7 +2132,6 @@ mod environment_tests {
             &session("full"),
             None,
             &[],
-            None,
             None,
             ProviderKind::Claude,
             true,
@@ -2297,7 +2151,6 @@ mod environment_tests {
             None,
             &[],
             None,
-            None,
             ProviderKind::Claude,
             true,
         );
@@ -2312,17 +2165,7 @@ mod environment_tests {
     #[test]
     fn start_workers_on_its_own_picks_the_rule_before_workers_start() {
         let conversation = session("full");
-        let prompt = |on| {
-            thread(
-                &conversation,
-                None,
-                &[],
-                None,
-                None,
-                ProviderKind::Claude,
-                on,
-            )
-        };
+        let prompt = |on| thread(&conversation, None, &[], None, ProviderKind::Claude, on);
         assert!(prompt(true).contains("say so in one line first"));
         assert!(!prompt(true).contains("ask first with"));
         let off = prompt(false);
@@ -2341,7 +2184,7 @@ mod environment_tests {
                 .any(|phrase| text.contains(phrase))
         };
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, None, provider, true);
+            let prompt = thread(&session("full"), None, &[], None, provider, true);
             assert!(!mentions(&prompt), "{prompt}");
         }
         assert!(!mentions(&worker_system("")));
@@ -2362,7 +2205,7 @@ mod environment_tests {
         assert!(NO_PROMISED_FILES.starts_with("Never promise a file or a link for later"));
         assert!(NO_PROMISED_FILES.contains("not only a link to the worker's file or a path"));
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let text = thread(&session("ask"), None, &[], None, None, provider, true);
+            let text = thread(&session("ask"), None, &[], None, provider, true);
             assert!(
                 text.contains(&format!("{LATE_EVENT} {REVISED_ANSWER}")),
                 "{provider:?}"
@@ -2414,15 +2257,6 @@ mod environment_tests {
         conversation
     }
 
-    fn workspace() -> crate::overnight::RunWorkspace {
-        crate::overnight::RunWorkspace {
-            base: "main".into(),
-            base_commit: "abc".into(),
-            branch: "overnight/2026-10-04-textkit-1234".into(),
-            path: "/tmp/run".into(),
-        }
-    }
-
     /// SESSION-MESSAGING-PLAN.md §5.7: a thread's instructions say sessions message each
     /// other, with each tool as its CLI calls it.
     /// The tools a session keeps are `brigadier` commands (STRIP-DOWN-PLAN S13): the thread's
@@ -2430,15 +2264,7 @@ mod environment_tests {
     #[test]
     fn a_threads_instructions_point_at_the_brigadier_commands() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(
-                &session("full"),
-                None,
-                &[],
-                None,
-                Some("/work/session @ brigadier/flow"),
-                provider,
-                true,
-            );
+            let prompt = thread(&session("full"), None, &[], None, provider, true);
             assert!(prompt.contains("`brigadier --help`"), "{provider:?}");
             assert!(prompt.contains("only with `brigadier ask`"), "{provider:?}");
             for gone in ["message_session", "offer_session", "ask_user", "app_state"] {
@@ -2590,20 +2416,11 @@ mod environment_tests {
     #[test]
     fn every_thread_and_chat_writes_in_the_restored_voice_and_shapes_its_final_answer() {
         let threads = [
+            thread(&session("full"), None, &[], None, ProviderKind::Codex, true),
             thread(
                 &session("full"),
                 None,
                 &[],
-                None,
-                None,
-                ProviderKind::Codex,
-                true,
-            ),
-            thread(
-                &session("full"),
-                None,
-                &[],
-                None,
                 None,
                 ProviderKind::Claude,
                 true,
@@ -2667,7 +2484,6 @@ mod environment_tests {
             None,
             &[],
             None,
-            None,
             ProviderKind::Claude,
             true,
         );
@@ -2694,7 +2510,6 @@ mod environment_tests {
             &session("acceptEdits"),
             None,
             &[],
-            None,
             None,
             ProviderKind::Claude,
             true,
@@ -2729,7 +2544,6 @@ mod environment_tests {
             None,
             &[],
             None,
-            None,
             ProviderKind::Claude,
             true,
         );
@@ -2758,7 +2572,6 @@ mod environment_tests {
             &session("full"),
             None,
             &[],
-            None,
             None,
             ProviderKind::Claude,
             true,
@@ -2797,7 +2610,7 @@ mod environment_tests {
         ];
         assert!(rule.contains(words[0]));
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, None, provider, true);
+            let prompt = thread(&session("full"), None, &[], None, provider, true);
             let how = &prompt[prompt.find("How to work:").unwrap()
                 ..prompt.find("How to talk to the user:").unwrap()];
             for words in words {
@@ -2809,7 +2622,6 @@ mod environment_tests {
             &session("full"),
             None,
             &[],
-            None,
             None,
             ProviderKind::Claude,
             true,
@@ -2840,7 +2652,6 @@ mod environment_tests {
             &session("acceptEdits"),
             None,
             &[],
-            None,
             None,
             ProviderKind::Claude,
             true,
@@ -2881,17 +2692,7 @@ mod environment_tests {
     /// CLI calls them.
     #[test]
     fn a_threads_prompt_keeps_the_user_from_guessing() {
-        let prompt = |provider| {
-            thread(
-                &session("full"),
-                None,
-                &[],
-                None,
-                Some("/work/session @ brigadier/flow"),
-                provider,
-                true,
-            )
-        };
+        let prompt = |provider| thread(&session("full"), None, &[], None, provider, true);
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
             let prompt = prompt(provider);
             assert!(
@@ -2910,15 +2711,7 @@ mod environment_tests {
     #[test]
     fn the_threads_scratch_stays_in_its_temp_folder() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(
-                &session("full"),
-                None,
-                &[],
-                None,
-                Some("/work/session @ brigadier/flow"),
-                provider,
-                true,
-            );
+            let prompt = thread(&session("full"), None, &[], None, provider, true);
             assert!(
                 prompt.contains("Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp"),
                 "{provider:?}"
@@ -2931,7 +2724,7 @@ mod environment_tests {
     #[test]
     fn only_workers_have_computer_tools() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, None, provider, false);
+            let prompt = thread(&session("full"), None, &[], None, provider, false);
             assert!(!prompt.contains("you and every worker"), "{provider:?}");
             assert!(!prompt.contains("quick look only"), "{provider:?}");
             assert_eq!(
@@ -2947,15 +2740,7 @@ mod environment_tests {
     #[test]
     fn the_thread_runs_the_full_checks_itself() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(
-                &worktree_session("full"),
-                None,
-                &[],
-                None,
-                Some("/work/session @ brigadier/flow"),
-                provider,
-                true,
-            );
+            let prompt = thread(&worktree_session("full"), None, &[], None, provider, true);
             assert!(
                 prompt.contains("run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output."),
                 "{prompt}"
@@ -2973,15 +2758,7 @@ mod environment_tests {
     #[test]
     fn the_thread_reviews_and_merges_with_plain_commands() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(
-                &worktree_session("full"),
-                None,
-                &[],
-                None,
-                Some("/work/session @ brigadier/flow"),
-                provider,
-                true,
-            );
+            let prompt = thread(&worktree_session("full"), None, &[], None, provider, true);
             assert!(
                 prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none."),
                 "{prompt}"
@@ -3016,7 +2793,6 @@ mod environment_tests {
             None,
             &[],
             None,
-            Some("/work/session @ brigadier/flow"),
             ProviderKind::Claude,
             true,
         );
@@ -3038,14 +2814,15 @@ mod environment_tests {
             &worktree_session("full"),
             None,
             &[],
-            None,
-            Some("/data/worktrees/run-1 @ overnight/2026-10-04-textkit-1234"),
+            Some("/data/worktrees/s-1 (on branch `brigadier/abc/session`)"),
             ProviderKind::Codex,
             true,
         );
-        assert!(prompt.contains(
-            "Your workspace: /data/worktrees/run-1 (on branch `overnight/2026-10-04-textkit-1234`)"
-        ));
+        assert!(
+            prompt.contains(
+                "Your workspace: /data/worktrees/s-1 (on branch `brigadier/abc/session`)"
+            )
+        );
         assert!(prompt.contains(THREAD_TRAILER));
     }
 
@@ -3061,7 +2838,6 @@ mod environment_tests {
             None,
             &[],
             None,
-            Some("/work/session @ brigadier/flow"),
             ProviderKind::Claude,
             true,
         );
