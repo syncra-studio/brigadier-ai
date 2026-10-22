@@ -18,8 +18,9 @@ and five Codex turns, cheap models at low effort, tiny prompts, about 5 minutes.
 
 - Starts its own daemon (this tree's `debug/brigadierd`, in `CARGO_TARGET_DIR` when set) on `/tmp/live-smoke-<time>-<pid>/data`
   with a clean environment, onboarded, Fable hidden, reviews and Brain enrichment off.
-- Two throwaway git projects; sessions C1, C2 and C3 (Claude, `sonnet` low) in the first, X
-  (Codex, `gpt-6-luna` low) in the second, all Full access in the project's own checkout. A model the
+- Four throwaway git projects, one per session (a Local checkout takes one session at a time):
+  C1, C2 and C3 (Claude, `sonnet` low) and X (Codex, `gpt-6-luna` low), all Full access in the
+  project's own checkout. A model the
   CLI doesn't offer falls back to its default (`--claude-model`, `--codex-model`).
 - Skipped with a note (exit 0) when a CLI isn't installed or signed in.
 
@@ -28,7 +29,8 @@ and five Codex turns, cheap models at low effort, tiny prompts, about 5 minutes.
 Each prompt asks for a fresh code, or a command prints one from `/dev/urandom` into the
 project's `.smoke/` folder, so "answered" means an assistant message carries it.
 
-1. **Long command** (C1). A foreground `sleep 70 && …` command; once its step runs, a follow-up
+1. **Long command** (C1). A foreground `sh .smoke/hold.sh 70 && …` command (Claude Code refuses a bare
+   foreground `sleep`); once its step runs, a follow-up
    and then a steer. The follow-up isn't Deciding for more than 30 s; the steer goes into the
    running request, its state says it is read when the command ends (`heldBy` on the steered
    request or its queued message, naming the command, then cleared), and it is
@@ -47,7 +49,7 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
    (`turn_usage`) with one answer (a Codex sender's progress notes aside: only the message it
    marks as its answer, `answerAtMs`, counts), its answer carries the reply; the receiver got it once and replied once; the
    reply carries its answer, and in b) leaves out the receiver's unrelated output.
-4. **Stop during a wait.** C1 runs its own user's `sleep 45` (a Claude thread takes a message
+4. **Stop during a wait.** C1 runs its own user's `sh .smoke/hold.sh 45` (a Claude thread takes a message
    steered into its turn only after its command, so its reply comes late); C3 messages it and
    waits, and is stopped while its wait runs. The request is stopped, its wait failed, the late
    reply arrives once, after the Stop, and shows once, and no turn or request starts for it.

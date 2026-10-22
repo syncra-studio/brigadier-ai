@@ -205,6 +205,9 @@ class Smoke:
         subprocess.run(["git", "init", "-q", "-b", "main", path], check=True)
         open(path + "/README.md", "w").write(f"# {name}\n\nA throwaway project of the live smoke.\n")
         open(path + "/.git/info/exclude", "a").write(".smoke/\n")
+        # A foreground wait: Claude Code's own Bash refuses a bare long `sleep` in the foreground
+        # (it says to background it), so the scenarios that need a running command wait in this.
+        open(path + "/.smoke/hold.sh", "w").write('#!/bin/sh\nsleep "$1"\n')
         subprocess.run(git + ["add", "README.md"], check=True)
         subprocess.run(git + ["commit", "-qm", "init"], check=True)
         return path
@@ -260,27 +263,27 @@ class Smoke:
             return missing
         claude = self.pick(status, "claude", self.args.claude_model)
         codex = self.pick(status, "codex", self.args.codex_model)
-        a, b = self.repo("projA"), self.repo("projB")
+        # One project per session: a Local checkout takes one session at a time (#522).
+        repos = {name: self.repo("proj" + name) for name in ("C1", "C2", "C3", "X")}
         projects = {}
-        for name, path in (("A", a), ("B", b)):
+        for name, path in repos.items():
             projects[name] = self.ipc.call({"method": "addProject", "path": path, "name": "", "init": False})["project"]["id"]
             # Trusted, as a user answers on entering the project; the project's removal at cleanup
             # takes the CLIs' trust entries this writes back out.
             self.ipc.call({"method": "setFolderTrust", "id": projects[name], "path": None, "trusted": True})
             self.projects.append(projects[name])
-        for name, project, path, provider, model in (("C1", "A", a, "claude", claude), ("C2", "A", a, "claude", claude),
-                                                     ("C3", "A", a, "claude", claude),
-                                                     ("X", "B", b, "codex", codex)):
-            setup = {"type": "session", "repo": path, "environment": {"type": "localCheckout", "branch": "main", "createFrom": None},
+        for name, provider, model in (("C1", "claude", claude), ("C2", "claude", claude), ("C3", "claude", claude),
+                                      ("X", "codex", codex)):
+            setup = {"type": "session", "repo": repos[name], "environment": {"type": "localCheckout", "branch": "main", "createFrom": None},
                      "permission": "full", "orchestrator": {"provider": provider, "model": model, "effort": "low"},
                      "planMode": False}
-            conv = self.ipc.call({"method": "createConversation", "kind": "session", "projectId": projects[project],
+            conv = self.ipc.call({"method": "createConversation", "kind": "session", "projectId": projects[name],
                                   "title": f"Smoke {name}", "setup": setup})["conversation"]["id"]
             self.convs[name] = conv
             self.native[name] = (provider, None)
             self.expected[conv] = {}
-        log(f"sessions: C1, C2, C3 Claude {claude} low in A; X Codex {codex} low in B")
-        self.projA, self.projB = a, b
+        log(f"sessions: C1, C2, C3 Claude {claude} low; X Codex {codex} low; each in its own project")
+        self.repos = repos
         return []
 
     def send(self, name, text, steer=False, codes=()):
@@ -333,12 +336,12 @@ class Smoke:
     def scenario_long_command(self):
         sc = "1 long command"
         long = self.args.long
-        cmd = f"sleep {long} && head -c6 /dev/urandom | xxd -p > .smoke/t1.txt && cat .smoke/t1.txt"
+        cmd = f"sh .smoke/hold.sh {long} && head -c6 /dev/urandom | xxd -p > .smoke/t1.txt && cat .smoke/t1.txt"
         t0 = now_ms()
         _, root = self.send("C1", f"Run exactly this shell command in the foreground and wait for it to finish, then tell me "
                                   f"what it printed: `{cmd}`")
-        step = until(lambda: self.running_command("C1", f"sleep {long}"), 90)
-        if not check(sc, "the command runs in the thread", step, "" if step else "no running `sleep` step within 90 s"):
+        step = until(lambda: self.running_command("C1", f"hold.sh {long}"), 90)
+        if not check(sc, "the command runs in the thread", step, "" if step else "no running `hold.sh` step within 90 s"):
             return
         cmd_seen = now_ms()
         time.sleep(3)
@@ -362,7 +365,7 @@ class Smoke:
                     deciding_max = max(deciding_max, time.time() - deciding_since[item["id"]])
                 else:
                     deciding_since.pop(item["id"], None)
-            running = any(s["status"] == "inProgress" and self.runs("C1", s, f"sleep {long}") for s in tool_steps(v))
+            running = any(s["status"] == "inProgress" and self.runs("C1", s, f"hold.sh {long}") for s in tool_steps(v))
             if not running and cmd_end is None:
                 cmd_end = now_ms()
             steer_req = next((r for r in v["requests"] if r["id"] == steer_id), None)
@@ -374,8 +377,8 @@ class Smoke:
                 deferred.update(extra)
             if not running and deferred and deferred_after is None:
                 deferred_after = extra
-            if os.path.exists(self.projA + "/.smoke/t1.txt") and t1 is None:
-                t1 = open(self.projA + "/.smoke/t1.txt").read().strip()
+            if os.path.exists(self.repos["C1"] + "/.smoke/t1.txt") and t1 is None:
+                t1 = open(self.repos["C1"] + "/.smoke/t1.txt").read().strip()
             if cmd_end and t1 and not v["queue"]["items"] and self.idle("C1"):
                 break
             time.sleep(1)
@@ -435,7 +438,7 @@ class Smoke:
     def scenario_background_job(self):
         sc = "2 background job"
         long = self.args.job
-        out = self.projA + "/.smoke/t2.txt"
+        out = self.repos["C2"] + "/.smoke/t2.txt"
         cmd = f"sleep {long} && head -c6 /dev/urandom | xxd -p > .smoke/t2.txt && cat .smoke/t2.txt"
         t0 = now_ms()
         _, root = self.send("C2", f"Start this shell command as a background job so that it keeps running after your turn ends: `{cmd}`. "
@@ -559,11 +562,11 @@ class Smoke:
         self.message_with_wait("3a Claude->Codex, idle", "C3", "X", code("A"))
         # Codex -> Claude while the Claude thread is busy with other work.
         unrel = code("U")
-        open(self.projA + "/.smoke/unrel.txt", "w").write(unrel + "\n")
+        open(self.repos["C1"] + "/.smoke/unrel.txt", "w").write(unrel + "\n")
         _, rid = self.send("C1", "Run exactly this shell command and wait for it, then tell me what it printed: "
-                                 "`sleep 40 && cat .smoke/unrel.txt`", codes=[unrel])
-        if not check("3b Codex->Claude, busy", "the receiver's own command runs", until(lambda: self.running_command("C1", "sleep 40"), 90),
-                     "no running `sleep 40` step within 90 s"):
+                                 "`sh .smoke/hold.sh 40 && cat .smoke/unrel.txt`", codes=[unrel])
+        if not check("3b Codex->Claude, busy", "the receiver's own command runs", until(lambda: self.running_command("C1", "hold.sh 40"), 90),
+                     "no running `hold.sh 40` step within 90 s"):
             return
         self.message_with_wait("3b Codex->Claude, busy", "X", "C1", code("B"), unrelated=unrel)
 
@@ -577,9 +580,9 @@ class Smoke:
         # at once, so a Codex receiver doesn't make the reply late.
         busy = code("W")
         self.send("C1", f"Run exactly this shell command in the foreground and wait for it, then reply with the code {busy}: "
-                        f"`sleep 45`", codes=[busy])
-        if not check(sc, "the receiver is busy with a command", until(lambda: self.running_command("C1", "sleep 45"), 60),
-                     "no running `sleep 45` step on C1 within 60 s"):
+                        f"`sh .smoke/hold.sh 45`", codes=[busy])
+        if not check(sc, "the receiver is busy with a command", until(lambda: self.running_command("C1", "hold.sh 45"), 60),
+                     "no running `hold.sh 45` step on C1 within 60 s"):
             return
         late = code("R")
         _, rid = self.send("C3", f"Find the session titled \"Smoke C1\" with list_sessions and use message_session to send it "
