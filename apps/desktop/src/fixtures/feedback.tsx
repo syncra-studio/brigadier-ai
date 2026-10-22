@@ -335,13 +335,23 @@ function Fixture() {
       daemon.approve?.(false);
 
       // No GitHub CLI: the step says so, with the command to install it; Send becomes Try again.
+      // The note stays as it was written, editable, after Send and after Try again alike (#478).
       daemon.gh = false;
       openFeedback();
       await wait(300);
       await write("The tab keeps spinning after Stop.");
+      const note = () => {
+        const field = dialog()?.querySelector("textarea");
+        return field ? [field.readOnly, getComputedStyle(field).color] : null;
+      };
+      const written = note();
       button("Send", dialog() ?? document)?.click();
       await wait(300);
       seen.noGh = [signInStep(), footer(), button("Try again", dialog() ?? document)?.disabled];
+      const sentNote = note();
+      button("Try again", dialog() ?? document)?.click();
+      await wait(300);
+      seen.noGhNote = [written, sentNote, note(), signInStep()?.[0]];
       closeFeedback();
       daemon.gh = true;
       daemon.signedIn = true;

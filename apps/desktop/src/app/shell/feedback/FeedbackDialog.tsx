@@ -44,8 +44,9 @@ function Feedback() {
   const unsent = done?.filter((result) => result.outcome === "failed").length ?? 0;
   const working = sending.phase === "working";
   const signingIn = sending.phase === "signIn" ? sending.signIn : null;
-  // Signing in, Send waits for GitHub; without the GitHub CLI it is Try again.
-  const waiting = working || (signingIn !== null && signingIn.step !== "noGh");
+  // Signing in, Send waits for GitHub; without the GitHub CLI it is Try again, the note as after a failed send (#478).
+  const signInAtWork = signingIn !== null && signingIn.step !== "noGh";
+  const waiting = working || signInAtWork;
   const error = sending.phase === "failed" ? `${sending.error} Your note is still here.` : null;
 
   return (
@@ -75,7 +76,7 @@ function Feedback() {
           <textarea
             value={text}
             onChange={(event) => setFeedbackText(event.target.value)}
-            readOnly={working || signingIn !== null}
+            readOnly={waiting}
             spellCheck
             autoFocus
             placeholder={ASK}
@@ -83,7 +84,7 @@ function Feedback() {
             className={cn(
               "placeholder:text-muted-foreground bg-muted/60 focus-visible:bg-background rounded-control h-37 resize-none border border-transparent px-3.5 py-3 text-sm leading-normal transition-colors outline-none",
               working && "text-foreground/80",
-              signingIn && "text-muted-foreground",
+              signInAtWork && "text-muted-foreground",
             )}
           />
         )}

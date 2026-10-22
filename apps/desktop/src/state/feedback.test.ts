@@ -150,6 +150,18 @@ test("a note changed after a failed send is written up anew on Try again", async
   assert.equal(asked[1]![0]!.title, "[Bug]: Stop leaves the tab spinning");
 });
 
+// No GitHub CLI is like a failed send: the note can change, and what it filed before is dropped (#478).
+test("a note changed while there is no GitHub CLI is written up anew on Try again", async () => {
+  openFeedback();
+  const failed = { kind: "bug" as const, title: "Spins", outcome: "failed" as const, reason: "not signed in", report: report("Spins"), searched: true };
+  useFeedbackUi.setState({ text: "Stop leaves it spinning", sending: { phase: "signIn", signIn: { step: "noGh" }, results: [failed] } });
+  setFeedbackText("Stop leaves the tab spinning");
+  sendFromDialog();
+  await until(() => useFeedbackUi.getState().sending.phase === "done");
+  assert.deepEqual(wrote, ["Stop leaves the tab spinning"]);
+  assert.equal(asked[0]![0]!.title, "[Bug]: Stop leaves the tab spinning");
+});
+
 test("a send that fails after the dialog closed is still there when it opens again", async () => {
   openFeedback();
   setFeedbackText("Stop leaves it spinning");

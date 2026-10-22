@@ -101,11 +101,16 @@ export function closeFeedback(): void {
   useFeedbackUi.setState({ open: false, draft: null, text: "", sending: { phase: "write" } });
 }
 
-/** The note as typed; once it changes, a failed send's reports are written up from it anew. */
+/**
+ * The note as typed; once it changes, a failed send's reports (or those waiting on a GitHub CLI)
+ * are written up from it anew.
+ */
 export function setFeedbackText(text: string): void {
   const { sending } = useFeedbackUi.getState();
   useFeedbackUi.setState(
-    sending.phase === "failed" && sending.results ? { text, sending: { ...sending, results: null } } : { text },
+    (sending.phase === "failed" || sending.phase === "signIn") && sending.results
+      ? { text, sending: { ...sending, results: null } }
+      : { text },
   );
 }
 

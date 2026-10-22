@@ -87,6 +87,12 @@ test("send feedback files what the user wrote and lists it with its links", { ti
     ["Write it on GitHub yourself", "Try again"],
     false,
   ]);
+  // Its note is as written, not dimmed or locked, after Send and after Try again alike (#478).
+  const [written, sentNote, triedNote, triedStep] = seen.noGhNote as [[boolean, string], unknown, unknown, string];
+  assert.equal(written[0], false);
+  assert.deepEqual(sentNote, written);
+  assert.deepEqual(triedNote, written);
+  assert.equal(triedStep, "GitHub CLI isn’t installed. Install it, then try again.");
   assert.deepEqual(seen.failed, [
     "The tab keeps spinning after Stop.",
     "Couldn’t send it: HTTP 502: Bad gateway. Your note is still here.",
