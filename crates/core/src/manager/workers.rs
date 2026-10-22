@@ -5844,13 +5844,31 @@ pub(crate) fn thread_temp_owner(id: &ConversationId) -> String {
     format!("thread-temp:{id}")
 }
 
-/// The folder every task's test data folder is made in.
+/// The folder every task's test data folder is made in: `/tmp`, whose short paths hold the
+/// Unix sockets made there. In the core's own tests, the test process's temp directory when it
+/// lies in `/tmp` already: a session's full checks run them with their own
+/// `/tmp/brigadier-test-k…`, the only folder of `/tmp` their sandbox lets them write, so the
+/// sessions a test starts make everything there (#493, #382).
 pub(crate) fn test_data_root() -> PathBuf {
+    #[cfg(all(test, unix))]
+    if let Some(temp) = temp_dir_in_tmp() {
+        return temp;
+    }
     if cfg!(unix) {
         PathBuf::from("/tmp")
     } else {
         std::env::temp_dir()
     }
+}
+
+/// The temp directory, when it lies in `/tmp` (resolved: `/tmp` is `/private/tmp` on macOS).
+#[cfg(all(test, unix))]
+pub(crate) fn temp_dir_in_tmp() -> Option<PathBuf> {
+    let resolved = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_owned());
+    let temp = std::env::temp_dir();
+    resolved(&temp)
+        .starts_with(resolved(Path::new("/tmp")))
+        .then_some(temp)
 }
 
 /// How a stopped task ends: a read task that already reported (a check still ending its turn,
@@ -6453,6 +6471,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn under_its_sandbox_a_writer_commits_on_its_branch_and_never_moves_another() {
+        if crate::manager::flow::skip_inside_a_sandbox() {
+            return;
+        }
         let dir =
             Temp(std::env::temp_dir().join(format!("brigadier-roots-{}", uuid::Uuid::new_v4())));
         let main = dir.join("main");

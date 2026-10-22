@@ -405,6 +405,15 @@ pub(crate) fn peer_confined(socket: std::os::fd::BorrowedFd<'_>) -> bool {
     peer == 1 && own != 1
 }
 
+/// See [`crate::confined`].
+pub(crate) fn confined() -> bool {
+    // SAFETY: a plain query with a null operation and no variadic arguments, as documented for
+    // SANDBOX_FILTER_NONE; it reads nothing but its arguments.
+    #[allow(unsafe_code)]
+    let own = unsafe { sandbox_check(libc::getpid(), std::ptr::null(), SANDBOX_FILTER_NONE) };
+    own == 1
+}
+
 /// `ProcessInfo.thermalState` and the kernel's memory-pressure level.
 struct MacMachine;
 

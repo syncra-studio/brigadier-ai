@@ -750,6 +750,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_scoped_thread_commits_in_its_linked_worktree() {
+        if crate::manager::flow::skip_inside_a_sandbox() {
+            return;
+        }
         let root =
             Temp(std::env::temp_dir().join(format!("brigadier-commit-{}", uuid::Uuid::new_v4())));
         let (repo, worktree, scratch) = (root.join("repo"), root.join("ws"), root.join("orch"));

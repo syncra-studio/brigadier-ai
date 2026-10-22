@@ -440,9 +440,10 @@ async fn a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_fol
         flow.say("Bind a socket.").await;
         flow.settled().await;
         let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
+        let root = crate::manager::workers::test_data_root().join("brigadier-test-t");
         let tmp = tmp.to_str().unwrap();
         assert!(
-            tmp.starts_with("/tmp/brigadier-test-t") && !tmp.contains(' '),
+            tmp.starts_with(root.to_str().unwrap()) && !tmp.contains(' '),
             "{tmp}"
         );
         let replies = replies.lock().unwrap().clone();

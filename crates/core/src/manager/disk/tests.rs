@@ -773,7 +773,7 @@ async fn preview_data_folders_go_with_their_session() {
     let (flow, _, _) = session("disk-preview-data").await;
     let ledger = flow.manager.runtime.ledger();
     let folder = |name: &str| {
-        let dir = Path::new("/tmp").join(format!(
+        let dir = crate::manager::workers::test_data_root().join(format!(
             "brigadier-disk-preview-{name}-{}",
             uuid::Uuid::new_v4().simple()
         ));

@@ -288,6 +288,16 @@ pub fn peer_confined(socket: std::os::fd::BorrowedFd<'_>) -> bool {
     }
 }
 
+/// Whether this process itself runs inside an OS sandbox (a session's checks or worker), where
+/// macOS refuses every further sandbox: a Seatbelt profile can't nest. Only macOS can tell;
+/// elsewhere `false`.
+pub fn confined() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::confined();
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
 #[cfg(not(target_os = "macos"))]
 fn unsupported<T>(what: &'static str, platform: &'static str) -> Result<T> {
     Err(Error::Unsupported { what, platform })

@@ -471,3 +471,100 @@ async fn an_unarchive_runs_no_full_checks_again() {
     assert!(runs(&flow.repo).is_empty(), "{:?}", runs(&flow.repo));
     flow.stop().await;
 }
+
+/// The core tests that make what the full checks' sandbox must let them write: a test's own
+/// folder, its sessions' temp, test and preview data folders, Unix sockets there, and a
+/// session whose commands its daemon sandboxes or protects.
+const SANDBOXED_SAMPLE: [&str; 7] = [
+    "manager::flow::litter_tests::",
+    "manager::protection::tests::",
+    "manager::disk::tests::preview_data_folders_go_with_their_session",
+    "manager::flow::accounts_tests::a_limit_moves_the_chat_to_another_account_and_its_work_is_done_once",
+    "manager::flow::background_tests::a_background_run_keeps_the_name_the_thread_gave_it",
+    "manager::flow::checks_tests::a_threads_checks_and_commands_bind_sockets_in_their_short_temporary_folder",
+    "manager::preview::tests::preview_data_refuses_symlink_parents_and_rechecks_protected_paths",
+];
+
+/// How long the sample may take: it hung, rather than failed, when the tests wrote where the
+/// sandbox doesn't let them, and must end well within a test's patience.
+const SAMPLE_LIMIT_SECS: u32 = 80;
+
+/// Issues #493 and #382: a session below Full access runs its full checks in Brigadier's
+/// sandbox, which writes only its checkout, its own folders (its `TMPDIR` among them) and the
+/// toolchains' homes, and can't hold another sandbox. Brigadier's own core tests must pass
+/// there, or no such session can ever merge. Here run_checks runs a sample of them, from this
+/// very test binary, the way the daemon runs a session's full checks.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn the_core_tests_pass_in_the_full_checks_sandbox() {
+    if super::skip_inside_a_sandbox() {
+        return;
+    }
+    let exe = std::env::current_exe().unwrap();
+    let filters: Vec<String> = SANDBOXED_SAMPLE.iter().map(|f| format!("'{f}'")).collect();
+    let full_checks = format!(
+        "#!/bin/sh\n\
+         /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true 2>/dev/null \
+           && {{ echo 'the full checks ran unsandboxed'; exit 1; }}\n\
+         log=\"$TMPDIR/sample.log\"\n\
+         '{}' {} > \"$log\" 2>&1 &\n\
+         pid=$!\n\
+         (i=0; while kill -0 $pid; do \
+           if [ $i -ge {SAMPLE_LIMIT_SECS} ]; then kill $pid; \
+           echo 'the sample hung: stopped after {SAMPLE_LIMIT_SECS} s' >> \"$log\"; fi; \
+           sleep 1; i=$((i + 1)); done) > /dev/null 2>&1 &\n\
+         watchdog=$!\n\
+         wait $pid\nstatus=$?\nwait $watchdog\ncat \"$log\"\nexit $status\n",
+        exe.display(),
+        filters.join(" ")
+    );
+    let flow = Flow::start(
+        "integrated-sandboxed-sample",
+        Options {
+            permission: crate::model::PermissionLevel::ApproveForMe,
+            files: vec![(
+                "tools/full-checks.sh",
+                Box::leak(full_checks.into_boxed_str()),
+            )],
+            ..Options::default()
+        },
+        script(move |turn| async move {
+            if turn.is_orchestrator() && turn.input.starts_with("Check it") {
+                thread_commit(&turn, "one.txt", "one\n");
+                let checks = turn.call("run_checks", json!({})).await;
+                assert!(!checks.is_error, "{}", checks.text);
+                return Reply::text("Checked.");
+            }
+            Reply::text("[quiet]")
+        }),
+    )
+    .await;
+    flow.say("Check it.").await;
+    let board = flow
+        .until("the full checks to end", |board| {
+            board
+                .integrated_checks
+                .values()
+                .any(|check| check.state.is_final())
+        })
+        .await;
+    let checks: Vec<_> = board.integrated_checks.values().collect();
+    let log = crate::manager::workers::session_temp_dir(
+        &flow.conversation,
+        crate::manager::workers::SessionTemp::Checks,
+    )
+    .join("sample.log");
+    let log = std::fs::read_to_string(log).unwrap_or_default();
+    assert!(
+        matches!(checks[0].state, IntegratedCheckState::Passed { .. }),
+        "{checks:#?}\n{log}"
+    );
+    assert!(log.contains("test result: ok."), "{log}");
+    for filter in SANDBOXED_SAMPLE {
+        assert!(
+            log.contains(&format!("test {filter}")),
+            "{filter} ran no test:\n{log}"
+        );
+    }
+    flow.stop().await;
+}

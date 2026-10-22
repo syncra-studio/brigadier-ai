@@ -80,39 +80,6 @@ pub(crate) fn add_full_access(protection: &mut Protection, data_dir: &Path, own:
     ]);
 }
 
-/// Where a test makes the repository and data folder of a session it protects: the temp
-/// directory, unless [`add_full_access`] denies it as another session's temp folder, as it
-/// does when the tests run in a session's full checks (`/tmp/brigadier-test-k…`); then the
-/// folder those live in, as a real session's never lie in another's. Only macOS's sandbox
-/// applies the protection.
-#[cfg(test)]
-pub(crate) fn unprotected_temp_dir() -> PathBuf {
-    unprotected_temp(std::env::temp_dir())
-}
-
-#[cfg(test)]
-fn unprotected_temp(temp: PathBuf) -> PathBuf {
-    let mut protection = Protection::default();
-    add_full_access(&mut protection, Path::new("/nonexistent"), &[]);
-    // Resolved as the sandbox resolves it (`/tmp` is `/private/tmp`), though not there yet.
-    let path = (temp.ancestors())
-        .find_map(|known| {
-            let rest = temp.strip_prefix(known).ok()?;
-            Some(known.canonicalize().ok()?.join(rest))
-        })
-        .unwrap_or_else(|| temp.clone());
-    let path = path.display().to_string();
-    let denied = protection
-        .deny_patterns
-        .iter()
-        .any(|pattern| regex::Regex::new(pattern).is_ok_and(|pattern| pattern.is_match(&path)));
-    if cfg!(target_os = "macos") && denied {
-        super::workers::test_data_root()
-    } else {
-        temp
-    }
-}
-
 /// Makes the folders the session's own ref and reflog live in: packing refs prunes an emptied
 /// one, and git can't make it again inside a protected folder.
 pub(crate) fn make_own_folders(protection: &Protection) {
@@ -274,8 +241,11 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_full_access_threads_cleanup_touches_nothing_of_another_session() {
+        if crate::manager::flow::skip_inside_a_sandbox() {
+            return;
+        }
         let hex = || uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
-        let dir = Temp(unprotected_temp_dir().join(format!("brigadier-protect-{}", hex())));
+        let dir = Temp(std::env::temp_dir().join(format!("brigadier-protect-{}", hex())));
         let repo = dir.0.join("repo");
         let data = dir.0.join("data");
         let scratch = data.join("orch/conv");
@@ -315,10 +285,11 @@ mod tests {
             ],
         );
         // Other sessions' temp and test folders, the thread's own temp folder, and the user's.
-        let other_temp = Temp(PathBuf::from(format!("/tmp/brigadier-{}", hex())));
-        let other_test = Temp(PathBuf::from(format!("/tmp/brigadier-test-{}", hex())));
-        let own_temp = Temp(PathBuf::from(format!("/tmp/brigadier-{}", hex())));
-        let mine = Temp(PathBuf::from(format!("/tmp/my-scratch-{}", hex())));
+        let tmp = super::super::workers::test_data_root();
+        let other_temp = Temp(tmp.join(format!("brigadier-{}", hex())));
+        let other_test = Temp(tmp.join(format!("brigadier-test-{}", hex())));
+        let own_temp = Temp(tmp.join(format!("brigadier-{}", hex())));
+        let mine = Temp(tmp.join(format!("my-scratch-{}", hex())));
         for folder in [&other_temp, &other_test, &mine] {
             std::fs::create_dir_all(folder.0.join("sub")).unwrap();
         }
@@ -429,7 +400,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_full_access_thread_on_the_users_checkout_cant_delete_another_sessions_branch() {
-        let dir = Temp(unprotected_temp_dir().join(format!(
+        if crate::manager::flow::skip_inside_a_sandbox() {
+            return;
+        }
+        let dir = Temp(std::env::temp_dir().join(format!(
             "brigadier-protect-local-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..12]
         )));
@@ -485,25 +459,27 @@ mod tests {
         assert!(ok && stderr.is_empty(), "{stderr}");
     }
 
-    /// Issue #493: in a session's full checks the temp directory is that session's own temp
-    /// folder, which a Full-access thread's protection denies: the tests' sessions live
-    /// beside it instead, while anywhere else the temp directory stays theirs.
+    /// Issues #493 and #382: in a session's full checks the temp directory is that session's
+    /// own temp folder (`/tmp/brigadier-test-k…`), the only folder of `/tmp` their sandbox
+    /// lets them write. The sessions the tests start make theirs in it, so a Full-access
+    /// thread's protection never denies the test's own temp directory, wherever it is.
     #[test]
-    fn a_protected_sessions_fixtures_never_lie_in_a_session_temp_folder() {
-        let root = super::super::workers::test_data_root();
-        for session in ["brigadier-test-k1234567", "brigadier-0123456789ab"] {
-            let expected = if cfg!(target_os = "macos") {
-                root.clone()
-            } else {
-                root.join(session)
-            };
-            assert_eq!(unprotected_temp(root.join(session)), expected);
+    fn the_tests_temp_directory_is_never_another_sessions_temp_folder() {
+        let mut protection = Protection::default();
+        add_full_access(&mut protection, Path::new("/nonexistent"), &[]);
+        let temp = std::env::temp_dir();
+        let temp = temp.canonicalize().unwrap_or(temp);
+        for path in [temp.clone(), temp.join("brigadier-flow-x")] {
+            let path = path.display().to_string();
+            for pattern in &protection.deny_patterns {
+                assert!(
+                    !regex::Regex::new(pattern).unwrap().is_match(&path),
+                    "{pattern} denies {path}"
+                );
+            }
         }
-        for temp in [
-            root.join("brigadier-flow-x"),
-            PathBuf::from("/var/folders/ab/cd/T"),
-        ] {
-            assert_eq!(unprotected_temp(temp.clone()), temp);
+        if let Some(temp) = super::super::workers::temp_dir_in_tmp() {
+            assert_eq!(super::super::workers::test_data_root(), temp);
         }
     }
 

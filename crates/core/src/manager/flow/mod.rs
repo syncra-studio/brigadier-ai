@@ -1230,6 +1230,76 @@ async fn open_store(data: &Path) -> brigadier_store::Store {
     .unwrap()
 }
 
+/// The platform a test's daemon runs on, its data folder `data`. Inside a sandbox already (a
+/// session's full checks, a worker) macOS refuses the daemon's own sandboxes, as a Seatbelt
+/// profile can't nest: there its commands run as they are, held only by the sandbox around
+/// the tests, the way Linux's protection leaves them. What a sandbox denies is tested where
+/// one applies: see [`skip_inside_a_sandbox`].
+pub(crate) fn test_platform(data: &Path) -> Arc<dyn brigadier_sandbox::Platform> {
+    let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+        data_dir: Some(data.to_owned()),
+    })
+    .unwrap();
+    if brigadier_sandbox::confined() {
+        Arc::new(Nested(platform))
+    } else {
+        platform
+    }
+}
+
+/// Whether a test of what a sandbox allows and denies can't run here, as this process runs
+/// inside a sandbox already (a session's full checks) and macOS can't nest another; says so in
+/// the test's output. Such a test runs wherever the tests aren't sandboxed: CI, a terminal, a
+/// Full-access session's checks.
+pub(crate) fn skip_inside_a_sandbox() -> bool {
+    let skip = brigadier_sandbox::confined();
+    if skip {
+        eprintln!("skipped: this test applies a sandbox, which can't nest in the one it runs in");
+    }
+    skip
+}
+
+/// [`test_platform`] inside a sandbox: the native platform, its sandbox leaving every spec as
+/// it is.
+struct Nested(Arc<dyn brigadier_sandbox::Platform>);
+
+impl brigadier_sandbox::Platform for Nested {
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn paths(&self) -> &brigadier_sandbox::AppPaths {
+        self.0.paths()
+    }
+    fn private_fs(&self) -> &dyn brigadier_sandbox::PrivateFs {
+        self.0.private_fs()
+    }
+    fn processes(&self) -> &dyn brigadier_sandbox::Processes {
+        self.0.processes()
+    }
+    fn credentials(&self) -> &dyn brigadier_sandbox::CredentialStore {
+        self.0.credentials()
+    }
+    fn shell(&self) -> &dyn brigadier_sandbox::Shell {
+        self.0.shell()
+    }
+    fn sandbox(&self) -> &dyn brigadier_sandbox::Sandbox {
+        self
+    }
+    fn machine(&self) -> &dyn brigadier_sandbox::Machine {
+        self.0.machine()
+    }
+}
+
+impl brigadier_sandbox::Sandbox for Nested {
+    fn confine(
+        &self,
+        spec: brigadier_sandbox::SpawnSpec,
+        _policy: &brigadier_sandbox::SandboxPolicy,
+    ) -> brigadier_sandbox::Result<brigadier_sandbox::SpawnSpec> {
+        Ok(spec)
+    }
+}
+
 /// The manager on `store`, its CLIs running `script` (and `reviews` for one-shot reviews),
 /// once it has seen both CLIs' models.
 async fn boot(
@@ -1241,10 +1311,7 @@ async fn boot(
     behavior: &Arc<FakeBehavior>,
 ) -> (Arc<SessionManager>, Arc<Core>) {
     let data = data.to_owned();
-    let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-        data_dir: Some(data.clone()),
-    })
-    .unwrap();
+    let platform = test_platform(&data);
     let core = Core::load(store).await.unwrap();
     let spawner: Spawner = Arc::new(|task| {
         tokio::spawn(task);
@@ -1385,16 +1452,17 @@ pub(crate) struct Scratch {
 }
 
 impl Scratch {
-    /// A fresh folder named for `name`, outside any session's temp folder (issue #493).
+    /// A fresh folder named for `name`.
     pub fn new(name: &str) -> Self {
-        Self::within(&crate::manager::protection::unprotected_temp_dir(), name)
+        Self::within(&std::env::temp_dir(), name)
     }
 
     /// A fresh folder named for `name` under `/tmp`, whatever the temp directory is, for paths
-    /// that must be there (a preview's `BRIGADIER_DATA_DIR`).
+    /// that must be there (a preview's `BRIGADIER_DATA_DIR`): where the tests' sessions make
+    /// their folders ([`crate::manager::workers::test_data_root`]).
     #[cfg(target_os = "macos")]
     pub fn in_tmp(name: &str) -> Self {
-        Self::within(Path::new("/tmp"), name)
+        Self::within(&crate::manager::workers::test_data_root(), name)
     }
 
     fn within(root: &Path, name: &str) -> Self {
@@ -1489,7 +1557,9 @@ fn sweep_killed_tests() {
     SWEPT.call_once(|| {
         remove_killed_tests(&std::env::temp_dir());
         #[cfg(target_os = "macos")]
-        remove_killed_tests(Path::new("/tmp"));
+        if crate::manager::workers::temp_dir_in_tmp().is_none() {
+            remove_killed_tests(Path::new("/tmp"));
+        }
     });
 }
 
