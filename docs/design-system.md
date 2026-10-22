@@ -113,7 +113,7 @@ table is the current one.
 | Primitives · Controls | `Badge/Default`, `Secondary`, `Destructive`, `Warning`, `Success`, `Outline`, `Ghost`, `Link` | `components/controls/badge.tsx` | `Badge` (`variant`) | |
 | Primitives · Controls | `Badge/Full access` | — | — | Pen only: the app's Full access pill is the access picker's trigger (`text-full-access`) in `app/shell/SetupPickers.tsx` |
 | Primitives · Controls | `Button/Primary`, `Secondary`, `Outline`, `Ghost`, `Destructive`, `Link`, each `/xs` and `/sm` | `components/controls/button.tsx` | `Button` (`variant` default…link, `size` default/xs/sm) | |
-| Primitives · Controls | — | `components/controls/button.tsx` | `Button` variants `soft`, `soft-destructive`, `link-blue`, sizes `lg`, `inline` | code only (`soft` is drawn as SettingsButton, Shared app parts) |
+| Primitives · Controls | — | `components/controls/button.tsx` | `Button` sizes `lg`, `inline` | code only (`soft`, `soft-destructive`, `link-blue` are drawn on Shared app parts) |
 | Primitives · Controls | `Icon Button`, `Icon Button/xs`, `/sm`, `/lg` | `components/controls/tooltip-icon-button.tsx` | `TooltipIconButton` (`size`, `look` ghost/toolbar/strip, `pressed`, `dot`) | sizes come from `Button` `icon-*` |
 | Primitives · Controls | `Send Button` | `components/controls/send-button.tsx` | `SendButton` (`state`, `background`) | |
 | Primitives · Controls | `Input` | `components/controls/input.tsx` | `Input` | |
@@ -121,8 +121,7 @@ table is the current one.
 | Primitives · Controls | `Switch/On`, `Switch/Off` | `components/controls/switch.tsx` | `Switch` | |
 | Primitives · Controls | `Checkbox/Off`, `Checkbox/On`, `Checkbox/Mixed` | `components/controls/checkbox.tsx` | `Checkbox`, `CheckboxMark` | |
 | Primitives · Controls | `Checkbox Row` | `components/controls/checkbox-row.tsx` | `CheckboxRow` | |
-| Primitives · Controls | `Kbd`, `Kbd/Tooltip`, `Kbd/On button` | `components/controls/kbd.tsx` | `Kbd` (`variant` key/chip; the tooltip and button pills follow where it sits) | |
-| Primitives · Controls | `KbdGroup` | — | — | Pen only: keys sit side by side in their parent |
+| Primitives · Controls | `Kbd`, `Kbd · chip`, `Kbd/Tooltip`, `Kbd/On button` | `components/controls/kbd.tsx` | `Kbd` (`variant` key/chip; the tooltip and button pills follow where it sits) | |
 | Primitives · Controls | `TabsList`, `TabsList/Line`, `TabsList/Vertical`, `Tab/Active`, `Tab/Inactive`, `Tab/Line Active`, `Tab/Line Inactive` | `components/controls/tabs.tsx` | `Tabs`, `TabsList` (`variant` default/line, orientation), `TabsTrigger`, `TabsContent` | |
 | Primitives · Controls | `Toggle/Off`, `Toggle/On` | `components/controls/toggle.tsx` | `Toggle` | |
 | Primitives · Controls | `ToggleGroup`, `ToggleGroupItem/On`, `ToggleGroupItem/Off` | `components/controls/toggle-group.tsx` | `ToggleGroup`, `ToggleGroupItem` | |
@@ -131,7 +130,7 @@ table is the current one.
 | Primitives · Controls | `Skeleton` | `components/layout/skeleton.tsx` | `Skeleton` | |
 | Primitives · Controls | `Separator/Horizontal`, `Separator/Vertical` | — | — | Pen only: the code draws rules with border classes (`separator.tsx` was removed) |
 | Primitives · Controls | `RoundBadge/Plain`, `RoundBadge/Done` | `components/controls/round-badge.tsx` | `RoundBadge` (`tone`) | |
-| Primitives · Controls | `Dot` | `components/shared/state-dot.tsx` | `StateDot` (`color`) | |
+| Primitives · Controls | `StateDot` | `components/shared/state-dot.tsx` | `StateDot` (`color`) | |
 | Primitives · Controls | `ErrorLine` | `components/controls/error-line.tsx` | `ErrorLine` | |
 | Primitives · Controls | `Nav Row` | `components/controls/nav-row.tsx` | `NavRow` | |
 | Primitives · Menus, popovers & dialogs | `Menu`, `Menu Item`, `Menu Item/Check`, `Menu Item/Radio`, `Menu Item/Sub`, `Menu Label`, `Menu Separator` | `components/overlays/dropdown-menu.tsx` | `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioItem`, `DropdownMenuSubTrigger`, `DropdownMenuLabel` (`variant` caps/heading), `DropdownMenuSeparator` | |
@@ -170,13 +169,15 @@ table is the current one.
 | Shared app parts | `ModelSelector` | `components/shared/model-selector.tsx` | `ModelSelector` | |
 | Shared app parts | `ProgressLine` | `components/shared/progress-line.tsx` | `ProgressLine` | |
 | Shared app parts | `Section` | `components/shared/section.tsx` | `Section` | |
-| Shared app parts | `SettingsButton` | `components/controls/button.tsx` | `Button variant="soft" size="sm"` | |
+| Shared app parts | `Button/Soft`, `Button/Soft destructive` | `components/controls/button.tsx` | `Button variant="soft"` / `"soft-destructive"`, `size="sm"` | |
+| Shared app parts | `Button/Link blue · chevron`, `Button/Link blue · icon` | `components/controls/button.tsx` | `Button variant="link-blue"` | |
+| Shared app parts | `EmptyState/Line`, `EmptyState/Card`, `EmptyState/Centered` | `components/shared/empty-state.tsx` | `EmptyState` (`variant` line/card/centered) | |
 | Shared app parts | `SettingsSearch` | `components/shared/settings-search.tsx` | `SettingsSearch` | |
 | Shared app parts | `Settings Card`, `Settings Row` | `components/shared/settings-card.tsx`, `settings-row.tsx` | `SettingsCard`, `RowText`, `settingsRows`; `SettingsRow` | |
 | Shared app parts | `SettingsTitlebarStrip` | `components/shared/settings-titlebar-strip.tsx` | `SettingsTitlebarStrip` (holds `TerminalButton`) | |
 | Shared app parts | `LabeledDivider` | `components/shared/labeled-divider.tsx` | `LabeledDivider` | |
 | Shared app parts | `MD/Paragraph`, `MD/Bullet item` | `components/conversation/markdown-text.tsx` | `MarkdownText` | |
-| Shared app parts | — | `components/shared/banner.tsx`, `empty-state.tsx`, `usage-bar.tsx`, `titlebar-button.tsx` | `Banner`, `EmptyState`, `UsageBar`, `TITLEBAR_BUTTON`, `TitlebarTips` | code only |
+| Shared app parts | — | `components/shared/banner.tsx`, `usage-bar.tsx`, `titlebar-button.tsx` | `Banner`, `UsageBar`, `TITLEBAR_BUTTON`, `TitlebarTips` | code only |
 | App shell (app.pen) | `#60 PageCorners` | `app/shell/PageCorners.tsx` | `PageCorners` | |
 | App shell (app.pen) | `#62 App › page surface` | `app/shell/PageSurface.tsx` | `PageSurface` | |
 | App shell (app.pen) | `#63 App › Settings titlebar strip` | `components/shared/settings-titlebar-strip.tsx` | `SettingsTitlebarStrip` | |
@@ -349,8 +350,8 @@ table is the current one.
 | Conversation (app.pen) | `#375 PreviewCard › OpenPill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
 | Conversation (app.pen) | `#376 PreviewCard › Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
 | Conversation (app.pen) | `#382 PlanCard` | `app/conversation/cards/PlanCard.tsx` | `PlanCard` | |
-| Conversation (app.pen) | `#384 OvernightPlanCard › PhaseWork` | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | |
-| Conversation (app.pen) | `#386 OvernightPlanCard › Rules and sources disclosure` | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | |
+| Conversation (app.pen) | — | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | code only (its OvernightPlanCard card was retired) |
+| Conversation (app.pen) | — | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | code only (its OvernightPlanCard card was retired) |
 | Conversation (app.pen) | `#388 PhaseMore` | `app/conversation/cards/PhaseMore.tsx` | `PhaseMore` | |
 | Conversation (app.pen) | `#389 DoneWhen` | `app/conversation/cards/DoneWhen.tsx` | `DoneWhen` | |
 | Conversation (app.pen) | `#392 PlanRating` | `app/conversation/cards/PlanRating.tsx` | `PlanRating` | |
