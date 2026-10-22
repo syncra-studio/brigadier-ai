@@ -522,7 +522,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       atMs: plan.createdAtMs,
     });
   }
-  return items.sort((a, b) => a.position - b.position).map(({ position: _position, ...item }) => item);
+  return items.toSorted((a, b) => a.position - b.position).map(({ position: _position, ...item }) => item);
 }
 
 /** What a block's work is made of, as its message metadata carries it. */

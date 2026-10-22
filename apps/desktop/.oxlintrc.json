@@ -38,7 +38,8 @@
       "error",
       {
         "allow": [
-          "**/*.css"
+          "**/*.css",
+          "@/fixtures/cliView"
         ]
       }
     ],

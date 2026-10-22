@@ -233,13 +233,14 @@ test("a turn's user message and its steers take the Brigadier requests the turn 
   assert.deepEqual(block.steers.map((steer) => steer.message.id), ["r2"]);
 });
 
+const decision = (requestId: string | null, atMs: number) =>
+  ({ requestId, atMs, position: 0, kind: { type: "decided", what: `at ${atMs}`, why: "" } }) as unknown as BoardDigest["orchestratorSteps"][number];
+
 test("Brigadier's own items go into the turn of their request, else by time, after the CLI's items before them", () => {
   const two: ThreadView = {
     entries: [user("u1", "One", 1000), at({ type: "message", itemId: "a1", role: "assistant", text: "Done one." }, 1500), user("u2", "Two", 5000), at({ type: "message", itemId: "a2", role: "assistant", text: "Done two." }, 5500)],
     turns: [{ ...turn("u1", 1000, 2000, "done"), requests: ["r1"] }, { ...turn("u2", 5000, 6000, "done"), requests: ["r2"] }],
   };
-  const decision = (requestId: string | null, atMs: number) =>
-    ({ requestId, atMs, position: 0, kind: { type: "decided", what: `at ${atMs}`, why: "" } }) as unknown as BoardDigest["orchestratorSteps"][number];
   // r1's step came late, at 5200, yet it is r1's; the one of no request goes by its time.
   const blocks = cliBlocks(two, "conv", { ...NO_BOARD, orchestratorSteps: [decision("r1", 5200), decision(null, 5600), decision(null, 1200)] });
   assert.deepEqual(

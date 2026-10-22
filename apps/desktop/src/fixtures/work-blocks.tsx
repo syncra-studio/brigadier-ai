@@ -905,6 +905,9 @@ async function driveUpdate(): Promise<object> {
   };
 }
 
+/** A step as if it came just now. */
+const now = (step: OrchestratorStep): OrchestratorStep => ({ ...step, atMs: Date.now() });
+
 /** A plan approved: its request works again, and the new steps show under the plan card as they come. */
 async function driveImplement(): Promise<object> {
   await settle(600);
@@ -922,7 +925,6 @@ async function driveImplement(): Promise<object> {
   change(() => ({ run: "running", runRequest: "r1", plans: { plan: { ...plan, state: { type: "approved" } } as unknown as Plan } }));
   request("r1", { state: { type: "working" }, endedAtMs: null, worked: [{ fromMs: begun, toMs: begun + 10_000 }, { fromMs: Date.now(), toMs: null }] });
   // Its new steps come now, after the plan.
-  const now = (step: OrchestratorStep): OrchestratorStep => ({ ...step, atMs: Date.now() });
   steps([...daemon.steps, now(tool("impl-read", 3.1, "Read", "/repo/src/cli.ts", "completed")), now(tool("impl-edit", 3.2, "apply_patch", "/repo/src/cli.ts", "inProgress"))]);
   await settle();
   const block = turn() ?? document.body;

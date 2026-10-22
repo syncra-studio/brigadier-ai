@@ -283,6 +283,14 @@ test("machine rows show in their request's block, each on its own line", () => {
   ]);
 });
 
+const planDigest = (plans: Plan[], steps: OrchestratorStep[]): BoardDigest => ({
+  ...board,
+  tasks: {},
+  plans: Object.fromEntries(plans.map((p) => [p.id, p])),
+  orchestratorSteps: steps,
+  decisions: [],
+});
+
 test("a plan shows as its document: writing it, then the newest revision in view and the plan as the answer", () => {
   const request = "plan-request";
   const user = { ...messages[0]!, id: request, seq: 320, requestId: request, text: "Add a --version flag" };
@@ -305,13 +313,6 @@ test("a plan shows as its document: writing it, then the newest revision in view
     createdAtMs: user.createdAtMs + position,
     decidedAtMs: null,
   });
-  const digest = (plans: Plan[], steps: OrchestratorStep[]): BoardDigest => ({
-    ...board,
-    tasks: {},
-    plans: Object.fromEntries(plans.map((p) => [p.id, p])),
-    orchestratorSteps: steps,
-    decisions: [],
-  });
   const done = requestOf(request, user.createdAtMs);
   const cardsOf = (d: BoardDigest) => {
     const block = blocksOf([user, opening], d, { requests: done }).find((candidate) => candidate.key === request);
@@ -319,21 +320,21 @@ test("a plan shows as its document: writing it, then the newest revision in view
     return { block, cards: block.cards.map((card) => [card.type, card.id, card.keep]) };
   };
   // While the call runs: "Writing plan", and nothing yet the answer.
-  assert.deepEqual(cardsOf(digest([], [writing])).cards, [["writingPlan", "writing:2", true]]);
+  assert.deepEqual(cardsOf(planDigest([], [writing])).cards, [["writingPlan", "writing:2", true]]);
   // Sent back and proposed again: the newest stays in view, the older folds; the plan is the answer.
   const wrote = { ...writing, kind: { ...writing.kind, status: "completed" as const } };
   const { block, cards } = cardsOf(
-    digest([plan("p1", 401, { type: "rejected", message: "smaller" }), plan("p2", 405, { type: "proposed" })], [wrote]),
+    planDigest([plan("p1", 401, { type: "rejected", message: "smaller" }), plan("p2", 405, { type: "proposed" })], [wrote]),
   );
   assert.deepEqual(cards, [["plan", "p1", false], ["plan", "p2", true]]);
   assert.ok(endsWithPlan(sequence(block)));
   // Once a reply comes after it (the work it started), that reply is the answer again.
   const after = { ...opening, id: "after", seq: 500, createdAtMs: user.createdAtMs + 500, text: "Done." };
-  const later = blocksOf([user, opening, after], digest([plan("p2", 405, { type: "approved", by: "user" })], [wrote]), { requests: done }).find((b) => b.key === request);
+  const later = blocksOf([user, opening, after], planDigest([plan("p2", 405, { type: "approved", by: "user" })], [wrote]), { requests: done }).find((b) => b.key === request);
   assert.ok(later);
   assert.ok(!endsWithPlan(sequence(later)));
   // The plan arrived before its call reported done: the plan alone.
-  assert.deepEqual(cardsOf(digest([plan("p1", 401, { type: "proposed" })], [writing])).cards, [["plan", "p1", true]]);
+  assert.deepEqual(cardsOf(planDigest([plan("p1", 401, { type: "proposed" })], [writing])).cards, [["plan", "p1", true]]);
 });
 
 test("a late event's update line shows under the answer, never as a new answer", () => {
@@ -741,8 +742,8 @@ test("another session's message names its sender; the user's own message is no p
 
 test("a message steered into a running turn joins it, its request with the turn's", () => {
   const thread = [said("d2", 1, "user", "d2"), said("d2-said", 2, "assistant", "d2"), said("m3", 3, "user", "m3"), said("m3-answer", 4, "assistant", "m3")];
-  const requests = requestsOf(peerRequest("d2", 1, { state: { type: "working" } }), peerRequest("m3", 3, { state: { type: "working" }, steeredInto: "d2", steeredAfter: "d2-said" }));
-  const blocks = blocksOf(thread, peerDigest(), requests);
+  const steered = requestsOf(peerRequest("d2", 1, { state: { type: "working" } }), peerRequest("m3", 3, { state: { type: "working" }, steeredInto: "d2", steeredAfter: "d2-said" }));
+  const blocks = blocksOf(thread, peerDigest(), steered);
   assert.equal(blocks.length, 1);
   const [turn] = blocks;
   assert.deepEqual(turn!.requestIds, ["d2", "m3"]);
