@@ -8,7 +8,8 @@
  * opens a report, opens Edit, sends the second (failing once, then Try again), dismisses the
  * first and writes what it saw to #feedback-offer-result (FeedbackOfferRender.test.ts reads
  * it). With ?partial=1 too it sends the second with its last report failing, then files
- * that one on Try again. With ?signedout=1 instead it sends the second signed out: the card
+ * that one on Try again. With ?restarted=1 the second was sent before the app restarted: it
+ * reads what the card lists from the daemon's answer. With ?signedout=1 instead it sends the second signed out: the card
  * signs in to GitHub under its reports (a one-time code, Open GitHub, waiting), then files.
  * ?state=drafted|open|working|signin|signin-waiting|signin-nogh|done|failed shows the second
  * card in the design's state, for screenshots.
@@ -159,6 +160,24 @@ useBoard.setState(({ board }) =>
     ? { board: { ...board, orchestratorSteps: [...board.orchestratorSteps, offer("r1", 7, "first", "Typo fixes take long", "A one-word fix took four minutes."), offer("r2", 30, "second", "Usage, Stop and pinning", SECOND)] } }
     : {},
 );
+// The second was sent before the app restarted (?restarted=1): only the daemon's answer knows what it filed.
+if (params.has("restarted")) {
+  const answered: OrchestratorStep = {
+    requestId: "r2",
+    atMs: Date.now(),
+    position: 31,
+    kind: {
+      type: "feedbackAnswered",
+      id: "second",
+      sent: true,
+      results: [
+        { outcome: "filed", kind: "bug", title: reports[0]!.title, number: 482, url: `${REPO}/482` },
+        { outcome: "added", kind: "bug", title: reports[1]!.title, number: 417, url: `${REPO}/417` },
+      ],
+    },
+  };
+  useBoard.setState(({ board }) => (board ? { board: { ...board, orchestratorSteps: [...board.orchestratorSteps, answered] } } : {}));
+}
 // The second request's own turn still runs (?turn=1); else only its worker does.
 if (params.has("turn")) {
   useBoard.setState(({ board }) => (board ? { board: { ...board, run: "running", runRequest: "r2" } } : {}));
@@ -214,6 +233,10 @@ async function drive() {
   seen.cards = cards().map((each) => rows(each, "Reports"));
   const second = () => cards()[1];
   const actions = () => [...(second()?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("li")).map(text);
+  if (params.has("restarted")) {
+    seen.sent = [...head(second()), rows(second(), "Sent")];
+    return seen;
+  }
   if (params.has("partial")) {
     daemon.failingLast = true;
     button(second(), "Send")?.click();
@@ -224,7 +247,10 @@ async function drive() {
     await wait(400);
     seen.sent = [...head(second()), rows(second(), "Sent"), actions()];
     seen.filed = filed;
-    seen.answers = calls.filter((call) => call.method === "answerFeedbackOffer").length;
+    // The issues each answer keeps.
+    seen.answers = calls
+      .filter((call) => call.method === "answerFeedbackOffer")
+      .map((call) => ((call as { results?: { number?: number }[] }).results ?? []).map((result) => result.number));
     return seen;
   }
   if (params.has("signedout")) {

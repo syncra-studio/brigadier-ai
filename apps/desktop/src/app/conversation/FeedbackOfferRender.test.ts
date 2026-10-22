@@ -63,15 +63,20 @@ test("a feedback offer is written up, then sends, edits or dismisses", { timeout
     "Pin a chat to the top of the sidebar#484",
   ]);
   assert.equal(seen.left, 1);
+  const filedRows = [
+    { kind: "bug", title: "Usage popover doesn't refresh when a session ends", outcome: "filed", number: 482, url: "https://github.com/syncra-studio/brigadier-ai/issues/482" },
+    { kind: "bug", title: "Stop doesn't stop a running worker", outcome: "added", number: 417, url: "https://github.com/syncra-studio/brigadier-ai/issues/417#issuecomment-1" },
+    { kind: "idea", title: "Pin a chat to the top of the sidebar", outcome: "filed", number: 484, url: "https://github.com/syncra-studio/brigadier-ai/issues/484" },
+  ];
   assert.deepEqual(seen.answers, [
-    { method: "answerFeedbackOffer", conversationId: (seen.answers as { conversationId: string }[])[0]?.conversationId, offerId: "second", sent: true },
+    { method: "answerFeedbackOffer", conversationId: (seen.answers as { conversationId: string }[])[0]?.conversationId, offerId: "second", sent: true, results: filedRows },
     { method: "answerFeedbackOffer", conversationId: (seen.answers as { conversationId: string }[])[0]?.conversationId, offerId: "first", sent: false },
   ]);
   assert.equal(seen.dialogOpen, false);
 });
 
 // When only some reports were filed, the card lists them with Try again, which files the rest
-// alone; the offer is answered once.
+// alone; the offer is answered with what was filed, then again with them all (#476).
 test("a feedback offer that sent only some files the rest on Try again", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "feedback-offer.html?drive=1&done=1&partial=1", "feedback-offer-result", 15000)) as Record<string, unknown>;
   assert.deepEqual(seen.partial, [
@@ -87,7 +92,17 @@ test("a feedback offer that sent only some files the rest on Try again", { timeo
     [],
   ]);
   assert.deepEqual(seen.filed, [3, 1]);
-  assert.equal(seen.answers, 1);
+  assert.deepEqual(seen.answers, [[482, 417], [482, 417, 482]]);
+});
+
+// #476: a card sent before the app restarted still lists what it filed, from the daemon's answer.
+test("a feedback offer sent before a restart still lists its issues", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "feedback-offer.html?drive=1&done=1&restarted=1", "feedback-offer-result", 15000)) as Record<string, unknown>;
+  assert.deepEqual(seen.sent, [
+    "Sent. Thank you",
+    "You can follow them on GitHub.",
+    ["Usage popover doesn't refresh when a session ends#482", `Stop doesn't stop a running workerAdded to #${417}`],
+  ]);
 });
 
 // Signed out, the card signs in to GitHub under its reports (no forms open): its one-time code,

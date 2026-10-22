@@ -2283,20 +2283,37 @@ async fn the_thread_offers_feedback_once_per_incident() {
     );
     assert_eq!(offers(&board).len(), 1);
 
-    // Sent: a later incident may be offered again; the answer is kept once.
+    // Sent: a later incident may be offered again; the answer is kept once, with the issues
+    // it filed, so the card lists them after a restart too (#476). A Try again that files the
+    // rest answers again, in its place.
+    let filed = |number: u64| crate::feedback::FeedbackSent::Filed {
+        kind: crate::work::FeedbackKind::Bug,
+        title: format!("Report {number}"),
+        number,
+        url: format!("https://github.com/syncra-studio/brigadier-ai/issues/{number}"),
+    };
     flow.manager
-        .answer_feedback_offer(&flow.conversation, &shown[0], true)
+        .answer_feedback_offer(&flow.conversation, &shown[0], true, vec![filed(482)])
+        .await
+        .unwrap();
+    flow.manager
+        .answer_feedback_offer(
+            &flow.conversation,
+            &shown[0],
+            true,
+            vec![filed(482), filed(483)],
+        )
         .await
         .unwrap();
     assert!(
         flow.manager
-            .answer_feedback_offer(&flow.conversation, &shown[0], false)
+            .answer_feedback_offer(&flow.conversation, &shown[0], false, Vec::new())
             .await
             .is_err()
     );
     assert!(
         flow.manager
-            .answer_feedback_offer(&flow.conversation, "nope", false)
+            .answer_feedback_offer(&flow.conversation, "nope", false, Vec::new())
             .await
             .is_err()
     );
@@ -2310,14 +2327,21 @@ async fn the_thread_offers_feedback_once_per_incident() {
     );
     let shown = offers(&board);
     assert_eq!(shown.len(), 2);
-    assert!(board.orchestrator_steps.iter().any(|step| matches!(
-        &step.kind,
-        OrchestratorStepKind::FeedbackAnswered { id, sent: true } if *id == shown[0]
-    )));
+    let answers: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::FeedbackAnswered { id, sent, results } if *id == shown[0] => {
+                Some((*sent, results.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answers, vec![(true, vec![filed(482), filed(483)])]);
 
     // Dismissed: none again in this session.
     flow.manager
-        .answer_feedback_offer(&flow.conversation, &shown[1], false)
+        .answer_feedback_offer(&flow.conversation, &shown[1], false, Vec::new())
         .await
         .unwrap();
     flow.say("Ugh.").await;

@@ -3,6 +3,7 @@ import type { AnswerOrigin } from "./AnswerOrigin";
 import type { CiRun } from "./CiRun";
 import type { ConversationId } from "./ConversationId";
 import type { FeedbackKind } from "./FeedbackKind";
+import type { FeedbackSent } from "./FeedbackSent";
 import type { FileStat } from "./FileStat";
 import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
@@ -129,7 +130,7 @@ record?: MergeRecord,
  * It merged without a passing run_checks on its commit, because the user said to merge
  * anyway ("Merge anyway", or their own words).
  */
-checksSkipped?: boolean, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
+checksSkipped?: boolean, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "settingSuggested", change: SettingChange, reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, results?: Array<FeedbackSent>, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.

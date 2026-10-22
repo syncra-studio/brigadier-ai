@@ -2557,7 +2557,15 @@ pub enum OrchestratorStepKind {
         body: String,
     },
     /// The user's answer to the feedback offer `id`: opened on GitHub (`sent`) or dismissed.
-    FeedbackAnswered { id: String, sent: bool },
+    /// Sent, what became of its reports (a Try again that files the rest answers again, in
+    /// this one's place).
+    FeedbackAnswered {
+        id: String,
+        sent: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<Vec<crate::feedback::FeedbackSent>>", optional)]
+        results: Vec<crate::feedback::FeedbackSent>,
+    },
     /// Work outside the request the thread offered as a session of its own
     /// (`offer_session`): a card with one "Start as session" button. Open until a
     /// `SessionOfferTaken` with its `id`.

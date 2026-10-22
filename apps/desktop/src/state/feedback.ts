@@ -261,13 +261,13 @@ export function draftOffer(id: string, text: string): void {
 
 /**
  * Sends what the offer `id` shows (or files again what failed), signing in to GitHub first
- * when it has to; `onSent` once the first was filed, not again when a Try again files the rest.
+ * when it has to; `onSent` with what became of them all once one was filed, again when a Try
+ * again files the rest.
  */
-export function sendOffer(id: string, text: string, kind: FeedbackKind, onSent: () => void): void {
+export function sendOffer(id: string, text: string, kind: FeedbackKind, onSent: (results: FeedbackResult[]) => void): void {
   const offer = useFeedbackOffers.getState()[id];
   const sending = offer?.sending ?? { phase: "write" };
   const written = offer?.written ?? null;
-  const filedBefore = sending.phase === "done";
   const failed = sending.phase === "done" || sending.phase === "failed" || sending.phase === "signIn" ? sending.results : null;
   const mine = (offerSends[id] ?? 0) + 1;
   offerSends[id] = mine;
@@ -287,7 +287,7 @@ export function sendOffer(id: string, text: string, kind: FeedbackKind, onSent: 
       if (!results) return;
       const next = outcomeOf(results);
       set(next);
-      if (next.phase === "done" && !filedBefore) onSent();
+      if (next.phase === "done") onSent(results);
     },
     (cause: unknown) => {
       console.warn("feedback: sending the thread's reports failed", cause);

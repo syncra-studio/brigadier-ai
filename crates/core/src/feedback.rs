@@ -149,6 +149,33 @@ pub enum FeedbackFiled {
     Failed { reason: String },
 }
 
+/// What became of one report a thread's feedback card sent, kept with the answer so the card
+/// lists it after the app restarts too (#476).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "outcome",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FeedbackSent {
+    /// Filed as the new issue `number`.
+    Filed {
+        kind: FeedbackKind,
+        title: String,
+        number: u64,
+        url: String,
+    },
+    /// Added to the issue `number` it repeats, as a comment.
+    Added {
+        kind: FeedbackKind,
+        title: String,
+        number: u64,
+        url: String,
+    },
+    /// No writer could run: its form opened in the browser, filled in.
+    Opened { kind: FeedbackKind, title: String },
+}
+
 /// Where signing in to GitHub for Send feedback starts: already signed in, no GitHub CLI to sign
 /// in with, or waiting for the user to enter `code` at `url`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

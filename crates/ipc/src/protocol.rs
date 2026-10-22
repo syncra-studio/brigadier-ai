@@ -901,11 +901,15 @@ pub enum Request {
     /// Send feedback: stops the GitHub sign-in at work, if any.
     CancelGitHubSignIn,
     /// The user's answer to the thread's feedback offer (`offer_feedback`): opened on GitHub
-    /// (`sent`) or dismissed.
+    /// (`sent`) or dismissed. Sent, what became of its reports; a Try again that files the
+    /// rest answers again with them all.
     AnswerFeedbackOffer {
         conversation_id: ConversationId,
         offer_id: String,
         sent: bool,
+        #[serde(default)]
+        #[ts(optional, as = "Option<Vec<brigadier_core::FeedbackSent>>")]
+        results: Vec<brigadier_core::FeedbackSent>,
     },
     /// The user clicked "Merge into main" on the side panel: the session branch merges into
     /// its base on this click, once. `anyway`: it was "Merge anyway", the user skipping the

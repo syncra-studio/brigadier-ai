@@ -931,6 +931,16 @@ impl Board {
                     known.kind = step.kind;
                     return;
                 }
+                // A feedback offer answered again (a Try again filed the rest) keeps one answer,
+                // with what was filed by now.
+                if let crate::work::OrchestratorStepKind::FeedbackAnswered { id, .. } = &step.kind
+                    && let Some(known) = self.orchestrator_steps.iter_mut().find(|known| {
+                        matches!(&known.kind, crate::work::OrchestratorStepKind::FeedbackAnswered { id: answered, .. } if answered == id)
+                    })
+                {
+                    known.kind = step.kind;
+                    return;
+                }
                 step.position = stream_seq;
                 self.orchestrator_steps.push(step);
             }
@@ -1356,6 +1366,78 @@ mod ci_tests {
         assert_eq!(board.orchestrator_steps[0].at_ms, 1_000);
         board.apply(&at(watch("o/fork", Some("passed")), 90_000), 3);
         assert_eq!(board.orchestrator_steps[0].at_ms, 90_000);
+    }
+}
+
+#[cfg(test)]
+mod feedback_tests {
+    use super::*;
+    use crate::feedback::FeedbackSent;
+    use crate::work::{FeedbackKind, OrchestratorStep, OrchestratorStepKind};
+
+    fn answered(id: &str, results: Vec<FeedbackSent>) -> DomainEvent {
+        DomainEvent::OrchestratorStepped {
+            step: OrchestratorStep {
+                request_id: Some("request".into()),
+                kind: OrchestratorStepKind::FeedbackAnswered {
+                    id: id.into(),
+                    sent: true,
+                    results,
+                },
+                at_ms: 0,
+                position: 0,
+            },
+        }
+    }
+
+    fn filed(number: u64) -> FeedbackSent {
+        FeedbackSent::Filed {
+            kind: FeedbackKind::Bug,
+            title: format!("Report {number}"),
+            number,
+            url: format!("https://github.com/syncra-studio/brigadier-ai/issues/{number}"),
+        }
+    }
+
+    /// A sent feedback card's issues are stored with its answer, so a board rebuilt from the
+    /// stored events after a restart still has them (#476); a Try again that filed the rest
+    /// answers again, in the first answer's place.
+    #[test]
+    fn a_sent_feedback_answer_keeps_its_issues_through_a_restart() {
+        let stored: Vec<String> = [
+            answered("offer", vec![filed(482)]),
+            answered("offer", vec![filed(482), filed(483)]),
+        ]
+        .iter()
+        .map(|event| serde_json::to_string(event).unwrap())
+        .collect();
+        assert!(stored[0].contains(
+            r#""results":[{"outcome":"filed","kind":"bug","title":"Report 482","number":482,"url":"#
+        ));
+        let mut board = Board::default();
+        for (seq, event) in stored.iter().enumerate() {
+            board.apply(&serde_json::from_str(event).unwrap(), seq as i64 + 1);
+        }
+        let answers: Vec<_> = board
+            .orchestrator_steps
+            .iter()
+            .filter_map(|step| match &step.kind {
+                OrchestratorStepKind::FeedbackAnswered { results, .. } => Some(results.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers, vec![vec![filed(482), filed(483)]]);
+        assert_eq!(board.orchestrator_steps[0].position, 1);
+        // Answered before answers kept their issues: none.
+        let old: DomainEvent = serde_json::from_str(
+            r#"{"type":"orchestratorStepped","step":{"requestId":null,"kind":{"type":"feedbackAnswered","id":"old","sent":true},"atMs":0,"position":0}}"#,
+        )
+        .unwrap();
+        board.apply(&old, 3);
+        assert!(matches!(
+            &board.orchestrator_steps[1].kind,
+            OrchestratorStepKind::FeedbackAnswered { id, results, .. } if id == "old" && results.is_empty()
+        ));
     }
 }
 

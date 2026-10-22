@@ -157,6 +157,7 @@ export type { FeedbackFiled } from "./FeedbackFiled";
 export type { FeedbackFiling } from "./FeedbackFiling";
 export type { FeedbackKind } from "./FeedbackKind";
 export type { FeedbackReport } from "./FeedbackReport";
+export type { FeedbackSent } from "./FeedbackSent";
 export type { FeedbackWriteUp } from "./FeedbackWriteUp";
 export type { FileChange } from "./FileChange";
 export type { FileChangeKind } from "./FileChangeKind";

@@ -18,12 +18,13 @@ import { Button } from "@/components/controls";
 import { Check, ChevronRightAlt, FeedbackGlyph } from "@/components/icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import { ProgressLine } from "@/components/shared";
-import type { FeedbackReport } from "@/ipc/generated";
+import type { FeedbackReport, FeedbackSent } from "@/ipc/generated";
 import { type FeedbackKind, reportLines } from "@/lib/feedbackUrl";
 import { answerFeedbackOffer } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import {
   type FeedbackAccount,
+  type FeedbackResult,
   type FeedbackSending,
   dismissOffer,
   draftOffer,
@@ -228,6 +229,11 @@ function asReport(kind: FeedbackKind, title: string, body: string): FeedbackRepo
   };
 }
 
+/** What a send filed (or opened in the browser), as the answer keeps it; not what failed. */
+function sentOf(results: readonly FeedbackResult[]): FeedbackSent[] {
+  return results.flatMap((result) => (result.outcome === "failed" ? [] : [result]));
+}
+
 /**
  * The offer `id` as the thread made it, answered through the daemon: written up once the turn
  * has ended, Send files the reports, Edit opens Send feedback filled in (sending there counts),
@@ -241,38 +247,40 @@ export function FeedbackOffer({ id, kind, title, body }: { id: string; kind: Fee
   const conversationId = useBoard((s) => s.board?.conversationId ?? null);
   const answered = useBoard((s) => {
     const step = s.board?.orchestratorSteps.find((each) => each.kind.type === "feedbackAnswered" && each.kind.id === id);
-    return step?.kind.type === "feedbackAnswered" ? step.kind.sent : null;
+    return step?.kind.type === "feedbackAnswered" ? step.kind : null;
   });
   const offer = useFeedbackOffers((s) => s[id]);
   const account = useFeedbackAccount();
   const [answer, setAnswer] = useState<boolean | null>(null);
   const action = useAction();
-  const said = answered ?? answer;
+  const said = answered?.sent ?? answer;
   const text = `${title}\n\n${body}`;
   const open = ended && conversationId !== null && said === null;
   useEffect(() => {
     if (open) draftOffer(id, text);
   }, [open, id, text]);
   if (!ended || !conversationId || said === false) return null;
-  const answerWith = (value: boolean) => answerFeedbackOffer(conversationId, id, value).then(() => setAnswer(value));
+  const answerWith = (value: boolean, results?: FeedbackResult[]) =>
+    answerFeedbackOffer(conversationId, id, value, results && sentOf(results)).then(() => setAnswer(value));
   const written = offer?.written;
+  // Sent before the app last started: what it filed, as the answer kept it (#476).
+  const kept = answered?.results?.length ? answered.results : null;
   return (
     <FeedbackCard
       reports={written === undefined ? null : written?.reports.length ? written.reports : [asReport(kind, title, body)]}
       account={account}
-      sending={offer?.sending ?? { phase: "write" }}
+      sending={offer?.sending ?? (kept ? { phase: "done", results: kept } : { phase: "write" })}
       sent={said === true}
       error={action.error}
-      onSend={() => sendOffer(id, text, kind, () => void action.run(() => answerWith(true)))}
+      onSend={() => sendOffer(id, text, kind, (results) => void action.run(() => answerWith(true, results)))}
       onEdit={() =>
         openFeedback({
           kind,
           text,
           onSent: (results) => {
-            // A Try again in the dialog that files the rest only updates what the card lists.
-            const first = useFeedbackOffers.getState()[id]?.sending.phase !== "done";
+            // A Try again in the dialog that files the rest updates what the card lists and the answer.
             offerSent(id, results);
-            if (first) void action.run(() => answerWith(true));
+            void action.run(() => answerWith(true, results));
           },
         })
       }

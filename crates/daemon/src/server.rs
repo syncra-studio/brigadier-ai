@@ -2244,8 +2244,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             offer_id,
             sent,
+            results,
         } => {
-            heap(|| sessions.answer_feedback_offer(&conversation_id, &offer_id, sent)).await?;
+            heap(|| sessions.answer_feedback_offer(&conversation_id, &offer_id, sent, results))
+                .await?;
             Response::AnswerFeedbackOffer
         }
         Request::CancelMerge { conversation_id } => Response::CancelMerge {

@@ -164,29 +164,31 @@ test("a send that fails after the dialog closed is still there when it opens aga
   assert.equal(sending.phase, "failed");
 });
 
-test("a card that sent only some files the rest on Try again, and is answered once", async () => {
+// Each send that filed answers with all filed by then: the card lists them after a restart (#476).
+test("a card that sent only some files the rest on Try again, and answers with them all", async () => {
   useFeedbackOffers.setState({
     offer: { written: { reports: [report("Spins"), report("Hangs")], searched: true }, sending: { phase: "write" } },
   });
-  let answered = 0;
+  const answered: string[][] = [];
+  const answer = (results: { outcome: string }[]) => answered.push(results.map((result) => result.outcome));
   const settledOffer = async () => {
     for (let tries = 0; tries < 200 && useFeedbackOffers.getState().offer?.sending.phase === "working"; tries++) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
   };
   filings = [() => [filed(801), refused]];
-  sendOffer("offer", "Spins. Hangs", "bug", () => answered++);
+  sendOffer("offer", "Spins. Hangs", "bug", answer);
   await settledOffer();
   assert.equal(useFeedbackOffers.getState().offer?.sending.phase, "done");
-  assert.equal(answered, 1);
+  assert.deepEqual(answered, [["filed", "failed"]]);
   filings = [() => [filed(802)]];
-  sendOffer("offer", "Spins. Hangs", "bug", () => answered++);
+  sendOffer("offer", "Spins. Hangs", "bug", answer);
   await settledOffer();
   assert.equal(asked[1]!.length, 1);
   assert.equal(asked[1]![0]!.title, "[Bug]: Hangs");
   const sending = useFeedbackOffers.getState().offer?.sending;
   assert.deepEqual(sending?.phase === "done" && sending.results.map((result) => result.outcome), ["filed", "filed"]);
-  assert.equal(answered, 1);
+  assert.deepEqual(answered, [["filed", "failed"], ["filed", "filed"]]);
 });
 
 /** Waits until `ready` holds (the faked daemon answers on later turns). */

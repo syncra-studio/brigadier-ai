@@ -1357,7 +1357,7 @@ impl SessionManager {
                     }
                     last = Some((id.clone(), None));
                 }
-                OrchestratorStepKind::FeedbackAnswered { id, sent } => {
+                OrchestratorStepKind::FeedbackAnswered { id, sent, .. } => {
                     if let Some((offered, answer)) = &mut last
                         && offered == id
                     {
@@ -1445,12 +1445,14 @@ impl SessionManager {
     }
 
     /// The user's answer to the feedback offer `offer_id` in this conversation: sent (opened
-    /// on GitHub) or dismissed. Once only.
+    /// on GitHub, with what became of its reports) or dismissed. Once only, but a sent one
+    /// again when a Try again filed the rest: its `results` take the first's place.
     pub async fn answer_feedback_offer(
         &self,
         id: &ConversationId,
         offer_id: &str,
         sent: bool,
+        results: Vec<crate::feedback::FeedbackSent>,
     ) -> Result<()> {
         let conv = self.conv(id)?;
         let _offer = conv.feedback_offer.lock().await;
@@ -1462,7 +1464,7 @@ impl SessionManager {
             return Err(Error::NotFound(format!("feedback offer {offer_id}")));
         };
         if board.orchestrator_steps.iter().any(|step| {
-            matches!(&step.kind, OrchestratorStepKind::FeedbackAnswered { id, .. } if id == offer_id)
+            matches!(&step.kind, OrchestratorStepKind::FeedbackAnswered { id, sent: was, .. } if id == offer_id && !(*was && sent))
         }) {
             return Err(Error::Invalid("this feedback was already answered".into()));
         }
@@ -1473,6 +1475,7 @@ impl SessionManager {
             OrchestratorStepKind::FeedbackAnswered {
                 id: offer_id.to_owned(),
                 sent,
+                results: if sent { results } else { Vec::new() },
             },
         )
         .await;
