@@ -59,10 +59,16 @@ test("a run whose jobs are all done still checks until GitHub completes it", () 
 test("a failed run fails the pill at once, naming its workflow", () => {
   const failed = ciPill(ciWatches([watch("ffff6666", [ended("test", "failure"), run(1, 3, "Lint")])]));
   assert.deepEqual(failed, { state: "failed", words: "CI failed · test" });
-  assert.deepEqual(ciPill(ciWatches([watch("ffff6666", [ended("test", "timed_out"), ended("build", "cancelled")])])), {
+  assert.deepEqual(ciPill(ciWatches([watch("ffff6666", [ended("test", "timed_out"), ended("lint", "failure"), ended("build", "cancelled")])])), {
     state: "failed",
     words: "CI failed · 2 workflows",
   });
+});
+
+test("a cancelled run, with none failed, says cancelled: never a silent failure", () => {
+  // GitHub cancels a run whose job hit its time limit saving the cache; the daemon's result is failed.
+  assert.deepEqual(ciPill(ciWatches([watch("a9716757", [ended("CI", "cancelled")], "failed")])), { state: "cancelled", words: "CI cancelled · CI" });
+  assert.deepEqual(ciPill(ciWatches([watch("a9716757", [ended("CI", "cancelled"), ended("test", "failure")], "failed")])), { state: "failed", words: "CI failed · test" });
 });
 
 test("every run passed while the daemon waits for a late one: passed, still looking", () => {

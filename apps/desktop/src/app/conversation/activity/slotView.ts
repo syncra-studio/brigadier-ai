@@ -69,20 +69,30 @@ export function ciJobs(runs: readonly CiRun[]): { done: number; total: number } 
 
 /**
  * Where the pill stands, which picks its icon: still `checking` (a spinner), `passed`, `failed`,
- * or `ended` with nothing to pass or fail (no runs, or the watch stopped).
+ * `cancelled` (a run cancelled, none failed: GitHub's word, never a silent failure), or `ended`
+ * with nothing to pass or fail (no runs, or the watch stopped).
  */
-export type CiState = "checking" | "passed" | "failed" | "ended";
+export type CiState = "checking" | "passed" | "failed" | "cancelled" | "ended";
+
+/** The workflows with a run that `ended` so, each once: "test", or "2 workflows"; null for none. */
+function named(watches: readonly CiWatchView[], ended: (run: CiRun) => boolean): string | null {
+  const workflows = [...new Set(watches.flatMap((watch) => watch.runs.filter(ended).map((run) => run.workflow)))];
+  return workflows.length === 0 ? null : workflows.length === 1 ? workflows[0]! : `${workflows.length} workflows`;
+}
 
 /**
  * The CI pill's state and words, every watch in one. Any failed run fails it at once: "CI failed ·
- * test", naming the workflow (or how many). Otherwise "Waiting for CI to start…" until a run
+ * test", naming the workflow (or how many). A cancelled run, with none failed, says so: "CI
+ * cancelled · test" (the daemon counts it failed; its mark and words are the cancel's). Otherwise "Waiting for CI to start…" until a run
  * starts, then "Checking CI · 2 of 5 jobs done", naming how many pushes when there are several.
  * Once every run passed, the daemon still waits a while for a late workflow: "CI passed ·
  * checking for more runs…". Then the result alone, while it lingers.
  */
 export function ciPill(watches: readonly CiWatchView[]): { state: CiState; words: string } {
-  const failed = [...new Set(watches.flatMap((watch) => watch.runs.filter(runFailed).map((run) => run.workflow)))];
-  if (failed.length > 0) return { state: "failed", words: `CI failed · ${failed.length === 1 ? failed[0]! : `${failed.length} workflows`}` };
+  const failed = named(watches, (run) => runFailed(run) && run.conclusion !== "cancelled");
+  if (failed) return { state: "failed", words: `CI failed · ${failed}` };
+  const cancelled = named(watches, (run) => runFailed(run) && run.conclusion === "cancelled");
+  if (cancelled) return { state: "cancelled", words: `CI cancelled · ${cancelled}` };
   if (watches.some((watch) => watch.result === "failed")) return { state: "failed", words: "CI failed" };
   const live = watches.filter((watch) => watch.result === null);
   const runs = live.flatMap((watch) => watch.runs);

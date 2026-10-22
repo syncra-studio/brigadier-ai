@@ -152,6 +152,8 @@ function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
   const endedAtMs = live.length > 0 ? undefined : (newest.endedAtMs ?? undefined);
   const atMs = endedAtMs ?? sinceMs;
   if (pill.state === "failed") return [{ kind: "failed", rank: 0, tone: "failed", headline: pill.words, detail, sinceMs, endedAtMs, atMs }];
+  // Cancelled, none failed: the cancel's own mark, under words that say it.
+  if (pill.state === "cancelled") return [{ kind: "failed", rank: 0, tone: "stopped", headline: pill.words, detail, sinceMs, endedAtMs, atMs }];
   if (pill.state === "checking" || live.length > 0) return [{ kind: "running", rank: 5, tone: "running", headline: pill.words, detail, sinceMs, atMs }];
   if (pill.state === "passed") return [{ kind: "done", rank: 0, tone: "done", headline: pill.words, detail, sinceMs, endedAtMs, atMs }];
   return [];

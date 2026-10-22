@@ -230,6 +230,8 @@ test("a success never carries the failure mark: a failure from before the thread
   assert.equal(liveJob(input({ ...idle, orchestratorSteps: [cancelled], headline: passes }))!.tone, "done");
   // Words that tell of a failure that still stands: the failure mark.
   assert.equal(liveJob(input({ ...idle, orchestratorSteps: [cancelled], headline: { ...passes, text: "CI failed on Windows", failed: true } }))!.tone, "failed");
-  // A failure after the thread's words: the failure shows, mark and all.
-  assert.deepEqual(words({ ...idle, orchestratorSteps: [merged, cancelled], headline: { ...passes, atMs: 35 } })!.slice(0, 1), ["failed"]);
+  // A cancelled run after the thread's words: it shows as cancelled, words and mark alike, never as a failure.
+  assert.deepEqual(words({ ...idle, orchestratorSteps: [merged, cancelled], headline: { ...passes, atMs: 35 } }), ["stopped", "CI cancelled · CI", "main · 4e1c49e9"]);
+  // A failed one: the failure shows, mark and all.
+  assert.deepEqual(words({ ...idle, orchestratorSteps: [merged, ci(40, [run("test", "completed", "failure")], "failed")], headline: { ...passes, atMs: 35 } })!.slice(0, 2), ["failed", "CI failed · test"]);
 });
