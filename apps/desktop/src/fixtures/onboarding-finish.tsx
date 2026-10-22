@@ -56,6 +56,22 @@ async function until(check: () => boolean, what: string, ms = 10_000) {
   throw new Error(`never: ${what}`);
 }
 
+/**
+ * Clicks the step's action until `done`: a click that lands while the dialog still moves into
+ * place misses it on a slow machine, so it is pressed again, only while nothing it does happened.
+ */
+async function press(done: () => boolean, what: string) {
+  for (let tries = 0; tries < 4; tries++) {
+    const button = action();
+    if (button) await fixtureClick(button);
+    for (const end = performance.now() + 3000; performance.now() < end; ) {
+      if (done()) return;
+      await wait(50);
+    }
+  }
+  throw new Error(`never: ${what}`);
+}
+
 /** The step showing, what it says went wrong and whether the setup is still open. */
 function standing() {
   return {
@@ -74,14 +90,12 @@ function Fixture() {
       try {
         await until(() => text(document.querySelector('[role="dialog"] h1')) === "Connect your agents", "the agents");
         await until(() => action()?.disabled === false, "Continue");
-        await fixtureClick(action()!);
-        await until(() => text(action()).startsWith("Continue without projects"), "the projects");
-        await fixtureClick(action()!);
-        await until(() => writes.length === 1, "the write");
+        await press(() => text(action()).startsWith("Continue without projects"), "the projects");
+        await press(() => writes.length === 1, "the write");
         await wait(500);
         seen.failed = standing();
         failing = false;
-        await fixtureClick(action()!);
+        await press(() => writes.length === 2, "the second write");
         await until(() => !standing().open, "the setup closing");
         seen.saved = { ...standing(), onboarded: useApp.getState().settings.onboarded };
         seen.writes = writes;
