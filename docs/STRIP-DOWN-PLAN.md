@@ -5,10 +5,14 @@
 > what a CLI can't do by itself: seeing and driving other sessions, previews, the browser, computer use, asking
 > the user as a card, and searching the record. This plan only removes and re-wires.
 
-> Status: plan, 2026-10-22, from the user's decisions G1–G15 (project memory `plain-cli-threads-1022`), the
+> Status: plan, 2026-10-22, from the user's decisions G1–G16 (project memory `plain-cli-threads-1022`), the
 > 10-22 diagnosis (run `20261022-0805-take-over-5-sessions`, `DIAGNOSIS.md`) and the long-sessions research
 > (same run, `research/PROPOSAL.md`, `QUESTIONS.md`, `EVIDENCE.md`). The decisions are settled. Where one looks
 > hard, §8 says so with evidence; nothing here changes one.
+> Revised the same day after the Codex plan review (`msgs/w12-plan-review.md`) and three live user decisions:
+> G16 (a `brigadier` CLI, not an MCP server), the Personal Brain deleted outright (S19), and #517 closed by G9.
+> **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
+> not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
 > `D/` = `apps/desktop/src/`. File:line references are to `ae56e9271`. Line counts are rough (`wc -l`, tests
 > included unless said).
@@ -51,21 +55,28 @@ There are no status nags, no cross-session notices, no mid-task rule changes, no
   the same order as the CLI. It may draw them more nicely, but it never shows different data, and it never
   hides or adds anything.
 - **Work block.** A turn runs from the user's message to the CLI's turn-end event. Its steps fold into "Worked
-  for Xm", timed from the CLI's own timestamps. The turn's last assistant text shows outside the fold. Stopped
-  and failed come from the CLI's result event.
+  for Xm", timed from the CLI's own timestamps. The turn's last assistant text shows outside the fold. Stopped,
+  failed and interrupted come from the CLI's live result event. The session file doesn't hold them, so
+  Brigadier writes that one fact per turn to `record/turns.jsonl` (S7).
 - **Long sessions.** One thread is the chain of its lineage's CLI session files.
 
-**Brigadier MCP is pull-only (G3, G6).** The thread calls these tools when it wants to:
+**The `brigadier` CLI is pull-only (G3, G6, G16).** Brigadier's whole tool surface is one command,
+`brigadier`, built like `cmux`: subcommands, `--json` output, called through the CLI's own Bash tool. It costs
+no context until used, and it is the same for Claude, Codex and the team skill. One line of the standing
+instructions points at `brigadier --help`. The thread calls it when it wants to:
 - **Read anything:** sessions, tabs, states, the workers it started.
-- **Session tools equal to `dlg`:** start, send, wait for events of the sessions it started, read the last
+- **Session commands equal to `dlg`:** start, send, wait for events of the sessions it started, read the last
   message or screen, close.
 - **Previews, browser, computer use.**
 - **Ask the user as a card.**
 - **Brain search** over the project's records (G14).
 
-Every checks, review, land and headline tool goes.
+Every checks, review, land and headline tool goes. So does the Brigadier MCP server. A thin MCP wrapper over
+the same commands is a non-goal; it would come only if a client can't run shell, and none can't today. The CLI
+should be shippable as a product later, so it is one binary, its subcommand names are stable, and its interface
+has no app-internal paths.
 
-**Teams = the Delegator pattern, built in (G3).** A plain, editable skill plus the session tools. Workers are
+**Teams = the Delegator pattern, built in (G3).** A plain, editable skill plus the `brigadier` session commands. Workers are
 ordinary sessions in the sidebar. Overnight is the same skill with a deadline. The engine has no lead, phase or
 landing protocol.
 
@@ -106,14 +117,14 @@ shows the exact diff between the two. Revert restores the start snapshot.
 - "learned from reading" pointers.
 
 Briefings, context packs, the Brain-first rule, the rebirth Brain budget, engine-written learned nodes and
-enrichment jobs all go. The code index stays as an optional tool. The Personal Brain moves into the CLIs' own
-memory files.
+enrichment jobs all go. The code index stays as an optional command. The Personal Brain is deleted outright;
+the CLIs' own memory (Claude Code's auto memory, Codex memories) is no longer switched off.
 
 **Folders (G13, G15).** Each session gets one folder, `~/.brigadier/s/<short-id>/`:
 
 | Subfolder | Holds | Archive | Delete |
 |---|---|---|---|
-| `record/` | ledger, hand-off notes, `lineage.json`, `seam.json` | keeps | removes |
+| `record/` | ledger, hand-off notes, `lineage.json`, `turns.jsonl`, `seam.json` | keeps | removes |
 | `work/` | the worktree | removes once merged | removes |
 | `tmp/` | `TMPDIR` points here | removes | removes |
 | `dev/` | dev servers and build output | removes | removes |
@@ -144,8 +155,9 @@ In `docs/PLAN.md`:
   - 2, "Brigadier owns the truth": the CLI's session file is now the truth
   - 4, a verifier per phase
   - 9, as far as it removes CLI session files: Archive keeps them now
-- **§3.** The architecture box items Orchestrator runtime, Worker pool, Router, Review engine and "Sandbox".
-  Also the line that Brigadier stores the canonical transcript.
+- **§3.** The architecture box items Orchestrator runtime, Worker pool, Router, Review engine, "Sandbox" and
+  "Brigadier MCP server" (now the `brigadier` CLI, G16). Also the line that Brigadier stores the canonical
+  transcript.
 - **§5.**
   - **Session:** "Brigadier's git engine performs merges"; workers' temporary worktrees.
   - **Lifecycle:** Archive's and Delete's lists, replaced by G15 (§1 above). Delete no longer keeps what the
@@ -154,7 +166,7 @@ In `docs/PLAN.md`:
   - **Cleanup ledger:** removing CLI transcripts on archive.
   - **Task, Worker, Artifact and Personal Brain.**
 - **§6.**
-  - **Phase 3:** the orchestrator runtime, its tool list, "A phase lands once…", the permission levels and
+  - **Phase 3:** the orchestrator runtime, its MCP tool list, "A phase lands once…", the permission levels and
     worker cards.
   - **Phase 4:** rebirth, briefings, skeleton pass, idle-quota enrichment and Personal Brain.
   - **Phase 5:** mid-task cross-provider hand-off of a task.
@@ -167,15 +179,15 @@ In `docs/PLAN.md`:
   - the 2026-10-05 "Delegator-style flow" row
 - **§10.** Overnight mode, all of it. Overnight is now the team skill with a deadline.
 
-Other plans lose the parts G1–G15 change. Where they conflict, this plan wins:
+Other plans lose the parts G1–G16 change. Where they conflict, this plan wins:
 - `THREAD-PLAN.md`: engine tools, reviews and the verifier.
 - `THREAD-UX-PLAN.md` and `THREAD-PARITY-PLAN.md`: thread items from engine records, and the Job card.
-- `SESSION-MESSAGING-PLAN.md`: peer tools become the session tools of S11.
+- `SESSION-MESSAGING-PLAN.md`: peer tools become the `brigadier` session commands of S13.
 - `WORKSPACES-PLAN.md`: auto-merge.
 - `SESSION-FIXES-PLAN.md`: merge gates.
 - `docs/research/long-sessions/BUILD-PLAN.md`: rebirth, briefings and the output store.
 
-w03's "Job card only for plans and overnight runs" (`4b1ea4c2a`) is a stopgap until S14.
+w03's "Job card only for plans and overnight runs" (`4b1ea4c2a`) is a stopgap until S16.
 
 ## 3. Deletion inventory
 
@@ -201,13 +213,13 @@ inventory.
 - `[next: …]` hints: `M/prompts.rs:410–420` and `M/conversation.rs:7123–7170`, plus `keep_guess` at :5287.
 - Engine-event turns:
   - `deliver`, `kick` and `next_turn` at `M/conversation.rs:2704–3363` shrink to user messages, plus results of
-    work the thread started (until S14) and the seam nudge.
+    work the thread started (until S16) and the seam nudge.
   - `M/inbox_store.rs` (443) narrows the same way.
 - Tests: `flow/status_tests`, `quiet_wake_tests`, `settings_toggles_tests`, `suggestion_tests`, and parts of
   `project_sessions_tests`, `owed_tests` and `restart_waits_tests`.
-- Closes: #520 (with S2).
+- Closes: #520 (with S4).
 
-### 3.2 Check gates, the full-checks sandbox and the build lease (G4, G6) → step S2
+### 3.2 Check gates, the full-checks sandbox and the build lease (G4, G6) → step S4
 - **Tools and checks code:**
   - Tools: `run_checks` (thread and worker) and `run_check`.
   - `M/integrated_checks.rs` (1,778): `full_check_access` at :783 and the checkout at :725.
@@ -218,7 +230,7 @@ inventory.
   - The skips at `M/preview.rs:3359`, `M/protection.rs:244/403`, `M/run.rs:753` and `M/workers.rs:6474`.
   - `no_terminal_here()` and its 9 uses in `crates/daemon/src/terminals.rs:868–1344`.
   - `nested_sandbox_refused` at `crates/sandbox/src/macos.rs:946`, and `confined()` (`crates/sandbox/src/lib.rs`,
-    `macos.rs`), unless S4 still needs it.
+    `macos.rs`), unless S6 still needs it.
   - The test `the_core_tests_pass_in_the_full_checks_sandbox` at `flow/integrated_checks_tests.rs:478–570`.
   - The CI job **"Core tests in the full checks' sandbox (macOS)"** (`checks-sandbox`, `.github/workflows/ci.yml`
     after the `rust-tests` job), and the header comment that names it.
@@ -226,13 +238,13 @@ inventory.
   - `crates/core/src/machine/builds.rs` (1,282; "One build at a time") and `machine/heavy.rs` (455).
   - The lease rows and held workers in `M/machine.rs` (234).
   - The lease calls in `checks.rs:1212–1250` and `preview.rs:123/899–923/1596–1693`.
-  - The heat and memory guard in `machine/mod.rs` stays until S14 decides, because workers still use it.
+  - The heat and memory guard in `machine/mod.rs` stays until S16 decides, because workers still use it.
 - Tests: `integrated_checks_tests` (570), `checks_tests` (533), `commit_on_pass_tests` (293), the
   `run_checks` cases in `agent_tools_tests`, the lease rows in `background_tests`, and the inline tests of
   `builds.rs`, `heavy.rs` and `checks.rs`.
-- Closes: #514, #515, #479. Re-check #382 and #296 after S14 (most flow tests named in them go).
+- Closes: #514, #515, #479. Re-check #382 and #296 after S16 (most flow tests named in them go).
 
-### 3.3 Reviews, merge gates and "merge anyway" (G4, G6) → step S3
+### 3.3 Reviews, merge gates and "merge anyway" (G4, G6) → step S5
 - **Review tools:** `request_review` (thread and worker), `record_findings` and `review_plan`.
   - `M/review_runs.rs` (2,713): the findings ledger, the "Review the work" setting and `auto_merge_on`.
   - `crates/review` (1,160), `M/fusion.rs` (290) and `M/unreviewed.rs` (243).
@@ -252,7 +264,7 @@ inventory.
 - Closes: #519, #518 for its card half. The CI half was fixed by `8bce22754`: check the last Windows Clippy runs
   and close.
 
-### 3.4 Brigadier's sandbox and its permission levels (G5) → step S4
+### 3.4 Brigadier's sandbox and its permission levels (G5) → step S6
 - Sandboxing of CLIs, runs and previews:
   - `providers/src/cli.rs:259–287` wraps every CLI in the "protect" profile, Full access included.
   - Seatbelt `confine`, `protect` and `confine_preview` at `crates/sandbox/src/macos.rs:614–920`, plus the
@@ -269,7 +281,7 @@ inventory.
 - The rest of `crates/sandbox` stays: paths, processes, Keychain, login shell and machine.
 - Closes: #521.
 
-### 3.5 Phases, outlines, overnight and the Job card (G4, G7) → step S14a
+### 3.5 Phases, outlines, overnight and the Job card (G4, G7) → step S16a
 - **Tools:** `plan_phases`, `propose_plan`, `approve_outline`, `start_verifier`, `submit_outline`,
   `propose_overnight`, `settle_step` and `end_run`.
 - **Engine:**
@@ -288,19 +300,19 @@ inventory.
     `PlanRating` and friends).
 - **Tests:** `plan_tests`, `phase_acceptance_tests`, `overnight_tests`, `engine_tests`, `constraints_tests`,
   `decision_index_tests`, `card_tests`, `stop_hook_tests`, and the headline cases in `agent_tools_tests`.
-- WaitCard is replaced by the "Resumes at" card read from the CLI's error (S12).
+- WaitCard is replaced by the "Resumes at" card read from the CLI's error (S14).
 
-### 3.6 Workers, routing and the landing engine (G3, G4) → steps S14b, S14c
+### 3.6 Workers, routing and the landing engine (G3, G4) → steps S16b, S16c
 - **Worker tools:** `delegate_task`, `message_worker`, `answer_worker`, `stop_worker`, `rerun_task`,
   `route_follow_up`, `list_tasks`, `read_report`, `read_artifact`, `store_output`, `ask_thread`, `note_progress`,
   `submit_report` and `attach_proof`.
 - **Landing and CI tools:** `land_phase`, `finish_session`, `stop_merge`, `ci_status`, `watch_ci`, `clean_up` and
   `note_for_user`.
-- **Session and suggestion tools:** `offer_session`, `suggest_setting`, and the peer tools that S11 replaces
+- **Session and suggestion tools:** `offer_session`, `suggest_setting`, and the peer tools that S13 replaces
   (`message_session`, `wait_for_replies` and `settle_wait`).
 - **Worker engine:**
   - `M/workers.rs`, about 6k of its 7,033 lines. Kept and moved: `make_worktree` (:2578), `session_worktree_path`
-    and `ensure_target` (:2642–2700), and the temp folders (:5812–5866), until S5 re-homes them.
+    and `ensure_target` (:2642–2700), and the temp folders (:5812–5866), until S7 re-homes them.
   - `M/worker_handoff.rs` (994), `M/worker_resume.rs` (303), `M/outcomes.rs` (272) and `M/reruns.rs` (317).
   - `M/research.rs` (894), `M/context_pack.rs` (1,013) and `M/peer_answers.rs` (321).
   - The worker-silence half of `M/watchdog.rs`.
@@ -309,10 +321,10 @@ inventory.
   - `crates/core/src/routing/*` stays (quota and model lists).
   - `M/fallback.rs` (946) goes as far as it reroutes a task; account switching stays.
 - **Landing engine and CI watch:**
-  - `M/landing.rs` (3,477, what S3 left).
-  - The CI-watch half of `M/ci.rs` (2,358). The `gh` PR read in `M/pull_request.rs` stays and moves to S12's PR
+  - `M/landing.rs` (3,477, what S5 left).
+  - The CI-watch half of `M/ci.rs` (2,358). The `gh` PR read in `M/pull_request.rs` stays and moves to S14's PR
     row.
-  - `M/background_runs.rs` (1,003), unless S10 already removed it.
+  - (`M/background_runs.rs` goes earlier, in S12.)
 - **Prompts:** the worker prompts and report envelopes at `M/prompts.rs:2623–3440`, and the protocol half of
   `thread()` at :260–363.
 - **Tests:** `resume`, `successor`, `worker_turns`, `watchdog`, the peer test files, `takeover` (worker
@@ -320,7 +332,7 @@ inventory.
 - Closes: #480, #481, #276, #271, #295, and #482 (workers are plain sessions with their own write access).
   Re-check #456, #45 and #34. They test scout and stand-in paths that no longer exist; close them if so.
 
-### 3.7 Brigadier's copy of the conversation and its guessed states (G2, G11) → steps S8, S9
+### 3.7 Brigadier's copy of the conversation and its guessed states (G2, G11) → steps S10, S11, S16b, S23
 - **Thread items from the engine store:**
   - `M/thread_items.rs` (845) and the `orch:<id>` log written by `log_orchestrator` (`M/conversation.rs:6959`);
   - `M/export.rs` (874), the successor transcript;
@@ -328,6 +340,7 @@ inventory.
 - **Request inference:**
   - `M/requests.rs` (1,293) and the worked and waited spans in `work.rs` (`moved_to` :2994);
   - `M/status.rs` if anything is left after S1.
+  - The display stops using them in S10. The code goes only with its last consumers (§4, "Last consumers").
 - **The changes card's sources:**
   - `M/request_changes.rs` (1,693, the most guess-heavy file), `M/pending_changes.rs` (884),
     `M/shell_changes.rs` (634) and `M/undo.rs` (210);
@@ -337,9 +350,9 @@ inventory.
   `project_sessions.rs:217`. Git ahead, merged and reverted stays.
 - **Archive and Delete removing CLI transcripts:** `ClaudeSession`, `ClaudeProjectDir` and `CodexThread` ledger
   artifacts disposed on archive (`M/lifecycle.rs:1040–1075`). Under G11 and G15 these are the record, so
-  Archive must keep them (S6).
+  Archive must keep them (S8).
 
-### 3.8 Briefings, rebirth and Brain machinery (G12, G14) → steps S16, S17, S21
+### 3.8 Briefings, rebirth and Brain machinery (G12, G14) → steps S18, S19, S23
 - **Fork-based rebirth and briefings:**
   - `M/rebirth.rs` (1,879): `HANDOFF_PROMPT` at :92, the 5k Brain budget at :62, and `briefing()` at :590.
   - The rebirth thresholds in `crates/core/src/knowledge.rs:175–406`, including the `BRIGADIER_REBIRTH_TOKENS`,
@@ -358,15 +371,27 @@ inventory.
   - `save_memory`, `memory_lines`, `preference_lines` and the preference notes;
   - `list_memories`, `edit_memory` and `forget_memory` (`brains.rs:2172–2275`);
   - `personal.sqlite`;
-  - the forced `autoMemoryEnabled:false` (`P/claude/mod.rs:827`).
+  - the forced `autoMemoryEnabled:false` (`P/claude/mod.rs:827`) and Codex's forced `memories` off
+    (`DISABLED_FEATURES`, `P/codex/mod.rs:148`).
+  - Deleted outright: nothing is exported or migrated (user, 10-22).
 - **Thread prompt:**
   - `M/prompts.rs` `thread()` and its rule macros. The standing instructions (§6) replace them.
   - `M/instructions.rs` (572), which inlines CLAUDE.md and AGENTS.md that the CLIs already read themselves.
 
-### 3.9 Open issues that stay
-These are unrelated to the strip-down: #522 (two sessions in one Local checkout), #483, #478, #476, #474, #473,
-#459, #453 and #86. #523 (first turn outside the worktree) is fixed by S5, not made obsolete. #517 depends on
-the rule in §8, item 5.
+### 3.9 The Brigadier MCP server (G16) → steps S13, S16c
+- `crates/mcp-server` (about 3.2k: `lib.rs`, `catalog.rs` 2,687, `schema.rs`), `brigadier_server()` at
+  `M/conversation.rs:3868`, the `ToolHost` impl at `M/mod.rs:979–1060`, the call types in
+  `crates/core/src/tools.rs` (`OrchestratorCall` :1371, `THREAD_TOOLS` :1432), the dispatch in `M/tools.rs`, the
+  MCP aliases and `MCP_TOOL_TIMEOUT` in `P/claude/mod.rs` `session_env` (:413), and Brigadier's entry in each
+  session's `--mcp-config`. The user's own MCP servers keep loading.
+- What the thread still needs moves to the `brigadier` CLI in S13. The rest goes with the tools it served.
+
+### 3.10 Open issues
+- **Closed by a decision:** #517, by G9 (user, 10-22). A thread that asks in plain text and ends its turn reads
+  Ready, like an idle plain CLI. Only real pending prompts read "Needs you".
+- **Unrelated, they stay:** #483, #478, #476, #474, #473, #459, #453 and #86. (#522 was fixed on main in
+  `e95a6d140`.)
+- **Fixed by a step, not made obsolete:** #523 (first turn outside the worktree), by S2.
 
 ## 4. Build steps
 
@@ -375,6 +400,11 @@ The rules for every step:
   ff-merges and pushes.
 - **No hidden fallback (G4).** Unfinished user-facing work stays behind an env flag. The old path is deleted in
   the step that turns the new one on.
+- **Display first, runtime after.** A step that replaces what the UI shows does not delete engine code that
+  other engine code still calls. That code goes in the step that replaces its **last consumer** (table below).
+  This is G4's "once the new flow works".
+- **Nothing is migrated.** Old records, saved settings and open sessions are not converted. A step that changes
+  what a session is archives the sessions open at upgrade; there is no transition machinery.
 - **The app keeps working after every step.**
 - **"Done when" names real checks.** Full suites and the live smoke run once on the integrated tree, not per
   worker.
@@ -383,15 +413,30 @@ The rules for every step:
 - **Parallel steps.** **∥** lists steps that touch disjoint files and can run at the same time. Steps without ∥
   run in order.
 
-Five steps edit `M/tools.rs`, `crates/mcp-server/src/catalog.rs`, `M/prompts.rs`, `board.rs` and `model.rs`:
-S1–S4, S11 and S14. They run one after another.
+Several steps edit `M/tools.rs`, `crates/mcp-server/src/catalog.rs`, `M/prompts.rs`, `board.rs` and
+`model.rs`: S1–S6, S13 and S16. They run one after another.
 
-### Stage 1: stop pushing and gating (relief first; deletions only)
+**Last consumers.** Engine code the display stops using, and when it may go:
 
-**S1. No engine pushes (G1).** Opus.
+| Part | Its last consumers | Deleted in |
+|---|---|---|
+| `M/requests.rs`, request spans in `work.rs` | turn scheduling in `M/conversation.rs`, `M/workers.rs` | S16b |
+| `M/decisions.rs` | `board.rs`, `requests.rs`, `watchdog.rs`, `overnight/report.rs`, `rebirth.rs` `briefing()` | S23 |
+| `M/constraints.rs` (+ the `remember` writer) | `phases.rs`, `workers.rs`, `rebirth.rs` | `remember` in S18; the module in S23 |
+| `orch:<id>` log, `M/export.rs` | `rebirth.rs` briefing exchanges, Brain transcript sync (`brains.rs:1218`) | S23, after S18 re-points the index |
+| `keep_note_decisions`, the rebirth Brain section | `rebirth.rs` | S23 |
+| `M/context_pack.rs`, `M/worker_handoff.rs` | `M/workers.rs` | S16b |
+| `M/background_runs.rs` | Brigadier's `run` and `run_check` (gone in S4, S6) | S12 |
+| `machine/mod.rs` heat guard | held workers | S16b |
+| `M/landing.rs` (what S5 left) | `land_phase`, overnight merges | S16c |
+| `crates/mcp-server` | the old thread and worker tools | S16c |
+
+### Stage 1: stop pushing and gating; the CLIs' own tools on (relief first)
+
+**S1. No engine pushes (G1).** Opus. It is the first step, so it also ends what was open before.
 - **Scope:** delete everything in §3.1. A thread's turn now starts only for:
   - a user message;
-  - a result of work it started itself (worker reports and session events, until S14 turns those into pulls);
+  - a result of work it started itself (worker reports and session events, until S16 turns those into pulls);
   - later, the seam nudge.
 - **Files:** `M/status.rs`, `M/project_sessions.rs:486–578`, `M/prompts.rs` (revisions, notes, `[quiet]`,
   `[next:]`), `M/conversation.rs` (deliver, quiet and next filters, notes), `M/inbox_store.rs`, `M/workers.rs:1854`.
@@ -400,13 +445,47 @@ S1–S4, S11 and S14. They run one after another.
     timer, another session merging, a settings change and a rule revision.
   - A user message still starts a turn, and a worker report still does.
   - `git grep -n '\[status due\]\|\[quiet\]\|\[next:\|From now on'` finds nothing in non-test code.
+  - Sessions open at upgrade are archived, not carried over: a flow test starts the daemon on a data folder with
+    an open session and finds it archived. There is no transition for their old instructions.
   - `cargo test -p brigadier-core` passes for the touched modules.
 
-**S2. Checks are plain commands; no lease, no sandbox gate (G6).** Opus.
+**S2. Long commands run as plain shell commands (G6 groundwork).** Opus. It lands before S4 removes `run_checks`
+and `run`.
+- **Scope:**
+  - Stop setting `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `BASH_DEFAULT_TIMEOUT_MS`/`BASH_MAX_TIMEOUT_MS`
+    (120000 ms) and `BASH_MAX_OUTPUT_LENGTH` (150000) for threads (`M/thread.rs:44–48`, :388–391). Claude Code's
+    own defaults and background tasks hold.
+  - Remove any Brigadier ceiling on Codex's command timeouts in `P/codex/mod.rs`.
+  - The thread runs in its worktree (or the Local checkout), never in `<data>/orch/<id>` (#523), so plain
+    commands and the CLIs' own instruction discovery see the repo.
+- **Files:** `M/thread.rs`, `M/conversation.rs` (CLI cwd), `P/codex/mod.rs`, `P/claude/mod.rs`.
+- **Done when:**
+  - A provider test asserts none of these env vars is set for a thread.
+  - A live dev session on each provider runs `tools/full-checks.sh` through plain Bash, in the background, for
+    over 20 minutes, and the result reaches the thread when it ends.
+  - A flow test: a new session's first turn runs in its worktree.
+- **Closes:** #523.
+
+**S3. The CLIs' own subagents and task control, on both providers (G12.read).** Opus.
+- **Scope:**
+  - Claude: the thread's built-in tools are Claude Code's own. Lift the exclusions of `Agent`/`Task`, `Monitor`
+    and `TaskStop` (`THREAD_TOOLS`, `P/claude/mod.rs:94`). Model rules still hold through Claude Code's own
+    `availableModels`: subagents can't pick Fable.
+  - Codex: drop `multi_agent`, `multi_agent_v2`, `goals` and `sleep_tool` from `THREAD_FEATURES`
+    (`P/codex/mod.rs:131`) and `agents.enabled=false` (:144) for threads. Codex can't hold a subagent to a model
+    list, but its subagents run Codex models only, so the never-Fable rule holds.
+- **Files:** `P/claude/mod.rs`, `P/codex/mod.rs`, their provider tests.
+- **Done when:**
+  - Provider tests assert the thread's tool and feature flags on both CLIs.
+  - A live check on each provider: the thread starts a subagent that reads files and returns conclusions, and
+    starts a background task and stops it (Claude `TaskStop`, Codex `/stop` or its app-server equivalent).
+
+**S4. Checks are plain commands; no lease, no sandbox gate (G6).** Opus.
 - **Scope:** §3.2.
   - Remove the checks tools and the check gate in `merge_rule`. A merge no longer waits for a Brigadier verdict.
   - Remove the build lease, the `Nested` and skip test machinery, and the `checks-sandbox` CI job.
   - Thread prompt: "run `tools/full-checks.sh` yourself (in the background for long runs) and read its output".
+    This relies on S2: long plain commands already work.
 - **Files:** `M/integrated_checks.rs`, `M/checks.rs`, `M/test_counts.rs`, `crates/core/src/machine/builds.rs`,
   `machine/heavy.rs`, `M/machine.rs`, the lease calls in `M/preview.rs`, `M/flow/mod.rs:1233–1302`, the skip
   sites in §3.2, `crates/daemon/src/terminals.rs`, `.github/workflows/ci.yml`, `M/landing.rs` (gate only),
@@ -420,10 +499,10 @@ S1–S4, S11 and S14. They run one after another.
   - The tests of the touched modules pass.
 - **Closes:** #514, #515, #479.
 
-**S3. Reviews and merges are plain commands (G6).** Opus.
+**S5. Reviews and merges are plain commands (G6).** Opus.
 - **Scope:** §3.3. Remove the review tools, the findings ledger, the merge-anyway path and `MergeRefused`.
   - The thread runs `codex review …` and `git merge` / `git push` itself.
-  - Worker landing (`land_phase`) keeps working, without any gate, until S14.
+  - Worker landing (`land_phase`) keeps working, without any gate, until S16.
 - **Files:** `M/review_runs.rs`, `crates/review`, `M/fusion.rs`, `M/unreviewed.rs`, `M/merge_consent.rs`,
   `M/review_hold.rs`, `M/landing.rs` (consent and refusal), `board.rs`, `work.rs`, `model.rs`, `sessions.rs`,
   `ipc/src/protocol.rs`, `crates/daemon/src/server.rs`, `D/app/conversation/Activities.tsx`, `backgroundRows.ts`,
@@ -435,7 +514,7 @@ S1–S4, S11 and S14. They run one after another.
   - `pnpm typecheck` and the app tests for the touched files pass.
 - **Closes:** #519, #518 (card half).
 
-**S4. Permissions pass straight through; no Brigadier sandbox (G5).** Opus.
+**S6. Permissions pass straight through; no Brigadier sandbox (G5).** Opus.
 - **Scope:** the composer picker becomes **Ask / Accept edits / Full access**:
 
   | Picker | Claude Code | Codex |
@@ -445,7 +524,7 @@ S1–S4, S11 and S14. They run one after another.
   | Full access | `bypassPermissions` | `never` + `danger-full-access` |
 
   - Codex's own sandbox counts as the CLI's own setting and stays.
-  - Saved levels migrate: `askForApproval` → Ask, `approveForMe` → Accept edits, `fullAccess` → Full access.
+  - Nothing is migrated: saved levels are dropped, and the picker starts at Accept edits.
   - The CLI's own permission prompts keep showing as cards: `--permission-prompt-tool stdio` → `open_cli_card`
     at `M/cards.rs:144`, and Codex approval requests.
   - Delete §3.4.
@@ -463,63 +542,67 @@ S1–S4, S11 and S14. They run one after another.
 
 ### Stage 2: the UI reads the CLI and git
 
-**S5. One folder per session (G13).** Opus.
+**S7. One folder per session (G13).** Opus.
 - **Scope:** new sessions get `~/.brigadier/s/<short-id>/{record,work,tmp,dev,logs}` (short id: 8 characters,
   no spaces).
   - The worktree goes under `work/`, previews and dev servers under `dev/`, logs under `logs/`.
   - `TMPDIR` and `TMPPREFIX` point at `tmp/`. This replaces `session_temp_dir` at `M/workers.rs:5832`.
-  - The thread starts in its worktree, never in `<data>/orch/<id>`.
   - `CLAUDE_CODE_TMPDIR` stays a short `/tmp/brigadier-<12hex>` (§8, item 3).
-  - Existing sessions keep their old paths, which are recorded, until they are archived.
+  - Sessions made before this step are archived at upgrade, not converted.
   - Storage shows size per session folder.
 - **Files:** `crates/sandbox/src/paths.rs`, `M/mod.rs` (`owned_dir` :889), `M/workers.rs:2532–2700` and
   `:5812–5866`, `M/thread.rs:366–395`, `M/preview.rs:78/529`, `M/disk/mod.rs`, `D/` Storage page.
 - **Done when:**
-  - A flow test: a new session's CLI sees `TMPDIR` under its folder.
-  - Its first turn runs in its worktree (#523).
+  - A flow test: a new session's CLI sees `TMPDIR` under its folder, and its worktree under `work/`.
   - A Unix socket made under `$TMPDIR` by `python3 -c 'import socket…bind'` binds on macOS.
   - Storage lists the folder with its size.
-- **Closes:** #523.
-- ∥ S9.
+- ∥ S11.
 
-**S6. The CLI's files are the record.** Codex.
+**S8. The CLI's files are the record.** Codex.
 - **Scope:**
   - Archive and Delete stop removing the CLI transcript files of a live lineage. Delete still removes them
-    (G15, S18).
+    (G15, S20).
   - Every CLI session start appends `{provider, session_id, file, started_at}` to `record/lineage.json`.
   - The ledger's `ClaudeSession`, `ClaudeProjectDir` and `CodexThread` artifacts move to "kept until Delete".
 - **Files:** `M/lifecycle.rs:1040–1075`, `crates/core/src/ledger.rs`, `P/model.rs:1486`, the CLI start path in
   `M/conversation.rs`.
 - **Done when:** a flow test archives a session and finds its CLI session file and `lineage.json` still there.
   Restore resumes it with `--resume`.
-- ∥ S9.
+- ∥ S11.
 
-**S7. Thread reader from the CLI's session file, behind a flag (G11).** Opus.
+**S9. Thread reader from the CLI's session file, behind a flag (G11).** Opus.
 - **Scope:** a reader that turns a lineage's files into thread items:
   - Claude JSONL, including `tool-results/` and subagent sidechains;
   - Codex rollout.
-  - While the CLI runs, the live stream extends the items. Item ids are file positions, so the stream and the
-    file agree.
-  - Turn = user message → the CLI's turn-end event. "Worked for Xm" comes from the CLI timestamps. Stopped and
-    failed come from the result event.
+  - While the CLI runs, the live stream extends the items. Stream items and file items are matched by the
+    CLIs' own message and tool-call ids, not by file positions (streamed items carry no byte offsets).
+  - Turn = user message → the CLI's turn-end event. "Worked for Xm" comes from the CLI timestamps.
+  - The session files hold no `result` records (checked on real Brigadier JSONLs, 10-22). So Brigadier writes
+    the minimum the file lacks, from the live stream, to `record/turns.jsonl`: per turn, the user message id, the
+    end state (done, stopped, failed, interrupted), the error text if any, and the end time. Nothing else of
+    the conversation is copied.
   - It is shown when `BRIGADIER_CLI_THREAD=1`.
 - **Files:** a new `P/claude/session_file.rs`, `P/codex/rollout.rs` and `crates/core/src/thread_view.rs`, plus
   IPC events. `D/` thread renderer reads the new items under the flag.
 - **Done when:**
   - Fixture tests: real JSONL and rollout files from this Mac, scrubbed, give the same items in the same order
     as the CLI shows. That covers tool rows, subagents, images, a failed turn and a stopped turn.
+  - Restart parity: a flow test with the fake CLI ends turns as done, stopped, failed and interrupted (the CLI
+    killed mid-turn), restarts the daemon, and the reloaded thread shows the same items and end states as before
+    the restart.
   - Under the flag, a live dev session renders the same conversation as the CLI's own `--resume` view. This is
     checked by hand on two sessions.
   - Benchmarks are not part of this check.
 
-**S8. Flip the thread; work block and sidebar from CLI events; delete Brigadier's copy.** Opus.
+**S10. Flip the thread; work block and sidebar from CLI events.** Opus. Display only.
 - **Scope:** the flag goes away and the new reader is the only path.
   - Sidebar words:
     - **Working** = a turn is open.
     - **Needs you** = an open CLI permission prompt, ask-user card or MCP sign-in.
     - **Ready, Merged, Reverted** = from git.
-  - Delete §3.7's thread copy and request inference: `thread_items.rs`, the display use of `orch:<id>`,
-    `export.rs`, `requests.rs`, the request spans in `work.rs`, and the engine half of `tabStates`.
+  - Delete what only the display used: `thread_items.rs`, the UI's reads of `orch:<id>`, the request spans in
+    the UI, and the engine half of `tabStates`.
+  - Keep, for their last consumers (§4 table): `requests.rs` (S16b), the `orch:<id>` log and `export.rs` (S23).
 - **Files:** as in §3.7, plus `D/state/tabStates.ts`, `activity.ts`, `requestTime.ts`, `WorkHeader.tsx`,
   `WorkFold.tsx`, `RequestBlock.tsx`, `blocks.ts`.
 - **Done when:**
@@ -527,13 +610,15 @@ S1–S4, S11 and S14. They run one after another.
     only.
   - The app tests pass.
   - A dev session shows the same items as `claude --resume`.
-  - No code path writes `OrchestratorLogged` for display.
+  - No UI code reads `OrchestratorLogged` or request records.
 
-**S9. Changes card from git snapshots (G8).** Codex.
+**S11. Changes card from git snapshots (G8).** Codex.
 - **Scope:**
   - At each turn's start and end, snapshot the worktree as a git tree object. Use a temporary index with
     `git add -A` and `write-tree`, including untracked and excluding ignored, and keep a ref under
     `refs/brigadier/s/<id>/turn-<n>-{start,end}`.
+  - The refs are the session's own: the cleanup ledger records the namespace. Delete removes all of it (S20).
+    Archive keeps the refs its Changes cards show.
   - The card is the exact diff between the two: files, +/− and the diff.
   - Revert restores the start snapshot, after a confirm. Files changed after the turn are named first.
   - Delete `request_changes.rs`, `pending_changes.rs`, `shell_changes.rs`, the capture hooks and `undo.rs`'s
@@ -544,12 +629,13 @@ S1–S4, S11 and S14. They run one after another.
 - **Done when:**
   - Unit tests on a temp repo: new, deleted, renamed, binary and untracked files, and a turn with no change.
   - A flow test: Revert restores the start tree exactly (`git diff` against the start ref is empty).
+  - A flow test: Delete leaves no `refs/brigadier/s/<id>/` ref; Archive keeps them.
   - App tests pass.
 - **Closes:** #256.
-- ∥ S5, S6, S7.
+- ∥ S7, S8, S9.
 
-**S10. Background = the CLI's own (G10).** Codex.
-- **Scope:** stop setting `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` (`M/thread.rs:389`).
+**S12. Background rows = the CLI's own (G10).** Codex. The CLIs' background tasks are already on (S2).
+- **Scope:**
   - **Claude rows:** from stream-json `task_started`, `task_progress`, `task_notification` and
     `background_tasks_changed`. These are already parsed at `P/claude/parse.rs:884–903`.
     - Label = the CLI's description. Elapsed time from its timestamps. Latest output line from `output_file`.
@@ -559,50 +645,64 @@ S1–S4, S11 and S14. They run one after another.
   - **Codex rows:** its background terminals, as `/ps` lists them.
   - Delete `M/background_runs.rs`, the Brigadier-owned run rows in `Activities.tsx` and `backgroundRows.ts`, and
     `run`'s background mode.
-- **Files:** `M/thread.rs`, `P/claude/parse.rs`, `P/codex/parse.rs`, `M/background_runs.rs`,
+- **Files:** `P/claude/parse.rs`, `P/codex/parse.rs`, `M/background_runs.rs`,
   `D/app/conversation/Activities.tsx`, `backgroundRows.ts`, `activity/BackgroundRunRow.tsx`.
 - **Done when:**
   - Fixture test: a stream with a `run_in_background` Bash and a background subagent gives two rows that appear
     and drop on the documented timings.
   - A live dev session: `sleep 30 &` through Ctrl+B-style `run_in_background` shows a row and clears.
   - Stop ends the task.
-- ∥ S9. It comes after S8 (shared item model).
+- ∥ S11. It comes after S10 (shared item model).
 
 ### Stage 3: teams = the Delegator, built in
 
-**S11. Session tools equal to `dlg` (G3, G6).** Opus.
-- **Scope:** pull-only MCP tools on the thread:
+**S13. The `brigadier` CLI, with session commands equal to `dlg` (G3, G6, G16).** Opus.
+- **Scope:** one command, `brigadier`, built like `cmux`.
+  - It is one binary, shipped in the app and put on each session's `PATH`.
+  - Output is text by default and `--json` on every subcommand.
+  - It reaches the daemon over its socket. The calling session is known from env (`BRIGADIER_SESSION` and a
+    per-session token), checked like the MCP grants today.
+  - Its arguments and output never name app-internal paths, and subcommand names are stable, so it can ship as
+    a product CLI later.
+  - Subcommands:
 
-  | Tool | What it does |
+  | Command | What it does |
   |---|---|
-  | `sessions` | List the project's sessions, with title, state from CLI events, branch, +/− and started-by. This is "read anything". |
-  | `session_start` | Takes project, title, prompt, agent (claude or codex), model, effort, worktree or local, base branch and permission. It starts an ordinary session in the sidebar, marked "started by <this one>". |
-  | `session_send` | Queued mid-turn, like `dlg send`. |
-  | `session_wait` | Takes ids and a timeout. Returns events of sessions this one started: turn ended (with the last message), needs input, gone, usage limit, fresh context. |
-  | `session_read` | The last message, the last N items or the screen. |
-  | `session_close` | Closes the session. |
+  | `brigadier sessions` | List the project's sessions: title, state from CLI events, branch, +/− and started-by. This is "read anything"; `brigadier show <id>` gives one in full. |
+  | `brigadier start` | Takes `--project`, `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local`, `--base`, `--permission` and the prompt. It starts an ordinary session in the sidebar, marked "started by <this one>". |
+  | `brigadier send <id> <text>` | Queued mid-turn, like `dlg send`. |
+  | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from a session this one started: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
+  | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen. |
+  | `brigadier close <id>` | Closes the session. |
+  | `brigadier preview start\|stop\|log`, `brigadier browser …`, `brigadier ask …`, `brigadier app …`, `brigadier page …` | The tools the thread keeps today (previews, browser, ask-user card, app actions, pages), moved as they are. `brigadier ask` blocks until the card is answered. |
 
-  - Build on the plain session start path (`M/project_sessions.rs:23/51`) and the raw-session runtime
-    (`crates/core/src/runtime.rs:1028–1205`), not on `delegate_task`.
+  - Brain search and the code index get their subcommands in S18.
   - `peers.rs`, `peer_wait.rs` and `peer_records.rs` fold into this. `message_session`, `wait_for_replies`,
-    `settle_wait` and `offer_session` go.
-  - App tools stay: `app_state`, `read_terminal`, `open_in_app`, `terminal_run`, `show_session`, `close_tab`.
+    `settle_wait` and `offer_session` go. The kept tools leave the MCP catalog in the same step; the MCP server
+    keeps only the old protocol tools until S16.
+  - Computer use stays the vendored driver's own interface (`M/computer_use.rs`), not part of Brigadier's tool
+    surface.
   - Model rules from the user's policy hold: never Fable, effort ≤ high.
-- **Files:** a new `M/session_tools.rs`, `catalog.rs`, `tools.rs`, `M/peers.rs`, `M/peer_wait.rs`,
-  `crates/core/src/sessions/peer_records.rs`, `D/` sidebar (started-by link).
+  - Non-goal: an MCP wrapper over the same commands. It would come only if a client can't run shell.
+- **Files:** a new `crates/cli` (the `brigadier` binary), a daemon request handler for it, `M/peers.rs`,
+  `M/peer_wait.rs`, `crates/core/src/sessions/peer_records.rs`, `catalog.rs`, `tools.rs`, the app bundle and
+  `PATH` setup in `P/claude/mod.rs` and `P/codex/mod.rs`, `D/` sidebar (started-by link).
 - **Done when:**
-  - Flow tests with the fake CLI: start two sessions, send one a message mid-turn, `session_wait` returns both
-    turn ends with their last messages, and close removes them.
-  - A live dev check: a thread starts a Codex session that writes a file and reports.
+  - CLI tests: every subcommand's `--json` output matches a checked-in schema, and `brigadier --help` lists them.
+  - Flow tests with the fake CLI: start two sessions, send one a message mid-turn, and `brigadier wait` returns
+    both turn ends with their last messages. Close removes them.
+  - A call without a valid session token is refused.
+  - A live dev check on each provider: the thread starts a Codex session through `brigadier start` that writes
+    a file and reports.
 
-**S12. Context card per G9/G10.** Opus.
+**S14. Context card per G9/G10.** Opus.
 - **Scope:** the card from §1:
   - the branch row (git);
   - the PR row: `#N` + state word + colour from `gh pr view`, refreshed when the CLI's events show a
     `git push` or `gh pr` command; failed checks red;
   - Waiting on you (pending prompts of started sessions);
-  - Workers (from S11; "N done · M stopped");
-  - Background (S10);
+  - Workers (sessions it started through `brigadier start`, S13; "N done · M stopped");
+  - Background (S12);
   - Sources: attachments first, then URLs from the CLI's fetch and browser tool items, then MCP servers seen in
     its events; + adds one.
   - A "Resumes at" card from the CLI's usage-limit error.
@@ -616,11 +716,11 @@ S1–S4, S11 and S14. They run one after another.
   - A dev session with a started worker shows the worker's state and +/−.
   - No component under `SummaryContent` imports `boardJob` or `liveJob`.
 
-**S13. The team skill (G3).** Opus.
+**S15. The team skill (G3).** Opus.
 - **Scope:** one plain, editable skill shipped with Brigadier: `crates/core/src/manager/team_skill/SKILL.md`,
   included like `computer_use_skill.md`.
   - It is adapted from `~/.claude/skills/delegator/SKILL.md`:
-    - the `dlg` commands become the S11 tools;
+    - the `dlg` commands become `brigadier` subcommands (S13);
     - cmux tabs become sessions;
     - "hand off at 300k" becomes the seam;
     - overnight is the same skill with a deadline;
@@ -635,92 +735,96 @@ S1–S4, S11 and S14. They run one after another.
     the skill, each worker running its own checks.
   - The A/B against cmux `/delegator` on the same request is written as a report and gates nothing.
 
-**S14. Delete the old engine.** Opus. These are three landable sub-steps, in this order, after S11–S13 are on.
+**S16. Delete the old engine.** Opus. These are three landable sub-steps, in this order, after S13–S15 are on.
 
-- **S14a.** Phases, outlines, overnight, plan cards, the Job card and WaitCard (§3.5).
+- **S16a.** Phases, outlines, overnight, plan cards, the Job card and WaitCard (§3.5).
   - Done when `git grep -n 'JobCard\|set_headline\|propose_overnight\|plan_phases'` finds nothing.
   - Overnight is reachable only as the skill.
   - The app and core tests that remain pass.
-- **S14b.** Workers, routing, context packs, worker hand-off and resume, research, outcomes and reruns (§3.6).
-  - Done when `catalog.rs` lists only:
-    - the S11 session tools;
-    - the app tools (`app_state`, `read_terminal`, `open_in_app`, `terminal_run`, `show_session`, `close_tab`);
-    - previews, browser, `ask_user`, `request_approval`, `offer_feedback`;
-    - pages (`read_page`, `write_page`, `save_report`);
-    - Brain search and `code_search`, `code_refs`, `project_map`.
-  - `crates/router` keeps only the shared types.
-- **S14c.** The landing engine, the CI-watch engine and what is left of `background_runs.rs` (§3.6).
-  - Done when `M/landing.rs` is gone and the PR row still works.
+- **S16b.** Workers, routing, context packs, worker hand-off and resume, research, outcomes and reruns (§3.6).
+  Also their last-consumer leftovers: `requests.rs` and the request spans, and the heat guard (§4 table).
+  - Done when the MCP catalog lists no worker, routing or task tool, `M/requests.rs` is gone, and `crates/router`
+    keeps only the shared types.
+- **S16c.** The landing engine, the CI-watch engine and the Brigadier MCP server (§3.6, §3.9).
+  - Done when `M/landing.rs` and `crates/mcp-server` are gone, sessions start with no Brigadier entry in their
+    MCP config (the user's own servers still load), and the PR row still works.
 - Each sub-step closes the §3.6 issues it obsoletes, and re-checks #382 and #296.
 
 ### Stage 4: long sessions (G12) and Brain (G14)
 
-This stage can run in parallel with Stage 3 once S8 has landed. It touches `rebirth.rs`, `brains.rs`, `crates/brain`
-and the seam code, not the session tools. The one shared file is `prompts.rs`, so S15 rebases after S14.
+This stage can run in parallel with Stage 3 once S10 has landed. It touches `rebirth.rs`, `brains.rs`, `crates/brain`
+and the seam code, not the session commands. The shared files are `prompts.rs`, `tools.rs` and the MCP catalog, so S17 and S18 rebase after S16.
 
-**S15. Standing instructions and the ledger (Q3, G12.read).** Opus.
+**S17. Standing instructions and the ledger (Q3, G12.read).** Opus.
 - **Scope:** the text in §6 becomes one file, `crates/core/src/manager/standing_instructions.md`, identical for
   every session.
-  - Claude receives it with `--append-system-prompt`; Codex receives it as developer instructions.
+  - It reaches both CLIs explicitly, never by discovery: Claude gets it with `--append-system-prompt`, Codex
+    as the thread's `developer_instructions` (`P/codex/mod.rs:1151/1288`).
   - Per-session values arrive as env vars: `BRIGADIER_SESSION_DIR`, `BRIGADIER_LEDGER`.
-  - It replaces the thread prompt (`M/prompts.rs` `thread()` and macros) and `M/instructions.rs`. The CLIs load
-    CLAUDE.md and AGENTS.md themselves.
+  - It replaces the thread prompt (`M/prompts.rs` `thread()` and macros) and `M/instructions.rs`. That file
+    exists because the thread ran outside the repo (`instructions.rs:66–71`); after S2 it runs in the repo.
+  - Repo instructions are then each CLI's own, with no parity added. Claude Code reads CLAUDE.md files as it
+    always does. Codex reads AGENTS.md along the root → cwd path only: no CLAUDE.md, and no AGENTS.md in
+    subfolders below the cwd. That is plain Codex behaviour, taken as is (§8, item 6).
   - The ledger shows in Sources and opens from there.
 - **Done when:**
-  - A provider test asserts the exact appended text and env on both CLIs.
+  - A provider test asserts the exact appended text, the Codex developer instructions and the env on both CLIs.
   - A byte test keeps the file under 2,500 bytes.
   - A dev session writes `record/ledger.md` when told a rule.
 
-**S16. Brain = pull-only search over the records (G14, Q5).** Codex for the reader, Opus for the deletions.
+**S18. Brain = pull-only search over the records (G14, Q5).** Codex for the reader, Opus for the deletions.
 - **Scope:** re-point the transcript index (`M/brains.rs:1218–1302` `sync_transcript_stream`, `crates/brain/src/transcript.rs`)
   from the event store to:
   - every session's lineage files, including `tool-results/`;
   - every ledger, `ledger-archive.md` and hand-off note in the project.
   - Entries of kind "Learned from reading" are indexed as pointers (file:line + finding) with a content hash.
     When the file changes, they read as stale.
-  - Tools: `brain_search(query, scope?)` returns hits with session, position and a text window.
-    `transcript_read(session, from, to)` returns a verbatim span.
-  - Delete §3.8's Brain-first rule, learned-node writers, `remember`, `constraints.rs` (if S14 left it) and
-    `brain_jobs.rs` enrichment.
-  - The code index stays as optional tools.
+  - Commands: `brigadier brain search <query> [--session …]` returns hits with session, position and a text
+    window. `brigadier brain read <session> <from> <to>` returns a verbatim span.
+  - Delete §3.8's Brain-first rule, the `learn_report` and `record_job_nodes` writers, the `remember` tool and
+    `brain_jobs.rs` enrichment. `constraints.rs`, `keep_note_decisions` and the event-store sync stay for
+    `rebirth.rs` until S23 (§4 table).
+  - The code index stays as optional commands: `brigadier code search|refs|map`.
 - **Done when:**
   - Fixture tests: a phrase in a predecessor's JSONL, in a large tool output under `tool-results/`, and in a
     ledger is found.
   - A changed file marks its pointer stale.
   - `git grep -n 'learn_report\|enrichment\|Brain-first'` finds nothing.
+  - The CLI schema test covers the new subcommands.
 
-**S17. Personal Brain → the CLIs' own memory.** Opus.
+**S19. Delete the Personal Brain; the CLIs' own memory is on.** Opus.
 - **Scope:**
-  - Stop forcing `autoMemoryEnabled:false`, so Claude Code's own memory works. Codex memory follows the user's
-    own Codex config.
-  - Export `personal.sqlite` once to `~/.brigadier/personal-preferences.md`.
-  - Where it goes from there is the user's call (§8, item 6).
-  - Delete §3.8's Personal Brain code and the Settings memories page.
+  - Delete §3.8's Personal Brain code, `personal.sqlite` and the Settings memories page outright. Nothing is
+    exported or migrated (user, 10-22).
+  - Stop forcing `autoMemoryEnabled:false` (`P/claude/mod.rs:827`) and drop `memories` from Codex's
+    `DISABLED_FEATURES` (`P/codex/mod.rs:148`). Each CLI's memory then follows the user's own setting.
   - Chats follow the same rule.
 - **Done when:**
-  - A test exports a fixture `personal.sqlite` exactly.
-  - No prompt contains "The user's preferences".
-  - A Chat in a dev build remembers a preference through Claude Code's own memory.
+  - Provider tests: with the user's memory setting on and off, on each CLI, the session starts with that same
+    setting (Brigadier sets nothing).
+  - No prompt contains "The user's preferences", and `git grep -n 'personal.sqlite\|save_memory'` finds nothing.
 
-**S18. Archive and Delete per G15.** Codex.
+**S20. Archive and Delete per G15.** Codex.
 - **Scope:**
   - **Archive** stops processes and removes `tmp/`, `logs/`, `dev/`, build output and a merged worktree. It keeps
     `record/`, the lineage transcripts and Brain entries, and is restorable.
-  - **Delete** removes the session folder, its Brain entries, its lineage's CLI transcript files and the
-    worktree. It removes the branch after the existing unmerged ask.
+  - **Delete** removes the session folder, its Brain entries, its lineage's CLI transcript files, its
+    `refs/brigadier/s/<id>/` snapshot refs and the worktree. It removes the branch after the existing unmerged
+    ask.
+  - Archive keeps the snapshot refs its Changes cards show.
   - Update the §5 Lifecycle text in `docs/PLAN.md` to point here.
 - **Files:** `M/lifecycle.rs`, `M/closing.rs`, `crates/core/src/ledger.rs`, `M/brains.rs` (`forget_transcript`
   → forget the session's entries), `M/disk/*`.
-- **Done when:** flow tests list exactly what each action leaves on disk and in the Brain, for a session with
-  two lineage generations.
+- **Done when:** flow tests list exactly what each action leaves on disk, in git refs and in the Brain, for a
+  session with two lineage generations.
 
-**S19. Continuity battery v0 (Q7).** Codex. Can run in parallel with anything after S6.
+**S21. Continuity battery v0 (Q7).** Codex. Can run in parallel with anything after S8.
 - **Scope:** a local script, `tools/continuity-battery/`, with a text report. It covers the planted items and
-  forced seams of `research/PROPOSAL.md` §2.6. It runs against today's rebirth, so S20 has a baseline.
+  forced seams of `research/PROPOSAL.md` §2.6. It runs against today's rebirth, so S22 has a baseline.
 - **Done when:** one run's report exists, item by item, for Claude.
 - This is a report, never a gate.
 
-**S20. Seam v1 behind `BRIGADIER_SEAM=1` (G12, Q0–Q2, Q4).** Opus.
+**S22. Seam v1 behind `BRIGADIER_SEAM=1` (G12, Q0–Q2, Q4).** Opus.
 - **Trigger:** when the hot context (from the CLI's usage events, as today) passes `BRIGADIER_SEAM_TOKENS`
   (default 200000), queue the one nudge mid-turn, the Delegator's way.
   - Wait while the CLI reports running background tasks or an open prompt.
@@ -748,36 +852,38 @@ and the seam code, not the session tools. The one shared file is `prompts.rs`, s
     without a note, and a restart between note and successor.
   - The battery is run against it, and its report goes into the run's notes.
 
-**S21. Seam on; delete rebirth (Q6).** Opus. It runs in the same run as S20, once the battery shows the seam no
+**S23. Seam on; delete rebirth (Q6).** Opus. It runs in the same run as S22, once the battery shows the seam no
 worse than today's rebirth.
 - **Scope:** the flag defaults on. Delete §3.8's rebirth, briefing, cold, overflow, threshold and stand-in
-  reseed code.
+  reseed code. With `rebirth.rs` gone, its last-consumer leftovers go in the same step (§4 table):
+  `decisions.rs`, `constraints.rs`, `keep_note_decisions`, the `orch:<id>` log, `export.rs` and the Brain's
+  event-store sync.
   - A usage limit stops the turn and shows "Resumes at"; it never restarts quietly.
-  - Open sessions switch at their next seam.
-- **Done when:** `git grep -n 'rebirth\|briefing\|BRIGADIER_REBIRTH_TOKENS'` finds only docs, and the S20 tests
-  pass with no flag.
+  - Sessions open at upgrade are archived.
+- **Done when:** `git grep -n 'rebirth\|briefing\|BRIGADIER_REBIRTH_TOKENS\|OrchestratorLogged'` finds only
+  docs, and the S22 tests pass with no flag.
 
-**S22. Cold-cache rule.** Opus.
+**S24. Cold-cache rule.** Opus.
 - **Scope:** when the user returns after the cache TTL and the context is ≥ 100k, start the successor from the
   ledger and tail instead of resuming. There is no idle nudge (Q2).
 - **Done when:** a flow test with a short `BRIGADIER_CACHE_TTL_SECS` starts a successor, not a resume.
 
-**S23. Battery nightly (Q7).** Codex.
+**S25. Battery nightly (Q7).** Codex.
 - **Scope:**
   - The battery runs nightly on both providers, as a CI artifact and a Reports page.
   - A weekly sample is drawn from real lineages.
   - A regression becomes a GitHub issue, never a hold.
 - **Done when:** the first nightly artifact exists.
 
-**S24. Codex parity.** Codex.
+**S26. Codex parity.** Codex.
 - **Scope:**
-  - The standing instructions and bootstrap on Codex.
+  - The bootstrap on Codex (the standing instructions already reach it, S17).
   - The divider when Codex compacted, read from the rollout.
-  - The 1M window if the S20 probe held, otherwise a documented limit.
+  - The 1M window if the S22 probe held, otherwise a documented limit.
   - No Codex hooks.
 - **Done when:** a Codex dev session goes through a debug-threshold seam with its divider.
 
-**S25. Tool-output trimming, A/B first (Q8).** Opus, later.
+**S27. Tool-output trimming, A/B first (Q8).** Opus, later.
 - **Scope:** an A/B on whole tasks of a lower `bashOutputMaxChars` and of the exact-read instructions. Switch on
   only with ≥5% measured saving on whole tasks and no quality loss.
 - **Done when:** the A/B report exists. Turning it on is a separate one-line change.
@@ -785,18 +891,18 @@ worse than today's rebirth.
 ### Order and parallel runs, in one view
 
 ```
-S1 → S2 → S3 → S4 → S5 ─┬→ S6 → S7 → S8 → S10 → S11 → S12 → S13 → S14a → S14b → S14c
-                        └→ S9 (∥ S5–S8)
-after S8:  S15 → S16 → S17 → S18      (∥ Stage 3; S15 rebases after S14)
-after S6:  S19 (∥ anything)
-after S16 + S19:  S20 → S21 → S22 → S23 → S24 → S25
+S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12 → S13 → S14 → S15 → S16a → S16b → S16c
+                                  └→ S11 (∥ S7–S10)
+after S10:  S17 → S18 → S19 → S20      (∥ Stage 3; S17 rebases after S16)
+after S8:  S21 (∥ anything)
+after S18 + S21:  S22 → S23 → S24 → S25 → S26 → S27
 ```
 
 ## 5. Benchmarks never gate
 
-The continuity battery (S19, S23), the token benches and the A/B against cmux `/delegator` (S13) are reports.
+The continuity battery (S21, S25), the token benches and the A/B against cmux `/delegator` (S15) are reports.
 They run nightly or before a release. A regression becomes a GitHub issue. No step's "done when" waits on a
-number from them, except S21's switch-on, which compares the seam with today's rebirth. That is the user's Q6
+number from them, except S23's switch-on, which compares the seam with today's rebirth. That is the user's Q6
 decision, and the comparison is read by the person landing it, not by a gate in code.
 
 ## 6. Standing instructions (draft of `standing_instructions.md`)
@@ -811,21 +917,21 @@ Each entry says its kind and its source (which message, command or file). Kinds:
 - Exact identifier (hash, path:line, number with units, id) · Failed check (command, exact error line, fixed or not) · Ruled out (what, why) · Open promise.
 - Learned from reading: file:line and a one-line finding, never a copy.
 Never delete entries; move finished ones to ledger-archive.md beside it. A worker's claim is not a fact until you check it; say whose it is.
-For big reading, use your own subagents and keep only conclusions with file:line. Read exact ranges.
+For big reading, use your own subagents and keep only conclusions with file:line. Read exact ranges. Brigadier's commands: `brigadier --help`.
 When a message says a fresh session will continue: finish the step you are on, update the ledger, write the hand-off note where it says
 (doing now, waiting for, next, "read A,B,C; next D,E", stale ledger entries), then stop. Don't start new work.
 If this is your second hand-off in a row that is still reading, say so in the note and propose splitting the work.
 If you are that fresh session: the ledger, note and last exchanges in your first message are authoritative. For anything else from
-before, search the record (brain_search, transcript_read) and quote what you find; if it isn't there, say so rather than guess.
+before, search the record (`brigadier brain search`, `brigadier brain read`) and quote what you find; if it isn't there, say so rather than guess.
 ```
 
 ## 7. Order of risk: what proves the plan early
 
-- S1–S4 are deletions with immediate user value: the 10-22 failure modes go away. They are low risk because
-  they only remove things.
-- S7 is the riskiest build step, because the CLI file formats are internal (§8, item 1). It runs behind a flag
-  and is checked against real files before S8 flips it.
-- S13 is the one that proves G3: a team run that lands real work.
+- S1–S6 bring immediate user value: the 10-22 failure modes go away. S2 and S3 switch the CLIs' own long
+  commands, background tasks and subagents on first, so S4–S6 only remove things.
+- S9 is the riskiest build step, because the CLI file formats are internal (§8, item 1). It runs behind a flag
+  and is checked against real files before S10 flips it.
+- S15 is the one that proves G3: a team run that lands real work.
 
 ## 8. Open risks
 
@@ -840,7 +946,7 @@ before, search the record (brain_search, transcript_read) and quote what you fin
      already parsed at `P/claude/parse.rs:884–903`.
    - Open: there is no control request that backgrounds a running tool. A user message with `priority: "now"`
      moves movable work to the background (v2.1.286+), which is the nearest Ctrl+B. Stopping one task needs a
-     probe in S10.
+     probe in S12.
    - For Codex, whether app-server exposes `/ps`-style background terminals needs the same probe. If not,
      Codex rows show only what its events carry.
 3. **The macOS 104-byte Unix-socket path.**
@@ -849,30 +955,36 @@ before, search the record (brain_search, transcript_read) and quote what you fin
    - Claude Code's sandbox makes sockets under `<tmp>/claude-<uid>/…`, and Seatbelt drops socket allowances on
      long roots (`crates/sandbox/src/macos.rs:689–711`). So `CLAUDE_CODE_TMPDIR` stays a short `/tmp` path, a
      G13 exception like shared caches.
-   - S5's done-when binds a socket to prove it.
+   - S7's done-when binds a socket to prove it.
 4. **Codex hooks need manual trust by hash** (EVIDENCE 2.5). Nothing in this plan uses a Codex hook. The changes
    card uses git snapshots, the seam uses usage events and a queued message, and Background uses events.
-5. **#517 and G9.** Under G9 "Needs you" means only real pending prompts. A thread that asks in plain text and
-   ends its turn reads as Ready, like an idle plain CLI.
-   - The case behind #517 (merge anyway / Full access) disappears with S2–S4. The thread can still raise a real
-     card with `ask_user`.
-   - Recommendation: close #517 with S8 as "by G9". If the user wants plain-text questions to count, that is a
-     new decision.
-6. **The Personal Brain's destination.** Writing into the user's own `~/.claude/CLAUDE.md` or
-   `~/.codex/AGENTS.md` changes files Brigadier doesn't own.
-   - S17 exports to `~/.brigadier/personal-preferences.md` and stops there.
-   - Recommendation: the user copies what they want, or says "append it", and S17 does so. This is the only
-     user ask in the plan.
-7. **Skills on Codex.** S13 assumes Codex loads a skill from its skills folder. If the installed Codex can't,
-   the team skill reaches Codex threads as a file the thread is told to read when asked. This is checked in S13.
+5. **The `brigadier` CLI inside the CLIs' own sandboxes.** Under Ask and Accept edits, Codex runs commands in
+   its own `workspace-write` sandbox, which may refuse a connection to the daemon's socket (and so may Claude
+   Code's sandbox if the user turns it on). S13 probes this on both CLIs before anything depends on it. If it is
+   refused, the fix is the CLI's own setting (an allowed socket or path in its sandbox config), never a
+   Brigadier sandbox.
+6. **Repo instructions on Codex.** After S17, Codex reads AGENTS.md along root → cwd only, as plain Codex does.
+   A project that has only CLAUDE.md, or rules in a subfolder's AGENTS.md below the cwd, gives a Codex session
+   less than `instructions.rs` gives it today. Taken as is ("take, don't rebuild"); a project that wants both
+   CLIs to see the same rules keeps them in AGENTS.md.
+7. **Skills on Codex.** S15 assumes Codex loads a skill from its skills folder. If the installed Codex can't,
+   the team skill reaches Codex threads as a file the thread is told to read when asked. This is checked in S15.
+   The skill drives sessions only through `brigadier` commands, so it is the same text on both CLIs.
 8. **No Brigadier sandbox (G5) also removes the "protect" profile.** That profile kept every CLI, Full access
-   included, from writing Brigadier's own data folder (`P/cli.rs:259–287`). After S4, a session can delete
-   `brigadier.db` like any other file it can reach. That is accepted under G5 and the same as a plain CLI. S4's
+   included, from writing Brigadier's own data folder (`P/cli.rs:259–287`). After S6, a session can delete
+   `brigadier.db` like any other file it can reach. That is accepted under G5 and the same as a plain CLI. S6's
    commit says so.
 9. **Ledger path.** PROPOSAL.md put it at `~/.brigadier/s/<id>/ledger.md`. G15 later placed the kept record under
    `record/`. This plan uses `record/ledger.md` so Archive keeps it, which follows G15.
 10. **Many seams in one long turn on Codex.** A Codex turn can compact before the 200k nudge is read (Q0). This
     is accepted and shown by the divider. The ledger, note and rollout survive it.
-11. **Big deletions break tests far away.** S14's sub-steps touch shared types (`board.rs`, `model.rs`, IPC).
+11. **Big deletions break tests far away.** S16's sub-steps touch shared types (`board.rs`, `model.rs`, IPC).
     Each sub-step runs `cargo test -p brigadier-core` for the touched modules and `pnpm typecheck`. The full suite
     runs once on the integrated tree, as the Delegator's rule says.
+12. **Codex plan-review findings not taken** (10-22, `msgs/w12-plan-review.md`):
+    - **#1, migrate old history before the new reader:** not taken. There are no real users yet, so old records
+      are neither migrated nor kept readable.
+    - **#6, a transition for open sessions' old instructions:** not taken, for the same reason. Sessions open at
+      upgrade are archived (S1's done-when, and the "Nothing is migrated" rule in §4).
+    - Taken: #2 (S9's ids and `record/turns.jsonl`, with a restart-parity check), #3 (the last-consumers table
+      in §4), #4 (S2), #5 (S3), #7 (S17 and item 6), #8 (S19), #9 (S11 and S20).
