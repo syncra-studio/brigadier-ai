@@ -65,7 +65,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.match(String(seen.draftTree), /src.*package\.json/);
   assert.equal(seen.draftComposer, "@package.json ");
   assert.deepEqual(seen.draftMention, [{ type: "file", path: "package.json" }]);
-  // Every new tab works on a worktree of its own, so a draft's project folder only reads.
+  // A new worktree (the default) makes its own copy, so the draft's project folder only reads.
   assert.ok(!(seen.draftSource as string[]).some((label) => /Stage|Discard/.test(label ?? "")), "a draft only reads");
   assert.equal(seen.draftCommitBox, false);
   assert.equal(seen.draftNote, true);
@@ -73,6 +73,9 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.match(String(seen.worktreeNote), /own copy/, "reopened, it still says why");
   assert.ok(!(seen.worktreeSource as string[]).some((label) => /Stage|Discard/.test(label ?? "")));
   assert.equal(seen.worktreeCommitBox, false);
+  // Working in the local checkout, the draft's Source stages and commits in the project folder.
+  assert.ok((seen.localSource as string[]).includes("Stage All Changes"), "a local draft stages in the project folder");
+  assert.equal(seen.localCommitBox, true);
   assert.equal(seen.chatPane, null);
   assert.match(String(seen.chatText), /Nothing here yet/);
   assert.doesNotMatch(String(seen.chatText), /Plan|Workers/);

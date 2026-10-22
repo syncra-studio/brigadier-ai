@@ -1,5 +1,6 @@
 import {
   type KeyboardEvent,
+  type ReactNode,
   useId,
   useMemo,
   useState,
@@ -19,12 +20,13 @@ import {
   Branch,
   BranchAlt,
   Check,
+  Desktop,
   Folder,
   Plus,
   X,
 } from "@/components/icons";
 
-import type { Project } from "@/ipc/generated";
+import type { EnvironmentKind, Project } from "@/ipc/generated";
 
 import { cn } from "@/lib/utils";
 
@@ -218,28 +220,49 @@ export function ProjectCombobox({
 
 // ----- where the session works -----------------------------------------------------------
 
-/**
- * The "Work in" menu: where the session works, always a new worktree of its own (only migrated
- * sessions work in the local checkout), and the usage left.
- */
+const PLACES: Record<EnvironmentKind, { label: string; icon: ReactNode }> = {
+  newWorktree: { label: "New worktree", icon: <BranchAlt /> },
+  localCheckout: { label: "Local checkout", icon: <Desktop /> },
+};
+
+/** The "Work in" menu: a new worktree (the default) or the local checkout, and the usage left. */
 export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
   const [open, setOpen] = useState(false);
+  const projectId = resolved.project?.id ?? null;
   const repoName = resolved.repo.info?.name ?? resolved.project?.name ?? "the repository";
-  const tip = `Every tab starts clean on a copy of ${repoName} of its own, to work in parallel.`;
+  const current = resolved.repo.info?.currentBranch;
+  const tips: Record<EnvironmentKind, string> = {
+    newWorktree: `Create a copy of ${repoName} to work in parallel.`,
+    localCheckout: `Work in ${repoName} itself, on ${current ?? "the branch it has checked out"}.`,
+  };
+  const place = PLACES[resolved.environment];
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <RailPill icon={<BranchAlt />} label="Work in" title={tip}>
-          New worktree
+        <RailPill icon={place.icon} label="Work in" title={tips[resolved.environment]}>
+          {place.label}
         </RailPill>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className={cn(MENU, "w-2xs")}>
         <p className="text-muted-foreground px-2 py-1 text-sm">Work in</p>
-        <p title={tip} className={ROW}>
-          <BranchAlt />
-          <span className="flex-1">New worktree</span>
-          <Check />
-        </p>
+        {(Object.keys(PLACES) as EnvironmentKind[]).map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            role="menuitemradio"
+            aria-checked={resolved.environment === kind}
+            title={tips[kind]}
+            onClick={() => {
+              updateDraft(projectId, { environment: kind });
+              setOpen(false);
+            }}
+            className={cn(ROW, "hover:bg-foreground/8")}
+          >
+            {PLACES[kind].icon}
+            <span className="flex-1">{PLACES[kind].label}</span>
+            {resolved.environment === kind && <Check />}
+          </button>
+        ))}
         <div className="border-foreground/10 mt-1 border-t pt-1">
           <UsageRemaining provider={resolved.model.provider} />
         </div>
@@ -251,10 +274,42 @@ export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
 // ----- branch ----------------------------------------------------------------------------
 
 /**
- * The base branch popover: a search (not focused on open), the branches (checked-out first, ✓
- * on the pick) in a fixed-height list. The session's worktree starts from the pick.
+ * The branch pill. A new worktree's picks its base: a search (not focused on open), the branches
+ * (checked-out first, ✓ on the pick) in a fixed-height list. The local checkout's shows the
+ * branch the project's folder has checked out, which the session works on.
  */
 export function BranchPopover({ resolved }: { resolved: ResolvedDraft }) {
+  return resolved.environment === "localCheckout" ? (
+    <CheckedOutBranch resolved={resolved} />
+  ) : (
+    <BasePopover resolved={resolved} />
+  );
+}
+
+function CheckedOutBranch({ resolved }: { resolved: ResolvedDraft }) {
+  const [open, setOpen] = useState(false);
+  const { loading } = resolved.repo;
+  const repoName = resolved.repo.info?.name ?? resolved.project?.name ?? "the repository";
+  const branch = resolved.base;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <RailPill icon={<Branch />} label="Branch" title="The branch your checkout has: the session works on it">
+          {branch ?? (loading ? "…" : "No branch")}
+        </RailPill>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className={cn(MENU, "w-2xs")}>
+        <p className="text-muted-foreground px-2 py-1 text-sm">
+          {branch
+            ? `The session works in ${repoName} on ${branch}, the branch it has checked out.`
+            : `${repoName} isn't on a branch. Check one out to work there.`}
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function BasePopover({ resolved }: { resolved: ResolvedDraft }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const listId = useId();

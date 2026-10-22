@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { ModelGroup } from "@/components/shared/model-selector";
+import { environmentRequest } from "@/app/conversation/draftEnvironment";
 import type {
+  EnvironmentKind,
   ModelChoice,
   PermissionLevel,
   Project,
@@ -85,7 +87,9 @@ export type ResolvedDraft = {
   repoPath: string | null;
   repo: RepoState & { reload: () => void };
   draft: DraftSetup;
-  /** The base branch: the session works on a new worktree of it, as every new tab does. */
+  /** Where the session works: a new worktree of its own, or the project's own folder. */
+  environment: EnvironmentKind;
+  /** New worktree: the base branch. Local checkout: the branch the project's folder has checked out. */
   base: string | null;
   permission: PermissionLevel;
   model: ModelChoice;
@@ -116,7 +120,9 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   const model = resolveModel(draft.model, kind, project, settings, groups);
   const defaultModel = resolveModel(null, kind, project, settings, groups);
   const permission = resolvePermission(draft.permission, settings);
-  const base = draft.base ?? repo.info?.currentBranch ?? null;
+  const { environment } = draft;
+  const current = repo.info?.currentBranch ?? null;
+  const base = environment === "localCheckout" ? current : (draft.base ?? current);
 
   let problem: string | null = null;
   let target: DraftTarget | null = null;
@@ -126,20 +132,21 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
     target = { kind: "chat", setup: { type: "chat", model } };
   } else if (!project || !repoPath) {
     problem = "This project has no repository yet. Add one in its settings.";
-  } else if (!base) {
-    problem = repo.loading ? "Reading the repository…" : "Pick the base branch.";
   } else {
-    // A new workspace's first tab gets its own worktree too; only migrated sessions keep
-    // working in the local checkout.
-    const setup: SetupRequest = {
-      type: "session",
-      repo: repoPath,
-      environment: { type: "newWorktree", base, branch: draft.sessionBranch.trim() || null },
-      permission,
-      orchestrator: model,
-      planMode: draft.planMode,
-    };
-    target = { kind: "session", projectId: project.id, setup };
+    const place = environmentRequest({ ...draft, current, loading: repo.loading });
+    if ("problem" in place) {
+      problem = place.problem;
+    } else {
+      const setup: SetupRequest = {
+        type: "session",
+        repo: repoPath,
+        environment: place.request,
+        permission,
+        orchestrator: model,
+        planMode: draft.planMode,
+      };
+      target = { kind: "session", projectId: project.id, setup };
+    }
   }
 
   return {
@@ -148,6 +155,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
     repoPath,
     repo,
     draft,
+    environment,
     base,
     permission,
     model,

@@ -8,6 +8,7 @@ import type {
   DaemonInfo,
   DaemonMetrics,
   Diagnostics,
+  EnvironmentKind,
   EventEnvelope,
   Message,
   Mention,
@@ -58,9 +59,11 @@ export type Selection =
 export type DraftSetup = {
   /** The project these choices were made for; they reset when the project changes. */
   projectId: string | null;
-  /** The branch the session's worktree starts from and merges into. Absent: the checked-out branch. */
+  /** Where the session works: a new worktree of its own (the default) or the local checkout. */
+  environment: EnvironmentKind;
+  /** New worktree: the branch it starts from and merges into. Absent: the checked-out branch. */
   base: string | null;
-  /** The session branch's name. Empty: Brigadier names it. */
+  /** New worktree: the session branch's name. Empty: Brigadier names it. */
   sessionBranch: string;
   permission: PermissionLevel | null;
   model: ModelChoice | null;
@@ -71,6 +74,7 @@ export type DraftSetup = {
 export function emptyDraft(projectId: string | null): DraftSetup {
   return {
     projectId,
+    environment: "newWorktree",
     base: null,
     sessionBranch: "",
     permission: null,

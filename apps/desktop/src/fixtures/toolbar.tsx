@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";
+import { updateDraft } from "@/app/conversation/draftSetup";
 import { ChatActions } from "@/app/shell/ChatActions";
 import { ConversationToolbar } from "@/app/shell/ConversationToolbar";
 import { MentionMemory } from "@/app/conversation/Mentions";
@@ -330,6 +331,14 @@ function Fixture() {
       emitWorkspaceChanged({ type: "project", projectId: "project" });
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
+      // Work in the local checkout: the draft's Source works on the project folder itself.
+      updateDraft("project", { environment: "localCheckout" });
+
+      await until(() => !document.querySelector('[data-slot="own-copy-note"]') && document.querySelector('[aria-label="Commit message"]'), "the local draft's Source");
+      seen.localSource = buttons('[data-slot="source-panel"]'); seen.localCommitBox = !!document.querySelector('[aria-label="Commit message"]');
+      updateDraft("project", { environment: "newWorktree" });
+
+      await until(() => document.querySelector('[data-slot="own-copy-note"]'), "the worktree draft's Source again");
       // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
       key("KeyF", { metaKey: true, shiftKey: true });
       useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });

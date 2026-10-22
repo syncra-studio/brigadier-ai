@@ -20,6 +20,7 @@ export function ComposerHint({ target }: { target: ComposerTarget }) {
   }
   // A new worktree starts from its base's last commit: what isn't committed stays out of it.
   const dirty = repo.info?.dirty;
+  const local = resolved.environment === "localCheckout";
   if (resolved.kind !== "session" || (permission !== "fullAccess" && !dirty)) return null;
   return (
     <p className="text-muted-foreground px-2 text-xs">
@@ -29,7 +30,9 @@ export function ComposerHint({ target }: { target: ComposerTarget }) {
         </span>
       )}
       {dirty &&
-        "Every tab starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout."}
+        (local
+          ? "The session works in your checkout, uncommitted changes and all."
+          : "Every tab starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout.")}
     </p>
   );
 }
