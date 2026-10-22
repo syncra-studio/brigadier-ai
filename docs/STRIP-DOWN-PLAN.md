@@ -20,6 +20,9 @@
 > Amended again with G20 (the brigade is always on: every session and chat gets the `/brigade` skill and a
 > pointer to it, with no invocation and no "New brigade" UI) and G21 (workers land into their parent session,
 > never into main by rule; the skill guides, Brigadier enforces nothing).
+> Amended again with three take-aways of `research/T3CODE-WORKTREES.md` (§2, §4, §6): the session's environment
+> and base branch are recorded (S7, S13), a turn's diff leaves out what a merge brought in (S11), and cleanup
+> recognises merged, empty and idle worktrees (S20).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -146,8 +149,9 @@ No context-used number shows anywhere. A usage-limit "Resumes at" card is allowe
 the CLI's own error. The Job card is gone, overnight included (G7).
 
 **Changes card (G8).** Brigadier takes a git snapshot of the session's own worktree at each turn's start and
-end. The card shows the exact diff between the two. Revert restores the start snapshot. A worker's card shows
-its own +/− against the parent's branch (G21).
+end. The card shows the exact diff between the two, minus files that a merge of another branch brought in: what a
+worker's merge brought into the parent shows under that worker's card, not as the parent's own change. Revert
+restores the start snapshot. A worker's card shows its own +/− against the parent's branch (G21).
 
 **Long sessions (G12).** The CLI never compacts.
 - **Ledger.** The thread keeps `record/ledger.md` as it works. A standing instruction asks for it; nothing
@@ -175,7 +179,7 @@ the CLIs' own memory (Claude Code's auto memory, Codex memories) is no longer sw
 
 | Subfolder | Holds | Archive | Delete |
 |---|---|---|---|
-| `record/` | ledger, hand-off notes, `lineage.json`, `turns.jsonl`, `seam.json` | keeps | removes |
+| `record/` | ledger, hand-off notes, `lineage.json`, `turns.jsonl`, `seam.json`, `workspace.json` | keeps | removes |
 | `work/` | the worktree | removes once merged | removes |
 | `tmp/` | `TMPDIR` points here | removes | removes |
 | `dev/` | dev servers and build output | removes | removes |
@@ -187,7 +191,8 @@ by its parent.
 - **Delete** removes everything of the session: its folder, its Brain entries, its lineage's CLI transcript
   files, its worktree, and its branch after the existing "not merged" ask.
 - Both do the same to each of the session's workers (G19).
-- **Storage** shows the size of each folder.
+- **Storage** shows the size of each folder, and its cleanup points out worktrees that are merged, have no
+  commits or are idle (S20). It is guidance; a dirty worktree still gets the "not merged" ask.
 
 Some things stay where they are: the CLIs' own session files, shared caches (`~/.cargo`, the pnpm store) and
 cross-session locks.
@@ -618,12 +623,18 @@ and `run`.
   - `CLAUDE_CODE_TMPDIR` stays a short `/tmp/brigadier-<12hex>` (§8, item 3).
   - Sessions made before this step are archived at upgrade, not converted.
   - Storage shows size per session folder.
+  - The environment and base branch chosen on the rail (Local checkout, or New worktree + its base branch) go
+    into `record/workspace.json` (environment, branch, base). A New worktree's branch also records its base
+    in git config, `branch.<branch>.gh-merge-base`, the key T3 Code records and `gh pr create` reads. Later diffs,
+    landing, `brigadier show` and cleanup read the target from there and never guess it.
 - **Files:** `crates/sandbox/src/paths.rs`, `M/mod.rs` (`owned_dir` :889), `M/workers.rs:2532–2700` and
   `:5812–5866`, `M/thread.rs:366–395`, `M/preview.rs:78/529`, `M/disk/mod.rs`, `D/` Storage page.
 - **Done when:**
   - A flow test: a new session's CLI sees `TMPDIR` under its folder, and its worktree under `work/`.
   - A Unix socket made under `$TMPDIR` by `python3 -c 'import socket…bind'` binds on macOS.
   - Storage lists the folder with its size.
+  - A flow test: a New worktree session's `record/workspace.json` and `git config branch.<branch>.gh-merge-base`
+    both name the base chosen on the rail; a Local checkout session's record names its branch.
 - ∥ S11.
 
 **S8. The CLI's files are the record.** Codex.
@@ -687,9 +698,13 @@ and `run`.
     `refs/brigadier/s/<id>/turn-<n>-{start,end}`.
   - The refs are the session's own: the cleanup ledger records the namespace. Delete removes all of it (S20).
     Archive keeps the refs its Changes cards show.
-  - The card is the exact diff between the two: files, +/− and the diff. A parent's card snapshots the
-    parent's worktree, so what a worker merged into it shows there. Worker cards show each worker's own +/−
-    against the parent's branch (G21).
+  - The card is the exact diff between the two: files, +/− and the diff. Worker cards show each worker's own
+    +/− against the parent's branch (G21).
+  - Files a merge brought in are not the turn's own change. When the turn's range (start ref to end ref, on
+    the branch's history) holds merge commits, the files those merges brought in are left out of the parent's
+    card and grouped by the merged branch. When that branch is one of the session's workers (S13), they show
+    under that worker's card. Prior art: T3 Code's turn diff leaves out what a pull, merge or rebase brought
+    in (its `docs/user/source-control.md`, lines 6–11).
   - Revert restores the start snapshot, after a confirm. Files changed after the turn are named first.
   - Delete `request_changes.rs`, `pending_changes.rs`, `shell_changes.rs`, the capture hooks and `undo.rs`'s
     recorded-commit revert.
@@ -701,6 +716,8 @@ and `run`.
   - A flow test: Revert restores the start tree exactly (`git diff` against the start ref is empty).
   - A flow test: Delete leaves no `refs/brigadier/s/<id>/` ref; Archive keeps them.
   - A flow test: a worker card's +/− is its diff against the parent's branch.
+  - A flow test: a turn that merges a branch and edits one file itself shows only that file on the parent's
+    card, and the merged files under the merged branch.
   - App tests pass.
 - **Closes:** #256.
 - ∥ S7, S8, S9.
@@ -741,7 +758,7 @@ and `run`.
   |---|---|
   | `brigadier sessions` | List the project's sidebar sessions: title, state from CLI events, branch, +/−. Workers are not in it. This is "read anything"; `brigadier show <id>` gives a session or worker in full. |
   | `brigadier workers` | List the calling session's own workers: title, agent, model, state from the worker's own CLI events, branch, +/−. |
-  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21), `--permission` and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
+  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
   | `brigadier send <id> <text>` | To one of the caller's own workers, queued mid-turn, like `dlg send`. This is how the parent relays the user's answers (G19.Q6). |
   | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
   | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen, of any session or worker. |
@@ -776,7 +793,7 @@ and `run`.
   - A flow test: the workers are listed by `brigadier workers` and not by `brigadier sessions`, and the sidebar
     has no row for them.
   - A flow test: `brigadier start` with no `--base` and no `--worktree\|--local` makes a new worktree whose
-    branch starts at the parent's current branch.
+    branch starts at the parent's current branch, and the worker's record and `gh-merge-base` name that branch.
   - A call without a valid session token is refused, and so is `send` or `close` on another session's worker.
   - A live dev check on each provider: the thread starts a Codex worker through `brigadier start` that writes
     a file and reports.
@@ -973,11 +990,17 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     ask.
   - Archive keeps the snapshot refs its Changes cards show.
   - Archiving or deleting a session does the same to each of its workers (G19). Archive stops them first.
+  - **Storage cleanup** recognises worktrees whose branch is merged into its recorded base (S7), squash merges
+    included (by patch-id, or by `gh pr` state when a PR exists), that have no commits beyond the base, or that
+    are idle. It suggests; it is not a gate. A dirty worktree is never removed without the existing "not
+    merged" ask.
   - Update the §5 Lifecycle text in `docs/PLAN.md` to point here.
 - **Files:** `M/lifecycle.rs`, `M/closing.rs`, `crates/core/src/ledger.rs`, `M/brains.rs` (`forget_transcript`
   → forget the session's entries), `M/disk/*`.
 - **Done when:** flow tests list exactly what each action leaves on disk, in git refs and in the Brain, for a
   session with two lineage generations and one worker; the worker gets the same treatment as its parent.
+  Unit tests on a temp repo: cleanup flags a merged, a squash-merged, an empty and an idle worktree, and a dirty
+  one only with the ask.
 
 **S21. Continuity battery v0 (Q7).** Codex. Can run in parallel with anything after S8.
 - **Scope:** a local script, `tools/continuity-battery/`, with a text report. It covers the planted items and
@@ -1055,7 +1078,7 @@ worse than today's rebirth.
 
 ```
 S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12 → S13 → S13b → S14 → S15 → S16a → S16b → S16c
-                                  └→ S11 (∥ S7–S10)
+                                  └→ S11 (∥ S7–S10; merged files go under worker cards once S13 is on)
 after S10:  S17 → S18 → S19 → S20      (∥ Stage 3; S17 rebases after S16)
 after S8:  S21 (∥ anything)
 after S18 + S21:  S22 → S23 → S24 → S25 → S26 → S27
@@ -1186,3 +1209,6 @@ search the record (`brigadier brain search`, `brigadier brain read`) and quote w
     S13 settles how the parent answers one: either `brigadier send` answers the worker's open prompt when one is
     pending, or workers start at Accept edits or Full access so that prompts are rare. The user is asked before
     S13 builds it.
+15. **Seen in T3 Code and not taken** (`research/T3CODE-WORKTREES.md` §4, §6): PR-watch wakeups, because
+    Brigadier pushes nothing (G1), and confirmations before pushing to the default branch, because permission
+    modes belong to the CLI (G5). The thread may poll its PR with `gh` or a background task.
