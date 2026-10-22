@@ -1130,6 +1130,7 @@ impl SessionManager {
                     headline: Some(crate::work::SessionHeadline {
                         text,
                         detail,
+                        failed: args.failed,
                         at_ms: crate::now_ms(),
                     }),
                 }],

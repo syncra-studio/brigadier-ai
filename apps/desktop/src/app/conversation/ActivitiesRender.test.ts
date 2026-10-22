@@ -49,10 +49,11 @@ test("a Background row leaves as soon as its process ends, failed, finished or s
   assert.equal(seen.restartOrDismiss, 0);
 });
 
-test("Background shows the session's events while they run: the full checks, a review, CI with Open CI, a held merge with Cancel, then a merge at work; each opens Progress and leaves once it ends", { timeout: 90000 }, async (t) => {
+test("Background shows the session's events while they run: the full checks, a review, CI with Open CI, a held merge with Cancel, a merge at work, a refused one with Merge anyway; each opens Progress and leaves once it ends", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?events=1", "activities-result", 60000)) as {
     order: string[]; rows: Record<string, Row>; buttons: Record<string, string[]>; buttonsVisibleAtRest: boolean; opened: string | null; calls: string[];
     ended: boolean; next: Record<string, string>; merged: string[]; restartOrDismiss: number;
+    refused: Row; refusedButtons: string[]; refusedVisibleAtRest: boolean; anyway: string[];
   };
   // Newest first, each with its state and how far it got.
   assert.deepEqual(seen.order, ["merge", "ci", "review-1", "check-1"]);
@@ -66,6 +67,11 @@ test("Background shows the session's events while they run: the full checks, a r
   assert.deepEqual(seen.calls, ["cancelMerge activities-fixture", "open_url https://github.com/o/r/actions/runs/7"]);
   assert.equal(seen.ended, true, "the checks passed, the review ended, CI passed and the merge was cancelled: no rows");
   assert.deepEqual(seen.next, { "check-1": "next", merge: "merging" });
+  // Refused for want of checks: it waits on the user, Merge anyway always in sight, and merges without them.
+  assert.deepEqual(seen.refused, { label: "Merge into main", state: "waiting · for you", moving: true, elapsed: null, tip: "The checks haven't run on abc1234." });
+  assert.deepEqual(seen.refusedButtons, ["Merge anyway"]);
+  assert.equal(seen.refusedVisibleAtRest, true);
+  assert.deepEqual(seen.anyway, ["mergeSession anyway=true"]);
   assert.deepEqual(seen.merged, ["check-1"]);
   assert.equal(seen.restartOrDismiss, 0);
 });

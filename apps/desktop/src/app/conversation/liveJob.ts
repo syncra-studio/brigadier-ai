@@ -1,26 +1,23 @@
 import { useMemo } from "react";
 
-import { ciPill, ciWatches, heldMerge, mergeWords, runFailed, shortSha } from "@/app/conversation/activity/slotView";
+import { ciPill, ciWatches, heldMerge, mergeWords, shortSha } from "@/app/conversation/activity/slotView";
 import { isRunRequest, isWorking } from "@/app/conversation/blocks";
 import { questionOpen } from "@/app/conversation/cards/questionRound";
 import type { IntegratedCheck, OrchestratorStep, ProviderKind } from "@/ipc/generated";
 import { type Board, liveRequest, useBoard } from "@/state/board";
 
 /**
- * The Job card as a live summary of the session right now (J1): one headline, one detail line,
- * and the buttons a state needs. The thread's own headline (`set_headline`) gives the words
- * (J2); before it sets one, or when something that needs the user or failed came after it, the
- * board's events give them, in this order (J5): waiting on you, something failed, something
- * running, done. Running and waiting things show whenever they started; a finished outcome only
+ * The Job card as a live summary of the session right now (J1): one headline and one detail
+ * line; the buttons are the Background rows' (Open CI, Cancel, Merge anyway). The thread's own
+ * headline (`set_headline`) gives the words (J2), and says whether they tell of a failure;
+ * before it sets one, or when something that needs the user or failed came after it, the board's
+ * events give them, in this order (J5): waiting on you, something failed, something running, done. Running and waiting things show whenever they started; a finished outcome only
  * until the user's next message (J4). It names no worker or Background row: those are the
  * context card's, and the Workers strip's.
  */
 
 /** Which icon the card shows: a spinner, a raised hand, a red cross, a tick, a stop, a merge. */
 export type LiveTone = "running" | "waiting" | "failed" | "done" | "stopped" | "merged";
-
-/** A button of the card's: open the CI run, cancel the held merge, merge without the checks. */
-export type LiveAction = { type: "openCi"; url: string } | { type: "cancelMerge" } | { type: "mergeAnyway" };
 
 export type LiveJob = {
   tone: LiveTone;
@@ -30,7 +27,6 @@ export type LiveJob = {
   sinceMs?: number | undefined;
   /** When it ended: an outcome shows how long it took. */
   endedAtMs?: number | undefined;
-  actions: LiveAction[];
   /** Only the bare "Working": nothing more specific to say (a run's or plan's card says its own). */
   plain?: true | undefined;
 };
@@ -74,10 +70,10 @@ function checkFacts(checks: readonly IntegratedCheck[]): Fact[] {
   const latest = checks.at(-1);
   if (!latest) return [];
   const sinceMs = latest.startedAtMs ?? latest.dueAtMs;
-  const ended = { sinceMs, endedAtMs: latest.endedAtMs ?? undefined, atMs: latest.endedAtMs ?? sinceMs, actions: [] };
+  const ended = { sinceMs, endedAtMs: latest.endedAtMs ?? undefined, atMs: latest.endedAtMs ?? sinceMs };
   switch (latest.state.type) {
     case "due":
-      return [{ kind: "running", rank: 2, tone: "running", headline: "Checks are next", detail: `They run on ${short(latest.tip)} once the work lands`, sinceMs: latest.dueAtMs, atMs: latest.dueAtMs, actions: [] }];
+      return [{ kind: "running", rank: 2, tone: "running", headline: "Checks are next", detail: `They run on ${short(latest.tip)} once the work lands`, sinceMs: latest.dueAtMs, atMs: latest.dueAtMs }];
     case "running": {
       // run_checks counts its commands: "3 of 5" is the third at work; one alone needs no count.
       const { done, total } = latest.state;
@@ -90,7 +86,6 @@ function checkFacts(checks: readonly IntegratedCheck[]): Fact[] {
           detail: latest.state.command ? `Now: ${latest.state.command}` : `On ${short(latest.tip)}`,
           sinceMs,
           atMs: sinceMs,
-          actions: [],
         },
       ];
     }
@@ -123,13 +118,12 @@ function reviewFacts(input: LiveInput): Fact[] {
         detail: running.length > 1 ? `${running.length} reviews at work` : `The changes up to ${short(first.tip)}`,
         sinceMs: first.startedAtMs,
         atMs: first.startedAtMs,
-        actions: [],
       },
     ];
   }
   const latest = reviews.at(-1);
   if (!latest || latest.endedAtMs === null) return [];
-  const ended = { sinceMs: latest.startedAtMs, endedAtMs: latest.endedAtMs, atMs: latest.endedAtMs, actions: [] };
+  const ended = { sinceMs: latest.startedAtMs, endedAtMs: latest.endedAtMs, atMs: latest.endedAtMs };
   const from = `From ${VENDORS[latest.reviewer]}’s review of ${short(latest.tip)}`;
   switch (latest.state.type) {
     case "clean":
@@ -153,17 +147,13 @@ function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
   const newest = watches.at(-1);
   if (!newest) return [];
   const pill = ciPill(watches);
-  const runs = watches.flatMap((watch) => watch.runs);
-  const failedRun = runs.find(runFailed);
-  const openRun = failedRun ?? runs.find((run) => run.status !== "completed") ?? runs[0];
-  const actions: LiveAction[] = openRun?.url ? [{ type: "openCi", url: openRun.url }] : [];
   const detail = `${newest.branch} · ${shortSha(newest.sha)}`;
   const sinceMs = watches[0]!.sinceMs;
   const endedAtMs = live.length > 0 ? undefined : (newest.endedAtMs ?? undefined);
   const atMs = endedAtMs ?? sinceMs;
-  if (pill.state === "failed") return [{ kind: "failed", rank: 0, tone: "failed", headline: pill.words, detail, sinceMs, endedAtMs, atMs, actions }];
-  if (pill.state === "checking" || live.length > 0) return [{ kind: "running", rank: 5, tone: "running", headline: pill.words, detail, sinceMs, atMs, actions }];
-  if (pill.state === "passed") return [{ kind: "done", rank: 0, tone: "done", headline: pill.words, detail, sinceMs, endedAtMs, atMs, actions: [] }];
+  if (pill.state === "failed") return [{ kind: "failed", rank: 0, tone: "failed", headline: pill.words, detail, sinceMs, endedAtMs, atMs }];
+  if (pill.state === "checking" || live.length > 0) return [{ kind: "running", rank: 5, tone: "running", headline: pill.words, detail, sinceMs, atMs }];
+  if (pill.state === "passed") return [{ kind: "done", rank: 0, tone: "done", headline: pill.words, detail, sinceMs, endedAtMs, atMs }];
   return [];
 }
 
@@ -181,7 +171,6 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
       detail: `Into ${held.base} once they’re done, as you asked`,
       sinceMs: held.sinceMs,
       atMs: held.sinceMs,
-      actions: [{ type: "cancelMerge" }],
     });
   }
   const last = steps.findLast((step) => ["mergeRequested", "merged", "mergeCancelled", "mergeStopped"].includes(step.kind.type));
@@ -200,7 +189,6 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
           : `${click.kind.branch} into ${click.kind.base}`,
       sinceMs: click.atMs,
       atMs: click.atMs,
-      actions: [],
     });
   }
   if (last?.kind.type === "merged") {
@@ -216,7 +204,6 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
       headline: `Merged into ${kind.base}${kind.checksSkipped ? " · checks skipped" : passedOn(checks, head) ? " · checks passed" : ""}`,
       detail,
       atMs: last.atMs,
-      actions: [],
     });
   }
   // The merge rule refused the merge (no run_checks pass on its commit): the user decides,
@@ -231,7 +218,6 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
       headline: "Can’t merge yet",
       detail: refused.reason,
       atMs: refused.atMs,
-      actions: refused.waivable ? [{ type: "mergeAnyway" }] : [],
     });
   }
   return facts;
@@ -258,7 +244,7 @@ function waitingFacts(input: LiveInput): Fact[] {
   const merges = open.filter((question) => question.kind.type === "merge");
   const others = open.filter((question) => question.kind.type !== "merge");
   if (merges.length > 0) {
-    facts.push({ kind: "waiting", rank: 0, tone: "waiting", headline: "Waiting for your yes below", detail: "To merge the work", atMs: newest(merges), actions: [] });
+    facts.push({ kind: "waiting", rank: 0, tone: "waiting", headline: "Waiting for your yes below", detail: "To merge the work", atMs: newest(merges) });
   }
   if (others.length > 0) {
     facts.push({
@@ -267,7 +253,6 @@ function waitingFacts(input: LiveInput): Fact[] {
       tone: "waiting",
       headline: others.length === 1 ? "Waiting for your answer below" : `Waiting for ${others.length} answers below`,
       atMs: newest(others),
-      actions: [],
     });
   }
   const approvals = Object.values(input.approvals).filter((approval) => approval.state.type === "pending");
@@ -278,7 +263,6 @@ function waitingFacts(input: LiveInput): Fact[] {
       tone: "waiting",
       headline: approvals.length === 1 ? "Waiting for your approval below" : `Waiting for ${approvals.length} approvals below`,
       atMs: newest(approvals),
-      actions: [],
     });
   }
   return facts;
@@ -299,7 +283,6 @@ function workFailures(input: LiveInput): Fact[] {
       headline: failed.length === 1 ? "A worker failed" : `${failed.length} workers failed`,
       detail: firstLine(last.error),
       atMs: last.updatedAtMs,
-      actions: [],
     });
   }
   // Each preview's latest run: one restarted since is up again.
@@ -314,7 +297,6 @@ function workFailures(input: LiveInput): Fact[] {
       headline: `${preview.name} stopped`,
       detail: preview.state.status,
       atMs: preview.endedAtMs ?? preview.startedAtMs,
-      actions: [],
     });
   }
   return facts;
@@ -328,7 +310,7 @@ function stopFacts(input: LiveInput): Fact[] {
   );
   if (last?.state.type !== "stopped") return [];
   const endedAtMs = last.endedAtMs ?? last.startedAtMs;
-  return [{ kind: "done", rank: 0, tone: "stopped", headline: "Stopped", detail: "You stopped it", sinceMs: last.startedAtMs, endedAtMs, atMs: endedAtMs, actions: [] }];
+  return [{ kind: "done", rank: 0, tone: "stopped", headline: "Stopped", detail: "You stopped it", sinceMs: last.startedAtMs, endedAtMs, atMs: endedAtMs }];
 }
 
 /** When the user last wrote: finished outcomes from before it are gone (J4). */
@@ -355,18 +337,13 @@ export function liveJob(input: LiveInput): LiveJob | null {
   const workers = Object.values(input.tasks).filter((task) => isWorking(task) && !isRunRequest(task.requestId));
   const startedAtMs = live ? (live.live.worked?.at(-1)?.fromMs ?? live.live.startedAtMs) : Math.min(...workers.map((task) => task.createdAtMs));
   if (live || workers.length > 0) {
-    facts.push({ kind: "running", rank: 1, tone: "running", headline: "Working", sinceMs: startedAtMs, atMs: startedAtMs, actions: [], plain: true });
+    facts.push({ kind: "running", rank: 1, tone: "running", headline: "Working", sinceMs: startedAtMs, atMs: startedAtMs, plain: true });
   }
   const waiting = facts.filter((fact) => fact.kind === "waiting");
   // A failure or an outcome from before the user's last message is over with.
   const failed = facts.filter((fact) => fact.kind === "failed" && fact.atMs >= since);
   const running = facts.filter((fact) => fact.kind === "running");
   const done = facts.filter((fact) => fact.kind === "done" && fact.atMs >= since);
-  // Every button of what is still going stays reachable, whatever the headline says.
-  const actions = [...waiting, ...failed, ...running]
-    .flatMap((fact) => fact.actions)
-    .filter((action, index, all) => all.findIndex((other) => other.type === action.type) === index);
-
   // The bare Working says least: an outcome since the user's last message says more.
   const specific = running.filter((fact) => !fact.plain);
   const shown = pick(waiting) ?? latestOf(failed) ?? pick(specific) ?? latestOf(done) ?? pick(running);
@@ -374,19 +351,21 @@ export function liveJob(input: LiveInput): LiveJob | null {
   // The thread's words go stale once something that needs the user, or a failure, came after them.
   const newer = [...waiting, ...failed].some((fact) => fact.atMs > (headline?.atMs ?? Number.POSITIVE_INFINITY));
   if (headline && !newer) {
-    const tone: LiveTone = waiting.length > 0 ? "waiting" : running.length > 0 ? "running" : failed.length > 0 ? "failed" : (shown?.tone ?? "done");
+    // A failure from before its words is one the thread has judged: the mark is the thread's
+    // (a CI run GitHub calls cancelled that the thread found passed is no failure).
+    const tone: LiveTone =
+      waiting.length > 0 ? "waiting" : running.length > 0 ? "running" : headline.failed ? "failed" : (latestOf(done)?.tone ?? "done");
     const timer = pick(running);
     return {
       tone,
       headline: headline.text,
       detail: headline.detail ?? undefined,
       sinceMs: tone === "running" ? (timer?.sinceMs ?? headline.atMs) : undefined,
-      actions,
     };
   }
   if (!shown) return null;
   const { kind: _kind, atMs: _atMs, rank: _rank, ...job } = shown;
-  return { ...job, actions };
+  return job;
 }
 
 /** The board's session's live job; null while there is none or the board is another conversation's. */

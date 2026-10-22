@@ -7,7 +7,8 @@
  * each one's icon and word look and move. With `ended=1` it runs processes, then ends them
  * (failed, finished, stopped) and writes that their rows left. With `events=1` it shows the
  * session's events while they run (the full checks, a review, the CI watch, a held merge, then a
- * merge at work), opens CI, cancels the merge, ends them, and writes what it saw.
+ * merge at work, then refused), opens CI, cancels the merge, merges anyway, ends them, and
+ * writes what it saw.
  * Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -71,6 +72,10 @@ mockIPC((command, payload) => {
   if (req.method === "cancelMerge") {
     calls.push(`cancelMerge ${req.conversationId}`);
     return { method: req.method, text: "Cancelled the merge." };
+  }
+  if (req.method === "mergeSession") {
+    calls.push(`mergeSession anyway=${String(req.anyway)}`);
+    return { method: req.method, text: "Merged." };
   }
   return { method: req.method };
 });
@@ -251,6 +256,8 @@ async function driveEvents(): Promise<Record<string, unknown>> {
   setBoard({ requests: working, integratedChecks: checks({ type: "running", command: "pnpm test", done: 2, total: 5 }), reviews: codex({ type: "running" }),
     orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - 2 * MIN, held)] });
   await frame();
+  // `until=…` stops at a moment, for a screenshot: `running`, every event at work; `refused`, the refused merge.
+  if (params.get("until") === "running") return seen;
   seen.order = ids();
   seen.rows = Object.fromEntries(ids().map((activity) => [activity, read(activity!)]));
   seen.buttons = Object.fromEntries(ids().map((activity) => {
@@ -278,9 +285,21 @@ async function driveEvents(): Promise<Record<string, unknown>> {
     orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }) });
   await frame();
   seen.next = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
+  // The merge rule refused it: no checks passed on its commit. The row waits on the user, its
+  // Merge anyway in sight.
+  setBoard({ mergeRefused: { reason: "The checks haven't run on abc1234.", sha: "abc1234000", branch: "session", base: "main", waivable: true, atMs: now - 30_000 } });
+  await frame();
+  seen.refused = read("merge");
+  seen.refusedButtons = [...(row("merge")?.nextElementSibling?.querySelectorAll("button") ?? [])].map((button) => button.textContent);
+  seen.refusedVisibleAtRest = actionsVisible("merge");
+  if (params.get("until") === "refused") return seen;
+  calls.length = 0;
+  action("merge", "Merge anyway")?.click();
+  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 1; ) await frame();
+  seen.anyway = [...calls];
   // Merged: its row leaves.
-  setBoard({ orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} },
-    { type: "merged", branch: "session", base: "main", commits: 3, askedIn: null, head: "abc", mergeCommit: "def" }) });
+  setBoard({ orchestratorSteps: [...steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }),
+    ...steps(now, { type: "merged", branch: "session", base: "main", commits: 3, askedIn: null, head: "abc", mergeCommit: "def", checksSkipped: true })] });
   await frame();
   seen.merged = ids();
   seen.restartOrDismiss = restartOrDismiss();

@@ -131,41 +131,37 @@ test("merge: merging, merged with checks passed only on the merged commit, never
 /** The merge rule refused the merge at 30: no run_checks pass on its commit. */
 const refused = (waivable: boolean, atMs = 30) => ({ reason: "The checks haven't run on 7d2a91f, the tip of s.", sha: "7d2a91f000", branch: "s", base: "main", waivable, atMs });
 
-test("a merge the merge rule refused: why, and Merge anyway only when the user can waive it", () => {
+test("a merge the merge rule refused: why, waiting on the user only when they can waive it", () => {
   const job = liveJob(input({ ...working, mergeRefused: refused(true) }))!;
   assert.deepEqual([job.tone, job.headline, job.detail], ["waiting", "Can’t merge yet", "The checks haven't run on 7d2a91f, the tip of s."]);
-  assert.deepEqual(job.actions, [{ type: "mergeAnyway" }]);
   // It waits on the user before what runs: the checks the thread runs now don't hide it.
   const running = byId([check(1, "7d2a91f000", { type: "running", command: "pnpm test", done: 0, total: 2 }, 40)]);
   assert.equal(liveJob(input({ ...working, integratedChecks: running, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
-  // One the user can't waive: the words, no button.
+  // One the user can’t waive: the words.
   const firm = liveJob(input({ ...working, mergeRefused: refused(false) }))!;
-  assert.deepEqual([firm.headline, firm.actions], ["Can’t merge yet", []]);
+  assert.deepEqual([firm.headline, firm.tone], ["Can’t merge yet", "waiting"]);
   // Over once the user wrote since, or a merge went through after it.
   assert.equal(liveJob(input({ requests: byId([request("r2", 40, { type: "done" }, 50)]), mergeRefused: refused(true) })), null);
   const merged = step(60, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "7d2a91f000", mergeCommit: "4e1c49e000" } as OrchestratorStep["kind"]);
   assert.equal(liveJob(input({ ...idle, orchestratorSteps: [merged], mergeRefused: refused(true) }))!.headline, "Merged into main");
-  // Newer than the thread's headline, it wins over it; its button stays either way.
-  const headline = { text: "Fixing the tests", detail: null, atMs: 20 };
+  // Newer than the thread's headline, it wins over it.
+  const headline = { text: "Fixing the tests", detail: null, failed: false, atMs: 20 };
   assert.equal(liveJob(input({ ...working, headline, mergeRefused: refused(true) }))!.headline, "Can’t merge yet");
   const later = liveJob(input({ ...working, headline: { ...headline, atMs: 40 }, mergeRefused: refused(true) }))!;
-  assert.deepEqual([later.headline, later.actions], ["Fixing the tests", [{ type: "mergeAnyway" }]]);
+  assert.deepEqual([later.tone, later.headline], ["waiting", "Fixing the tests"]);
 });
 
-test("the held merge and CI are the card's now, their buttons with them; CI's outcome stays until the next message", () => {
+test("the held merge and CI in words; CI's outcome stays until the next message", () => {
   const held = step(30, { type: "mergeHeld", branch: "s", base: "main", askedIn: "r1", consentedAtMs: 30, condition: { type: "workersDone" }, waiting: ["t1"], tip: "abc" } as unknown as OrchestratorStep["kind"]);
   const tasks = byId([{ id: "t1", kind: "implement", state: "running", requestId: "r1", createdAtMs: 20, updatedAtMs: 20 } as unknown as Task]);
   const job = liveJob(input({ ...working, tasks, orchestratorSteps: [held] }))!;
   assert.deepEqual([job.headline, job.detail], ["Merging after 1 worker finishes", "Into main once they’re done, as you asked"]);
-  assert.deepEqual(job.actions, [{ type: "cancelMerge" }]);
 
   const checking = liveJob(input({ ...working, orchestratorSteps: [ci(30, [run("test", "in_progress", "", 3, 5)])] }))!;
   assert.deepEqual([checking.headline, checking.detail], ["Checking CI · 3 of 5 jobs done", "main · 4e1c49e9"]);
-  assert.deepEqual(checking.actions, [{ type: "openCi", url: "https://ci/test" }]);
   // Long after it ended (no 4-second linger), the outcome holds until the user writes.
   const failed = [ci(30, [run("test", "completed", "failure")], "failed")];
   assert.deepEqual(words({ ...idle, orchestratorSteps: failed }), ["failed", "CI failed · test", "main · 4e1c49e9"]);
-  assert.deepEqual(liveJob(input({ ...idle, orchestratorSteps: failed }))!.actions, [{ type: "openCi", url: "https://ci/test" }]);
   assert.deepEqual(words({ ...idle, orchestratorSteps: [ci(30, [run("test", "completed", "success")], "passed")] })![1], "CI passed");
   const next = { requests: byId([request("r1", 10, { type: "done" }, 50), request("r2", 90, { type: "done" }, 95)]) };
   assert.equal(liveJob(input({ ...next, orchestratorSteps: [ci(30, [run("test", "completed", "success")], "passed")] })), null);
@@ -207,19 +203,33 @@ test("a finished outcome stays until the next message; what still runs stays whe
   assert.deepEqual(words({ requests: byId([request("r1", 10, { type: "stopped" }, 50)]) }), ["stopped", "Stopped", "You stopped it"]);
 });
 
-test("the thread's headline wins until something that needs the user, or a failure, comes after it; the buttons stay", () => {
-  const headline = { text: "Investigating the dev server", detail: "Looking for what holds port 1420", atMs: 40 };
+test("the thread's headline wins until something that needs the user, or a failure, comes after it", () => {
+  const headline = { text: "Investigating the dev server", detail: "Looking for what holds port 1420", failed: false, atMs: 40 };
   const held = step(30, { type: "mergeHeld", branch: "s", base: "main", askedIn: "r1", consentedAtMs: 30, condition: { type: "workersDone" }, waiting: ["t1"], tip: "abc" } as unknown as OrchestratorStep["kind"]);
   const tasks = byId([{ id: "t1", kind: "implement", state: "running", requestId: "r1", createdAtMs: 20, updatedAtMs: 20 } as unknown as Task]);
   const job = liveJob(input({ ...working, tasks, orchestratorSteps: [held], headline }))!;
   assert.deepEqual([job.tone, job.headline, job.detail], ["running", "Investigating the dev server", "Looking for what holds port 1420"]);
-  assert.deepEqual(job.actions, [{ type: "cancelMerge" }]);
   // A failure after it: the failure shows.
   const failed = byId([check(1, "abc", { type: "failed", command: "pnpm test", status: "exit 1", output: null }, 45, 50)]);
   assert.equal(words({ ...working, headline, integratedChecks: failed })![1], "Checks failed");
   // A question after it: the card points at it.
   assert.equal(words({ ...working, headline, questions: byId([question("q1", 60)]) })![1], "Waiting for your answer below");
   // Its outcome words once nothing runs: a tick, until the next message.
-  assert.deepEqual(words({ ...idle, headline: { text: "The dev server is up again", detail: null, atMs: 45 } }), ["done", "The dev server is up again", null]);
-  assert.equal(liveJob(input({ ...idle, headline: { text: "Old", detail: null, atMs: 5 } })), null);
+  assert.deepEqual(words({ ...idle, headline: { text: "The dev server is up again", detail: null, failed: false, atMs: 45 } }), ["done", "The dev server is up again", null]);
+  assert.equal(liveJob(input({ ...idle, headline: { text: "Old", detail: null, failed: false, atMs: 5 } })), null);
+});
+
+test("a success never carries the failure mark: a failure from before the thread's words is the thread's to judge", () => {
+  // Merged, then CI that GitHub marked cancelled (Windows timed out saving its build cache), then
+  // the thread's words that it passed: the merge's mark, not a failure's.
+  const merged = step(30, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "head111", mergeCommit: "4e1c49e000" } as OrchestratorStep["kind"]);
+  const cancelled = ci(40, [run("CI", "completed", "cancelled", 6, 6)], "failed");
+  const passes = { text: "Merged, pushed, CI passes", detail: "Windows only timed out saving its build cache", failed: false, atMs: 45 };
+  assert.deepEqual(words({ ...idle, orchestratorSteps: [merged, cancelled], headline: passes }), ["merged", "Merged, pushed, CI passes", "Windows only timed out saving its build cache"]);
+  // With no other outcome, the thread's words are a tick.
+  assert.equal(liveJob(input({ ...idle, orchestratorSteps: [cancelled], headline: passes }))!.tone, "done");
+  // Words that tell of a failure that still stands: the failure mark.
+  assert.equal(liveJob(input({ ...idle, orchestratorSteps: [cancelled], headline: { ...passes, text: "CI failed on Windows", failed: true } }))!.tone, "failed");
+  // A failure after the thread's words: the failure shows, mark and all.
+  assert.deepEqual(words({ ...idle, orchestratorSteps: [merged, cancelled], headline: { ...passes, atMs: 35 } })!.slice(0, 1), ["failed"]);
 });

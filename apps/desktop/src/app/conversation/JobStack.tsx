@@ -42,9 +42,9 @@ function useWaits(conversationId: string): Wait[] {
 
 /**
  * The session's Job card, only for a job of several steps: an overnight run, in every state of
- * the run, or a plan, its phase bar under what is happening right now (J1). Outside them it shows
- * only while a button is needed (Open CI, Cancel a held merge, Merge anyway): the session's state
- * alone is the tab's and the sidebar's. Then what the session waits for at a set time: cards of
+ * the run, or a plan, its phase bar under what is happening right now (J1). Never otherwise: the
+ * session's state is the tab's and the sidebar's, its checks, reviews, CI and merges are the
+ * Background rows', buttons included. Then what the session waits for at a set time: cards of
  * their own, under the context card or in its place while it is hidden.
  */
 export function JobStack({ conversationId }: { conversationId: string }) {
@@ -53,7 +53,7 @@ export function JobStack({ conversationId }: { conversationId: string }) {
   const live = useLiveJob(conversationId);
   const plan = usePlanBar(conversationId);
   const waits = useWaits(conversationId);
-  const nowMs = useNow(live?.tone === "running" ? 1_000 : waits.length > 0 ? 30_000 : null);
+  const nowMs = useNow((run || plan) && live?.tone === "running" ? 1_000 : waits.length > 0 ? 30_000 : null);
   const open = () => openPanelTab(conversationId, { type: "reviews" }, "Progress");
   return (
     <>
@@ -62,14 +62,13 @@ export function JobStack({ conversationId }: { conversationId: string }) {
           key={run.run.id}
           model={run}
           actions={overnightActions}
-          conversationId={conversationId}
           live={live}
           nowMs={nowMs}
           onOpen={open}
           onEdit={() => revealOvernight(run.run.id)}
         />
       ) : (
-        (plan || (live && live.actions.length > 0)) && <JobCard conversationId={conversationId} live={live} plan={plan} nowMs={nowMs} onOpen={open} />
+        plan && <JobCard live={live} plan={plan} nowMs={nowMs} onOpen={open} />
       )}
       {waits.map((wait) => (
         <WaitCard key={wait.key} title={wait.title} reason={wait.reason} atMs={wait.atMs} nowMs={nowMs} />

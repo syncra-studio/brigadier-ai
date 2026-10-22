@@ -1,6 +1,6 @@
 import { ciJobs, ciWatches, heldMerge, mergeWords, runFailed, shortSha } from "@/app/conversation/activity/slotView";
 import { isRunRequest } from "@/app/conversation/blocks";
-import { type LiveAction, lastMessageAtMs, liveMergeClick, sessionChecks, VENDORS } from "@/app/conversation/liveJob";
+import { lastMessageAtMs, liveMergeClick, sessionChecks, VENDORS } from "@/app/conversation/liveJob";
 import { previewActive } from "@/app/conversation/previewStatus";
 import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
 import type { Board } from "@/state/board";
@@ -22,6 +22,9 @@ export type BackgroundState = "building" | "starting" | "running" | "paused" | "
 export type BackgroundEvents = Pick<Board, "tasks" | "questions" | "reviews" | "integratedChecks" | "orchestratorSteps" | "requests"> &
   Partial<Pick<Board, "mergeRefused">>;
 
+/** An event row's button: open the CI run, cancel the held merge, merge without the checks. */
+export type EventAction = { type: "openCi"; url: string } | { type: "cancelMerge" } | { type: "mergeAnyway" };
+
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
   | { type: "run"; id: string; startedAtMs: number; run: BackgroundRun; state: BackgroundState }
@@ -34,8 +37,7 @@ export type BackgroundRow =
     /** More of where it stands, after its state: "3 of 5". */
     words: string | null;
     tip: string;
-    /** Its button: open the CI run, cancel the held merge. */
-    action: Exclude<LiveAction, { type: "mergeAnyway" }> | null;
+    action: EventAction | null;
   };
 
 /** Leading `NAME=value` assignments, as a shell reads them before the command. */
@@ -74,7 +76,8 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
  * The rows for the session's own events while they run, as the Job card reads them (an
  * overnight run's are its card's, a worker's own checks its row's): the full checks while they
  * are next and while they run, each review at work, the CI watch until its result, and a merge
- * held for workers or at work. Each leaves once it ends, passed, failed or merged.
+ * held for workers, at work, or refused for want of checks while the user may still merge it
+ * anyway. Each leaves once it ends, passed, failed or merged.
  */
 export function eventRows(board: BackgroundEvents): BackgroundRow[] {
   const rows: BackgroundRow[] = [];
@@ -105,7 +108,8 @@ export function eventRows(board: BackgroundEvents): BackgroundRow[] {
       tip: watching.map((watch) => `${watch.branch} · ${shortSha(watch.sha)}`).join("\n"), action: open?.url ? { type: "openCi", url: open.url } : null });
   }
   const held = heldMerge(steps, board.tasks, Object.values(board.questions));
-  const click = liveMergeClick(board, steps, lastMessageAtMs(board));
+  const since = lastMessageAtMs(board);
+  const click = liveMergeClick(board, steps, since);
   const refused = board.mergeRefused;
   if (held) {
     const words = held.asking ? "for your yes" : held.mergingIn ? `for ${held.base} to merge in` : held.waiting > 0 ? `on ${plural(held.waiting, "worker")}` : null;
@@ -114,6 +118,11 @@ export function eventRows(board: BackgroundEvents): BackgroundRow[] {
   } else if (click?.kind.type === "mergeRequested" && !(refused && refused.atMs >= click.atMs)) {
     rows.push({ type: "event", id: "merge", startedAtMs: click.atMs, name: `Merge into ${click.kind.base}`, state: "merging", words: null,
       tip: `${click.kind.branch} into ${click.kind.base}`, action: null });
+  } else if (refused?.waivable && refused.atMs >= since && !steps.some((step) => step.kind.type === "merged" && step.atMs > refused.atMs)) {
+    // The merge rule refused it (no checks passed on its commit): the user may merge it anyway,
+    // until they write again or a merge goes through. One the user can't waive is a failure: gone.
+    rows.push({ type: "event", id: "merge", startedAtMs: refused.atMs, name: `Merge into ${refused.base}`, state: "waiting", words: "for you",
+      tip: refused.reason, action: { type: "mergeAnyway" } });
   }
   return rows;
 }

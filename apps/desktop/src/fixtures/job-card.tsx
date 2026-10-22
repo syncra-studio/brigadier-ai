@@ -10,7 +10,6 @@ import { JobStack } from "@/app/conversation/JobStack";
 import { JobTimeline } from "@/app/side-panel/JobTab";
 import { SummaryRow, SummarySection } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
-import { fixtureClick } from "@/fixtures/input";
 import type { CiRun, IntegratedCheck, IntegratedCheckState, OrchestratorStep, Plan, Preview, Question, Request, ReviewRun, ReviewState, Task, UserRequest } from "@/ipc/generated";
 import { type Board, BoardStoreContext, emptyBoard, type ShownApproval } from "@/state/board";
 
@@ -20,15 +19,8 @@ const NOW = Date.now();
 const MIN = 60_000;
 const T0 = NOW - 20 * MIN;
 
-/** What the Job card's buttons sent. */
-const sent: string[] = [];
-mockIPC((command, payload) => {
-  if (command === "open_url") sent.push(`open ${(payload as { url: string }).url}`);
-  if (command !== "ipc_request") return null;
-  const req = (payload as { request: Request }).request;
-  sent.push(req.method === "mergeSession" ? `mergeSession anyway=${String(req.anyway)}` : req.method);
-  return req.method === "cancelMerge" || req.method === "mergeSession" ? { method: req.method, text: "Done" } : { method: req.method };
-});
+// The cards send nothing: their buttons are the Background rows'.
+mockIPC((command, payload) => (command === "ipc_request" ? { method: (payload as { request: Request }).request.method } : null));
 
 const request = (id: string, startedAtMs: number, state: UserRequest["state"], endedAtMs: number | null = null): UserRequest =>
   ({ id, conversationId: "c", preview: "", state, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [] }) as unknown as UserRequest;
@@ -107,9 +99,36 @@ const MOMENTS: Record<string, Partial<Board>> = {
     ...working,
     tasks: byId([task("t1", "running")]),
     orchestratorSteps: [held],
-    headline: { text: "Investigating the dev server", detail: "Looking for what holds port 1420", atMs: T0 + 6 * MIN },
+    headline: { text: "Investigating the dev server", detail: "Looking for what holds port 1420", failed: false, atMs: T0 + 6 * MIN },
   },
   plan: { ...working, tasks: byId([task("t1", "running")]), plans: { p1: plan } },
+  // A plan's card: the thread's headline over the phase bar; the held merge's Cancel is its Background row's.
+  planHeadline: {
+    ...working,
+    tasks: byId([task("t1", "running")]),
+    plans: { p1: plan },
+    orchestratorSteps: [held],
+    headline: { text: "Investigating the dev server", detail: "Looking for what holds port 1420", failed: false, atMs: T0 + 6 * MIN },
+  },
+  // Merged, then CI that GitHub marked cancelled (a cache save timed out), then the thread's words
+  // that it passed: a success, never the failure mark.
+  planCiCancelled: {
+    ...ended,
+    tasks: byId([task("t1", "done")]),
+    plans: { p1: plan },
+    orchestratorSteps: [merged("head111"), ci(T0 + 10 * MIN, [ciRun("CI", "completed", "cancelled", 6, 6)], "failed")],
+    headline: { text: "Merged, pushed, CI passes", detail: "Windows only timed out saving its build cache", failed: false, atMs: T0 + 11 * MIN },
+  },
+  // The thread's words tell of a failure that still stands: the failure mark.
+  planFailedHeadline: {
+    ...ended,
+    tasks: byId([task("t1", "done")]),
+    plans: { p1: plan },
+    integratedChecks: byId([check(1, "4e1c49e999", { type: "failed", command: "pnpm test", status: "2 tests failed", output: null }, T0 + 3 * MIN, T0 + 6 * MIN)]),
+    headline: { text: "The tests still fail", detail: "Next: ask you how to go on", failed: true, atMs: T0 + 7 * MIN },
+  },
+  // A refused merge in a plan: the card says so, Merge anyway is the Background row's.
+  planMergeRefused: { ...working, tasks: byId([task("t1", "running")]), plans: { p1: plan }, mergeRefused: refused(true) },
 };
 
 /** A stand-in for the context card: its surface and two of its rows. */
@@ -197,14 +216,6 @@ function Fixture() {
           ];
         }),
       );
-      // The held merge's Cancel and CI's Open CI do what the rail's pills did; Merge anyway merges without the checks.
-      const anyway = document.querySelector('[data-column="mergeRefused"] [data-slot="merge-anyway"]');
-      if (anyway) await fixtureClick(anyway);
-      const cancel = document.querySelector('[data-column="heldMerge"] [data-slot="merge-cancel"]');
-      if (cancel) await fixtureClick(cancel);
-      const openCi = document.querySelector('[data-column="ciFailed"] [data-slot="job-open-ci"]');
-      if (openCi) await fixtureClick(openCi);
-      await sleep(100);
       const tab = document.querySelector('[data-shot="tab"]')!;
       const steps = [...tab.querySelectorAll('[data-slot="timeline"] > li')];
       if (done) return;
@@ -212,7 +223,6 @@ function Fixture() {
       result.id = "job-card-result";
       result.textContent = JSON.stringify({
         ...seen,
-        sent,
         tab: {
           steps: steps.map((item) => item.querySelector("div > span")?.textContent),
           current: steps.map((item) => item.getAttribute("aria-current")),

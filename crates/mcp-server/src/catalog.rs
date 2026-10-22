@@ -329,9 +329,10 @@ lists them for the user. Record again when a status changes.";
 
 const SET_HEADLINE: &str = "Say what the session is doing now, for the user's Job card: \
 `headline` in a few plain words (\"Starting the dev server\", \"The build failed\", \"It's up \
-again\"), and `detail`, one short line under it, usually what comes next (\"Next: open the \
-window\"). Call it when what you are doing changes, not for every step; it replaces the last one \
-and stays until the user's next message. Returns at once.";
+again\"), `detail`, one short line under it, usually what comes next (\"Next: open the \
+window\"), and `failed` true when the words tell of a failure that still stands. Call it when \
+what you are doing changes, not for every step; it replaces the last one and stays until the \
+user's next message. Returns at once.";
 
 const LIST_SESSIONS: &str = "List the other sessions of your projects that message_session \
 can reach, newest activity first: each one's id, title, project, state (working, idle, \

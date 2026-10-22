@@ -86,8 +86,8 @@ async fn an_open_thread_hears_once(name: &str, number: u32) -> (&'static Revisio
     (added, second)
 }
 
-/// `set_headline` stores the session's headline and detail line and sends them as an event;
-/// an empty one is refused, and the user's next message clears it.
+/// `set_headline` stores the session's headline, detail line and whether it tells of a failure,
+/// and sends them as an event; an empty one is refused, and the user's next message clears it.
 #[tokio::test]
 async fn the_threads_headline_stays_until_the_users_next_message() {
     let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
@@ -101,6 +101,7 @@ async fn the_threads_headline_stays_until_the_users_next_message() {
                 if turn.is_orchestrator() && turn.input.contains("Start the server") {
                     for arguments in [
                         json!({ "headline": "  " }),
+                        json!({ "headline": "The build failed", "failed": true }),
                         json!({
                             "headline": "Starting   the dev server",
                             "detail": "Next: open the window",
@@ -120,20 +121,24 @@ async fn the_threads_headline_stays_until_the_users_next_message() {
     let board = flow.settled().await;
     let said = std::mem::take(&mut *replies.lock().unwrap());
     assert!(said[0].0, "an empty headline is refused: {said:?}");
-    assert!(!said[1].0, "{said:?}");
+    assert!(!said[1].0 && !said[2].0, "{said:?}");
     let headline = board.headline.clone().expect("the headline is stored");
     assert_eq!(headline.text, "Starting the dev server");
     assert_eq!(headline.detail.as_deref(), Some("Next: open the window"));
+    assert!(
+        !headline.failed,
+        "a headline tells of no failure unless the thread says so"
+    );
     let events = flow.events().await;
     assert!(
         events.iter().any(|event| matches!(
             event,
             crate::model::DomainEvent::HeadlineSet {
-                headline: Some(_),
+                headline: Some(said),
                 ..
-            }
+            } if said.text == "The build failed" && said.failed
         )),
-        "sent as an event"
+        "sent as an event, with whether it tells of a failure"
     );
 
     // The turn ending leaves it; the user's next message clears it.

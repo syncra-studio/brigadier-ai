@@ -1284,6 +1284,9 @@ pub struct SetHeadline {
     /// One short line under it, usually what comes next ("Next: open the window").
     #[serde(default)]
     pub detail: Option<String>,
+    /// True when the words tell of a failure that still stands ("The build failed").
+    #[serde(default)]
+    pub failed: bool,
 }
 
 /// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it

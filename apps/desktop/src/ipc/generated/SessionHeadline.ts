@@ -13,4 +13,9 @@ text: string,
 /**
  * One line under it: "Next: open the window".
  */
-detail: string | null, atMs: number, };
+detail: string | null, 
+/**
+ * The words tell of a failure that still stands: the Job card's mark is a failure's. Else
+ * none is, even for a failure from before them: the thread has judged it.
+ */
+failed: boolean, atMs: number, };

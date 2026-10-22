@@ -1913,6 +1913,10 @@ pub struct SessionHeadline {
     pub text: String,
     /// One line under it: "Next: open the window".
     pub detail: Option<String>,
+    /// The words tell of a failure that still stands: the Job card's mark is a failure's. Else
+    /// none is, even for a failure from before them: the thread has judged it.
+    #[serde(default)]
+    pub failed: bool,
     pub at_ms: i64,
 }
 

@@ -10,7 +10,7 @@ import { Terminal } from "@/components/icons";
 import { TooltipIconButton, Button } from "@/components/controls";
 import { openUrl } from "@/ipc/client";
 import type { Preview } from "@/ipc/generated";
-import { cancelMerge, stopBackgroundRun, stopPreview } from "@/state/actions";
+import { cancelMerge, mergeAnyway, stopBackgroundRun, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { openLink } from "@/state/links";
 import { openPanelTab } from "@/state/sessionTabs";
@@ -39,7 +39,7 @@ const label = (activity: Activity) =>
  * full checks, a review, the CI watch, a held merge or one at work), each with its state in a
  * word and an icon (a worker's copy of an app or a browser at it is a state of the app's row),
  * how long it has gone, and its button on hover: Stop on a process, Open CI on the CI watch,
- * Cancel on a held merge. A click on a web preview that is up opens its page in the browser
+ * Cancel on a held merge, and Merge anyway, always shown, on a merge refused for want of checks. A click on a web preview that is up opens its page in the browser
  * (Brigadier's, by Settings › Browser), with what it prints one button away; an event opens the
  * Progress tab; any other row opens what it prints in a tab. The rows come from the live board:
  * one leaves as soon as its thing ends, finished, failed or stopped (the thread's fold keeps the
@@ -86,13 +86,17 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
     </span>
   );
   if (activity.type === "event") {
+    // What waits on the user's Merge anyway keeps no clock, and its name keeps the room.
+    const asks = activity.action?.type === "mergeAnyway";
     return (
       <SummaryRowButton
         data-activity={activity.id}
         title={activity.tip}
         icon={<StateIcon state={activity.state} />}
-        meta={meta}
+        meta={asks ? undefined : meta}
         action={activity.action ? <EventButton conversationId={conversationId} action={activity.action} /> : undefined}
+        // A refused merge waits on the user: its Merge anyway shows all the time, not only on hover.
+        actionVisible={asks}
         onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}
       >
         {name}
@@ -138,7 +142,10 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
   );
 }
 
-/** An event row's button: Open CI opens the CI run in the browser, Cancel takes back the held merge. */
+/**
+ * An event row's button: Open CI opens the CI run in the browser, Cancel takes back the held
+ * merge, Merge anyway merges without the checks.
+ */
 function EventButton({ conversationId, action }: { conversationId: string; action: Extract<Activity, { type: "event" }>["action"] }) {
   const [busy, setBusy] = useState(false);
   if (action?.type === "openCi") {
@@ -148,17 +155,20 @@ function EventButton({ conversationId, action }: { conversationId: string; actio
       </Button>
     );
   }
-  if (action?.type !== "cancelMerge") return null;
+  if (!action) return null;
+  const [send, words, failed] = action.type === "cancelMerge"
+    ? [cancelMerge, "Cancel", "Couldn't cancel it"]
+    : [mergeAnyway, "Merge anyway", "Couldn't merge it"];
   return (
-    <Button variant="ghost" size="xs" disabled={busy} aria-label="Cancel the merge"
+    <Button variant="ghost" size="xs" disabled={busy} aria-label={action.type === "cancelMerge" ? "Cancel the merge" : "Merge anyway"}
       onClick={() => {
         setBusy(true);
-        cancelMerge(conversationId).then(() => setBusy(false), (reason: unknown) => {
+        send(conversationId).then(() => setBusy(false), (reason: unknown) => {
           setBusy(false);
-          toast(`Couldn't cancel it: ${String(reason)}`, { tone: "error" });
+          toast(`${failed}: ${String(reason)}`, { tone: "error" });
         });
       }}>
-      Cancel
+      {words}
     </Button>
   );
 }

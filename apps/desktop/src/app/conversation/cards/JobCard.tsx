@@ -1,17 +1,14 @@
 import { type ReactNode, useState } from "react";
 
 import type { PlanBar } from "@/app/conversation/boardJob";
-import type { LiveAction, LiveJob } from "@/app/conversation/liveJob";
+import type { LiveJob } from "@/app/conversation/liveJob";
 import type { OvernightActions, OvernightCardModel } from "@/app/conversation/overnightAdapter";
 import { runJob } from "@/app/conversation/runJob";
-import { useAction } from "@/app/conversation/useAction";
 import { useRunCommand } from "@/app/conversation/useRunCommand";
 import { JobProgress, ScheduleCard } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { ConfirmDialog } from "@/components/overlays";
-import { openUrl } from "@/ipc/client";
 import { cn } from "@/lib/utils";
-import { cancelMerge, mergeAnyway } from "@/state/actions";
 
 /**
  * A card of the summary's column beside the context card (Q88): the same surface, its own card.
@@ -56,76 +53,17 @@ function elapsedOf(live: LiveJob, nowMs: number): number | undefined {
 }
 
 /**
- * The live job's buttons (R2): Open CI for the push CI checks, Cancel for the merge held until
- * workers finish (they were the composer rail's pills; now they are the card's), and Merge
- * anyway for a merge the merge rule refused.
- */
-export function LiveButtons({ conversationId, actions }: { conversationId: string; actions: readonly LiveAction[] }) {
-  const merge = useAction();
-  if (actions.length === 0) return null;
-  return (
-    <>
-      {actions.map((action) => {
-        switch (action.type) {
-          case "openCi":
-            return (
-              <Button key={action.type} type="button" size="xs" variant="secondary" data-slot="job-open-ci" onClick={() => void openUrl(action.url).catch(() => {})}>
-                Open CI
-              </Button>
-            );
-          case "cancelMerge":
-            return (
-              <Button
-                key={action.type}
-                type="button"
-                size="xs"
-                variant="secondary"
-                data-slot="merge-cancel"
-                disabled={merge.busy}
-                onClick={() => merge.run(() => cancelMerge(conversationId))}
-              >
-                Cancel
-              </Button>
-            );
-          case "mergeAnyway":
-            return (
-              <Button
-                key={action.type}
-                type="button"
-                size="xs"
-                variant="secondary"
-                data-slot="merge-anyway"
-                disabled={merge.busy}
-                onClick={() => merge.run(() => mergeAnyway(conversationId))}
-              >
-                Merge anyway
-              </Button>
-            );
-        }
-      })}
-      {merge.error && (
-        <p role="alert" className="text-destructive text-xs">
-          {merge.error}
-        </p>
-      )}
-    </>
-  );
-}
-
-/**
  * The session's Job card (J1): what is happening right now, in one headline and one detail line
- * (J6), with the buttons its state needs. Only a real plan of several steps adds its phase bar
+ * (J6); its buttons are the Background rows'. Only a real plan of several steps adds its phase bar
  * (mockup 06): one segment per step, the step at work before the next. A click opens every step
  * in a tab.
  */
 export function JobCard({
-  conversationId,
   live,
   plan,
   nowMs,
   onOpen,
 }: {
-  conversationId: string;
   live: LiveJob | null;
   plan?: PlanBar | null | undefined;
   nowMs: number;
@@ -148,7 +86,6 @@ export function JobCard({
         stalled={!live && plan ? !plan.stages.some((stage) => stage.state === "active") && failedAt !== -1 : false}
         elapsedMs={live ? elapsedOf(live, nowMs) : undefined}
         detail={detail || undefined}
-        actions={live && live.actions.length > 0 ? <LiveButtons conversationId={conversationId} actions={live.actions} /> : undefined}
       />
     </JobSurface>
   );
@@ -163,17 +100,14 @@ export function JobCard({
 export function RunJobCard({
   model,
   actions,
-  conversationId = "",
   live,
   nowMs = 0,
   onOpen,
   onEdit,
 }: {
   model: OvernightCardModel;
-  /** The session's id, for the live buttons. */
-  conversationId?: string | undefined;
   actions: OvernightActions;
-  /** What the session waits on or does right now: its words go over the run's own (J5), its buttons with them. */
+  /** What the session waits on or does right now: its words go over the run's own (J5). */
   live?: LiveJob | null | undefined;
   nowMs?: number | undefined;
   onOpen?: () => void;
@@ -204,7 +138,6 @@ export function RunJobCard({
       {job.merge.merged ? "Merged" : "Merge"}
     </Button>
   ) : null;
-  const liveButtons = said && said.actions.length > 0 ? <LiveButtons conversationId={conversationId} actions={said.actions} /> : null;
   return (
     <>
       <JobSurface label={`${job.title}: see the run`} onOpen={onOpen}>
@@ -223,14 +156,7 @@ export function RunJobCard({
           detail={said?.detail ?? job.detail}
           warning={job.warning}
           onCancel={job.stop && !stopped ? () => setAsking(true) : undefined}
-          actions={
-            buttons || liveButtons ? (
-              <>
-                {buttons}
-                {liveButtons}
-              </>
-            ) : null
-          }
+          actions={buttons}
         />
         {command.error && (
           <p role="alert" className="text-destructive text-xs">

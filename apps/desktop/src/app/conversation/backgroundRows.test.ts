@@ -114,7 +114,7 @@ test("the CI watch is a row with Open CI while it watches, and leaves when its r
   assert.deepEqual(events({ orchestratorSteps: [ci(30, [ciRun("completed", "success", 5, 5)], "passed")] }), []);
 });
 
-test("a merge held for workers is a row with Cancel, one at work a row of its own; each leaves once merged or refused", () => {
+test("a merge held for workers is a row with Cancel, one at work a row of its own, a refused one waits with Merge anyway; each leaves once over", () => {
   const held = step(30, { type: "mergeHeld", branch: "s", base: "main", askedIn: "r1", consentedAtMs: 30, condition: { type: "workersDone" }, waiting: ["t1"], tip: "abc" });
   const tasks = { t1: { id: "t1", kind: "implement", state: "running", requestId: "r1", createdAtMs: 20, updatedAtMs: 20 } as unknown as Task };
   assert.deepEqual(events({ tasks, orchestratorSteps: [held] }), [["Merge into main", "waiting", "on 1 worker", "cancelMerge"]]);
@@ -124,7 +124,16 @@ test("a merge held for workers is a row with Cancel, one at work a row of its ow
   assert.deepEqual(events({ tasks, orchestratorSteps: [held, requested, merged] }), []);
   assert.deepEqual(events({ tasks, orchestratorSteps: [held, step(50, { type: "mergeCancelled", askedIn: "r1" })] }), []);
   const refused = { reason: "The checks haven't run on abc.", sha: "abc", branch: "s", base: "main", waivable: true, atMs: 70 };
-  assert.deepEqual(events({ orchestratorSteps: [requested], mergeRefused: refused }), []);
+  // Refused for want of checks: the click's row waits on the user, with Merge anyway, until they
+  // write again or a merge goes through. One they can't waive is a failure: no row.
+  const waiting = backgroundRows([], [], null, () => null, board({ orchestratorSteps: [requested], mergeRefused: refused }));
+  assert.deepEqual(waiting.map((row) => row.type === "event" && [row.name, row.state, row.words, row.tip, row.action]), [
+    ["Merge into main", "waiting", "for you", "The checks haven't run on abc.", { type: "mergeAnyway" }],
+  ]);
+  assert.deepEqual(events({ mergeRefused: refused }), [["Merge into main", "waiting", "for you", "mergeAnyway"]]);
+  assert.deepEqual(events({ orchestratorSteps: [requested], mergeRefused: { ...refused, waivable: false } }), []);
+  assert.deepEqual(events({ orchestratorSteps: [requested, step(90, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: "r1", head: "abc", mergeCommit: "def", checksSkipped: true })], mergeRefused: refused }), []);
+  assert.deepEqual(events({ mergeRefused: refused, requests: { ...working, r2: request("r2", 75, { type: "working" }) } }), []);
   // A click whose work is over (turned down, or stopped) merges nothing.
   assert.deepEqual(events({ orchestratorSteps: [requested], requests: { r1: request("r1", 10, { type: "done" }) } }), []);
 });

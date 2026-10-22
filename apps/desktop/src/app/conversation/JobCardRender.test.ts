@@ -18,9 +18,8 @@ type Seen = {
   schedule: string | null;
 };
 
-test("the Job card shows only for a plan or a button, saying what is happening right now from the board's events", { timeout: 60000 }, async (t) => {
+test("the Job card shows only for a plan or an overnight run, saying what is happening right now from the board's events", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "job-card.html", "job-card-result", 30000, { reducedMotion: true })) as Record<string, Seen> & {
-    sent: string[];
     tab: { steps: string[]; current: (string | null)[]; findings: number };
   };
   const card = (id: string) => {
@@ -28,47 +27,45 @@ test("the Job card shows only for a plan or a button, saying what is happening r
     return { tone, headline, detail, buttons };
   };
 
-  // No Job card for the session's state alone, outside a plan or an overnight run: idle, at work,
-  // checks, reviews, merges, waiting on the user, failures and outcomes.
+  // No Job card outside a plan or an overnight run, whatever the session does: idle, at work,
+  // checks, reviews, CI, merges held, refused or done, waiting on the user, failures and outcomes,
+  // and the thread's own headline. Their buttons are the Background rows'.
   for (const id of [
-    "idle", "working", "checksRunning", "checksFailed", "checksPassed", "reviewRunning", "reviewFindings", "reviewClean",
-    "merging", "merged", "mergedUnchecked", "mergeRefusedFirm", "mergeRefusedOld", "mergedAnyway", "waitingAnswer",
-    "waitingApproval", "workerFailed", "devServer", "stopped", "nextMessage",
+    "heldMerge", "mergeRefused", "ciFailed", "idle", "working", "checksRunning", "checksFailed", "checksPassed", "reviewRunning",
+    "reviewFindings", "reviewClean", "ciChecking", "merging", "merged", "mergedUnchecked", "mergeRefusedFirm", "mergeRefusedOld",
+    "mergedAnyway", "waitingAnswer", "waitingApproval", "workerFailed", "devServer", "stopped", "nextMessage", "headline",
   ]) {
     assert.deepEqual(seen[id]!.cards, ["context"], `${id} has no Job card`);
   }
 
-  // Only a button keeps it: CI's Open CI, the held merge's Cancel, and Merge anyway for a refusal the user can waive.
-  assert.deepEqual(card("ciChecking"), { tone: "running", headline: "Checking CI · 3 of 5 jobs done", detail: ["main · 4e1c49e9"], buttons: ["Open CI"] });
-  assert.deepEqual(card("ciFailed"), { tone: "failed", headline: "CI failed · test", detail: ["main · 4e1c49e9"], buttons: ["Open CI"] });
-  assert.deepEqual(card("heldMerge"), {
-    tone: "running",
-    headline: "Merging after 1 worker finishes",
-    detail: ["Into main once they’re done, as you asked"],
-    buttons: ["Cancel"],
-  });
-  assert.deepEqual(card("mergeRefused"), {
-    tone: "waiting",
-    headline: "Can’t merge yet",
-    detail: ["The checks haven't run on 7d2a91f, the tip of brigadier/s."],
-    buttons: ["Merge anyway"],
-  });
-  assert.equal(seen["mergeRefused"]!.timer, false);
-  assert.ok(seen.sent.includes("cancelMerge"), `Cancel cancels the held merge: ${seen.sent.join(", ")}`);
-  assert.ok(seen.sent.includes("open https://github.com/o/r/actions/runs/test"), `Open CI opens the failed run: ${seen.sent.join(", ")}`);
-  assert.ok(seen.sent.includes("mergeSession anyway=true"), `Merge anyway merges without the checks: ${seen.sent.join(", ")}`);
-
-  // The thread's headline wins, its detail under it, while the held merge's Cancel keeps the card.
-  assert.deepEqual(card("headline"), {
+  // A plan's card: the thread's headline wins, its detail after the step, and no buttons.
+  assert.deepEqual(card("planHeadline"), {
     tone: "running",
     headline: "Investigating the dev server",
-    detail: ["Looking for what holds port 1420"],
-    buttons: ["Cancel"],
+    detail: ["Step 1 of 3 · Looking for what holds port 1420"],
+    buttons: [],
+  });
+  assert.deepEqual(card("planMergeRefused"), {
+    tone: "waiting",
+    headline: "Can’t merge yet",
+    detail: ["Step 1 of 3 · The checks haven't run on 7d2a91f, the tip of brigadier/s."],
+    buttons: [],
+  });
+
+  // A success never carries the failure mark: CI that GitHub marked cancelled before the thread
+  // said it passed is the merge's tick; only words that tell of a failure get the cross.
+  assert.equal(card("planCiCancelled").headline, "Merged, pushed, CI passes");
+  assert.equal(card("planCiCancelled").tone, "merged");
+  assert.deepEqual(card("planFailedHeadline"), {
+    tone: "failed",
+    headline: "The tests still fail",
+    detail: ["Step 2 of 3 · Next: ask you how to go on"],
+    buttons: [],
   });
 
   // No fixed phases: only a real plan has a bar, one segment per step, the step at work before the next.
   for (const [id, column] of Object.entries(seen)) {
-    if (id !== "plan" && typeof column === "object" && "bar" in column) assert.equal(column.bar, null, `${id} has no bar`);
+    if (!id.startsWith("plan") && typeof column === "object" && "bar" in column) assert.equal(column.bar, null, `${id} has no bar`);
   }
   assert.deepEqual(seen["plan"]!.bar, ["active", "pending", "pending"]);
   assert.deepEqual(seen["plan"]!.line, ["active:Move settings", "next:Delete old store"]);
