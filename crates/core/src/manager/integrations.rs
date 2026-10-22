@@ -1466,6 +1466,10 @@ impl SessionManager {
             self.trusted_repo(conversation),
         );
         let project = self.session_project(conversation);
+        // A thread runs in its workspace, a checkout of the project.
+        let in_checkout = self
+            .recorded_workspace(conversation)
+            .is_some_and(|workspace| workspace.path == cwd);
         let cwd = cwd.to_owned();
         super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
@@ -1473,7 +1477,7 @@ impl SessionManager {
                 agent: agent(provider),
                 cwd: &cwd,
                 project: repo.as_deref(),
-                in_checkout: false,
+                in_checkout,
             };
             let switches = Switches {
                 settings: &settings,

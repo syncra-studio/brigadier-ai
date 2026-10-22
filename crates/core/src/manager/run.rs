@@ -235,7 +235,7 @@ impl SessionManager {
         }
         brigadier_providers::cli::apply_session_env(
             &mut spec,
-            &SessionManager::thread_env(&self.thread_temp(id).await?, cli.provider),
+            &SessionManager::thread_env(&self.thread_temp(id).await?),
             &[],
         );
         // Recorded under the session's background owner, not the CLI's: a command that goes

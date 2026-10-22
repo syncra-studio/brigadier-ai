@@ -45,7 +45,7 @@ fn checks(asks: &'static [(&'static str, &'static str, &'static str)], seen: Log
             else {
                 return Reply::text("Fine.");
             };
-            std::fs::write(turn.add_dirs[0].join(file), "notes\n").unwrap();
+            std::fs::write(turn.cwd.join(file), "notes\n").unwrap();
             let reply = turn
                 .call(
                     "run_check",
@@ -128,15 +128,7 @@ async fn a_passing_check_commits_the_threads_change_and_a_failing_one_nothing() 
             crate::manager::checks::AFTER_COMMIT
         ),
     );
-    let workspace = flow
-        .thread_specs()
-        .last()
-        .unwrap()
-        .1
-        .add_dirs
-        .first()
-        .cloned()
-        .unwrap();
+    let workspace = flow.thread_specs().last().unwrap().1.cwd.clone();
     let message = git(&workspace, &["log", "-1", "--format=%B"]);
     assert!(message.starts_with("Add the notes file"), "{message}");
     assert!(message.contains(THREAD_TRAILER), "{message}");

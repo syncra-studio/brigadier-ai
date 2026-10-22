@@ -245,7 +245,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                     && workspace_seen.lock().unwrap().is_none()
                 {
                     assert!(turn.input.contains("run_check's `commit` and `fixes`"));
-                    let workspace = turn.add_dirs[0].clone();
+                    let workspace = turn.cwd.clone();
                     *workspace_seen.lock().unwrap() = Some(workspace.clone());
                     std::fs::write(workspace.join("notes.txt"), "fixed notes\n").unwrap();
                     // An id that is no finding here is refused before anything runs or commits,

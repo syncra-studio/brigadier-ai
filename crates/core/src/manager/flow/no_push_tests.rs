@@ -33,7 +33,7 @@ fn delegating(inputs: Inputs) -> Script {
                 inputs
                     .lock()
                     .unwrap()
-                    .push((turn.add_dirs[0].clone(), turn.input.clone()));
+                    .push((turn.cwd.clone(), turn.input.clone()));
                 let reply = turn
                     .call(
                         "delegate_task",

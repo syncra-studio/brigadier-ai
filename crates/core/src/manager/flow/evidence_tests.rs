@@ -48,8 +48,8 @@ async fn every_check_cites_its_output_and_a_live_check_reruns_unless_it_declares
                     }
                 };
                 // An ignored fixture: git's tree doesn't see it change.
-                std::fs::write(turn.add_dirs[0].join(".gitignore"), "fixture.txt\n").unwrap();
-                let fixture = turn.add_dirs[0].join("fixture.txt");
+                std::fs::write(turn.cwd.join(".gitignore"), "fixture.txt\n").unwrap();
+                let fixture = turn.cwd.join("fixture.txt");
                 std::fs::write(&fixture, "one\n").unwrap();
                 // An ordinary check: run, then from the cache.
                 check(json!({ "command": "echo checked" })).await;

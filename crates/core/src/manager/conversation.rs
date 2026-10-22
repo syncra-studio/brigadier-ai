@@ -3373,8 +3373,24 @@ impl SessionManager {
             self.last_native_id(&conv.id, choice.provider).await
         };
         let reseed_needed = !fresh && resume.is_none() && self.has_history(&conv.id).await;
+        // A thread runs in its workspace (#523), so its plain commands and its CLI's own
+        // instruction discovery see the repository. Only a New worktree is Brigadier's to own;
+        // a Local checkout is the user's folder. The scratch folder stays its sweep folder.
+        let workspace_cwd = launch
+            .as_ref()
+            .and_then(|launch| launch.workspace.as_ref())
+            .map(|workspace| workspace.path.clone());
+        let owned_cwd = workspace_cwd.is_none()
+            || matches!(
+                conversation.setup,
+                Some(Setup::Session {
+                    environment: crate::model::Environment::NewWorktree { .. },
+                    ..
+                })
+            );
+        let cwd = workspace_cwd.unwrap_or_else(|| dir.clone());
         let mut spec = SessionSpec {
-            cwd: dir.clone(),
+            cwd: cwd.clone(),
             model: choice.model.clone(),
             effort: choice.effort.clone(),
             fast: choice.fast == Some(true),
@@ -3402,19 +3418,13 @@ impl SessionManager {
             // What the user switched off of its agent's own setup (`integrations`).
             switched_off: match conv.kind {
                 ConversationKind::Session => {
-                    self.thread_switched_off(&conv.id, choice.provider, &dir)
+                    self.thread_switched_off(&conv.id, choice.provider, &cwd)
                         .await
                 }
                 ConversationKind::Chat => Default::default(),
             },
-            // The workspace is the thread's to work in, never its own to clean up: it is not
-            // recorded under the thread's owner. A tab chat's checkout is read the same way.
-            add_dirs: launch
-                .as_ref()
-                .and_then(|launch| launch.workspace.as_ref())
-                .map(|workspace| vec![workspace.path.clone()])
-                .or_else(|| tab_checkout.clone().map(|checkout| vec![checkout]))
-                .unwrap_or_default(),
+            // A tab chat reads its session's checkout, never its own to clean up.
+            add_dirs: tab_checkout.clone().into_iter().collect(),
             // A thread runs with the project's own setup (its hooks, MCP servers, skills) when
             // the user trusts the folder.
             project: launch
@@ -3427,13 +3437,13 @@ impl SessionManager {
                 .map(|workspace| workspace.path.clone()),
             env: tmp
                 .as_deref()
-                .map(|tmp| SessionManager::thread_env(tmp, choice.provider))
+                .map(SessionManager::thread_env)
                 .unwrap_or_default(),
             unset_env: Vec::new(),
             low_priority: false,
             record_to: None,
             redactor: grant_redactor.clone(),
-            owned_cwd: true,
+            owned_cwd,
             sweep_dir: Some(dir.clone()),
             // An orchestrator is reborn, never compacted.
             auto_compact: conv.kind == ConversationKind::Chat,

@@ -115,7 +115,7 @@ fn full_runs(repo: &std::path::Path) -> usize {
 
 /// Commits `file` in the thread's workspace, as the thread's own edit; its new tip.
 fn thread_commit(turn: &Turn, file: &str, text: &str) -> String {
-    let workspace = &turn.add_dirs[0];
+    let workspace = &turn.cwd;
     std::fs::write(workspace.join(file), text).unwrap();
     git(workspace, &["add", file]);
     git(workspace, &["commit", "-q", "-m", &format!("Add {file}")]);
@@ -861,7 +861,7 @@ async fn a_merge_into_main_needs_run_checks_passed_on_its_commit_or_the_users_me
                     finish(json!({ "consent": "Merge it anyway", "anyway": "Merge it anyway" }))
                         .await;
                 } else if input.contains("Fix it, check it and merge it") {
-                    let workspace = &turn.add_dirs[0];
+                    let workspace = &turn.cwd;
                     git(workspace, &["rm", "-q", "broken.txt"]);
                     git(workspace, &["commit", "-q", "-m", "Fix it"]);
                     turn.call("run_checks", json!({})).await;
@@ -1075,7 +1075,7 @@ async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
                 return Reply::text("Built the modules and the feature.");
             }
             if turn.input.starts_with("Build the modules") {
-                let workspace = &turn.add_dirs[0];
+                let workspace = &turn.cwd;
                 for module in ["a", "b", "c", "d", "e", "f"] {
                     let text: String = (1..=40)
                         .map(|n| format!("pub fn {module}_{n}() {{}}\n"))

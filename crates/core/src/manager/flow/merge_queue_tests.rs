@@ -109,7 +109,7 @@ async fn a_pull_request_watch_survives_until_the_request_is_recorded_ready() {
             let (dir, ran, done) = (dir.clone(), ran.clone(), done.clone());
             async move {
                 if turn.is_orchestrator() && turn.input.contains("Ship the notes.") {
-                    ship(&turn.add_dirs[0], dir.get().unwrap(), true).await;
+                    ship(&turn.cwd, dir.get().unwrap(), true).await;
                     ran.notify_one();
                     done.notified().await;
                 }
@@ -167,7 +167,7 @@ async fn queued_then_merged(name: &str, auto: bool) {
                     return Reply::text("Done.");
                 }
                 if turn.input.contains("Ship the notes.") {
-                    ship(&turn.add_dirs[0], dir.get().unwrap(), auto).await;
+                    ship(&turn.cwd, dir.get().unwrap(), auto).await;
                     return Reply::text("PR #7 is queued to merge.");
                 }
                 Reply::text("Noted.")
@@ -224,7 +224,7 @@ async fn a_queued_pull_request_merging_while_a_command_runs_is_recorded_after_it
                 if !turn.is_orchestrator() {
                     return Reply::text("Done.");
                 }
-                let workspace = turn.add_dirs[0].clone();
+                let workspace = turn.cwd.clone();
                 if turn.input.contains("Ship the notes.") {
                     ship(&workspace, dir.get().unwrap(), true).await;
                     return Reply::text("PR #7 is queued to merge.");
@@ -324,7 +324,7 @@ async fn queued_across_a_restart(name: &str, merged_while_off: bool) {
                     return Reply::text("Done.");
                 }
                 if turn.input.contains("Ship the notes.") {
-                    ship(&turn.add_dirs[0], dir.get().unwrap(), true).await;
+                    ship(&turn.cwd, dir.get().unwrap(), true).await;
                     return Reply::text("PR #7 will merge once its checks pass.");
                 }
                 Reply::text("Noted.")

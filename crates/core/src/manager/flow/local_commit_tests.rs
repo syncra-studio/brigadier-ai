@@ -39,7 +39,7 @@ async fn on_the_users_checkout_the_thread_commits_only_when_asked_and_without_a_
                     return Reply::text("");
                 }
                 heard.lock().unwrap().push(turn.input.clone());
-                let workspace = turn.add_dirs[0].clone();
+                let workspace = turn.cwd.clone();
                 if turn.input.contains("Fix the typo.") {
                     std::fs::write(workspace.join("README.md"), "fixed\n").unwrap();
                     return Reply::text("Fixed the typo.\nChanged 1 file, not committed.");
@@ -172,7 +172,7 @@ async fn the_self_edit_metric_counts_the_threads_uncommitted_and_trailerless_cha
             if !turn.is_orchestrator() {
                 return Reply::text("");
             }
-            let workspace = turn.add_dirs[0].clone();
+            let workspace = turn.cwd.clone();
             if turn.input.contains("Fix the typo.") {
                 std::fs::write(workspace.join("README.md"), "fixed\nand more\n").unwrap();
                 return Reply::text("Fixed the typo.\nChanged 1 file, not committed.");
@@ -223,6 +223,14 @@ async fn the_self_edit_metric_counts_the_threads_uncommitted_and_trailerless_cha
         .id;
     flow.say("Look around.").await;
     flow.settled().await;
+    // The thread runs in the user's checkout, which is never Brigadier's to own (#523).
+    let (_, spec) = flow.thread_specs().pop().expect("the thread's CLI");
+    assert_eq!(
+        spec.cwd.canonicalize().unwrap(),
+        flow.repo.canonicalize().unwrap()
+    );
+    assert!(!spec.owned_cwd);
+    assert!(spec.add_dirs.is_empty(), "{:?}", spec.add_dirs);
     let before = std::fs::read_to_string(flow.repo.join("README.md")).unwrap();
     let removed = i64::try_from(before.lines().count()).unwrap();
     // Uncommitted before the request: the user's, not the thread's.

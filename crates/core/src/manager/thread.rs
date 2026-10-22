@@ -39,15 +39,6 @@ use crate::model::{
 use crate::work::TaskKind;
 use crate::{Error, Result};
 
-/// The read-back window of a Claude thread's Bash output (the documented maximum): a failing
-/// command's excerpt is cut from it, so a long failing log still ends with its last lines
-/// (docs/evidence/2026-10-07-thread-phase2-contracts.md §3).
-const BASH_MAX_OUTPUT_LENGTH: &str = "150000";
-
-/// The longest a Claude thread's own shell command may run (2 minutes): longer ones go through
-/// `run` or `run_check`, which go to the background rather than hold the thread.
-const BASH_TIMEOUT_MS: &str = "120000";
-
 /// `run_unsandboxed` as a Claude thread's CLI names it in its permission prompt.
 const CLAUDE_RUN_UNSANDBOXED: &str = "mcp__brigadier__run_unsandboxed";
 
@@ -197,6 +188,13 @@ impl SessionManager {
         self.recorded_workspace(id)
             .map(Some)
             .ok_or_else(|| Error::Invalid("the session's worktree could not be made".into()))
+    }
+
+    /// Where the thread's CLI runs: its workspace (#523), or its scratch folder while it has
+    /// none yet.
+    pub(crate) fn thread_cwd(&self, id: &ConversationId) -> PathBuf {
+        self.recorded_workspace(id)
+            .map_or_else(|| self.owned_dir("orch", &id.0), |workspace| workspace.path)
     }
 
     /// The thread's access at `permission`, mapped as a worker's is: Full access runs without
@@ -373,28 +371,10 @@ impl SessionManager {
     }
 
     /// The thread's environment: its temporary files in its short temporary folder `tmp`, as
-    /// a worker's are in its own. A Claude thread reads back up to [`BASH_MAX_OUTPUT_LENGTH`]
-    /// of a command's output, has no background jobs of its own, and its shell holds it at
-    /// most [`BASH_TIMEOUT_MS`]: a job of the CLI's dies with it, unseen (a closed or replaced
-    /// CLI, a restart), and a long command holds the thread from the user. Its long commands
-    /// go through `run` and `run_check`, which go to the background on their own
-    /// ([`super::background_runs`]).
-    pub(crate) fn thread_env(tmp: &Path, provider: ProviderKind) -> Vec<(String, String)> {
-        let mut env = super::workers::worker_env(tmp);
-        if provider == ProviderKind::Claude {
-            // code.claude.com/docs/en/env-vars. The ceiling holds whatever timeout a call asks
-            // for, and a command past it is stopped, not moved to the background (checked on
-            // Claude Code 2.1.299).
-            for (name, value) in [
-                ("BASH_MAX_OUTPUT_LENGTH", BASH_MAX_OUTPUT_LENGTH),
-                ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
-                ("BASH_DEFAULT_TIMEOUT_MS", BASH_TIMEOUT_MS),
-                ("BASH_MAX_TIMEOUT_MS", BASH_TIMEOUT_MS),
-            ] {
-                env.push((name.into(), value.into()));
-            }
-        }
-        env
+    /// a worker's are in its own. Nothing else: the CLI's own shell timeouts, output limits and
+    /// background tasks hold as the CLI ships them.
+    pub(crate) fn thread_env(tmp: &Path) -> Vec<(String, String)> {
+        super::workers::worker_env(tmp)
     }
 
     /// An approval request from the thread's CLI, answered as a worker's is: what stays

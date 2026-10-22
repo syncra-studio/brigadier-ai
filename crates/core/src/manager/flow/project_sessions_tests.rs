@@ -363,7 +363,7 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
             inputs
                 .lock()
                 .unwrap()
-                .push((turn.add_dirs[0].clone(), turn.input.clone()));
+                .push((turn.cwd.clone(), turn.input.clone()));
             if turn.input.contains("[merge] The user clicked") {
                 turn.call("run_checks", serde_json::json!({})).await;
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
@@ -398,13 +398,13 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
                 return Reply::text("Pinged.");
             }
             if said(&turn, "Unshare.") {
-                let folder = &turn.add_dirs[0];
+                let folder = &turn.cwd;
                 git(folder, &["rm", "-q", "shared.txt"]);
                 git(folder, &["commit", "-q", "-m", "Unshare"]);
                 return Reply::text("Unshared.");
             }
             if said(&turn, "Edit main.") {
-                let folder = &turn.add_dirs[0];
+                let folder = &turn.cwd;
                 std::fs::create_dir_all(folder.join("src")).unwrap();
                 let text = format!("fn main() {{}} // {}\n", crate::now_ms());
                 std::fs::write(folder.join("src/main.rs"), text).unwrap();
@@ -413,7 +413,7 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
                 return Reply::text("Edited.");
             }
             if said(&turn, "Share.") {
-                let text = format!("{} {}\n", turn.add_dirs[0].display(), crate::now_ms());
+                let text = format!("{} {}\n", turn.cwd.display(), crate::now_ms());
                 commit_in_workspace(&turn, "shared.txt", &text, "Share");
                 return Reply::text("Shared.");
             }
@@ -569,7 +569,7 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
             inputs
                 .lock()
                 .unwrap()
-                .push((turn.add_dirs[0].clone(), turn.input.clone()));
+                .push((turn.cwd.clone(), turn.input.clone()));
             if turn.input.contains("[merge] The user clicked") {
                 turn.call("run_checks", serde_json::json!({})).await;
                 let reply = turn.call("finish_session", serde_json::json!({})).await;

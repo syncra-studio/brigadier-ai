@@ -729,8 +729,8 @@ async fn request_changes_generated_and_viewed_images_are_conversation_scoped_and
             .unwrap();
         assert!(generated.contains("thread-images/"));
         assert!(board.orchestrator_steps.iter().any(|step| step.request_id.as_deref() == Some(&request.id) && matches!(&step.kind, OrchestratorStepKind::Tool { name, detail, turn: Some(_), .. } if name == "imagegen" && detail.as_deref() == Some("A picture"))));
-        let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
-        std::fs::remove_file(scratch.join("generated.png")).unwrap();
+        let cwd = flow.manager.thread_cwd(&flow.conversation);
+        std::fs::remove_file(cwd.join("generated.png")).unwrap();
         let (data, mime) = flow
             .manager
             .read_thread_image(&flow.conversation, "generated")
@@ -744,7 +744,7 @@ async fn request_changes_generated_and_viewed_images_are_conversation_scoped_and
             .await
             .unwrap();
         assert_eq!(data, brigadier_providers::image_base64(b"viewed image"));
-        std::fs::remove_file(scratch.join("viewed.png")).unwrap();
+        std::fs::remove_file(cwd.join("viewed.png")).unwrap();
         assert!(
             flow.manager
                 .read_thread_image(&flow.conversation, "viewed")

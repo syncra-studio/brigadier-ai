@@ -494,7 +494,7 @@ impl SessionManager {
                         provider,
                     )
                     .await;
-                plain_fork_spec(self.owned_dir("orch", &id.0), &choice, native_id, prompt)
+                plain_fork_spec(self.thread_cwd(id), &choice, native_id, prompt)
             }
         };
         let account = self.runtime.account_for(&choice);

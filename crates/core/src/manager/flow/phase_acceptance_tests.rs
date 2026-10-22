@@ -360,7 +360,7 @@ async fn a_fresh_verifier_gets_only_the_request_constraints_criteria_and_commit(
                 }
                 if turn.input.contains("Add a greeting file.") {
                     // The thread builds it itself, then verifies its own commit.
-                    let workspace = &turn.add_dirs[0];
+                    let workspace = &turn.cwd;
                     std::fs::write(workspace.join("hello.txt"), "hello\n").unwrap();
                     super::git(workspace, &["add", "hello.txt"]);
                     super::git(workspace, &["commit", "-qm", "Add hello.txt"]);

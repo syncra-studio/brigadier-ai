@@ -37,10 +37,10 @@ fn session_worktree(flow: &Flow) -> std::path::PathBuf {
     }
 }
 
-/// At each level and for both vendors, the thread starts with its own tools in its scratch
-/// folder, its workspace (the session worktree, made before the CLI starts) as an extra
-/// folder, and a worker's access for that level; the workspace is never the thread's to
-/// clean up.
+/// At each level and for both vendors, the thread starts with its own tools in its workspace
+/// (the session worktree, made before the CLI starts, #523) and a worker's access for that
+/// level; its scratch folder stays its sweep folder. Its environment sets only its temporary
+/// folder: the CLI's own shell timeouts, output limits and background tasks hold (S2).
 #[tokio::test]
 async fn the_thread_works_in_its_workspace_with_the_levels_access() {
     for (permission, thread) in [
@@ -60,11 +60,13 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
             script(move |turn| {
                 let log = log.clone();
                 async move {
-                    // The workspace is there when the thread starts.
-                    for dir in &turn.add_dirs {
-                        assert!(dir.join("README.md").is_file(), "{}", dir.display());
-                    }
-                    log.lock().unwrap().extend(turn.add_dirs.clone());
+                    // The workspace is there when the thread starts, and it starts in it.
+                    assert!(
+                        turn.cwd.join("README.md").is_file(),
+                        "{}",
+                        turn.cwd.display()
+                    );
+                    log.lock().unwrap().push(turn.cwd.clone());
                     Reply::text("The README is all there is.")
                 }
             }),
@@ -79,8 +81,11 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         let (provider, spec) = &specs[0];
         assert_eq!(*provider, thread);
         assert_eq!(spec.tools, ToolSet::Thread);
-        assert_eq!(spec.add_dirs, vec![worktree.clone()]);
-        assert!(spec.cwd.ends_with(format!("orch/{}", flow.conversation.0)));
+        assert!(spec.add_dirs.is_empty(), "{:?}", spec.add_dirs);
+        assert_eq!(spec.cwd, worktree);
+        assert!(spec.owned_cwd, "a New worktree is Brigadier's");
+        let scratch = spec.sweep_dir.clone().expect("its sweep folder");
+        assert!(scratch.ends_with(format!("orch/{}", flow.conversation.0)));
         let env: std::collections::HashMap<_, _> = spec.env.iter().cloned().collect();
         // Its temporary files go to its short folder under /tmp, never the data folder's.
         let tmp = crate::manager::workers::session_temp_dir(
@@ -89,22 +94,13 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         );
         assert_eq!(env.get("TMPDIR").map(String::as_str), tmp.to_str());
         assert!(tmp.is_dir());
-        assert_eq!(
-            env.get("BASH_MAX_OUTPUT_LENGTH").map(String::as_str),
-            (thread == ProviderKind::Claude).then_some("150000")
-        );
-        // A Claude thread has no background jobs of its own, and its shell holds it at most
-        // two minutes: long commands go through run and run_check.
-        for (name, value) in [
-            ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
-            ("BASH_DEFAULT_TIMEOUT_MS", "120000"),
-            ("BASH_MAX_TIMEOUT_MS", "120000"),
+        for name in [
+            "BASH_MAX_OUTPUT_LENGTH",
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+            "BASH_DEFAULT_TIMEOUT_MS",
+            "BASH_MAX_TIMEOUT_MS",
         ] {
-            assert_eq!(
-                env.get(name).map(String::as_str),
-                (thread == ProviderKind::Claude).then_some(value),
-                "{name}"
-            );
+            assert!(!env.contains_key(name), "{name}");
         }
         match permission {
             PermissionLevel::FullAccess => {
@@ -123,7 +119,7 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
                 };
                 assert!(write_cwd);
                 assert!(writable_roots.contains(&worktree));
-                assert!(writable_roots.contains(&spec.cwd));
+                assert!(writable_roots.contains(&scratch));
                 assert!(writable_roots.contains(&tmp));
                 // It commits its tiny edits into the repository's git folder.
                 let common = std::path::PathBuf::from(git(
@@ -297,12 +293,13 @@ async fn a_session_grant_allows_later_edits_in_the_workspace_only() {
         script(move |turn| {
             let log = log.clone();
             async move {
-                let workspace = turn.add_dirs[0].clone();
+                let workspace = turn.cwd.clone();
+                let outside = workspace.parent().unwrap().join("outside.txt");
                 for paths in [
                     vec![workspace.join("a.txt")],
                     vec![workspace.join("new/b.txt"), workspace.join("c.txt")],
-                    vec![turn.cwd.join("outside.txt")],
-                    vec![workspace.join("d.txt"), turn.cwd.join("outside.txt")],
+                    vec![outside.clone()],
+                    vec![workspace.join("d.txt"), outside.clone()],
                     vec![workspace.join(".git")],
                 ] {
                     let paths: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
@@ -432,7 +429,7 @@ async fn a_new_workspace_or_level_resumes_the_thread_with_a_note() {
             async move {
                 log.lock()
                     .unwrap()
-                    .push((turn.input.clone(), turn.add_dirs.clone()));
+                    .push((turn.input.clone(), vec![turn.cwd.clone()]));
                 Reply::text("Done.")
             }
         }),
@@ -528,8 +525,8 @@ async fn a_new_workspace_or_level_resumes_the_thread_with_a_note() {
         "the same native session"
     );
     assert!(!native_id.is_empty());
-    assert_eq!(specs[0].1.add_dirs, vec![first]);
-    assert_eq!(specs[1].1.add_dirs, vec![moved.clone()]);
+    assert_eq!(specs[0].1.cwd, first);
+    assert_eq!(specs[1].1.cwd, moved);
     assert_eq!(specs[1].1.access, Access::Full);
     assert!(matches!(specs[2].1.access, Access::Scoped { .. }));
     assert!(specs[2].1.auto_review);
@@ -620,7 +617,7 @@ pub(super) fn reviewed_notes() -> String {
 
 /// Commits a file in the thread's workspace, as the thread's own tiny edit would.
 pub(super) fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: &str) -> String {
-    let workspace = &turn.add_dirs[0];
+    let workspace = &turn.cwd;
     std::fs::write(workspace.join(file), text).unwrap();
     git(workspace, &["add", file]);
     git(workspace, &["commit", "-q", "-m", message]);
@@ -739,7 +736,7 @@ fn merging_thread(seen: Arc<Mutex<Vec<Seen>>>) -> Script {
         async move {
             log.lock()
                 .unwrap()
-                .push((turn.input.clone(), turn.add_dirs.clone()));
+                .push((turn.input.clone(), vec![turn.cwd.clone()]));
             if turn.input.contains("Add notes.") {
                 commit_in_workspace(
                     &turn,

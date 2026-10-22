@@ -35,6 +35,14 @@ fn parts(secret: bool) -> [String; 3] {
     ]
 }
 
+/// The folder of a run's chunks and gates, beside the thread's workspace (outside it, so they
+/// are no change of its request).
+fn gates(workspace: &Path) -> PathBuf {
+    let dir = workspace.parent().unwrap().join("gates");
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 fn command(dir: &Path, secret: bool) -> String {
     for (number, part) in parts(secret).iter().enumerate() {
         std::fs::write(dir.join(format!("chunk-{number}")), part).unwrap();
@@ -76,7 +84,7 @@ fn streaming(tool: &'static str, background: bool) -> Script {
             if turn.earlier > 0 {
                 return Reply::text("The background command finished.");
             }
-            let mut words = command(&turn.cwd, !background);
+            let mut words = command(&gates(&turn.cwd), !background);
             if background {
                 let (workspace, _) = turn
                     .host
@@ -258,7 +266,7 @@ async fn own_run_streams_real_pipes_for_both_providers_and_checks() {
                     ..
                 })
             ));
-            let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
+            let scratch = gates(&flow.manager.thread_cwd(&flow.conversation));
             release(scratch.join("gate-0")).await;
             let board = flow.until("live byte count", |b| matches!(row(b, "own-run"), Some(OrchestratorStepKind::Tool { output_bytes: Some(bytes), .. }) if *bytes > 0)).await;
             assert!(matches!(
@@ -330,7 +338,7 @@ async fn own_run_streams_keep_one_buffer_through_background_handoff() {
         flow.say("Run in the background.").await;
         flow.until("the starting rows", |b| row(b, "decoy").is_some())
             .await;
-        let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
+        let scratch = gates(&flow.manager.thread_cwd(&flow.conversation));
         release(scratch.join("gate-0")).await;
         let board = flow
             .until("the background handoff", |b| {
@@ -420,7 +428,7 @@ async fn a_background_runs_file_seen_before_its_end_stays_its_change() {
             for gate in ["gate-0", "gate-1"] {
                 assert!(
                     std::process::Command::new("mkfifo")
-                        .arg(turn.cwd.join(gate))
+                        .arg(gates(&turn.cwd).join(gate))
                         .status()
                         .unwrap()
                         .success()
@@ -428,9 +436,9 @@ async fn a_background_runs_file_seen_before_its_end_stays_its_change() {
             }
             let words = format!(
                 "IFS= read -r gate < {}; printf 'written\\n' > {}; IFS= read -r gate < {}",
-                quote(&turn.cwd.join("gate-0")),
+                quote(&gates(&turn.cwd).join("gate-0")),
                 quote(&workspace.join("background-written.txt")),
-                quote(&turn.cwd.join("gate-1"))
+                quote(&gates(&turn.cwd).join("gate-1"))
             );
             let name = match turn.provider {
                 ProviderKind::Claude => "mcp__brigadier__run",
@@ -493,7 +501,7 @@ async fn a_background_runs_file_seen_before_its_end_stays_its_change() {
         )
     };
     refresh().await;
-    let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
+    let scratch = gates(&flow.manager.thread_cwd(&flow.conversation));
     let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
     release(scratch.join("gate-0")).await;
     tokio::time::timeout(*super::PATIENCE, async {
@@ -534,7 +542,7 @@ async fn own_run_streams_keep_a_stopped_background_runs_output() {
     flow.say("Run in the background.").await;
     flow.until("the starting rows", |b| row(b, "decoy").is_some())
         .await;
-    let scratch = flow.manager.owned_dir("orch", &flow.conversation.0);
+    let scratch = gates(&flow.manager.thread_cwd(&flow.conversation));
     release(scratch.join("gate-0")).await;
     flow.until("the background handoff", |b| {
         b.background_runs

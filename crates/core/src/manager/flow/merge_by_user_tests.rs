@@ -63,7 +63,7 @@ async fn session(name: &str) -> (Flow, Log) {
                 }
                 if turn.input.contains("Add more notes.") {
                     let head = commit_in_workspace(&turn, "MORE.md", "more\n", "Add more");
-                    log(format!("worked in: {}", turn.add_dirs[0].display()));
+                    log(format!("worked in: {}", turn.cwd.display()));
                     log(format!("head: {head}"));
                     return Reply::text("More notes are in.");
                 }
@@ -75,7 +75,7 @@ async fn session(name: &str) -> (Flow, Log) {
                     return Reply::text("It runs.");
                 }
                 if turn.input.contains("Draft it.") {
-                    std::fs::write(turn.add_dirs[0].join("DRAFT.md"), "draft\n").unwrap();
+                    std::fs::write(turn.cwd.join("DRAFT.md"), "draft\n").unwrap();
                     return Reply::text("Drafted, not committed.");
                 }
                 // Last: a resumed thread's input may carry the earlier messages too.

@@ -203,7 +203,7 @@ impl SessionManager {
         };
         if !held.is_empty() {
             let workspace = self.recorded_workspace(id).map(|workspace| workspace.path);
-            let scratch = self.owned_dir("orch", &id.0);
+            let scratch = self.thread_cwd(id);
             let (reads, searches) =
                 super::blocking(move || Ok(resolve(held, workspace.as_deref(), &scratch))).await?;
             log.apply(&reads, &searches);
@@ -250,7 +250,7 @@ impl SessionManager {
             return;
         }
         let workspace = self.recorded_workspace(id).map(|workspace| workspace.path);
-        let scratch = self.owned_dir("orch", &id.0);
+        let scratch = self.thread_cwd(id);
         let resolved =
             super::blocking(move || Ok(resolve(batch, workspace.as_deref(), &scratch))).await;
         let (reads, searches) = match resolved {
@@ -280,7 +280,8 @@ impl SessionManager {
     }
 }
 
-/// The records of `batch`, paths resolved (blocking: it looks at the disk).
+/// The records of `batch`, paths resolved (blocking: it looks at the disk); `scratch` is the
+/// CLI's working directory, for an event that names none.
 fn resolve(
     batch: Vec<ProviderEvent>,
     workspace: Option<&Path>,

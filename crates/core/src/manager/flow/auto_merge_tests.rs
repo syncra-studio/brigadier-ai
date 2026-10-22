@@ -103,7 +103,7 @@ async fn squash_merged(name: &str, single_branch: bool) {
                     return Reply::text("Done.");
                 }
                 let scratch = dir.get().unwrap().clone();
-                let workspace = turn.add_dirs[0].clone();
+                let workspace = turn.cwd.clone();
                 if turn.input.contains("Ship the notes.") {
                     std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
                     git(&workspace, &["add", "NOTES.md"]);
@@ -291,7 +291,7 @@ async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_befor
                 if !turn.is_orchestrator() {
                     return Reply::text("Done.");
                 }
-                let workspace = turn.add_dirs[0].clone();
+                let workspace = turn.cwd.clone();
                 if turn.input.contains("Ship the notes.") {
                     std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
                     git(&workspace, &["add", "NOTES.md"]);
@@ -421,7 +421,7 @@ async fn a_pull_request_into_another_branch_or_not_fetched_yet_is_not_recorded()
                 if !turn.is_orchestrator() {
                     return Reply::text("Done.");
                 }
-                let workspace = turn.add_dirs[0].clone();
+                let workspace = turn.cwd.clone();
                 if turn.input.contains("Ship it.") {
                     std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
                     git(&workspace, &["add", "NOTES.md"]);
@@ -509,7 +509,7 @@ async fn shipping(name: &str, auto_merge: bool) -> (Flow, Log) {
                     said.lock()
                         .unwrap()
                         .push(format!("bar: {}", turn.prompt.contains(AUTO_MERGE)));
-                    let workspace = &turn.add_dirs[0];
+                    let workspace = &turn.cwd;
                     let n = shipped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     std::fs::write(workspace.join("NOTES.md"), format!("notes {n}\n")).unwrap();
                     git(workspace, &["add", "NOTES.md"]);
@@ -629,7 +629,7 @@ async fn a_merge_held_on_its_own_needs_consent_once_the_switch_is_off() {
         },
         script(|turn| async move {
             if turn.is_orchestrator() && turn.input.contains("Add notes.") {
-                let workspace = &turn.add_dirs[0];
+                let workspace = &turn.cwd;
                 std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
                 git(workspace, &["add", "NOTES.md"]);
                 git(workspace, &["commit", "-q", "-m", "Add notes"]);
@@ -694,7 +694,7 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
                 if !turn.is_orchestrator() || !turn.input.contains("Show it.") {
                     return Reply::text("Done.");
                 }
-                let workspace = &turn.add_dirs[0];
+                let workspace = &turn.cwd;
                 std::fs::write(workspace.join("shot.png"), b"\x89PNG proof").unwrap();
                 std::fs::write(workspace.join("notes.md"), "notes").unwrap();
                 std::fs::write(workspace.join("tests.txt"), "test result: ok").unwrap();
@@ -827,7 +827,7 @@ async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_l
             if !turn.is_orchestrator() {
                 return Reply::text("Done.");
             }
-            let workspace = &turn.add_dirs[0];
+            let workspace = &turn.cwd;
             if turn.input.contains("Ship it.") {
                 std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
                 git(workspace, &["add", "NOTES.md"]);

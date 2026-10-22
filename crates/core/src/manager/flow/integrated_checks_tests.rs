@@ -88,7 +88,7 @@ async fn land_reports(turn: &Turn) -> bool {
 
 /// Commits `file` in the thread's workspace, as the thread's own edit; its new tip.
 fn thread_commit(turn: &Turn, file: &str, text: &str) -> String {
-    let workspace = &turn.add_dirs[0];
+    let workspace = &turn.cwd;
     std::fs::write(workspace.join(file), text).unwrap();
     git(workspace, &["add", file]);
     git(workspace, &["commit", "-q", "-m", &format!("Add {file}")]);

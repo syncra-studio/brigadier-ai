@@ -90,7 +90,7 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
                     return Reply::text("Noted.");
                 }
                 let scratch = dir.get().unwrap().clone();
-                let workspace = turn.add_dirs[0].clone();
+                let workspace = turn.cwd.clone();
                 std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
                 git(&workspace, &["add", "NOTES.md"]);
                 git(&workspace, &["commit", "-q", "-m", "Add notes"]);

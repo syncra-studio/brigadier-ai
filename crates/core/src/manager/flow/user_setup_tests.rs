@@ -43,9 +43,8 @@ async fn a_thread_and_its_worker_get_the_projects_setup_in_a_trusted_folder() {
     let threads = of(&flow, ToolSet::Thread);
     assert!(!threads.is_empty());
     for thread in &threads {
-        let workspace = thread.add_dirs.first().expect("the thread's workspace");
-        assert_eq!(thread.project.as_ref(), Some(workspace), "{thread:#?}");
-        assert_ne!(thread.cwd, *workspace, "it works from its own folder");
+        assert_eq!(thread.project.as_ref(), Some(&thread.cwd), "{thread:#?}");
+        assert!(thread.add_dirs.is_empty(), "it works in its workspace");
     }
     let workers = of(&flow, ToolSet::Lean);
     assert!(!workers.is_empty(), "a worker ran");

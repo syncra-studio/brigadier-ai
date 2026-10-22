@@ -2040,6 +2040,26 @@ fn linked_project(spec: &SessionSpec, cwd: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    /// A thread's shell is Claude Code's own (S2): no background-task switch, timeout ceiling or
+    /// output cap of Brigadier's reaches its environment.
+    #[test]
+    fn a_thread_keeps_claude_codes_own_shell_settings() {
+        let thread = SessionSpec {
+            tools: ToolSet::Thread,
+            env: vec![("TMPDIR".into(), "/tmp/brigadier-t".into())],
+            ..spec(Path::new("/tmp"), &[])
+        };
+        let env = session_env(&thread);
+        for name in [
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+            "BASH_DEFAULT_TIMEOUT_MS",
+            "BASH_MAX_TIMEOUT_MS",
+            "BASH_MAX_OUTPUT_LENGTH",
+        ] {
+            assert!(!env.iter().any(|(key, _)| key == name), "{name}: {env:?}");
+        }
+    }
+
     /// A resume is refused up front only when the config's projects folder is there and no
     /// project holds the session's transcript (BUILD-PLAN D2.4).
     #[test]

@@ -21,7 +21,8 @@ where
 }
 
 /// What the thread's CLI prints when it reads lines 1–2 of the workspace's README, searches it
-/// for "Flow" and reads a note in its own scratch folder, in `provider`'s own words.
+/// for "Flow" and reads a note in a folder outside the workspace, `scratch`, in `provider`'s own
+/// words.
 fn cli_lines(provider: ProviderKind, scratch: &Path, workspace: &Path) -> Vec<Value> {
     let readme = workspace.join("README.md").display().to_string();
     let note = scratch.join("note.txt").display().to_string();
@@ -131,6 +132,11 @@ fn parsed(provider: ProviderKind, lines: Vec<Value>) -> Vec<ProviderEvent> {
         .collect()
 }
 
+/// A folder beside the thread's workspace, outside it.
+fn elsewhere(workspace: &Path) -> PathBuf {
+    workspace.parent().unwrap().join("elsewhere")
+}
+
 #[tokio::test]
 async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not() {
     for vendor in [ProviderKind::Claude, ProviderKind::Codex] {
@@ -150,10 +156,12 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
                 async move {
                     if turn.is_orchestrator() {
                         if turn.input.contains("Look around") {
-                            turn.write("note.txt", "note\n");
+                            let outside = elsewhere(&turn.cwd);
+                            std::fs::create_dir_all(&outside).unwrap();
+                            std::fs::write(outside.join("note.txt"), "note\n").unwrap();
                             let events = parsed(
                                 turn.provider,
-                                cli_lines(turn.provider, &turn.cwd, &turn.add_dirs[0]),
+                                cli_lines(turn.provider, &outside, &turn.cwd),
                             );
                             assert_eq!(
                                 events
@@ -214,8 +222,8 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
         flow.settled().await;
 
         let spec = flow.thread_specs()[0].1.clone();
-        let scratch = real_path(&spec.cwd).unwrap();
-        let workspace = real_path(&spec.add_dirs[0]).unwrap();
+        let scratch = real_path(&elsewhere(&spec.cwd)).unwrap();
+        let workspace = real_path(&spec.cwd).unwrap();
         let readme = workspace.join("README.md").display().to_string();
         let check = |reads: &crate::manager::reads::ThreadReads| {
             let files: Vec<(&str, bool, &[LineRange], bool)> = reads
@@ -234,7 +242,7 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
             assert_eq!(
                 files,
                 [
-                    // Most recently read first; the scratch folder is not the workspace.
+                    // Most recently read first; the other folder is not the workspace.
                     (note.as_str(), true, &[][..], true),
                     (
                         readme.as_str(),

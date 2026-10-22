@@ -3007,6 +3007,15 @@ mod tests {
         }
     }
 
+    /// A thread's command timeouts are Codex's own (S2): Brigadier sets no ceiling of its own,
+    /// and a project's own `background_terminal_max_timeout` passes through unchanged
+    /// ([`project_options_keep_thread_controls_out_and_require_trust`]).
+    #[test]
+    fn a_thread_gets_no_command_timeout_of_brigadiers() {
+        let args = app_server_args(Some(&spec(ToolSet::Thread, None)));
+        assert!(!args.iter().any(|arg| arg.contains("timeout")), "{args:?}");
+    }
+
     #[test]
     fn project_options_keep_thread_controls_out_and_require_trust() {
         let mut read = json!({ "layers": [{

@@ -48,9 +48,9 @@ pub(crate) struct Turn {
     /// What the turn was started with.
     pub input: String,
     /// Where it works: a worker's worktree (its CLI starts in the session's worker folder with
-    /// the worktree added), else the CLI's working directory.
+    /// the worktree added), else the CLI's working directory (a thread's workspace).
     pub cwd: PathBuf,
-    /// The session's extra folders (a thread's workspace).
+    /// The session's extra folders (a worker's worktree, a tab chat's checkout).
     pub add_dirs: Vec<PathBuf>,
     /// The session's turns before this one.
     pub earlier: u32,

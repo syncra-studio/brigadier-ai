@@ -488,15 +488,14 @@ pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
 /// (its built-in shell's isn't, THREAD-PLAN.md Q4).
 const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long listings: an output over 8 KB comes back as a digest (the exit status, the error lines, the first and last lines) with a `read_artifact out-…` id for the whole of it. Under Ask for approval, run_unsandboxed runs a command the sandbox blocked once the user allows it.";
 
-/// How a Claude thread runs long commands: through `run` too, whose output Brigadier keeps
-/// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
-/// folder, so a workspace change can resume the same session) and what that shell's long
-/// output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Run builds, tests, logs and listings in your own shell. It starts in a scratch folder: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole; for a longer one you need whole, @run keeps it behind a `read_artifact out-…` id. Your shell stops a command at two minutes: one that may run longer goes through @run (run_check for a check), which goes on in the background. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.";
+/// How a Claude thread keeps a long output whole: through `run`, whose output Brigadier keeps,
+/// a failure's included; its own shell's long output is trimmed by its output hook.
+const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Run builds, tests, logs and listings in your own shell, in your workspace. Its output up to 30 KB comes back whole; for a longer one you need whole, @run keeps it behind a `read_artifact out-…` id. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.";
 
 /// Command tools supplied by the CLI when Brigadier has no supported sandbox wrapper.
-const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
-const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
+const NATIVE_COMMANDS: &str =
+    "\n- Use your own CLI shell for builds, tests, logs and listings, in your workspace.";
+const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use your own CLI shell for builds, tests, logs and listings, in your workspace.";
 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its self-edit
 /// metric and unreviewed range count it as the thread's.
@@ -2366,7 +2365,9 @@ mod environment_tests {
             true,
         );
         assert_eq!(
-            claude.contains("Run builds, tests, logs and listings in your own shell."),
+            claude.contains(
+                "Run builds, tests, logs and listings in your own shell, in your workspace."
+            ),
             cfg!(target_os = "macos")
         );
         assert_eq!(
@@ -2377,12 +2378,9 @@ mod environment_tests {
             claude.contains("Its output up to 30 KB comes back whole;"),
             cfg!(target_os = "macos")
         );
-        // The CLI's shell stops a command at BASH_MAX_TIMEOUT_MS, two minutes: a longer one
-        // goes through run, which moves it to the background.
-        assert_eq!(
-            claude.contains("Your shell stops a command at two minutes: one that may run longer goes through mcp__brigadier__run"),
-            cfg!(target_os = "macos")
-        );
+        // The CLI's own shell timeouts and background tasks hold: no word of a ceiling.
+        assert!(!claude.contains("two minutes"));
+        assert!(!claude.contains("scratch folder"));
         assert!(claude.contains("Your workspace: (none yet)"));
         // The short ending, updated rather than repeated, with no Details since Q87; nothing
         // is listed for the user outside a run (THREAD-PARITY-PLAN §5 Q6, Q9).

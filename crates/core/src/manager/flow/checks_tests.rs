@@ -23,11 +23,15 @@ where
 async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
     let replies: Arc<Mutex<Vec<String>>> = Arc::default();
     let log = replies.clone();
+    // The thread's scratch folder, outside git.
+    let scratch: Arc<std::sync::OnceLock<std::path::PathBuf>> = Arc::default();
+    let outside = scratch.clone();
     let flow = Flow::start(
         "checks",
         Options::default(),
         script(move |turn| {
             let log = log.clone();
+            let outside = outside.clone();
             async move {
                 let check = |args: serde_json::Value| {
                     let turn = &turn;
@@ -65,14 +69,18 @@ async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
                 // The worker's report: the same files, so the same result.
                 check(json!({ "command": "echo checked" })).await;
                 check(json!({ "command": "echo checked", "rerun": true })).await;
-                std::fs::write(turn.add_dirs[0].join("greeting.txt"), "hello\n").unwrap();
+                std::fs::write(turn.cwd.join("greeting.txt"), "hello\n").unwrap();
                 check(json!({ "command": "echo checked" })).await;
-                check(json!({ "command": "echo checked", "workdir": turn.cwd })).await;
+                check(json!({ "command": "echo checked", "workdir": outside.get().unwrap() }))
+                    .await;
                 Reply::text("Checked.")
             }
         }),
     )
     .await;
+    scratch
+        .set(flow.manager.owned_dir("orch", &flow.conversation.0))
+        .unwrap();
     flow.say("Check the greeting.").await;
     flow.until("the thread's checks", |_| {
         replies.lock().unwrap().len() == 7

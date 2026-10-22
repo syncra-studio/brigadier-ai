@@ -115,7 +115,7 @@ impl Thread {
         self.turns
             .lock()
             .unwrap()
-            .push((turn.input.clone(), turn.add_dirs.clone()));
+            .push((turn.input.clone(), vec![turn.cwd.clone()]));
         if turn.input.contains("[overnight] The run") && turn.input.contains("has started") {
             if self.plans > 0 {
                 let phases: Vec<_> = (1..=self.plans)
@@ -137,7 +137,7 @@ impl Thread {
                 assert!(reply.is_error, "phase {phase} is refused: {}", reply.text);
             }
             if self.tiny_edit {
-                let workspace = &turn.add_dirs[0];
+                let workspace = &turn.cwd;
                 std::fs::write(workspace.join("notes.txt"), "notes\n").unwrap();
                 super::git(workspace, &["add", "notes.txt"]);
                 super::git(
@@ -693,17 +693,7 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
             .all(|origin| matches!(origin, Origin::Resume { .. }) && *origin == resumed[0]),
         "one native session throughout: {resumed:#?}"
     );
-    assert_eq!(
-        specs
-            .last()
-            .unwrap()
-            .1
-            .add_dirs
-            .iter()
-            .map(|d| real(d))
-            .collect::<Vec<_>>(),
-        vec![real(&session)]
-    );
+    assert_eq!(real(&specs.last().unwrap().1.cwd), real(&session));
     flow.stop().await;
 }
 

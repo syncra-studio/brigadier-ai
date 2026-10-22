@@ -26,7 +26,7 @@ fn lines(tag: &str, lines: usize) -> String {
 
 /// Commits `file` (appending `text`) in the thread's workspace; its new tip.
 fn commit(turn: &Turn, file: &str, text: &str, message: &str) -> String {
-    let workspace = &turn.add_dirs[0];
+    let workspace = &turn.cwd;
     let path = workspace.join(file);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let before = std::fs::read_to_string(&path).unwrap_or_default();
