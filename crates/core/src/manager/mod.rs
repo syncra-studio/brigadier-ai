@@ -146,7 +146,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::model::{
     Conversation, ConversationId, ConversationKind, DomainEvent, Environment, EnvironmentRequest,
-    ModelChoice, ProjectId, Rating, RepoInfo, Setup, SetupRequest,
+    Lifecycle, ModelChoice, ProjectId, Rating, RepoInfo, Setup, SetupRequest,
 };
 use crate::runtime::{Runtime, Spawner};
 use crate::sessions::Origin;
@@ -195,6 +195,9 @@ pub struct SessionManager {
     /// Held while a new-worktree session's own worktree is created, so parallel first tasks
     /// create it once.
     session_worktrees: tokio::sync::Mutex<()>,
+    /// Held while a session is let into a project's own checkout (who works there looked for,
+    /// then the session recorded), so two can't both be let in.
+    local_checkouts: tokio::sync::Mutex<()>,
     /// Held while a plan is proposed (checked against the plans as they are, then recorded
     /// and the open ones replaced) and while a review result decides a plan, so the two
     /// can't interleave.
@@ -452,6 +455,7 @@ impl SessionManager {
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             session_worktrees: tokio::sync::Mutex::new(()),
+            local_checkouts: tokio::sync::Mutex::new(()),
             plans: tokio::sync::Mutex::new(()),
             uncommitted_asks: tokio::sync::Mutex::new(()),
             reviews: tokio::sync::Mutex::new(()),
@@ -782,6 +786,16 @@ impl SessionManager {
         if let Some(choice) = orchestrator {
             self.check_choice(choice)?;
         }
+        let _admitting = self.local_checkouts.lock().await;
+        if let Some(SetupRequest::Session {
+            repo,
+            environment: EnvironmentRequest::LocalCheckout { .. },
+            ..
+        }) = &setup
+            && let Some(holder) = self.checkout_holder(repo, None)
+        {
+            return Err(checkout_taken(&holder));
+        }
         if let Some(SetupRequest::Session {
             repo,
             environment:
@@ -808,6 +822,23 @@ impl SessionManager {
         self.core
             .create_conversation(id, kind, project_id, title, setup, Origin::default())
             .await
+    }
+
+    /// The other session that works in `repo`'s own folder, if one does: an open one, or one
+    /// archived or deleted whose cleanup hasn't stopped it yet. Two sessions there would edit,
+    /// commit and switch branches over each other.
+    fn checkout_holder(&self, repo: &str, except: Option<&ConversationId>) -> Option<Conversation> {
+        self.core.catalog().conversations.into_iter().find(|other| {
+            Some(&other.id) != except
+                && (other.lifecycle != Lifecycle::Archived
+                    || other.cleanup_pending
+                    || other.deleting)
+                && matches!(&other.setup, Some(Setup::Session {
+                        repo: at,
+                        environment: Environment::LocalCheckout { .. },
+                        ..
+                    }) if at == repo)
+        })
     }
 
     fn arc(&self) -> Arc<Self> {
@@ -946,6 +977,20 @@ impl SessionManager {
         if !same_model {
             self.check_choice(setup.choice())?;
         }
+        // A session given its environment only now is let into the checkout as a new one is.
+        if current.is_none()
+            && let Setup::Session {
+                repo,
+                environment: Environment::LocalCheckout { .. },
+                ..
+            } = &setup
+        {
+            let _admitting = self.local_checkouts.lock().await;
+            if let Some(holder) = self.checkout_holder(repo, Some(&id)) {
+                return Err(checkout_taken(&holder));
+            }
+            return self.core.set_setup(id, setup).await;
+        }
         self.core.set_setup(id, setup).await
     }
 
@@ -966,6 +1011,14 @@ impl SessionManager {
                 .current(kind, crate::now_ms())
                 .is_none_or(|quota| quota.limit.is_none())
     }
+}
+
+/// Why a new session can't work in the checkout `holder` works in.
+fn checkout_taken(holder: &Conversation) -> Error {
+    Error::Invalid(format!(
+        "“{}” already works in this checkout. Archive it, or start this session in a new worktree.",
+        holder.title
+    ))
 }
 
 /// Whose CLI session an event comes from (development builds route faults by it).

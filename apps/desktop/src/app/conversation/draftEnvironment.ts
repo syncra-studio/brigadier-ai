@@ -1,4 +1,4 @@
-import type { EnvironmentKind, EnvironmentRequest } from "@/ipc/generated";
+import type { Conversation, EnvironmentKind, EnvironmentRequest } from "@/ipc/generated";
 
 /** What the composer knows when it asks where a new session works. */
 export type DraftPlace = {
@@ -11,7 +11,26 @@ export type DraftPlace = {
   current: string | null;
   /** The repository is still being read. */
   loading: boolean;
+  /** The title of the session that already works in the project's own folder, if one does. */
+  holder?: string | null;
 };
+
+/**
+ * The session that already works in the repository's own folder: one not archived on a local
+ * checkout there. A second one there would edit, commit and switch branches over it.
+ */
+export function checkoutHolder(conversations: readonly Conversation[], repo: string): Conversation | null {
+  return (
+    conversations.find(
+      (other) =>
+        other.kind === "session" &&
+        other.lifecycle !== "archived" &&
+        other.setup?.type === "session" &&
+        other.setup.repo === repo &&
+        other.setup.environment.type === "localCheckout",
+    ) ?? null
+  );
+}
 
 /**
  * Where a draft session works, as the setup asks for it, or why it can't start yet. A new
@@ -23,6 +42,9 @@ export function environmentRequest(place: DraftPlace): { request: EnvironmentReq
   if (environment === "localCheckout") {
     if (!current) {
       return { problem: loading ? "Reading the repository…" : "Your checkout isn't on a branch. Check one out to work there." };
+    }
+    if (place.holder) {
+      return { problem: `“${place.holder}” already works in this checkout. Archive it, or start this session in a new worktree.` };
     }
     return { request: { type: "localCheckout", branch: current, createFrom: null } };
   }

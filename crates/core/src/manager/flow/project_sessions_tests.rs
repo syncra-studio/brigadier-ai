@@ -180,6 +180,131 @@ async fn a_background_session_starts_on_its_message() {
     flow.stop().await;
 }
 
+/// One session at a time works in a project's own checkout (#522): another is refused there,
+/// whether it starts, gets its environment late or is restored, while one in a new worktree
+/// starts; once the first is archived and cleaned up, one of two asking at once gets in.
+#[tokio::test]
+async fn one_session_works_in_the_checkout_at_once() {
+    use crate::model::{EnvironmentRequest, SetupRequest};
+    let flow = Flow::start("sessions-one-local", Options::default(), writing(None)).await;
+    let first = flow.core.conversation(&flow.conversation).unwrap();
+    let Some(Setup::Session {
+        repo,
+        permission,
+        orchestrator,
+        ..
+    }) = first.setup.clone()
+    else {
+        unreachable!()
+    };
+    let project = first.project_id.clone();
+    let local = || SetupRequest::Session {
+        repo: repo.clone(),
+        environment: EnvironmentRequest::LocalCheckout {
+            branch: "main".into(),
+            create_from: None,
+        },
+        permission,
+        orchestrator: orchestrator.clone(),
+        plan_mode: false,
+    };
+    let taken = "“Here” already works in this checkout.";
+    let here = flow
+        .manager
+        .create_conversation(
+            ConversationKind::Session,
+            project.clone(),
+            Some("Here".into()),
+            Some(local()),
+        )
+        .await
+        .unwrap();
+    let refused = flow
+        .manager
+        .create_conversation(
+            ConversationKind::Session,
+            project.clone(),
+            Some("Also here".into()),
+            Some(local()),
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains(taken), "{refused}");
+    flow.manager
+        .create_conversation(
+            ConversationKind::Session,
+            project.clone(),
+            Some("Elsewhere".into()),
+            Some(SetupRequest::Session {
+                repo: repo.clone(),
+                environment: EnvironmentRequest::NewWorktree {
+                    base: "main".into(),
+                    branch: None,
+                },
+                permission,
+                orchestrator: orchestrator.clone(),
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap();
+
+    // A session with no setup yet is refused the checkout as it gets one.
+    let late = flow
+        .manager
+        .create_conversation(ConversationKind::Session, project.clone(), None, None)
+        .await
+        .unwrap();
+    let refused = flow
+        .manager
+        .set_setup(
+            late.id.clone(),
+            Setup::Session {
+                repo: repo.clone(),
+                environment: Environment::LocalCheckout {
+                    branch: "main".into(),
+                },
+                permission,
+                orchestrator: orchestrator.clone(),
+                workers_see_uncommitted: None,
+                plan_mode: false,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains(taken), "{refused}");
+
+    // The checkout is free once the archive's cleanup is done; of two at once, one gets it.
+    flow.manager.archive(here.id.clone()).await.unwrap();
+    super::eventually("the archive cleaned up", || {
+        !flow.core.conversation(&here.id).unwrap().cleanup_pending
+    })
+    .await;
+    let (one, two) = tokio::join!(
+        flow.manager.create_conversation(
+            ConversationKind::Session,
+            project.clone(),
+            Some("One".into()),
+            Some(local()),
+        ),
+        flow.manager.create_conversation(
+            ConversationKind::Session,
+            project.clone(),
+            Some("Two".into()),
+            Some(local()),
+        ),
+    );
+    assert!(one.is_ok() != two.is_ok(), "{one:?} {two:?}");
+    let refused = flow.manager.restore(here.id.clone()).await.unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("already works in this checkout"),
+        "{refused}"
+    );
+    flow.stop().await;
+}
+
 /// A background session whose message can't go leaves no empty session behind; a chat starts
 /// none.
 #[tokio::test]

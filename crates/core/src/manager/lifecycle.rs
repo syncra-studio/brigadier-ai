@@ -1207,6 +1207,19 @@ impl SessionManager {
                 "only an archived conversation can be restored".into(),
             ));
         }
+        let admitting = self.local_checkouts.lock().await;
+        if let Some(Setup::Session {
+            repo,
+            environment: Environment::LocalCheckout { .. },
+            ..
+        }) = &conversation.setup
+            && let Some(holder) = self.checkout_holder(repo, Some(&id))
+        {
+            return Err(Error::Invalid(format!(
+                "“{}” already works in this checkout. Archive it before restoring this session.",
+                holder.title
+            )));
+        }
         if let Ok(conv) = self.conv(&id) {
             conv.mark_reseed().await;
         }
@@ -1214,6 +1227,7 @@ impl SessionManager {
             .core
             .set_lifecycle(id.clone(), Lifecycle::Active)
             .await?;
+        drop(admitting);
         self.open_fence(&id);
         // A check the archive cut off, or one still due, is recorded interrupted: nothing runs
         // again by itself.

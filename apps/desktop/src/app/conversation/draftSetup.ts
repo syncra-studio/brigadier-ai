@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { ModelGroup } from "@/components/shared/model-selector";
-import { environmentRequest } from "@/app/conversation/draftEnvironment";
+import { checkoutHolder, environmentRequest } from "@/app/conversation/draftEnvironment";
 import type {
   EnvironmentKind,
   ModelChoice,
@@ -116,6 +116,11 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   const noModel = nothingAvailable(listed, groups);
   const repoPath = project?.repos[0]?.path ?? null;
   const repo = useRepoInfo(kind === "session" ? repoPath : null);
+  const holder = useApp((s) =>
+    repoPath && draft.environment === "localCheckout"
+      ? (checkoutHolder(Object.values(s.conversations), repoPath)?.title ?? null)
+      : null,
+  );
 
   const model = resolveModel(draft.model, kind, project, settings, groups);
   const defaultModel = resolveModel(null, kind, project, settings, groups);
@@ -133,7 +138,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   } else if (!project || !repoPath) {
     problem = "This project has no repository yet. Add one in its settings.";
   } else {
-    const place = environmentRequest({ ...draft, current, loading: repo.loading });
+    const place = environmentRequest({ ...draft, current, loading: repo.loading, holder });
     if ("problem" in place) {
       problem = place.problem;
     } else {
