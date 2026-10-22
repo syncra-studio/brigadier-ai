@@ -13,6 +13,7 @@ mod refname;
 mod repo;
 mod request_changes;
 mod source;
+pub mod snapshot;
 mod trailers;
 mod worktree;
 
