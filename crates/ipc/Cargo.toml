@@ -32,3 +32,6 @@ path = "src/bin/gen_ts.rs"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+brigadier-cli.workspace = true

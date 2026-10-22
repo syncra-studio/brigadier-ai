@@ -124,6 +124,13 @@ pub enum Accepted {
         active: bool,
         stream: RawStream,
     },
+    /// A session's `brigadier` command: one request frame follows on the connection, and the
+    /// daemon answers with one frame (`brigadier_cli::protocol`).
+    Cli {
+        session: String,
+        grant: String,
+        connection: Connection,
+    },
 }
 
 impl Pending {
@@ -173,6 +180,11 @@ impl Pending {
                 grant,
                 active: stop_hook_active,
                 stream,
+            }),
+            Ok(Some(ClientFrame::Cli { session, grant })) => Ok(Accepted::Cli {
+                session,
+                grant,
+                connection: Connection::new(stream),
             }),
             Ok(Some(ClientFrame::Request { .. })) => {
                 Err(Error::Unauthorized("first frame was not a hello"))

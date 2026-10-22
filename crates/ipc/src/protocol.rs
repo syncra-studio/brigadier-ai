@@ -127,6 +127,13 @@ pub enum ClientFrame {
         /// The CLI already continued once for this hook in this stop.
         stop_hook_active: bool,
     },
+    /// First frame of a `brigadier` command run by a session: the session's id and grant. One
+    /// length-prefixed `brigadier_cli::protocol::CliCall` follows, answered by one `CliReply`;
+    /// a grant that isn't the session's just closes the connection.
+    Cli {
+        session: String,
+        grant: String,
+    },
 }
 
 /// What a thread's output hook sends after its [`ClientFrame::Hook`].
@@ -2561,5 +2568,25 @@ mod browser_tests {
             "tab": "browser:agent-1", "paused": true});
         let request: Request = serde_json::from_value(paused.clone()).unwrap();
         assert_eq!(serde_json::to_value(request).unwrap(), paused);
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    /// `brigadier` writes its first frame without this crate: both must agree on its shape.
+    #[test]
+    fn the_brigadier_commands_first_frame_is_a_cli_frame() {
+        let written = serde_json::to_value(brigadier_cli::client::FirstFrame {
+            session: "s",
+            grant: "g",
+        })
+        .unwrap();
+        let frame: ClientFrame = serde_json::from_value(written.clone()).unwrap();
+        assert!(
+            matches!(&frame, ClientFrame::Cli { session, grant } if session == "s" && grant == "g")
+        );
+        assert_eq!(serde_json::to_value(frame).unwrap(), written);
     }
 }

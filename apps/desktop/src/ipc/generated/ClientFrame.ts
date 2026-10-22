@@ -10,4 +10,4 @@ export type ClientFrame = { "type": "hello", token: string, protocol: number, cl
 /**
  * The CLI already continued once for this hook in this stop.
  */
-stopHookActive: boolean, };
+stopHookActive: boolean, } | { "type": "cli", session: string, grant: string, };

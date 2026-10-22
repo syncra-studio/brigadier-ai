@@ -486,6 +486,7 @@ dependencies = [
  "base64 0.23.1",
  "blake3",
  "brigadier-brain",
+ "brigadier-cli",
  "brigadier-git",
  "brigadier-index",
  "brigadier-providers",
@@ -539,6 +540,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "brigadier-cli",
  "brigadier-core",
  "brigadier-index",
  "brigadier-ipc",
@@ -649,6 +651,7 @@ name = "brigadier-ipc"
 version = "0.1.0"
 dependencies = [
  "brigadier-brain",
+ "brigadier-cli",
  "brigadier-core",
  "brigadier-index",
  "brigadier-providers",

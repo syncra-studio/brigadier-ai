@@ -3,8 +3,9 @@
 //! [`serve_mcp`]: after `ClientFrame::Mcp`, the connection is raw MCP, served in-process by
 //! `brigadier_mcp_server` against the session manager. It runs as a tracked connection, so an
 //! orderly quit closes it. [`serve_hook`]: after `ClientFrame::Hook`, a Claude thread's output
-//! hook sends one command output, which is stored for the thread, and gets one answer. Grants
-//! are never logged.
+//! hook sends one command output, which is stored for the thread, and gets one answer.
+//! [`serve_cli`]: after `ClientFrame::Cli`, a session's `brigadier` command sends one call and
+//! gets one answer. Grants are never logged.
 
 use tracing::Instrument;
 
@@ -12,10 +13,11 @@ use std::sync::Arc;
 
 use std::time::Duration;
 
+use brigadier_cli::protocol::{CliCall, CliReply, ErrorCode};
 use brigadier_core::manager::{HookOutput, OUTPUT_MAX_BYTES};
 use brigadier_core::tools::{Role, ToolHost};
-use brigadier_ipc::RawStream;
 use brigadier_ipc::protocol::{HookOutput as HookFrame, HookReply};
+use brigadier_ipc::{Connection, RawStream};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use crate::server::Daemon;
@@ -205,4 +207,59 @@ async fn answer_hook(stream: &mut RawStream, reply: &HookReply) {
         tracing::debug!(error = %err, "an output hook left before its answer");
     }
     let _ = stream.flush().await;
+}
+
+/// Answers one `brigadier` call of a session: its grant must be the live grant of the session it
+/// names, or the connection closes without a word (the command says it was refused).
+pub async fn serve_cli(
+    daemon: Arc<Daemon>,
+    session: String,
+    grant: String,
+    connection: Connection,
+) {
+    let Some(caller) = daemon.sessions.cli_caller(&session, &grant) else {
+        tracing::warn!("refused a brigadier call: not a live grant of the session it names");
+        return;
+    };
+    let Connection {
+        mut reader,
+        mut writer,
+    } = connection;
+    let call = match tokio::time::timeout(
+        brigadier_ipc::transport::AUTH_TIMEOUT,
+        reader.read::<serde_json::Value>(),
+    )
+    .await
+    {
+        Ok(Ok(Some(call))) => call,
+        Ok(Ok(None)) => return,
+        Ok(Err(err)) => {
+            tracing::debug!(error = %err, "a brigadier call could not be read");
+            return;
+        }
+        Err(_) => {
+            tracing::debug!("a brigadier call came too late");
+            return;
+        }
+    };
+    let reply = match serde_json::from_value::<CliCall>(call) {
+        Ok(call) => {
+            tokio::select! {
+                reply = brigadier_core::heap(|| daemon.sessions.cli_call(&caller, call)) => reply,
+                () = daemon.closing.cancelled() => {
+                    CliReply::error(ErrorCode::Unreachable, "Brigadier is quitting")
+                }
+            }
+        }
+        // A newer `brigadier` than this app, most likely.
+        Err(err) => CliReply::error(
+            ErrorCode::Version,
+            format!(
+                "Brigadier doesn't know this request ({err}): use the brigadier that came with the app"
+            ),
+        ),
+    };
+    if let Err(err) = writer.write(&reply).await {
+        tracing::debug!(error = %err, "a brigadier answer could not be sent");
+    }
 }

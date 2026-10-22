@@ -5,7 +5,7 @@
 //! - Authentication: a per-launch 256-bit token in a private file; the first frame must present
 //!   it within [`transport::AUTH_TIMEOUT`]. CLI sessions' helper process (the MCP bridge) never
 //!   sees the token: its first frame carries a role-scoped grant instead, which only reaches
-//!   the MCP tools.
+//!   the MCP tools (or, for a `brigadier` command, its read commands).
 //! - Framing: length-prefixed JSON, at most [`MAX_FRAME_BYTES`] per frame.
 //! - Types: [`protocol`] and [`metrics`], exported to TypeScript by the `gen-ts` binary.
 
