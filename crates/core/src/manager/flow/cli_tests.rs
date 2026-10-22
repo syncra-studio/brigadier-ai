@@ -345,3 +345,147 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     assert_eq!(answers["show elsewhere"]["error"]["code"], "not-found");
     flow.stop().await;
 }
+
+/// A completed command, as a CLI reports one.
+fn command(n: usize) -> brigadier_providers::ProviderEvent {
+    brigadier_providers::ProviderEvent::Command {
+        item_id: format!("c{n}"),
+        command: format!("echo {n}"),
+        cwd: None,
+        status: brigadier_providers::model::ItemStatus::Completed,
+        exit_code: Some(0),
+        output: Some(format!("{n}\n")),
+        duration_ms: Some(1),
+        kept: None,
+    }
+}
+
+/// `read` of a session shows its own commands with its messages, `--screen` keeps the newest
+/// of a long request's commands and says older ones were left out, and a worker's `--last N`
+/// reads back as far as it takes (STRIP-DOWN-PLAN S13; Codex review of part 1).
+#[tokio::test]
+async fn read_shows_commands_and_reads_back_as_far_as_asked() {
+    const RUNS: usize = 205;
+    const WORKER_RUNS: usize = 1100;
+    let script: Script = Arc::new(|turn| {
+        Box::pin(async move {
+            if let Some(Role::Worker { .. }) = turn.host.grants().resolve(&turn.grant) {
+                for n in 0..WORKER_RUNS {
+                    turn.emit(command(n)).await;
+                }
+                let reply = turn
+                    .call("submit_report", json!({"summary": "Ran them."}))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Ran them all.");
+            }
+            if turn.input.contains("Start a worker.") {
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "medium", "title": "Run them",
+                               "kind": "scout", "spec": "Run the commands.",
+                               "provider": "claude"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Started a worker.");
+            }
+            if turn.input.contains("Run them.") {
+                for n in 0..RUNS {
+                    turn.emit(command(n)).await;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                return Reply::text("Ran them.");
+            }
+            Reply::text("Noted.")
+        })
+    });
+    let flow = Flow::start("cli-read-back", Options::default(), script).await;
+    flow.say("Run them.").await;
+    flow.settled().await;
+    let caller = crate::manager::cli::CliCaller {
+        conversation_id: flow.conversation.clone(),
+        task_id: None,
+    };
+    let read = |id: String, last, screen| {
+        let (flow, caller) = (&flow, &caller);
+        async move {
+            let call = CliCall {
+                protocol: PROTOCOL,
+                request: CliRequest::Read { id, last, screen },
+            };
+            match flow.manager.cli_call(caller, call).await {
+                CliReply::Ok { output } => output,
+                CliReply::Error { error } => panic!("{error:?}"),
+            }
+        }
+    };
+    let me = flow.conversation.0.clone();
+    let texts = |read: &Value| -> Vec<String> {
+        read["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                format!(
+                    "{} {}",
+                    item["kind"].as_str().unwrap(),
+                    item["text"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+
+    // `--last 3`: its last two commands, then its answer.
+    let last = read(me.clone(), Some(3), false).await;
+    assert_eq!(
+        texts(&last),
+        [
+            format!("command echo {}", RUNS - 2),
+            format!("command echo {}", RUNS - 1),
+            "message Ran them.".to_owned()
+        ],
+        "{last:#}"
+    );
+    assert_eq!(last["hasMore"], true);
+
+    // `--screen`: the request, the newest 200 of its commands, its answer; older ones left out.
+    let screen = read(me.clone(), None, true).await;
+    let shown = texts(&screen);
+    assert!(
+        shown[0].starts_with("message ") && shown[0].contains("Run them."),
+        "{shown:?}"
+    );
+    assert_eq!(shown.last().unwrap(), "message Ran them.");
+    let commands: Vec<&String> = shown
+        .iter()
+        .filter(|text| text.starts_with("command "))
+        .collect();
+    assert_eq!(commands.len(), 200);
+    assert_eq!(commands[0], &format!("command echo {}", RUNS - 200));
+    assert_eq!(commands[199], &format!("command echo {}", RUNS - 1));
+    assert_eq!(screen["hasMore"], true);
+
+    // A worker's `--last N` past one page of its events reads back as far as asked.
+    flow.say("Start a worker.").await;
+    flow.until("its worker reported", |board| {
+        board.tasks.values().any(|task| task.report.is_some())
+    })
+    .await;
+    flow.settled().await;
+    let worker = Flow::task(&flow.board().await, 1).id.0.clone();
+    let all = read(worker.clone(), Some(1050), false).await;
+    let shown = texts(&all);
+    assert_eq!(shown.len(), 1050, "{:?}", &shown[..3]);
+    assert!(
+        shown.contains(&"message Ran them all.".to_owned()),
+        "{:?}",
+        &shown[1040..]
+    );
+    assert!(shown[0].starts_with("command echo "), "{}", shown[0]);
+    assert_eq!(all["hasMore"], true);
+    let answer = read(worker, None, false).await;
+    assert_eq!(texts(&answer), ["message Ran them all."]);
+    flow.stop().await;
+}

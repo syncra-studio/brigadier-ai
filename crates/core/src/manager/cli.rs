@@ -640,8 +640,8 @@ impl SessionManager {
         Ok(CliReply::ok(&output))
     }
 
-    /// A session's messages: its last answer, its last `last`, or its latest request with the
-    /// thread's own commands and tools in it.
+    /// A session's items: its last answer, its last `last` messages, commands and tools, or
+    /// its latest request with the thread's own commands and tools in it.
     async fn cli_session_items(
         &self,
         id: &ConversationId,
@@ -652,7 +652,30 @@ impl SessionManager {
         let page = self.core.list_messages(id.clone(), None, limit).await?;
         let messages = page.messages;
         Ok(match view {
-            ReadView::Items => (messages.iter().map(message_item).collect(), page.has_more),
+            ReadView::Items => {
+                let n = limit as usize;
+                let mut items: Vec<Item> = messages.iter().map(message_item).collect();
+                // The commands and tools of the requests these messages belong to: older ones
+                // are older than every message here, so they can't be among the last `n`.
+                let mut requests: Vec<&str> = Vec::new();
+                for request in messages.iter().filter_map(|m| m.request_id.as_deref()) {
+                    if !requests.contains(&request) {
+                        requests.push(request);
+                    }
+                }
+                let mut older_steps = false;
+                for request in requests {
+                    let (steps, older) = self.cli_request_steps(id, request, n).await;
+                    older_steps |= older;
+                    items.extend(steps);
+                }
+                items.sort_by_key(in_order);
+                let skip = items.len().saturating_sub(n);
+                (
+                    items[skip..].to_vec(),
+                    skip > 0 || older_steps || page.has_more,
+                )
+            }
             ReadView::Last => match messages
                 .iter()
                 .rposition(|message| message.role == MessageRole::Assistant)
@@ -666,63 +689,124 @@ impl SessionManager {
                     .rposition(|message| message.role == MessageRole::User)
                     .unwrap_or(0);
                 let mut items: Vec<Item> = messages[from..].iter().map(message_item).collect();
+                let mut older_steps = false;
                 if let Some(request) = messages
                     .get(from)
-                    .and_then(|message| message.request_id.clone())
+                    .and_then(|message| message.request_id.as_deref())
                 {
-                    let steps = self
-                        .thread_items(id, &request, None, None, LOOK_BACK)
-                        .await
-                        .map(|page| page.entries)
-                        .unwrap_or_default();
-                    items.extend(
-                        self::items(&steps)
-                            .into_iter()
-                            .filter(|item| item.kind != ItemKind::Message),
-                    );
-                    items.sort_by_key(|item| item.at_ms);
+                    let (steps, older) = self
+                        .cli_request_steps(id, request, LOOK_BACK as usize)
+                        .await;
+                    older_steps = older;
+                    items.extend(steps);
+                    items.sort_by_key(in_order);
                 }
-                (items, from > 0 || page.has_more)
+                (items, from > 0 || older_steps || page.has_more)
             }
         })
     }
 
-    /// A worker's transcript: its last message, its last `last` items, or its latest turn.
+    /// The thread's own commands and tools of `request`, the newest `keep` of them, and
+    /// whether older ones were left out. A thread with none reads as none.
+    async fn cli_request_steps(
+        &self,
+        id: &ConversationId,
+        request: &str,
+        keep: usize,
+    ) -> (Vec<Item>, bool) {
+        let Ok(board) = self.core.board(id).await else {
+            return (Vec::new(), false);
+        };
+        let positions: Vec<i64> = board
+            .orchestrator_steps
+            .iter()
+            .filter(|step| {
+                step.request_id.as_deref() == Some(request)
+                    && matches!(
+                        &step.kind,
+                        crate::work::OrchestratorStepKind::Tool {
+                            log_seq: Some(_),
+                            ..
+                        }
+                    )
+            })
+            .map(|step| step.position)
+            .collect();
+        let older = positions.len() > keep;
+        if keep == 0 || positions.is_empty() {
+            return (Vec::new(), older);
+        }
+        // From just after the last one left out, page by page to the newest.
+        let mut after = older.then(|| positions[positions.len() - keep - 1]);
+        let mut entries = Vec::new();
+        loop {
+            let Ok(page) = self.thread_items(id, request, None, after, LOOK_BACK).await else {
+                break;
+            };
+            entries.extend(page.entries);
+            match page.next {
+                Some(next) => after = Some(next),
+                None => break,
+            }
+        }
+        let steps = items(&entries)
+            .into_iter()
+            .filter(|item| item.kind != ItemKind::Message)
+            .collect();
+        (steps, older)
+    }
+
+    /// A worker's transcript: its last message, its last `last` items, or its latest turn. Its
+    /// events are read back a page at a time until what was asked for is found or its history
+    /// ends: most events aren't items (deltas, usage).
     async fn cli_worker_items(
         &self,
         id: &TaskId,
         view: ReadView,
         last: Option<u32>,
     ) -> crate::Result<(Vec<Item>, bool)> {
-        // Most events aren't items (deltas, usage): read well past what is shown.
-        let limit = last.map_or(LOOK_BACK * 5, |n| {
-            n.saturating_mul(8).clamp(LOOK_BACK, 5000)
-        });
-        let page = self.core.list_worker_events(id, None, limit).await?;
-        let entries = &page.entries;
+        let n = last.unwrap_or(LOOK_BACK) as usize;
+        let mut entries: Vec<crate::model::RawEntry> = Vec::new();
+        let mut before = None;
+        let more = loop {
+            let page = self
+                .core
+                .list_worker_events(id, before, brigadier_store::MAX_PAGE)
+                .await?;
+            before = page.entries.first().map(|entry| entry.stream_seq);
+            let mut older = page.entries;
+            older.append(&mut entries);
+            entries = older;
+            let found = match view {
+                // One past `n`, so a cut shows as more.
+                ReadView::Items => items(&entries).len() > n,
+                ReadView::Last => entries.iter().any(|entry| is_answer(&entry.event)),
+                ReadView::Screen => entries
+                    .iter()
+                    .any(|entry| matches!(entry.event, ProviderEvent::TurnStarted { .. })),
+            };
+            if found || !page.has_more || before.is_none() {
+                break page.has_more;
+            }
+        };
         Ok(match view {
             ReadView::Items => {
-                let items = items(entries);
-                let n = last.unwrap_or(LOOK_BACK) as usize;
+                let items = items(&entries);
                 let skip = items.len().saturating_sub(n);
-                (items[skip..].to_vec(), skip > 0 || page.has_more)
+                (items[skip..].to_vec(), skip > 0 || more)
             }
             ReadView::Last => {
-                let found =
-                    entries
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find_map(|(at, entry)| match &entry.event {
-                            ProviderEvent::Message {
-                                role: brigadier_providers::model::Role::Assistant,
-                                ..
-                            } => event_item(&entry.event, entry.at_ms).map(|item| (at, item)),
-                            _ => None,
-                        });
+                let found = entries
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, entry)| is_answer(&entry.event))
+                    .and_then(|(at, entry)| {
+                        event_item(&entry.event, entry.at_ms).map(|item| (at, item))
+                    });
                 match found {
-                    Some((at, item)) => (vec![item], at > 0 || page.has_more),
-                    None => (Vec::new(), page.has_more),
+                    Some((at, item)) => (vec![item], at > 0 || more),
+                    None => (Vec::new(), more),
                 }
             }
             ReadView::Screen => {
@@ -730,10 +814,32 @@ impl SessionManager {
                     .iter()
                     .rposition(|entry| matches!(entry.event, ProviderEvent::TurnStarted { .. }))
                     .unwrap_or(0);
-                (items(&entries[from..]), from > 0 || page.has_more)
+                (items(&entries[from..]), from > 0 || more)
             }
         })
     }
+}
+
+/// Where an item goes among a session's: by time, and within one millisecond a request first,
+/// then the commands and tools it ran, then the answer.
+fn in_order(item: &Item) -> (i64, u8) {
+    let rank = match (item.kind, item.role) {
+        (ItemKind::Message, Some(cli::Role::User)) => 0,
+        (ItemKind::Message, _) => 2,
+        _ => 1,
+    };
+    (item.at_ms, rank)
+}
+
+/// An assistant message: what `read` shows as a worker's last answer.
+fn is_answer(event: &ProviderEvent) -> bool {
+    matches!(
+        event,
+        ProviderEvent::Message {
+            role: brigadier_providers::model::Role::Assistant,
+            ..
+        }
+    )
 }
 
 #[cfg(test)]
