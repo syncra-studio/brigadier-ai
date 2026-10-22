@@ -558,9 +558,6 @@ impl SessionManager {
             OrchestratorCall::OfferFeedback(args) => {
                 crate::heap(|| self.offer_feedback(id, args)).await
             }
-            OrchestratorCall::OfferSession(args) => {
-                crate::heap(|| self.offer_session(id, args)).await
-            }
             OrchestratorCall::SetHeadline(args) => {
                 crate::heap(|| self.set_headline(id, args)).await
             }
@@ -620,21 +617,6 @@ impl SessionManager {
                     self.preview_log(id, args.id.as_deref(), args.tail_lines, args.wait_secs)
                 })
                 .await
-            }
-            OrchestratorCall::ListSessions(args) => {
-                crate::heap(|| self.list_sessions(id, args.query.as_deref(), args.project)).await
-            }
-            OrchestratorCall::ReadSession(args) => {
-                crate::heap(|| self.read_session(&args.id)).await
-            }
-            OrchestratorCall::MessageSession(args) => {
-                crate::heap(|| self.message_session(id, args)).await
-            }
-            OrchestratorCall::WaitForReplies(args) => {
-                crate::heap(|| self.wait_for_replies(id, args)).await
-            }
-            OrchestratorCall::SettleWait(args) => {
-                crate::heap(|| self.settle_wait(id, &args.message_id)).await
             }
             OrchestratorCall::ListTasks => {
                 let tasks = crate::heap(|| self.core.tasks(id)).await?;
@@ -1211,55 +1193,6 @@ impl SessionManager {
         Ok("The user sees the report as a card under your answer, to send or dismiss. Don't mention it again, nor say whether it is sent: they may send it after your answer, and the card shows it. Carry on with your answer.".into())
     }
 
-    /// `offer_session`: a card in the thread with one "Start as session" button for work
-    /// outside the request (the thread judges what is out of scope; this only plumbs). Nothing
-    /// starts until the user clicks it ([`Self::start_offered_session`]). The same task once a
-    /// request, and none in an overnight run, where nobody is there to click.
-    pub(crate) async fn offer_session(
-        &self,
-        id: &ConversationId,
-        args: crate::tools::OfferSession,
-    ) -> Result<String> {
-        let task = args.task.trim();
-        if task.is_empty() {
-            return Err(Error::Invalid(
-                "`task` must say what the session is to do".into(),
-            ));
-        }
-        if self.overnight.active.get(id).is_some() {
-            return Err(Error::Invalid(
-                "An overnight run is going and nobody is there to start it: note it in the run's report instead.".into(),
-            ));
-        }
-        let title = args
-            .title
-            .as_deref()
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-            .map_or_else(|| offer_title(task), str::to_owned);
-        let request = self.request_for(id, None).await;
-        let board = self.core.board(id).await?;
-        if board.orchestrator_steps.iter().any(|step| {
-            step.request_id == request
-                && matches!(&step.kind, OrchestratorStepKind::SessionOffered { task: offered, .. } if offered == task)
-        }) {
-            return Err(Error::Invalid(
-                "This task was already offered for this request: don't offer it again.".into(),
-            ));
-        }
-        self.orchestrator_step_in(
-            id,
-            request,
-            OrchestratorStepKind::SessionOffered {
-                id: uuid::Uuid::now_v7().to_string(),
-                title,
-                task: task.to_owned(),
-            },
-        )
-        .await;
-        Ok("The user sees it as a card with a Start as session button: one click starts it as a session of its own, on its own branch. Don't start it yourself or do it here; carry on with the request.".into())
-    }
-
     /// The user's answer to the feedback offer `offer_id` in this conversation: sent (opened
     /// on GitHub, with what became of its reports) or dismissed. Once only, but a sent one
     /// again when a Try again filed the rest: its `results` take the first's place.
@@ -1566,19 +1499,6 @@ pub(super) fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec
             })
         })
         .collect()
-}
-
-/// A session offer's name when the thread gave none: the task's first sentence, cut to a few
-/// words.
-fn offer_title(task: &str) -> String {
-    let first = task.split(['.', ':', '\n']).next().unwrap_or(task).trim();
-    let words: Vec<&str> = first.split_whitespace().take(8).collect();
-    let title = words.join(" ");
-    if first.split_whitespace().count() > words.len() {
-        format!("{title}…")
-    } else {
-        title
-    }
 }
 
 #[cfg(test)]

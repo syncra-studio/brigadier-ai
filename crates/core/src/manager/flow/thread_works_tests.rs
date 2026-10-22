@@ -157,7 +157,10 @@ async fn parts_that_run_at_once(start_workers_on_own: bool) {
             "{shown:#?}"
         );
     } else {
-        assert!(rule.contains("ask first with"), "{rule}");
+        assert!(
+            rule.contains("ask first on one `brigadier ask` card"),
+            "{rule}"
+        );
         assert!(!shown.iter().any(|text| text == ANNOUNCED), "{shown:#?}");
         let heard = inputs.lock().unwrap().clone();
         assert!(heard[1].contains("The user answered: Yes"), "{heard:#?}");

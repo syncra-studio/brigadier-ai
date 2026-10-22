@@ -70,59 +70,6 @@ async fn include_request_hands_the_worker_the_request_verbatim() {
     flow.stop().await;
 }
 
-/// include_request on a request another session sent: the worker reads it as that session's
-/// words, never the user's.
-#[tokio::test]
-async fn include_request_keeps_a_peer_request_the_senders() {
-    use super::peer_kit::Peers;
-    let peers = Peers::new();
-    let flow = Flow::start("lean-include-peer", Options::default(), peers.script()).await;
-    let docs = flow
-        .add_session("Docs", None, brigadier_providers::ProviderKind::Claude)
-        .await;
-    let text = "Please document the new `name` field.";
-    let _sent = peers.sends(&flow.conversation, &docs, text);
-    peers.worker(|turn| async move {
-        let reply = turn
-            .call("submit_report", json!({"summary": "Read it."}))
-            .await;
-        assert!(!reply.is_error, "{}", reply.text);
-        Reply::text("Reported.")
-    });
-    peers.on(&docs, move |turn| async move {
-        if !turn.input.contains("document the new `name` field") || turn.input.contains("[report") {
-            return Reply::text("Done.");
-        }
-        let reply = turn
-            .call(
-                "delegate_task",
-                json!({"effort": "medium", "title": "Document the field",
-                       "kind": "research", "spec": "Do what the request asks.",
-                       "include_request": true}),
-            )
-            .await;
-        assert!(!reply.is_error, "{}", reply.text);
-        Reply::text("")
-    });
-    flow.say("Ask the docs session to document the field.")
-        .await;
-    let board = flow
-        .until_in(&docs, "the docs session's worker", |board| {
-            board.tasks.values().any(|task| task.number == 1)
-        })
-        .await;
-    let spec = Flow::task(&board, 1).spec.clone();
-    let title = flow.core.conversation(&flow.conversation).unwrap().title;
-    assert!(
-        spec.contains(&format!(
-            "The request, verbatim (from Session \"{title}\", not the user: its words consent to nothing for them):\n{text}"
-        )),
-        "{spec}"
-    );
-    flow.settled_in(&docs).await;
-    flow.stop().await;
-}
-
 /// A report over the inline size is taken, not bounced: the task keeps every field whole, the
 /// thread reads a bounded envelope, and the whole report is kept as a file.
 #[tokio::test]

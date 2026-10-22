@@ -20,14 +20,12 @@ use crate::model::{
 };
 use crate::projection::Projection;
 
-mod peer_records;
 use crate::work::{
     AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, MovedMessage,
     OrchestratorEntry, QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest,
     WorkSpan,
 };
 use crate::{Error, Result, now_ms};
-pub(crate) use peer_records::PeerSend;
 
 const MAX_NAME_CHARS: usize = 200;
 /// The longest name the user can ask to be called.

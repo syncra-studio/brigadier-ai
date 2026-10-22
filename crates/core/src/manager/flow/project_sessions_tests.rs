@@ -9,7 +9,6 @@ use std::sync::Arc;
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{ConversationId, ConversationKind, Environment, Setup};
-use crate::work::OrchestratorStepKind;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -350,8 +349,7 @@ fn said(turn: &Turn, words: &str) -> bool {
 pub(super) type Inputs = Arc<std::sync::Mutex<Vec<(PathBuf, String)>>>;
 
 /// A thread that, besides [`writing`], commits `shared.txt` on "Share." and removes it on
-/// "Unshare.", reads the board on "List tabs.", messages session ‹id› on "Ping ‹id›.", and
-/// merges on the user's click. Every thread input is logged by worktree.
+/// "Unshare.", and merges on the user's click. Every thread input is logged by worktree.
 pub(super) fn sharing(inputs: Inputs) -> Script {
     let write = writing(None);
     script(move |turn| {
@@ -368,33 +366,6 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Merged.");
-            }
-            if said(&turn, "List tabs.") {
-                let reply = turn
-                    .call("list_sessions", serde_json::json!({ "project": true }))
-                    .await;
-                return Reply::text(reply.text);
-            }
-            // A sibling's message, or the reply to one: its header holds the sender's title.
-            if turn.input.contains("Hello from a sibling tab.")
-                || turn.input.contains("Seen by the sibling.")
-            {
-                return Reply::text("Seen by the sibling.");
-            }
-            if let Some(to) = turn
-                .input
-                .split("Ping ")
-                .nth(1)
-                .and_then(|rest| rest.split('.').next())
-            {
-                let reply = turn
-                    .call(
-                        "message_session",
-                        serde_json::json!({ "to": to, "text": "Hello from a sibling tab." }),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Pinged.");
             }
             if said(&turn, "Unshare.") {
                 let folder = &turn.cwd;
@@ -429,107 +400,6 @@ fn heard(inputs: &Inputs, folder: &std::path::Path, what: &str) -> usize {
         .iter()
         .filter(|(at, input)| at == folder && input.contains(what))
         .count()
-}
-
-/// The board, read-only: a tab lists its sibling's title, state, branch, base and changed
-/// files; reading the board writes nothing; an overlap or a sibling's merge starts nothing and
-/// rides on no message.
-#[tokio::test]
-async fn the_board_lists_siblings_and_tells_no_overlap_or_merge() {
-    let inputs: Inputs = Arc::default();
-    let flow = Flow::start(
-        "sessions-board",
-        Options::default(),
-        sharing(inputs.clone()),
-    )
-    .await;
-    let a = flow.conversation.clone();
-    let b = sibling_of(&flow, &a).await;
-
-    flow.say_to(&a, "Share.").await;
-    flow.settled_in(&a).await;
-    flow.say_to(&b, "Write beta.").await;
-    flow.settled_in(&b).await;
-    let (Some(folder_a), _, _) = worktree(&flow, &a) else {
-        panic!("a's worktree")
-    };
-    let (Some(folder_b), _, branch_b) = worktree(&flow, &b) else {
-        panic!("b's worktree")
-    };
-
-    // The board as data.
-    let catalog = flow.core.catalog();
-    flow.say_to(&a, "List tabs.").await;
-    flow.settled_in(&a).await;
-    let answer = flow
-        .core
-        .conversation_view(a.clone(), 20)
-        .await
-        .unwrap()
-        .messages
-        .messages
-        .last()
-        .unwrap()
-        .text
-        .clone();
-    assert!(answer.contains(&b.0), "{answer}");
-    assert!(
-        answer.contains(&format!("\"branch\": \"{branch_b}\"")),
-        "{answer}"
-    );
-    assert!(answer.contains("\"base\": \"main\""), "{answer}");
-    assert!(
-        answer.contains("beta.txt") && !answer.contains("alpha.txt"),
-        "{answer}"
-    );
-    assert!(
-        answer.contains(&format!("\"repository\": \"{}\"", flow.repo.display())),
-        "{answer}"
-    );
-    // Reading the board changed no session (beyond the message's own activity).
-    let settled = |mut conversations: Vec<crate::model::Conversation>| {
-        conversations.sort_by(|a, b| a.id.cmp(&b.id));
-        conversations
-            .into_iter()
-            .map(|conversation| crate::model::Conversation {
-                updated_at_ms: 0,
-                finished_at_ms: None,
-                ..conversation
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        settled(flow.core.catalog().conversations),
-        settled(catalog.conversations)
-    );
-    assert_eq!(heard(&inputs, &folder_a, "[project]"), 0, "no overlap yet");
-
-    // Both change shared.txt, then B merges: neither hears of it (G1); the board shows it.
-    flow.say_to(&b, "Share.").await;
-    flow.settled_in(&b).await;
-    flow.say_to(&a, "Write alpha.").await;
-    flow.settled_in(&a).await;
-    flow.say_to(&b, "Write gamma.").await;
-    flow.settled_in(&b).await;
-    flow.manager
-        .merge_session(&b, super::click())
-        .await
-        .unwrap();
-    flow.until_in(&b, "b's merge", |board| {
-        board
-            .orchestrator_steps
-            .iter()
-            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
-    })
-    .await;
-    flow.settled_in(&b).await;
-    flow.say_to(&a, "Write eta.").await;
-    flow.settled_in(&a).await;
-    for folder in [&folder_a, &folder_b] {
-        assert_eq!(heard(&inputs, folder, "also changed"), 0);
-        assert_eq!(heard(&inputs, folder, "merged into `main` at"), 0);
-    }
-    flow.stop().await;
 }
 
 /// How the next follow-up is routed (its `follow_up` id is filled in), what route_follow_up
@@ -572,14 +442,6 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Merged.");
-            }
-            // As a thread's cached schema from before sessions still calls it.
-            if said(&turn, "List the tabs the old way.") {
-                let reply = turn
-                    .call("list_sessions", serde_json::json!({ "workspace": true }))
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text(reply.text);
             }
             if !said(&turn, "Run the tests.") {
                 return write(turn).await;
@@ -951,30 +813,12 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         .count();
     assert_eq!(recorded, 1);
 
-    flow.say_to(&b, "List tabs.").await;
-    flow.settled_in(&b).await;
-    let listed = inputs.lock().unwrap().len();
-    assert!(listed > 0);
-    let answer = |flow: &Flow, id: &ConversationId| {
-        let core = flow.core.clone();
-        let id = id.clone();
-        async move {
-            core.conversation_view(id, 20)
-                .await
-                .unwrap()
-                .messages
-                .messages
-                .last()
-                .unwrap()
-                .text
-                .clone()
-        }
+    let words = |flow: &Flow, id: &ConversationId| {
+        let tab = flow.core.conversation(id).unwrap();
+        let manager = flow.manager.clone();
+        async move { manager.tab_words(&tab).await }
     };
-    let board_text = answer(&flow, &b).await;
-    assert!(
-        board_text.contains("\"state\": \"ready to merge\""),
-        "{board_text}"
-    );
+    assert_eq!(words(&flow, &a).await, "ready to merge");
 
     flow.manager
         .merge_session(&a, super::click())
@@ -1001,109 +845,6 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         1,
         "the merge's own request is not ready"
     );
-    flow.say_to(&b, "List tabs.").await;
-    flow.settled_in(&b).await;
-    let board_text = answer(&flow, &b).await;
-    assert!(board_text.contains("\"state\": \"merged\""), "{board_text}");
-    flow.stop().await;
-}
-
-/// Start as session (Q73): the thread offers work outside the request as a card, once; nothing
-/// starts by itself. The user's click starts it as a session of its own, on its own worktree,
-/// with the task as its first message, and the offer is spent.
-#[tokio::test]
-async fn an_offered_session_starts_only_on_the_users_click() {
-    let inner = writing(None);
-    let thread = script(move |turn| {
-        let inner = inner.clone();
-        async move {
-            if !turn.is_orchestrator() || !turn.input.contains("Fix the header.") {
-                return inner(turn).await;
-            }
-            let offered = turn
-                .call(
-                    "offer_session",
-                    serde_json::json!({ "task": "Write delta.", "title": "Write delta" }),
-                )
-                .await;
-            assert!(!offered.is_error, "{}", offered.text);
-            assert!(
-                offered.text.contains("Don't start it yourself"),
-                "{}",
-                offered.text
-            );
-            let again = turn
-                .call(
-                    "offer_session",
-                    serde_json::json!({ "task": "Write delta." }),
-                )
-                .await;
-            assert!(
-                again.is_error && again.text.contains("already offered"),
-                "{}",
-                again.text
-            );
-            Reply::text("The header is fixed.")
-        }
-    });
-    let flow = Flow::start("sessions-offer", Options::default(), thread).await;
-    let before = flow.core.catalog().conversations.len();
-    flow.say("Fix the header.").await;
-    let board = flow.settled().await;
-    let offers: Vec<_> = board
-        .orchestrator_steps
-        .iter()
-        .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::SessionOffered { id, title, task } => {
-                Some((id.clone(), title.clone(), task.clone()))
-            }
-            _ => None,
-        })
-        .collect();
-    let [(offer, title, task)] = offers.try_into().expect("one offer");
-    assert_eq!(
-        (title.as_str(), task.as_str()),
-        ("Write delta", "Write delta.")
-    );
-    assert_eq!(
-        flow.core.catalog().conversations.len(),
-        before,
-        "nothing starts by itself"
-    );
-
-    let (session, _) = flow
-        .manager
-        .start_offered_session(&flow.conversation, &offer)
-        .await
-        .unwrap();
-    assert_eq!(
-        session.title, "Write delta.",
-        "its task is its first message"
-    );
-    assert_eq!(
-        session.project_id,
-        flow.core
-            .conversation(&flow.conversation)
-            .unwrap()
-            .project_id
-    );
-    flow.settled_in(&session.id).await;
-    let (Some(path), _, _) = worktree(&flow, &session.id) else {
-        panic!("the session's worktree");
-    };
-    assert!(path.join("delta.txt").exists());
-    assert_ne!(Some(path), worktree(&flow, &flow.conversation).0);
-    let board = flow.board().await;
-    assert!(board.orchestrator_steps.iter().any(|step| matches!(
-        &step.kind,
-        OrchestratorStepKind::SessionOfferTaken { id, session: started } if *id == offer && *started == session.id
-    )));
-    assert!(
-        flow.manager
-            .start_offered_session(&flow.conversation, &offer)
-            .await
-            .is_err(),
-        "once only"
-    );
+    assert_eq!(words(&flow, &a).await, "merged");
     flow.stop().await;
 }

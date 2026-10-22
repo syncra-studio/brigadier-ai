@@ -607,7 +607,7 @@ pub(crate) fn dev_app_command(worktree: &Path) -> Option<String> {
     if scripts.get("tauri:debug-app").is_some() && worktree.join("tools/open-dev-app.sh").exists() {
         let app = worktree.join("target/debug/bundle/macos/Brigadier Dev.app");
         return Some(format!(
-            "here: build and open it as one start_preview with `kind: \"app\"`, `env.BRIGADIER_DATA_DIR` set to a fresh folder under /tmp, and the command `{manager} tauri:debug-app && \"{}/Contents/MacOS/brigadier-app\"`; then find its window with the computer tools' list_windows",
+            "here: build and open it as one `brigadier preview start --kind app --env BRIGADIER_DATA_DIR=<a fresh folder under /tmp>` with the command `{manager} tauri:debug-app && \"{}/Contents/MacOS/brigadier-app\"`; then find its window with the computer tools' list_windows",
             app.display()
         ));
     }

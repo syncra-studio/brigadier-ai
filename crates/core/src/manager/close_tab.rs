@@ -58,7 +58,9 @@ impl SessionManager {
     pub(crate) async fn close_tab(&self, id: &ConversationId, tab: &str) -> Result<String> {
         let tab = tab.trim();
         if tab.is_empty() {
-            return Err(Error::Invalid("name the tab, as app_state lists it".into()));
+            return Err(Error::Invalid(
+                "name the tab, as `brigadier app state` lists it".into(),
+            ));
         }
         if tab == CHAT_TAB {
             return Err(Error::Invalid(

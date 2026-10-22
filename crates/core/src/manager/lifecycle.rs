@@ -115,10 +115,6 @@ impl SessionManager {
         self.reconcile_trust().await;
         // Tab chats whose session went go now; those whose tab closed, once the app says.
         self.sweep_tab_chats().await;
-        // What other sessions sent that the last run hadn't had taken, as it stands before any
-        // session recovers: a reply sent while they recover (a cut-off request's) is delivered
-        // once, by its sending, and not again as if the last run had left it.
-        let owed = self.owed_peer_messages().await;
         // Each big await below is polled from the heap ([`crate::heap`]): recovery runs on a
         // runtime thread's stack, and their futures in this frame came to over 700 KB.
         for conversation in self.core.catalog().conversations {
@@ -280,25 +276,10 @@ impl SessionManager {
             if conversation.lifecycle != Lifecycle::Archived {
                 self.rewatch_pr(&conversation.id).await;
             }
-            // What other sessions sent it and it hadn't taken goes again (once).
-            crate::heap(|| self.recover_peer_messages(&conversation, &owed)).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;
-            // Nothing runs any more: what was working is over or waits for the user. What ends
-            // here was cut off, and a message it owes a reply to hears so.
-            let working = self.working_requests(&conversation.id).await;
-            self.cut_off_lock().extend(working.iter().cloned());
+            // Nothing runs any more: what was working is over or waits for the user.
             self.settle_requests(&conversation.id).await;
-            let still = self.working_requests(&conversation.id).await;
-            self.cut_off_lock()
-                .retain(|request| !still.contains(request));
-        }
-        // A message whose card the user answered just before the daemon stopped goes now, or
-        // is declined.
-        for conversation in self.core.catalog().conversations {
-            if !conversation.deleting {
-                self.recover_peer_cards(&conversation.id).await;
-            }
         }
         self.sweep_test_data().await;
     }
@@ -606,8 +587,6 @@ impl SessionManager {
                 return Err(err);
             }
         };
-        // What other sessions sent it and it hasn't taken never goes (SESSION-MESSAGING-PLAN.md §4).
-        self.drop_due_peer_messages(&id, "archived").await;
         let manager = self.arc();
         self.start_cleanup(id.clone(), async move {
             manager.finish_archive(&id, runs).await;
@@ -1391,10 +1370,6 @@ impl SessionManager {
         // What its browser tab sent goes now, however it is deleted (its tab closed, New chat).
         self.tab_chats.forget_page(&id);
         let drained = self.drain(&id).await;
-        // What other sessions sent it and it hasn't taken never goes; once it is gone, what
-        // they wait for from it is over (SESSION-MESSAGING-PLAN.md §4).
-        let peers = self.peers_of(&id).await;
-        self.drop_due_peer_messages(&id, "deleted").await;
         self.delete_side_chats(&id).await;
         let runs = self.fence_runs(&id).await?;
         self.wind_down(&conversation).await;
@@ -1487,9 +1462,6 @@ impl SessionManager {
         let (removed, own) = store.delete_streams_and_blobs(purge).await?;
         self.core.forget_conversation(id.clone()).await?;
         self.convs_lock().remove(&id);
-        for peer in &peers {
-            self.settle_requests(peer).await;
-        }
         match store.gc_blobs().await {
             Ok(stats) => {
                 crate::logging::private_trace!(private_logs, info, "conversation deleted"; conversation = %id, removed, ?own, ?stats)

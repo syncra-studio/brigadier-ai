@@ -341,7 +341,7 @@ impl SessionManager {
         if let Ok(conv) = self.conv(&id) {
             conv.note(format!(
                 "[preview] The user started {preview_id} \"{}\" again (its own command, in its \
-                 folder); check preview_log before you tell them how it runs.",
+                 folder); check `brigadier preview log` before you tell them how it runs.",
                 preview.name
             ))
             .await;
@@ -636,8 +636,8 @@ impl SessionManager {
         } else {
             format!(
                 "is starting, not ready yet: it reads Starting until {}. Don't tell the user it \
-                 runs before preview_log says it is running. To wait for it, call preview_log \
-                 with wait_secs (up to 300), which answers the moment it runs or ends; never \
+                 runs before `brigadier preview log` says it is running. To wait for it, run \
+                 `brigadier preview log --wait <seconds>` (up to 300), which answers the moment it runs or ends; never \
                  sleep in a command for it",
                 waits_for(kind)
             )
@@ -661,17 +661,17 @@ impl SessionManager {
             PreviewKind::Web => "",
         };
         let lifetime = if task.is_some() {
-            "It keeps running after you report, until you call stop_preview, and stops when the \
+            "It keeps running after you report, until you run `brigadier preview stop`, and stops when the \
              user presses Stop, when the session closes, when Brigadier quits and when your task \
              ends and its folder is removed: a preview you show the user lasts only while your \
              task is alive"
         } else if for_user {
             "It keeps running across your turns and after the session's work merges, until you \
-             call stop_preview, and stops when the session is archived or deleted, when your \
+             run `brigadier preview stop`, and stops when the session is archived or deleted, when your \
              workspace changes, when the user presses Stop and when Brigadier quits"
         } else {
-            "It keeps running across your turns until you call stop_preview, and stops when the \
-             session is merged, archived or deleted, when your workspace changes, when the user \
+            "It keeps running across your turns until you run `brigadier preview stop`, and stops when \
+             the session is merged, archived or deleted, when your workspace changes, when the user \
              presses Stop and when Brigadier quits"
         };
         Ok(format!(

@@ -5,10 +5,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use brigadier_providers::{ItemStatus, ProviderEvent, ProviderKind, Role};
+use brigadier_providers::{ItemStatus, ProviderEvent, Role};
 use serde_json::json;
 
-use super::peer_kit::{Peers, is_reply};
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::manager::prompts::RESEARCH_REPORT_NOTE;
 use crate::model::MessageRole;
@@ -210,64 +209,6 @@ async fn commentary_between_two_calls_reaches_the_user() {
         ],
     );
     assert_eq!(board.requests[&request].state, RequestState::Done);
-    flow.stop().await;
-}
-
-/// The API session works on its user's request; the sender's message is steered in and the
-/// turn answers the user only. Returns the sender's replies as its turns read them.
-async fn mixed_reply(name: &str) -> (Flow, Vec<String>) {
-    let peers = Peers::new();
-    let flow = Flow::start(name, Options::default(), peers.script()).await;
-    let api = flow
-        .add_session("API work", None, ProviderKind::Claude)
-        .await;
-    let _sent = peers.sends(&flow.conversation, &api, "Which column holds names?");
-    let started = Arc::new(tokio::sync::Notify::new());
-    let at = started.clone();
-    let asked: Arc<Mutex<Option<(String, crate::model::ConversationId)>>> = Arc::default();
-    peers.on(&api, move |turn| {
-        let (at, asked) = (at.clone(), asked.clone());
-        async move {
-            at.notify_one();
-            let steer = turn.steered().await.expect("the message steered in");
-            *asked.lock().unwrap() = Some((
-                super::peer_kit::header_id(&steer).unwrap(),
-                super::peer_kit::header_session(&steer).unwrap(),
-            ));
-            Reply::text("The command printed U990085.")
-        }
-    });
-    flow.say_to(&api, "Run the build.").await;
-    started.notified().await;
-    flow.say("Ask the API session where names live.").await;
-    super::eventually("the reply to reach the sender", || {
-        peers
-            .inputs_of(&flow.conversation)
-            .iter()
-            .any(|input| is_reply(input))
-    })
-    .await;
-    flow.settled_in(&api).await;
-    let replies = peers
-        .inputs_of(&flow.conversation)
-        .into_iter()
-        .filter(|input| is_reply(input))
-        .collect();
-    (flow, replies)
-}
-
-/// Left unanswered amid other work: the sender hears that it went unanswered, never the other
-/// work's answer; nothing reminds the receiver.
-#[tokio::test]
-async fn a_message_left_unanswered_amid_other_work_says_so() {
-    let (flow, replies) = mixed_reply("peer-mixed-silent").await;
-    assert_eq!(replies.len(), 1, "{replies:#?}");
-    assert!(
-        replies[0].contains("\"API work\" didn't answer your message"),
-        "{}",
-        replies[0]
-    );
-    assert!(!replies[0].contains("U990085"), "{}", replies[0]);
     flow.stop().await;
 }
 

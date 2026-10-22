@@ -256,7 +256,10 @@ pub const COMMANDS: &[Command] = &[
         details: "`start <command…>` runs a dev server, app, simulator, PDF or test run as a \
                   preview the user sees (run in the foreground, no trailing `&`); `stop \
                   [<id>]` ends one, or every running one; `log [<id>]` reads the end of its \
-                  output, the latest one's by default. Ids look like `preview-1`.",
+                  output, the latest one's by default. Ids look like `preview-1`. It reads \
+                  Starting until it is ready: say it runs only once `log` says so. Running \
+                  Brigadier itself, give it a new BRIGADIER_DATA_DIR under /tmp and a dev \
+                  identity, never the installed app's.",
         args: &[
             action(&["start", "stop", "log"], "What to do."),
             flag("name", "NAME", "start: a short name the user sees."),

@@ -490,8 +490,16 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
     .await;
     flow.settled().await;
     let worker = Flow::task(&flow.board().await, 1).id.0.clone();
-    let all = read(worker.clone(), Some(1050), false).await;
-    let shown = texts(&all);
+    // Its last events may still be on their way to its log under load: read until they are.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let (all, shown) = loop {
+        let all = read(worker.clone(), Some(1050), false).await;
+        let shown = texts(&all);
+        if shown.len() == 1050 || std::time::Instant::now() > deadline {
+            break (all, shown);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
     assert_eq!(shown.len(), 1050, "{:?}", &shown[..3]);
     assert!(
         shown.contains(&"message Ran them all.".to_owned()),

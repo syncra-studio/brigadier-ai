@@ -317,16 +317,6 @@ impl SessionManager {
                 tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
             }
         }
-        // What another session asked and is answered now gets its reply (sent apart: it settles
-        // the asker's requests in turn).
-        if board
-            .peer_messages
-            .values()
-            .any(super::peer_answers::owes_reply)
-        {
-            let (manager, id) = (self.arc(), conversation_id.clone());
-            self.spawn(async move { manager.answer_peers(&id).await });
-        }
         // A session's answer that ended with no turn after it (a worker the user stopped):
         // the follow-up waiting for it goes now.
         let waiting = conv.kind == ConversationKind::Session

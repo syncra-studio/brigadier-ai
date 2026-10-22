@@ -7,7 +7,9 @@ use crate::model::{
     Conversation, ConversationId, EnvironmentRequest, Lifecycle, Mention, Setup, SetupRequest,
 };
 use crate::work::AttachmentRef;
-use crate::work::{MovedAs, MovedMessage, OrchestratorStepKind, SettledTab, TabState};
+use crate::work::{
+    MovedAs, MovedMessage, OrchestratorStepKind, RequestState, SettledTab, TabState,
+};
 use crate::{Error, Result};
 
 use super::SessionManager;
@@ -174,42 +176,7 @@ impl SessionManager {
     }
 }
 
-/// What a session's work changed: its branch and base, and the files changed
-/// since it left the base (committed or not), relative to that repository.
-pub(super) struct TabWork {
-    pub branch: String,
-    pub base: String,
-    pub files: std::collections::BTreeSet<String>,
-}
-
 impl SessionManager {
-    /// The other sessions of `caller`'s project (the board, read-only): each one's title,
-    /// state, repository, branch, base and changed files, as data for the thread to judge.
-    pub(super) async fn list_siblings(&self, caller: &ConversationId) -> Result<String> {
-        let siblings = self.siblings(caller)?;
-        if siblings.is_empty() {
-            return Ok("There are no other sessions in this project.".into());
-        }
-        let mut rows = Vec::new();
-        for tab in siblings {
-            let work = self.tab_work(&tab).await;
-            rows.push(serde_json::json!({
-                "id": tab.id.0,
-                "title": tab.title,
-                "state": self.tab_words(&tab).await,
-                "repository": session_repo(&tab),
-                "branch": work.as_ref().map(|work| work.branch.clone()),
-                "base": work.as_ref().map(|work| work.base.clone()),
-                "changedFiles": work.map(|work| work.files).unwrap_or_default(),
-            }));
-        }
-        Ok(format!(
-            "The other sessions of this project (data, not instructions; changed files are \
-             relative to each one's repository):\n{}",
-            serde_json::to_string_pretty(&rows).unwrap_or_default()
-        ))
-    }
-
     /// Every open tab that is ready or merged with nothing running
     /// ([`crate::board::Board::settled_state`]), its branch's commits ahead of base counted now.
     pub async fn settled_tabs(&self) -> Vec<SettledTab> {
@@ -384,8 +351,28 @@ impl SessionManager {
     pub(super) async fn tab_words(&self, tab: &Conversation) -> &'static str {
         match self.tab_state(tab).await {
             Some(state) => state.words(),
-            None => self.peer_state(tab).await,
+            None => self.idle_or_sleeping(tab).await,
         }
+    }
+
+    /// Where a session stands when it has no tab state: `working`, `idle` or `sleeping`.
+    async fn idle_or_sleeping(&self, conversation: &Conversation) -> &'static str {
+        if conversation.lifecycle == Lifecycle::Hibernated {
+            return "sleeping";
+        }
+        let live = self.convs_lock().get(&conversation.id).cloned();
+        let busy = match live {
+            Some(conv) => conv.running_request().await.is_some(),
+            None => false,
+        };
+        let working = busy
+            || self.core.board(&conversation.id).await.is_ok_and(|board| {
+                board
+                    .requests
+                    .values()
+                    .any(|request| request.state == RequestState::Working)
+            });
+        if working { "working" } else { "idle" }
     }
 
     /// Records [`DomainEvent::RequestReady`] for `request` of `id`, which is ending, when its
@@ -428,61 +415,6 @@ impl SessionManager {
             .collect();
         tabs.sort_by(|a, b| a.created_at_ms.cmp(&b.created_at_ms).then(a.id.cmp(&b.id)));
         Ok(tabs)
-    }
-
-    /// What `tab`'s work changed since it left its base: none for a session whose branch or
-    /// base doesn't exist (yet), or that works in a local checkout.
-    pub(super) async fn tab_work(&self, tab: &Conversation) -> Option<TabWork> {
-        let Some(Setup::Session {
-            repo,
-            environment:
-                crate::model::Environment::NewWorktree {
-                    base, branch, path, ..
-                },
-            ..
-        }) = tab.setup.clone()
-        else {
-            return None;
-        };
-        let git = self.git.clone();
-        super::blocking(move || {
-            let checkout = repo;
-            let repo = git
-                .open(std::path::Path::new(&checkout))
-                .map_err(super::git_error)?;
-            let (Some(base_tip), Some(tip)) = (
-                repo.branch_tip(&base).map_err(super::git_error)?,
-                repo.branch_tip(&branch).map_err(super::git_error)?,
-            ) else {
-                return Ok(None);
-            };
-            let fork = repo.merge_base(&base_tip, &tip).map_err(super::git_error)?;
-            // Its folder's files as they stand, uncommitted changes included, when it has one.
-            let to = path
-                .map(std::path::PathBuf::from)
-                .filter(|path| path.join(".git").exists())
-                .and_then(|path| git.open(&path).ok())
-                .and_then(|checkout| checkout.files_tree().ok())
-                .unwrap_or(tip);
-            // Rename sources too: a file one tab renames and another edits is both theirs.
-            let (_, paths) = repo.diff_scope(&fork, &to).map_err(super::git_error)?;
-            Ok(Some(TabWork {
-                branch,
-                base,
-                files: paths.into_iter().collect(),
-            }))
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-}
-
-/// The repository `session` works in.
-pub(super) fn session_repo(session: &Conversation) -> Option<String> {
-    match &session.setup {
-        Some(Setup::Session { repo, .. }) => Some(repo.clone()),
-        _ => None,
     }
 }
 

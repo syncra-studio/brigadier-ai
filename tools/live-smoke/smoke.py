@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """The live smoke: this tree's daemon with the real Claude and Codex CLIs, headless.
 
-It starts its own daemon on a scratch data dir under /tmp, makes two throwaway git projects,
+It starts its own daemon on a scratch data dir under /tmp, makes four throwaway git projects,
 three Claude sessions and one Codex session (cheap models, low effort, tiny prompts), runs the
 scenarios below, reads every verdict from the daemon's own view (requests, steps, queue,
-messages between sessions, turns metered) and leaves nothing behind.
+workers, turns metered) and leaves nothing behind.
 
   1  a long command in the thread, with a follow-up and a steer sent while it runs
   2  a thread's background job outlives its turn and its CLI: the result still reaches the user
-  3  Claude -> Codex (idle receiver) and Codex -> Claude (receiver busy with other work),
-     each with a wait: the reply is taken once, in the same turn, and carries only its answer
-  4  Stop during a wait: the wait is cancelled, the late reply arrives once, no turn starts
+  3  a Claude thread and a Codex thread each run a Codex worker through `brigadier start`, wait
+     for its turn's end, and close it: the worker shows only in its session, never the sidebar
+  4  Stop during `brigadier wait`: the worker's turn end starts no turn of the stopped thread
   5  every request that finished ends on a real answer, not a narration line
 
 usage: smoke.py --daemon <brigadierd> [--claude-model sonnet] [--codex-model gpt-6-luna]
@@ -263,6 +263,7 @@ class Smoke:
             return missing
         claude = self.pick(status, "claude", self.args.claude_model)
         codex = self.pick(status, "codex", self.args.codex_model)
+        self.models = {"claude": claude, "codex": codex}
         # One project per session: a Local checkout takes one session at a time (#522).
         repos = {name: self.repo("proj" + name) for name in ("C1", "C2", "C3", "X")}
         projects = {}
@@ -492,136 +493,76 @@ class Smoke:
             check(sc, "after its CLI went, the next request is answered in its own block", mine,
                   f"no answer with {next_code} in it" + (f"; answers outside any request: {stray}" if stray else ""))
 
-    # -- scenario 3: messages with a wait, both ways --
+    # -- scenario 3: a worker of the session's own, through `brigadier` --
 
-    def message_with_wait(self, sc, sender, receiver, reply_code, unrelated=None):
-        to = self.convs[receiver]
+    def sidebar(self):
+        return {c["id"] for c in self.ipc.call({"method": "getCatalog"}, timeout=10)["catalog"]["conversations"]}
+
+    def worker_round_trip(self, sc, parent, reply_code):
+        conv = self.convs[parent]
         start = now_ms()
-        prompt = (f"Find the session titled \"Smoke {receiver}\" with list_sessions and use message_session to send it this "
-                  f"message: \"Reply with the code {reply_code} and nothing else.\" Then call wait_for_replies, and tell me "
-                  f"the reply you got.")
-        _, rid = self.send(sender, prompt, codes=[reply_code])
-        until(lambda: self.idle(sender) and self.idle(receiver), 150)
+        prompt = (f"Run these in your shell, one command per call. 1. `brigadier start --agent codex --model "
+                  f"{self.models['codex']} --effort low --title \"Smoke worker\" \"Reply with the code {reply_code} "
+                  f"and nothing else.\"`, and note the worker id it prints. 2. `brigadier wait --timeout 120`: run it "
+                  f"again while it prints no event; on needs-input run `brigadier send <id> --allow` and wait again; "
+                  f"stop once its turn ended. 3. `brigadier close <id>`. Then tell me the worker's last message.")
+        _, rid = self.send(parent, prompt, codes=[reply_code])
+        seen, in_sidebar = set(), set()
+
+        def watch():
+            v = self.view(parent)
+            mine = {t["id"] for t in v.get("tasks", [])}
+            seen.update(mine)
+            in_sidebar.update(mine & self.sidebar())
+            return self.idle(parent)
+        until(watch, 300, 2)
         time.sleep(SETTLE_S)
-        v, rv = self.view(sender), self.view(receiver)
-        out = [p for p in v["peerMessages"] if p["outgoing"] and p["peer"] == to and p.get("requestId") == rid]
-        sent = out[0] if out else None
-        check(sc, f"{sender} sent one message to {receiver}", len(out) == 1, f"{len(out)} sent")
-        if not sent:
-            return
-        replies = [p for p in v["peerMessages"] if not p["outgoing"] and p.get("replyTo") == sent["messageId"]]
-        check(sc, "its state is replied", sent["state"]["type"] == "replied", f"state {sent['state']['type']}")
-        waits = [s for s in tool_steps(v, "wait_for_replies") if s.get("requestId") == rid]
-        completed = any(s["status"] == "completed" for s in waits)
-        check(sc, "a wait_for_replies ran and completed", completed,
-              f"waits: {[s['status'] for s in waits]}" + ("" if completed else f"; {self.wait_calls(sender, rid)}"))
-        check(sc, "exactly one reply came back", len(replies) == 1, f"{len(replies)} replies")
-        hold = (replies[0].get("hold") or {}).get("type") if replies else None
-        check(sc, "the wait took the reply", hold == "taken", f"hold {hold}")
-        # One turn: one stretch of work and one answer (a reply pushed after the turn would add both);
-        # a Claude thread's turns are also metered one each (Codex meters every model call).
+        v = self.view(parent)
         req = next((r for r in v["requests"] if r["id"] == rid), {})
-        said = [m for m in messages(v) if m["role"] == "assistant" and m.get("requestId") == rid]
-        # A CLI that marks its final answer (Codex) also keeps its progress notes as assistant
-        # messages, folded into the work: only the marked ones are answers then (#63).
-        answers = [m for m in said if m.get("answerAtMs")] or said
-        spans = len(req.get("worked") or [])
-        n = turns(self.data, self.convs[sender], start, now_ms()) if self.native[sender][0] == "claude" else 1
-        check(sc, f"{sender} answered in one turn", spans == 1 and len(answers) == 1 and n == 1,
-              f"{spans} stretches of work, {len(answers)} answers, {n} turns metered",
-              info=f"{len(said) - len(answers)} progress notes" if len(said) > len(answers) else "")
-        check(sc, "the answer carries the reply", assistant_after(v, start, reply_code), f"no answer with {reply_code}")
-        got = [p for p in rv["peerMessages"] if not p["outgoing"] and p["peer"] == self.convs[sender]
-               and p["messageId"] == sent["messageId"]]
-        check(sc, f"{receiver} got it once", len(got) == 1, f"{len(got)} received")
-        back = [p for p in rv["peerMessages"] if p["outgoing"] and p.get("replyTo") == sent["messageId"]]
-        check(sc, f"{receiver} replied once", len(back) == 1, f"{len(back)} replies")
-        if back:
-            # The receiver's record of what it sent: the sender's own record of a reply keeps no text.
-            text = back[0]["text"]
-            check(sc, "the reply carries its answer", reply_code.lower() in text.lower(), f"reply: {text[:120]!r}")
-            if unrelated:
-                check(sc, "the reply leaves out the receiver's other work", unrelated.lower() not in text.lower(),
-                      f"reply: {text[:160]!r}")
-        for p in got:
-            if p.get("requestId"):
-                self.expected[to].setdefault(p["requestId"], []).append(reply_code)
+        check(sc, "the request is done", req and state_of(req) == "done", f"state {state_of(req) if req else 'none'}")
+        steps = [st for st in tool_steps(v) if st.get("requestId") == rid]
+        for words in ("brigadier start", "brigadier wait", "brigadier close"):
+            ran = [st for st in steps if self.runs(parent, st, words)]
+            check(sc, f"`{words}` ran", any(st["status"] == "completed" for st in ran),
+                  f"{[st['status'] for st in ran]}")
+        check(sc, "the worker shows in its session's Workers row", len(seen) == 1, f"{len(seen)} workers seen")
+        check(sc, "the worker is never in the sidebar", not in_sidebar, f"in the sidebar: {sorted(in_sidebar)}")
+        closed = [st for st in v["orchestratorSteps"] if st["kind"].get("type") == "stopped"
+                  and st["kind"].get("taskId") in seen and st["kind"].get("reason") == "Closed by its session."]
+        check(sc, "close stopped the worker", len(closed) == 1, f"{len(closed)} closes")
+        check(sc, "the answer carries the worker's reply", assistant_after(v, start, reply_code), f"no answer with {reply_code}")
 
-    def wait_calls(self, name, rid):
-        """What `name`'s wait_for_replies calls in request `rid` were given and answered, as its
-        tool log holds them: a failed wait's error says which way it ended (#456)."""
-        try:
-            page = self.ipc.call({"method": "listThreadItems", "conversationId": self.convs[name],
-                                  "requestId": rid, "turn": None, "after": None, "limit": 200})["page"]
-        except Exception as err:
-            return f"its calls couldn't be read: {err}"
-        calls = [json.dumps(e)[:600] for e in page["entries"] if "wait_for_replies" in json.dumps(e)]
-        return "calls: " + (" | ".join(calls) or "none in its tool log")
+    def scenario_workers(self):
+        self.worker_round_trip("3a Claude thread, Codex worker", "C3", code("A"))
+        self.worker_round_trip("3b Codex thread, Codex worker", "X", code("B"))
 
-    def scenario_messages(self):
-        self.message_with_wait("3a Claude->Codex, idle", "C3", "X", code("A"))
-        # Codex -> Claude while the Claude thread is busy with other work.
-        unrel = code("U")
-        open(self.repos["C1"] + "/.smoke/unrel.txt", "w").write(unrel + "\n")
-        _, rid = self.send("C1", "Run exactly this shell command and wait for it, then tell me what it printed: "
-                                 "`sh .smoke/hold.sh 40 && cat .smoke/unrel.txt`", codes=[unrel])
-        if not check("3b Codex->Claude, busy", "the receiver's own command runs", until(lambda: self.running_command("C1", "hold.sh 40"), 90),
-                     "no running `hold.sh 40` step within 90 s"):
-            return
-        self.message_with_wait("3b Codex->Claude, busy", "X", "C1", code("B"), unrelated=unrel)
-
-    # -- scenario 4: Stop during a wait --
+    # -- scenario 4: Stop during `brigadier wait` --
 
     def scenario_stop(self):
         sc = "4 stop during a wait"
-        to = self.convs["C1"]
-        # The receiver is busy with its own user's command, so its reply comes late. A Claude thread takes a
-        # message steered into its turn only once its command returns; a Codex thread can answer it mid-command,
-        # at once, so a Codex receiver doesn't make the reply late.
-        busy = code("W")
-        self.send("C1", f"Run exactly this shell command in the foreground and wait for it, then reply with the code {busy}: "
-                        f"`sh .smoke/hold.sh 45`", codes=[busy])
-        if not check(sc, "the receiver is busy with a command", until(lambda: self.running_command("C1", "hold.sh 45"), 60),
-                     "no running `hold.sh 45` step on C1 within 60 s"):
-            return
         late = code("R")
-        _, rid = self.send("C3", f"Find the session titled \"Smoke C1\" with list_sessions and use message_session to send it "
-                                 f"this message: \"Reply with the code {late}.\" Then call wait_for_replies, and tell me "
-                                 f"the reply you got.")
-        waiting = until(lambda: next((s for s in tool_steps(self.view("C3"), "wait_for_replies")
-                                      if s.get("requestId") == rid and s["status"] == "inProgress"), None), 120)
-        if not check(sc, "the wait starts", waiting, "no running wait_for_replies within 120 s"):
+        _, rid = self.send("C1", f"Run these in your shell, one command per call. 1. `brigadier start --agent codex --model "
+                                 f"{self.models['codex']} --effort low --title \"Smoke late\" \"Run `sleep 40` in your "
+                                 f"shell, then reply with the code {late}.\"`. 2. `brigadier wait --timeout 300`, and tell "
+                                 f"me what it printed.")
+        waiting = until(lambda: next((st for st in tool_steps(self.view("C1")) if st.get("requestId") == rid
+                                      and st["status"] == "inProgress" and self.runs("C1", st, "brigadier wait")), None), 150)
+        if not check(sc, "the wait starts", waiting, "no running `brigadier wait` within 150 s"):
             return
-        self.ipc.call({"method": "interrupt", "conversationId": self.convs["C3"]})
+        self.ipc.call({"method": "interrupt", "conversationId": self.convs["C1"]})
         stopped_at = now_ms()
-
-        def late_reply():
-            v = self.view("C3")
-            ids = {p["messageId"] for p in v["peerMessages"] if p["outgoing"] and p.get("requestId") == rid}
-            return [p for p in v["peerMessages"] if not p["outgoing"] and p.get("replyTo") in ids]
-        until(late_reply, 120)
-        replies = late_reply()
-        time.sleep(SETTLE_S + 8)
-        v = self.view("C3")
+        # The worker's turn ends well after the Stop: nothing of it may start a turn of the thread.
+        time.sleep(70)
+        v = self.view("C1")
         req = next((r for r in v["requests"] if r["id"] == rid), None)
         check(sc, "the request is stopped", req and state_of(req) == "stopped", f"state {state_of(req) if req else 'none'}")
-        waits = [s["status"] for s in tool_steps(v, "wait_for_replies") if s.get("requestId") == rid]
-        check(sc, "the wait is cancelled", waits and all(s == "failed" for s in waits), f"waits: {waits}")
-        check(sc, "the late reply arrives once", len(replies) == 1, f"{len(replies)} replies")
-        if replies:
-            sent_back = [p for p in self.ipc.view(to)["peerMessages"] if p["outgoing"] and p["messageId"] == replies[0]["messageId"]]
-            text = sent_back[0]["text"] if sent_back else ""
-            check(sc, "it carries its answer", late.lower() in text.lower(), f"reply: {text[:120]!r}")
-            shown = [m for m in messages(v) if m["role"] == "peer" and m["createdAtMs"] >= waiting["atMs"]]
-            check(sc, "it shows once as a message", len(shown) == 1, f"{len(shown)} messages")
-            arrived = min((m["createdAtMs"] for m in shown), default=now_ms())
-            check(sc, "it came after the Stop", arrived > stopped_at, f"it came {(stopped_at - arrived) / 1000:.1f} s before")
-            n = turns(self.data, self.convs["C3"], arrived + 1000, now_ms())
-            after = [m for m in messages(v) if m["role"] == "assistant" and m["createdAtMs"] > arrived]
-            check(sc, "no turn starts for it", n == 0 and not after, f"{n} turns metered, {len(after)} answers after it")
+        waits = [st["status"] for st in tool_steps(v) if st.get("requestId") == rid and self.runs("C1", st, "brigadier wait")]
+        check(sc, "the wait ended with the Stop", waits and "inProgress" not in waits, f"waits: {waits}")
+        n = turns(self.data, self.convs["C1"], stopped_at + 1000, now_ms())
+        after = [m for m in messages(v) if m["role"] == "assistant" and m["createdAtMs"] > stopped_at + 1000]
+        check(sc, "no turn starts for the worker's end", n == 0 and not after, f"{n} turns metered, {len(after)} answers after it")
         new = [r for r in v["requests"] if r["startedAtMs"] > stopped_at]
         check(sc, "no request starts after the Stop", not new, f"{len(new)} new")
-        until(lambda: self.idle("C1"), 60)
 
     # -- scenario 5: every finished request ends on a real answer --
 
@@ -808,8 +749,8 @@ def main():
             if raised:
                 raise raised[0]
             smoke.note_native()
-            log("phase 2: messages with a wait, both ways")
-            smoke.scenario_messages()
+            log("phase 2: a worker of the session's own, from a Claude and a Codex thread")
+            smoke.scenario_workers()
             log("phase 3: Stop during a wait")
             smoke.scenario_stop()
             smoke.note_native()

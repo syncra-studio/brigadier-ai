@@ -1157,7 +1157,7 @@ async fn a_web_preview_runs_once_its_url_answers() {
         .unwrap();
     assert!(log.contains("starting, not ready yet"), "{log}");
     assert!(
-        started.contains("call preview_log with wait_secs"),
+        started.contains("run `brigadier preview log --wait <seconds>`"),
         "{started}"
     );
     // A wait ends after its seconds while it still starts (#510)...

@@ -12,13 +12,17 @@ use super::takeover::TerminalSnapshot;
 use crate::accounts::AccountRef;
 use crate::app_call::{AppAnswer, AppOp, OpenPanels, WindowView};
 use crate::digest::TRIM_ABOVE;
-use crate::model::{ModelChoice, PermissionLevel, Setup};
+use crate::model::{
+    Conversation, ConversationKind, Lifecycle, ModelChoice, PermissionLevel, Setup,
+};
 use crate::tools::{AppToolCall, ToolReply};
 use crate::work::OutputSource;
 use crate::{ConversationId, Error, Result, now_ms};
 
 /// How long the window may take to say what it shows.
 const STATE_WAIT: Duration = Duration::from_secs(5);
+/// How long the window may take to show a session.
+const SHOW_WAIT: Duration = Duration::from_secs(5);
 /// The room the tabs' lines may take, in bytes; the tabs past it are counted.
 const TABS_ROOM: usize = 1000;
 /// The room the terminals' lines may take, in bytes; the terminals past it are counted.
@@ -48,6 +52,57 @@ impl SessionManager {
         match replied {
             Ok(text) => ToolReply::ok(text),
             Err(err) => ToolReply::error(err.to_string()),
+        }
+    }
+
+    /// The sidebar session `id` names: a project's session, not a chat, a tab's or side chat,
+    /// or one being deleted; else "No session with that id."
+    fn sidebar_session(&self, id: &str) -> Result<Conversation> {
+        self.core
+            .conversation(&ConversationId(id.trim().to_owned()))
+            .ok()
+            .filter(|conversation| {
+                conversation.kind == ConversationKind::Session
+                    && conversation.project_id.is_some()
+                    && conversation.tab_chat.is_none()
+                    && conversation.side_of.is_none()
+                    && !conversation.deleting
+            })
+            .ok_or_else(|| Error::Invalid("No session with that id.".into()))
+    }
+
+    /// `show_session`: the window shows session `id`, as a click on its sidebar row would. It
+    /// never brings the window forward; the tool's rule keeps it to the user's ask.
+    async fn show_session(&self, caller: &ConversationId, id: &str) -> Result<String> {
+        let session = self.sidebar_session(id)?;
+        if session.id == *caller {
+            return Err(Error::Invalid(
+                "That is this session: the user is talking to it.".into(),
+            ));
+        }
+        if session.lifecycle == Lifecycle::Archived {
+            return Err(Error::Invalid(format!(
+                "The session \"{}\" is archived: the user restores it from Settings › Archived.",
+                session.title
+            )));
+        }
+        let label = self.browser_label(caller, None).await;
+        let op = AppOp::ShowSession {
+            session: session.id.clone(),
+        };
+        match self.app.call(caller, None, &label, op, SHOW_WAIT).await {
+            AppAnswer::SessionShown { visible: true } => Ok(format!(
+                "Brigadier shows the session \"{}\" now.",
+                session.title
+            )),
+            AppAnswer::SessionShown { visible: false } => Ok(format!(
+                "Brigadier's window shows the session \"{}\"; the window is hidden, so the user sees it when they come back to it.",
+                session.title
+            )),
+            AppAnswer::Failed { message } => Err(Error::Invalid(message)),
+            _ => Err(Error::Invalid(
+                "Brigadier's window answered something else.".into(),
+            )),
         }
     }
 
@@ -171,7 +226,7 @@ impl SessionManager {
             .and_then(|host| host.output(&id.0, terminal))
             .ok_or_else(|| {
                 Error::Invalid(format!(
-                    "{terminal} isn't one of this session's terminals now: app_state lists them."
+                    "{terminal} isn't one of this session's terminals now: `brigadier app state` lists them."
                 ))
             })?;
         let plain = terminal_text(&output);
@@ -284,7 +339,7 @@ fn terminal_lines(text: &mut String, terminals: &[TerminalSnapshot]) {
         text.push_str("Terminals: none.\n");
         return;
     }
-    text.push_str("Terminals (read_terminal reads one whole):\n");
+    text.push_str("Terminals (`brigadier app read-terminal` reads one whole):\n");
     let room = text.len() + TERMINALS_ROOM;
     let mut listed = 0;
     for terminal in terminals {

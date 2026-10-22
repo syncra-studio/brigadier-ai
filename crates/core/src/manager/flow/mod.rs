@@ -401,7 +401,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "set_headline" => ToolCall::Orchestrator(O::SetHeadline(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
-        "offer_session" => ToolCall::Orchestrator(O::OfferSession(arg(name, args))),
         "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
         "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),
@@ -423,11 +422,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "clean_up" => ToolCall::Orchestrator(O::CleanUp),
         "project_map" => ToolCall::Worker(W::ProjectMap),
-        "list_sessions" => ToolCall::Orchestrator(O::ListSessions(arg(name, args))),
-        "message_session" => ToolCall::Orchestrator(O::MessageSession(arg(name, args))),
-        "wait_for_replies" => ToolCall::Orchestrator(O::WaitForReplies(arg(name, args))),
-        "read_session" => ToolCall::Orchestrator(O::ReadSession(arg(name, args))),
-        "settle_wait" => ToolCall::Orchestrator(O::SettleWait(arg(name, args))),
         "app_state" => ToolCall::App(crate::tools::AppToolCall::State),
         "read_terminal" => ToolCall::App(crate::tools::AppToolCall::ReadTerminal(arg(name, args))),
         "open_in_app" => ToolCall::App(crate::tools::AppToolCall::Open(arg(name, args))),
@@ -2223,27 +2217,6 @@ mod overnight_tests;
 mod owed_tests;
 #[cfg(unix)]
 mod page_tools_tests;
-#[cfg(unix)]
-mod peer_ask_tests;
-#[cfg(unix)]
-mod peer_boundary_tests;
-#[cfg(unix)]
-mod peer_chain_tests;
-#[cfg(unix)]
-mod peer_delivery_tests;
-#[cfg(unix)]
-mod peer_kit;
-#[cfg(unix)]
-mod peer_reply_tests;
-#[cfg(unix)]
-mod peer_restart_tests;
-#[cfg(unix)]
-#[cfg(unix)]
-mod peer_session_tests;
-#[cfg(unix)]
-mod peer_view_tests;
-#[cfg(unix)]
-mod peer_wait_tests;
 #[cfg(unix)]
 mod phase_acceptance_tests;
 #[cfg(unix)]

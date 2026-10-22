@@ -12,11 +12,11 @@ the daemon's view.
 It runs **once, on the integrated tree, before a merge**: part of checking once, never in a
 worker's own checks and never in the session's background full checks (plain
 `tools/full-checks.sh`, which runs on every landing). It spends tokens: about a dozen Claude turns
-and five Codex turns, cheap models at low effort, tiny prompts, about 5 minutes.
+and eight Codex turns, cheap models at low effort, tiny prompts, about 5 minutes.
 
 ## What it does
 
-- Starts its own daemon (this tree's `debug/brigadierd`, in `CARGO_TARGET_DIR` when set) on `/tmp/live-smoke-<time>-<pid>/data`
+- Starts its own daemon (this tree's `debug/brigadierd`, with `debug/brigadier` beside it, in `CARGO_TARGET_DIR` when set) on `/tmp/live-smoke-<time>-<pid>/data`
   with a clean environment, onboarded, Fable hidden, reviews and Brain enrichment off.
 - Four throwaway git projects, one per session (a Local checkout takes one session at a time):
   C1, C2 and C3 (Claude, `sonnet` low) and X (Codex, `gpt-6-luna` low), all Full access in the
@@ -43,16 +43,16 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
    anyway (its output file appeared); its output reaches the user afterwards, told in the
    request's own block; the request ends; and after its CLI went, the next request is answered in
    its own block.
-3. **Messages with a wait.** a) C3 → X with X idle; b) X → C1 while C1 runs an unrelated
-   command. The sender sent one message, it is replied, a `wait_for_replies` ran and completed,
-   exactly one reply came and the wait took it (`taken`), the sender spent exactly one turn
-   (`turn_usage`) with one answer (a Codex sender's progress notes aside: only the message it
-   marks as its answer, `answerAtMs`, counts), its answer carries the reply; the receiver got it once and replied once; the
-   reply carries its answer, and in b) leaves out the receiver's unrelated output.
-4. **Stop during a wait.** C1 runs its own user's `sh .smoke/hold.sh 45` (a Claude thread takes a message
-   steered into its turn only after its command, so its reply comes late); C3 messages it and
-   waits, and is stopped while its wait runs. The request is stopped, its wait failed, the late
-   reply arrives once, after the Stop, and shows once, and no turn or request starts for it.
+3. **A worker of the session's own.** a) C3 (Claude) and b) X (Codex) each run `brigadier start
+   --agent codex` with a code to reply, `brigadier wait` until its turn ends (answering a
+   needs-input with `brigadier send <id> --allow`) and `brigadier close`. The request is done; the
+   three commands ran and completed; the worker showed in the session's tasks (its Workers row)
+   and never in the sidebar's catalog; close stopped it ("Closed by its session."); the answer
+   carries the worker's code.
+4. **Stop during a wait.** C1 starts a Codex worker that sleeps 40 s before it answers, runs
+   `brigadier wait`, and is stopped while the wait runs. The request is stopped, the wait ended
+   with it, and when the worker's turn ends later no turn, answer or request of C1 starts for it:
+   nothing is pushed into a thread.
 5. **Final answers.** Every request family (a request and those steered into it) that ended
    done ends on an assistant message that carries one of its codes: never a narration line,
    empty, or `[quiet]`. Stopped requests are checked in 4 instead.

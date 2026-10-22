@@ -19,8 +19,9 @@ for cli in claude codex; do
   fi
 done
 
-echo "+ cargo build --locked -p brigadier-daemon --bin brigadierd"
-cargo build --locked -q -p brigadier-daemon --bin brigadierd
+# The sessions run `brigadier` from the daemon's own folder (first on their PATH).
+echo "+ cargo build --locked -p brigadier-daemon --bin brigadierd -p brigadier-cli --bin brigadier"
+cargo build --locked -q -p brigadier-daemon --bin brigadierd -p brigadier-cli --bin brigadier
 # Where cargo put it: honours CARGO_TARGET_DIR (relative ones too) and any configured target dir.
 target_dir=$(cargo metadata --locked --format-version 1 --no-deps \
   | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')

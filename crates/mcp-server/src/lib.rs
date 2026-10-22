@@ -173,13 +173,7 @@ impl ServerHandler for BrigadierServer {
         // without them, and the session starts with no Brigadier tools. A role's tools never
         // change while its grant lives, and they are the grant's own.
         let role = self.role()?;
-        let mut tools = tools_for(role).to_vec();
-        if catalog::has_browser_tools(role) && self.host.browser_tools() {
-            tools.extend_from_slice(catalog::browser_tools());
-            if catalog::has_thread_browser_tools(role) {
-                tools.extend_from_slice(catalog::thread_browser_tools());
-            }
-        }
+        let tools = tools_for(role).to_vec();
         Ok(ListToolsResult::with_all_items(tools)
             .with_ttl_ms(TOOLS_TTL_MS)
             .with_cache_scope(CacheScope::Private))

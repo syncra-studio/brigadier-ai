@@ -252,7 +252,7 @@ pub struct RouteFollowUp {
     #[serde(default)]
     pub route: Option<FollowUpRoute>,
     /// For route "session": the other session's id, from the [follow-up …] block or
-    /// list_sessions with project true. `tab` is its older name (rule R).
+    /// `brigadier sessions`. `tab` is its older name (rule R).
     #[serde(default, alias = "tab")]
     pub session: Option<String>,
     /// The older form, from before routes (rule R: a session's cached schema still sends it):
@@ -804,67 +804,6 @@ pub struct FinishSession {
     pub message: Option<String>,
 }
 
-/// `list_sessions`: the project sessions this thread can message.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ListSessions {
-    /// Keeps only the sessions whose title or project name contains it, ignoring case.
-    #[serde(default)]
-    pub query: Option<String>,
-    /// Only the other sessions of this session's project, each with its state, repository,
-    /// branch, base and the files its work changed since it left its base. `workspace` is its
-    /// older name (rule R).
-    #[serde(default, alias = "workspace")]
-    pub project: bool,
-}
-
-/// `message_session`: send another session a message. Returns at once; a reply comes later as
-/// a message of its own.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MessageSession {
-    /// The session's id, from list_sessions, or for a reply the `session ‹id›` of the
-    /// message's header (never the message's own id).
-    pub to: String,
-    /// Self-contained plain prose: the other session doesn't share your context.
-    pub text: String,
-    /// The id of the message from that session this one answers (it is the reply). Leave it
-    /// out to ask for a reply.
-    #[serde(default)]
-    pub reply_to: Option<String>,
-}
-
-/// `read_session`: another session's latest messages.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReadSession {
-    /// The session's id, from list_sessions.
-    pub id: String,
-}
-
-/// `wait_for_replies`: waits in the running turn for replies to messages it sent.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WaitForReplies {
-    /// The message_ids message_session returned to wait for. Leave it out to wait for every
-    /// message your request sent that has no reply yet.
-    #[serde(default)]
-    pub message_ids: Option<Vec<String>>,
-    /// Seconds to wait at most: 300 when left out, at most 1800.
-    #[serde(default)]
-    pub timeout_s: Option<u64>,
-}
-
-/// `settle_wait`: no reply to this message is needed any more.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SettleWait {
-    /// The message_id message_session returned.
-    pub message_id: String,
-    /// Why, in a few words.
-    pub why: String,
-}
-
 /// What `note_for_user` records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -939,20 +878,6 @@ pub struct OfferFeedback {
     /// doesn't refuse it.
     #[serde(default)]
     pub asked: bool,
-}
-
-/// `offer_session`: work the thread found along the way that is outside the request; the user
-/// sees it as a card with one "Start as session" button, which starts it as a session of its
-/// own (own branch and worktree). The thread never starts it itself.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OfferSession {
-    /// What the session is to do, as its first message: complete on its own ("Fix the date
-    /// parser in src/dates.rs: it drops the time zone").
-    pub task: String,
-    /// A short name for the card ("Fix the date parser"); the task's start when left out.
-    #[serde(default)]
-    pub title: Option<String>,
 }
 
 /// `set_headline`: what the session is doing now, in the thread's words, for the Job card.
@@ -1074,7 +999,6 @@ pub enum OrchestratorCall {
     WatchCi(CiPush),
     SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
-    OfferSession(OfferSession),
     SetHeadline(SetHeadline),
     ListTasks,
     SettleStep(SettleStep),
@@ -1090,11 +1014,6 @@ pub enum OrchestratorCall {
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
-    ListSessions(ListSessions),
-    MessageSession(MessageSession),
-    WaitForReplies(WaitForReplies),
-    ReadSession(ReadSession),
-    SettleWait(SettleWait),
 }
 
 /// Every tool a thread may call, by name (the catalog's tests hold it to the catalog). Its
@@ -1106,7 +1025,6 @@ pub const THREAD_TOOLS: &[&str] = &[
     "route_follow_up",
     "stop_worker",
     "rerun_task",
-    "ask_user",
     "read_report",
     "read_artifact",
     "store_output",
@@ -1125,7 +1043,6 @@ pub const THREAD_TOOLS: &[&str] = &[
     "ci_status",
     "watch_ci",
     "offer_feedback",
-    "offer_session",
     "set_headline",
     "list_tasks",
     "settle_step",
@@ -1135,24 +1052,8 @@ pub const THREAD_TOOLS: &[&str] = &[
     "code_refs",
     "project_map",
     "clean_up",
-    "read_page",
-    "write_page",
     "save_report",
-    "start_preview",
-    "stop_preview",
-    "preview_log",
-    "list_sessions",
-    "message_session",
-    "wait_for_replies",
-    "read_session",
-    "settle_wait",
     "suggest_setting",
-    "app_state",
-    "read_terminal",
-    "open_in_app",
-    "terminal_run",
-    "show_session",
-    "close_tab",
 ];
 
 /// The thread's tools a Chat has too (Q76): a Chat is a thread without a project, so it runs
@@ -1203,7 +1104,6 @@ impl OrchestratorCall {
             Self::WatchCi(_) => "watch_ci",
             Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
-            Self::OfferSession(_) => "offer_session",
             Self::SetHeadline(_) => "set_headline",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
@@ -1219,11 +1119,6 @@ impl OrchestratorCall {
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",
-            Self::ListSessions(_) => "list_sessions",
-            Self::MessageSession(_) => "message_session",
-            Self::WaitForReplies(_) => "wait_for_replies",
-            Self::ReadSession(_) => "read_session",
-            Self::SettleWait(_) => "settle_wait",
         }
     }
 }
@@ -1745,7 +1640,7 @@ pub struct TerminalRun {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShowSession {
-    /// The session's id, from list_sessions.
+    /// The session's id, from `brigadier sessions`.
     pub id: String,
 }
 
@@ -1874,12 +1769,6 @@ impl ToolReply {
 pub trait ToolHost: Send + Sync {
     /// The role of a live grant; `None` for an unknown or revoked grant.
     fn role(&self, grant: &str) -> Option<Role>;
-
-    /// Whether the thread and its workers get the browser tools: the built-in browser is on and
-    /// agents can use it on this platform. Asked when a connection opens.
-    fn browser_tools(&self) -> bool {
-        false
-    }
 
     /// Runs a tool call. The host re-checks the grant and that its role may make this call.
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply>;

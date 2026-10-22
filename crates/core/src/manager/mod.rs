@@ -79,9 +79,6 @@ mod outputs;
 pub mod overnight;
 mod page_tools;
 mod past_projects;
-mod peer_answers;
-mod peer_wait;
-mod peers;
 mod phases;
 mod plain_workers;
 mod preview;
@@ -242,12 +239,6 @@ pub struct SessionManager {
     stopping: Mutex<HashSet<TaskId>>,
     /// Held while a rerun one tier up is checked and made, so a task reruns once.
     reruns_starting: tokio::sync::Mutex<()>,
-    /// Held while a message to another session is checked against the hop and rate rules
-    /// and recorded, so two sends can't both pass the same last place.
-    peer_sends: tokio::sync::Mutex<()>,
-    /// Requests the last restart cut off before they answered: a message they owe a reply
-    /// to hears that, so its sender can ask again.
-    cut_off: Mutex<HashSet<String>>,
     /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
     /// moment the stop starts: the thread may no longer message, steer or approve them.
     user_stops: Mutex<HashSet<TaskId>>,
@@ -292,9 +283,6 @@ pub struct SessionManager {
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
     pub(crate) trust_home: std::sync::OnceLock<PathBuf>,
-    /// Tests: where the daemon dies while delivering a message between sessions.
-    #[cfg(test)]
-    pub(crate) peer_fault: std::sync::Mutex<Option<peers::PeerFault>>,
     /// Tests: what a landing runs once it has rewritten the task branch, before it moves
     /// the target.
     #[cfg(test)]
@@ -453,8 +441,6 @@ impl SessionManager {
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
             reruns_starting: tokio::sync::Mutex::new(()),
-            peer_sends: tokio::sync::Mutex::new(()),
-            cut_off: Mutex::new(HashSet::new()),
             user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
@@ -482,8 +468,6 @@ impl SessionManager {
             session_files: crate::thread_view::FileCache::default(),
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
-            #[cfg(test)]
-            peer_fault: std::sync::Mutex::new(None),
             #[cfg(test)]
             landing_rewritten: std::sync::Mutex::new(None),
             activity: Arc::default(),
@@ -833,10 +817,6 @@ impl SessionManager {
         self.stopping.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn cut_off_lock(&self) -> MutexGuard<'_, HashSet<String>> {
-        self.cut_off.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
     fn user_stops_lock(&self) -> MutexGuard<'_, HashSet<TaskId>> {
         self.user_stops.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -994,10 +974,6 @@ enum EventSource<'a> {
 impl ToolHost for SessionManager {
     fn role(&self, grant: &str) -> Option<Role> {
         self.grants.resolve(grant)
-    }
-
-    fn browser_tools(&self) -> bool {
-        self.browser_tools_on()
     }
 
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply> {

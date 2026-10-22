@@ -454,7 +454,7 @@ fn failed(message: &str) -> BrowserResult {
 }
 
 impl SessionManager {
-    /// Whether the thread and its workers get the browser tools: the built-in browser is on,
+    /// Whether the thread and its workers may use the browser: the built-in browser is on,
     /// and agents can drive it on this platform (macOS for now).
     pub(crate) fn browser_tools_on(&self) -> bool {
         agents_browse(self.core.settings().browser_enabled)
@@ -471,6 +471,9 @@ impl SessionManager {
             return ToolReply::error(
                 "The built-in browser is off (Settings › Browser), so its tabs can't be used.",
             );
+        }
+        if !self.browser_tools_on() {
+            return ToolReply::error("Agents can't use the built-in browser on this computer yet.");
         }
         if task_id.is_some() && matches!(call, BrowserToolCall::Show(_)) {
             return ToolReply::error(

@@ -307,25 +307,13 @@ impl SessionManager {
                 )
                 .await;
             }
-            // The message waiting for the user's OK goes now, or never.
-            ApprovalSubject::PeerMessage { .. } => {
-                #[cfg(test)]
-                if self
-                    .peer_fault_at(super::peers::PeerFault::AfterCardAnswer)
-                    .await
-                {
-                    return Ok(());
-                }
-                let said = match &decision {
-                    ApprovalDecision::Deny { message } => Some(message.as_str()),
-                    _ => None,
-                };
-                self.answer_peer_card(&approval, said.is_none(), said).await;
-            }
             ApprovalSubject::Browser { .. } => {
                 self.answer_browser_card(&approval, &decision).await;
             }
-            ApprovalSubject::OutwardCommand { .. }
+            // A message to another session from before sessions stopped messaging each other:
+            // nothing sends it any more.
+            ApprovalSubject::PeerMessage { .. }
+            | ApprovalSubject::OutwardCommand { .. }
             | ApprovalSubject::Landing { .. }
             | ApprovalSubject::FinishSession { .. }
             | ApprovalSubject::Outline { .. } => {}

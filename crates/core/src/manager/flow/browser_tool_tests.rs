@@ -1231,7 +1231,7 @@ async fn a_browser_tab_the_user_mentions_reaches_the_thread_as_data_to_read() {
         .expect("the thread heard the message");
     assert!(
         input.contains(
-            "[mentions the Browser tab browser:7f3 \"Checkout\" at http://localhost:3000/checkout] browser_read reads it."
+            "[mentions the Browser tab browser:7f3 \"Checkout\" at http://localhost:3000/checkout] `brigadier browser read browser:7f3` reads it."
         ),
         "{input}"
     );
