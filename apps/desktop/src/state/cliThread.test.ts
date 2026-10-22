@@ -47,7 +47,7 @@ test("a thread is read once, follows the stream, and is read again when its turn
   Object.defineProperty(globalThis, "window", { configurable: true, value: { crypto: globalThis.crypto } });
   const first: ThreadView = {
     entries: [at({ type: "message", itemId: "u1", role: "user", text: "Go" }, 1)],
-    turns: [{ userMessage: "u1", startedAtMs: 1, endedAtMs: null, end: null, error: null }],
+    turns: [{ userMessage: "u1", startedAtMs: 1, endedAtMs: null, end: null, error: null, requests: [] }],
   };
   const reads: string[] = [];
   let answer: ThreadView = first;
@@ -81,7 +81,7 @@ test("a thread is read once, follows the stream, and is read again when its turn
     // whole items only (a delta may be in the read already).
     const done: ThreadView = {
       entries: [first.entries[0] as FileEntry, at({ type: "message", itemId: "m", role: "assistant", text: "Done" }, 2)],
-      turns: [{ userMessage: "u1", startedAtMs: 1, endedAtMs: 4, end: "done", error: null }],
+      turns: [{ userMessage: "u1", startedAtMs: 1, endedAtMs: 4, end: "done", error: null, requests: [] }],
     };
     answer = done;
     held = true;

@@ -41,6 +41,9 @@ pub struct ThreadTurn {
     /// How it ended; none while it runs.
     pub end: Option<TurnEnd>,
     pub error: Option<String>,
+    /// Brigadier's requests it carried: its user message's, then those steered into it. Their
+    /// cards, workers and changes show in the turn.
+    pub requests: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -54,15 +57,20 @@ pub enum TurnEnd {
     Interrupted,
 }
 
-/// A line of `record/turns.jsonl`.
+/// A line of `record/turns.jsonl`: a turn's requests once its user message came, and its end.
+/// A turn's lines add up.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TurnRecord {
     pub user_message: Option<String>,
-    pub end: TurnEnd,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<TurnEnd>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    pub ended_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<String>,
 }
 
 /// What the live stream added for a conversation, sent as it comes.
@@ -87,6 +95,8 @@ pub(crate) struct LiveTurn {
     pub awaiting_user: bool,
     pub open: bool,
     pub error: Option<String>,
+    /// Brigadier's requests it carries.
+    pub requests: Vec<String>,
 }
 
 /// A session file's items, with the length and change time they were read at.
@@ -152,10 +162,13 @@ pub(crate) fn view(
     }
     let mut turns = turns(&entries, records, running);
     if running
+        && let Some(live) = live
         && let Some(turn) = turns.last_mut()
-        && turn.error.is_none()
     {
-        turn.error = live.and_then(|live| live.error.clone());
+        if turn.error.is_none() {
+            turn.error.clone_from(&live.error);
+        }
+        add_requests(&mut turn.requests, &live.requests);
     }
     ThreadView { entries, turns }
 }
@@ -170,10 +183,18 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
         })
         .map(|(index, _)| index)
         .collect();
-    let recorded: HashMap<&str, &TurnRecord> = records
-        .iter()
-        .filter_map(|record| Some((record.user_message.as_deref()?, record)))
-        .collect();
+    // A turn's lines, added up: its requests, and its end.
+    let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>)> = HashMap::new();
+    for record in records {
+        let Some(id) = record.user_message.as_deref() else {
+            continue;
+        };
+        let (requests, end) = recorded.entry(id).or_default();
+        add_requests(requests, &record.requests);
+        if record.end.is_some() {
+            *end = Some(record);
+        }
+    }
     let count = starts.len();
     starts
         .iter()
@@ -189,6 +210,7 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 ended_at_ms: inside.iter().rev().find_map(|entry| entry.at_ms),
                 end: None,
                 error: None,
+                requests: Vec::new(),
             };
             let marker = inside.iter().find_map(|entry| match &entry.event {
                 ProviderEvent::TurnCompleted { status, .. } if entry.parent.is_none() => {
@@ -206,10 +228,12 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 }
                 _ => None,
             });
-            if let Some(record) = recorded.get(id.as_str()) {
-                turn.end = Some(record.end);
+            let (requests, record) = recorded.remove(id.as_str()).unwrap_or_default();
+            turn.requests = requests;
+            if let Some(record) = record {
+                turn.end = record.end;
                 turn.error = record.error.clone().or(error);
-                turn.ended_at_ms = Some(record.ended_at_ms);
+                turn.ended_at_ms = record.ended_at_ms;
             } else if last && running {
                 turn.ended_at_ms = None;
             } else if let Some(marker) = marker {
@@ -227,6 +251,15 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
             turn
         })
         .collect()
+}
+
+/// Adds `more` to `requests`, each once, in order.
+pub(crate) fn add_requests(requests: &mut Vec<String>, more: &[String]) {
+    for request in more {
+        if !requests.contains(request) {
+            requests.push(request.clone());
+        }
+    }
 }
 
 /// The id of a user message.

@@ -432,6 +432,22 @@ struct ConvState {
 }
 
 impl ConvState {
+    /// Brigadier's requests the running turn carries: its user messages', then the one it
+    /// serves now (a steer's, or one with no message of its own).
+    fn carried_requests(&self) -> Vec<String> {
+        let mut requests = Vec::new();
+        let ids = self
+            .in_turn
+            .iter()
+            .filter_map(|message| message.request_id.as_ref());
+        for request in ids.chain(self.request.as_ref()) {
+            if !requests.contains(request) {
+                requests.push(request.clone());
+            }
+        }
+        requests
+    }
+
     /// A usage limit or a rebirth hands the turn over: what it took from the inbox goes again,
     /// first (it was taken, so nothing else would bring it back). `landed`: the CLI had begun
     /// the turn and its session goes on, so the next turn says to carry on with them instead.
@@ -622,6 +638,11 @@ impl ConvLive {
     #[cfg(debug_assertions)]
     pub(crate) async fn cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.clone()
+    }
+
+    /// Brigadier's requests its running turn carries ([`ConvState::carried_requests`]).
+    pub(super) async fn carried_requests(&self) -> Vec<String> {
+        self.state.lock().await.carried_requests()
     }
 
     pub fn new(id: ConversationId, kind: ConversationKind, private_logs: bool) -> Self {
@@ -4726,15 +4747,13 @@ impl SessionManager {
                 ..
             } => {
                 cli.meter.session_started(cli_version.as_deref());
-                if !conv.private_logs {
-                    let entry = super::session_dir::LineageEntry {
-                        provider: cli.provider,
-                        session_id: native_id.clone(),
-                        file: file.clone(),
-                        started_at: now_ms(),
-                    };
-                    self.note_lineage(&conv.id, entry).await;
-                }
+                let entry = super::session_dir::LineageEntry {
+                    provider: cli.provider,
+                    session_id: native_id.clone(),
+                    file: file.clone(),
+                    started_at: now_ms(),
+                };
+                self.note_lineage(&conv.id, entry, conv.private_logs).await;
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());

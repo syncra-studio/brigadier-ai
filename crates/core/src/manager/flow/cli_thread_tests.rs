@@ -115,6 +115,82 @@ async fn a_restart_keeps_the_thread_and_how_each_turn_ended() {
     flow.stop().await;
 }
 
+/// Each turn names Brigadier's requests it carried: its user message's, and a steer's; a
+/// restart reads them back from `record/turns.jsonl`.
+#[tokio::test]
+async fn a_turn_names_the_requests_it_carried() {
+    let running = Arc::new(tokio::sync::Notify::new());
+    let ran = running.clone();
+    let mut flow = Flow::start(
+        "cli-thread-requests",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let ran = ran.clone();
+            async move {
+                if turn.input.contains("Steer me") {
+                    ran.notify_one();
+                    turn.until_steered().await;
+                    return Reply::text("Did both.");
+                }
+                Reply::text("Looked.")
+            }
+        }),
+    )
+    .await;
+    let id = flow.conversation.clone();
+    let ended = |flow: &Flow, count: usize| {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == count && view.turns.iter().all(|turn| turn.end.is_some())
+    };
+    flow.say("Look around.").await;
+    eventually("the first turn ends", || ended(&flow, 1)).await;
+    flow.settled().await;
+    flow.say("Steer me.").await;
+    running.notified().await;
+    flow.manager
+        .send_message(
+            id.clone(),
+            "Also this.".into(),
+            Vec::new(),
+            Vec::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+    eventually("the steered turn ends", || ended(&flow, 2)).await;
+    flow.settled().await;
+
+    let messages = flow.core.all_messages(&id).await.unwrap();
+    let request = |text: &str| {
+        let message = messages
+            .iter()
+            .find(|message| message.text == text)
+            .unwrap();
+        message.request_id.clone().unwrap()
+    };
+    let view = flow.manager.thread_view(&id).unwrap();
+    assert_eq!(
+        view.turns[0].requests,
+        [request("Look around.")],
+        "{view:#?}"
+    );
+    assert_eq!(
+        view.turns[1].requests,
+        [request("Steer me."), request("Also this.")],
+        "{view:#?}"
+    );
+    flow.restart().await;
+    assert_eq!(flow.manager.thread_view(&id).unwrap().turns, view.turns);
+    flow.stop().await;
+}
+
 fn texts(view: &ThreadView) -> Vec<String> {
     view.entries
         .iter()

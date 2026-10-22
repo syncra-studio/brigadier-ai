@@ -132,7 +132,13 @@ impl SessionManager {
     /// Adds a CLI session start to conversation `id`'s `record/lineage.json`. A session already
     /// listed (resumed, or started twice by its CLI) is listed once, with the file it named
     /// first unless it named none.
-    pub(crate) async fn note_lineage(&self, id: &ConversationId, entry: LineageEntry) {
+    /// `private`: a tab chat's, never named in the logs.
+    pub(crate) async fn note_lineage(
+        &self,
+        id: &ConversationId,
+        entry: LineageEntry,
+        private: bool,
+    ) {
         let record = self.session_dir(id).record();
         let written = blocking(move || {
             let mut lineage = read_lineage(&record);
@@ -150,7 +156,7 @@ impl SessionManager {
         })
         .await;
         if let Err(err) = written {
-            tracing::warn!(conversation = %id, error = %err, "could not note the CLI session in lineage.json");
+            crate::logging::private_trace!(private, warn, "could not note the CLI session in lineage.json"; conversation = %id, error = %err);
         }
     }
 
@@ -166,13 +172,15 @@ impl SessionManager {
     }
 
     /// Makes `conversation`'s folder and its `record/`, recorded under [`folder_owner`] first,
-    /// and writes `record/workspace.json` for a session. Tab chats have none.
+    /// and writes `record/workspace.json` for a session. A tab chat's folder holds only its
+    /// record (its thread's lineage and turns) and is its own: it goes with the chat.
     pub(crate) async fn prepare_session_dir(&self, conversation: &Conversation) -> Result<()> {
-        if conversation.tab_chat.is_some() {
-            return Ok(());
-        }
         let dir = self.session_dir(&conversation.id);
-        let owner = folder_owner(&conversation.id);
+        let owner = if conversation.tab_chat.is_some() {
+            super::lifecycle::conversation_owner(conversation).0
+        } else {
+            folder_owner(&conversation.id)
+        };
         let ledger = self.runtime.ledger();
         let path = dir.root().to_string_lossy().into_owned();
         let recorded = ledger.artifacts(&owner).iter().any(

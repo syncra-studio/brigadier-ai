@@ -16,4 +16,9 @@ startedAtMs: number | null, endedAtMs: number | null,
 /**
  * How it ended; none while it runs.
  */
-end: TurnEnd | null, error: string | null, };
+end: TurnEnd | null, error: string | null, 
+/**
+ * Brigadier's requests it carried: its user message's, then those steered into it. Their
+ * cards, workers and changes show in the turn.
+ */
+requests: Array<string>, };

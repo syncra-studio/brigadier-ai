@@ -133,6 +133,12 @@ async fn left_nothing_of(flow: &Flow, chat: &ConversationId, natives: &[String])
     })
     .await;
     flow.manager.cleanup_finished(chat).await;
+    let folder = flow.manager.session_dir(chat);
+    assert!(
+        !folder.root().exists(),
+        "{} is left",
+        folder.root().display()
+    );
     assert!(
         !flow
             .core
@@ -215,7 +221,16 @@ fn natives(log: &Log) -> Vec<String> {
 #[tokio::test]
 async fn a_tab_chat_outlives_a_restart_and_its_closed_tab_leaves_nothing() {
     let log = Log::default();
-    let mut flow = Flow::start("tab-chat-lifetime", cleaning(), quiet(&log)).await;
+    // Its CLI keeps a session file, as Claude Code does.
+    let options = Options {
+        behavior: Arc::new(super::FakeBehavior {
+            cleanup: true,
+            session_file: true,
+            ..Default::default()
+        }),
+        ..Options::default()
+    };
+    let mut flow = Flow::start("tab-chat-lifetime", options, quiet(&log)).await;
     app_ready(&flow).await;
     let chat = open(
         &flow,
@@ -239,6 +254,12 @@ async fn a_tab_chat_outlives_a_restart_and_its_closed_tab_leaves_nothing() {
             "{}",
             seen.input
         );
+        // Its thread is its CLI's, as every thread is: the CLI session and the turn are noted.
+        let record = flow.manager.session_dir(&chat).record();
+        super::eventually("the turn noted", || {
+            record.join("lineage.json").exists() && record.join("turns.jsonl").exists()
+        })
+        .await;
         // Not the session's thread: none of its messages or side-chat wording.
         assert!(!seen.input.contains("side chat beside the conversation"));
         // Its own scratch folder; the checkout is only read.

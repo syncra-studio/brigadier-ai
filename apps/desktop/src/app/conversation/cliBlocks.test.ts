@@ -22,6 +22,7 @@ const turn = (userMessage: string, startedAtMs: number, endedAtMs: number | null
   endedAtMs,
   end,
   error,
+  requests: [],
 });
 
 /** A thread with a turn of each ending: done, stopped, failed, interrupted, and one running. */

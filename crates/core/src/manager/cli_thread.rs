@@ -15,13 +15,23 @@ impl SessionManager {
     /// Follows the running turn of `conv`'s CLI through one of its events (`None`: the CLI's
     /// events ended): its items, and its end, written to `record/turns.jsonl`.
     pub(super) async fn follow_cli_thread(&self, conv: &ConvLive, event: Option<&ProviderEvent>) {
-        // A tab's chat keeps nothing of its own.
-        if conv.private_logs {
-            return;
-        }
         let at = now_ms();
+        // Brigadier's requests the turn carries, as the conversation knows them now: when the
+        // CLI says a user message (a turn's, or a steer's) and when the turn ends.
+        let carried = match event {
+            Some(
+                ProviderEvent::Message {
+                    role: Role::User, ..
+                }
+                | ProviderEvent::TurnCompleted { .. }
+                | ProviderEvent::Exited { .. },
+            )
+            | None => Some(conv.carried_requests().await),
+            _ => None,
+        };
         let mut news = Vec::new();
         let mut ended = None;
+        let mut noted = None;
         {
             let mut threads = self.cli_threads.lock().unwrap();
             let live = threads.entry(conv.id.clone()).or_default();
@@ -50,6 +60,16 @@ impl SessionManager {
                     if !steer {
                         live.awaiting_user = false;
                         live.user_message = Some(item_id.clone());
+                    }
+                    if let Some(carried) = &carried {
+                        thread_view::add_requests(&mut live.requests, carried);
+                        noted = Some(TurnRecord {
+                            user_message: live.user_message.clone(),
+                            end: None,
+                            error: None,
+                            ended_at_ms: None,
+                            requests: live.requests.clone(),
+                        });
                     }
                     let entry = FileEntry {
                         steer,
@@ -81,15 +101,23 @@ impl SessionManager {
             }
             if let Some(end) = ended {
                 live.open = false;
-                let record = TurnRecord {
+                if let Some(carried) = &carried {
+                    thread_view::add_requests(&mut live.requests, carried);
+                }
+                noted = Some(TurnRecord {
                     user_message: live.user_message.clone(),
-                    end,
+                    end: Some(end),
                     error: live.error.take(),
-                    ended_at_ms: at,
-                };
+                    ended_at_ms: Some(at),
+                    requests: live.requests.clone(),
+                });
+            }
+            if let Some(record) = &noted
+                && record.user_message.is_some()
+            {
                 let dir = self.session_dir(&conv.id).record();
-                if let Err(err) = thread_view::append_turn(&dir, &record) {
-                    tracing::warn!(conversation = %conv.id, error = %err, "could not note a turn's end");
+                if let Err(err) = thread_view::append_turn(&dir, record) {
+                    crate::logging::private_trace!(conv.private_logs, warn, "could not note a turn"; conversation = %conv.id, error = %err);
                 }
             }
         }
