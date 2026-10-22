@@ -265,8 +265,10 @@ fn sample(request: &CliRequest) -> CliReply {
             has_more: true,
         }),
         CliRequest::Start(start) => CliReply::ok(&StartOutput {
+            // A just-started worker has no branch yet: its worktree is still being made.
             worker: WorkerRow {
                 state: WorkerState::Starting,
+                branch: None,
                 changes: None,
                 ..worker_row()
             },
@@ -502,7 +504,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 9, sample);
+    let daemon = stand_in_daemon(&dir.0, 10, sample);
     let sessions = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["sessions"]));
     assert!(sessions.starts_with("brigadier-ai\nID"), "{sessions}");
     assert!(sessions.contains("Strip-down (this session)"), "{sessions}");
@@ -517,9 +519,18 @@ fn text_output_reads_well() {
     assert!(read.contains("$ cargo test\n  ok\n  (exit 0)"), "{read}");
     let start = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["start", "go"]));
     assert!(
-        start.starts_with("a1b2c3d4\nStarted worker 2 (codex, codex-model-1), on "),
+        start.starts_with(
+            "a1b2c3d4\nStarted worker 2 (codex, codex-model-1), in a new worktree from \
+             brigadier/0000c0de/session, "
+        ),
         "{start}"
     );
+    let local = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &["start", "--local", "go"],
+    ));
+    assert!(local.contains(", in this session's checkout, "), "{local}");
     let wait = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["wait"]));
     assert!(
         wait.starts_with("a1b2c3d4 turn-ended (completed)\nWrote the file.\n"),

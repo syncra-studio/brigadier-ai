@@ -241,7 +241,8 @@ pub fn start(output: &StartOutput) -> String {
     let place = match (&worker.branch, &output.base) {
         (Some(branch), Some(base)) => format!("on {branch} from {base}"),
         (Some(branch), None) => format!("on {branch}"),
-        (None, _) => "in this session's checkout".into(),
+        (None, Some(base)) => format!("in a new worktree from {base}"),
+        (None, None) => "in this session's checkout".into(),
     };
     format!(
         "{}\nStarted worker {} ({}, {}), {place}, permission {}.\n`brigadier wait {}` hears \
