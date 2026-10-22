@@ -540,6 +540,7 @@ impl SessionManager {
             mcp_servers: vec![self.brigadier_server(grant.clone(), JOB_TOOL_TIMEOUT_SECS, true)],
             tools: ToolSet::Reader,
             skill_plugins: Vec::new(),
+            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,

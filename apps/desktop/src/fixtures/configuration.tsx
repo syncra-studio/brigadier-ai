@@ -39,12 +39,19 @@ const memory = (id: string, title: string) =>
   ({ id, title, body: "", updatedAtMs: Date.now(), provenance: { origin: "user", sessionId: null } }) as unknown as Node;
 const memories = [memory("m1", "Lives in Lisbon"), memory("m2", "Works as an electrician")];
 
+const calls: string[] = [];
+
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "listMemories":
       return { method: req.method, memories };
+    case "getBrigadeSkill":
+      return { method: req.method, custom: true, path: "~/.brigadier/brigade/SKILL.md" };
+    case "resetBrigadeSkill":
+      calls.push("reset");
+      return { method: req.method, custom: false, path: "~/.brigadier/brigade/SKILL.md" };
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     default:
@@ -80,6 +87,7 @@ const typeSearch = (value: string) => {
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 };
+const skill = () => document.querySelector('[data-setting="How sessions run workers"]');
 const MENUS: Record<string, string> = {
   sessions: "Model for sessions",
   chats: "Model for chats",
@@ -110,6 +118,11 @@ function Fixture() {
         seen.buttons = all("main button").map(text).filter((name) => name === "Use automatic");
         seen.levelRow = all("[data-setting]").some((row) => text(row).endsWith("Default"));
         seen.triggers = Object.values(MENUS).map((label) => text(trigger(label)));
+        seen.skill = { helper: text(skill()?.querySelector(".text-xs")), button: text(skill()?.querySelector("button")) };
+        skill()?.querySelector("button")?.click();
+      },
+      () => {
+        seen.skillReset = { helper: text(skill()?.querySelector(".text-xs")), buttons: all("button", skill() ?? document.body).length, calls };
         press(trigger(MENUS.sessions!));
       },
       () => {

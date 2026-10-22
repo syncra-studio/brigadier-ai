@@ -62,7 +62,14 @@ test("Configuration shows its defaults in one card and explains the choices in i
   ]);
   assert.equal(seen.firstCardHeading, false, "the first card has no heading");
   // Every section shows.
-  assert.deepEqual(seen.sections, ["Composer", "Brain"]);
+  assert.deepEqual(seen.sections, ["Workers", "Composer", "Brain"]);
+  // The user's copy of the brigade skill is in use until Reset to shipped (S15).
+  assert.deepEqual(seen.skill, { helper: "Your copy at ~/.brigadier/brigade/SKILL.md is in use", button: "Reset to shipped" });
+  assert.deepEqual(seen.skillReset, {
+    helper: "Brigadier’s brigade skill. Your own copy at ~/.brigadier/brigade/SKILL.md replaces it",
+    buttons: 0,
+    calls: ["reset"],
+  });
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
   assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Accept edits"]);

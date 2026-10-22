@@ -393,7 +393,7 @@ impl Claude {
         }
         // Brigadier's own skills, as plugins: they load beside the project's settings without
         // reading the user's.
-        for plugin in &spec.skill_plugins {
+        for plugin in spec.skill_plugins.iter().chain(&spec.installed_skills) {
             args.push("--plugin-dir".into());
             args.push(plugin.display().to_string());
         }
@@ -2475,6 +2475,7 @@ for line in sys.stdin:
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
             skill_plugins: Vec::new(),
+            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
@@ -2493,6 +2494,18 @@ for line in sys.stdin:
             deny_tools: None,
             lean_worker: false,
         }
+    }
+
+    /// The `/brigade` skill loads as a plugin beside Brigadier's other skills (S15).
+    #[test]
+    fn installed_skills_load_as_plugins() {
+        let dir = Temp::new();
+        let mut spec = spec(dir.path(), &["claude-sonnet-5-5"]);
+        spec.tools = ToolSet::Thread;
+        spec.installed_skills = vec![PathBuf::from("/data/brigade")];
+        let args = Claude::session_args(&spec, dir.path(), "x", false, None).unwrap();
+        let at = args.iter().position(|arg| arg == "--plugin-dir").unwrap();
+        assert_eq!(args[at + 1], "/data/brigade");
     }
 
     fn assert_thinking_args(args: &[String]) {
@@ -2662,6 +2675,7 @@ for line in sys.stdin:
             access,
             tools: ToolSet::Thread,
             skill_plugins: Vec::new(),
+            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: vec![ws.clone()],
             allowed_models: None,

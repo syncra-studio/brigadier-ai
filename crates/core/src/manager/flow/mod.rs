@@ -2151,6 +2151,9 @@ mod base_merge_tests;
 mod brain_first_tests;
 #[cfg(unix)]
 mod branch_prefix_tests;
+#[cfg(all(test, target_os = "macos"))]
+#[cfg(unix)]
+mod brigade_tests;
 mod browser_switch_tests;
 mod browser_tool_tests;
 #[cfg(unix)]
@@ -2168,7 +2171,6 @@ mod clean_up_tests;
 #[cfg(unix)]
 mod cli_tests;
 mod cli_thread_tests;
-#[cfg(all(test, target_os = "macos"))]
 #[cfg(unix)]
 mod computer_host_tests;
 #[cfg(unix)]

@@ -20,12 +20,13 @@ mod add_project;
 mod app_call;
 mod app_state;
 // Nothing feeds it since `run` went (S6); the module goes in S12.
-#[allow(dead_code)]
 mod brain_first;
 mod brain_jobs;
 mod brains;
 mod branch_names;
 mod branches;
+#[allow(dead_code)]
+mod brigade;
 pub(crate) mod browser_tool;
 mod cards;
 mod ci;

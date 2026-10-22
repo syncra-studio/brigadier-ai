@@ -742,6 +742,11 @@ pub enum Request {
     DontResume {
         conversation_id: ConversationId,
     },
+    /// Whether the user's copy of the `/brigade` skill (`~/.brigadier/brigade/SKILL.md`)
+    /// overrides the shipped one (S15).
+    GetBrigadeSkill,
+    /// Settings' Reset to shipped: the user's copy goes; new sessions get the shipped skill.
+    ResetBrigadeSkill,
     /// A worker's thread as its CLI keeps it (S14): its CLI session files' items and turns,
     /// read-only (G19.Q6).
     WorkerThread {
@@ -1702,6 +1707,14 @@ pub enum Response {
     },
     ContinueWaiting,
     DontResume,
+    GetBrigadeSkill {
+        custom: bool,
+        path: String,
+    },
+    ResetBrigadeSkill {
+        custom: bool,
+        path: String,
+    },
     StopBackgroundTask,
     ReadBackgroundTaskOutput {
         output: String,

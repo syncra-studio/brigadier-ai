@@ -263,12 +263,12 @@ Project: {project}. Repository: {repo}.
 Permission level: {permission}
 Your workspace: {workspace}
 
-You are this session's one long-lived thread: you read, search, run commands and edit in your workspace as a plain coding session does, and run workers when work needs them (delegate_task says how to brief them).
+You are this session's one long-lived thread: you read, search, run commands and edit in your workspace as a plain coding session does, and run workers when work needs them (the brigade skill says how).
 
 How to work:
 - Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
-- {fan_out} {clarify} {start}
+- {clarify} {start}
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) in your shell before your final answer. Before a merge, run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output. Never background a command with `&` or nohup. Run dev servers and apps with `brigadier preview start`.
 - {own_commits}
@@ -295,10 +295,9 @@ How to talk to the user:
 - {LATE_EVENT} {REVISED_ANSWER} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that request: answer about it briefly.{voice}
 
-How you handle workers:{WORKER_RULES}{code_rules}{preferences}"#,
+{BRIGADE}{code_rules}{preferences}"#,
         today = today(),
         voice = VOICE,
-        fan_out = research_fan_out!(),
         clarify = clarify_rule!(),
         start = start_rule!(),
         workers = workers_rule(start_workers),
@@ -559,14 +558,8 @@ pub(crate) fn browser_section(on: bool) -> String {
     }
 }
 
-/// How the thread handles its workers, in its instructions.
-pub(crate) const WORKER_RULES: &str = "
-- Answer a worker's question ([question from task-N]) at once with answer_worker. message_worker steers a running worker, or sends a reported one back with the exact gaps.
-- Judge each report against its \"done when\" yourself, and don't take a claim on trust: check what matters (the diff, a check) or send the work back. read_report and read_artifact give details a report left out.
-- Land finished work with land_phase (no phase needed), each report at once. Never rerun a worker's checks after you land its work: its report covers its change. A check that fails on a worker's landed work goes to one fix task (role fix, subject the task that broke it) with the failing lines, unless you fix it yourself.
-- A lead that sends an outline waits: judge it and call approve_outline at once, with corrections (the brief wins).
-- A landing gets no review by itself. What a task left unfixed goes back in one fix task (role fix, subject that task); what stays open goes to the user as a list.
-- The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread: don't repeat a task's spec or restate reports.";
+/// The thread's pointer to the `/brigade` skill, which says how workers run (S15, §6).
+pub(crate) const BRIGADE: &str = "You may run workers of your own through `brigadier start` when the job calls for them; the brigade skill says how.";
 
 /// What the voice covers for a worker, and its report's shape.
 const WORKER_VOICE: &str = "
@@ -1838,13 +1831,9 @@ mod environment_tests {
         );
         assert!(text.contains("Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one."));
         assert!(!text.contains("Delegate early"));
-        // Batches, efforts and briefs are delegate_task's to say, read when the thread
-        // delegates (BUILD-PLAN C1; the catalog's tests hold its text).
-        assert!(
-            text.contains(
-                "run workers when work needs them (delegate_task says how to brief them)"
-            )
-        );
+        // How workers run is the brigade skill's to say, read when the thread runs one (S15).
+        assert!(text.contains("run workers when work needs them (the brigade skill says how)"));
+        assert!(text.contains(BRIGADE));
         assert!(!text.contains("several delegate_task calls in one message"));
         assert!(!text.contains("you or the Brain found"));
     }
@@ -1871,7 +1860,7 @@ mod environment_tests {
                 assert!(claude.contains(
                     "with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch"
                 ));
-                assert!(claude.contains("(mcp__brigadier__delegate_task says how to brief them)"));
+                assert!(claude.contains("mcp__brigadier__delegate_task says how a mockup goes"));
                 // Both run commands in their CLI's own shell, at every level.
                 assert!(claude.contains("Use your own CLI shell"));
                 assert!(codex.contains("Use your own CLI shell"));
@@ -1881,7 +1870,7 @@ mod environment_tests {
                     assert!(!text.contains("sandbox"), "{permission}");
                 }
                 assert!(claude.contains("keep it with mcp__brigadier__remember citing"));
-                assert!(codex.contains("(delegate_task says how to brief them)"));
+                assert!(codex.contains("; delegate_task says how a mockup goes"));
                 assert!(!codex.contains("mcp__brigadier__"));
                 assert!(!claude.contains("@run") && !claude.contains("@remember"));
                 // No tool with an underscore is named bare in Claude's.
@@ -2002,14 +1991,12 @@ mod environment_tests {
                     ] {
                         assert!(!prompt.contains(gone), "{gone}");
                     }
-                    // How workers are handled is in the instructions, and how they are
-                    // briefed is delegate_task's to say (BUILD-PLAN C1).
-                    assert!(prompt.contains(&callable(WORKER_RULES, provider)));
-                    assert!(
-                        WORKER_RULES
-                            .contains("Never rerun a worker's checks after you land its work")
-                    );
-                    assert!(!WORKER_RULES.contains("request_review"));
+                    // How workers run is the brigade skill's to say (S15): the instructions
+                    // only point at it.
+                    assert!(prompt.contains(BRIGADE));
+                    assert!(!prompt.contains("How you handle workers"));
+                    assert!(!prompt.contains("land_phase"));
+                    assert!(!prompt.contains("2 to 4 research workers"));
                     assert!(prompt.contains(&callable(MOCKUPS, provider)));
                     assert!(prompt.contains("Never answer \"I can't\""));
                     assert!(
@@ -2052,25 +2039,6 @@ mod environment_tests {
                         "ci_status",
                     ] {
                         assert!(prompt.contains(&tool(name, provider)), "{name}");
-                    }
-                    // The tools for workers are named in their rules.
-                    for (rules, names) in [(
-                        WORKER_RULES,
-                        &[
-                            "answer_worker",
-                            "message_worker",
-                            "read_report",
-                            "read_artifact",
-                            "land_phase",
-                            "approve_outline",
-                        ][..],
-                    )] {
-                        for name in names {
-                            assert!(
-                                callable(rules, provider).contains(&tool(name, provider)),
-                                "{name}"
-                            );
-                        }
                     }
                     // The user is asked only on cards, in rounds; the merge too.
                     assert!(
@@ -2170,16 +2138,12 @@ mod environment_tests {
             // The full checks are the thread's to run before a merge (thread-truth grill Q5);
             // landing at once is in the rules for workers.
             assert!(!text.contains("a merge goes through only once they passed"));
-            assert!(WORKER_RULES.contains("each report at once"));
             assert!(!text.contains("Never run the full suite"));
             // Git is the thread's call (Q61); the three approvals stay, whoever asks.
             assert!(!text.contains("only when the user asks for exactly that"));
             assert!(text.contains("Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all."));
             assert!(text.contains("Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need "));
             assert!(!text.contains("[checks failed …]"));
-            assert!(WORKER_RULES.contains(
-                "one fix task (role fix, subject the task that broke it) with the failing lines"
-            ));
             assert!(!text.contains("write the ending again"));
             assert!(!text.contains("kind waiting"));
             assert!(!text.contains("Waiting on you"));
@@ -2519,13 +2483,6 @@ mod environment_tests {
         assert!(!worker_system("").contains("is refused until you list it"));
     }
 
-    /// The thread speaks when it judges it useful (#248, #54, #105): the rules for workers
-    /// never say "don't announce it".
-    #[test]
-    fn the_thread_speaks_when_it_judges_it_useful() {
-        assert!(!WORKER_RULES.contains("announce"));
-    }
-
     /// A follow-up block lists the project's other sessions with their states and names route
     /// "session" only when there is one; it never asks for silence.
     #[test]
@@ -2710,16 +2667,10 @@ mod environment_tests {
         for text in [&page, &browser] {
             assert!(!text.contains("save_report"));
         }
-        // The thread: no Details (Q87), and research fanned out when it warrants.
+        // The thread: no Details (Q87); how research fans out is the brigade skill's (S15).
         for text in &threads {
             assert!(!text.contains("which always holds three labelled lines"));
-            assert!(text.contains("split it across 2 to 4 research workers"));
-            assert!(
-                text.contains(
-                    "write the answer from their reports and notes in your own sentences."
-                )
-            );
-            assert!(text.contains("A quick fact you look up yourself."));
+            assert!(!text.contains("split it across 2 to 4 research workers"));
         }
         assert!(WORKER_WRITING.contains(RESTORED_VOICE[2]));
         assert!(
@@ -3080,7 +3031,7 @@ mod environment_tests {
                 assert!(!prompt.contains(gone), "{gone}: {prompt}");
             }
         }
-        for text in [WORKER_RULES, LEAD_STEPS, LIVE_LOOK, WORKER_MOCKUP] {
+        for text in [LEAD_STEPS, LIVE_LOOK, WORKER_MOCKUP] {
             assert!(!text.contains("request_review"), "{text}");
         }
     }

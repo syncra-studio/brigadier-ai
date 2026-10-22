@@ -326,6 +326,21 @@ impl Codex {
 }
 
 impl Codex {
+    /// Copies `spec`'s installed skills into the user's skills folder (`$CODEX_HOME/skills`),
+    /// where this session finds them, and a plain `codex` too.
+    async fn install_skills(&self, spec: &SessionSpec) {
+        let Some(home) = self.history_home() else {
+            return;
+        };
+        let plugins = spec.installed_skills.clone();
+        let installed =
+            tokio::task::spawn_blocking(move || install_skills(&home.join("skills"), &plugins))
+                .await;
+        if let Ok(Err(error)) = installed {
+            tracing::warn!(%error, "couldn't install Brigadier's skills for Codex");
+        }
+    }
+
     /// The `CODEX_HOME` a thread with an output hook runs from ([`home`]), brought up to date;
     /// `None` for any other session, where the login can't follow the thread there
     /// ([`runs_thread_hook`]), or when it can't be made.
@@ -353,6 +368,25 @@ impl Codex {
             }
         }
     }
+}
+
+/// Copies each plugin's `skills/<name>/SKILL.md` to `<skills>/<name>/SKILL.md`, unless it is
+/// already the same.
+fn install_skills(skills: &Path, plugins: &[PathBuf]) -> std::io::Result<()> {
+    for plugin in plugins {
+        for entry in std::fs::read_dir(plugin.join("skills"))? {
+            let entry = entry?;
+            let text = std::fs::read_to_string(entry.path().join("SKILL.md"))?;
+            let dir = skills.join(entry.file_name());
+            let path = dir.join("SKILL.md");
+            if std::fs::read_to_string(&path).is_ok_and(|current| current == text) {
+                continue;
+            }
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(path, text)?;
+        }
+    }
+    Ok(())
 }
 
 /// The plan's name as people know it, for "Connected · Pro plan"; none when Codex doesn't know.
@@ -821,6 +855,8 @@ impl Provider for Codex {
                 )?)),
                 None => None,
             };
+            // Before its home is made, which links the user's skills folder.
+            self.install_skills(&spec).await;
             let own_home = self.own_home(&spec).await;
             let spawned = self
                 .app_server(
@@ -2589,6 +2625,7 @@ mod tests {
             mcp_servers: Vec::new(),
             tools,
             skill_plugins: Vec::new(),
+            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,
@@ -3118,6 +3155,27 @@ mod tests {
             json!("untrusted")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An installed skill lands in the user's skills folder, where a plain `codex` finds it
+    /// too, and is written again only when it changed (S15).
+    #[test]
+    fn installed_skills_go_into_the_users_skills_folder() {
+        let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
+        let plugin = dir.join("brigade");
+        std::fs::create_dir_all(plugin.join("skills/brigade")).unwrap();
+        std::fs::write(plugin.join("skills/brigade/SKILL.md"), "one").unwrap();
+        let skills = dir.join("codex-home/skills");
+        std::fs::create_dir_all(skills.join("theirs")).unwrap();
+        install_skills(&skills, std::slice::from_ref(&plugin)).unwrap();
+        let installed = skills.join("brigade/SKILL.md");
+        assert_eq!(std::fs::read_to_string(&installed).unwrap(), "one");
+        std::fs::write(plugin.join("skills/brigade/SKILL.md"), "two").unwrap();
+        install_skills(&skills, std::slice::from_ref(&plugin)).unwrap();
+        assert_eq!(std::fs::read_to_string(&installed).unwrap(), "two");
+        // The user's own skills stay.
+        assert!(skills.join("theirs").is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Missing or signed out, the status points at Connect in plain words: no command to run,

@@ -2084,6 +2084,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             sessions.continue_waiting(&conversation_id).await?;
             Response::ContinueWaiting
         }
+        Request::GetBrigadeSkill => {
+            let skill = sessions.brigade_skill();
+            Response::GetBrigadeSkill {
+                custom: skill.custom,
+                path: skill.path.display().to_string(),
+            }
+        }
+        Request::ResetBrigadeSkill => {
+            let skill = sessions.reset_brigade_skill()?;
+            Response::ResetBrigadeSkill {
+                custom: skill.custom,
+                path: skill.path.display().to_string(),
+            }
+        }
         Request::DontResume { conversation_id } => {
             sessions.dont_resume(&conversation_id).await?;
             Response::DontResume

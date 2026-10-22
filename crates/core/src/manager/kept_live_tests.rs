@@ -126,6 +126,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         add_dirs: Vec::new(),
         project: None,
         skill_plugins: Vec::new(),
+        installed_skills: Vec::new(),
         switched_off: Default::default(),
         env: Vec::new(),
         unset_env: Vec::new(),

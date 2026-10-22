@@ -1,7 +1,10 @@
+import { useEffect, useState } from "react";
+
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { findModel, ModelSelector, type ModelGroup, SettingsCard, SettingsRow } from "@/components/shared";
-import { Badge, SettingsSelect, selectTrigger } from "@/components/controls";
+import { Badge, Button, SettingsSelect, selectTrigger } from "@/components/controls";
+import { request } from "@/ipc/client";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
   builtInDefault,
@@ -58,6 +61,10 @@ export const CONFIGURATION_ROWS = {
     label: "Show the Full access notice",
     description: "A card above the composer while a session is on Full access",
   },
+  brigadeSkill: {
+    label: "How sessions run workers",
+    description: "Brigadier’s brigade skill. Your own copy at ~/.brigadier/brigade/SKILL.md replaces it",
+  },
   enrichBrain: {
     label: "Use spare quota to deepen the Brain",
     description:
@@ -104,6 +111,11 @@ export function ConfigurationPage() {
         <SwitchSetting setting="startWorkersOnOwn" row={CONFIGURATION_ROWS.startWorkersOnOwn} />
       </SettingsCard>
 
+      <SettingsSection title="Workers">
+        <SettingsCard>
+          <BrigadeSkillRow />
+        </SettingsCard>
+      </SettingsSection>
       <SettingsSection title="Composer">
         <SettingsCard>
           <SwitchSetting
@@ -166,6 +178,33 @@ function DefaultModelRow({
         }}
         className={cn(selectTrigger, "text-foreground")}
       />
+    </SettingsRow>
+  );
+}
+
+/** The brigade skill sessions get: the shipped one, or the user's copy, which Reset removes. */
+function BrigadeSkillRow() {
+  const reset = useAction();
+  const [skill, setSkill] = useState<{ custom: boolean; path: string } | null>(null);
+  useEffect(() => {
+    void request({ method: "getBrigadeSkill" }).then(setSkill, () => setSkill(null));
+  }, []);
+  return (
+    <SettingsRow
+      label={CONFIGURATION_ROWS.brigadeSkill.label}
+      description={skill?.custom ? `Your copy at ${skill.path} is in use` : CONFIGURATION_ROWS.brigadeSkill.description}
+      error={reset.error}
+    >
+      {skill?.custom && (
+        <Button
+          variant="soft"
+          size="sm"
+          disabled={reset.busy}
+          onClick={() => reset.run(() => request({ method: "resetBrigadeSkill" }).then(setSkill))}
+        >
+          Reset to shipped
+        </Button>
+      )}
     </SettingsRow>
   );
 }

@@ -252,6 +252,7 @@ impl SessionManager {
             mcp_servers: Vec::new(),
             tools: ToolSet::Web,
             skill_plugins: Vec::new(),
+            installed_skills: Vec::new(),
             switched_off: Default::default(),
             add_dirs: Vec::new(),
             project: None,

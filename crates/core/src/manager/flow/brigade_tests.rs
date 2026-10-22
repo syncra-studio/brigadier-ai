@@ -1,0 +1,86 @@
+//! The `/brigade` skill (S15): every session and Chat, on both CLIs, starts with it installed;
+//! the user's copy overrides the shipped one until Settings resets it.
+
+use brigadier_providers::{ProviderKind, SessionSpec, ToolSet};
+
+use super::chat_thread_tests::new_chat;
+use super::{Flow, Options, Reply};
+use crate::manager::brigade::SKILL;
+
+async fn flow(name: &str, thread: ProviderKind) -> Flow {
+    Flow::start(
+        name,
+        Options {
+            thread,
+            ..Options::default()
+        },
+        std::sync::Arc::new(|_| Box::pin(async { Reply::text("ok") })),
+    )
+    .await
+}
+
+/// The skill text a spec's installed plugin holds.
+fn installed(spec: &SessionSpec) -> String {
+    assert_eq!(
+        spec.installed_skills.len(),
+        1,
+        "{:?}",
+        spec.installed_skills
+    );
+    let plugin = &spec.installed_skills[0];
+    assert!(plugin.join(".claude-plugin/plugin.json").is_file());
+    std::fs::read_to_string(plugin.join("skills/brigade/SKILL.md")).unwrap()
+}
+
+#[tokio::test]
+async fn every_session_and_chat_on_both_clis_starts_with_the_skill() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let flow = flow("brigade-installed", provider).await;
+        flow.say("Is the build green?").await;
+        flow.settled().await;
+        let chat = new_chat(&flow).await;
+        flow.say_to(&chat, "Which nozzle?").await;
+        flow.settled_in(&chat).await;
+        let specs = flow.specs();
+        let thread = specs
+            .iter()
+            .find(|(of, spec)| *of == provider && spec.tools == ToolSet::Thread)
+            .expect("the session started");
+        assert_eq!(installed(&thread.1), SKILL, "{provider:?}");
+        // Brigadier's other skills stay for workers only.
+        assert!(thread.1.skill_plugins.is_empty());
+        let chat = specs
+            .iter()
+            .find(|(_, spec)| spec.tools == ToolSet::Chat)
+            .expect("the Chat started");
+        assert_eq!(installed(&chat.1), SKILL);
+        // The instructions point at it; how workers run is its to say.
+        let prompt = thread.1.append_system_prompt.as_deref().unwrap();
+        assert!(prompt.contains(crate::manager::prompts::BRIGADE));
+        flow.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn the_users_copy_overrides_the_shipped_skill_until_reset() {
+    let flow = flow("brigade-override", ProviderKind::Claude).await;
+    assert!(!flow.manager.brigade_skill().custom);
+    let path = flow.manager.brigade_override_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "---\nname: brigade\ndescription: mine\n---\nMy way.\n",
+    )
+    .unwrap();
+    assert!(flow.manager.brigade_skill().custom);
+    flow.say("Is the build green?").await;
+    flow.settled().await;
+    let spec = flow.thread_specs().pop().unwrap().1;
+    assert!(installed(&spec).ends_with("My way.\n"));
+    let reset = flow.manager.reset_brigade_skill().unwrap();
+    assert!(!reset.custom);
+    assert!(!path.exists());
+    // The installed copy is the shipped one again at once.
+    assert_eq!(installed(&spec), SKILL);
+    flow.stop().await;
+}

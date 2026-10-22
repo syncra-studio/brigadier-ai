@@ -3005,6 +3005,11 @@ impl SessionManager {
                 ConversationKind::Chat => ToolSet::Chat,
             },
             skill_plugins: Vec::new(),
+            // Every session and Chat is a brigade (G20); a tab chat is its session's helper.
+            installed_skills: match tab_checkout {
+                Some(_) => Vec::new(),
+                None => self.brigade_plugin().into_iter().collect(),
+            },
             // What the user switched off of its agent's own setup (`integrations`).
             switched_off: match conv.kind {
                 ConversationKind::Session => {
