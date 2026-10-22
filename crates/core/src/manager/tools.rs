@@ -22,6 +22,8 @@ use crate::{Error, Result, now_ms};
 const ARTIFACT_PAGE_MAX: u32 = 16_000;
 /// The most bytes of a `stop_worker` reason the thread shows.
 const STOP_REASON_MAX: usize = 300;
+/// The most feedback cards the thread offers in one request (several when the user asked, #483).
+const FEEDBACK_OFFERS_MAX: usize = 10;
 
 impl SessionManager {
     pub(crate) async fn orchestrator_call(
@@ -1300,9 +1302,10 @@ impl SessionManager {
 
     /// `offer_feedback`: a card in the thread with a report to Brigadier's developers, which
     /// the user sends or dismisses (the thread judges they are annoyed, or that they asked;
-    /// this only plumbs). One offer per incident: none while the session's last offer is
-    /// unanswered or after the user dismissed one unless they asked for this one, none twice in
-    /// a request, and none in an overnight run. An offer
+    /// this only plumbs). One offer per incident: none while a card of the latest request that
+    /// offered any is unanswered or dismissed unless they asked for this one, one in a request
+    /// unless they asked (then up to [`FEEDBACK_OFFERS_MAX`], each title once, #483), and none
+    /// in an overnight run. An offer
     /// from an attempt the user asked to redo, or from a message they edited away, counts for nothing.
     pub(crate) async fn offer_feedback(
         &self,
@@ -1333,7 +1336,11 @@ impl SessionManager {
             .filter(|message| message.role == MessageRole::User)
             .map(|message| message.request_id.unwrap_or(message.id))
             .collect();
+        // The latest earlier request that offered any (`None` before one did), its cards with
+        // their answers; and this request's titles.
         let mut last = None;
+        let mut cards: Vec<(&str, Option<bool>)> = Vec::new();
+        let mut here: Vec<&str> = Vec::new();
         // An offer from a request's earlier attempt (before a Try again) or from a message the
         // user edited away is out of view: it counts for nothing, as the thread shows it.
         let current = |step: &&crate::work::OrchestratorStep| match &step.request_id {
@@ -1348,38 +1355,54 @@ impl SessionManager {
         };
         for step in board.orchestrator_steps.iter().filter(current) {
             match &step.kind {
-                OrchestratorStepKind::FeedbackOffered { id, .. } => {
+                OrchestratorStepKind::FeedbackOffered {
+                    id, title: offered, ..
+                } => {
                     if step.request_id == request {
-                        return Err(Error::Invalid(
-                            "Feedback was already offered for this request: don't offer it again."
-                                .into(),
-                        ));
+                        here.push(offered);
+                        continue;
                     }
-                    last = Some((id.clone(), None));
+                    if last != Some(&step.request_id) {
+                        last = Some(&step.request_id);
+                        cards.clear();
+                    }
+                    cards.push((id, None));
                 }
                 OrchestratorStepKind::FeedbackAnswered { id, sent, .. } => {
-                    if let Some((offered, answer)) = &mut last
-                        && offered == id
-                    {
+                    if let Some((_, answer)) = cards.iter_mut().find(|(offered, _)| offered == id) {
                         *answer = Some(*sent);
                     }
                 }
                 _ => {}
             }
         }
-        match last {
-            _ if args.asked => {}
-            Some((_, None)) => {
-                return Err(Error::Invalid(
-                    "The user hasn't answered the feedback already offered in this session: don't offer another.".into(),
-                ));
-            }
-            Some((_, Some(false))) => {
-                return Err(Error::Invalid(
-                    "The user dismissed the feedback offered earlier in this session: don't offer it again.".into(),
-                ));
-            }
-            _ => {}
+        if !here.is_empty() && !args.asked {
+            return Err(Error::Invalid(
+                "Feedback was already offered for this request: don't offer it again.".into(),
+            ));
+        }
+        if here
+            .iter()
+            .any(|offered| offered.eq_ignore_ascii_case(title))
+        {
+            return Err(Error::Invalid(
+                "This report was already offered for this request: don't offer it again.".into(),
+            ));
+        }
+        if here.len() >= FEEDBACK_OFFERS_MAX {
+            return Err(Error::Invalid(format!(
+                "At most {FEEDBACK_OFFERS_MAX} reports are offered in one request: tell the user which ones are left, so they can ask for them next."
+            )));
+        }
+        if !args.asked && cards.iter().any(|(_, answer)| answer.is_none()) {
+            return Err(Error::Invalid(
+                "The user hasn't answered the feedback already offered in this session: don't offer another.".into(),
+            ));
+        }
+        if !args.asked && cards.iter().any(|(_, answer)| *answer == Some(false)) {
+            return Err(Error::Invalid(
+                "The user dismissed the feedback offered earlier in this session: don't offer it again.".into(),
+            ));
         }
         self.orchestrator_step_in(
             id,

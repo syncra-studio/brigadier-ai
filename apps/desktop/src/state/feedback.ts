@@ -253,6 +253,29 @@ export const useFeedbackOffers = create<
 /** Each card's send now, by offer id; a sign-in dismissed with its card is left to end, unseen. */
 const offerSends: Record<string, number | undefined> = {};
 
+/**
+ * The cards' sign-in at work, shared (#483): a second card's Send waits on it and shows its
+ * steps too, instead of starting one in its place; each card's `show`, by offer id.
+ */
+type OffersSignIn = { step: FeedbackSignIn; shows: Map<string, (step: FeedbackSignIn) => void>; done: Promise<boolean> };
+let offersSignIn: OffersSignIn | null = null;
+
+function offerSignIn(id: string, show: (step: FeedbackSignIn) => void): Promise<boolean> {
+  if (!offersSignIn) {
+    const shared: OffersSignIn = { step: { step: "starting" }, shows: new Map(), done: Promise.resolve(false) };
+    offersSignIn = shared;
+    shared.done = signIn((step) => {
+      shared.step = step;
+      for (const each of shared.shows.values()) each(step);
+    }).finally(() => {
+      if (offersSignIn === shared) offersSignIn = null;
+    });
+  }
+  offersSignIn.shows.set(id, show);
+  show(offersSignIn.step);
+  return offersSignIn.done;
+}
+
 function setOffer(id: string, next: { written?: FeedbackWriteUp | null; sending: FeedbackSending }): void {
   useFeedbackOffers.setState({ [id]: { ...useFeedbackOffers.getState()[id], ...next } });
 }
@@ -281,7 +304,7 @@ export function sendOffer(id: string, text: string, kind: FeedbackKind, onSent: 
   };
   const run = async (): Promise<FeedbackResult[] | null> => {
     const first = signInFirst(sending) ?? (await signInOnceKnown(sending));
-    if (first && !(await signIn((step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
+    if (first && !(await offerSignIn(id, (step) => set({ phase: "signIn", signIn: step, results: failed })))) return null;
     // Dismissed (or sent again) while it asked or signed in: this send stops there.
     if (offerSends[id] !== mine) return null;
     set({ phase: "working", step: { step: "filing", count: failed?.length || written?.reports.length || 1 } });
@@ -307,11 +330,15 @@ export function openOfferSignIn(id: string): void {
   if (offer) openSignIn(offer.sending, (next) => setOffer(id, { sending: next }));
 }
 
-/** The offer `id` was dismissed: a send not filing yet stops, a sign-in it started too. */
+/**
+ * The offer `id` was dismissed: a send not filing yet stops, a sign-in it started too unless
+ * another card waits on it.
+ */
 export function dismissOffer(id: string): void {
   const phase = useFeedbackOffers.getState()[id]?.sending.phase;
   if (phase === "working") return;
-  if (phase === "signIn") cancelSignIn();
+  offersSignIn?.shows.delete(id);
+  if (phase === "signIn" && !offersSignIn?.shows.size) cancelSignIn();
   offerSends[id] = (offerSends[id] ?? 0) + 1;
 }
 

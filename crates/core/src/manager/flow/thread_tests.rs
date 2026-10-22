@@ -2364,6 +2364,137 @@ async fn the_thread_offers_feedback_once_per_incident() {
     flow.stop().await;
 }
 
+/// Asked to report several things at once, the thread offers a card for each (#483): up to ten
+/// in a request, each title once, each answered on its own. Any card of that request still
+/// unanswered, or dismissed, holds back the next unasked offer.
+#[tokio::test]
+async fn several_feedback_cards_are_offered_when_asked() {
+    let replies: Arc<Mutex<Vec<(String, bool, String)>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-offer-feedback-several",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() && turn.input.contains("Report these") {
+                    let titles = ["Bug 1", "bug 1"]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .chain((2..=11).map(|n| format!("Bug {n}")));
+                    for title in titles {
+                        let reply = turn
+                            .call(
+                                "offer_feedback",
+                                json!({"kind": "bug", "title": title, "body": "It broke.", "asked": true}),
+                            )
+                            .await;
+                        log.lock().unwrap().push((title, reply.is_error, reply.text));
+                    }
+                } else if turn.is_orchestrator() {
+                    let reply = turn
+                        .call(
+                            "offer_feedback",
+                            json!({"kind": "bug", "title": "Still broken", "body": "It broke again."}),
+                        )
+                        .await;
+                    log.lock()
+                        .unwrap()
+                        .push(("Still broken".into(), reply.is_error, reply.text));
+                }
+                Reply::text("On it.")
+            }
+        }),
+    )
+    .await;
+    let taken = |replies: &Arc<Mutex<Vec<(String, bool, String)>>>| {
+        std::mem::take(&mut *replies.lock().unwrap())
+    };
+    let offers = |board: &crate::board::Board| -> Vec<String> {
+        board
+            .orchestrator_steps
+            .iter()
+            .filter_map(|step| match &step.kind {
+                OrchestratorStepKind::FeedbackOffered { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    flow.say("Report these to Brigadier: the tab spins, the composer sticks, and more.")
+        .await;
+    let board = flow.settled().await;
+    let first = taken(&replies);
+    let offered: Vec<_> = first
+        .iter()
+        .filter(|reply| !reply.1)
+        .map(|reply| reply.0.as_str())
+        .collect();
+    assert_eq!(
+        offered,
+        (1..=10).map(|n| format!("Bug {n}")).collect::<Vec<_>>(),
+        "{first:?}"
+    );
+    assert!(
+        first[1].1 && first[1].2.contains("already offered"),
+        "{first:?}"
+    );
+    assert!(
+        first[11].1 && first[11].2.contains("At most 10"),
+        "{first:?}"
+    );
+    let shown = offers(&board);
+    assert_eq!(shown.len(), 10);
+    assert_eq!(
+        shown.iter().collect::<std::collections::HashSet<_>>().len(),
+        10,
+        "each its own card"
+    );
+
+    // Each card is answered on its own: the others stay unanswered.
+    for card in shown.iter().filter(|card| **card != shown[5]) {
+        flow.manager
+            .answer_feedback_offer(&flow.conversation, card, true, Vec::new())
+            .await
+            .unwrap();
+    }
+    let board = flow.core.board(&flow.conversation).await.unwrap();
+    let answered: std::collections::HashSet<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::FeedbackAnswered { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answered.len(), 9);
+    assert!(!answered.contains(&shown[5]));
+
+    // One card of that request unanswered, though the last one was sent: no unasked offer.
+    flow.say("Ugh, still broken.").await;
+    flow.settled().await;
+    let second = taken(&replies);
+    assert!(
+        second.len() == 1 && second[0].1 && second[0].2.contains("hasn't answered"),
+        "{second:?}"
+    );
+
+    // One of them dismissed: none either.
+    flow.manager
+        .answer_feedback_offer(&flow.conversation, &shown[5], false, Vec::new())
+        .await
+        .unwrap();
+    flow.say("Ugh.").await;
+    let board = flow.settled().await;
+    let third = taken(&replies);
+    assert!(
+        third.len() == 1 && third[0].1 && third[0].2.contains("dismissed"),
+        "{third:?}"
+    );
+    assert_eq!(offers(&board).len(), 10);
+    flow.stop().await;
+}
+
 /// An offer from an attempt the user asked to redo is out of view, so it blocks no new one: the
 /// new attempt may offer again.
 #[tokio::test]

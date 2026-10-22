@@ -448,7 +448,8 @@ edit it first or dismiss it. Nothing is sent without their click, and the card, 
 answer, says whether it was. title: one line naming the problem. body: what happened and what \
 they expected, steps if known, a few plain lines in their words; never invent steps; no secrets, paths or project code. asked: true when the user asked \
 for it. One offer per incident: unless asked, refused while an earlier one is unanswered or \
-after they dismissed one.";
+after they dismissed one. Asked to report several separate things, offer one card each, up to 10 \
+in a request.";
 
 const OFFER_SESSION: &str = "Work you found along the way that is outside this request (a \
 separate bug, a follow-up the user didn't ask for): offer it as a session of its own instead of \

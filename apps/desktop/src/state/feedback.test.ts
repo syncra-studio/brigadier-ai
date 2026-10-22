@@ -255,6 +255,25 @@ test("dismissing a card while its sign-in finishes files nothing", async () => {
   assert.equal(answered, 0);
 });
 
+test("two cards share one sign-in, and dismissing one leaves the other's going", async () => {
+  useFeedbackUi.setState({ account: { signedIn: false, login: null } });
+  const yes = signInPending();
+  const written = { reports: [report("Spins")], searched: true };
+  useFeedbackOffers.setState({ one: { written, sending: { phase: "write" } }, two: { written, sending: { phase: "write" } } });
+  let answered = 0;
+  sendOffer("one", "Spins", "bug", () => answered++);
+  await until(() => signIns.includes("waitGitHubSignIn"));
+  sendOffer("two", "Spins", "bug", () => answered++);
+  await until(() => useFeedbackOffers.getState()["two"]?.sending.phase === "signIn");
+  assert.deepEqual(useFeedbackOffers.getState()["two"]?.sending, useFeedbackOffers.getState()["one"]?.sending);
+  dismissOffer("one");
+  yes();
+  await until(() => useFeedbackOffers.getState()["two"]?.sending.phase === "done");
+  assert.deepEqual(signIns, ["startGitHubSignIn", "waitGitHubSignIn"]);
+  assert.equal(asked.length, 1);
+  assert.equal(answered, 1);
+});
+
 test("a Send before it knows who it posts as waits, and signs in when signed out", async () => {
   useFeedbackUi.setState({ account: null });
   let answer: ((yes: boolean) => void) | undefined;
