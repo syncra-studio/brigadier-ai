@@ -38,33 +38,36 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.deepEqual(seen.left, ["run-2", "preview-2"], "what the user stopped left the card");
 });
 
-type Ended = { state: string; icon: string | null; red: boolean; shimmer: boolean; muted: boolean; lastLine: string | null; elapsed: string; actions: string[]; actionsVisibleAtRest: boolean | null; clear?: boolean | null; cut?: boolean | null };
-
-test("Background rows stay while they need the user (Q94): a failed one red with its last line, Restart and × clear of its words; a finished or stopped one gone", { timeout: 90000 }, async (t) => {
+test("a Background row leaves as soon as its process ends, failed, finished or stopped: no red row, no Restart and no ×", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
-    order: string[]; rows: Record<string, Ended>; calls: string[]; restarted: string; afterActions: string[]; startedAgain: string[];
+    running: string[]; ended: string[]; section: boolean; restartOrDismiss: number;
   };
-  // Newest first; the docs build and lint that finished and the storybook the user stopped are not there.
-  assert.deepEqual(seen.order, ["preview-12", "preview-11", "run-13", "run-15"]);
-  // The name and its last line are long enough, at the card's width, to need cutting off (#511):
-  // the words end in an ellipsis before Restart and ×, never under them.
-  assert.deepEqual(seen.rows["preview-11"], { state: "failed", icon: "failed", red: true, shimmer: false, muted: false,
-    lastLine: "· Error: the bundle couldn't be opened, check the build log for details", elapsed: "1m",
-    actions: ["Restart Brigadier dev app", "Dismiss Brigadier dev app"], actionsVisibleAtRest: true, clear: true, cut: true });
-  // A crash is a failure too, and so is a run with a non-zero exit or one cut off.
-  assert.equal(seen.rows["preview-12"]?.state, "failed");
-  assert.deepEqual([seen.rows["run-13"]?.state, seen.rows["run-13"]?.lastLine, seen.rows["run-13"]?.actions, seen.rows["run-13"]?.actionsVisibleAtRest],
-    ["failed", "· test result: FAILED. 9 passed; 3 failed", ["Restart Core tests", "Dismiss Core tests"], true]);
-  assert.equal(seen.rows["run-15"]?.state, "failed");
-  assert.equal(seen.rows["run-15"]?.actionsVisibleAtRest, true, "a failed row's Restart and × show without hover");
-  // Every failed row's words stay clear of its Restart and ×, not only the longest one.
-  for (const activity of ["preview-11", "preview-12", "run-13", "run-15"]) assert.equal(seen.rows[activity]?.clear, true, activity);
-  assert.deepEqual(seen.calls, ["dismissBackground run-15", "restartBackgroundRun run-13", "restartPreview preview-11"]);
-  // Restarted under its id, the page is its running row again; the run restarted and the one dismissed left.
-  assert.equal(seen.restarted, "starting");
-  assert.deepEqual(seen.afterActions, ["preview-11", "preview-12"]);
-  // The thread starts the api server again: the new one replaces the failed row.
-  assert.deepEqual(seen.startedAgain, ["preview-15", "preview-11"]);
+  assert.deepEqual(seen.running, ["preview-14", "preview-13", "preview-12", "preview-11", "run-13", "run-14", "run-15"]);
+  // A crash, a non-zero exit, an interruption, a clean exit and a Stop all take their row off at once.
+  assert.deepEqual(seen.ended, []);
+  assert.equal(seen.section, false, "nothing runs, no section");
+  assert.equal(seen.restartOrDismiss, 0);
+});
+
+test("Background shows the session's events while they run: the full checks, a review, CI with Open CI, a held merge with Cancel, then a merge at work; each opens Progress and leaves once it ends", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "activities.html?events=1", "activities-result", 60000)) as {
+    order: string[]; rows: Record<string, Row>; buttons: Record<string, string[]>; buttonsVisibleAtRest: boolean; opened: string | null; calls: string[];
+    ended: boolean; next: Record<string, string>; merged: string[]; restartOrDismiss: number;
+  };
+  // Newest first, each with its state and how far it got.
+  assert.deepEqual(seen.order, ["merge", "ci", "review-1", "check-1"]);
+  assert.deepEqual(seen.rows["check-1"], { label: "Full checks", state: "checking · 3 of 5", moving: true, elapsed: "5m", tip: "Now: pnpm test" });
+  assert.deepEqual(seen.rows["review-1"], { label: "Codex review", state: "reviewing", moving: true, elapsed: "4m", tip: "The changes up to 4e1c49e" });
+  assert.deepEqual(seen.rows["ci"], { label: "CI", state: "checking · 3 of 5 jobs", moving: true, elapsed: "3m", tip: "main · 4e1c49e9" });
+  assert.deepEqual(seen.rows["merge"], { label: "Merge into main", state: "waiting · on 1 worker", moving: true, elapsed: "2m", tip: "Merging after 1 worker finishes" });
+  assert.deepEqual(seen.buttons, { merge: ["Cancel"], ci: ["Open CI"], "review-1": [], "check-1": [] });
+  assert.equal(seen.buttonsVisibleAtRest, false, "Open CI and Cancel show on hover, as Stop does");
+  assert.equal(seen.opened, "panel:reviews Progress");
+  assert.deepEqual(seen.calls, ["cancelMerge activities-fixture", "open_url https://github.com/o/r/actions/runs/7"]);
+  assert.equal(seen.ended, true, "the checks passed, the review ended, CI passed and the merge was cancelled: no rows");
+  assert.deepEqual(seen.next, { "check-1": "next", merge: "merging" });
+  assert.deepEqual(seen.merged, ["check-1"]);
+  assert.equal(seen.restartOrDismiss, 0);
 });
 
 type Look = { icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };

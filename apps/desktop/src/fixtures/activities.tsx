@@ -4,9 +4,10 @@
  * as its preview events say), the thread's named long command and an unnamed one. With `drive=1`
  * it opens their output, stops two, ends them, and writes what it saw. With `states=1` it shows a
  * row in each state (building, starting, running, paused, smoke testing, checking) and writes how
- * each one's icon and word look and move. With `ended=1` it shows what stays once processes end
- * (Q94): failed rows with their last line, Restart and ×, and no finished or stopped ones; it
- * restarts, dismisses and starts one again, and writes what it saw.
+ * each one's icon and word look and move. With `ended=1` it runs processes, then ends them
+ * (failed, finished, stopped) and writes that their rows left. With `events=1` it shows the
+ * session's events while they run (the full checks, a review, the CI watch, a held merge, then a
+ * merge at work), opens CI, cancels the merge, ends them, and writes what it saw.
  * Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
@@ -18,7 +19,7 @@ import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, Conversation, EventEnvelope, Preview, Request, Task } from "@/ipc/generated";
+import type { BackgroundRun, CiRun, Conversation, EventEnvelope, IntegratedCheck, OrchestratorStep, Preview, Request, ReviewRun, Task, UserRequest } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -60,25 +61,16 @@ const send = (...events: EventEnvelope["event"][]) => applyBoardEvents(events.ma
 }));
 const calls: string[] = [];
 mockIPC((command, payload) => {
+  if (command === "open_url") calls.push(`open_url ${(payload as { url: string }).url}`);
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
-  if (req.method === "previewLog") {
-    const tail = req.previewId === "preview-11" ? "listening…\nError: the bundle couldn't be opened, check the build log for details\n\n" : "VITE ready in 286 ms";
-    return { method: req.method, tail, url: null };
-  }
-  if (req.method === "readBackgroundRun") return { method: req.method, output: req.runId === "run-13" ? "running 12 tests\ntest result: FAILED. 9 passed; 3 failed\n" : "done\n" };
+  if (req.method === "previewLog") return { method: req.method, tail: "VITE ready in 286 ms", url: null };
   if (req.method === "stopPreview") calls.push(`stopPreview ${req.previewId}`);
   if (req.method === "stopBackgroundRun") calls.push(`stopBackgroundRun ${req.runId}`);
-  if (req.method === "restartPreview") {
-    calls.push(`restartPreview ${req.previewId}`);
-    const record = useBoard.getState().board!.previews[req.previewId]!;
-    setTimeout(() => send({ type: "previewUpdated", preview: { ...record, state: { type: "starting" }, startedAtMs: Date.now(), endedAtMs: null } }));
-  }
-  if (req.method === "restartBackgroundRun" || req.method === "dismissBackground") {
-    const row = req.method === "restartBackgroundRun" ? req.runId : req.id;
-    calls.push(`${req.method} ${row}`);
-    setTimeout(() => send({ type: "backgroundCleared", conversationId: id, ids: [row] }));
+  if (req.method === "cancelMerge") {
+    calls.push(`cancelMerge ${req.conversationId}`);
+    return { method: req.method, text: "Cancelled the merge." };
   }
   return { method: req.method };
 });
@@ -200,59 +192,98 @@ async function drive(): Promise<Record<string, unknown>> {
   return seen;
 }
 
-/** The thread's processes that ended (Q94): a page that crashed, an api server that failed, a docs build and a lint that finished, tests that failed, a check interrupted, and one the user stopped. */
+/** The thread's processes running, then ended: a page that crashes, an api server that fails, a docs build and a lint that finish, tests that fail, a check interrupted, and one the user stops. */
 const exited = (code: number) => ({ type: "exited" as const, code, status: `exit ${code}` });
-// Long enough, with a long last line (#511), to need truncation at the card's width.
-const crashed: Preview = { ...page, id: "preview-11", name: "Brigadier dev app", state: exited(1), startedAtMs: now - 9 * MIN, endedAtMs: now - 8 * MIN };
-const api: Preview = { ...own, id: "preview-12", name: "api server", command: "node server.js", building: false, state: { type: "exited", code: null, status: "killed by signal 11" }, startedAtMs: now - 7 * MIN, endedAtMs: now - 6 * MIN };
-const docs: Preview = { ...own, id: "preview-13", name: "docs build", command: "pnpm docs", building: false, state: exited(0), startedAtMs: now - 5 * MIN, endedAtMs: now - 4 * MIN };
-const userStopped: Preview = { ...own, id: "preview-14", name: "storybook", command: "pnpm storybook", building: false, state: { type: "stopped", reason: "stopped by the user" }, startedAtMs: now - 3 * MIN, endedAtMs: now - 2 * MIN };
-const failedTests: BackgroundRun = { ...tests, id: "run-13", state: { type: "finished", status: "exit 101" }, startedAtMs: now - 10 * MIN, endedAtMs: now - 9 * MIN };
-const lintDone: BackgroundRun = { ...lint, id: "run-14", state: { type: "finished", status: "exit 0" }, startedAtMs: now - 11 * MIN, endedAtMs: now - 10 * MIN };
-const cut: BackgroundRun = { ...lint, id: "run-15", name: "e2e", command: "pnpm e2e", state: { type: "interrupted", reason: "Brigadier quit" }, startedAtMs: now - 12 * MIN, endedAtMs: now - 11 * MIN };
+const crashed: Preview = { ...page, id: "preview-11", name: "Brigadier dev app", startedAtMs: now - 9 * MIN };
+const api: Preview = { ...own, id: "preview-12", name: "api server", command: "node server.js", building: false, state: { type: "running" }, startedAtMs: now - 7 * MIN };
+const docs: Preview = { ...own, id: "preview-13", name: "docs build", command: "pnpm docs", building: false, state: { type: "running" }, startedAtMs: now - 5 * MIN };
+const storybook: Preview = { ...own, id: "preview-14", name: "storybook", command: "pnpm storybook", building: false, state: { type: "running" }, startedAtMs: now - 3 * MIN };
+const failedTests: BackgroundRun = { ...tests, id: "run-13", startedAtMs: now - 10 * MIN };
+const lintDone: BackgroundRun = { ...lint, id: "run-14", startedAtMs: now - 11 * MIN };
+const cut: BackgroundRun = { ...lint, id: "run-15", name: "e2e", command: "pnpm e2e", startedAtMs: now - 12 * MIN };
 
 /** The rows' ids, top to bottom. */
 const ids = () => [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
+/** The card's Restart and × buttons, wherever they are: there are none any more. */
+const restartOrDismiss = () => document.querySelectorAll('[data-slot="summary-card"] button[aria-label^="Restart"], [data-slot="summary-card"] button[aria-label^="Dismiss"]').length;
 
 async function driveEnded(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
-  send(...[crashed, api, docs, userStopped].map((preview) => ({ type: "previewUpdated" as const, preview })),
+  send(...[crashed, api, docs, storybook].map((preview) => ({ type: "previewUpdated" as const, preview })),
     ...[failedTests, lintDone, cut].map((run) => ({ type: "backgroundRunUpdated" as const, run })));
-  for (const end = Date.now() + 3000; Date.now() < end && !row("preview-11")?.querySelector("[data-last-line]"); ) await frame();
+  await frame();
+  seen.running = ids();
+  const ended = Date.now();
+  send(...[
+    { ...crashed, state: exited(1) },
+    { ...api, state: { type: "exited", code: null, status: "killed by signal 11" } },
+    { ...docs, state: exited(0) },
+    { ...storybook, state: { type: "stopped", reason: "stopped by the user" } },
+  ].map((preview) => ({ type: "previewUpdated" as const, preview: { ...preview, endedAtMs: ended } as Preview })),
+  ...[
+    { ...failedTests, state: { type: "finished", status: "exit 101" } },
+    { ...lintDone, state: { type: "finished", status: "exit 0" } },
+    { ...cut, state: { type: "interrupted", reason: "Brigadier quit" } },
+  ].map((run) => ({ type: "backgroundRunUpdated" as const, run: { ...run, endedAtMs: ended } as BackgroundRun })));
+  await frame();
+  seen.ended = ids();
+  seen.section = !!section();
+  seen.restartOrDismiss = restartOrDismiss();
+  return seen;
+}
+
+/** The session's own events at work: the full checks, a Codex review, a CI watch, a merge held for the worker. */
+const steps = (atMs: number, ...kinds: unknown[]): OrchestratorStep[] => kinds.map((kind) => ({ requestId: "r1", kind: kind as OrchestratorStep["kind"], atMs, position: 0 }));
+const ciRun = { workflow: "test", url: "https://github.com/o/r/actions/runs/7", status: "in_progress", conclusion: "", jobsDone: 3, jobsTotal: 5 } as unknown as CiRun;
+const ciWatch = (result?: string) => ({ type: "ciWatch", repo: "o/r", branch: "main", sha: "4e1c49e99aa", waiting: false, runs: [ciRun], ...(result ? { result } : {}) });
+const held = { type: "mergeHeld", branch: "session", base: "main", askedIn: "r1", consentedAtMs: now - 2 * MIN, condition: { type: "workersDone" }, waiting: ["task-2"], tip: "abc" };
+const checks = (state: IntegratedCheck["state"]): Record<string, IntegratedCheck> => ({ "check-1": { id: "check-1", conversationId: id, repo: "/fixture", branch: "session", tip: "4e1c49e999",
+  state, dueAtMs: now - 6 * MIN, startedAtMs: now - 5 * MIN, endedAtMs: null, requests: ["r1"], tasks: [], rerun: false, asked: { taskId: null, scope: "full" } } });
+const codex = (state: ReviewRun["state"]): Record<string, ReviewRun> => ({ "review-1": { id: "review-1", conversationId: id, requestId: "r1", taskId: null, kind: "code", base: "aaaaaaa000",
+  tip: "4e1c49e999", author: "claude", reviewer: "codex", reviewerModel: null, notify: { type: "orchestrator" }, state, startedAtMs: now - 4 * MIN, endedAtMs: null, items: [] } as unknown as ReviewRun });
+const working = { r1: { id: "r1", conversationId: id, preview: "", state: { type: "working" }, startedAtMs: now - 10 * MIN, endedAtMs: null, steeredInto: null, steeredAfter: null, undo: null, worked: [] } as unknown as UserRequest };
+const setBoard = (parts: Partial<NonNullable<ReturnType<typeof useBoard.getState>["board"]>>) => useBoard.setState({ board: { ...useBoard.getState().board!, ...parts } });
+
+async function driveEvents(): Promise<Record<string, unknown>> {
+  const seen: Record<string, unknown> = {};
+  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
+  setBoard({ requests: working, integratedChecks: checks({ type: "running", command: "pnpm test", done: 2, total: 5 }), reviews: codex({ type: "running" }),
+    orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - 2 * MIN, held)] });
+  await frame();
   seen.order = ids();
-  seen.rows = Object.fromEntries(ids().map((activity) => {
-    const button = row(activity!)!;
-    const word = button.querySelector("[data-state]");
-    const place = button.nextElementSibling?.matches('[data-slot="summary-row-action"]') ? button.nextElementSibling : null;
-    const actions = [...(place?.querySelectorAll("button") ?? [])].map((each) => each.getAttribute("aria-label"));
-    const words = button.querySelector("span.truncate");
-    return [activity, {
-      state: text(word), icon: button.querySelector("[data-icon]")?.getAttribute("data-icon") ?? null,
-      red: word?.classList.contains("text-destructive") ?? false, shimmer: word?.classList.contains("shimmer") ?? false,
-      muted: button.classList.contains("text-muted-foreground"), lastLine: text(button.querySelector("[data-last-line]")),
-      elapsed: text(button.querySelector("span.tabular-nums")), actions,
-      // A failed row's Restart and × show at rest, not only on hover, clear of its words.
-      actionsVisibleAtRest: place ? getComputedStyle(place).display !== "none" : null,
-      clear: place && words ? place.getBoundingClientRect().left >= words.getBoundingClientRect().right : null,
-      // The words don't fit as one line at the card's width (#511): they cut off, not run under the buttons.
-      cut: words ? words.scrollWidth > words.clientWidth : null,
-    }];
+  seen.rows = Object.fromEntries(ids().map((activity) => [activity, read(activity!)]));
+  seen.buttons = Object.fromEntries(ids().map((activity) => {
+    const place = row(activity!)?.nextElementSibling;
+    return [activity, place?.matches('[data-slot="summary-row-action"]') ? [...place.querySelectorAll("button")].map((button) => button.textContent) : []];
   }));
-  // Restart on the crashed page: its own command again, under its id; the row is the running one.
-  action("preview-11", "Restart")?.click();
-  // Restart on the failed tests asks the thread to run them again; × on the interrupted e2e.
-  action("run-13", "Restart")?.click();
-  action("run-15", "Dismiss")?.click();
-  for (const end = Date.now() + 3000; Date.now() < end && (calls.length < 3 || row("run-13") || row("run-15")); ) await frame();
+  seen.buttonsVisibleAtRest = actionsVisible("ci") || actionsVisible("merge");
+  // An event opens the Progress tab.
+  row("review-1")?.click();
   await frame();
+  const tabs = sessionTabs(id);
+  const front = tabs.tabs.find((candidate) => candidate.id === tabs.active);
+  seen.opened = front?.kind === "panel" ? `${front.id} ${front.title}` : front?.kind ?? null;
+  action("ci", "Open CI")?.click();
+  action("merge", "Cancel")?.click();
+  for (const end = Date.now() + 3000; Date.now() < end && calls.length < 2; ) await frame();
   seen.calls = calls.toSorted();
-  seen.restarted = text(row("preview-11")?.querySelector("[data-state]"));
-  seen.afterActions = ids();
-  // The thread starts the api server again: the new one is its row.
-  send({ type: "previewUpdated", preview: { ...api, id: "preview-15", command: "PORT=4100 node server.js", state: { type: "running" }, startedAtMs: Date.now(), endedAtMs: null } });
+  // The merge was cancelled, the checks passed, the review ended, CI gave its result: all gone.
+  setBoard({ integratedChecks: checks({ type: "passed", commands: ["a", "b", "c", "d", "e"] }), reviews: codex({ type: "clean" }),
+    orchestratorSteps: [...steps(now - 3 * MIN, ciWatch()), ...steps(now - 2 * MIN, held), ...steps(now - MIN, ciWatch("passed"), { type: "mergeCancelled", askedIn: "r1" })] });
   await frame();
-  seen.startedAgain = ids();
+  seen.ended = !section();
+  // The next checks are due, and the user's merge click is at work.
+  setBoard({ integratedChecks: { ...checks({ type: "due" }), "check-1": { ...checks({ type: "due" })["check-1"]!, dueAtMs: now } },
+    orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} }) });
+  await frame();
+  seen.next = Object.fromEntries(ids().map((activity) => [activity, read(activity!)?.state]));
+  // Merged: its row leaves.
+  setBoard({ orchestratorSteps: steps(now - MIN, { type: "mergeRequested", id: "m", branch: "session", base: "main", origin: {} },
+    { type: "merged", branch: "session", base: "main", commits: 3, askedIn: null, head: "abc", mergeCommit: "def" }) });
+  await frame();
+  seen.merged = ids();
+  seen.restartOrDismiss = restartOrDismiss();
   return seen;
 }
 
@@ -261,7 +292,8 @@ function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
-    else if (params.has("ended")) void driveEnded().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
+    else if (params.has("ended")) void driveEnded().then((seen) => setResult(JSON.stringify(seen)));
+    else if (params.has("events")) void driveEvents().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     // `shot=1` leaves the result off the page, for a screenshot.
     else if (params.has("states")) void readStates().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     else send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "previewUpdated", preview: app },

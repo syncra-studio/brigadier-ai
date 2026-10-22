@@ -101,8 +101,8 @@ test("a review is a row while it runs, and leaves when it ends", () => {
 });
 
 test("the CI watch is a row with Open CI while it watches, and leaves when its result comes", () => {
-  const rows = backgroundRows([], [], null, () => null, board({ orchestratorSteps: [ci(30, [ciRun("in_progress", "", 3, 5)])] }));
-  assert.deepEqual(rows.map((row) => row.type === "event" && [row.name, row.state, row.words, row.action]), [["CI", "checking", "3 of 5 jobs", { type: "openCi", url: "https://ci/test" }]]);
+  const watching = backgroundRows([], [], null, () => null, board({ orchestratorSteps: [ci(30, [ciRun("in_progress", "", 3, 5)])] }));
+  assert.deepEqual(watching.map((row) => row.type === "event" && [row.name, row.state, row.words, row.action]), [["CI", "checking", "3 of 5 jobs", { type: "openCi", url: "https://ci/test" }]]);
   assert.deepEqual(events({ orchestratorSteps: [ci(30, [])] }), [["CI", "checking", null, null]]);
   assert.deepEqual(events({ orchestratorSteps: [ci(30, [ciRun("in_progress", "", 3, 5)]), ci(40, [ciRun("completed", "failure", 5, 5)], "failed")] }), []);
   assert.deepEqual(events({ orchestratorSteps: [ci(30, [ciRun("completed", "success", 5, 5)], "passed")] }), []);
@@ -124,7 +124,7 @@ test("a merge held for workers is a row with Cancel, one at work a row of its ow
 });
 
 test("event rows sort newest first with the processes", () => {
-  const rows = backgroundRows([preview("preview-1", "Dev app", "pnpm dev", 25)], [], null, () => null,
+  const sorted = backgroundRows([preview("preview-1", "Dev app", "pnpm dev", 25)], [], null, () => null,
     board({ integratedChecks: { "check-1": check({ type: "due" }) }, reviews: { "review-1": review("review-1", 20, { type: "running" } as ReviewState) } }));
-  assert.deepEqual(rows.map((row) => row.id), ["check-1", "preview-1", "review-1"]);
+  assert.deepEqual(sorted.map((row) => row.id), ["check-1", "preview-1", "review-1"]);
 });
