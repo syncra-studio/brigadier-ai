@@ -5,17 +5,22 @@ import { Check, Copy } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 
 /**
- * Copies `text`, then shows a check and says "Copied" for `copiedDuration` ms. Any other button
+ * Copies `text`, then shows a check and says `copiedTooltip` ("Copied") for `copiedDuration` ms. Any other button
  * prop passes through; `onClick` runs before the copy (e.g. to stop the click reaching a card).
  */
 export const CopyButton: FC<
-  Omit<TooltipIconButtonProps, "tooltip" | "children"> & { text: string; tooltip?: string; copiedDuration?: number }
-> = ({ text, tooltip = "Copy", copiedDuration = 3000, onClick, ...props }) => {
+  Omit<TooltipIconButtonProps, "tooltip" | "children"> & {
+    text: string;
+    tooltip?: string;
+    copiedTooltip?: string;
+    copiedDuration?: number;
+  }
+> = ({ text, tooltip = "Copy", copiedTooltip = "Copied", copiedDuration = 3000, onClick, ...props }) => {
   const { isCopied, copyToClipboard } = useCopyToClipboard({ copiedDuration });
   return (
     <TooltipIconButton
       {...props}
-      tooltip={isCopied ? "Copied" : tooltip}
+      tooltip={isCopied ? copiedTooltip : tooltip}
       onClick={(event) => {
         onClick?.(event);
         copyToClipboard(text);

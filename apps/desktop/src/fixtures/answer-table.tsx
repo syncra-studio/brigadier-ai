@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 /** One of the answer's Markdown parts, as the element it renders. */
 const part = <K extends "table" | "tr" | "th" | "td" | "code" | "a">(name: K) =>
-  defaultComponents[name] as unknown as FC<ComponentProps<K>>;
+  (defaultComponents as Record<string, unknown>)[name] as FC<ComponentProps<K>>;
 const [Table, Tr, Th, Td, Code, A] = [part("table"), part("tr"), part("th"), part("td"), part("code"), part("a")];
 
 const narrow = new URLSearchParams(location.search).has("narrow");
