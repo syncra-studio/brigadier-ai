@@ -98,16 +98,20 @@ jobs:
     name: Clippy (${{ matrix.name }})
     # Each platform's clippy sees the code gated to it: dead code under another platform's cfg
     # shows up only here.
-    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Linux
             os: ubuntu-24.04
+            timeout-minutes: 15
           - name: Windows
             os: windows-latest
+            # Clippy itself finishes in ~15 min, but saving the Rust cache off the Dev Drive has
+            # twice taken the whole job past a 25-minute limit and been cancelled mid-save (#518).
+            timeout-minutes: 45
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout-minutes }}
     defaults:
       run:
         shell: bash
