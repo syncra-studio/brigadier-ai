@@ -818,7 +818,9 @@ export const SHOWN_TURNS = 30;
 export function foldTurns(tree: ThreadTree, keep: number): { tree: ThreadTree; hidden: number } {
   const byId = new Map(tree.nodes.map((node) => [node.id, node]));
   const path: ThreadNode[] = [];
-  for (let node = tree.headId ? byId.get(tree.headId) : undefined; node; node = node.parentId ? byId.get(node.parentId) : undefined) {
+  const seen = new Set<string>();
+  for (let node = tree.headId ? byId.get(tree.headId) : undefined; node && !seen.has(node.id); node = node.parentId ? byId.get(node.parentId) : undefined) {
+    seen.add(node.id);
     path.unshift(node);
   }
   const starts = path.flatMap((node, index) => (node.kind === "user" ? [index] : []));

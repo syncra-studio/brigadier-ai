@@ -383,7 +383,11 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       const requests = view.turns[blocks.length]?.requests ?? [];
       const atMs = entry.atMs ?? 0;
       block = emptyBlock(event.itemId, atMs, requests);
-      const message = userMessage(conversationId, entry, requests[0] ?? event.itemId, event.text, position + 1);
+      // A turn of a request an earlier turn carried (a background command's end, told after its
+      // turn) starts with the CLI's message, not the user's: it keeps its own id.
+      const first = requests[0];
+      const id = first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first) ? first : event.itemId;
+      const message = userMessage(conversationId, entry, id, event.text, position + 1);
       block.user = { kind: "message", message, text: event.text };
       blocks.push(block);
       times.push([[position, atMs]]);

@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import type { BoardDigest } from "@/app/conversation/blocks";
+import { type BoardDigest, foldTurns } from "@/app/conversation/blocks";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
@@ -231,6 +231,31 @@ test("a turn's user message and its steers take the Brigadier requests the turn 
   assert.deepEqual(block.requestIds, ["r1", "r2"]);
   assert.equal(block.user?.kind === "message" && block.user.message.id, "r1");
   assert.deepEqual(block.steers.map((steer) => steer.message.id), ["r2"]);
+});
+
+test("a turn that carries an earlier turn's request keeps its own message, so the tree has no loop", () => {
+  // A Codex background terminal that ends after its turn: the note of its end starts a turn of
+  // the same request.
+  const noted: ThreadView = {
+    entries: [
+      user("u1", "Start it in the background", 1000),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "started" }, 1100),
+      user("u2", "[your background command `sleep 60` finished after your turn · exit 0]", 61_000),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "It finished." }, 61_100),
+    ],
+    turns: [
+      { ...turn("u1", 1000, 1200, "done"), requests: ["r1"] },
+      { ...turn("u2", 61_000, 61_200, "done"), requests: ["r1"] },
+    ],
+  };
+  const tree = cliThreadTree(noted, "conv", [stored("r1", 900)], {}, [], NO_BOARD, { state: "idle", error: null });
+  assert.deepEqual(tree.nodes.map((node) => [node.id, node.parentId]), [
+    ["r1", null],
+    ["request:u1", "r1"],
+    ["u2", "request:u1"],
+    ["request:u2", "u2"],
+  ]);
+  assert.deepEqual(foldTurns(tree, 1).hidden, 1);
 });
 
 const decision = (requestId: string | null, atMs: number) =>
