@@ -320,13 +320,20 @@ class Smoke:
             return True
         key = (name, step["itemId"])
         if not self.inputs.get(key):
-            try:
-                item = self.ipc.call({"method": "getThreadItem", "conversationId": self.convs[name],
-                                      "itemId": step["itemId"]})["item"]
-            except RuntimeError:
-                return False
-            self.inputs[key] = item.get("input") or ""
+            self.inputs[key] = self.call_input(name, step["itemId"])
         return needle in self.inputs[key]
+
+    def call_input(self, name, item_id):
+        """A tool call's input as the thread has it from the CLI's session file and live stream."""
+        try:
+            view = self.ipc.call({"method": "threadView", "conversationId": self.convs[name]})["view"]
+        except RuntimeError:
+            return ""
+        for entry in view["entries"]:
+            event = entry["event"]
+            if event.get("itemId") == item_id:
+                return event.get("input") or event.get("command") or ""
+        return ""
 
     def running_command(self, name, needle):
         v = self.view(name)
@@ -399,11 +406,7 @@ class Smoke:
             self.expected[self.convs["C1"]].setdefault(follow_id, []).append(follow_code)
         routes = []
         for step in tool_steps(v, "route_follow_up"):
-            try:
-                routes.append(self.ipc.call({"method": "getThreadItem", "conversationId": self.convs["C1"],
-                                             "itemId": step["itemId"]})["item"].get("input") or "")
-            except RuntimeError:
-                pass
+            routes.append(self.call_input("C1", step["itemId"]))
 
         def joined(rid):
             # A thread inside a long command can't judge it, so after 20 s it joins the working
@@ -596,9 +599,13 @@ class Smoke:
 
     # -- cleanup --
 
-    def claude_dirs(self):
+    def claude_files(self):
+        """The Claude sessions' own files (`<id>.jsonl` and its `<id>/` folder), wherever they ran."""
         base = os.path.expanduser("~/.claude/projects")
-        return [os.path.join(base, re.sub(r"[^A-Za-z0-9]", "-", f"{self.data}/orch/{conv}")) for conv in self.convs.values()]
+        ids = [native for provider, native in self.native.values() if provider == "claude" and native]
+        return [os.path.join(base, d, f) for d in (os.listdir(base) if os.path.isdir(base) else [])
+                for f in (os.listdir(os.path.join(base, d)) if os.path.isdir(os.path.join(base, d)) else [])
+                if any(f in (native, native + ".jsonl") for native in ids)]
 
     def codex_files(self, thread):
         found = []
@@ -674,10 +681,12 @@ class Smoke:
                 os.killpg(self.proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
-        for d in self.claude_dirs():
-            if os.path.exists(d):
-                left.append(f"Claude's session dir was left by the delete (removed now): {d}")
-                shutil.rmtree(d, ignore_errors=True)
+        for f in self.claude_files():
+            left.append(f"Claude's session file was left by the delete (removed now): {f}")
+            if os.path.isdir(f):
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                os.remove(f)
         for name, (provider, thread) in self.native.items():
             if provider == "codex" and thread and self.codex_files(thread):
                 self.codex_delete(thread)
