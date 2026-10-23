@@ -21,6 +21,7 @@
 //! context grows only by messages and reports.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2849,7 +2850,10 @@ impl SessionManager {
                 if let Some(n) = inline_paste(attachment)
                     && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
                 {
-                    pastes.push((n, pasted_inline(&pasted, attachment, conv.kind)));
+                    let whole = self
+                        .whole_paste(conv, attachment, &pasted, &mut copied)
+                        .await;
+                    pastes.push((n, pasted_inline(&pasted, whole.as_deref())));
                 }
             }
             let mut inline = vec![InputPart::Text(place_inline_pastes(&text, &pastes))];
@@ -2857,7 +2861,10 @@ impl SessionManager {
                 if attachment.pasted
                     && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
                 {
-                    push_input_block(&mut inline, &pasted_inline(&pasted, attachment, conv.kind));
+                    let whole = self
+                        .whole_paste(conv, attachment, &pasted, &mut copied)
+                        .await;
+                    push_input_block(&mut inline, &pasted_inline(&pasted, whole.as_deref()));
                     continue;
                 }
                 if conv.kind == ConversationKind::Chat && !is_image(&attachment.mime) {
@@ -2865,10 +2872,18 @@ impl SessionManager {
                     continue;
                 }
                 if conv.kind == ConversationKind::Session {
+                    // A file other than an image is read from its copy in the session's folder.
+                    let copy = match is_image(&attachment.mime) {
+                        true => None,
+                        false => self.copied_file(conv, attachment, &mut copied).await,
+                    };
+                    let place = copy
+                        .map(|path| format!(", saved as {}", path.display()))
+                        .unwrap_or_default();
                     append_input_text(
                         &mut inline,
                         &format!(
-                            "\n[attachment {} \"{}\" ({}, {} bytes)]",
+                            "\n[attachment {} \"{}\" ({}, {} bytes){place}]",
                             attachment.id, attachment.name, attachment.mime, attachment.bytes,
                         ),
                     );
@@ -3112,6 +3127,38 @@ impl SessionManager {
     }
 
     /// Writes an attachment into the conversation's own folder so the CLI can read it.
+    /// Where `attachment` is copied for the session to read, copied once per turn (`copied`).
+    async fn copied_file(
+        &self,
+        conv: &Arc<ConvLive>,
+        attachment: &AttachmentRef,
+        copied: &mut HashMap<String, Option<InputFile>>,
+    ) -> Option<PathBuf> {
+        if !copied.contains_key(&attachment.id) {
+            let file = self.attachment_file(conv, attachment).await;
+            copied.insert(attachment.id.clone(), file);
+        }
+        copied
+            .get(&attachment.id)?
+            .as_ref()
+            .map(|file| file.path.clone())
+    }
+
+    /// The copy a session reads a paste too long to send whole from; none for a Chat or a
+    /// paste sent whole.
+    async fn whole_paste(
+        &self,
+        conv: &Arc<ConvLive>,
+        attachment: &AttachmentRef,
+        pasted: &str,
+        copied: &mut HashMap<String, Option<InputFile>>,
+    ) -> Option<PathBuf> {
+        if conv.kind != ConversationKind::Session || pasted.len() <= INLINE_TEXT_MAX_BYTES {
+            return None;
+        }
+        self.copied_file(conv, attachment, copied).await
+    }
+
     async fn attachment_file(
         &self,
         conv: &Arc<ConvLive>,
@@ -5428,19 +5475,16 @@ fn inline_document(attachment: &AttachmentRef, kind: &str, text: &str) -> String
     )
 }
 
-fn pasted_inline(text: &str, attachment: &AttachmentRef, kind: ConversationKind) -> String {
-    let session = kind == ConversationKind::Session;
+fn pasted_inline(text: &str, whole: Option<&Path>) -> String {
     if text.len() <= INLINE_TEXT_MAX_BYTES {
         return text.to_owned();
     }
     let head = &text[..text.floor_char_boundary(PASTE_HEAD_BYTES)];
     let tail = &text[text.ceil_char_boundary(text.len() - PASTE_TAIL_BYTES)..];
     let left_out = text.len() - head.len() - tail.len();
-    let whole = if session {
-        format!("; all of it is attachment {}", attachment.id)
-    } else {
-        String::new()
-    };
+    let whole = whole
+        .map(|path| format!("; all of it is saved as {}", path.display()))
+        .unwrap_or_default();
     format!(
         "{head}\n[… {left_out} bytes of the pasted text are left out here, since it is longer \
          than {} kB{whole}]\n{tail}",
@@ -5850,13 +5894,9 @@ mod tests {
 
     #[test]
     fn whitespace_only_text_with_a_pasted_attachment_preserves_the_whole_paste() {
-        let attachment = image_ref("text", false, "text/plain");
         for text in [" \n", "                    ", "\u{2003}"] {
             let mut parts = vec![InputPart::Text(text.into())];
-            push_input_block(
-                &mut parts,
-                &pasted_inline("é", &attachment, ConversationKind::Chat),
-            );
+            push_input_block(&mut parts, &pasted_inline("é", None));
             assert_eq!(parts, vec![InputPart::Text("é".into())]);
         }
     }

@@ -1,5 +1,6 @@
 //! What a Chat's agent gets of a message's attachments (#428, #430): text pasted as a chip, rich
-//! text as Markdown, where it was pasted; a Word file or a PDF as its text.
+//! text as Markdown, where it was pasted; a Word file or a PDF as its text. A session reads a
+//! file, or a paste too long to send whole, from its copy in the session's folder.
 
 use std::sync::{Arc, Mutex};
 
@@ -152,4 +153,74 @@ async fn a_chat_gets_a_pdfs_text() {
         "{input}"
     );
     flow.stop().await;
+}
+
+/// A session's thread is told where the copies are: an attached file (it has no tool to read
+/// one by id), and the whole of a paste too long to send.
+#[tokio::test]
+async fn a_session_reads_an_attached_file_and_a_long_paste_from_their_copies() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = inputs.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            seen.lock().unwrap().push(turn.input.clone());
+            Reply::text("Read them.")
+        })
+    });
+    let flow = Flow::start("session-attachments", Options::default(), script).await;
+    let notes = flow
+        .core
+        .add_attachment(
+            "notes.csv".into(),
+            "text/csv".into(),
+            b"name,size\nalpha,3\n".to_vec(),
+            false,
+        )
+        .await
+        .unwrap();
+    let long = format!("start {} end", "x".repeat(300_000));
+    let mut pasted = flow
+        .core
+        .add_attachment(
+            "Pasted text.txt".into(),
+            "text/plain".into(),
+            long.clone().into_bytes(),
+            true,
+        )
+        .await
+        .unwrap();
+    pasted.inline = Some(1);
+    flow.manager
+        .send_message(
+            flow.conversation.clone(),
+            "Sum the sizes: [Pasted text #1]".into(),
+            vec![notes, pasted],
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled_in(&flow.conversation).await;
+    let input = inputs.lock().unwrap().join("\n");
+    let saved_as = |after: &str| -> String {
+        let at = input
+            .find(after)
+            .unwrap_or_else(|| panic!("{after:?} in {input}"))
+            + after.len();
+        input[at..]
+            .split(['\n', ']'])
+            .next()
+            .unwrap()
+            .trim_end_matches(';')
+            .to_owned()
+    };
+    let file = saved_as("\"notes.csv\" (text/csv, 18 bytes), saved as ");
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "name,size\nalpha,3\n"
+    );
+    let whole = saved_as("; all of it is saved as ");
+    assert_eq!(std::fs::read_to_string(&whole).unwrap(), long);
 }
