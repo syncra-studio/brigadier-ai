@@ -1,0 +1,70 @@
+{
+  "source": "8b033ebb27620158ca7e8cda68aa263cb03c7247",
+  "started_at": "2026-10-24T00:04:17+0300",
+  "provider": "claude",
+  "model": "opus",
+  "arm": "zed",
+  "threshold": 43750,
+  "roles": {
+    "parent": {
+      "usage": {
+        "input": 24,
+        "cache_write": 64984,
+        "cache_read": 316463,
+        "output": 3259
+      },
+      "usage_available": true,
+      "uncached_input": 65008,
+      "cache_read": 316463,
+      "cache_hit_ratio": 0.8295859973628401,
+      "output": 3259,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "list_price_usd": 0.6484406,
+      "price_status": "priced",
+      "notes": []
+    },
+    "successor": {
+      "usage": {
+        "input": 74,
+        "cache_write": 1833152,
+        "cache_read": 1043713,
+        "output": 21808
+      },
+      "usage_available": true,
+      "uncached_input": 1833226,
+      "cache_read": 1043713,
+      "cache_hit_ratio": 0.3627859332436315,
+      "output": 21808,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "list_price_usd": 15.310414600000001,
+      "price_status": "priced",
+      "notes": []
+    }
+  },
+  "economics": {
+    "usage": {
+      "input": 98,
+      "cache_write": 1898136,
+      "cache_read": 1360176,
+      "output": 25067
+    },
+    "usage_available": true,
+    "uncached_input": 1898234,
+    "cache_read": 1360176,
+    "cache_hit_ratio": 0.4174354976813845,
+    "output": 25067,
+    "models": [
+      "claude-opus-5-5"
+    ],
+    "list_price_usd": 15.958855200000002,
+    "price_status": "priced",
+    "notes": []
+  },
+  "list_price_usd": 15.958855200000002,
+  "zed_compactions": 14,
+  "zed_commit": "9f305aaf88370e8ca39c702242186e3d8f97ecca"
+}

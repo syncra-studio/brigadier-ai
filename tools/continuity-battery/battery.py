@@ -420,7 +420,7 @@ class Battery:
                 sidecar = file.with_suffix("")
                 if sidecar.is_dir():
                     shutil.rmtree(sidecar)
-                self.cleanup_notes.append("IPC Delete left a native session file; removed " + filename)
+                self.cleanup_notes.append("Removed native session file owned by this run: " + filename)
         if trusted:
             self.cleanup_notes.append("Kept scratch records to undo remaining folder trust: " + str(self.root))
         self.result["cleanup"] = self.cleanup_notes
@@ -541,7 +541,10 @@ def native_calls(entries):
 def seam_observations(result):
     out = []
     for i, seam in enumerate(result["seams"]):
-        end = result["seams"][i + 1]["at_ms"] if i + 1 < len(result["seams"]) else float("inf")
+        if seam.get("skipped"):
+            out.append({"kind": seam["kind"], "skipped": seam["skipped"]})
+            continue
+        end = next((s["at_ms"] for s in result["seams"][i + 1:] if "at_ms" in s), float("inf"))
         events = [(e["atMs"], e["entry"].get("event") or {}) for e in result.get("provider_events", [])
                   if seam["at_ms"] <= e["atMs"] < end]
         errors = [event["error"]["kind"] for _, event in events if event.get("type") == "error"]
@@ -595,11 +598,12 @@ def report(result):
     if not models:
         models = sorted({(result.get("provider", "unknown"), model)
                          for role in result.get("roles", {}).values() for model in role.get("models", [])})
-    lines += ["", "Observed session providers/models: " + ", ".join(f"`{p}/{m}`" for p, m in models) + ".",
-              "The usage-limit injection may use today's stand-in path; the requested Claude model returns after its window resets."]
+    lines += ["", "Observed session providers/models: " + ", ".join(f"`{p}/{m}`" for p, m in models) + "."]
+    if result.get("arm", "seam") == "seam":
+        lines += ["The usage-limit injection may use today's stand-in path; the requested Claude model returns after its window resets."]
     lines += ["", "| Forced seam | Observed |", "|---|---|",
-              f"| Size ×2 | {result.get('size_seams_before_faults', 0)} "
-              "closed seams before fault injections |"]
+              f"| Size transitions | {result.get('size_seams_before_faults', 0)} "
+              "transitions before fault prompts |"]
     observations = seam_observations(result)
     for seam, observed in zip(result["seams"], observations):
         lines.append("| " + seam["kind"] + " | `" + json.dumps({**seam, **observed}, sort_keys=True) + "` |")
@@ -620,6 +624,11 @@ def report(result):
     prior_probe = [e["entry"] for e in events if probe and e["atMs"] < probe["sent_ms"] and
                    (e["entry"].get("event") or {}).get("type") == "sessionStarted"]
     probe_start = (during_probe[:1] or prior_probe[-1:] or [{}])[0]
+    if not probe_start:
+        native_model = next((e["message"]["model"] for e in reversed(result.get("plain_events", []))
+                             if e.get("type") == "assistant" and e.get("message", {}).get("model")), None)
+        if native_model:
+            probe_start = {"provider": result.get("provider"), "event": {"model": native_model}}
     lines += ["", f"Final probe provider/model: `{probe_start.get('provider', 'unavailable')}/{(probe_start.get('event') or {}).get('model', 'unavailable')}`."]
     lines += ["", f"Probe lookup calls observed: {len(lookup)}. Item search evidence means its marker appeared in a lookup result, or an explicit query attempted it; one result can serve several items.",
                             "Seam cost below includes all metered handoff calls; ordinary thread calls are separate (successor bootstrap is included in thread use)."]
@@ -632,7 +641,7 @@ def report(result):
     lines += ["", "Limits: a short debug-threshold baseline, not the ≥400k token A/B or a nightly result. "
               "Nightly A/B, observed cold-return costs, and opted-in real-lineage samples are summarized by nightly.py (S25/L4). "
               "No fewer-tokens claim is established. Later seams share this session, so recall cannot be attributed to one seam alone."]
-    if rows.get("large_failure", {}).get("verdict") == "unknown":
+    if result.get("arm", "seam") == "seam" and rows.get("large_failure", {}).get("verdict") == "unknown":
         lines += ["The middle marker of the >250 KB failing command was not recovered. The retained command output "
                   "was already excerpted; lookup attempts returned that excerpt. This measures the existing output path's limit."]
     lines += ["", "Run problems: " + ("; ".join(result["errors"]) or "none"),

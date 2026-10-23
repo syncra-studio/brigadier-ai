@@ -201,6 +201,17 @@ class ZedTests(unittest.TestCase):
             self.assertEqual([row["status"] for row in report["arms"]], ["skipped"] * 3)
             self.assertTrue(all("could not fetch" in row["reason"] for row in report["arms"]))
 
+    def test_skipped_native_faults_need_no_daemon_timestamps_to_report(self):
+        result = {"started_at": "2026-10-24", "source": "fixture", "daemon_sha256": "unused",
+                  "model": "fixture", "arm": "zed", "provider": "claude", "threshold": 50,
+                  "errors": [], "steps": [], "seams": [
+                      {"kind": kind, "skipped": "native transport"}
+                      for kind in ("context", "crash", "restart", "limit")]}
+        self.assertEqual(battery.seam_observations(result), result["seams"])
+        text = battery.report(result)
+        self.assertIn("native transport", text)
+        self.assertIn("Zed text compactions", text)
+
     def test_zed_decisions_share_scenarios_and_plain_own_decision_scoring(self):
         class ZedDecisions(decisions.Decisions, zed.ZedBattery):
             pass
