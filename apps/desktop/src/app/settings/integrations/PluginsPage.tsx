@@ -8,7 +8,7 @@ import { BookOpen, Folder, Globe, MinusCircle, Plugin, SettingsSlider, ShieldChe
 import { SettingsCard, SettingsSearch, StateDot } from "@/components/shared";
 import { cn } from "@/lib/utils";
 import { scopeOf, useIntegrations, usedIn, type IntegrationAdapter, type IntegrationSnapshot, type Scope } from "./adapter";
-import { AgentMarks, ClaudeAlways, IntegrationNote, ownFiles, ScopeChips, SkillMark } from "./parts";
+import { AgentMarks, ClaudeAlways, IntegrationNote, ownFiles, ScopeChips, SkillMark, SOURCE_NAMES, sourcePath } from "./parts";
 import { ServerMark, ServerPage, serverCommand } from "./ServerPage";
 import { needsSignIn } from "./SignInSection";
 import { SkillPage } from "./SkillPage";
@@ -157,6 +157,14 @@ export function PluginsView({ snapshot, adapter, error, initialTab = "servers", 
       }
       for (const group of groups.slice(1)) group.aside = counted(group.rows.length, tab);
     }
+    // Servers of one name set up apart (pencil in Claude Code, Codex and Claude Desktop, each
+    // with its own arguments): each row says where it comes from instead of its command.
+    for (const group of groups) {
+      const named = (name: string) => group.rows.filter((row) => !("description" in row.item) && row.item.name === name).length;
+      for (const row of group.rows) {
+        if (!("description" in row.item) && !row.line && !row.item.error && named(row.item.name) > 1) row.line = foundIn(row.item);
+      }
+    }
     const shown = groups.filter((group) => group.key === "yours" || group.rows.length);
     const toggle = ({ item, scope }: Row, value: boolean) => {
       if (view && !(scope.stays && scope.origin?.id === view.id)) {
@@ -202,6 +210,14 @@ export function PluginsView({ snapshot, adapter, error, initialTab = "servers", 
     </SettingsPage>;
   }
   return <div className="@container relative h-full min-w-0 [&_[data-tauri-drag-region]]:h-11">{page}{(action.error || error) && <p role="alert" className="text-destructive bg-background absolute right-5 bottom-4 left-5 text-xs">{action.error ?? error}</p>}</div>;
+}
+
+/** Where a server is set up, in a few words: "Codex · ~/.codex/config.toml". */
+function foundIn(server: IntegrationServer): string {
+  const files = server.sourceFiles?.length
+    ? server.sourceFiles.map((file) => `${SOURCE_NAMES[file.source]} · ${file.path}`)
+    : server.sources.map((source) => `${SOURCE_NAMES[source]} · ${sourcePath(source, server.projectPath)}`);
+  return [...new Set(files)].join(", ");
 }
 
 function IntegrationTile({ row, project, busy, highlighted, onOpen, onToggle }: {

@@ -31,6 +31,12 @@ test("plugins: drawn server states, switch, details, search and config refresh",
   assert.ok(!seen.linear!.text.includes("mcp login"));
   assert.match(seen.pencil!.text, /Claude Code, Codex and Claude Desktop/);
   assert.match(seen.pencil!.text, /pencil mcp --stdio/);
+  // Three servers named pencil, set up apart: each says where it comes from (#566).
+  assert.match(seen.copies!.text, /pencilClaude Code · ~\/\.claude\.json/);
+  assert.match(seen.copies!.text, /pencilCodex · ~\/\.codex\/config\.toml/);
+  assert.match(seen.copies!.text, /pencilClaude Desktop · ~\/Library\/Application Support\/Claude\/claude_desktop_config\.json/);
+  // A server of a name of its own keeps its command.
+  assert.match(seen.copies!.text, /playwrightnpx @playwright\/mcp@latest/);
   assert.deepEqual(seen.unreadable!.sections, ["Couldn't read it", "What it read", "Found in", "Workers"]);
   assert.equal(seen.unreadable!.switches.length, 0);
   assert.match(seen.unreadable!.text, /~\/.cursor\/mcp.json · line 22/);
@@ -38,7 +44,7 @@ test("plugins: drawn server states, switch, details, search and config refresh",
   assert.match(seen["empty-servers"]!.text, /3 trusted projects/);
   assert.equal(seen["empty-servers"]!.tiles.length, 0);
   assert.match(seen["long-servers"]!.text, /northwind-traders-mobile-monorepo-2026-q4-migration/);
-  for (const state of ["servers", "search", "linear", "pencil", "unreadable", "empty-servers", "long-servers", "narrow-servers"]) {
+  for (const state of ["servers", "search", "linear", "pencil", "copies", "unreadable", "empty-servers", "long-servers", "narrow-servers"]) {
     assert.equal(seen[state]!.overflow, false, state);
   }
   assert.equal(seen.switchedOff, true);

@@ -463,7 +463,7 @@ const notion: IntegrationServer = {
 };
 const SIGNED_ON = Date.UTC(2026, 9, 21, 12);
 const native: IntegrationSignIn = { kind: "native" };
-const SERVER_STATES = ["servers", "search", "linear", "pencil", "unreadable", "empty-servers", "long-servers", "narrow-servers"];
+const SERVER_STATES = ["servers", "search", "linear", "pencil", "copies", "unreadable", "empty-servers", "long-servers", "narrow-servers"];
 /** Each sign-in state: linear's or notion's agent states (the board's, then the ones it doesn't draw). */
 const SIGN_IN_STATES: Record<string, Partial<IntegrationServer>> = {
   "sign-in-list": {},
@@ -586,6 +586,18 @@ function snapshotFor(state: string): IntegrationSnapshot {
     // This frame keeps grilling switchable while the other Claude skills are locked on.
     snapshot.catalog.skills[4]!.canSwitchOff = true;
     snapshot.switches.skillsOff.push(skills[9]!.id);
+  }
+  // pencil set up apart in three agents, each with its own arguments: three servers of one name.
+  if (state === "copies") {
+    const pencil = snapshot.catalog.servers[3]!;
+    const copy = (source: "ClaudeUser" | "CodexUser" | "Desktop", path: string, agent: string): IntegrationServer => ({
+      ...structuredClone(pencil), id: `${source}:pencil`, sources: [source], sourceFiles: [{ source, path }],
+      transport: { kind: "stdio", command: "/Applications/Pencil.app/Contents/MacOS/pencil", args: ["mcp", "--agent", agent] },
+    });
+    snapshot.catalog.servers.splice(3, 1,
+      copy("ClaudeUser", "~/.claude.json", "claudeCode"),
+      copy("CodexUser", "~/.codex/config.toml", "codexCLI"),
+      copy("Desktop", "~/Library/Application Support/Claude/claude_desktop_config.json", "desktop"));
   }
   if (state === "pencil") snapshot.catalog.servers[3]!.transport = { kind: "stdio", command: "/Applications/Pencil.app/Contents/MacOS/pencil", args: ["mcp", "--stdio"] };
   if (state === "grill-me") snapshot.catalog.skills[3]!.description = "Interview you about a plan until every decision in it is pinned down, one question at a time.";
