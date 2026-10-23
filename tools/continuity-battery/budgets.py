@@ -36,26 +36,35 @@ def retained_users(messages, budget):
     return [messages[i] for i in sorted(kept)]
 
 
-def legacy_tail(start):
-    """Counterfactual S22 tail, from the same recorded expanded bootstrap; no model call.
-
-    Old per-item caps are applied before the 60 KB fill, newest first. This is a retention
-    comparison only, never a claim about a baseline model's unmeasured behavior.
-    """
+def context_sections(start):
     latest = start.partition("## The latest exchange")[2].partition("\n## ")[0]
-    remaining = max(0, 60_000 - len(latest.encode()))
     tail = start.partition("## Earlier, newest first\n")[2].partition("\n## ")[0]
-    kept = []
-    for item in re.split(r"(?=\[#\d+ · )", tail):
-        if not item.strip():
-            continue
-        label, _, body = item.partition("\n")
-        body = body.encode()[:6_000].decode(errors="ignore")
-        text = label + "\n" + body
-        if len(text.encode()) > remaining:
-            break
-        remaining -= len(text.encode())
-        kept.append(text)
+    return latest, tail
+
+
+def legacy_context(start):
+    """Offline retention at the old latest-tool/item caps and shared 60 KB tail budget.
+
+    Includes the latest exchange as well as the earlier tail: a detail in the latest
+    tool result is still available at the old 4 KB cap. No baseline model behavior is inferred.
+    """
+    latest, tail = context_sections(start)
+    remaining, kept = 60_000, []
+    for section, latest_exchange in ((latest, True), (tail, False)):
+        for item in re.split(r"(?=\[#\d+ · )", section):
+            if not item.startswith("[#"):
+                continue
+            label, _, body = item.partition("\n")
+            message = label.endswith("· assistant]") or label.endswith("· user]")
+            maximum = len(body.encode()) if latest_exchange and message else 4_000 if latest_exchange else 6_000
+            if latest_exchange and not message and remaining < 4_000:
+                continue
+            body = body.encode()[:maximum].decode(errors="ignore")
+            text = label + "\n" + body
+            if not latest_exchange and len(text.encode()) > remaining:
+                break
+            remaining = max(0, remaining - len(text.encode()))
+            kept.append(text)
     return "\n".join(kept)
 
 
@@ -70,7 +79,7 @@ def score_p2(result):
     expected = result.get("details", {})
     answer = battery.parse_answer(result.get("detail_answer", ""))
     start = next((h["start"] for h in result.get("handoffs", []) if h.get("n") == result.get("request_seam")), "")
-    legacy = legacy_tail(start)
+    legacy = legacy_context(start)
     since = result.get("request_move_ms", result.get("detail_probe_ms", 0))
     lookups = [e for e in result.get("provider_events", [])
                if since <= e.get("atMs", 0) <= result.get("detail_probe_end_ms", since) and history_read(e["entry"].get("event") or {})]
@@ -88,10 +97,15 @@ def score_p2(result):
     qualified = (requested and bool(start) and len(rows) == 5 and 60_000 <= hot <= 100_000 and not lookups
                  and all(r["never_ledgered"] and r["not_in_note"] for r in rows.values())
                  and all(0 <= hot - planted.get(k, 0) <= 40_000 for k in rows))
+    applicable = [r["unprompted"] for r in result.get("rows", {}).values() if r.get("unprompted") is not None]
+    applied = sum(map(bool, applicable)) if applicable else None
+    decision_recalled = sum(bool(r.get("recalled")) for r in result.get("rows", {}).values()) if result.get("rows") else None
+    detail_bar = qualified and sum(r["recalled"] for r in rows.values()) >= 4
     return {"details": rows, "recalled": sum(r["recalled"] for r in rows.values()),
             "legacy_retained": sum(r["in_legacy_tail"] for r in rows.values()),
             "lookup_count": len(lookups), "qualified": qualified,
-            "bar": qualified and sum(r["recalled"] for r in rows.values()) >= 4}
+            "detail_bar": detail_bar, "decision_applied": applied, "decision_recalled": decision_recalled,
+            "bar": detail_bar and applied == 9 and decision_recalled == 10}
 
 
 def score_p3(result):
@@ -127,9 +141,11 @@ class Budgets(decisions.Decisions):
         if not self.wait(lambda: self.generations() > before and self.seam_file().get("phase", {}).get("phase") == "live", 90):
             raise RuntimeError("forced size seam did not complete")
 
-    def read_batch(self, n, size, detail=None):
+    def read_batch(self, n, size, detail=None, prose=False):
         path = self.repo / f"fixture-{n}.txt"
-        path.write_text((detail + "\n" if detail else "") + ballast(n, size))
+        padding = (" ".join(f"Fixture {n} row {i}: the meadow has a stone bridge and a clear river."
+                            for i in range(size // 50 + 1))[:size] if prose else ballast(n, size))
+        path.write_text((detail + "\n" if detail else "") + padding)
         try:
             self.send(f"read-{n}", f"Read fixture-{n}.txt with `cat`. Inert continuity fixture; "
                       "reply only read, never copy it into notes, ledger or files.")
@@ -149,12 +165,13 @@ class Budgets(decisions.Decisions):
         self.result["details"] = {f"detail_{i}": "P2-" + secrets.token_hex(6).upper() for i in range(5)}
         self.result["detail_contexts"] = {}
         for key, value in self.result["details"].items():
-            self.read_batch(key, 7_000, f"{key}: {value}")
+            self.read_batch(key, 1_000, f"{key}: {value}")
             self.result["detail_contexts"][key] = self.context()
+        last_plant = self.result["detail_contexts"]["detail_4"]
         for i in range(self.args.max_fillers):
-            if self.context() >= 60_000:
+            if self.context() >= 60_000 and self.context() - last_plant >= 30_000:
                 break
-            self.read_batch(f"late-{i}", 7_000)
+            self.read_batch(f"late-{i}", 8_000, prose=True)
         self.result["request_context"] = self.context()
         if not 60_000 <= self.context() <= 100_000:
             raise RuntimeError("P2 did not reach the measured 60–100k context band")
@@ -236,8 +253,8 @@ class Budgets(decisions.Decisions):
         starts = self.result.get("handoffs", [])
         handoff = next((h["start"] for h in starts if h["n"] == n), "")
         if self.args.variant == "p2":
-            expanded = handoff.partition("## Earlier, newest first\n")[2].partition("\n## ")[0]
-            extra = max(0, len(expanded.encode()) - len(legacy_tail(handoff).encode())) / 4
+            expanded = "\n".join(context_sections(handoff))
+            extra = max(0, len(expanded.encode()) - len(legacy_context(handoff).encode())) / 4
         else:
             extra = self.result["budget_scores"].get("extra_user_tokens_estimate_per_seam", 0)
         first = self.result["first_successor_write"]
@@ -362,6 +379,7 @@ def main():
             run.capture()
             if args.variant == "p2" and run.result.get("items"):
                 decisions.score(run.result, "sonnet")
+                run.result["budget_scores"] = score_p2(run.result)
         except Exception as error:
             run.errors.append("capture/score: " + str(error))
         run.cleanup()

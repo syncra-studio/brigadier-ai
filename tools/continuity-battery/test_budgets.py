@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import budgets
+import decisions
 import nightly
 
 PREFIX = "20261022-0805-take-over-5-sessions-w167-test-"
@@ -31,7 +32,8 @@ class BudgetTests(unittest.TestCase):
                 "detail_contexts": {k: 45_000 for k in details},
                 "detail_answer": json.dumps(details), "detail_probe_ms": 100, "detail_probe_end_ms": 200,
                 "handoffs": [{"n": 1, "start": "## Earlier, newest first\n" + tail}], "provider_events": [],
-                "seam_file": {"seams": [{"n": 1, "provider": "codex", "movedTo": "codex"}]}}
+                "seam_file": {"seams": [{"n": 1, "provider": "codex", "movedTo": "codex"}]},
+                "rows": {str(i): {"recalled": True, "unprompted": True if i < 9 else None} for i in range(10)}}
 
     def test_p2_qualifies_five_details_beyond_old_tail_and_requires_no_lookups(self):
         result = self.p2_result()
@@ -49,6 +51,30 @@ class BudgetTests(unittest.TestCase):
             self.assertFalse(budgets.score_p2(bad)["qualified"])
         result["detail_contexts"]["detail_0"] = 39_999
         self.assertFalse(budgets.score_p2(result)["qualified"])
+
+    def test_legacy_comparison_includes_latest_tools_with_the_old_4kb_cap(self):
+        start = "## The latest exchange, after #1\n[#2 · command]\nLATEST-DETAIL\n" + "x" * 5000 + "TOO-LATE" + "\n## Earlier, newest first\n[#0 · assistant]\nOLDER"
+        old = budgets.legacy_context(start)
+        self.assertIn("LATEST-DETAIL", old)
+        self.assertIn("OLDER", old)
+        self.assertNotIn("TOO-LATE", old)
+        result = self.p2_result()
+        result["rows"]["0"]["unprompted"] = False
+        self.assertTrue(budgets.score_p2(result)["detail_bar"])
+        self.assertFalse(budgets.score_p2(result)["bar"])
+
+    def test_inline_jsdocs_do_not_consume_the_next_functions_comment(self):
+        text = """/** Since 0.6: First. */
+export function one() {}
+/** Since 0.6: Second. */
+export function two() {}
+/**
+ * Since 0.6: Third.
+ * More words.
+ */
+export function three() {}
+"""
+        self.assertEqual(decisions.jsdoc_first_lines(text), ["Since 0.6: First.", "Since 0.6: Second.", "Since 0.6: Third."])
 
     def test_p2_missing_start_or_answer_never_passes(self):
         result = self.p2_result()
@@ -101,7 +127,7 @@ class BudgetTests(unittest.TestCase):
         run.ipc = Ipc()
         run.generations = lambda: 0
         run.context = lambda: 60_000
-        run.read_batch = lambda *args: None
+        run.read_batch = lambda *args, **kwargs: None
         run.send = lambda *args: {"answer": "noted", "ended_ms": 200}
         run.wait = lambda *args: True
         checks = []

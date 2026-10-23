@@ -167,7 +167,7 @@ class Decisions(battery.Battery):
         lines = [line for line in text.splitlines() if line.strip()]
         out["spdx"] = bool(lines) and lines[0].strip() == "// SPDX-License-Identifier: MIT"
         out["named"] = bool(text) and "export default" not in text
-        docs = re.findall(r"/\*\*\s*\n?\s*\*?\s*([^\n]*)[^*]*(?:\*(?!/)[^*]*)*\*/\s*export\s+(?:async\s+)?function\b", text)
+        docs = jsdoc_first_lines(text)
         exported = len(re.findall(r"\bexport\s+(?:async\s+)?function\b", text))
         out["jsdoc_lines"] = docs
         out["jsdoc"] = exported == 3 and len(docs) == 3 and all(d.strip().startswith("Since 0.6:") for d in docs) \
@@ -194,6 +194,13 @@ class Decisions(battery.Battery):
         self.result["ledger_archive"] = battery.read_text(self.record() / "ledger-archive.md")
         commands = [(e["entry"].get("event") or {}).get("command") or "" for e in self.result.get("provider_events", [])]
         self.result["ledger_commands"] = sorted({c for c in commands if "brigadier ledger" in c})
+
+
+def jsdoc_first_lines(text):
+    """The first nonempty documentation line before each exported function, inline or multiline."""
+    blocks = re.findall(r"/\*\*(.*?)\*/\s*export\s+(?:async\s+)?function\b", text, re.S)
+    return [next((line.strip().removeprefix("*").strip() for line in block.splitlines()
+                  if line.strip().removeprefix("*").strip()), "") for block in blocks]
 
 
 def separator(text):
