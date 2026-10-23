@@ -306,3 +306,66 @@ async fn a_chats_cli_runs_as_a_sessions_at_its_level() {
         }
     }
 }
+
+/// #573: deleting a Chat removes its `--repo` workers' CLI session files, as deleting a
+/// session removes its workers' (G15).
+#[tokio::test]
+async fn deleting_a_chat_removes_its_repo_workers_session_files() {
+    let answers = Answers::default();
+    let script: Script = {
+        let answers = answers.clone();
+        Arc::new(move |turn| {
+            let answers = answers.clone();
+            Box::pin(async move {
+                let worker = turn
+                    .env(GRANT_ENV)
+                    .and_then(|grant| turn.host.grants().resolve(grant));
+                if matches!(worker, Some(Role::Worker { .. })) {
+                    return Reply::text("Seven.");
+                }
+                let Some(repo) = turn.input.split_once("Count in ").map(|(_, r)| r.trim()) else {
+                    return Reply::text("ok");
+                };
+                let mut ids = Vec::new();
+                for local in [false, true] {
+                    let answer = brigadier(&turn, started(Some(repo), local, None, "Count.")).await;
+                    ids.push(id_of(&answer));
+                }
+                let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+                let events = json!(wait_for(&turn, &ids, 2).await);
+                answers.lock().unwrap().insert("events".into(), events);
+                Reply::text("Counted.")
+            })
+        })
+    };
+    let flow = Flow::start(
+        "chat-workers-delete",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                cleanup: true,
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, &format!("Count in {}", flow.repo.display()))
+        .await;
+    answered(&flow, &chat).await;
+    let tasks = flow.core.tasks(&chat).await.unwrap();
+    assert_eq!(tasks.len(), 2, "{:#?}", answers.lock().unwrap());
+    let own = flow.dir.join("data/own/claude");
+    let files: Vec<PathBuf> = tasks
+        .iter()
+        .flat_map(|task| super::fake_files(&own, task.native_session.as_ref().unwrap()))
+        .collect();
+    assert!(files.iter().all(|file| file.exists()), "{files:#?}");
+    flow.manager.delete(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    for file in files {
+        assert!(!file.exists(), "{} survived", file.display());
+    }
+    flow.stop().await;
+}
