@@ -45,15 +45,21 @@ advice picks them. The worker's start receipt and transcript models are recorded
 identifiers are recorded from native transcripts. Runs execute sequentially in task/run/arm
 order; this avoids competing arms on a shared host, but short-task variance remains substantial.
 
-Two opt-in cache experiments change Claude startup and are report only:
+Three opt-in cache experiments change session startup and are report only:
 `--claude-flag-exclude-dynamic` passes `--exclude-dynamic-system-prompt-sections` to plain
 Claude and to Brigadier parents and workers. It moves cwd/environment/memory/git sections into
 the first user message, allowing more of the system prefix to be shared across directories.
 `--worker-cache-ttl 5m` (or `1h`) sets `CLAUDE_CODE_PROMPT_CACHE_TTL` for Claude workers only;
-parents keep the CLI's default or inherited TTL. Both options are off by default; Codex is
-unaffected. The isolated daemon selects a bench-only Claude launcher through `agentPaths`;
+parents keep the CLI's default or inherited TTL. These two options are Claude only.
+`--stable-standing` sets `BRIGADIER_BENCH_STABLE_STANDING=1` in the isolated daemon only:
+its appended standing text keeps the session-folder and ledger environment variables instead
+of substituting each session's paths, and adds one sentence about shell expansion. Those
+variables are already set for parents and workers. This applies to either wrapped provider;
+plain arms are unaffected. All three options are off by default. The isolated daemon selects
+a bench-only Claude launcher through `agentPaths`;
 no provider or nightly behavior changes. JSON and Markdown record the requested options;
-wrapped runs also record `claude_launches` with the actual per-role overrides. Confirm TTLs
+wrapped runs also record `claude_launches` with the actual per-role overrides, standing-text
+SHA256, placeholder presence and whether both standing environment variables are set. Confirm TTLs
 from native `usage.cache_creation` in `--keep-transcripts`, since settings or other environment
 overrides may affect the CLI. These require a CLI supporting the flag and TTL override
 (TTL requires v2.1.242+); see [Claude's CLI reference](https://code.claude.com/docs/en/cli-reference)

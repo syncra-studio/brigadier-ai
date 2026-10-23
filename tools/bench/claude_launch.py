@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Bench-only Claude launcher, selected in the isolated daemon's agentPaths."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,11 +24,15 @@ def launch(config_path, arguments):
         override = config["worker_cache_ttl"] if role == "worker" else None
         if override:
             env["CLAUDE_CODE_PROMPT_CACHE_TTL"] = override
+        standing = arguments[arguments.index("--append-system-prompt") + 1] if "--append-system-prompt" in arguments else None
         with Path(config["audit"]).open("a") as audit:
             audit.write(json.dumps(dict(session=session, role=role,
                                         exclude_dynamic=config["exclude_dynamic"],
                                         cache_ttl_override=override,
-                                        cache_ttl_env=env.get("CLAUDE_CODE_PROMPT_CACHE_TTL"))) + "\n")
+                                        cache_ttl_env=env.get("CLAUDE_CODE_PROMPT_CACHE_TTL"),
+                                        standing_sha256=hashlib.sha256(standing.encode()).hexdigest() if standing is not None else None,
+                                        standing_placeholders=standing is not None and all("$" + name in standing for name in ("BRIGADIER_SESSION_DIR", "BRIGADIER_LEDGER")),
+                                        standing_env_present=all(env.get(name) for name in ("BRIGADIER_SESSION_DIR", "BRIGADIER_LEDGER")))) + "\n")
     os.execve(config["binary"], [config["binary"], *arguments], env)
 
 

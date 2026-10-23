@@ -209,6 +209,8 @@ class Daemon:
         models = models_file(self.root, self.args.worker_model)
         env.update(BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_MODELS_FILE=str(models),
                    TMPDIR=str(self.root), SHELL=shutil.which("zsh") or "/bin/bash")
+        if self.args.stable_standing:
+            env["BRIGADIER_BENCH_STABLE_STANDING"] = "1"
         with (self.root / "daemon.log").open("w") as out:
             self.proc = subprocess.Popen([self.args.daemon, "--foreground", "--data-dir", str(self.data)], env=env,
                                          stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
@@ -445,7 +447,7 @@ def markdown(report):
     prepare(report)
     lines = ["# CLI bench", "", "Report only; regressions never gate CI or releases.", "",
              f"Source: `{report['source']}`; fixture v{report['fixture_version']}; effort {report['effort']}; worker model {report.get('worker_model', 'pinned')}", "",
-             f"Cache experiment: exclude dynamic = {report.get('claude_flag_exclude_dynamic', False)}; worker TTL override = {report.get('worker_cache_ttl') or 'CLI default'}", "",
+             f"Cache experiment: exclude dynamic = {report.get('claude_flag_exclude_dynamic', False)}; worker TTL override = {report.get('worker_cache_ttl') or 'CLI default'}; stable standing = {report.get('stable_standing', False)}", "",
              "| Arm | Task/run | Status | Pass | Wall s | First output s | Worktree s | API calls | Input / cache write / cache read / output | Cost units | CLI commands | Ledger adds | Injected msgs / bytes |",
              "|---|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|---|"]
     for r in report["runs"]:
@@ -509,6 +511,8 @@ def run_main():
                    help="Report-only experiment: move dynamic Claude system sections to the first user message, for parents and workers")
     p.add_argument("--worker-cache-ttl", choices=["5m", "1h"], default=None,
                    help="Report-only experiment: override CLAUDE_CODE_PROMPT_CACHE_TTL for Claude workers only")
+    p.add_argument("--stable-standing", action="store_true",
+                   help="Report-only experiment: keep standing path variables in the isolated daemon system text")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--scratch-prefix", default="brigadier-bench-" + os.environ.get("GITHUB_RUN_ID", "local") + "-", help="Unique run/worker prefix for /tmp scratch")
     p.add_argument("--keep-transcripts", type=Path, default=None, help="Copy each run's native transcripts to DIR/<arm>-<task>-<run>/")
@@ -525,6 +529,7 @@ def run_main():
               "worker_model": args.worker_model,
               "claude_flag_exclude_dynamic": args.claude_flag_exclude_dynamic,
               "worker_cache_ttl": args.worker_cache_ttl,
+              "stable_standing": args.stable_standing,
               "standing_instruction_bytes": (ROOT / "crates/core/src/manager/standing_instructions.md").stat().st_size,
               "runs": []}
     if args.skip:

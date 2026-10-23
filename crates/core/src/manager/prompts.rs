@@ -21,6 +21,22 @@ pub(crate) const LEDGER_ENV: &str = "BRIGADIER_LEDGER";
 /// them. Claude asks before any command with a variable it can't check, so in Accept edits
 /// a ledger named only by its variable cost the user a card per entry.
 pub(crate) fn with_session_paths(text: &str, root: &std::path::Path) -> String {
+    session_paths(
+        text,
+        root,
+        std::env::var("BRIGADIER_BENCH_STABLE_STANDING")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Default-off bench experiment, read in the daemon; the CLI already has both variables.
+fn session_paths(text: &str, root: &std::path::Path, stable: Option<&str>) -> String {
+    if stable == Some("1") {
+        return format!(
+            "{text}\n$NAME paths are environment variables; expand them in shell commands."
+        );
+    }
     super::session_dir::standing_env(root)
         .into_iter()
         .fold(text.to_owned(), |text, (name, value)| {
@@ -451,6 +467,37 @@ mod tests {
             "Never a progress log: not the request restated, a passing check or your own change; a task that settled nothing needs no entry.",
         ] {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
+        }
+    }
+
+    #[test]
+    fn standing_paths_are_stable_only_under_the_bench_gate() {
+        let first = std::path::Path::new("/sessions/one");
+        let second = std::path::Path::new("/sessions/two/workers/1-worker");
+        for template in [
+            session_instructions(&Settings::default(), ProviderKind::Claude),
+            worker_instructions(&Settings::default(), ProviderKind::Claude),
+        ] {
+            let stable = session_paths(&template, first, Some("1"));
+            assert_eq!(stable, session_paths(&template, second, Some("1")));
+            assert!(stable.contains("$BRIGADIER_SESSION_DIR"));
+            assert!(stable.contains("$BRIGADIER_LEDGER"));
+            assert!(stable.ends_with("expand them in shell commands."));
+            for gate in [None, Some(""), Some("0"), Some("true")] {
+                for root in [first, second] {
+                    let expected = template
+                        .replace("$BRIGADIER_SESSION_DIR", &root.display().to_string())
+                        .replace(
+                            "$BRIGADIER_LEDGER",
+                            &root.join("record/ledger.md").display().to_string(),
+                        );
+                    assert_eq!(session_paths(&template, root, gate), expected);
+                }
+                assert_ne!(
+                    session_paths(&template, first, gate),
+                    session_paths(&template, second, gate)
+                );
+            }
         }
     }
 
