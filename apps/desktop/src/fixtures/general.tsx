@@ -45,6 +45,7 @@ useApp.setState((state) => ({
 const calls: string[] = [];
 let permission = params.get("notifications") ?? "off";
 let login = params.get("login") ?? "off";
+let updateChecks = 0;
 /** The settings as last saved, to tell what a save changed. */
 let saved = useApp.getState().settings;
 
@@ -72,6 +73,8 @@ mockIPC((command, payload) => {
       return null;
     case "check_for_updates":
       calls.push("checkForUpdates");
+      // The second check finds the feed unreachable (offline).
+      if (++updateChecks > 1) throw new Error("the update feed didn't answer");
       return null;
     case "ipc_request": {
       const req = (payload as { request: Request }).request;
@@ -150,6 +153,11 @@ function Fixture() {
       () => button("Check now")?.click(),
       () => {
         seen.updatesAfter = text(row("Updates")?.querySelector(".text-xs"));
+      },
+      () => button("Check now")?.click(),
+      () => {
+        seen.updatesFailed = text(row("Updates")?.querySelector(".text-xs"));
+        seen.checkAgain = !(button("Check now") as HTMLButtonElement | null)?.disabled;
       },
       () => button("View")?.click(),
       () => {

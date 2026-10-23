@@ -11,6 +11,8 @@ type Rendering = {
   build: string;
   updatesBefore: string;
   updatesAfter: string;
+  updatesFailed: string;
+  checkAgain: boolean;
   followUpHelper: string;
   followUp: string[];
   loginBefore: string;
@@ -69,6 +71,9 @@ test("General: its sections and rows, and every new setting saved for real", { t
   assert.equal(seen.build, "2026-10-16 · a1b2c3d4e");
   assert.equal(seen.updatesBefore, "Nightly channel");
   assert.equal(seen.updatesAfter, "Up to date.");
+  // A check that can't reach the feed says so, and Check now works again.
+  assert.equal(seen.updatesFailed, "Couldn't check for updates. Try again later.");
+  assert.equal(seen.checkAgain, true);
   // Enter always sends (no Send shortcut row); ⌥Enter sends the other way.
   assert.equal(seen.followUpHelper, "What a message sent while an agent works does; ⌥Enter does the other for one message");
   assert.deepEqual(seen.followUp, ["Steer"]);
@@ -84,6 +89,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
     "setLoginItem true",
     "setLoginItem false",
     "askNotifications",
+    "checkForUpdates",
     "checkForUpdates",
   ]);
 });

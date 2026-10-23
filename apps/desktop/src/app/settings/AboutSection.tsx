@@ -11,8 +11,8 @@ import { useAppUpdate } from "@/state/appUpdate";
 import { reopenOnboarding } from "@/state/onboarding";
 import { useApp } from "@/state/store";
 
-/** Settings › About's "Check now": checked just now, and what it found (if it finished). */
-type CheckState = { checking: boolean; found: boolean };
+/** Settings › About's "Check now": checked just now, and what it found (if it finished), or that it couldn't. */
+type CheckState = { checking: boolean; found: boolean; failed?: boolean };
 
 /** General › About: the version, the build, updates, the licenses, and running setup again. */
 export function AboutSection() {
@@ -23,10 +23,14 @@ export function AboutSection() {
   const [checked, setChecked] = useState<CheckState | null>(null);
   const checkNow = () => {
     setChecked({ checking: true, found: false });
-    void checkForUpdates().then((update) => {
-      if (update) useAppUpdate.setState({ update });
-      setChecked({ checking: false, found: update !== null });
-    });
+    void checkForUpdates().then(
+      (update) => {
+        if (update) useAppUpdate.setState({ update });
+        setChecked({ checking: false, found: update !== null });
+      },
+      // Offline, or the feed didn't answer: say so, and Check now works again.
+      () => setChecked({ checking: false, found: false, failed: true }),
+    );
   };
   return (
     <SettingsSection title="About">
@@ -47,7 +51,9 @@ export function AboutSection() {
             description={
               checked?.checking
                 ? "Checking…"
-                : checked
+                : checked?.failed
+                  ? "Couldn't check for updates. Try again later."
+                  : checked
                   ? checked.found
                     ? "An update was found."
                     : "Up to date."
