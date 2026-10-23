@@ -68,7 +68,7 @@ document. `S-1`, `S-2` = the Sources case the user found.
 ### 1.4 What today's continuity battery measures, and what it misses
 
 The S21 battery (`tools/continuity-battery/`, baseline 11/12) plants twelve items and, at the end, *asks* for
-them. Every pass came from the successor searching the record when asked (report `2026-10-22-claude.md`,
+them. Every pass came from the successor searching the record when asked (report `docs/evidence/2026-10-22-claude-continuity.md`,
 "Successor searched? yes" on every row). None of this run's 33 losses was a fact someone was asked for and
 couldn't find. They were rules nobody re-applied, documents that added or dropped things, and questions
 nobody raised again. **The battery needs items that test acting on a decision without being asked, deriving
