@@ -333,8 +333,25 @@ impl SessionManager {
         if ended < since {
             return None;
         }
-        let message = thread
+        // Its answer is that turn's own: a turn that failed or stopped before one says its error.
+        let opens = |entry: &brigadier_providers::session_file::FileEntry, id: Option<&str>| {
+            entry.parent.is_none()
+                && !entry.steer
+                && matches!(&entry.event, ProviderEvent::Message {
+                    role: brigadier_providers::Role::User,
+                    item_id,
+                    ..
+                } if id.is_none_or(|id| item_id == id))
+        };
+        let start = thread
             .entries
+            .iter()
+            .position(|entry| opens(entry, Some(&turn.user_message)))?;
+        let end = thread.entries[start + 1..]
+            .iter()
+            .position(|entry| opens(entry, None))
+            .map_or(thread.entries.len(), |next| start + 1 + next);
+        let message = thread.entries[start..end]
             .iter()
             .rev()
             .filter(|entry| entry.parent.is_none())

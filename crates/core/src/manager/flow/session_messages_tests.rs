@@ -96,6 +96,9 @@ async fn session(turn: Turn, id: ConversationId, seen: Arc<Seen>) -> Reply {
         }
         return Reply::text("Held.");
     }
+    if said.contains("Fail.") {
+        return Reply::failed("The API said no.");
+    }
     if said.contains("Spawn.") {
         turn.start_worker("Helper", "Helper.").await;
         return Reply::text("Spawned.");
@@ -255,6 +258,31 @@ async fn a_session_messages_another_mid_turn_and_hears_its_answer() {
     assert_eq!(events[0]["event"], "turn-ended");
     assert_eq!(events[0]["message"], "Answered.");
     assert_eq!(kept(&flow, &b), [(message, true)]);
+    flow.stop().await;
+}
+
+/// `wait <session>` returns that turn's own end: a turn that failed before it answered says
+/// its error, never an earlier turn's answer.
+#[tokio::test]
+async fn a_session_wait_returns_the_turns_own_end() {
+    let (flow, seen) = flow("sessions-wait-own-turn", false).await;
+    let a = flow.conversation.clone();
+    let b = two_sessions(&flow, &seen).await;
+    let waited = {
+        let (flow, seen, a, b) = (&flow, &seen, a.clone(), b.0.clone());
+        async move { ok(call(flow, seen, &a, wait(&[b.as_str()], Some(30))).await) }
+    };
+    let failing = async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        flow.say_to(&b, "Fail.").await;
+    };
+    let (waited, ()) = tokio::join!(waited, failing);
+    let events = waited["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1, "{waited:#}");
+    assert_eq!(events[0]["event"], "failed", "{waited:#}");
+    let message = events[0]["message"].as_str().unwrap_or_default();
+    assert!(!message.contains("Got it."), "{waited:#}");
+    assert!(message.contains("The API said no."), "{waited:#}");
     flow.stop().await;
 }
 
