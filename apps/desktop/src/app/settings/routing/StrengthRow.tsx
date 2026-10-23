@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * A model ranked in Model strength: its place, name and tier, its strength as a bar and a
- * number.
+ * number; an unrated model has no score to show, only its empty bar.
  */
 export function StrengthRow({
   model,
@@ -21,6 +21,8 @@ export function StrengthRow({
   category: TaskCategory;
 }) {
   const dim = faded(model);
+  const tier = tierFor(model, category);
+  const rated = tier !== "unrated";
   return (
     <div
       data-slot="strength-row"
@@ -34,15 +36,17 @@ export function StrengthRow({
             {model.displayName}
           </span>
           <span className="text-xs text-muted-foreground shrink-0">
-            {TIER_LABELS[tierFor(model, category)]}
+            {TIER_LABELS[tier]}
           </span>
         </span>
       </span>
       <span aria-hidden className={cn("bg-muted h-1 w-105 shrink rounded-full", dim && "opacity-50")}>
-        <span
-          className={"bg-muted-foreground/60 block h-full rounded-full"}
-          style={{ width: `${Math.max(0, Math.min(10, strength)) * 10}%` }}
-        />
+        {rated && (
+          <span
+            className={"bg-muted-foreground/60 block h-full rounded-full"}
+            style={{ width: `${Math.max(0, Math.min(10, strength)) * 10}%` }}
+          />
+        )}
       </span>
       <span
         className={cn(
@@ -50,7 +54,7 @@ export function StrengthRow({
           dim ? "text-muted-foreground" : "text-foreground",
         )}
       >
-        {strength.toFixed(1)}
+        {rated && strength.toFixed(1)}
       </span>
       <span className="flex min-w-23 shrink-0 justify-end" />
     </div>

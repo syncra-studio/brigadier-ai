@@ -5,7 +5,7 @@ import { MoreRowHead } from "@/app/settings/routing/MoreRowHead";
 import { RatingsFooter } from "@/app/settings/routing/RatingsFooter";
 import { StepsList } from "@/app/settings/routing/StepsList";
 import { StrengthRow } from "@/app/settings/routing/StrengthRow";
-import { strengthFor } from "@/app/settings/routing/words";
+import { rankedFor, strengthFor } from "@/app/settings/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
 import { ListOrderedIcon, SpeedometerLatencySpeed } from "@/components/icons";
 import { type ModelGroup, SettingsCard } from "@/components/shared";
@@ -63,13 +63,13 @@ export function More({
   // Accounts that didn't answer in time, from the usage check Refresh runs.
   const usageError = useUsage((s) => s.refreshError);
   // Models switched off on Providers (or whose agent is) aren't ranked here.
-  const ranked = (view?.models ?? [])
+  const rated = (view?.models ?? [])
     .filter((model) => !model.excluded && modelAvailable(availability, { provider: model.provider, id: model.id }))
     .flatMap((model) => {
       const strength = strengthFor(model, category);
       return strength === null ? [] : [{ model, strength }];
-    })
-    .toSorted((a, b) => b.strength - a.strength);
+    });
+  const ranked = rankedFor(rated, category);
   const registry = view?.registry ?? null;
   const toggle = (row: Exclude<MoreRow, null>) => onOpen(open === row ? null : row);
   return (

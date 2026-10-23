@@ -56,12 +56,22 @@ export function withOrder(rows: readonly GuidanceRow[], work: string, order: rea
   return [...rest.slice(0, place), ...order, ...rest.slice(place)];
 }
 
+/**
+ * A kind of work as Routing names it: as written, but a fusion's consult row (`fusion-claude`,
+ * the name `brigadier start --work` takes) in plain words ("Fusion · Claude consult").
+ */
+export function workName(work: string): string {
+  const agent = /^fusion-(.+)$/.exec(work)?.[1];
+  if (!agent) return work;
+  return `Fusion · ${VENDOR_LABELS[agent as ProviderKind] ?? capital(agent)} consult`;
+}
+
 /** "Opus" from "opus": a family word as a name. */
 export const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
-/** A row's model in a few words: a listed model's name ("Opus 5.5"), a family ("Opus"), or "Default model". */
+/** A row's model in a few words: a listed model's name ("Opus 5.5"), a family ("Opus"), or the agent's default ("Codex's default"). */
 export function rowModelName(groups: readonly ModelGroup[], agent: ProviderKind, model: string): string {
-  if (model === "default") return "Default model";
+  if (model === "default") return `${VENDOR_LABELS[agent]}'s default`;
   return findModel(groups, { provider: agent, model, effort: null })?.displayName ?? capital(model);
 }
 
@@ -106,6 +116,15 @@ export function tierFor(model: MergedModel, category: TaskCategory): QualityTier
 export function strengthFor(model: MergedModel, category: TaskCategory): number | null {
   if (model.only && !(category in model.only)) return null;
   return model.strengths[category] ?? null;
+}
+
+/**
+ * The models ranked for a kind of work, strongest first; an unrated model's score is only a
+ * placeholder, so the unrated come last, in the order given.
+ */
+export function rankedFor<M extends { model: MergedModel; strength: number }>(models: readonly M[], category: TaskCategory): M[] {
+  const unrated = (entry: M) => tierFor(entry.model, category) === "unrated";
+  return models.toSorted((a, b) => Number(unrated(a)) - Number(unrated(b)) || (unrated(a) ? 0 : b.strength - a.strength));
 }
 
 /** Whether a model is shown faded: a legacy model. */

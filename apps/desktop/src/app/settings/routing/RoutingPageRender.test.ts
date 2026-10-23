@@ -13,7 +13,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.equal(
     seen.note,
-    "RoutingWhich agent, model and effort suit each kind of work. The thread follows these when it starts workers; change only what you want to.Applies to new work only",
+    "RoutingWhich agent, model and effort suit each kind of work. A session follows these when it starts workers; change only what you want to.Applies to new work only",
   );
   assert.deepEqual((seen.sections as string[]).slice(-3), ["Who does what", "Rules", "More"]);
   assert.equal(seen.rulesDescription, "Keep a model away from all work or one kind of work, allow only some models, or cap the effort");
@@ -22,7 +22,9 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "Architecture and broad changesAutomatic · Strong default for work that needs judgment across a codebase.Opus 5.5 · High",
     "Bounded implementationYour order · Sonnet 5.5Sonnet 5.5 · Medium",
     "Mechanical changes and searchAutomatic · A smaller model fits a bounded task with clear checks.Sonnet 5.5 · Medium",
-    "Independent reviewAutomatic · A second provider offers a useful independent reading.Default model · High",
+    "Independent reviewAutomatic · Codex, a second provider, gives an independent reading.Codex's default · High",
+    // A fusion's consult row in plain words, not its id (#549).
+    "Fusion · Claude consultAutomatic · A fusion's Claude consult: the strongest Claude model.Opus 5.5 · High",
     "Release notesYour order · GPT-6GPT-6 · Low",
   ];
   assert.deepEqual(seen.kinds, kinds);
@@ -79,7 +81,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   // Its preview warns of a kind of work the rule would stop, says where to fix it, and opens it.
   assert.equal(
     seen.clash,
-    "“Architecture and broad changes” uses Opus 5.5, so starting it would be refused. Pick another model for it in Who does what, or make this rule for one kind of work.Open Architecture and broad changes",
+    "“Architecture and broad changes” and “Fusion · Claude consult” use Opus 5.5, so starting them would be refused. Pick another model for them in Who does what, or make this rule for one kind of work.Open Architecture and broad changesOpen Fusion · Claude consult",
   );
   assert.equal(seen.openAfterClash, 0);
   assert.equal(seen.openedByNote, "Architecture and broad changes");
@@ -121,7 +123,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   );
   // How a model is picked, step by step; Model strength stays closed when search shows the steps.
   assert.deepEqual(seen.steps, [
-    "1Your choiceIf you or the thread name a model or effort for the worker, that is used.",
+    "1Named for the workerIf you or the session name a model or effort when the worker starts, that is used.",
     "2Your orderIf not, the worker takes the first model in your order for its kind of work that your rules allow.",
     "3AutomaticWith no order of your own, it takes the first model of the automatic advice that your rules allow.",
     "4Your rulesLast, your rules check the result: a model they keep out, or an effort above your cap, is refused and the worker doesn't start. Your rules win over everything above.",
@@ -134,6 +136,8 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
     "4GPT-6 LunaStrong8.0",
     "5GPT-5.5Strong7.9",
     "6Opus 4.6Standard7.2",
+    // Unrated: last, with no score (#549).
+    "7Claude NewUnrated",
   ]);
   // Refresh models reads again what `brigadier models` shows: each agent's models, every
   // account's usage, the ratings, and the shipped advice beside the rules file.

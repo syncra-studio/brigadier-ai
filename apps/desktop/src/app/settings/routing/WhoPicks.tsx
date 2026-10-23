@@ -4,7 +4,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { AutoPicks } from "@/app/settings/routing/AutoPicks";
 import { OrderList } from "@/app/settings/routing/OrderList";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
-import { withOrder, type WorkRow } from "@/app/settings/routing/words";
+import { withOrder, type WorkRow, workName } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Segmented } from "@/components/controls";
 import type { GuidanceRow, ModelRules } from "@/ipc/generated";
@@ -19,7 +19,7 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
   const action = useAction();
   // My order with nothing to start it from (a kind of your own): an empty order, Add model there to fill it.
   const [starting, setStarting] = useState(false);
-  const name = row.work;
+  const name = workName(row.work);
   const save = (order: GuidanceRow[]) => {
     setStarting(false);
     return action.run(() => saveModelRules(withOrder(rules.rows, row.work, order), rules.rules));

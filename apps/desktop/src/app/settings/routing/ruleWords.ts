@@ -1,4 +1,4 @@
-import { shortPlaceName, type WorkRow } from "@/app/settings/routing/words";
+import { shortPlaceName, workName, type WorkRow } from "@/app/settings/routing/words";
 import { effortLabel, findModel, type ModelGroup } from "@/components/shared/model-selector";
 import type { GuidanceRow, ModelChoice, ModelInfo, ModelRule, OverrideTarget, ProviderKind } from "@/ipc/generated";
 import { joinWords, VENDOR_LABELS } from "@/lib/routing";
@@ -66,7 +66,7 @@ const named = (patterns: readonly string[], names: readonly string[]) =>
 
 /** A rule as the file writes it: `forbid: fable`, `allow claude: opus, sonnet`, `effort-ceiling for Review: medium`. */
 export function ruleText(rule: ModelRule): string {
-  const scope = rule.work ? ` for ${rule.work}` : "";
+  const scope = rule.work ? ` for ${workName(rule.work)}` : "";
   switch (rule.type) {
     case "forbid":
       return `forbid${scope}: ${rule.names.join(", ")}`;
@@ -79,11 +79,11 @@ export function ruleText(rule: ModelRule): string {
 
 /** "Never give Fable work", "Don't use Sonnet 5.5 for Review", "Only use Opus or Sonnet on Claude", "Never go above High effort". */
 export function ruleTitle(rule: ModelRule, names: Names): string {
-  const scope = rule.work ? ` for ${rule.work}` : "";
+  const scope = rule.work ? ` for ${workName(rule.work)}` : "";
   switch (rule.type) {
     case "forbid": {
       const models = joinWords(rule.names.map((name) => names.pattern(null, name)), "or");
-      return rule.work ? `Don't use ${models} for ${rule.work}` : `Never give ${models} work`;
+      return rule.work ? `Don't use ${models} for ${workName(rule.work)}` : `Never give ${models} work`;
     }
     case "allow": {
       const models = joinWords(rule.names.map((name) => names.pattern(rule.agent, name)), "or");
@@ -99,7 +99,7 @@ export function ruleTitle(rule: ModelRule, names: Names): string {
  * on it", "Review only · Its workers can't run on it".
  */
 export function ruleLine(rule: ModelRule): string {
-  const scope = rule.work ? `${rule.work} only` : "Everywhere";
+  const scope = rule.work ? `${workName(rule.work)} only` : "Everywhere";
   const vendor = rule.type === "allow" && rule.agent ? `${VENDOR_LABELS[rule.agent]} ` : "";
   const who = rule.work ? `Its ${vendor}workers` : vendor ? `${vendor}chats, sessions and workers` : "Chats, sessions and workers";
   switch (rule.type) {
@@ -248,7 +248,7 @@ export function draftRules(draft: Draft, rules: readonly ModelRule[]): ModelRule
 export type DraftPreview = { tone: "info" | "warning"; text: string; works?: string[] };
 
 /** "“Bounded implementation” and “Review”": the kinds of work rows name. */
-const works = (rows: readonly WorkRow[]) => joinWords(rows.map((row) => `“${row.work}”`));
+const works = (rows: readonly WorkRow[]) => joinWords(rows.map((row) => `“${workName(row.work)}”`));
 
 /**
  * What adding the draft would do, from the models the agents list now and the rows in force;
@@ -275,7 +275,7 @@ export function previewDraft(
   const made = next.find((rule) => !rules.some((old) => ruleText(old) === ruleText(rule)));
   const kept = (rule: ModelRule) => rule.type === "forbid" && sameScope(rule, draft.work) && target !== null && rule.names.includes(draftName(target));
   if (!made || (draft.effect === "never" && rules.some(kept))) return { tone: "warning", text: "You already have this rule." };
-  const scope = draft.work ? ` for ${draft.work}` : "";
+  const scope = draft.work ? ` for ${workName(draft.work)}` : "";
   // A kind of work starts while any of its rows may: the first its rules allow takes it.
   const starts = (row: WorkRow, using: readonly ModelRule[]) =>
     row.rows.some((found) => !refusingRule(using, rowChoice(found, models), row.work));
@@ -294,7 +294,7 @@ export function previewDraft(
     }
     const old = rules.find((rule) => rule.type === "effortCeiling" && sameScope(rule, draft.work));
     const replaces = old?.type === "effortCeiling" ? ` It replaces your ${effortLabel(old.effort)} ceiling${scope}.` : "";
-    const who = draft.work ? `Workers for ${draft.work}` : "Chats, sessions and workers";
+    const who = draft.work ? `Workers for ${workName(draft.work)}` : "Chats, sessions and workers";
     return { tone: "info", text: `${who} will run at ${effortLabel(draft.effort)} effort or lower; asking for more is refused.${replaces}` };
   }
   if (!target) return null;
@@ -323,7 +323,7 @@ export function previewDraft(
   if (draft.effect === "never") {
     const caught = models.filter((found) => named([name], [found.id, ...(found.resolved ? [found.resolved] : [])]));
     if (caught.length === 0) return { tone: "info", text: `No model listed now is ${model}; the rule applies once one is.` };
-    const who = draft.work ? `a worker for ${draft.work}` : "a chat, session or worker";
+    const who = draft.work ? `a worker for ${workName(draft.work)}` : "a chat, session or worker";
     return {
       tone: "info",
       text: `${joinWords(caught.map((found) => found.name))} won't be used${scope}: ${who} that asks for ${caught.length === 1 ? "it" : "them"} is refused, quoting this rule.`,
@@ -339,6 +339,6 @@ export function previewDraft(
     refused.length === 0
       ? `No ${vendor} model listed now is refused.`
       : `${joinWords(refused.map((found) => found.name))} ${refused.length === 1 ? "is" : "are"} refused.`;
-  const who = draft.work ? `${vendor} workers for ${draft.work}` : `${vendor} chats, sessions and workers`;
+  const who = draft.work ? `${vendor} workers for ${workName(draft.work)}` : `${vendor} chats, sessions and workers`;
   return { tone: "info", text: `${joins}${who} will use only ${joinWords(allowed.map((found) => names.pattern(target.provider, found)), "or")}. ${rest}` };
 }

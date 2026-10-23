@@ -15,7 +15,7 @@ import {
   ruleText,
   ruleTitle,
 } from "@/app/settings/routing/ruleWords";
-import { workRows } from "@/app/settings/routing/words";
+import { workName, workRows } from "@/app/settings/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
 import { effortLabel, type ModelGroup, SettingsCard } from "@/components/shared";
 import { Button, SettingsSelect, SettingsSelectTrigger } from "@/components/controls";
@@ -161,7 +161,7 @@ function DraftRow({
   const capping = draft.effect === "cap";
   const kinds = workRows(file);
   const preview = previewDraft(draft, { rules: file.rules, rows: kinds, models, names });
-  const works = [{ value: ANY_WORK, label: "Any work" }, ...kinds.map((kind) => ({ value: kind.work, label: kind.work }))];
+  const works = [{ value: ANY_WORK, label: "Any work" }, ...kinds.map((kind) => ({ value: kind.work, label: workName(kind.work) }))];
   const submit = () => {
     if (!capping && !target) return;
     const next = draftRules(draft, file.rules);
@@ -218,7 +218,7 @@ function DraftRow({
           {preview.text}
           {preview.works?.map((work) => (
             <Button key={work} variant="link-blue" size="inline" className="ms-1.5 inline-flex" onClick={() => onOpenKind(work)}>
-              Open {work}
+              Open {workName(work)}
             </Button>
           ))}
         </Note>

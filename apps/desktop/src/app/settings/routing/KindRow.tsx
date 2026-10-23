@@ -5,7 +5,7 @@ import { WhoPicks } from "@/app/settings/routing/WhoPicks";
 import { OpenChevron } from "@/app/settings/routing/parts";
 import { useListedModels } from "@/app/settings/routing/pickers";
 import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
-import { rowModelName, type WorkRow } from "@/app/settings/routing/words";
+import { rowModelName, workName, type WorkRow } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Code, Grid, Nodes, PullRequestOpen, Telescope } from "@/components/icons";
 import type { ModelRules } from "@/ipc/generated";
@@ -51,7 +51,7 @@ export function KindRow({
     <div data-slot="routing-kind" data-work={row.work} data-open={open || undefined} className="flex flex-col">
       <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3.5 py-3.5 text-start">
         <Icon aria-hidden className="text-foreground/65 size-4 shrink-0" />
-        <RowText truncate title={row.work} line={line} />
+        <RowText truncate title={workName(row.work)} line={line} />
         {now && <NowPick row={now} groups={groups} />}
         <OpenChevron open={open} />
       </button>

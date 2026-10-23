@@ -1,14 +1,14 @@
 import { HAIRLINE_TOP, StepNumber } from "@/app/settings/routing/parts";
 import { useListedModels } from "@/app/settings/routing/pickers";
 import { refusingRule, rowChoice } from "@/app/settings/routing/ruleWords";
-import { rowModelName, workRows } from "@/app/settings/routing/words";
+import { rowModelName, workName, workRows } from "@/app/settings/routing/words";
 import type { ModelGroup } from "@/components/shared";
 import type { ModelRules } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 
 /** How a new worker's model and effort are chosen, in the order it really happens (`brigadier start`). */
 const STEPS: readonly [string, string][] = [
-  ["Your choice", "If you or the thread name a model or effort for the worker, that is used."],
+  ["Named for the worker", "If you or the session name a model or effort when the worker starts, that is used."],
   ["Your order", "If not, the worker takes the first model in your order for its kind of work that your rules allow."],
   ["Automatic", "With no order of your own, it takes the first model of the automatic advice that your rules allow."],
   [
@@ -34,7 +34,7 @@ function useExample(rules: ModelRules | null, groups: readonly ModelGroup[]): st
     if (next < 0) continue;
     const name = (index: number) => rowModelName(groups, row.rows[index]!.agent, row.rows[index]!.model);
     const from = row.mine.length > 0 ? "your order" : "the automatic advice";
-    return `For example, ${row.work}: your rules keep ${name(0)} out, so ${name(next)}, next in ${from}, runs.`;
+    return `For example, ${workName(row.work)}: your rules keep ${name(0)} out, so ${name(next)}, next in ${from}, runs.`;
   }
   return EXAMPLE;
 }

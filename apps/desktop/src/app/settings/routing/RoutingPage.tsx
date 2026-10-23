@@ -56,7 +56,7 @@ export function RoutingPage() {
   return (
     <SettingsPage
       title="Routing"
-      description="Which agent, model and effort suit each kind of work. The thread follows these when it starts workers; change only what you want to."
+      description="Which agent, model and effort suit each kind of work. A session follows these when it starts workers; change only what you want to."
       actions={
         <span className="text-xs text-muted-foreground flex items-center gap-1.5 pt-2.25">
           <Info aria-hidden className="size-3.25" />

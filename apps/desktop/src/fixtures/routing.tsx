@@ -60,7 +60,8 @@ const SHIPPED: GuidanceRow[] = [
   { work: "Architecture and broad changes", agent: "claude", model: "opus", effort: "high", reason: "Strong default for work that needs judgment across a codebase." },
   { work: "Bounded implementation", agent: "codex", model: "default", effort: "high", reason: "The CLI default suits a well specified coding task." },
   { work: "Mechanical changes and search", agent: "claude", model: "sonnet", effort: "medium", reason: "A smaller model fits a bounded task with clear checks." },
-  { work: "Independent review", agent: "codex", model: "default", effort: "high", reason: "A second provider offers a useful independent reading." },
+  { work: "Independent review", agent: "codex", model: "default", effort: "high", reason: "Codex, a second provider, gives an independent reading." },
+  { work: "fusion-claude", agent: "claude", model: "opus", effort: "high", reason: "A fusion's Claude consult: the strongest Claude model." },
 ];
 
 /** The fixture's rules file: the user's rows (one over a shipped row, one of their own) and rules. */
@@ -75,6 +76,11 @@ const file: { rows: GuidanceRow[]; rules: ModelRule[] } = {
   ],
 };
 const read = (): ModelRules => ({ path: "/Users/me/.brigadier/models.md", shipped: SHIPPED, rows: [...file.rows], rules: [...file.rules] });
+/** A model the ratings don't score yet: its strength is only a placeholder. */
+const unrated = (() => {
+  const base = usageView().models.find((model) => model.id === "claude-opus-4-6")!;
+  return { ...base, id: "claude-new", registryKey: "claude-new", displayName: "Claude New", tier: "unrated" as const, legacy: false };
+})();
 /** Every request's method, in order. */
 const asked: string[] = [];
 /** Every save the page sent, in order. */
@@ -91,7 +97,7 @@ mockIPC((command, payload) => {
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     case "getUsage":
-      return { method: req.method, usage: usageView() };
+      return { method: req.method, usage: { ...usageView(), models: [...usageView().models, unrated] } };
     case "refreshAccounts":
       return { method: req.method, generation: 0 };
     case "checkRegistry":
