@@ -563,15 +563,19 @@ impl SessionManager {
         .await
     }
 
-    /// What a worktree session's branch changed since it left its base, and how many commits
-    /// it has that its base lacks (what "Merge into main" merges, even when they change nothing
-    /// in sum). Absent for Chats, local-checkout sessions (their commits are on the picked
-    /// branch) and a session whose branch or base does not exist (yet).
+    /// What a worktree session's branch changed since it left its base, with what its worktree
+    /// holds uncommitted (as its Changes card counts it, #552), and how many commits it has that
+    /// its base lacks (what "Merge into main" merges, even when they change nothing in sum).
+    /// Absent for Chats, local-checkout sessions (their commits are on the picked branch) and a
+    /// session whose branch or base does not exist (yet).
     pub async fn session_diff_stat(&self, id: &ConversationId) -> Result<Option<(DiffStat, u32)>> {
         let conversation = self.core.conversation(id)?;
         let Some(Setup::Session {
             repo,
-            environment: Environment::NewWorktree { base, branch, .. },
+            environment:
+                Environment::NewWorktree {
+                    base, branch, path, ..
+                },
             ..
         }) = conversation.setup
         else {
@@ -599,7 +603,13 @@ impl SessionManager {
                 fork = newer;
                 from = upstream;
             }
-            let stat = repo.diff_stat(&fork, &tip).map_err(git_error)?;
+            // Its worktree as it stands, while it has the branch checked out; else the branch.
+            let to = path
+                .and_then(|path| git.open(Path::new(&path)).ok())
+                .filter(|worktree| worktree.resolve("HEAD").ok().as_ref() == Some(&tip))
+                .and_then(|worktree| worktree.snapshot_tree().ok())
+                .unwrap_or_else(|| tip.clone());
+            let stat = repo.diff_stat(&fork, &to).map_err(git_error)?;
             let commits = repo.count_commits(&from, &tip).map_err(git_error)?;
             Ok(Some((diff_stat_of(&stat), commits)))
         })

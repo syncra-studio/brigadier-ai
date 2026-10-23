@@ -157,6 +157,36 @@ async fn the_session_diff_counts_commits_whose_sum_changes_nothing() {
     flow.stop().await;
 }
 
+/// A worktree session's diff counts what its worktree holds that its base lacks, uncommitted
+/// and new files too, as its Changes card does: `brigadier sessions` reads it (#552).
+#[tokio::test]
+async fn the_session_diff_counts_uncommitted_work() {
+    let (flow, _log) = session("merge-uncommitted").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let (path, _) = workspace(&flow);
+    let path = path.expect("the worktree");
+    let diff = || async {
+        flow.manager
+            .session_diff_stat(&flow.conversation)
+            .await
+            .unwrap()
+            .expect("a worktree session")
+    };
+    let (stat, commits) = diff().await;
+    let (files, insertions) = (stat.files.len(), stat.insertions);
+    let notes = std::fs::read_to_string(path.join("NOTES.md")).unwrap();
+    std::fs::write(path.join("NOTES.md"), format!("{notes}One line more.\n")).unwrap();
+    std::fs::write(path.join("hello.txt"), "hello\n").unwrap();
+    let (stat, after) = diff().await;
+    assert_eq!(
+        (stat.files.len(), stat.insertions, after),
+        (files + 1, insertions + 2, commits),
+        "{stat:?}"
+    );
+    flow.stop().await;
+}
+
 /// #233: the local `main` fell behind GitHub's, and the session merged GitHub's `main` in. Its
 /// size is what it changed since that merge base, its own notes only, not every file
 /// GitHub's `main` gained.
