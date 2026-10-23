@@ -181,6 +181,17 @@ fn kept(flow: &Flow, id: &ConversationId) -> Vec<(String, bool)> {
     found
 }
 
+/// [`kept`] once every message shows its CLI took it: the fake CLI records an input before
+/// the daemon writes that it was seen.
+async fn kept_seen(flow: &Flow, id: &ConversationId) -> Vec<(String, bool)> {
+    super::eventually("the kept messages to be marked seen", || {
+        let found = kept(flow, id);
+        !found.is_empty() && found.iter().all(|(_, seen)| *seen)
+    })
+    .await;
+    kept(flow, id)
+}
+
 fn mail_file(flow: &Flow, id: &ConversationId) -> std::path::PathBuf {
     flow.manager.session_dir(id).record().join(FILE)
 }
@@ -257,7 +268,7 @@ async fn a_session_messages_another_mid_turn_and_hears_its_answer() {
     assert_eq!(events.len(), 1, "{waited:#}");
     assert_eq!(events[0]["event"], "turn-ended");
     assert_eq!(events[0]["message"], "Answered.");
-    assert_eq!(kept(&flow, &b), [(message, true)]);
+    assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
     flow.stop().await;
 }
 
@@ -390,7 +401,10 @@ async fn a_message_kept_before_it_was_queued_reaches_its_session_once_after_a_cr
     })
     .await;
     flow.settled_in(&b).await;
-    assert_eq!(kept(&flow, &b), [("sm-0123456789ab".into(), true)]);
+    assert_eq!(
+        kept_seen(&flow, &b).await,
+        [("sm-0123456789ab".into(), true)]
+    );
 
     flow.crash().await;
     flow.settled_in(&b).await;
@@ -421,7 +435,7 @@ async fn a_message_its_cli_never_took_reaches_it_once_after_a_crash() {
     flow.settled_in(&b).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(seen.took(&b, "Queued one."), 1, "{:#?}", seen.inputs_of(&b));
-    assert_eq!(kept(&flow, &b), [(message, true)]);
+    assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
     flow.stop().await;
 }
 
@@ -437,13 +451,13 @@ async fn a_message_its_cli_took_is_not_sent_again_after_a_crash() {
     let sent = ok(call(&flow, &seen, &a, send(&b.0, "Steered one.")).await);
     let message = sent["message"].as_str().unwrap().to_owned();
     assert_eq!(sent["queued"], true);
-    assert_eq!(kept(&flow, &b), [(message.clone(), true)]);
+    assert_eq!(kept_seen(&flow, &b).await, [(message.clone(), true)]);
 
     flow.crash().await;
     seen.release.store(true, Ordering::SeqCst);
     flow.settled_in(&b).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(kept(&flow, &b), [(message.clone(), true)]);
+    assert_eq!(kept_seen(&flow, &b).await, [(message.clone(), true)]);
 
     // The seen line lost: B's session file still holds it, so it is not sent again.
     let file = mail_file(&flow, &b);
@@ -460,7 +474,7 @@ async fn a_message_its_cli_took_is_not_sent_again_after_a_crash() {
     flow.crash().await;
     flow.settled_in(&b).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(kept(&flow, &b), [(message, true)]);
+    assert_eq!(kept_seen(&flow, &b).await, [(message, true)]);
     assert_eq!(
         seen.took(&b, "Steered one."),
         before,
