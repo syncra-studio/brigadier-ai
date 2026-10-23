@@ -820,6 +820,8 @@
   --onboarding-heading-tracking: -0.032em;
   --welcome-title-tracking: -0.035em;
   --welcome-title-gap: 1.75rem;
+  --pr-yellow: #fbc959;
+  --pr-purple: #d080e2;
   /* end generated */
 }
 
@@ -845,6 +847,8 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-destructive-fill: var(--destructive-fill);
+  --color-pr-yellow: var(--pr-yellow);
+  --color-pr-purple: var(--pr-purple);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-success: var(--success);

@@ -22,11 +22,14 @@ const conversation: Conversation = {
   setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "add-notes" }, permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } },
   lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
 };
-const base: PullRequest = { number: 7, title: "Add notes", url: "https://github.com/o/n/pull/7", state: "open", base: "main", ci: "passing" };
+const base: PullRequest = { number: 7, title: "Add notes", url: "https://github.com/o/n/pull/7", state: "open", base: "main", ci: "passing", approved: true, mergeable: true };
 const STATES: Record<string, PullRequest> = {
   failing: { ...base, ci: "failing" },
   approved: { ...base, unresolved: 1 },
-  conflicts: { ...base, conflicts: true, changesRequested: true },
+  review: { ...base, approved: false },
+  pending: { ...base, ci: "pending" },
+  closed: { ...base, state: "closed" },
+  conflicts: { ...base, approved: false, mergeable: false, conflicts: true, changesRequested: true },
   draft: { ...base, state: "draft", ci: "pending" },
   merged: { ...base, state: "merged", mergeCommit: "f00dfeed1234" },
 };
@@ -39,12 +42,34 @@ useApp.setState({
   connection: { status: "connected", daemon: null, reason: null },
 });
 let reads = 0;
+let prState = params.get("state") ?? "approved";
+// Advance only the PR's real 60 s timer; leave React, layout and the fixture's waits alone.
+const timers = new Map<number, TimerHandler>();
+let nextTimer = -1;
+const realTimeout = window.setTimeout.bind(window);
+const realClearTimeout = window.clearTimeout.bind(window);
+window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+  if (delay !== 60_000) return realTimeout(handler, delay, ...args);
+  const timerId = nextTimer--;
+  timers.set(timerId, handler);
+  return timerId;
+}) as typeof window.setTimeout;
+window.clearTimeout = (timerId?: number) => {
+  if (timerId !== undefined && timers.delete(timerId)) return;
+  realClearTimeout(timerId);
+};
+const poll = async () => {
+  const due = [...timers.values()];
+  timers.clear();
+  for (const callback of due) if (typeof callback === "function") callback();
+  await wait(150);
+};
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "getPullRequest") {
     reads += 1;
-    return { method: req.method, pullRequest: STATES[params.get("state") ?? "approved"] ?? null };
+    return { method: req.method, pullRequest: STATES[prState] ?? null, authRequired: prState === "signed-out" };
   }
   return { method: req.method };
 });
@@ -58,8 +83,17 @@ const ran = (itemId: string, command: string): FileEntry =>
 const add = (entry: FileEntry) =>
   useCliThread.setState((state) => ({ views: { ...state.views, [id]: { ...state.views[id]!, entries: [...state.views[id]!.entries, entry] } } }));
 
+function tokenColour(token: string): string {
+  const sample = document.createElement("span");
+  sample.style.color = `var(${token})`;
+  document.body.append(sample);
+  const colour = getComputedStyle(sample).color;
+  sample.remove();
+  return colour;
+}
+
 async function drive() {
-  for (let tries = 0; tries < 200 && !row(); tries++) await wait(50);
+  for (let tries = 0; tries < 200 && !row() && !document.querySelector('[data-slot="pull-request-auth"]'); tries++) await wait(50);
   await wait(200);
   const shown = row();
   const word = shown?.querySelector<HTMLElement>('[data-slot="pull-request-state"]');
@@ -69,6 +103,12 @@ async function drive() {
     word: word?.textContent,
     tone: shown?.dataset.tone,
     red: !!word?.classList.contains("text-destructive"),
+    colour: word ? getComputedStyle(word).color : null,
+    yellowToken: tokenColour("--pr-yellow"),
+    purpleToken: tokenColour("--pr-purple"),
+    iconColour: shown?.querySelector("svg") ? getComputedStyle(shown.querySelector("svg")!).color : null,
+    authHint: document.querySelector('[data-slot="pull-request-auth"]')?.textContent,
+    polling: timers.size,
     buttons: shown?.parentElement?.querySelectorAll('[data-slot="pr-actions"], [data-slot="pr-actions"] button').length ?? 0,
   };
   if (params.has("push")) {
@@ -80,6 +120,31 @@ async function drive() {
     add(ran("c2", "/bin/zsh -lc 'git push -u origin HEAD'"));
     await wait(300);
     seen.afterPush = reads - before;
+    add(ran("c3", "gh pr ready"));
+    await wait(300);
+    seen.afterGhPr = reads - before;
+  }
+  if (params.has("poll")) {
+    prState = "approved";
+    await poll();
+    seen.afterPollWord = row()?.querySelector('[data-slot="pull-request-state"]')?.textContent;
+    seen.afterPollReads = reads;
+    // The timer lives with the tab, even when the context card is hidden.
+    useApp.setState({ summaryShown: { [id]: false } });
+    await wait(200);
+    await poll();
+    seen.hiddenReads = reads;
+    prState = "merged";
+    await poll();
+    seen.terminalTimers = timers.size;
+    prState = "review";
+    add(ran("reopen", "gh pr create --fill"));
+    await wait(200);
+    seen.reopenedTimers = timers.size;
+    root.unmount();
+    seen.closedTimers = timers.size;
+    await poll();
+    seen.closedReads = reads;
   }
   const result = document.createElement("pre");
   result.id = "pr-card-result";
@@ -87,7 +152,8 @@ async function drive() {
   document.body.append(result);
 }
 
-createRoot(document.getElementById("root")!).render(
+const root = createRoot(document.getElementById("root")!);
+root.render(
   <TooltipProvider>
     <SidebarProvider defaultOpen={false}>
       <main className="bg-background text-foreground relative flex h-screen w-full min-w-0">

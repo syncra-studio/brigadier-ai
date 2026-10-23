@@ -1371,6 +1371,8 @@ mod tab_state_tests {
                     base: None,
                     merge_commit: None,
                     ci: None,
+                    approved: false,
+                    mergeable: false,
                     conflicts: false,
                     changes_requested: false,
                     unresolved: 0,

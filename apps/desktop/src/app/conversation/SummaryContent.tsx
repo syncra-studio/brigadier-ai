@@ -11,11 +11,12 @@ import { useShallow } from "zustand/react/shallow";
 
 import { showCard } from "@/app/conversation/ActionCards";
 import { rowName } from "@/app/conversation/activity/workerState";
-import { gitCommandsKey, mcpKey, pullRequestKey, usedMcpServers, webUse } from "@/app/conversation/cliFacts";
+import { gitCommandsKey, mcpKey, usedMcpServers, webUse } from "@/app/conversation/cliFacts";
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { AllLinksPopover } from "@/app/conversation/AllLinksPopover";
 import { BranchRow } from "@/app/conversation/BranchRow";
 import { PULL_REQUEST_TONES, pullRequestLook } from "@/app/conversation/pullRequestWords";
+import type { PullRequestStatus } from "@/app/conversation/usePullRequest";
 import { SourceRow } from "@/app/conversation/SourceRow";
 import { hostOf, linksIn, openLink } from "@/app/conversation/summaryLinks";
 import { useKeptScroll } from "@/app/conversation/summaryScroll";
@@ -36,7 +37,6 @@ import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/side-panel/WorkerSummary";
 import { TooltipIconButton } from "@/components/controls";
 import { Popover, PopoverTrigger } from "@/components/overlays";
-import { request } from "@/ipc/client";
 import { openLink as openWebLink } from "@/state/links";
 import type {
   Conversation,
@@ -293,29 +293,6 @@ const PULL_REQUEST_ICONS: Record<PullRequestState, ReactNode> = {
   closed: <PullRequestClosed />,
 };
 
-/**
- * The branch's GitHub pull request (from `gh`, read only): read when the card opens, and again
- * whenever a `git push` or a `gh pr` command of the thread finishes (`pullRequestKey`).
- */
-function usePullRequest(conversationId: string): PullRequest | null {
-  const entries = useEntries(conversationId);
-  const pushed = useMemo(() => pullRequestKey(entries), [entries]);
-  const [found, setFound] = useState<PullRequest | null>(null);
-  useEffect(() => {
-    let current = true;
-    request({ method: "getPullRequest", conversationId })
-      .then(({ pullRequest }) => current && setFound(pullRequest))
-      // No row when it can't be told.
-      .catch(() => current && setFound(null));
-    return () => {
-      current = false;
-    };
-    // A push or a `gh pr` command may have opened, moved or merged it: look again.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [conversationId, pushed]);
-  return found;
-}
-
 /** The pull request row: `#N`, its state in a word and a colour (failed checks red); a click opens it. */
 function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
   const look = pullRequestLook(pullRequest);
@@ -390,11 +367,11 @@ function SummaryCard({
  * the cards the conversation's view gives it to show under it (`cards`: the job's, "Resumes at").
  * `active` while they can be seen, for their scroll offsets.
  */
-export function SummaryContent({ conversation, active, cards = null }: { conversation: Conversation | null; active: boolean; cards?: ReactNode }) {
+export function SummaryContent({ conversation, active, cards = null, prStatus }: { conversation: Conversation | null; active: boolean; cards?: ReactNode; prStatus: PullRequestStatus }) {
   if (!conversation) return <SummaryCard scrollKey="draft/context" active={active}>
     <p className="text-muted-foreground p-4 text-sm">Nothing here yet</p>
   </SummaryCard>;
-  return conversation.kind === "session" ? <SessionSummaryContent conversation={conversation} active={active} cards={cards} />
+  return conversation.kind === "session" ? <SessionSummaryContent conversation={conversation} active={active} cards={cards} prStatus={prStatus} />
     : <ChatSummaryContent conversation={conversation} active={active} />;
 }
 
@@ -425,10 +402,12 @@ function SessionSummaryContent({
   conversation,
   active,
   cards,
+  prStatus,
 }: {
   conversation: Conversation;
   active: boolean;
   cards: ReactNode;
+  prStatus: PullRequestStatus;
 }) {
   const project = useApp((s) =>
     conversation.projectId
@@ -440,7 +419,7 @@ function SessionSummaryContent({
   const worktree = setup?.environment.type === "newWorktree";
   const sessionDiff = useSessionDiff(conversation.id, worktree);
   const diff = sessionDiff?.stat ?? null;
-  const pullRequest = usePullRequest(conversation.id);
+  const { pullRequest, authRequired } = prStatus;
   // Before a session has its folder and branch, its card is a chat's: never an empty space.
   if (!setup) return <ChatSummaryContent conversation={conversation} active={active} />;
   const checkout =
@@ -458,7 +437,11 @@ function SessionSummaryContent({
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <BranchRow branch={setup.environment.branch} diff={diff} />
-            {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
+            {authRequired ? (
+              <SummaryRow data-slot="pull-request-auth" muted icon={<PullRequestOpen />}>
+                gh auth login for PR status
+              </SummaryRow>
+            ) : pullRequest && <PullRequestRow pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />
           <WorkersSummary conversationId={conversation.id} />

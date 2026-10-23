@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 
+import { usePullRequest } from "@/app/conversation/usePullRequest";
 import { FloatingSummary } from "@/app/conversation/FloatingSummary";
 import { SummaryContent } from "@/app/conversation/SummaryContent";
 import { STACK, useKeptScroll } from "@/app/conversation/summaryScroll";
@@ -110,6 +111,7 @@ export function PinnedSummary({
   /** The cards under the context card, which stay in its place while it is hidden (the job's, "Resumes at"). */
   cards?: ReactNode;
 }) {
+  const prStatus = usePullRequest(conversation?.kind === "session" && conversation.setup?.type === "session" ? conversation.id : null);
   const shown = useApp(summaryShownOf);
   const float = useSummary((s) => s.layout === "float");
   const visible = shown && !float;
@@ -153,7 +155,7 @@ export function PinnedSummary({
             "summary-hidden:invisible summary-hidden:translate-x-full summary-hidden:scale-80 summary-hidden:opacity-0 origin-top-right motion-safe:group-data-settled/pane:transition-[opacity,translate,scale,visibility] motion-safe:group-data-settled/pane:duration-300 motion-safe:group-data-settled/pane:ease-summary-card",
           )}
         >
-          {content && <SummaryContent conversation={conversation} active={visible} cards={cards} />}
+          {content && <SummaryContent conversation={conversation} active={visible} cards={cards} prStatus={prStatus} />}
         </aside>
       </div>
       {conversation?.kind === "session" && cards && !visible && !(float && floating) && (
@@ -163,7 +165,7 @@ export function PinnedSummary({
           </div>
         </div>
       )}
-      {float && <FloatingSummary conversation={conversation} cards={cards} />}
+      {float && <FloatingSummary conversation={conversation} cards={cards} prStatus={prStatus} />}
     </>
   );
 }

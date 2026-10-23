@@ -2588,6 +2588,14 @@ pub struct PullRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ci: Option<PullRequestCi>,
+    /// GitHub explicitly reports an approved review decision.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub approved: bool,
+    /// GitHub explicitly reports MERGEABLE; unknown is not ready.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub mergeable: bool,
     /// GitHub can't merge it: its branch conflicts with the base.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]

@@ -1981,9 +1981,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetGitState { conversation_id } => Response::GetGitState {
             state: heap(|| sessions.git_state(&conversation_id)).await?,
         },
-        Request::GetPullRequest { conversation_id } => Response::GetPullRequest {
-            pull_request: heap(|| sessions.pull_request(&conversation_id)).await?,
-        },
+        Request::GetPullRequest { conversation_id } => {
+            let status = heap(|| sessions.pull_request(&conversation_id)).await?;
+            Response::GetPullRequest {
+                pull_request: status.pull_request,
+                auth_required: status.auth_required,
+            }
+        }
         Request::CommitChanges {
             conversation_id,
             message,

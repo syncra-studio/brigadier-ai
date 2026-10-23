@@ -1602,5 +1602,13 @@
   "--welcome-title-gap": {
     "type": "number",
     "value": 28
+  },
+  "--pr-yellow": {
+    "type": "color",
+    "value": "#FBC959"
+  },
+  "--pr-purple": {
+    "type": "color",
+    "value": "#D080E2"
   }
 }

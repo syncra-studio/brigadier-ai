@@ -19,6 +19,14 @@ mergeCommit?: string,
  */
 ci?: PullRequestCi, 
 /**
+ * GitHub explicitly reports an approved review decision.
+ */
+approved?: boolean, 
+/**
+ * GitHub explicitly reports MERGEABLE; unknown is not ready.
+ */
+mergeable?: boolean, 
+/**
  * GitHub can't merge it: its branch conflicts with the base.
  */
 conflicts?: boolean, 

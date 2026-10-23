@@ -75,13 +75,22 @@ struct FoundPr {
     auto_merge: bool,
 }
 
+/// A card lookup distinguishes a signed-out CLI from a branch without a pull request.
+pub struct PullRequestStatus {
+    pub pull_request: Option<PullRequest>,
+    pub auth_required: bool,
+}
+
 impl SessionManager {
     /// The pull request of the session checkout's branch, newest first; none when there is
-    /// none, the branch isn't on GitHub, or `gh` is missing or signed out.
-    pub async fn pull_request(&self, id: &ConversationId) -> Result<Option<PullRequest>> {
+    /// none, the branch isn't on GitHub, or `gh` is missing. A signed-out CLI has its own hint.
+    pub async fn pull_request(&self, id: &ConversationId) -> Result<PullRequestStatus> {
         let checkout = PathBuf::from(self.checkout_dir(id)?);
         let Some(gh) = self.gh() else {
-            return Ok(None);
+            return Ok(PullRequestStatus {
+                pull_request: None,
+                auth_required: false,
+            });
         };
         let git = self.git.clone();
         blocking(move || {
@@ -91,26 +100,34 @@ impl SessionManager {
                 .map_err(git_error)?
                 .current_branch;
             let Some(branch) = branch else {
-                return Ok(None);
+                return Ok(PullRequestStatus {
+                    pull_request: None,
+                    auth_required: false,
+                });
             };
-            Ok(
-                match run_gh(&gh.program, &checkout, &branch, &gh.vars, true) {
-                    Ok(found) => found.map(|found| {
-                        let mut pr = found.pr;
-                        if matches!(pr.state, PullRequestState::Open | PullRequestState::Draft) {
-                            match unresolved_threads(&gh.program, &checkout, &pr, &gh.vars) {
-                                Ok(count) => pr.unresolved = count,
-                                Err(reason) => tracing::debug!(reason, "no review threads from gh"),
-                            }
+            let mut auth_required = false;
+            let pull_request = match run_gh(&gh.program, &checkout, &branch, &gh.vars, true) {
+                Ok(found) => found.map(|found| {
+                    let mut pr = found.pr;
+                    if matches!(pr.state, PullRequestState::Open | PullRequestState::Draft) {
+                        match unresolved_threads(&gh.program, &checkout, &pr, &gh.vars) {
+                            Ok(count) => pr.unresolved = count,
+                            Err(reason) => tracing::debug!(reason, "no review threads from gh"),
                         }
-                        pr
-                    }),
-                    Err(reason) => {
-                        tracing::debug!(branch, reason, "no pull request from gh");
-                        None
                     }
-                },
-            )
+                    pr
+                }),
+                Err(reason) => {
+                    tracing::debug!(branch, reason, "no pull request from gh");
+                    auth_required =
+                        gh_output(&gh.program, &checkout, &["auth", "status"], &gh.vars).is_err();
+                    None
+                }
+            };
+            Ok(PullRequestStatus {
+                pull_request,
+                auth_required,
+            })
         })
         .await
     }
@@ -568,6 +585,8 @@ fn found_pr(pr: GhPullRequest) -> FoundPr {
             base: pr.base_ref_name,
             merge_commit,
             ci: pr.status_check_rollup.as_deref().and_then(checks_state),
+            approved: pr.review_decision.as_deref() == Some("APPROVED"),
+            mergeable: pr.mergeable.as_deref() == Some("MERGEABLE"),
             conflicts: pr.mergeable.as_deref() == Some("CONFLICTING"),
             changes_requested: pr.review_decision.as_deref() == Some("CHANGES_REQUESTED"),
             unresolved: 0,
@@ -758,6 +777,8 @@ mod tests {
         .unwrap();
         let pr = found_pr(pr).pr;
         assert!(pr.conflicts);
+        assert!(pr.approved);
+        assert!(!pr.mergeable);
         assert!(!pr.changes_requested);
         assert_eq!(pr.ci, None);
         assert_eq!(pr.base.as_deref(), Some("main"));

@@ -1541,6 +1541,9 @@ pub enum Response {
     },
     GetPullRequest {
         pull_request: Option<PullRequest>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(as = "Option<bool>", optional)]
+        auth_required: bool,
     },
     CommitChanges {
         outcome: CommitOutcome,
