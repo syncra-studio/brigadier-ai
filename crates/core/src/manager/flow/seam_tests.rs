@@ -1,15 +1,16 @@
 //! The seam (S22): past a debug threshold of 60k the thread is asked for its hand-off note, its
-//! CLI closes behind a divider, and the next message starts a fresh session from the hand-off.
-//! Each message reaches the thread once, across a note turn that runs long, a restart or a
-//! crash at every step, and a generation that dies without its note still goes on.
+//! CLI closes behind a divider, and a fresh session starts at once from the hand-off, with the
+//! messages that waited or told to carry on. Each message reaches the thread once, across a
+//! note turn that runs long, a restart or a crash at every step, and a generation that dies
+//! without its note still goes on.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_providers::{ErrorKind, ProviderError, ProviderEvent, ProviderKind};
+use brigadier_providers::{ErrorKind, ProviderError, ProviderEvent};
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
-use crate::manager::seam::{Phase, SeamConfig, SeamFile, read_seam, without_handoff};
+use crate::manager::seam::{CARRY_ON, Phase, SeamConfig, SeamFile, read_seam, without_handoff};
 use crate::thread_view::{HANDOFF_MARK, NUDGE_MARK};
 
 fn script<F, Fut>(f: F) -> Script
@@ -25,15 +26,10 @@ type Inputs = Arc<Mutex<Vec<(String, String)>>>;
 
 /// Turns the seam on at 60k, for this manager and every one the flow restarts.
 fn seam_on(flow: &mut Flow, hold: Duration) {
-    seam_with(flow, hold, false);
-}
-
-fn seam_with(flow: &mut Flow, hold: Duration, carry_on: bool) {
     let config = SeamConfig {
         on: true,
         tokens: 60_000,
         hold,
-        carry_on,
     };
     flow.seam = Some(config);
     flow.manager.set_seam(config);
@@ -126,11 +122,39 @@ fn given(inputs: &Inputs, needle: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Grows the thread past the seam and waits until it closed.
-async fn grow(flow: &Flow) -> SeamFile {
+/// Grows the thread past seam `n`'s threshold and waits until its successor carried on and
+/// the thread is idle.
+async fn grow(flow: &Flow, n: u32) -> SeamFile {
     flow.say("Grow.").await;
-    flow.settled().await;
-    until_seam(flow, "the seam to close", closed).await
+    let file = until_seam(flow, "the successor", |file| file.generation == n + 1).await;
+    flow.idle().await;
+    file
+}
+
+/// Waits until the note turn is under way: the seam is nudged.
+async fn until_nudged(flow: &Flow) {
+    until_seam(flow, "the nudge", |file| {
+        matches!(file.phase, Phase::Nudged { .. })
+    })
+    .await;
+}
+
+/// A note that never comes: the thread's note turn waits until `release`.
+fn gate_note(
+    base: Script,
+    reached: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+) -> Script {
+    script(move |turn| {
+        let (base, reached, release) = (base.clone(), reached.clone(), release.clone());
+        async move {
+            if turn.input.starts_with(NUDGE_MARK) {
+                reached.notify_one();
+                release.notified().await;
+            }
+            base(turn).await
+        }
+    })
 }
 
 #[tokio::test]
@@ -149,25 +173,31 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
         flow.say(&format!("Filler {n}.")).await;
         flow.settled().await;
     }
-    grow(&flow).await;
-    flow.say("After one.").await;
-    flow.settled().await;
-    let first = until_seam(&flow, "the first successor", |file| file.generation == 2).await;
+    let first = grow(&flow, 1).await;
     assert_eq!(first.seams.len(), 1);
     assert!(first.seams[0].note.is_some() && first.seams[0].end.death.is_none());
+    assert!(first.seams[0].messages.is_empty());
 
-    // The successor's first input is its hand-off, then the user's message, once.
-    let after = given(&inputs, "After one.");
-    assert_eq!(after.len(), 1, "{after:?}");
-    let (successor, input) = &after[0];
+    // The successor started at once from its hand-off, told to carry on.
+    let carried = given(&inputs, CARRY_ON);
+    assert_eq!(carried.len(), 1, "{carried:?}");
+    let (successor, input) = &carried[0];
     assert_eq!(*successor, first.seams[0].successor);
     assert_ne!(Some(successor), first.seams[0].end.predecessor.as_ref());
     assert!(input.starts_with(HANDOFF_MARK), "{input}");
     assert!(input.contains("## Hand-off note\nDoing now: nothing."));
     assert!(input.contains("Plant: keep the code K-001 as it is."));
-    assert!(input.trim_end().ends_with("After one."));
+    assert!(input.trim_end().ends_with(CARRY_ON));
     let start = std::fs::read_to_string(&first.seams[0].start).unwrap();
     assert!(input.starts_with(start.as_str()));
+
+    // The user's next message goes to that successor, resumed.
+    flow.say("After one.").await;
+    flow.idle().await;
+    let after = given(&inputs, "After one.");
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert_eq!(after[0].0, first.seams[0].successor);
+    assert!(!after[0].1.contains(HANDOFF_MARK));
 
     // Every span the hand-off leaves out is a read that works.
     let key = flow.conversation.short().to_owned();
@@ -207,23 +237,21 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
 
     // A restart keeps the seam; a second one comes the same way.
     flow.restart().await;
-    grow(&flow).await;
-    flow.say("After two.").await;
-    flow.settled().await;
-    let second = until_seam(&flow, "the second successor", |file| file.generation == 3).await;
+    let second = grow(&flow, 2).await;
     assert_eq!(second.seams.len(), 2);
-    let after = given(&inputs, "After two.");
-    assert_eq!(after.len(), 1);
-    assert_eq!(after[0].0, second.seams[1].successor);
-    assert!(after[0].1.starts_with(&format!("{HANDOFF_MARK}2 ·")));
+    let carried = given(&inputs, CARRY_ON);
+    assert_eq!(carried.len(), 2);
+    assert_eq!(carried[1].0, second.seams[1].successor);
+    assert!(carried[1].1.starts_with(&format!("{HANDOFF_MARK}2 ·")));
 
-    // Two dividers, after a restart too, each with its note; the user's words stay theirs.
+    // Two dividers, after a restart too, each with its note; the successor's first message
+    // reads as its own words, not the hand-off.
     flow.restart().await;
     let view = flow.manager.thread_view(&flow.conversation).unwrap();
     assert_eq!(view.seams.len(), 2, "{:?}", view.seams);
     for mark in &view.seams {
         assert!(mark.note.is_some() && mark.start.is_some() && mark.death.is_none());
-        assert!(mark.nudge.is_some() && mark.at.is_some());
+        assert!(mark.nudge.is_some() && mark.at.is_some() && mark.carried);
     }
     let texts: Vec<&str> = view
         .entries
@@ -240,7 +268,7 @@ async fn two_seams_each_with_a_divider_its_note_and_a_successor() {
             _ => None,
         })
         .collect();
-    assert_eq!(texts, ["After one.", "After two."]);
+    assert_eq!(texts, [CARRY_ON, CARRY_ON]);
     flow.stop().await;
 }
 
@@ -250,20 +278,10 @@ async fn a_message_during_the_note_turn_reaches_the_successor_once() {
     let release = Arc::new(tokio::sync::Notify::new());
     let reached = Arc::new(tokio::sync::Notify::new());
     let base = thread(inputs.clone(), Arc::default());
-    let (gate, at) = (release.clone(), reached.clone());
     let mut flow = Flow::start(
         "seam-once",
         options(),
-        script(move |turn| {
-            let (base, gate, at) = (base.clone(), gate.clone(), at.clone());
-            async move {
-                if turn.input.starts_with(NUDGE_MARK) {
-                    at.notify_one();
-                    gate.notified().await;
-                }
-                base(turn).await
-            }
-        }),
+        gate_note(base, reached.clone(), release.clone()),
     )
     .await;
     seam_on(&mut flow, Duration::from_secs(60));
@@ -274,13 +292,16 @@ async fn a_message_during_the_note_turn_reaches_the_successor_once() {
     assert!(given(&inputs, "Meanwhile.").is_empty());
     assert_eq!(flow.board().await.queue.items.len(), 1);
     release.notify_one();
-    flow.settled().await;
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    flow.idle().await;
+    // It starts the successor, with its hand-off; nothing else is said to carry on.
     let meanwhile = given(&inputs, "Meanwhile.");
     assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
     assert_eq!(meanwhile[0].0, file.seams[0].successor);
     assert!(meanwhile[0].1.starts_with(HANDOFF_MARK));
+    assert!(given(&inputs, CARRY_ON).is_empty());
     assert!(file.seams[0].note.is_some());
+    assert_eq!(file.seams[0].messages.len(), 1);
     flow.stop().await;
 }
 
@@ -306,13 +327,10 @@ async fn a_note_turn_still_working_a_minute_after_a_message_is_stopped() {
     .await;
     seam_on(&mut flow, Duration::from_millis(300));
     flow.say("Grow.").await;
-    until_seam(&flow, "the nudge", |file| {
-        matches!(file.phase, Phase::Nudged { .. })
-    })
-    .await;
+    until_nudged(&flow).await;
     flow.say("Meanwhile.").await;
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
-    flow.settled().await;
+    flow.idle().await;
     assert_eq!(
         file.seams[0].end.death.as_deref(),
         Some("it was still working a minute after a message came")
@@ -359,31 +377,19 @@ async fn a_context_too_long_ends_the_generation_without_a_note() {
     flow.say("First.").await;
     flow.settled().await;
     flow.say("Overflow.").await;
-    flow.settled().await;
-    let file = until_seam(&flow, "the seam to close", closed).await;
-    let Phase::Closed { end } = &file.phase else {
-        unreachable!()
-    };
+    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    flow.idle().await;
     assert_eq!(
-        end.death.as_deref(),
+        file.seams[0].end.death.as_deref(),
         Some("its context was too long for the model")
     );
-    flow.say("Go on.").await;
-    flow.settled().await;
-    until_seam(&flow, "the successor", |file| file.generation == 2).await;
-    let go = given(&inputs, "Go on.");
-    assert_eq!(
-        go.len(),
-        1,
-        "{:#?} {:?}",
-        inputs.lock().unwrap(),
-        seam_file(&flow)
-    );
-    assert!(go[0].1.contains(
+    let carried = given(&inputs, CARRY_ON);
+    assert_eq!(carried.len(), 1);
+    assert!(carried[0].1.contains(
         "The previous session ended without a hand-off note (its context was too long for \
          the model): check `git status` and `git log` first."
     ));
-    assert!(go[0].1.contains("First."));
+    assert!(carried[0].1.contains("First."));
     let view = flow.manager.thread_view(&flow.conversation).unwrap();
     assert_eq!(
         view.seams[0].death.as_deref(),
@@ -418,6 +424,9 @@ async fn a_nudge_that_cannot_be_steered_is_a_turn_of_its_own() {
                         std::fs::write(note_of(&turn.input), "Next: wait.").unwrap();
                         return Reply::text("Handed off.");
                     }
+                    if turn.input.starts_with(HANDOFF_MARK) {
+                        return Reply::text("Carrying on.");
+                    }
                     Reply {
                         text: "Big.".into(),
                         context_tokens: Some(70_000),
@@ -430,16 +439,13 @@ async fn a_nudge_that_cannot_be_steered_is_a_turn_of_its_own() {
     .await;
     seam_on(&mut flow, Duration::from_secs(60));
     flow.say("Big.").await;
-    let file = until_seam(&flow, "the seam to close", closed).await;
-    flow.settled().await;
+    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    flow.idle().await;
     // One nudge, its own turn, in the predecessor.
     let nudges = given(&inputs, NUDGE_MARK);
-    assert_eq!(nudges.len(), 1);
-    let Phase::Closed { end } = &file.phase else {
-        unreachable!()
-    };
-    assert_eq!(end.predecessor.as_ref(), Some(&nudges[0].0));
-    assert!(end.death.is_none());
+    assert_eq!(nudges.len(), 1, "{nudges:?}");
+    assert_eq!(file.seams[0].end.predecessor.as_ref(), Some(&nudges[0].0));
+    assert!(file.seams[0].end.death.is_none());
     flow.stop().await;
 }
 
@@ -455,25 +461,31 @@ async fn a_restart_between_note_and_successor_starts_one_successor() {
     seam_on(&mut flow, Duration::from_secs(60));
     flow.say("First.").await;
     flow.settled().await;
-    grow(&flow).await;
-    flow.restart().await;
-    flow.say("After.").await;
-    flow.settled().await;
+    // The successor's CLI never comes up before Brigadier stops.
+    let reached = Arc::new(tokio::sync::Notify::new());
+    flow.say("Grow.").await;
+    until_nudged(&flow).await;
+    *flow.behavior.hold_start.lock().unwrap() =
+        Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
+    reached.notified().await;
+    let Phase::Starting { successor, .. } = seam_file(&flow).phase else {
+        panic!("not starting")
+    };
+    flow.crash().await;
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
-    let after = given(&inputs, "After.");
-    assert_eq!(after.len(), 1);
-    assert_eq!(after[0].0, file.seams[0].successor);
-    assert!(after[0].1.contains("## Hand-off note"));
+    flow.idle().await;
+    // One successor, under another id: the one reserved before was never started.
+    let carried = given(&inputs, CARRY_ON);
+    assert_eq!(carried.len(), 1, "{carried:?}");
+    assert_ne!(file.seams[0].successor, successor);
+    assert_eq!(carried[0].0, file.seams[0].successor);
+    assert!(carried[0].1.contains("## Hand-off note"));
     // The next message goes to the same successor, resumed.
     flow.say("Next.").await;
-    flow.settled().await;
+    flow.idle().await;
     let next = given(&inputs, "Next.");
-    assert_eq!(
-        next[0].0,
-        file.seams[0].successor,
-        "{:#?}",
-        inputs.lock().unwrap()
-    );
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].0, file.seams[0].successor);
     assert_eq!(seam_file(&flow).generation, 2);
     flow.stop().await;
 }
@@ -508,21 +520,17 @@ async fn a_restart_in_the_note_turn_ends_the_generation_with_the_note_it_wrote()
         flow.say("Grow.").await;
         reached.notified().await;
         flow.crash().await;
-        let file = seam_file(&flow);
-        let Phase::Closed { end } = &file.phase else {
-            panic!("{file:?}")
-        };
+        // The generation ends, and its successor carries on at once.
+        let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+        flow.idle().await;
         assert_eq!(
-            end.death.as_deref(),
+            file.seams[0].end.death.as_deref(),
             (!written).then_some("Brigadier restarted before it wrote one")
         );
-        flow.say("After.").await;
-        flow.settled().await;
-        until_seam(&flow, "the successor", |file| file.generation == 2).await;
-        let after = given(&inputs, "After.");
-        assert_eq!(after.len(), 1);
+        let carried = given(&inputs, CARRY_ON);
+        assert_eq!(carried.len(), 1);
         assert_eq!(
-            after[0].1.contains("## Hand-off note\nNext: wait."),
+            carried[0].1.contains("## Hand-off note\nNext: wait."),
             written
         );
         flow.stop().await;
@@ -532,27 +540,39 @@ async fn a_restart_in_the_note_turn_ends_the_generation_with_the_note_it_wrote()
 #[tokio::test]
 async fn a_crash_before_the_successor_took_its_handoff_sends_the_message_once() {
     let inputs: Inputs = Arc::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let note = Arc::new(tokio::sync::Notify::new());
+    let base = thread(inputs.clone(), Arc::default());
     let mut flow = Flow::start(
         "seam-crash-before",
         options(),
-        thread(inputs.clone(), Arc::default()),
+        gate_note(base, note.clone(), release.clone()),
     )
     .await;
     seam_on(&mut flow, Duration::from_secs(60));
-    grow(&flow).await;
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release));
+    flow.say("Grow.").await;
+    note.notified().await;
+    // A message waits for the successor, whose CLI never comes up before the crash.
     flow.say("After.").await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_start.lock().unwrap() =
+        Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
+    release.notify_one();
     reached.notified().await;
     let starting = seam_file(&flow);
-    let Phase::Starting { successor, .. } = &starting.phase else {
+    let Phase::Starting {
+        successor,
+        messages,
+        ..
+    } = &starting.phase
+    else {
         panic!("{starting:?}")
     };
+    assert_eq!(messages.len(), 1);
     let reserved = successor.clone();
     flow.crash().await;
     let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
-    flow.settled().await;
+    flow.idle().await;
     let after = given(&inputs, "After.");
     assert_eq!(after.len(), 1, "{after:?}");
     assert!(after[0].1.starts_with(HANDOFF_MARK));
@@ -560,76 +580,51 @@ async fn a_crash_before_the_successor_took_its_handoff_sends_the_message_once() 
     assert_ne!(file.seams[0].successor, reserved);
     assert_eq!(after[0].0, file.seams[0].successor);
     assert_eq!(file.seams[0].messages.len(), 1);
+    // It carried the message: nothing else told it to carry on.
+    assert!(given(&inputs, CARRY_ON).is_empty());
     flow.stop().await;
 }
 
 #[tokio::test]
 async fn a_crash_after_the_successor_took_its_handoff_sends_nothing_again() {
     let inputs: Inputs = Arc::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let note = Arc::new(tokio::sync::Notify::new());
+    let base = thread(inputs.clone(), Arc::default());
     let mut flow = Flow::start(
         "seam-crash-after",
         options(),
-        thread(inputs.clone(), Arc::default()),
+        gate_note(base, note.clone(), release.clone()),
     )
     .await;
     seam_on(&mut flow, Duration::from_secs(60));
-    grow(&flow).await;
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    *flow.behavior.hold_send.lock().unwrap() = Some((reached.clone(), release));
+    flow.say("Grow.").await;
+    note.notified().await;
     flow.say("After.").await;
+    // The successor took its input, and Brigadier dies before it heard so.
+    let reached = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_send.lock().unwrap() =
+        Some((reached.clone(), Arc::new(tokio::sync::Notify::new())));
+    release.notify_one();
     reached.notified().await;
     let Phase::Starting { successor, .. } = seam_file(&flow).phase else {
         panic!("not starting")
     };
     flow.crash().await;
-    let file = seam_file(&flow);
-    assert_eq!(file.generation, 2, "{file:?}");
+    let file = until_seam(&flow, "the seam to complete", |file| file.generation == 2).await;
     assert_eq!(file.seams[0].successor, successor);
-    // Its turn was cut off by the crash: it reads interrupted, and nothing went again.
     flow.settled().await;
-    assert!(given(&inputs, "After.").is_empty());
+    // Its turn was cut off by the crash: nothing went again, and nothing carried on.
+    let after = given(&inputs, "After.");
+    assert!(after.is_empty(), "{after:?}");
+    assert!(given(&inputs, CARRY_ON).is_empty());
     // The next message resumes that successor, never another.
     flow.say("Next.").await;
-    flow.settled().await;
+    flow.idle().await;
     let next = given(&inputs, "Next.");
     assert_eq!(next.len(), 1);
     assert_eq!(next[0].0, successor);
     assert!(!next[0].1.contains(HANDOFF_MARK));
     assert_eq!(seam_file(&flow).seams.len(), 1);
-    let _ = ProviderKind::Claude;
-    flow.stop().await;
-}
-
-#[tokio::test]
-async fn set_to_carry_on_the_successor_starts_by_itself() {
-    let inputs: Inputs = Arc::default();
-    let mut flow = Flow::start(
-        "seam-carry-on",
-        options(),
-        thread(inputs.clone(), Arc::default()),
-    )
-    .await;
-    seam_with(&mut flow, Duration::from_secs(60), true);
-    flow.say("First.").await;
-    flow.settled().await;
-    flow.say("Grow.").await;
-    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
-    // Its turn carries no request: wait for the thread itself.
-    flow.idle().await;
-    // No message of the user's: it starts from its hand-off, told to carry on.
-    let carried = given(&inputs, crate::manager::seam::CARRY_ON);
-    assert_eq!(carried.len(), 1, "{:#?}", inputs.lock().unwrap());
-    assert_eq!(carried[0].0, file.seams[0].successor);
-    assert!(carried[0].1.starts_with(HANDOFF_MARK));
-    assert!(file.seams[0].messages.is_empty());
-    // The user's next message goes to that successor, resumed.
-    flow.say("Next.").await;
-    flow.idle().await;
-    let next = given(&inputs, "Next.");
-    assert_eq!(next.len(), 1);
-    assert_eq!(next[0].0, file.seams[0].successor);
-    assert!(!next[0].1.starts_with(HANDOFF_MARK));
-    assert_eq!(seam_file(&flow).generation, 2);
     flow.stop().await;
 }

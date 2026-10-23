@@ -308,7 +308,7 @@ test("a call's kind, detail and exit read as the engine's", () => {
 });
 
 test("a seam: Brigadier's message is its line in the turn, and the divider stands before the successor's first turn", () => {
-  const seam = { n: 1, open: false, at: "u3", nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null };
+  const seam = { n: 1, open: false, at: "u3", carried: false, nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null };
   const steered: ThreadView = {
     entries: [
       user("u1", "Grow", 1000),
@@ -344,6 +344,22 @@ test("a seam: Brigadier's message is its line in the turn, and the divider stand
     [
       ["u1", "message", [], []],
       ["n1", null, [2], ["it ended its turn without writing one"]],
+    ],
+  );
+  // A successor that carried on by itself: its first turn has no user bubble, under the divider.
+  const carried = cliBlocks(
+    {
+      ...steered,
+      entries: [...steered.entries.slice(0, 3), user("u3", "Carry on from the hand-off note.", 2000)],
+      seams: [{ ...seam, carried: true }],
+    },
+    "conv",
+  );
+  assert.deepEqual(
+    carried.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.length]),
+    [
+      ["u1", "message", [1], 1],
+      ["u3", null, [], 0],
     ],
   );
   // While the thread writes its note, no divider yet.

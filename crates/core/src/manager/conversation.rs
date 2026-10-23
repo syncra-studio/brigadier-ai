@@ -826,7 +826,8 @@ impl ConvLive {
     pub(super) async fn recovering(&self, on: bool) -> bool {
         let mut state = self.state.lock().await;
         state.recovering = on;
-        !state.inbox.is_empty() || !state.pending.is_empty()
+        // A closed seam's successor starts by itself (S22).
+        !state.inbox.is_empty() || !state.pending.is_empty() || state.seam.carry_on
     }
 
     /// Holds new turns until [`Self::carry`].

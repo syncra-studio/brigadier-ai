@@ -504,13 +504,13 @@ def report(result):
     events = result.get("provider_events", [])
     lookup = {e["entry"]["event"]["itemId"]: e["entry"]["event"] for e in events if probe and
               e["atMs"] >= probe["sent_ms"] and is_lookup(e["entry"].get("event") or {})}.values()
-    seam = result.get("arm") == "seam"
-    lines = [("# Claude continuity, seam arm — " if seam else "# Claude continuity baseline — ") + result["started_at"][:10], "",
+    seam_arm = result.get("arm") == "seam"
+    lines = [("# Claude continuity, seam arm — " if seam_arm else "# Claude continuity baseline — ") + result["started_at"][:10], "",
              "Report only; no recall result gates a session or changes continuity.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
              f"Claude `{result['model']}`, high effort; headless dev daemon; one session, several requests.",
              (f"Seam (`BRIGADIER_SEAM=1`) at {seam_tokens(result['threshold'])} tokens, where rebirth would swap; "
-              "the bootstrap's tail budget is about 15k tokens." if seam else
+              "the bootstrap's tail budget is about 15k tokens." if seam_arm else
               f"Prepare threshold {result['threshold']} tokens; swap at 1.25×; briefing cap 4000 estimated tokens."),
              "Mandatory sections and the minimum tail can exceed that briefing budget; observed sizes follow below.",
              "A labelled, injected unverified worker report supplies the false claim; no real worker is spawned.",
@@ -519,7 +519,7 @@ def report(result):
     if rows:
         passed = sum(row["verdict"] == "pass" for row in rows.values())
         lines.insert(4, f"{passed}/{len(ITEMS)} planted items passed. The final probe was allowed to search existing records.\n")
-    if seam:
+    if seam_arm:
         # The successor's verbatim part: the first message, the latest exchange and the tail.
         last = (result.get("handoffs") or [{}])[-1].get("start", "")
         recent = last.partition("## The session's first message")[2].partition("## Left out")[0]
@@ -545,7 +545,7 @@ def report(result):
               "The usage-limit injection may use today's stand-in path; the requested Claude model returns after its window resets."]
     lines += ["", "| Forced seam | Observed |", "|---|---|",
               f"| Size ×2 | {result.get('size_rebirths_before_faults', 0)} "
-              f"{'closed seams' if seam else 'rebirth records'} before fault injections |"]
+              f"{'closed seams' if seam_arm else 'rebirth records'} before fault injections |"]
     observations = seam_observations(result)
     for seam, observed in zip(result["seams"], observations):
         lines.append("| " + seam["kind"] + " | `" + json.dumps({**seam, **observed}, sort_keys=True) + "` |")
@@ -554,7 +554,7 @@ def report(result):
               "Note and briefing token estimates use the runtime's bytes/4 convention; first-call sizes use metering.", "",
               "| Generation / trigger | Note bytes | Briefing tokens | Prepare→swap ms | Successor first context | Calls to first work tool |",
               "|---|---:|---:|---:|---:|---:|"]
-    if seam:
+    if seam_arm:
         lines[-2:] = ["| Seam | Note bytes | Hand-off tokens | Nudge→close ms | Close→successor ms | Successor first context | Death |",
                       "|---|---:|---:|---:|---:|---:|---|"]
         for handoff in result.get("handoffs", []):
@@ -564,7 +564,7 @@ def report(result):
             lines.append(f"| {handoff['n']} | {len(handoff['note'].encode())} | {len(handoff['start'].encode()) // 4} | "
                          f"{closed - nudged if nudged and closed else 'no nudge'} | {started - closed if started and closed else ''} | "
                          f"{first} | {handoff.get('death') or ''} |")
-    for record, texts in zip([] if seam else rebirths, result.get("briefings", [])):
+    for record, texts in zip([] if seam_arm else rebirths, result.get("briefings", [])):
         calls = result.get("native_calls", {}).get(record.get("newNativeId"), [])
         first = sum(calls[0]["usage"].get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")) if calls else None
         productive = next((i for i, call in enumerate(calls, 1) if any(

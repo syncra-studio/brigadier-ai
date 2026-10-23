@@ -18,6 +18,11 @@ open: boolean,
  */
 at: string | null, 
 /**
+ * The successor started with no message of the user's: its first message is Brigadier's
+ * word to carry on, shown as no bubble of the user's.
+ */
+carried: boolean, 
+/**
  * Brigadier's message asking for the hand-off, shown as Brigadier's line, not the user's.
  */
 nudge: string | null, 

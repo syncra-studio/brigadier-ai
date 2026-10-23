@@ -1,8 +1,8 @@
 //! The seam (G12, S22): a long session goes on in a fresh CLI session, never compacted. Past
 //! `BRIGADIER_SEAM_TOKENS` of hot context (the CLI's own usage events), Brigadier sends the one
 //! message it ever pushes into a thread: finish the step you are on, update the ledger, write
-//! the hand-off note. Once that turn ends the CLI closes and the thread shows a divider; the
-//! next message starts the successor, whose first lines are the hand-off (the bootstrap): the
+//! the hand-off note. Once that turn ends the CLI closes, the thread shows a divider and the
+//! successor starts at once (user, 10-23); its first lines are the hand-off (the bootstrap): the
 //! map, the whole ledger, the note, the session's first message, the latest exchange and a
 //! newest-first verbatim tail, with the exact read command of every span left out (§9.5 L2).
 //!
@@ -29,10 +29,8 @@ use crate::{Error, Result};
 pub(crate) const SEAM_ENV: &str = "BRIGADIER_SEAM";
 /// The hot context the seam comes at, in tokens: an env default, never a cap (Q1).
 pub(crate) const TOKENS_ENV: &str = "BRIGADIER_SEAM_TOKENS";
-/// The successor starts at once and carries on from the note by itself, rather than with the
-/// user's next message. One switch, so the choice is easy to flip.
-pub(crate) const CARRY_ON_ENV: &str = "BRIGADIER_SEAM_CARRY_ON";
-/// What a successor that starts by itself is told after its hand-off.
+/// What the successor is told after its hand-off when no message of the user's waits for it: it
+/// starts at once and carries on by itself, as a Delegator's successor does (user, 10-23).
 pub(crate) const CARRY_ON: &str = "Carry on from the hand-off note.";
 const DEFAULT_TOKENS: i64 = 200_000;
 /// How long a user message waits for the note turn before it goes to the successor anyway.
@@ -51,8 +49,6 @@ pub(crate) struct SeamConfig {
     pub on: bool,
     pub tokens: i64,
     pub hold: Duration,
-    /// The successor starts as soon as the seam closes ([`CARRY_ON_ENV`]).
-    pub carry_on: bool,
 }
 
 impl SeamConfig {
@@ -65,17 +61,26 @@ impl SeamConfig {
                 .filter(|tokens| *tokens > 0)
                 .unwrap_or(DEFAULT_TOKENS),
             hold: HOLD,
-            carry_on: std::env::var(CARRY_ON_ENV).is_ok_and(|value| value.trim() == "1"),
         }
     }
 
     /// The context the seam comes at for a model of `window` tokens: the setting, or four
-    /// fifths of a smaller window, so the note turn still fits.
-    pub(crate) fn threshold(&self, window: Option<i64>) -> i64 {
-        match window.filter(|window| *window > 0) {
+    /// fifths of a smaller window, so the note turn still fits. A generation that started at
+    /// `base` grows a quarter of the setting first, so a successor whose hand-off alone comes
+    /// near the setting isn't asked for its own at once (never past nine tenths of the window).
+    pub(crate) fn threshold(&self, window: Option<i64>, base: Option<i64>) -> i64 {
+        let window = window.filter(|window| *window > 0);
+        let mut at = match window {
             Some(window) => self.tokens.min(window / 5 * 4),
             None => self.tokens,
+        };
+        if let Some(base) = base {
+            at = at.max(base + self.tokens / 4);
+            if let Some(window) = window {
+                at = at.min(window / 10 * 9);
+            }
         }
+        at
     }
 }
 
@@ -165,6 +170,10 @@ pub(crate) struct Seam {
     /// The messages its first input carried.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<String>,
+    /// The context the successor's CLI first reported: its generation grows from there
+    /// before its own seam ([`SeamConfig::threshold`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_context: Option<i64>,
 }
 
 pub(crate) fn read_seam(record: &Path) -> SeamFile {
@@ -254,7 +263,14 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         .iter()
         .map(|entry| entry_text(entry, boot.blobs).map(|(role, text, _)| (role, text)))
         .collect();
-    let mut shown = vec![false; readable.len()];
+    // Brigadier's own nudge is no part of the work: never quoted, never left out.
+    let mut shown: Vec<bool> = readable
+        .iter()
+        .map(|item| {
+            item.as_ref()
+                .is_some_and(|(_, text)| text.starts_with(NUDGE_MARK))
+        })
+        .collect();
     let read = |from: usize, to: usize| format!("`brigadier brain read {} {from} {to}`", boot.key);
     let item = |at: usize, max: usize| -> Option<String> {
         let (role, text) = readable[at].as_ref()?;
@@ -357,7 +373,7 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         out.push_str("\n## The latest exchange\n");
         for (at, entry) in boot.entries.iter().enumerate().skip(from) {
             let message = matches!(entry.event, ProviderEvent::Message { .. });
-            if entry.parent.is_some() {
+            if entry.parent.is_some() || shown[at] {
                 continue;
             }
             let max = if message {
@@ -463,6 +479,7 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
             n: seam.n,
             open: false,
             at: None,
+            carried: false,
             nudge: None,
             note: existing(note_path(record, seam.n)),
             start: existing(PathBuf::from(&seam.start)),
@@ -475,6 +492,7 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
             n: file.generation,
             open: true,
             at: None,
+            carried: false,
             nudge: None,
             note: None,
             start: None,
@@ -484,6 +502,7 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
             n: file.generation,
             open: false,
             at: None,
+            carried: false,
             nudge: None,
             note: existing(note_path(record, file.generation)),
             start: None,
@@ -515,6 +534,7 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
         let own = without_handoff(text).to_owned();
         *text = own;
         if let Some(mark) = marks.iter_mut().find(|mark| Some(mark.n) == n) {
+            mark.carried = text == CARRY_ON;
             mark.at = Some(item_id.clone());
             mark.nudge = nudge.take();
         }

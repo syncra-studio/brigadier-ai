@@ -372,12 +372,15 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   let block: Block | null = null;
   const seams = view.seams ?? [];
   const nudges = new Set(seams.flatMap((seam) => (seam.nudge ? [seam.nudge] : [])));
+  // A successor that started by itself: its first message is Brigadier's word to carry on.
+  const carried = new Set(seams.flatMap((seam) => (seam.carried && seam.at ? [seam.at] : [])));
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
     const { event } = entry;
     // Brigadier's one message at a seam is its line in the turn, never a bubble of the user's;
-    // sent as a turn of its own, that turn has no user message.
-    if (event.type === "message" && event.role === "user" && nudges.has(event.itemId)) {
+    // sent as a turn of its own, that turn has no user message, as a successor's that carried on.
+    const own = event.type === "message" && event.role === "user" && carried.has(event.itemId);
+    if (own || (event.type === "message" && event.role === "user" && nudges.has(event.itemId))) {
       if (startsTurn(entry)) {
         if (block) settle(block, view.turns[blocks.length - 1]);
         block = emptyBlock(event.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
@@ -385,7 +388,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         times.push([[position, entry.atMs ?? 0]]);
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
-      block?.nudges.push(position);
+      if (!own) block?.nudges.push(position);
       return;
     }
     if (startsTurn(entry) && event.type === "message") {

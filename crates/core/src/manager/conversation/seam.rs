@@ -9,11 +9,12 @@
 //!   a minute after a message came, it is stopped and the seam closes without waiting.
 //! - **Close.** The turn that read the nudge ends: with a note or without, the seam closes
 //!   (`closed`) and the predecessor's CLI goes.
-//! - **Successor.** The next turn writes `starting` with a session id reserved for it and the
-//!   messages it carries, starts a fresh CLI under that id, and sends the hand-off with them;
+//! - **Successor.** It starts at once, carrying the messages that waited (or, with none, told
+//!   to carry on from the note): the turn writes `starting` with a session id reserved for it
+//!   and those messages, starts a fresh CLI under that id, and sends the hand-off with them;
 //!   once sent, the seam is complete and the generation one more.
 //! - **Death.** "Prompt is too long", or a CLI that can't be resumed, ends the generation
-//!   without a note: the next message starts the successor, told to check git first.
+//!   without a note: the successor starts the same way, told to check git first.
 
 use std::sync::Arc;
 
@@ -48,9 +49,11 @@ pub(super) struct SeamLive {
     hold_armed: bool,
     /// The session id the next CLI starts under (a successor's, reserved in `seam.json`).
     pub(super) reserved: Option<String>,
-    /// The seam closed and its successor starts by itself, when nothing else starts it first
-    /// ([`SeamConfig::carry_on`](crate::manager::seam::SeamConfig)).
+    /// The seam closed and its successor starts by itself, when no message starts it first.
     pub(super) carry_on: bool,
+    /// The context a successor's CLI first reported, which its generation grows from before
+    /// its seam (none for the first generation); `None` until looked up in `seam.json`.
+    pub(super) base: Option<Option<i64>>,
 }
 
 /// A successor about to start: its seam, how its predecessor ended and what it carries.
@@ -99,9 +102,35 @@ impl SessionManager {
         used: i64,
         window: Option<i64>,
     ) {
-        if used >= self.seam_config().threshold(window) {
+        let base = self.seam_base(conv, used).await;
+        if used >= self.seam_config().threshold(window, base) {
             self.seam_nudge(conv, cli, used, true).await;
         }
+    }
+
+    /// What a successor's generation grows from: its first reported context, kept in
+    /// `seam.json` so a restart doesn't take a later one.
+    async fn seam_base(&self, conv: &Arc<ConvLive>, used: i64) -> Option<i64> {
+        if let Some(base) = conv.state.lock().await.seam.base {
+            return base;
+        }
+        let mut file = self.read_seam_of(&conv.id).await;
+        let generation = file.generation;
+        let base = match (&file.phase, file.seams.last_mut()) {
+            (Phase::Live, Some(seam)) if seam.n + 1 == generation => match seam.first_context {
+                Some(first) => Some(first),
+                None => {
+                    seam.first_context = Some(used);
+                    self.write_seam_of(&conv.id, file).await.ok();
+                    Some(used)
+                }
+            },
+            // The successor reports before it is recorded: `seam_started` keeps this.
+            (Phase::Starting { .. }, _) => Some(used),
+            _ => None,
+        };
+        conv.state.lock().await.seam.base = Some(base);
+        base
     }
 
     /// Asks for the hand-off once per generation: steered into the running turn when
@@ -266,9 +295,12 @@ impl SessionManager {
                 self.close_seam(conv, file, Some(at_ms), death).await
             }
             Phase::Live => {
-                let used = conv.state.lock().await.context;
+                let (used, base) = {
+                    let state = conv.state.lock().await;
+                    (state.context, state.seam.base.flatten())
+                };
                 if let Some((used, window)) = used
-                    && used >= self.seam_config().threshold(window)
+                    && used >= self.seam_config().threshold(window, base)
                 {
                     self.seam_nudge(conv, cli, used, false).await;
                 }
@@ -315,7 +347,7 @@ impl SessionManager {
         state.seam.force = false;
         state.seam.hold_armed = false;
         state.seam.hold_timer += 1;
-        state.seam.carry_on = self.seam_config().carry_on;
+        state.seam.carry_on = true;
         true
     }
 
@@ -430,6 +462,7 @@ impl SessionManager {
         let mut state = conv.state.lock().await;
         state.seam.reserved = Some(reserved);
         state.seam.carry_on = false;
+        state.seam.base = None;
         state.fresh = true;
         // The predecessor's context is not the successor's.
         state.context = None;
@@ -472,6 +505,7 @@ impl SessionManager {
         self.write_seam_of(&conv.id, file.clone()).await.ok()?;
         let mut state = conv.state.lock().await;
         state.seam.held = false;
+        state.seam.base = None;
         state.context = None;
         state.checkpoint = None;
         state.continuing.clear();
@@ -581,6 +615,9 @@ impl SessionManager {
             successor.end,
             successor.messages,
         );
+        if let Some(seam) = file.seams.last_mut() {
+            seam.first_context = conv.state.lock().await.seam.base.flatten();
+        }
         if let Err(err) = self.write_seam_of(&conv.id, file).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not record the successor"; conversation = %conv.id, error = %err);
         }
@@ -608,10 +645,10 @@ impl SessionManager {
         }
         let record = self.session_dir(id).record();
         let mut file = self.read_seam_of(id).await;
-        let carry_on = self.seam_config().carry_on;
         match file.phase.clone() {
             Phase::Live => {}
-            Phase::Closed { .. } => conv.state.lock().await.seam.carry_on = carry_on,
+            // Its successor starts at once.
+            Phase::Closed { .. } => conv.state.lock().await.seam.carry_on = true,
             Phase::Nudged {
                 at_ms, predecessor, ..
             } => {
@@ -625,7 +662,7 @@ impl SessionManager {
                     },
                 };
                 if self.write_seam_of(id, file).await.is_ok() {
-                    conv.state.lock().await.seam.carry_on = carry_on;
+                    conv.state.lock().await.seam.carry_on = true;
                 }
             }
             Phase::Starting {
@@ -664,7 +701,7 @@ impl SessionManager {
                     .collect();
                 let mut state = conv.state.lock().await;
                 // Its messages start the next successor; with none, it carries on by itself.
-                state.seam.carry_on = carry_on && again.is_empty();
+                state.seam.carry_on = again.is_empty();
                 state.pending.extend(again);
             }
         }
@@ -716,6 +753,7 @@ fn complete(
         note: note.is_file().then(|| note.display().to_string()),
         start: start_path(record, n).display().to_string(),
         messages,
+        first_context: None,
     });
     file.generation = n + 1;
     file.phase = Phase::Live;

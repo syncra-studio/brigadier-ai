@@ -190,6 +190,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         note: (n == 1).then(|| note_path(record, 1).display().to_string()),
         start: start_path(record, n).display().to_string(),
         messages: Vec::new(),
+        first_context: None,
     };
     write_seam(
         record,
@@ -237,9 +238,27 @@ fn the_threshold_leaves_room_in_a_small_window() {
         on: true,
         tokens: 200_000,
         hold: HOLD,
-        carry_on: false,
     };
-    assert_eq!(config.threshold(Some(1_000_000)), 200_000);
-    assert_eq!(config.threshold(Some(200_000)), 160_000);
-    assert_eq!(config.threshold(None), 200_000);
+    assert_eq!(config.threshold(Some(1_000_000), None), 200_000);
+    assert_eq!(config.threshold(Some(200_000), None), 160_000);
+    assert_eq!(config.threshold(None, None), 200_000);
+    // A generation that started near it grows a quarter of it first, within the window.
+    assert_eq!(config.threshold(Some(1_000_000), Some(40_000)), 200_000);
+    assert_eq!(config.threshold(Some(1_000_000), Some(190_000)), 240_000);
+    assert_eq!(config.threshold(Some(250_000), Some(190_000)), 225_000);
+}
+
+#[test]
+fn the_nudge_is_never_quoted_nor_left_out() {
+    let mut entries = transcript(3, "done");
+    entries.push(message("n", Role::User, &nudge(Path::new("/s/n.md"))));
+    entries.push(message("h", Role::Assistant, "Handed off."));
+    let text = boot(&entries, Some("doing now: nothing"), None);
+    assert!(!text.contains(NUDGE_MARK), "{text}");
+    assert!(text.contains("[#4 · user]\nuser 2"));
+    assert!(text.contains("[#7 · assistant]\nHanded off."));
+    assert!(
+        !shown(&text).contains(&6) && spans(&text).is_empty(),
+        "{text}"
+    );
 }
