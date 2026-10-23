@@ -1451,6 +1451,8 @@ refresh the routing for automatic choosing, which all these then go as the \"adv
     …`. It judges only `brigadier start --work <Work>`; chats, sessions and `brigadier models`' list ignore it.
   - Each rule row says its scope and effect ("Everywhere · Chats, sessions and workers can't run on it",
     "<Work> only · Its workers can't run on it"); a draft that would refuse a kind names it with an Open link.
+  - The page calls the shipped advice Automatic. How a model is picked lists the four true steps (your choice,
+    your order, Automatic, your rules, which win over all) and ends on an example from the page's own kinds.
   - Not built (G18, no router): the pen's Prefer effect, scores, Explanation view, Route sections, 7 steps.
 
 **S33. A neutral shipped rules file (w95 item 16).** Codex.
