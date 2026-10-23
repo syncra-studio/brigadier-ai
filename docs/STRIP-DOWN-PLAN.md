@@ -30,7 +30,10 @@
 > Amended again on 10-23 with `research/CONTINUITY.md`: decisions survive hand-offs (S22b, §6, §9.5 L8–L9).
 > From this amendment on, a plan line that comes from a user decision cites it (a G/Q id, or a ledger id), and a
 > line the writer adds says "proposed". Older text is not re-tagged. The known drifts are in the run's audit
-> (`workers/w95/report.md`, run `20261022-0805-take-over-5-sessions`) and wait on the user (§9.6).
+> (`workers/w95/report.md`, run `20261022-0805-take-over-5-sessions`).
+> Amended again on 10-23 with the user's answers to that audit: the plan restores the grill's decisions where
+> they live, and Stage 6 (S28–S36) builds them. A changed line carries `(user, 2026-10-23: "…")`; the four
+> answers still open carry "default, user may reverse" (§9.6 lists all 20).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -67,13 +70,17 @@ default. It trims only its own additions: the short standing instructions (§6),
 one `brigadier --help` pointer, and the always-installed `/brigade` skill, which costs only its description
 until used (G20). The one thing it turns off is the few CLI tools that cannot work inside a Brigadier tab (S17),
 never anything of the user's. Stripping comes back only with measured evidence on our own tasks (§8, item 13).
+One override stays: when the user's settings say `disableAllHooks: true`, Brigadier sets it false so its own
+hooks run, and the user's hooks run too (§8, item 17; default, user may reverse, 2026-10-23).
 The one exception is a research worker the thread starts with `brigadier start --lean` (G23, S13): the thread's
 choice per worker, never the user's own sessions.
 
 **Brigadier pushes nothing (G1).** A thread receives only:
 - the user's messages;
 - results of things it started itself, which the CLI already delivers;
-- one message per seam: "write your hand-off" (G12).
+- one message per seam: "write your hand-off" (G12);
+- a message another session chose to send it, when the user asked for it or it was truly needed (S30) (user,
+  2026-10-23: "Sessions should be able to message eachother").
 
 There are no status nags, no cross-session notices, no mid-task rule changes, no `[quiet]` and no `[next:]`.
 
@@ -93,10 +100,15 @@ There are no status nags, no cross-session notices, no mid-task rule changes, no
 `brigadier`, built like `cmux`: subcommands, `--json` output, called through the CLI's own Bash tool. It costs
 no context until used, and it is the same for Claude, Codex and the `/brigade` skill. One line of the standing
 instructions points at `brigadier --help`. The thread calls it when it wants to:
-- **Read anything:** sessions, tabs, states, its own workers.
+- **Read anything:** sessions, tabs, states, its own workers, in every project, not only the current one (S30)
+  (user, 2026-10-23, w95 item 12: every project).
 - **Worker commands equal to `dlg`:** start a worker, send, wait for its workers' events, read the last
   message or screen, close.
-- **Previews, browser, computer use.**
+- **Message other sessions:** send to and wait on another sidebar session, when the user asks or when it is
+  absolutely needed (S30) (user, 2026-10-23: "Sessions should be able to message eachother").
+- **Previews, browser.**
+- **Computer use:** not a subcommand; the vendored driver's own tools sit beside `brigadier` and reach every
+  session, Chat and worker while Settings › Computer use is on (S35) (user, 2026-10-23: "fix this!").
 - **Ask the user as a card.**
 - **Models:** `brigadier models`, the live model, usage and guidance view (G18).
 - **Brain search** over the project's records (G14).
@@ -112,12 +124,20 @@ skill is always installed, and one line of the standing instructions says the se
 `brigadier` and points at the skill. No one invokes it and there is no "New brigade" UI. The user talks to the
 session as usual; it uses workers only when the job calls for them. Overnight is the same skill with a deadline.
 The engine has no lead, phase or landing protocol.
+A Chat is a brigade too and acts almost exactly as a normal session: it starts workers, and its CLI has its own
+shell with the Chat's session folder as cwd, with no `brigadier`-only gate (S28) (user, 2026-10-23: "a chat is
+always a brigade").
 
 **A worker belongs to its parent session (G19).** A worker is never a sidebar session. `brigadier start`
 creates a worker of the calling session, and it lives only inside that session: in its Workers row (context
 card), the rail above its composer and its worker cards and panel. It is like Claude Code's subagents or the
 Delegator's worker tabs. Archiving or deleting the parent takes its workers (S20). Under the hood a worker is
-still a plain CLI with its own worktree and its own checks.
+still a plain CLI with its own worktree and its own checks. A worker can't start workers of its own; it may use
+its CLI's own subagents (user, 2026-10-23: "workers cant start other workers").
+
+**The parent knows everything about its workers (Q9).** A worker's turn end, question, prompt or stop reaches its
+parent, idle or not, the Delegator way: a `brigadier wait` the parent keeps in its CLI's background re-invokes it
+(S29) (user, 2026-10-23: "The parent should know everything").
 
 **Workers land into their parent (G21).** A worker branches from its parent session's branch (`brigadier start
 --base` defaults to the parent's current branch) and merges back into the parent when its step is done. The
@@ -136,8 +156,11 @@ composer would duplicate the parent and complicate the UI.
 `/brigade` skill. Before `brigadier start` it reads `brigadier models`: what each CLI reports as available, usage and
 reset times per account, the current account, a shipped guidance table, and the user's own rules on top
 (S13b). **Brigadier enforces nothing on its own.** `brigadier start` refuses only what the user's rules file
-forbids; the shipped default of that file carries today's rules (never Fable, effort ≤ high), and the user may
-edit it. The old task router and its fallback rerouting go. Account auto-switch stays.
+forbids. The shipped default of that file is neutral and forbids nothing; the user's own rules (for this user:
+never Fable, effort ≤ high) live in the user's own file (S33) (user, 2026-10-23, w95 item 16).
+Settings › Routing is the editor of that same file, with the user's preferences; `brigadier start` and the
+skill pass the model and effort those rules name (S32) (user, 2026-10-23: "user should've been able to apply
+his rules"). The old task router and its fallback rerouting go. Account auto-switch stays.
 
 **Permissions pass straight through (G5).** The composer offers Ask, Accept edits and Full access. These map to
 Claude Code's and Codex's own modes. The CLI's own permission prompts show as cards. Brigadier runs no sandbox
@@ -145,7 +168,11 @@ of its own.
 
 **Context card (G9, G10).** It has these rows:
 - **Project and branch**, with +/− from git.
-- **PR row:** `#N`, a state word and a colour, from `gh`. It has no actions.
+- **PR row:** `#N`, a state word and a colour, from `gh`. It has no actions. The words and colours are the
+  grill's list: Draft (grey), Checks running (yellow), Review needed (yellow), Ready (green), Merged (purple),
+  Closed (grey), Checks failed (red). It refreshes after `git push` and `gh pr`, plus a light poll while the
+  session is open; without a `gh` sign-in it says "gh auth login for PR status" (S34) (user, 2026-10-23: "fix
+  this").
 - **Waiting on you:** only real pending CLI permission prompts, ask-user questions and MCP sign-ins of this
   session's workers. The user answers them here, and the parent relays (G19.Q6). This session's own question
   shows only above the composer.
@@ -156,7 +183,8 @@ of its own.
   rows behave exactly like Claude Code's own.
 - **Sources:** attachments first, then fetched URLs, then MCP servers used; + adds one.
 
-No context-used number shows anywhere. A usage-limit "Resumes at" card is allowed; it reads the reset time from
+No context-used number shows anywhere, except the context ring in a Chat's composer, which stays as it is
+(user, 2026-10-23: "ok"). A usage-limit "Resumes at" card is allowed; it reads the reset time from
 the CLI's own error. The Job card is gone, overnight included (G7).
 
 **Changes card (G8).** Brigadier takes a git snapshot of the session's own worktree at each turn's start and
@@ -175,7 +203,9 @@ restores the start snapshot. A worker's card shows its own +/− against the par
   updates the ledger and writes a hand-off note. The hand-off instructions travel in that nudge, not in the
   standing instructions (§6).
 - **Successor.** A fresh CLI session continues in the same tab, after a visible divider: "Fresh context ·
-  hand-off note", and the note opens from it. Its bootstrap is the first lines of its first user message, also
+  hand-off note", and the note opens from it. It starts at once and carries on from the note by itself, as a
+  Delegator's successor does; it never waits for the user's next message (S22, S23) (user, 2026-10-23: "Why
+  wait? See how delegator works"). Its bootstrap is the first lines of its first user message, also
   saved to disk (Q4). The successor may search every earlier file of the lineage (Q5).
 - **Codex.** Codex's forced compaction at 90% is a known limit. The divider shows when it happens (Q0).
 
@@ -200,7 +230,8 @@ the CLIs' own memory (Claude Code's auto memory, Codex memories) is no longer sw
 | `logs/` | logs | removes | removes |
 
 `TMPDIR` points at `tmp/` as a convention, not a guard. A worker gets its own folder of the same shape, owned
-by its parent.
+by its parent. `tmp/` is a plain `TMPDIR`: nothing empties it between turns and no process is killed; only
+Archive and Delete clean it (S31) (user, 2026-10-23, w95 item 13: the grill's design stands).
 - **Archive** also stops the session's processes, and keeps its Brain entries and lineage transcripts.
 - **Delete** removes everything of the session: its folder, its Brain entries, its lineage's CLI transcript
   files, its worktree, and its branch after the existing "not merged" ask.
@@ -255,7 +286,8 @@ Other plans lose the parts G1–G21 change. Where they conflict, this plan wins:
 - `THREAD-PLAN.md`: engine tools, reviews and the verifier.
 - `THREAD-UX-PLAN.md` and `THREAD-PARITY-PLAN.md`: thread items from engine records, and the Job card.
 - `SESSION-MESSAGING-PLAN.md`: peer tools become the `brigadier` worker commands of S13, parent to its own
-  workers only.
+  workers only, and session-to-session messages through `brigadier` (S30) (user, 2026-10-23: "Sessions should be
+  able to message eachother").
 - `WORKSPACES-PLAN.md`: auto-merge.
 - `SESSION-FIXES-PLAN.md`: merge gates.
 - `docs/research/long-sessions/BUILD-PLAN.md`: rebirth, briefings and the output store.
@@ -770,11 +802,11 @@ and `run`.
 
   | Command | What it does |
   |---|---|
-  | `brigadier sessions` | List the project's sidebar sessions: title, state from CLI events, branch, +/−. Workers are not in it. This is "read anything"; `brigadier show <id>` gives a session or worker in full. |
+  | `brigadier sessions` | List the project's sidebar sessions: title, state from CLI events, branch, +/−. Workers are not in it. This is "read anything"; `brigadier show <id>` gives a session or worker in full. `--all` lists every project's sessions (S30) (user, 2026-10-23, w95 item 12: every project). |
   | `brigadier workers` | List the calling session's own workers: title, agent, model, state from the worker's own CLI events, branch, +/−. |
-  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` (default: the parent's level, Q8), `--lean` with `--skill <name>` (G23, below) and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule. |
+  | `brigadier start` | Takes `--title`, `--agent claude\|codex`, `--model`, `--effort`, `--worktree\|--local` (default `--worktree`), `--base` (default: the parent's current branch, G21; recorded in the worker's `record/workspace.json` and `gh-merge-base` like S7), `--permission` (default: the parent's level, Q8), `--lean` with `--skill <name>` (G23, below) and the prompt. It starts a worker of the calling session, in that session's project (G19). The worker shows only inside that session (its Workers row, rail and worker cards), never in the sidebar. It refuses only what the user's rules file forbids (S13b), quoting the rule, and a call from a worker: a worker can't start workers, and uses its CLI's own subagents instead (user, 2026-10-23: "workers cant start other workers"). |
   | `brigadier send <id> <text>\|--allow\|--deny` | To one of the caller's own workers, queued mid-turn, like `dlg send`. This is how the parent relays the user's answers (G19.Q6). `--allow` or `--deny` answers the worker's open CLI permission prompt through the CLI's own permission protocol, never key presses (Q8). The prompt reaches the parent as a `brigadier wait` "needs input" event, and until it is answered it shows under Waiting on you in the parent. |
-  | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background. |
+  | `brigadier wait [<id>…] [--timeout]` | Blocks until an event from one of the caller's workers: turn ended (with the last message), needs input, gone, usage limit, fresh context. Long waits run in the CLI's background, which re-invokes the parent when one ends (S29) (user, 2026-10-23: "The parent should know everything"). |
   | `brigadier read <id> [--last N\|--screen]` | The last message, the last N items or the screen, of any session or worker. |
   | `brigadier close <id>` | Closes one of the caller's own workers. |
   | `brigadier preview start\|stop\|log`, `brigadier browser …`, `brigadier ask …`, `brigadier app …`, `brigadier page …` | The tools the thread keeps today (previews, browser, ask-user card, app actions, pages), moved as they are. `brigadier ask` blocks until the card is answered. Its card always allows a free-text answer next to any options, never options only; the recommended option comes first, so "yes" takes it. |
@@ -792,17 +824,20 @@ and `run`.
     sessions vs. the caller's workers), so each keeps one fixed `--json` row shape, and `workers` lists exactly
     the ids that `send`, `wait` and `close` accept.
   - `send`, `wait` and `close` act only on the caller's own workers; another session's worker is refused.
-    Sidebar sessions don't message each other.
-  - `peers.rs`, `peer_wait.rs` and `peer_records.rs` go. Their parent → own worker parts move into the
-    worker commands; session-to-session messaging has no successor. `message_session`, `wait_for_replies`,
-    `settle_wait` and `offer_session` go. The kept tools leave the MCP catalog in the same step; the MCP server
-    keeps only the old protocol tools until S16.
-  - Computer use stays the vendored driver's own interface (`M/computer_use.rs`), not part of Brigadier's tool
-    surface.
+    Sidebar sessions message each other through `brigadier send` and `wait` on a session id, when the user
+    asks or when it is absolutely needed (S30) (user, 2026-10-23: "Sessions should be able to message eachother").
+  - `peers.rs`, `peer_wait.rs` and `peer_records.rs` go. Their parent → own worker parts move into the worker
+    commands; session-to-session messaging comes back in S30 (user, 2026-10-23: "Sessions should be able to message
+    eachother"). `message_session`, `wait_for_replies`, `settle_wait` and `offer_session` go. The kept tools leave
+    the MCP catalog in the same step; the MCP server keeps only the old protocol tools until S16.
+  - Computer use stays the vendored driver's own interface (`M/computer_use.rs`), not part of the `brigadier`
+    subcommands, and it reaches every session, Chat and worker while its setting is on (S35) (user,
+    2026-10-23: "fix this!").
   - There is no land or merge subcommand. A worker merges into its parent with plain git, and the parent
     merges on into the branch the user chose; Brigadier enforces nothing there (G21).
-  - Brigadier enforces no model rule of its own (G18). The only refusal is `brigadier start`'s check against the
-    user's rules file, built in S13b; until then `start` checks nothing.
+  - Brigadier enforces no model rule of its own (G18). The model refusal is `brigadier start`'s check against the
+    user's rules file, built in S13b; the other is a worker starting workers (above) (user, 2026-10-23: "workers
+    cant start other workers").
   - Non-goal: an MCP wrapper over the same commands. It would come only if a client can't run shell.
 - **Files:** a new `crates/cli` (the `brigadier` binary), a daemon request handler for it, `M/peers.rs`,
   `M/peer_wait.rs`, `crates/core/src/sessions/peer_records.rs`, `catalog.rs`, `tools.rs`, the app bundle and
@@ -834,7 +869,9 @@ and `run`.
     with a one-line reason each. It is updated per release.
   - **The user's rules:** the user's own file (`~/.brigadier/models.md`), layered on top. Its rows override the
     shipped rows; its rules (forbidden models, an effort ceiling, allowlists) are shown as such. The shipped
-    default of this file carries today's rules: never Fable, effort ≤ high. The user may edit or empty it.
+    default of this file is neutral and forbids nothing; the user's own rules (never Fable, effort ≤ high for
+    this user) live in the user's own file, which the user may edit or empty (S33) (user, 2026-10-23, w95
+    item 16). Settings › Routing edits the same file (S32).
   - `brigadier start` refuses a model or effort only when the user's file forbids it, and quotes the rule.
     Brigadier enforces nothing else; there is no built-in list.
   - The `/brigade` skill tells the thread to consult `brigadier models` before `brigadier start` (S15).
@@ -844,8 +881,9 @@ and `run`.
 - **Done when:**
   - The `--json` output matches a checked-in schema.
   - Unit tests: a user row overrides the shipped row; a user rule shows in the merged view.
-  - A flow test: with the default rules file, `brigadier start` with a Fable model is refused and quotes the
-    rule; after the user removes that rule, the same call starts the session.
+  - A flow test: with a rules file that forbids Fable, `brigadier start` with a Fable model is refused and quotes
+    the rule; after the user removes that rule, the same call starts the session (S33 makes the shipped default
+    neutral; user, 2026-10-23, w95 item 16).
   - `git grep` finds no other model refusal outside the rules-file check.
   - A live dev check: the listed accounts' usage and reset times match Settings › Usage.
 
@@ -853,7 +891,8 @@ and `run`.
 - **Scope:** the card from §1:
   - the branch row (git);
   - the PR row: `#N` + state word + colour from `gh pr view`, refreshed when the CLI's events show a
-    `git push` or `gh pr` command; failed checks red;
+    `git push` or `gh pr` command; failed checks red. The words, colours, light poll and sign-in hint are §1's
+    list, built in S34 (user, 2026-10-23: "fix this");
   - Waiting on you (real pending prompts and questions of this session's workers, G19.Q6);
   - Workers (this session's own workers from `brigadier start`, S13: title, state from the worker's own CLI
     events, +/− of its worktree against the parent's branch (G21), "N done · M stopped");
@@ -903,13 +942,18 @@ and `run`.
   - Research and review guidance (G23). All of it is guidance; nothing is a gate:
     - Research goes to lean workers (`brigadier start --lean`, S13). Small reads go to the CLI's own subagents
       first.
-    - When the ask is unclear: ask the user once. One lean researcher when the options need evidence. Builders
-      only when prototypes must be compared, never by default.
+    - When the user is uncertain, help them: a model fusion gives the best advice or answer, through `/fusion`
+      or the thread's own judgement (S36) (user, 2026-10-23: "if the user is uncertain - we help him").
+      One lean researcher when the options need evidence. Builders only when prototypes must be compared,
+      never by default.
     - Adversarial review stays: `codex review` per step, and the verifier per phase.
     - Adversarial consultation before approving a plan or outline, or taking an irreversible step (a delete, a
       merge into the user's branch, a publish): a critique from the other vendor's CLI; take what you agree with.
       Not for every small decision.
-  - A chat without a project can't start workers: the skill says `brigadier start` needs a project.
+  - A Chat starts workers like any session; a worker of a Chat runs in a folder of its own under the Chat's
+    session folder unless the Chat names a repo (S28) (user, 2026-10-23: "a chat is always a brigade").
+    A worker can't start workers; it uses its CLI's own subagents (user, 2026-10-23: "workers cant start
+    other workers").
   - Gotchas the skill states, one line each (`research/POCOCK.md` §4):
     - Worktrees don't remove collisions; they move them to merge time. Two workers that touch one shared file
       (a registry, a type, a string catalogue) run in order, or get their exact names fixed up front.
@@ -961,6 +1005,9 @@ and `run`.
     every command, and runs an approved one outside its sandbox when the model asked for that, so Brigadier's
     approval is the guard. Codex's network proxy (`features.network_proxy`) would hold the sandbox to the
     socket, but has no effect over the app-server's per-turn sandbox policy (checked on 0.163.0).
+  - For Chats this limited shell goes in S28: a Chat gets the CLI's own shell like a session, cwd = its session
+    folder, and Brigadier approves nothing (user, 2026-10-23: "a chat acts almost exactly as a normal
+    session"). Side chats keep the limited shell; the answers did not cover them.
 - Each sub-step closes the §3.6 issues it obsoletes, and re-checks #382 and #296.
 
 ### Stage 4: long sessions (G12) and Brain (G14)
@@ -1074,9 +1121,11 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
 - **Note and divider:**
   - The thread writes `record/handoff/<n>.md`.
   - Brigadier draws the divider "Fresh context · hand-off note" (openable) and closes the predecessor.
-- **Successor:** starts on the next user message, with the bootstrap as the first lines of that message, also
-  saved as `record/handoff/<n>-start.md`. One switch, `BRIGADIER_SEAM_CARRY_ON=1`, starts it at once instead,
-  carrying on from the note by itself (open with the user, 10-23). The bootstrap holds:
+- **Successor:** starts at once and carries on from the note by itself, like `dlg spawn --continues`; there is no
+  flag and it never waits for the next user message (user, 2026-10-23: "Why wait? See how delegator works"). The
+  bootstrap is its first message, also saved as `record/handoff/<n>-start.md`. S22 landed with a wait by default
+  and a `BRIGADIER_SEAM_CARRY_ON=1` switch; S23 makes carrying on the only behaviour and removes the switch. The
+  bootstrap holds:
   - the map;
   - the whole ledger;
   - the note;
@@ -1105,10 +1154,10 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - The battery is run against it, and its report goes into the run's notes.
 
 **S22b. Decisions survive the seam (`research/CONTINUITY.md`).** Opus. After S22; it may land with S23.
-Proposed (10-23): the user asked for a fix to forgotten decisions; the details below are the research's design,
-not the user's decisions. Why: on 10-22/23, 33 decisions and instructions were lost or changed between the
-user and the work. Most were not forgotten at a hand-off. They lost who decided them, lost their defining
-sentence in a summary, or waited with no moment to raise them (CONTINUITY §1).
+The user asked for this fix (user, 2026-10-23: "find a fix for this"). Why: on 10-22/23, 33 decisions and
+instructions were lost or changed between the user and the work. Most were not forgotten at a hand-off. They lost
+who decided them, lost their defining sentence in a summary, or waited with no moment to raise them
+(CONTINUITY §1).
 - **Scope:**
   - `brigadier ledger add` writes `L<n> · <MM-DD HH:MM> · gen <g> ·` before the text. Ids count up per ledger
     and are never reused. The model never types the time.
@@ -1149,22 +1198,25 @@ sentence in a summary, or waited with no moment to raise them (CONTINUITY §1).
 
 **S23. Seam on; delete rebirth (Q6).** Opus. It runs in the same run as S22, once the battery shows the seam no
 worse than today's rebirth.
-- **Scope:** the flag defaults on. Delete §3.8's rebirth, briefing, cold, overflow, threshold and stand-in
-  reseed code. With `rebirth.rs` gone, its last-consumer leftovers go in the same step (§4 table):
-  `decisions.rs`, `constraints.rs`, `keep_note_decisions`, the `orch:<id>` log, `export.rs` and the Brain's
-  event-store sync.
+- **Scope:** the flag defaults on. The successor carries on at once from the note: delete the wait for the next
+  user message and the `BRIGADIER_SEAM_CARRY_ON` switch (user, 2026-10-23: "Why wait? See how delegator works").
+  Delete §3.8's rebirth, briefing, cold, overflow, threshold and stand-in reseed code. With `rebirth.rs` gone, its
+  last-consumer leftovers go in the same step (§4 table): `decisions.rs`, `constraints.rs`, `keep_note_decisions`,
+  the `orch:<id>` log, `export.rs` and the Brain's event-store sync.
   - A usage limit shows the "Resumes at" card, then the session continues visibly at the reset — a divider +
     the same turn resumed (MA5) — like the plain CLI (Q11, §9).
+  - An account switch or a model change continues the same CLI session; it never starts a successor (default,
+    user may reverse, 2026-10-23).
   - Sessions open at upgrade are archived.
 - **Done when:** `git grep -n 'rebirth\|briefing\|BRIGADIER_REBIRTH_TOKENS\|OrchestratorLogged'` finds only
   docs, and the S22 tests pass with no flag.
+  - A flow test: after the hand-off note, the successor's first turn starts with no user message, and
+    `git grep -n BRIGADIER_SEAM_CARRY_ON` finds nothing (user, 2026-10-23: "Why wait? See how delegator works").
 - If S22b has landed, the seam-versus-rebirth comparison includes its decision-survival block, with the same
   planted items on both arms.
 
-**S24. Cold-cache rule.** Opus.
-- **Scope:** when the user returns after the cache TTL and the context is ≥ 100k, start the successor from the
-  ledger and tail instead of resuming. There is no idle nudge (Q2).
-- **Done when:** a flow test with a short `BRIGADIER_CACHE_TTL_SECS` starts a successor, not a resume.
+**S24. Cold-cache rule.** Dropped (default, user may reverse, 2026-10-23): a session the user returns to after
+the cache TTL resumes as the plain CLI does. There is no idle nudge (Q2).
 
 **S25. Battery nightly (Q7).** Codex.
 - **Scope:**
@@ -1189,6 +1241,195 @@ worse than today's rebirth.
   only with ≥5% measured saving on whole tasks and no quality loss.
 - **Done when:** the A/B report exists. Turning it on is a separate one-line change.
 
+### Stage 6: restore the grill
+
+The user's answers of 10-23 to the w95 audit (§9.6). Each step's goal is the user's answer and carries its tag;
+the how is proposed unless tagged. Steps on disjoint files carry ∥.
+
+**S28. Chats are sessions: workers allowed, the CLI's own shell (w95 items 1, 20).** Opus.
+(user, 2026-10-23: "a chat is always a brigade a chat acts almost exactly as a normal session")
+- **Scope:**
+  - `brigadier start` from a Chat starts a worker of that Chat, shown in its rail, Workers row and worker cards.
+    The refusal "only a session with a project starts workers" goes (`plain_workers.rs`).
+  - Where a Chat's worker runs (proposed): `--local <path>` or `--worktree` against a repo the Chat names with
+    `--repo <path>`; with no repo, a folder of its own under the Chat's session folder, with no git.
+  - A worker still can't start workers; it uses its CLI's own subagents (user, 2026-10-23: "workers cant start
+    other workers").
+  - The Chat's CLI gets its own shell like a session: cwd = the Chat's session folder, the permission level
+    mapped as S6 maps a session's. On Claude, no `dontAsk` and no `Bash(brigadier:*)`-only rule; on Codex, no
+    read-only sandbox of Brigadier's choosing, and Brigadier approves or declines no command (the heredoc
+    refusal goes too). Side chats keep S16c's limited shell.
+  - The `/brigade` skill's "a Chat can't start workers" line goes (`brigade/SKILL.md:22`).
+- **Files:** `M/plain_workers.rs`, `M/brigade/SKILL.md`, the Chat launch in `P/claude/mod.rs` and
+  `P/codex/mod.rs`, `P/chat_shell_live_tests.rs`, `M/prompts.rs` (Chat text, if any names the limit).
+- **Done when:**
+  - A flow test: a Chat's `brigadier start` makes a worker that shows in the Chat's rail and in
+    `brigadier workers`; a worker's own `start` is still refused.
+  - Provider tests: a Chat's Claude flags and a Chat's Codex sandbox and approval policy equal a session's at
+    the same level, with the session folder as cwd.
+  - `git grep -n "a Chat has no repository\|a Chat without one can't start"` finds nothing.
+  - A live dev Chat asked for two workers runs them (w86's refused case).
+
+**S29. The parent is told about its workers, the Delegator way (w95 item 8, Q9, O1).** Opus.
+(user, 2026-10-23: "The parent should know everything about it's children!")
+- **Scope:**
+  - **Durable events.** Worker events (turn end with its last message, needs input, failed, interrupted, gone,
+    usage limit, fresh context) go to a per-parent queue with cursors, `record/worker-events.jsonl`, so none is
+    lost across a daemon restart or a parent seam (O1, §9.1's bar).
+  - **Claude, the Delegator way.** `brigadier start` answers with one line: keep `brigadier wait` running in
+    the background. The parent runs it as a background Bash task; when an event arrives, `wait` exits, and
+    Claude Code re-invokes the parent with the task's result, idle or not, as it does for `dlg wait`. That is a
+    result of a command the thread started (G1).
+  - **Codex equivalent.** Probe first whether a finished background terminal re-invokes an idle Codex thread
+    over app-server. If it does, the same as Claude. If not, Brigadier starts the idle parent's next turn with
+    the event batch, and queues it into a running turn like `brigadier send` (Q9).
+  - **Safety net (Q9).** When a parent's turn has ended and no `wait` of its own is running, Brigadier sends
+    one batched message, "Worker *title*: finished · *excerpt*" (or asks, stopped, failed), never twice.
+  - The skill's "workers send you nothing on their own" line becomes: events reach you; keep a `wait` running.
+- **Files:** a new `M/worker_events.rs`, `M/plain_workers.rs`, `crates/cli` (`wait`), the turn start in
+  `M/conversation.rs`, `P/codex/mod.rs` (turn start or steer), `M/brigade/SKILL.md`.
+- **Done when:**
+  - A flow test with the fake CLI: a parent ends its turn with a background `wait` running; a worker finishes;
+    the parent's next turn starts with the event, once.
+  - A flow test: no `wait` running; a worker asks a question; the parent gets one batched message, once.
+  - A flow test: an event survives a daemon restart and is delivered once after it.
+  - The Codex probe is written up in the step's report; a live dev check on each CLI shows a parent woken by
+    a finished worker.
+
+**S30. Sessions message each other and read every project (w95 item 12).** Opus.
+(user, 2026-10-23: "Sessions should be able to message eachother when asked")
+- **Scope:**
+  - `brigadier send <session> <text>` reaches another sidebar session, in any project, queued mid-turn like a
+    worker message. The recipient's thread shows it as a message from that session (its title, openable),
+    never as the user's.
+  - `brigadier wait <session>` waits for that session's turn end, with its last message.
+  - The skill and `brigadier send --help` say when: when the user asks, or when it is absolutely needed (the
+    user's words). Nothing in code limits it.
+  - "Read anything" is not limited to the current project: `brigadier sessions --all` lists every project's
+    sessions; `show` and `read` take any session id (w95 item 12).
+  - Another session's workers stay out of reach: `send`, `wait` and `close` on them are refused (G19).
+- **Files:** `crates/cli` (`sessions`, `send`, `wait`, schemas), the daemon's `brigadier` handler,
+  `M/plain_workers.rs` (targets), the thread item for a session's message in `D/app/conversation/`,
+  `M/brigade/SKILL.md`.
+- **Done when:**
+  - A flow test: session A sends B a message mid-turn; B's thread shows it as from A; B's `send` back reaches
+    A; `brigadier wait <B>` returns B's turn end.
+  - A flow test: `brigadier sessions --all` lists a session of another project, and `read` returns its last
+    message.
+  - A flow test: `send` to another session's worker is refused.
+  - The `--json` schema tests cover the new targets.
+- After S29 (shared `crates/cli` and `plain_workers.rs`).
+
+**S31. No `tmp/` sweep (w95 item 13; #532).** Codex.
+(user, 2026-10-23: the grill's design stands: `tmp/` is a plain `TMPDIR`)
+- **Scope:** delete the per-turn sweep: nothing empties `tmp/` when a session's requests end, and no
+  left-behind process is killed (`thread_scratch.rs` `sweep_scratch_when_over`, the launch sweep and the
+  process reaping). Only Archive and Delete clean `tmp/` (S20). Settings › Storage's Free up space keeps only
+  what the user starts by a click (proposed).
+- **Files:** `M/thread_scratch.rs`, its call sites in `M/conversation.rs` and `M/mod.rs`,
+  `M/flow/thread_scratch_tests.rs`, `M/disk/mod.rs`.
+- **Done when:**
+  - A flow test: a file in `tmp/` and a background `sleep 600` started by the session both survive the turn's
+    end and a daemon restart.
+  - A flow test: Archive removes `tmp/`.
+- **Closes:** #532. ∥ S28–S30, S32–S36.
+
+**S32. Settings › Routing comes back as the rules editor (w95 item 14).** Opus.
+(user, 2026-10-23: "user should've been able to apply his rules there")
+- **Scope:**
+  - Settings › Routing returns under Agents. It edits the same file `brigadier models` reads,
+    `~/.brigadier/models.md`: the user's preferences (Work / Agent / Model / Effort / Reason rows) and rules
+    (forbid, effort ceiling, allowlists), beside the shipped guidance, read only.
+  - A hand edit of the file shows when the page opens again; the page writes the same text format.
+  - The look is the user's Routing design as of `ec0e74408^` (S16b deleted it; `44c718005`), re-fed from the
+    rules file; any change from it gets A/B pictures first (proposed).
+  - `brigadier start` without `--model` or `--effort` takes them from the rules: the user's row for `--work
+    <kind>` (the file's Work key), else the shipped row; its receipt says which row picked them. The skill
+    passes `--work` (user, 2026-10-23: "the brigadier cli would pass the --model").
+- **Files:** `D/app/settings/routing/*` (restored), the Settings nav, a daemon read and write of the rules file
+  in `M/models.rs`, `crates/cli` (`start`), `M/plain_workers.rs`, `M/brigade/SKILL.md`.
+- **Done when:**
+  - App tests: the page lists the user's rows and rules from a fixture file, and a saved edit writes the file.
+  - A flow test: a rule written through the page shows in `brigadier models` and refuses in `brigadier start`.
+  - A flow test: `brigadier start --work <kind>` with no `--model` starts the row's model and effort, and
+    the receipt names the row.
+- After S33 (shared `M/models.rs`) and S28 (shared `plain_workers.rs`).
+
+**S33. A neutral shipped rules file (w95 item 16).** Codex.
+(user, 2026-10-23: the shipped default must not carry the user's personal rules)
+- **Scope:** `M/models_default.md` forbids nothing and sets no ceiling: only its comments. A rules file that
+  exists is never overwritten, so this user's own file keeps never Fable and effort ≤ high. Tests write the
+  rules they need.
+- **Files:** `M/models_default.md`, `M/models.rs` and its tests, the S13b flow test.
+- **Done when:**
+  - A unit test: the shipped default parses to no rules.
+  - A flow test: on a fresh home, `brigadier start` with any model the CLI offers is not refused; an existing
+    rules file is left byte for byte.
+- ∥ S28–S31, S34–S36.
+
+**S34. PR row words and colours (w95 item 6).** Codex.
+(user, 2026-10-23: "fix this")
+- **Scope:**
+  - The grill's list, exactly: Draft (grey), Checks running (yellow), Review needed (yellow), Ready (green),
+    Merged (purple), Closed (grey), Checks failed (red). The build's own Open, Conflicts and Changes requested
+    go.
+  - Which word wins (proposed): Merged, Closed, Draft, Checks failed, Checks running, Ready (approved, checks
+    green, mergeable), else Review needed (changes requested and conflicts included).
+  - Refresh after `git push` and `gh pr` commands, plus a light poll while the session is open (proposed:
+    every 60 s while its tab is open and the PR is neither Merged nor Closed).
+  - Without a `gh` sign-in the row says "gh auth login for PR status".
+  - Yellow and purple come from the design system's tokens; a missing one goes into `foundations.pen` first.
+- **Files:** `D/app/conversation/pullRequestWords.ts`, `SummaryContent.tsx`, `M/pull_request.rs`.
+- **Done when:**
+  - An app test per word and colour.
+  - A flow test: with a `gh` stub, the poll turns Review needed into Ready with no push.
+  - A flow test: a signed-out `gh` stub gives the sign-in hint.
+- ∥ S28–S33, S35, S36.
+
+**S35. Computer use reaches sessions (w95 item 5; #529).** Opus.
+(user, 2026-10-23: "fix this!")
+- **Scope:** #529's fix. While Settings › Computer use is on, every session, Chat and worker on both CLIs gets
+  the vendored driver's own MCP server and its skill (`computer_use_kit`), as a server entry of its own beside
+  the user's. A lean worker gets it only when the thread asks (proposed). Brigadier's own MCP server stays gone
+  (G16). The MCP aliases and `MCP_TOOL_TIMEOUT` come back in `session_env` for this server only.
+- **Files:** `M/computer_use.rs`, `M/computer_host.rs`, the session and Chat launch in `P/claude/mod.rs` and
+  `P/codex/mod.rs`, `D/app/settings/ComputerUsePage.tsx` (wording only).
+- **Done when:**
+  - A thread and a Chat on Claude and on Codex list the computer tools when the setting is on and none when it
+    is off (provider tests).
+  - A live check drives a background app through them.
+- **Closes:** #529. After S28 (shared launch code in the providers).
+
+**S36. Model fusion when the user is uncertain (w95 item 3).** Opus.
+(user, 2026-10-23: "we do a model fusion and give the best advice/answer")
+- **Scope** (the design is proposed):
+  - **When:** the user types `/fusion <question>`, or the thread judges the user uncertain (they say they are
+    unsure, or ask which of several ways to take). Not for every reply.
+  - **Which models:** one consult per installed CLI (Claude Code and Codex today, more CLIs later), each on the
+    strongest model and effort the user's rules allow and with quota left, read from `brigadier models`. A
+    `fusion` row in the rules file (S32) can name them.
+  - **How:** the thread starts them as lean workers (`brigadier start --lean`) with the same brief: the
+    question, the context it gathered (file:line, the ledger's rules and decisions that bear on it), and
+    "answer only; change no file". Each answers alone: a recommendation, its reasons, risks and confidence.
+    Then one cross round: each reads the other's answer and says what it would change (adversarial, G23). No
+    further rounds.
+  - **Merge:** the thread writes one answer: the recommendation; where the models agreed; where they differed,
+    which side it takes and why; what would change the call. The thread judges; it never counts votes.
+  - **Where it shows:** the answer is the thread's own reply, naming the models consulted. The consults show as
+    the thread's workers ("Fusion · *model*"), readable like any worker. No new card.
+  - `/fusion` ships as a second skill, `fusion`, beside `/brigade`, through the same plugin folder on both CLIs
+    (Q13), so S15's "the one skill Brigadier ships" becomes two. The old review `M/fusion.rs` (gone in S5) is
+    not revived.
+- **Files:** a new `crates/core/src/manager/fusion/SKILL.md`, the skill installer (`brigade.rs`),
+  `M/brigade/SKILL.md` (the uncertain-user line, S15), the S13b guidance file (a `fusion` row).
+- **Done when:**
+  - A provider test: every new session and Chat, on both CLIs, has the `fusion` skill in its skills folder.
+  - A live dev run: `/fusion` on a real two-way question starts one Claude and one Codex consult, and the reply
+    names both models, what they agreed on, where they differed and the pick.
+  - A live dev run: "I'm not sure whether A or B" without `/fusion` leads the thread to a fusion. Judgement,
+    so it is a report, never a gate.
+- After S30 (shared skill file).
+
 ### Order and parallel runs, in one view
 
 ```
@@ -1196,7 +1437,9 @@ S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12
                                   └→ S11 (∥ S7–S10; merged files go under worker cards once S13 is on)
 after S10:  S17 → S18 → S19 → S20      (∥ Stage 3; S17 rebases after S16)
 after S8:  S21 (∥ anything)
-after S18 + S21:  S22 → S22b → S23 → S24 → S25 → S26 → S27
+after S18 + S21:  S22 → S22b → S23 → S25 → S26 → S27      (S24 dropped, default, user may reverse, 2026-10-23)
+Stage 6, now (user, 2026-10-23):  S28 → S29 → S30 → S36 · S28 → S35 · S33 → S32 (after S28)
+                                  ∥ S31, S33, S34 with anything
 any time:  MA1, X1 (bounded Codex tasks, §9)
 after Stage 2, one run per capability (§9):  O1–O5 with S13–S15 · MA2–MA7 with S13–S14 and S23
                                              L1–L9 with S18–S27 · BR1–BR8 after S13 · X2–X9 after X1
@@ -1219,7 +1462,7 @@ project's CLAUDE.md or AGENTS.md, the user's MCP servers, skills, and memory per
 Brigadier removes none of it; a `--lean` research worker (S13) is the thread's own choice (G23). The file
 holds only what every turn of every session needs; text that matters only at a seam travels in the seam
 message instead (`research/POCOCK.md` §3.1). The entry ids, the Decision and Open kinds, absolute paths and the
-"cites entry ids" line were added on 10-23, proposed (S22b, `research/CONTINUITY.md` §3.1–§3.6).
+"cites entry ids" line were added on 10-23 (S22b, `research/CONTINUITY.md` §3.1–§3.6) (user, 2026-10-23: "find a fix for this").
 
 ```
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
@@ -1260,6 +1503,9 @@ For anything else from before, search the record (`brigadier brain search`, `bri
   and is checked against real files before S10 flips it.
 - S15 is the one that proves G3: a team run whose workers land real work into their parent, which lands it on
   the user's branch.
+- In Stage 6, S29 and S30 carry the risk: they decide what reaches a thread it didn't start. S29's Codex probe
+  comes first; S30's messages always show whose they are (user, 2026-10-23: "The parent should know
+  everything"; "Sessions should be able to message eachother").
 
 ## 8. Open risks
 
@@ -1286,11 +1532,12 @@ For anything else from before, search the record (`brigadier brain search`, `bri
    - S7's done-when binds a socket to prove it.
 4. **Codex hooks need manual trust by hash** (EVIDENCE 2.5). Nothing in this plan uses a Codex hook. The changes
    card uses git snapshots, the seam uses usage events and a queued message, and Background uses events.
-5. **The `brigadier` CLI inside the CLIs' own sandboxes.** Under Ask and Accept edits, Codex runs commands in
-   its own `workspace-write` sandbox, which may refuse a connection to the daemon's socket (and so may Claude
-   Code's sandbox if the user turns it on). S13 probes this on both CLIs before anything depends on it. If it is
-   refused, the fix is the CLI's own setting (an allowed socket or path in its sandbox config), never a
-   Brigadier sandbox.
+5. **The `brigadier` CLI inside the CLIs' own sandboxes.** Under Ask and Accept edits, Codex runs commands in its
+   own `workspace-write` sandbox, which may refuse a connection to the daemon's socket (and so may Claude Code's
+   sandbox if the user turns it on). S13 probes this on both CLIs before anything depends on it. If it is refused,
+   the fix is the CLI's own setting (an allowed socket or path in its sandbox config), never a Brigadier sandbox.
+   As built, Codex keeps network on at Ask and Accept edits so `brigadier` reaches the daemon's socket
+   (`P/codex/mod.rs`), where plain Codex keeps it off. That stays (default, user may reverse, 2026-10-23).
 6. **Repo instructions on Codex.** After S17, Codex reads AGENTS.md along root → cwd only, as plain Codex does.
    A project that has only CLAUDE.md, or rules in a subfolder's AGENTS.md below the cwd, gives a Codex session
    less than `instructions.rs` gives it today. Taken as is ("take, don't rebuild"); a project that wants both
@@ -1329,7 +1576,9 @@ For anything else from before, search the record (`brigadier brain search`, `bri
       servers. Under G17 these stay as the user set them, and come back only with measured evidence on our own
       tasks. G23 takes them per worker instead: the thread may start a research worker with `--lean` (S13).
       POCOCK §3.5's depth limit on `brigadier start` is not built in either: Brigadier enforces nothing
-      of its own (G18); a user who wants one writes it into the rules file.
+      of its own (G18); a user who wants one writes it into the rules file. The one built-in limit is that a
+      worker can't start workers; it uses its CLI's own subagents (user, 2026-10-23: "workers cant start other
+      workers").
 14. **A worker's CLI permission prompt under read-only workers (G19.Q6). Resolved by Q8 (user, 10-22).** A
     question can be relayed in words with `brigadier send`; a permission prompt needs allow or deny. So:
     - A worker inherits its parent's permission level. `brigadier start --permission` overrides it.
@@ -1344,6 +1593,10 @@ For anything else from before, search the record (`brigadier brain search`, `bri
     entries written with file tools have none, and `ledger check` lists them. The take-over line costs about
     100 tokens per seam: if the battery shows no gain in "applied without being asked", it goes. The derived-brief
     check is a model reading a fixed rubric, so it is a report, not proof.
+17. **Brigadier overrides `disableAllHooks`.** Brigadier's own hooks (the PreCompact refusal and the others)
+    need hooks on, so when the user's settings say `disableAllHooks: true`, a session gets `false`
+    (`P/claude/mod.rs`), and the user's own hooks run inside Brigadier too. A plain CLI would run none. This
+    stays, and this item is where it is said (default, user may reverse, 2026-10-23).
 
 ## 9. Excel at what we keep
 
@@ -1382,9 +1635,10 @@ sessions with token economy. Each has a measurable bar against the best rival to
   - **Lean research.** A research task given to a lean worker costs fewer tokens and lands a better doc than the
     same task done in the parent (G23; the orchestration bench, report only).
 - **Steps:**
-  1. **O1** (into S13): `wait` events `turn_end`, `needs_input`, `failed`, `interrupted`, `gone`, `limit`,
-     `fresh_context`, `quiet` (20 min with no CLI event, naming what runs); a durable per-parent queue with
-     cursors (`record/worker-events.jsonl`); idle-parent delivery (Q9). Files: `crates/cli`, a new
+  1. **O1** (into S13; it shipped without the queue and idle-parent delivery, so S29 builds them (user, 2026-10-23:
+     "The parent should know everything")): `wait` events `turn_end`, `needs_input`, `failed`, `interrupted`,
+     `gone`, `limit`, `fresh_context`, `quiet` (20 min with no CLI event, naming what runs); a durable per-parent
+     queue with cursors (`record/worker-events.jsonl`); idle-parent delivery (Q9). Files: `crates/cli`, a new
      `M/worker_events.rs` (replaces `peer_wait.rs`), provider taps. Done: 10 fault tests, none twice. Opus, M–L.
   2. **O2** (into S13): `workers --json`/`show --json` add branch, base, ahead, behind, dirty, `merge` (clean /
      conflicts / merged / behind, via `git merge-tree`) and "base checkout clean". Files: `crates/cli`,
@@ -1525,11 +1779,13 @@ sessions with token economy. Each has a measurable bar against the best rival to
 - **Our bar:**
   - **No compaction:** 0 in Claude sessions of any length (Codex's are counted, no bar). **Fewer tokens:**
     price-weighted ≤ 0.95× the plain CLI on the long battery (past 400k), ≤ 1.01× on the short one (< 150k).
-  - **Recall** ≥ 90% of planted items across forced seams. **Cold return** at 250k ≤ 35% of a plain resume.
+  - **Recall** ≥ 90% of planted items across forced seams. The **cold return** bar went with S24 (default, user may
+    reverse, 2026-10-23).
     **Done:** each scripted task still passes its test command.
-  - **Decisions survive** (proposed, CONTINUITY §3.7): after three seams, ≥ 9 of 10 planted items applied without being
-    asked where they apply; a brief derived from them has 0 contradictions and 0 additions not marked
-    "proposed"; every open item is raised again. The plain CLI with its own compaction is the comparison.
+  - **Decisions survive** (CONTINUITY §3.7) (user, 2026-10-23: "find a fix for this"): after three seams, ≥ 9 of 10
+    planted items applied without being asked where they apply; a brief derived from them has 0 contradictions and
+    0 additions not marked "proposed"; every open item is raised again. The plain CLI with its own compaction is
+    the comparison.
 - **Steps** (they extend S17–S27 and add no stage):
   1. **L1** (into S18): `brigadier transcript search|read` over the lineage's CLI files, `tool-results/` and
      rollouts included, no database copy. Files: `crates/brain/src/transcript*`, `crates/cli`. Done: fixture
@@ -1537,9 +1793,8 @@ sessions with token economy. Each has a measurable bar against the best rival to
   2. **L2** (into S22): bootstrap order: map, ledger, note, the session's first user message and the latest
      exchange verbatim, a newest-first tail of ≈15k tokens, one line per omitted range with its exact read
      command. Done: a test asserts the order and that every omitted range's command works. Opus, S.
-  3. **L3** (into S24): a successor instead of a resume when the next request would be cold (TTL passed, account
-     switched, model changed) and the context is ≥ 100k. Files: `M/cold.rs`, the switch path, `knowledge.rs`.
-     Done: the cross-account cache probe written up; a test per trigger. Opus, S–M.
+  3. **L3** dropped with S24 (default, user may reverse, 2026-10-23): a cold cache, an account switch or a model
+     change continues the same session; none starts a successor.
   4. **L4** (into S21, S25): a token A/B arm, the same scripts in the plain CLI and Brigadier, both providers.
      Done: the nightly artifact shows all five bars per provider; the first run is the baseline. Codex, M.
   5. **L5** (into S23): a compaction counter in the weekly scan of real sessions. Done when the report lists
@@ -1547,22 +1802,25 @@ sessions with token economy. Each has a measurable bar against the best rival to
   6. **L6** (into S26): the Codex 1M-window probe, and the divider on Codex's compacted events. Done when the
      probe is written up and a recorded rollout shows the divider. Codex, S.
   7. **L7** (S27, unchanged): the A/B of `bashOutputMaxChars` and the exact-read instructions. Opus, S.
-  8. **L8** (= S22b, proposed): entry ids and the time from `brigadier ledger add`, `ledger close|show --open|check`, the
-     bootstrap that carries open items, rules and decisions whole, the seam's check and take-over lines, four
-     `/brigade` lines, and the battery's decision-survival block. Done: S22b's done-when. Opus, S–M.
-  9. **L9** (into S25, proposed): the decision-survival block nightly on both providers, next to a plain-CLI arm that
-     compacts. Done when the nightly artifact shows the "decisions survive" bar per provider. Codex, S.
+  8. **L8** (= S22b) (user, 2026-10-23: "find a fix for this"): entry ids and the time from `brigadier ledger add`,
+     `ledger close|show --open|check`, the bootstrap that carries open items, rules and decisions whole, the seam's
+     check and take-over lines, four `/brigade` lines, and the battery's decision-survival block. Done: S22b's
+     done-when. Opus, S–M.
+  9. **L9** (into S25) (user, 2026-10-23: "find a fix for this"): the decision-survival block nightly on both
+     providers, next to a plain-CLI arm that compacts. Done when the nightly artifact shows the "decisions survive"
+     bar per provider. Codex, S.
 - **Not copied:** no rival's words for compaction or hand-off in the UI. Before the first nightly numbers, no
   "fewer tokens" claim on the landing page.
 
 ### 9.6 Open decisions and what waits on the user
 
 **Decided (10-22):**
-- **Q9. Notify an idle parent when a worker finishes?** Yes. With the parent's turn ended and no `wait`
-  running, one batched message: "Worker *title*: finished · *excerpt*", a result of what the thread started
-  (G1), never twice. (O1)
+- **Q9. Notify an idle parent when a worker finishes?** Yes. With the parent's turn ended and no `wait` running,
+  one batched message: "Worker *title*: finished · *excerpt*", a result of what the thread started (G1), never
+  twice. (O1) Not built in S13; S29 builds it, for questions, prompts and stops too (user, 2026-10-23: "The parent
+  should know everything").
 - **Q10. A warm note before the cache expires?** No. Revisit only if the nightly battery shows it pays off on
-  cold seams. (L3)
+  cold seams. (L3, now dropped (default, user may reverse, 2026-10-23))
 - **Q11. Resume visibly at the reset when every account is out?** Yes (MA5). The "Resumes at" card, then the
   session continues visibly at the reset — a divider + the same turn resumed — like the plain CLI. This
   replaces "a usage limit stops the turn … never restarts quietly" everywhere.
@@ -1572,12 +1830,42 @@ sessions with token economy. Each has a measurable bar against the best rival to
   shared plugin folder; it may appear in plain-terminal Codex sessions and says it needs the app. (X2; §8,
   item 7)
 
+**Decided (10-23): the 20 drifts of the w95 audit** (run `20261022-0805-take-over-5-sessions`,
+`workers/w95/report.md`). Item numbers are the audit's.
+1. Chats can't run workers → a Chat is always a brigade and acts almost exactly as a normal session (§1 Teams,
+   S15, S28) (user: "a chat is always a brigade").
+2. Workers can't start workers → stays: they use their CLI's own subagents (§1, S13, S15, §8 item 13) (user:
+   "workers cant start other workers").
+3. Unclear asks → when the user is uncertain, a model fusion gives the best answer (S15, S36) (user: "if the
+   user is uncertain - we help him").
+4. The context ring in Chats → stays as it is (§1 Context card) (user: "ok").
+5. Computer use reaches no session → fixed (§1, S13, S35; #529) (user: "fix this!").
+6. PR row words and colours → the grill's list (§1, S14, S34) (user: "fix this").
+7. Codex network at Ask and Accept edits → stays on so `brigadier` reaches its socket (§8 item 5; default, user may
+   reverse).
+8. An idle parent isn't told → the parent knows everything about its workers (§1, S13, O1, Q9, S29) (user:
+   "The parent should know everything").
+9. The successor waits → it starts at once from the note (§1, S22, S23) (user: "Why wait? See how delegator
+   works").
+10. A successor on account switch or model change → the same session continues (S23, L3; default, user may reverse).
+11. The cold-cache rule → dropped (S24, L3, the cold-return bar; default, user may reverse).
+12. No session-to-session messages, "read anything" in one project → sessions message each other when asked
+    or truly needed, and read every project (§1, §2, S13, S30) (user: "Sessions should be able to message
+    eachother").
+13. `tmp/` emptied each turn → the grill's design stands: a plain `TMPDIR`, cleaned only on Archive and Delete
+    (§1 Folders, S31; #532).
+14. No Settings page for routing → Settings › Routing comes back as the rules editor, and `brigadier start` takes
+    model and effort from those rules (§1, S13b, S32) (user: "user should've been able to apply his rules").
+15. Brigadier overrides `disableAllHooks` → kept, and said so (§1, §8 item 17; default, user may reverse).
+16. The shipped rules file carries the user's personal rules → a neutral shipped default; those rules live in
+    the user's own file (§1, S13b, S33).
+17. Only one session may use the Local checkout → stays as built.
+18. The CLI's own question tool is denied → stays as built (S17).
+19. Folder trust forces Ask and stops workers → stays as built.
+20. A Chat's shell can run only `brigadier` → folds into 1: the CLI's own shell, cwd = the Chat's session folder
+    (S16c, S28).
+
 **Waiting on you:**
-- The 20 drifts between the 10-22 grill and the plan or the build (run `20261022-0805-take-over-5-sessions`,
-  `workers/w95/report.md`). Each needs your call. Until then the plan's text stands; the 10-23 continuity
-  amendment changes none of them.
-- After a seam, should the successor carry on by itself, as a Delegator does, or wait for your next message,
-  as S22 does by default (w95, item 9)? `BRIGADIER_SEAM_CARRY_ON=1` already does the first. S22b works either
-  way.
+- Items 7, 10, 11 and 15 above are the Delegator's defaults; each is yours to reverse.
 - A terms check of multi-account auto-switch before marketing it.
 - Bench sign-ins for Superset and Orca (the orchestration and model-advice benches need them).
