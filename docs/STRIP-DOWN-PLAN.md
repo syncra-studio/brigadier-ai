@@ -2026,44 +2026,47 @@ sessions with token economy. Each has a measurable bar against the best rival to
 
 **Decided (10-23): the 20 drifts of the w95 audit** (run `20261022-0805-take-over-5-sessions`,
 `workers/w95/report.md`). Item numbers are the audit's.
-1. Chats can't run workers → a Chat is always a brigade and acts almost exactly as a normal session (§1 Teams,
+1. (D1, D20) Chats can't run workers → a Chat is always a brigade and acts almost exactly as a normal session (§1 Teams,
    S15, S28) (user: "a chat is always a brigade").
-2. Workers can't start workers → stays: they use their CLI's own subagents (§1, S13, S15, §8 item 13) (user:
+2. (D2) Workers can't start workers → stays: they use their CLI's own subagents (§1, S13, S15, §8 item 13) (user:
    "workers cant start other workers").
-3. Unclear asks → when the user is uncertain, a model fusion gives the best answer (S15, S36) (user: "if the
+3. (D3) Unclear asks → when the user is uncertain, a model fusion gives the best answer (S15, S36) (user: "if the
    user is uncertain - we help him").
-4. The context ring in Chats → stays as it is (§1 Context card) (user: "ok").
-5. Computer use reaches no session → fixed (§1, S13, S35; #529) (user: "fix this!").
-6. PR row words and colours → the grill's list (§1, S14, S34) (user: "fix this").
-7. Codex network at Ask and Accept edits → stays on so `brigadier` reaches its socket (§8 item 5;
+4. (D4) The context ring in Chats → stays as it is (§1 Context card) (user: "ok").
+5. (D5) Computer use reaches no session → fixed (§1, S13, S35; #529) (user: "fix this!").
+6. (D6) PR row words and colours → the grill's list (§1, S14, S34) (user: "fix this").
+7. (D15) Codex network at Ask and Accept edits → stays on so `brigadier` reaches its socket (§8 item 5;
    [#538](https://github.com/syncra-studio/brigadier-ai/issues/538))
    (Delegator's judgement with the user's trust, 2026-10-23: "do as u thinnk it's best, i'll trust your judgement").
-8. An idle parent isn't told → the parent knows everything about its workers (§1, S13, O1, Q9, S29) (user:
+8. (D7) An idle parent isn't told → the parent knows everything about its workers (§1, S13, O1, Q9, S29) (user:
    "The parent should know everything").
-9. The successor waits → it starts at once from the note (§1, S22, S23) (user: "Why wait? See how delegator
+9. (D8) The successor waits → it starts at once from the note (§1, S22, S23) (user: "Why wait? See how delegator
    works").
-10. A successor on account switch or model change → the same session continues (S23, L3)
+10. (D14) A successor on account switch or model change → the same session continues (S23, L3)
     (user, 2026-10-23: "sure, continue the same session, don't start a fresh one").
-11. The cold-cache rule → dropped (S24, L3, the cold-return bar)
+11. (D16) The cold-cache rule → dropped (S24, L3, the cold-return bar)
     (Delegator's judgement, 2026-10-23: the research's saving is one uncached read per cold return; plain
     Claude Code never restarts on a cold cache; S24 stays dropped; the nightly battery reports cold-return
     cost, never gates).
-12. No session-to-session messages, "read anything" in one project → sessions message each other when asked
+12. (D9) No session-to-session messages, "read anything" in one project → sessions message each other when asked
     or truly needed, and read every project (§1, §2, S13, S30) (user: "Sessions should be able to message
     eachother").
-13. `tmp/` emptied each turn → the grill's design stands: a plain `TMPDIR`, cleaned only on Archive and Delete
+13. (D21) `tmp/` emptied each turn → the grill's design stands: a plain `TMPDIR`, cleaned only on Archive and Delete
     (§1 Folders, S31; #532).
-14. No Settings page for routing → Settings › Routing comes back as the rules editor, and `brigadier start` takes
+14. (D10, D22) No Settings page for routing → Settings › Routing comes back as the rules editor, and `brigadier start` takes
     model and effort from those rules (§1, S13b, S32) (user: "user should've been able to apply his rules").
-15. Brigadier overrides `disableAllHooks` → removed (S37, §1, §8 item 17)
+15. (D17) Brigadier overrides `disableAllHooks` → removed (S37, §1, §8 item 17)
     (Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
-16. The shipped rules file carries the user's personal rules → a neutral shipped default; those rules live in
+16. (D11) The shipped rules file carries the user's personal rules → a neutral shipped default; those rules live in
     the user's own file (§1, S13b, S33).
-17. Only one session may use the Local checkout → stays as built.
-18. The CLI's own question tool is denied → stays as built (S17).
-19. Folder trust forces Ask and stops workers → stays as built.
-20. A Chat's shell can run only `brigadier` → folds into 1: the CLI's own shell, cwd = the Chat's session folder
+17. (D12) Only one session may use the Local checkout → stays as built.
+18. (D12) The CLI's own question tool is denied → stays as built (S17).
+19. (D12) Folder trust forces Ask and stops workers → stays as built.
+20. (D1) A Chat's shell can run only `brigadier` → folds into 1: the CLI's own shell, cwd = the Chat's session folder
     (S16c, S28).
+Also decided on 10-23, with no step of their own: D13 (Sources are outside-the-repo things only, and the
+ledger is not shown in the UI, `f10bb20b9`), D18 (the Delegator skill's continuity items) and D19 (the memory
+cleanup): no step needed. D23 is S38; D24 is S23's kept `orch:<id>` log (§4 last consumers, #540).
 
 **Waiting on you:**
 - A terms check of multi-account auto-switch before marketing it.
