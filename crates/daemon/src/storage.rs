@@ -558,6 +558,19 @@ fn stale_sockets(_paths: &AppPaths) -> Vec<ScanItem> {
     Vec::new()
 }
 
+/// `identifiers` as a short, countable sentence: every id up to 3, else the first 3 and
+/// "and N more".
+fn identifier_list(identifiers: &[String]) -> String {
+    if identifiers.len() <= 3 {
+        return identifiers.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        identifiers[..3].join(", "),
+        identifiers.len() - 3
+    )
+}
+
 /// Other Brigadier apps' caches (development builds, older identities) untouched for
 /// [`CACHE_MIN_AGE`], as one item. Never the asking `app`'s or a running app's; nothing at all
 /// when which apps run can't be told.
@@ -599,7 +612,7 @@ fn app_caches(roots: &CacheRoots, app: String) -> Option<(CleanItem, DaemonActio
                 "From test or older builds of Brigadier that aren't running and haven't been \
                  used for a week."
             },
-            identifiers.join(", ")
+            identifier_list(&identifiers)
         ),
         true,
         true,
@@ -1072,6 +1085,17 @@ mod tests {
         };
         let storage = storage_with("scan", old);
         assert!(storage.take("scan", &["item-0".into()]).is_err());
+    }
+
+    #[test]
+    fn identifier_list_names_the_first_three_and_counts_the_rest() {
+        let few = ["a".to_owned(), "b".to_owned(), "c".to_owned()];
+        assert_eq!(identifier_list(&few), "a, b, c");
+        let many: Vec<String> = (0..97).map(|n| format!("ai.brigadier.ab-{n}")).collect();
+        assert_eq!(
+            identifier_list(&many),
+            "ai.brigadier.ab-0, ai.brigadier.ab-1, ai.brigadier.ab-2, and 94 more"
+        );
     }
 
     #[test]
