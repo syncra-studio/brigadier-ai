@@ -1,6 +1,6 @@
-import type { WorkRow } from "@/app/settings/routing/words";
-import { effortLabel } from "@/components/shared/model-selector";
-import type { GuidanceRow, ModelRule, OverrideTarget, ProviderKind } from "@/ipc/generated";
+import { shortPlaceName, type WorkRow } from "@/app/settings/routing/words";
+import { effortLabel, findModel, type ModelGroup } from "@/components/shared/model-selector";
+import type { GuidanceRow, ModelChoice, ModelInfo, ModelRule, OverrideTarget, ProviderKind } from "@/ipc/generated";
 import { joinWords, VENDOR_LABELS } from "@/lib/routing";
 
 /*
@@ -31,6 +31,19 @@ export type Names = {
   pattern: (agent: ProviderKind | null, pattern: string) => string;
   target: (target: OverrideTarget) => string;
 };
+
+/** The names the rules' words need, from the model list. */
+export function ruleNames(groups: readonly ModelGroup[]): Names {
+  const pattern = (agent: ProviderKind | null, name: string) => {
+    if (name === "*") return "any model";
+    if (name === "default") return agent ? shortPlaceName({ type: "vendor", provider: agent }, groups) : "the default model";
+    const listed = (agent ? groups.filter((group) => group.provider === agent) : groups)
+      .map((group) => findModel(groups, { provider: group.provider, model: name, effort: null }))
+      .find(Boolean);
+    return listed?.displayName ?? name.charAt(0).toUpperCase() + name.slice(1);
+  };
+  return { pattern, target: (target) => shortPlaceName(target, groups) };
+}
 
 /** A model the agents list now, as a rule's preview checks it. */
 export type ListedModel = { provider: ProviderKind; id: string; resolved: string | null; name: string };
@@ -133,6 +146,68 @@ export function rowChoice(row: GuidanceRow, models: readonly ListedModel[]): Cho
     names: [row.model, ...(listed ? [listed.id, ...(listed.resolved ? [listed.resolved] : [])] : [])],
     effort: row.effort,
   };
+}
+
+/**
+ * A chat's or session's pick as a choice: the names its model goes by (as picked, its id, what
+ * it resolves to; the agent's default model when none is picked) and its effort (the model's
+ * default when none is picked), as the daemon judges a start.
+ */
+export function pickedChoice(groups: readonly ModelGroup[], choice: ModelChoice): Choice {
+  const model = findModel(groups, choice);
+  const names = [choice.model, model?.id, model?.resolved].filter((name): name is string => !!name && name !== "default");
+  return { provider: choice.provider, names: [...new Set(names)], effort: choice.effort ?? model?.defaultEffort ?? null };
+}
+
+/** The pick of `model` at `effort` (`null`: the model alone, its effort not judged). */
+const modelPick = (provider: ProviderKind, model: ModelInfo, effort: string | null): Choice => ({
+  provider,
+  names: [model.id, ...(model.resolved ? [model.resolved] : [])],
+  effort,
+});
+
+/**
+ * Why the rules keep a model out of a chat or session, or one of its efforts (`effort` null:
+ * the model itself), in the Rules card's words ("Never go above High effort"); `null` if
+ * they don't.
+ */
+export function pickRefusal(
+  rules: readonly ModelRule[],
+  names: Names,
+  provider: ProviderKind,
+  model: ModelInfo,
+  effort: string | null,
+): string | null {
+  const rule = refusingRule(rules, modelPick(provider, model, effort), null);
+  return rule ? ruleTitle(rule, names) : null;
+}
+
+/**
+ * A pick the rules allow, as near the one asked for as can be: an effort above a ceiling comes
+ * down to the highest of its model's efforts the rules allow. Any other pick stays as it is.
+ */
+export function allowedPick(rules: readonly ModelRule[], groups: readonly ModelGroup[], choice: ModelChoice): ModelChoice {
+  const model = findModel(groups, choice);
+  if (!model || rules.length === 0) return choice;
+  const rule = refusingRule(rules, pickedChoice(groups, choice), null);
+  if (rule?.type !== "effortCeiling") return choice;
+  const lower = model.efforts.toReversed().find((effort) => !refusingRule(rules, pickedChoice(groups, { ...choice, effort }), null));
+  return lower ? { ...choice, effort: lower } : choice;
+}
+
+/** A rules-file line as the daemon quotes it in a refusal, compared without case or spaces. */
+const lineKey = (line: string) => line.toLowerCase().replace(/\s+/g, "");
+
+/**
+ * An error in the Rules card's words when it is the daemon's refusal by one of the user's rules
+ * (`refused by your model rule: "effort-ceiling: high"`): "Refused by your rule “Never go above
+ * High effort”". Any other error stays as it is.
+ */
+export function refusalText(message: string, rules: readonly ModelRule[], names: Names): string {
+  const quoted = /refused by your model rule: "(.*)"/s.exec(message)?.[1];
+  if (quoted === undefined) return message;
+  const rule = rules.find((found) => lineKey(ruleText(found)) === lineKey(quoted));
+  return rule ? `Refused by your rule “${ruleTitle(rule, names)}”` : message;
 }
 
 /** The word of a draft's model the rule names: a listed id, a family word, or `default`. */

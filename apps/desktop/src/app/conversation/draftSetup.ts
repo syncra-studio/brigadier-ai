@@ -3,9 +3,11 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { ModelGroup } from "@/components/shared/model-selector";
 import { checkoutHolder, environmentRequest } from "@/app/conversation/draftEnvironment";
+import { allowedPick } from "@/app/settings/routing/ruleWords";
 import type {
   EnvironmentKind,
   ModelChoice,
+  ModelRule,
   PermissionLevel,
   Project,
   RepoInfo,
@@ -19,6 +21,7 @@ import {
   useModelGroups,
 } from "@/lib/setup";
 import { type DraftTarget, getRepoInfo } from "@/state/actions";
+import { useModelRules } from "@/state/modelRules";
 import { type DraftSetup, emptyDraft, type Selection, useApp } from "@/state/store";
 
 export type RepoState = { info: RepoInfo | null; error: string | null; loading: boolean };
@@ -80,6 +83,8 @@ export function updateDraft(projectId: string | null, patch: Partial<DraftSetup>
   }));
 }
 
+const NO_RULES: ModelRule[] = [];
+
 /** Everything the composer resolved for a draft, and what (if anything) blocks sending. */
 export type ResolvedDraft = {
   kind: "chat" | "session";
@@ -122,8 +127,11 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
       : null,
   );
 
-  const model = resolveModel(draft.model, kind, project, settings, groups);
-  const defaultModel = resolveModel(null, kind, project, settings, groups);
+  // An effort above the user's ceiling comes down to one it allows: the picker can't be left on
+  // what the rules refuse, so Send isn't either.
+  const rules = useModelRules((s) => s.view?.rules ?? NO_RULES);
+  const model = allowedPick(rules, groups, resolveModel(draft.model, kind, project, settings, groups));
+  const defaultModel = allowedPick(rules, groups, resolveModel(null, kind, project, settings, groups));
   const permission = resolvePermission(draft.permission, settings);
   const { environment } = draft;
   const current = repo.info?.currentBranch ?? null;

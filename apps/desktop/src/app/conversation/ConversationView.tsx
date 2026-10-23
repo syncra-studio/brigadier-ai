@@ -46,6 +46,9 @@ import {
   PulledSlot,
 } from "@/app/conversation/composerTarget";
 import { useResolvedDraft } from "@/app/conversation/draftSetup";
+import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
+import { putBack } from "@/app/conversation/composerDraft";
+import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { workerName } from "@/app/conversation/rowWords";
 import { type BlockMeta, RequestBlock } from "@/app/conversation/RequestBlock";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
@@ -617,6 +620,8 @@ export function ConversationView({
   const fail = useCallback((cause: unknown) => {
     setError(cause instanceof Error ? cause.message : String(cause));
   }, []);
+  // The user's rules' refusals read in their words (as Settings › Routing words a rule).
+  const refusals = useRuleRefusals(resolved.groups);
   const submit = useCallback(
     (message: AppendMessage, lane: SendLane | "followUp") => {
       const text = textOf(message);
@@ -632,8 +637,13 @@ export function ConversationView({
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const outgoing = { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] };
       const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
+      // What wasn't sent goes back into the composer: a refusal never takes the typed message.
+      const keep = (cause: unknown) => {
+        putBack(conversationId ?? NEW_CHAT_SCOPE, text);
+        fail(cause);
+      };
       if (background && source && isTaskTab(source)) {
-        void startSessionFrom(source, outgoing).catch(fail);
+        void startSessionFrom(source, outgoing).catch(keep);
         return;
       }
       const into = keepPaused
@@ -647,7 +657,7 @@ export function ConversationView({
           queueIndex: into === "steer" ? null : (slot?.index ?? null),
           to: conversationId,
         },
-      ).catch(fail);
+      ).catch(keep);
     },
     [attachments, pulled, conversationId, targets, mentions, draftTarget, fail],
   );
@@ -877,7 +887,7 @@ export function ConversationView({
                       <div className="relative flex min-h-0 flex-1">
                       <div className="flex h-full min-w-0 flex-1 flex-col">
                           {error && (
-                            <Banner tone="error" text={error} onDismiss={() => setError(null)} />
+                            <Banner tone="error" text={refusals.words(error)} onDismiss={() => setError(null)} />
                           )}
                           <div className="relative flex min-h-0 flex-1">
                           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

@@ -26,6 +26,22 @@ export function typeInto(scope: string, edit: (text: string) => string): boolean
   return type !== undefined;
 }
 
+/**
+ * Puts a message the daemon didn't take (a refusal, a failed send) back into the composer of
+ * `scope`, before anything typed since; into its kept draft when no composer for it is open.
+ */
+export function putBack(scope: string, text: string): void {
+  if (text === "" || typeInto(scope, (now) => (now === "" ? text : `${text}\n${now}`))) return;
+  const saved = loadDraft(scope);
+  const shift = saved?.text ? text.length + 1 : 0;
+  saveDraft(
+    scope,
+    saved?.text ? `${text}\n${saved.text}` : text,
+    saved?.attachments ?? [],
+    (saved?.mentions ?? []).map((mention) => ({ ...mention, at: mention.at + shift })),
+  );
+}
+
 /** Where each remembered file or conversation's `@name` stands in `text`. */
 function mentionsAt(text: string, memory: MentionMemory): DraftMention[] {
   const found: DraftMention[] = [];

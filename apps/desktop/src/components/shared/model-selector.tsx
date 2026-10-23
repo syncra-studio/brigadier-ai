@@ -84,19 +84,33 @@ export function effortFor(model: ModelInfo | null, effort: string | null): strin
 /** A two-line row (a model and what it's for): rounded, not a pill. */
 const TALL_ROW = "h-auto rounded-xl";
 
-/** A model as a radio row of its provider's list, marked when it's `defaultModel`. */
-const modelItem = (defaultModel: ModelInfo | null) => (model: ModelInfo) => (
-  <DropdownMenuRadioItem
-    key={model.id}
-    value={model.id}
-    data-slot="model-selector-item"
-    indicator={<Check className="size-icon-md" />}
-    className={TALL_ROW}
-  >
-    {/* Its name (marked when it's the default), then what it's for in grey. */}
-    <MenuRow twoLine title={model.displayName} hint={model === defaultModel && "Default"} detail={model.description} />
-  </DropdownMenuRadioItem>
-);
+/**
+ * Why the user's rules keep a model out, or one of its efforts (`effort` null: the model
+ * itself), in their words ("Never go above High effort"); `null` when they don't.
+ */
+export type Refused = (provider: ProviderKind, model: ModelInfo, effort: string | null) => string | null;
+
+/**
+ * A model as a radio row of its provider's list, marked when it's `defaultModel`; one the
+ * rules keep out (`refused`) can't be picked and says which rule.
+ */
+const modelItem = (defaultModel: ModelInfo | null, refused: (model: ModelInfo) => string | null) => (model: ModelInfo) => {
+  const rule = refused(model);
+  return (
+    <DropdownMenuRadioItem
+      key={model.id}
+      value={model.id}
+      disabled={rule !== null}
+      data-slot="model-selector-item"
+      data-refused={rule ?? undefined}
+      indicator={<Check className="size-icon-md" />}
+      className={TALL_ROW}
+    >
+      {/* Its name (marked when it's the default), then what it's for in grey, or the rule that keeps it out. */}
+      <MenuRow twoLine title={model.displayName} hint={model === defaultModel && "Default"} detail={rule ?? model.description} />
+    </DropdownMenuRadioItem>
+  );
+};
 
 /** Whether a model goes under Legacy: an older one, unless it's a default (the CLI's or ours). */
 const isLegacy = (defaultModel: ModelInfo | null) => (model: ModelInfo) =>
@@ -125,6 +139,7 @@ export function ModelSelector({
   open: shown,
   onOpenChange,
   automatic,
+  refused,
 }: {
   groups: readonly ModelGroup[];
   value: ModelChoice;
@@ -142,6 +157,8 @@ export function ModelSelector({
    * what it picks now ("Automatic (Opus 5.5)").
    */
   automatic?: { chosen: boolean; hint: string; onChoose: () => void; label?: string } | undefined;
+  /** What the user's rules keep out: shown, but it can't be picked, with the rule's words. */
+  refused?: Refused | undefined;
 }) {
   const auto = automatic?.chosen === true;
   const [own, setOwn] = useState(false);
@@ -166,6 +183,7 @@ export function ModelSelector({
   const models = (group: ModelGroup) => {
     const chosen = !auto && group.provider === value.provider ? current?.id : undefined;
     const legacy = group.models.filter(isLegacy(defaultModel));
+    const item = modelItem(defaultModel, (model) => refused?.(group.provider, model, null) ?? null);
     return (
       <DropdownMenuRadioGroup
         value={chosen ?? ""}
@@ -176,7 +194,7 @@ export function ModelSelector({
       >
         {group.models
           .filter((model) => !isLegacy(defaultModel)(model))
-          .map(modelItem(defaultModel))}
+          .map(item)}
         {legacy.length > 0 && (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger data-slot="model-selector-legacy">
@@ -186,7 +204,7 @@ export function ModelSelector({
               </span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent sideOffset={tokenPx("--spacing")} className={FLYOUT}>
-              {legacy.map(modelItem(defaultModel))}
+              {legacy.map(item)}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}
@@ -248,19 +266,27 @@ export function ModelSelector({
               value={effort ?? ""}
               onValueChange={(next) => onChange({ ...value, model: current.id, effort: next })}
             >
-              {current.efforts.map((level) => (
-                <DropdownMenuRadioItem
-                  key={level}
-                  value={level}
-                  data-slot="model-selector-effort"
-                  indicator={<Check className="size-icon-md" />}
-                >
-                  {effortLabel(level)}
-                  {level === current.defaultEffort && (
-                    <span className="text-muted-foreground">Default</span>
-                  )}
-                </DropdownMenuRadioItem>
-              ))}
+              {current.efforts.map((level) => {
+                // An effort the rules refuse shows, greyed, with the rule that keeps it out.
+                const rule = refused?.(value.provider, current, level) ?? null;
+                return (
+                  <DropdownMenuRadioItem
+                    key={level}
+                    value={level}
+                    disabled={rule !== null}
+                    data-slot="model-selector-effort"
+                    data-refused={rule ?? undefined}
+                    indicator={<Check className="size-icon-md" />}
+                  >
+                    {effortLabel(level)}
+                    {rule ? (
+                      <span className="text-muted-foreground min-w-0 truncate">{rule}</span>
+                    ) : (
+                      level === current.defaultEffort && <span className="text-muted-foreground">Default</span>
+                    )}
+                  </DropdownMenuRadioItem>
+                );
+              })}
             </DropdownMenuRadioGroup>
           </>
         )}

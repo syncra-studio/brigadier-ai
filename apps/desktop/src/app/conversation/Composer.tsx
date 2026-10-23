@@ -38,20 +38,23 @@ import { QueueCard } from "@/app/conversation/QueueCard";
 import { SendControls } from "@/app/conversation/SendControls";
 import { UtilityBar } from "@/app/conversation/UtilityBar";
 import { useComposerDraft } from "@/app/conversation/composerDraft";
+import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
 import { PausedSendDialog } from "@/app/conversation/PausedSend";
 import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
-import { ModelSelector } from "@/components/shared";
+import { type ModelGroup, ModelSelector } from "@/components/shared";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { useThreadView } from "@/state/cliThread";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
+import { loadModelRules, useModelRulesRead } from "@/state/modelRules";
 import { folderTrust } from "@/state/trust";
 
+const NO_GROUPS: ModelGroup[] = [];
 
 /**
  * The composer (assistant-ui composer elements): attachments, @-mentions of
@@ -62,6 +65,14 @@ import { folderTrust } from "@/state/trust";
 export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder }) => {
   const target = useContext(ComposerTargetContext);
   const [modelOpen, setModelOpen] = useState(false);
+  // The user's rules file, read as the composer opens and again as the model picker does, so a
+  // hand edit shows: what it keeps out the picker shows but can't pick.
+  useModelRulesRead();
+  const refusals = useRuleRefusals(target?.resolved.groups ?? NO_GROUPS);
+  const openModel = (open: boolean) => {
+    if (open) void loadModelRules();
+    setModelOpen(open);
+  };
   const [permissionOpen, setPermissionOpen] = useState(false);
   const sessionPermission = useShownPermission(target?.conversation ?? null);
   const statusCard = useContext(StatusCardContext);
@@ -117,7 +128,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
           groups={resolved.groups}
           // Each picker opens once the / menu has closed and the composer took the command out,
           // or it would close as it opens.
-          onOpenModel={() => requestAnimationFrame(() => setModelOpen(true))}
+          onOpenModel={() => requestAnimationFrame(() => openModel(true))}
           permission={permissionLevel && { level: permissionLevel, onOpen: () => requestAnimationFrame(() => setPermissionOpen(true)) }}
         />
         {/* Hidden, not unmounted, while the slash or + menu is open over it. */}
@@ -196,7 +207,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
                   conversation={conversation}
                   groups={resolved.groups}
                   open={modelOpen}
-                  onOpenChange={setModelOpen}
+                  onOpenChange={openModel}
                 />
               ) : (
                 <ModelSelector
@@ -206,7 +217,8 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
                   label="Model"
                   onChange={(model) => updateDraft(resolved.project?.id ?? null, { model })}
                   open={modelOpen}
-                  onOpenChange={setModelOpen}
+                  onOpenChange={openModel}
+                  refused={refusals.refused}
                 />
               )}
               <SendControls running={target.running} onResume={target.onResume} />

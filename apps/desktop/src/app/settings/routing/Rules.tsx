@@ -11,16 +11,17 @@ import {
   type Names,
   previewDraft,
   ruleLine,
+  ruleNames,
   ruleText,
   ruleTitle,
 } from "@/app/settings/routing/ruleWords";
-import { shortPlaceName, workRows } from "@/app/settings/routing/words";
+import { workRows } from "@/app/settings/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
-import { effortLabel, findModel, type ModelGroup, SettingsCard } from "@/components/shared";
+import { effortLabel, type ModelGroup, SettingsCard } from "@/components/shared";
 import { Button, SettingsSelect, SettingsSelectTrigger } from "@/components/controls";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays";
 import { DotsHorizontal, Info, Plus, Warning } from "@/components/icons";
-import type { ModelRule, ModelRules, OverrideTarget, ProviderKind } from "@/ipc/generated";
+import type { ModelRule, ModelRules, OverrideTarget } from "@/ipc/generated";
 import { saveModelRules } from "@/state/modelRules";
 import { toast } from "@/state/toasts";
 
@@ -44,19 +45,6 @@ const CEILINGS = EFFORT_LEVELS.filter((level) => level !== "none" && level !== "
   label: effortLabel(level),
 }));
 
-/** The names the rules' words need, from the model list. */
-function useNames(groups: readonly ModelGroup[]): Names {
-  const pattern = (agent: ProviderKind | null, name: string) => {
-    if (name === "*") return "any model";
-    if (name === "default") return agent ? shortPlaceName({ type: "vendor", provider: agent }, groups) : "the default model";
-    const listed = (agent ? groups.filter((group) => group.provider === agent) : groups)
-      .map((group) => findModel(groups, { provider: group.provider, model: name, effort: null }))
-      .find(Boolean);
-    return listed?.displayName ?? name.charAt(0).toUpperCase() + name.slice(1);
-  };
-  return { pattern, target: (target) => shortPlaceName(target, groups) };
-}
-
 /**
  * Rules: each as a sentence naming its model, then where it applies and what it does; removed
  * from its menu. Add rule opens a sentence to complete at the top of the card ("Never use [a
@@ -77,7 +65,7 @@ export function Rules({
   const [adding, setAdding] = useState(false);
   const [fresh, setFresh] = useState<string | null>(null);
   const remove = useAction();
-  const names = useNames(groups);
+  const names = ruleNames(groups);
   const save = (next: readonly ModelRule[]) => saveModelRules(file?.rows ?? [], next);
   const added = rules.find((rule) => ruleText(rule) === fresh);
   // The rule just added leads the list while it is new.

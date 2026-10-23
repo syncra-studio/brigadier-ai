@@ -1,5 +1,6 @@
 import { type FC, useRef, useState } from "react";
 
+import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import { useAction } from "@/app/conversation/useAction";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
 import { WaitingPill } from "@/app/shell/WaitingPill";
@@ -338,12 +339,13 @@ export function ConversationModelPicker({
   const fixed = setup === null && conversation.kind === "session";
   const all = useModelGroups();
   const shown = withChoice(groups, all, current);
+  const refusals = useRuleRefusals(all);
 
   return (
     <>
       {action.error && (
-        <span role="alert" className="text-destructive max-w-xs truncate text-xs" title={action.error}>
-          {action.error}
+        <span role="alert" className="text-destructive max-w-xs truncate text-xs" title={refusals.words(action.error)}>
+          {refusals.words(action.error)}
         </span>
       )}
       {conversation.quotaWait && <WaitingPill wait={conversation.quotaWait} />}
@@ -355,7 +357,10 @@ export function ConversationModelPicker({
         open={open}
         onOpenChange={onOpenChange}
         label="Model"
-        onChange={(choice) =>
+        refused={refusals.refused}
+        onChange={(picked) => {
+          // A model whose efforts the rules cap starts at the highest they allow.
+          const choice = refusals.allowed(picked);
           action.run(() =>
             updateSetup(
               conversation.id,
@@ -363,8 +368,8 @@ export function ConversationModelPicker({
                 ? { ...setup, orchestrator: choice }
                 : { type: "chat", model: choice, permission: setup?.permission ?? "acceptEdits" },
             ),
-          )
-        }
+          );
+        }}
       />
     </>
   );

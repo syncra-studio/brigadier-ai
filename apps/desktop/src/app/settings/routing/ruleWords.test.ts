@@ -5,7 +5,8 @@ import { createServer, type ViteDevServer } from "vite";
 import type * as RuleWords from "@/app/settings/routing/ruleWords";
 import type { ListedModel, Names } from "@/app/settings/routing/ruleWords";
 import type { WorkRow } from "@/app/settings/routing/words";
-import type { GuidanceRow, ModelRule, OverrideTarget } from "@/ipc/generated";
+import type { ModelGroup } from "@/components/shared/model-selector";
+import type { GuidanceRow, ModelInfo, ModelRule, OverrideTarget } from "@/ipc/generated";
 
 // The rules' words need the model names lib/routing reads through the app's modules: loaded by Vite.
 let server: ViteDevServer;
@@ -16,12 +17,15 @@ let previewDraft: typeof RuleWords.previewDraft;
 let ruleLine: typeof RuleWords.ruleLine;
 let ruleText: typeof RuleWords.ruleText;
 let ruleTitle: typeof RuleWords.ruleTitle;
+let allowedPick: typeof RuleWords.allowedPick;
+let pickRefusal: typeof RuleWords.pickRefusal;
+let refusalText: typeof RuleWords.refusalText;
 before(async () => {
   const globals = globalThis as Record<string, unknown>;
   globals.document ??= { documentElement: {} };
   globals.getComputedStyle ??= () => ({ getPropertyValue: () => "" });
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ draftRules, matches, previewDraft, refusingRule, ruleLine, ruleText, ruleTitle } = (await server.ssrLoadModule(
+  ({ allowedPick, draftRules, matches, pickRefusal, previewDraft, refusalText, refusingRule, ruleLine, ruleText, ruleTitle } = (await server.ssrLoadModule(
     "/src/app/settings/routing/ruleWords.ts",
   )) as typeof RuleWords);
 });
@@ -198,4 +202,49 @@ test("a draft's preview says what it changes, and warns of a rule already there 
     tone: "warning",
     text: "You already have this rule.",
   });
+});
+
+// The composer's model picker (issue 545): what the rules keep out, in the Rules card's words.
+const info = (id: string, displayName: string, resolved: string | null, efforts: string[], defaultEffort: string | null): ModelInfo => ({
+  id, displayName, description: "", resolved, efforts, defaultEffort, isDefault: id === "opus", inputModalities: [], fast: null, legacy: false,
+});
+const OPUS = info("opus", "Opus 5.5", "claude-opus-5-5", ["low", "medium", "high", "xhigh", "max"], "high");
+const SONNET = info("sonnet", "Sonnet 5.5", "claude-sonnet-5-5", ["low", "medium", "high"], "medium");
+const GROUPS: ModelGroup[] = [{ provider: "claude", label: "Claude", models: [OPUS, SONNET], unavailable: null }];
+const CEILING: ModelRule[] = [{ type: "effortCeiling", effort: "high" }];
+
+test("the picker shows an effort or model the rules keep out with the rule's title; others are free (issue 545)", () => {
+  assert.equal(pickRefusal(CEILING, names, "claude", OPUS, "max"), "Never go above High effort");
+  assert.equal(pickRefusal(CEILING, names, "claude", OPUS, "xhigh"), "Never go above High effort");
+  assert.equal(pickRefusal(CEILING, names, "claude", OPUS, "high"), null);
+  // The model alone: a ceiling doesn't keep it out.
+  assert.equal(pickRefusal(CEILING, names, "claude", OPUS, null), null);
+  // A rule names a model by its id or what it resolves to.
+  assert.equal(pickRefusal([{ type: "forbid", names: ["claude-opus-5-5"] }], names, "claude", OPUS, null), "Never give Claude-opus-5-5 work");
+  assert.equal(pickRefusal([{ type: "allow", agent: "claude", names: ["sonnet"] }], names, "claude", OPUS, null), "Only use Sonnet 5.5 on Claude");
+  // A rule for one kind of work never judges a chat's or session's pick.
+  assert.equal(pickRefusal([{ type: "effortCeiling", effort: "low", work: "Review" }], names, "claude", OPUS, "max"), null);
+});
+
+test("a pick above the ceiling comes down to its model's highest allowed effort; any other pick stays (issue 545)", () => {
+  const max = { provider: "claude" as const, model: "opus", effort: "max" };
+  assert.deepEqual(allowedPick(CEILING, GROUPS, max), { ...max, effort: "high" });
+  assert.deepEqual(allowedPick([{ type: "effortCeiling", effort: "medium" }], GROUPS, max), { ...max, effort: "medium" });
+  assert.equal(allowedPick(CEILING, GROUPS, { ...max, effort: "medium" }).effort, "medium");
+  assert.deepEqual(allowedPick([], GROUPS, max), max);
+  // No effort picked: the model's default is what the daemon judges.
+  assert.deepEqual(allowedPick([{ type: "effortCeiling", effort: "low" }], GROUPS, { provider: "claude", model: "sonnet", effort: null }), {
+    provider: "claude", model: "sonnet", effort: "low",
+  });
+  // A model the rules keep out stays as it is: the picker shows why, the daemon refuses it.
+  const forbid: ModelRule[] = [{ type: "forbid", names: ["opus"] }];
+  assert.deepEqual(allowedPick(forbid, GROUPS, max), max);
+});
+
+test("the daemon's refusal reads in the rule's words; other errors stay as they are (issue 545)", () => {
+  assert.equal(refusalText('refused by your model rule: "effort-ceiling: high"', CEILING, names), "Refused by your rule “Never go above High effort”");
+  // As the user wrote it in the file: case and spaces don't matter.
+  assert.equal(refusalText('refused by your model rule: "forbid:  Opus,sonnet"', [{ type: "forbid", names: ["opus", "sonnet"] }], names), "Refused by your rule “Never give Opus 5.5 or Sonnet 5.5 work”");
+  assert.equal(refusalText('refused by your model rule: "forbid: fable"', CEILING, names), 'refused by your model rule: "forbid: fable"');
+  assert.equal(refusalText("the daemon closed the connection", CEILING, names), "the daemon closed the connection");
 });

@@ -167,6 +167,14 @@ level in use and its icon; `/perm` and Enter open the permission menu above the 
 too. It writes what it saw as JSON into `#composer-permissions-result`;
 `ComposerPermissionsRender.test.ts` checks it. This entry is absent from the production build.
 
+# The model picker and the rules file
+
+`/fixtures/composer-rules.html` is a new chat's composer with the rules file capping effort at High
+and the draft left on Max (issue 545). The picker shows High, and Extra high and Max greyed with "Never
+go above High effort"; Send, refused by the daemon, shows the rule in those words in the banner and
+keeps the typed message. It writes what it saw as JSON into `#composer-rules-result`;
+`ComposerRulesRender.test.ts` checks it. This entry is absent from the production build.
+
 # Source panel menu
 
 `/fixtures/source-menu.html` is the Source panel on a project's folder with More Actions' Branch ›
