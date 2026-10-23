@@ -1141,6 +1141,7 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - S22b then changes this order and the seam text (`research/CONTINUITY.md`); S22 lands with the text above.
 - **Edge cases:**
   - A user message during the note turn waits up to a minute, then goes to the successor, exactly once.
+  - The user's Stop in the note turn closes the seam; their next message starts the successor (w116).
   - Death without a note (limit, crash, prompt too long) → the successor starts from the ledger and tail with
     the "check git first" line.
   - Daemon restart → `seam.json` decides; never two successors.
