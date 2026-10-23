@@ -92,3 +92,26 @@ async fn the_users_copy_overrides_the_shipped_skill_until_reset() {
     assert_eq!(installed(&spec), SKILL);
     flow.stop().await;
 }
+
+#[tokio::test]
+async fn create_writes_the_shipped_skill_as_the_users_copy_and_keeps_one_there() {
+    let flow = flow("brigade-create", ProviderKind::Claude).await;
+    let path = flow.manager.brigade_override_path();
+    let created = flow.manager.create_brigade_skill().unwrap();
+    assert!(created.custom);
+    assert_eq!(created.path, path);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), SKILL);
+    // A copy already there is the user's: Create keeps it.
+    std::fs::write(
+        &path,
+        "---\nname: brigade\ndescription: mine\n---\nMy way.\n",
+    )
+    .unwrap();
+    assert!(flow.manager.create_brigade_skill().unwrap().custom);
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .ends_with("My way.\n")
+    );
+    flow.stop().await;
+}

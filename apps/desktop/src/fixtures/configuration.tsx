@@ -38,6 +38,10 @@ useApp.setState((state) => ({
 const calls: string[] = [];
 
 mockIPC((command, payload) => {
+  if (command === "reveal_path") {
+    calls.push(`show ${(payload as { path: string }).path}`);
+    return null;
+  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
@@ -46,6 +50,9 @@ mockIPC((command, payload) => {
     case "resetBrigadeSkill":
       calls.push("reset");
       return { method: req.method, custom: false, path: "~/.brigadier/brigade/SKILL.md" };
+    case "createBrigadeSkill":
+      calls.push("create");
+      return { method: req.method, custom: true, path: "~/.brigadier/brigade/SKILL.md" };
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     default:
@@ -82,6 +89,8 @@ const typeSearch = (value: string) => {
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 };
 const skill = () => document.querySelector('[data-setting="How sessions run workers"]');
+const skillButtons = () => all("button", skill() ?? document.createElement("div"));
+const skillButton = (name: string) => skillButtons().find((button) => text(button) === name);
 const MENUS: Record<string, string> = {
   sessions: "Model for sessions",
   chats: "Model for chats",
@@ -112,11 +121,19 @@ function Fixture() {
         seen.buttons = all("main button").map(text).filter((name) => name === "Use automatic");
         seen.levelRow = all("[data-setting]").some((row) => text(row).endsWith("Default"));
         seen.triggers = Object.values(MENUS).map((label) => text(trigger(label)));
-        seen.skill = { helper: text(skill()?.querySelector(".text-xs")), button: text(skill()?.querySelector("button")) };
-        skill()?.querySelector("button")?.click();
+        seen.skill = { helper: text(skill()?.querySelector(".text-xs")), buttons: skillButtons().map(text) };
+        skillButton("Reset to shipped")?.click();
       },
       () => {
-        seen.skillReset = { helper: text(skill()?.querySelector(".text-xs")), buttons: all("button", skill() ?? document.body).length, calls };
+        seen.skillReset = { helper: text(skill()?.querySelector(".text-xs")), buttons: skillButtons().map(text), calls: [...calls] };
+        skillButton("Create")?.click();
+      },
+      () => {
+        seen.skillCreated = { helper: text(skill()?.querySelector(".text-xs")), buttons: skillButtons().map(text), calls: [...calls] };
+        skillButton("Show file")?.click();
+      },
+      () => {
+        seen.skillShown = [...calls];
         press(trigger(MENUS.sessions!));
       },
       () => {

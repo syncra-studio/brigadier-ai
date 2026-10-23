@@ -1961,6 +1961,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 path: skill.path.display().to_string(),
             }
         }
+        Request::CreateBrigadeSkill => {
+            let skill = sessions.create_brigade_skill()?;
+            Response::CreateBrigadeSkill {
+                custom: skill.custom,
+                path: skill.path.display().to_string(),
+            }
+        }
         Request::GetModelRules => Response::GetModelRules {
             rules: sessions.model_rules()?,
         },

@@ -2,7 +2,7 @@
 //! installed for every session and Chat, on both CLIs: a Claude session loads it as a plugin,
 //! and Codex finds it in its user skills folder (`P/codex`). A user copy at
 //! `~/.brigadier/brigade/SKILL.md` overrides the shipped one and survives updates; Settings
-//! resets it.
+//! creates it from the shipped one, and resets it.
 
 use std::path::{Path, PathBuf};
 
@@ -57,6 +57,23 @@ impl SessionManager {
             custom: user_copy(&path).is_some(),
             path,
         }
+    }
+
+    /// Writes the user's copy as the shipped skill, to edit, unless one is there: sessions
+    /// started from now on get it.
+    pub fn create_brigade_skill(&self) -> Result<BrigadeSkill> {
+        let path = self.brigade_override_path();
+        if user_copy(&path).is_none() {
+            let written = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, SKILL));
+            if let Err(error) = written {
+                return Err(Error::Invalid(format!("{}: {error}", path.display())));
+            }
+            self.brigade_plugin();
+        }
+        Ok(self.brigade_skill())
     }
 
     /// Removes the user's copy: sessions started from now on get the shipped skill.

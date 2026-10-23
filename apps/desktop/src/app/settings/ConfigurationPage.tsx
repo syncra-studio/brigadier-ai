@@ -4,7 +4,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
 import { findModel, ModelSelector, type ModelGroup, SettingsCard, SettingsRow } from "@/components/shared";
 import { Badge, Button, SettingsSelect, selectTrigger } from "@/components/controls";
-import { request } from "@/ipc/client";
+import { request, revealPath } from "@/ipc/client";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
   builtInDefault,
@@ -166,7 +166,10 @@ function DefaultModelRow({
   );
 }
 
-/** The brigade skill sessions get: the shipped one, or the user's copy, which Reset removes. */
+/**
+ * The brigade skill sessions get: the shipped one, or the user's copy. Create writes the copy
+ * from the shipped skill and shows it; Show file shows a copy there; Reset removes it.
+ */
 function BrigadeSkillRow() {
   const reset = useAction();
   const [skill, setSkill] = useState<{ custom: boolean; path: string } | null>(null);
@@ -179,15 +182,36 @@ function BrigadeSkillRow() {
       description={skill?.custom ? `Your copy at ${skill.path} is in use` : CONFIGURATION_ROWS.brigadeSkill.description}
       error={reset.error}
     >
-      {skill?.custom && (
+      {skill && !skill.custom && (
         <Button
           variant="soft"
           size="sm"
           disabled={reset.busy}
-          onClick={() => reset.run(() => request({ method: "resetBrigadeSkill" }).then(setSkill))}
+          onClick={() =>
+            reset.run(async () => {
+              const created = await request({ method: "createBrigadeSkill" });
+              setSkill(created);
+              await revealPath(created.path);
+            })
+          }
         >
-          Reset to shipped
+          Create
         </Button>
+      )}
+      {skill?.custom && (
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="soft" size="sm" disabled={reset.busy} onClick={() => reset.run(() => revealPath(skill.path))}>
+            Show file
+          </Button>
+          <Button
+            variant="soft"
+            size="sm"
+            disabled={reset.busy}
+            onClick={() => reset.run(() => request({ method: "resetBrigadeSkill" }).then(setSkill))}
+          >
+            Reset to shipped
+          </Button>
+        </div>
       )}
     </SettingsRow>
   );
