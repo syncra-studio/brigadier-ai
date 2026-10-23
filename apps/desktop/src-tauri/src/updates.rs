@@ -407,20 +407,27 @@ mod tests {
     }
 
     #[test]
-    fn the_build_is_the_nightlys_date_stamp_without_a_sha_in_tests() {
+    fn the_build_is_the_nightlys_date_stamp_and_the_sha_the_build_env_carried() {
         let nightly: tauri::Config = serde_json::from_value(serde_json::json!({
             "identifier": "ai.brigadier.test",
             "version": "0.1.0-nightly.202610161908",
         }))
         .unwrap();
-        // `cargo test` carries no `GITHUB_SHA`, so only the date comes through.
+        // A local `cargo test` carries no `GITHUB_SHA`; a CI one does.
+        let sha = option_env!("GITHUB_SHA").map(|sha| sha[..sha.len().min(9)].to_owned());
         let info = build(&nightly).expect("a nightly stamps a date");
-        assert_eq!(info.sha, None);
+        assert_eq!(info.sha, sha);
         assert_eq!(info.date.as_deref(), Some("2026-10-16"));
         let plain: tauri::Config =
             serde_json::from_value(serde_json::json!({ "identifier": "ai.brigadier.test" }))
                 .unwrap();
-        assert_eq!(build(&plain), None);
+        assert_eq!(
+            build(&plain),
+            sha.map(|sha| brigadier_ipc::app::BuildInfo {
+                sha: Some(sha),
+                date: None
+            })
+        );
     }
 
     #[test]
