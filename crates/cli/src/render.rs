@@ -408,6 +408,23 @@ fn window_word(id: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// How long ago a figure was read (" · read 40s ago"), or nothing when unknown.
+fn read_ago(age_s: Option<i64>) -> String {
+    age_s.map_or_else(String::new, |age| format!(" · read {age}s ago"))
+}
+
+/// A place in an order as people say it ("1st", "2nd", "3rd", "4th").
+fn ordinal(n: u32) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
 /// An epoch-ms instant as a local date and time ("2026-10-23 09:40"), or `unknown`.
 fn local_time(at_ms: i64) -> String {
     jiff::Timestamp::from_millisecond(at_ms).map_or_else(
@@ -432,12 +449,12 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .iter()
             .filter(|m| m.agent == agent)
             .map(|m| {
-                format!(
-                    "{} [{}] age {}s",
-                    m.model,
-                    m.efforts.join("/"),
-                    m.age_s.map_or_else(|| "?".into(), |age| age.to_string())
-                )
+                let efforts = if m.efforts.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (efforts {})", m.efforts.join("/"))
+                };
+                format!("{}{efforts}{}", m.model, read_ago(m.age_s))
             })
             .collect();
         lines.push(format!(
@@ -478,7 +495,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .iter()
             .map(|w| {
                 format!(
-                    "{} {}% reset {}{}{}",
+                    "{} {}% used, resets {}{}{}",
                     window_word(&w.window),
                     w.used_percent,
                     w.resets_at_ms.map_or_else(|| "unknown".into(), local_time),
@@ -499,8 +516,13 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
                 )
             })
             .collect();
+        let placed = output
+            .accounts
+            .iter()
+            .filter(|other| other.agent == account.agent && other.place.is_some())
+            .count();
         lines.push(format!(
-            "{} / {}{}{}: {} · {} · {} · age {}s",
+            "{} / {}{}{}: {} · {} · {}{}",
             account.agent.word(),
             if account.name.is_empty() {
                 &account.id
@@ -509,19 +531,18 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             },
             if account.current { " (current)" } else { "" },
             if account.you { " (you)" } else { "" },
-            account.place.map_or_else(
-                || account.why.clone(),
-                |place| format!("#{place} {}", account.why)
-            ),
+            match account.place {
+                None => account.why.clone(),
+                Some(_) if placed == 1 => "the one account that takes work".into(),
+                Some(place) => format!("takes work {} ({})", ordinal(place), account.why),
+            },
             account.fit,
             if usage.is_empty() {
                 "usage unknown".into()
             } else {
                 usage.join("; ")
             },
-            account
-                .age_s
-                .map_or_else(|| "?".into(), |age| age.to_string())
+            read_ago(account.age_s)
         ));
     }
     lines.push("Guidance:".into());
@@ -590,6 +611,13 @@ mod tests {
         let text = models(&output);
         assert!(!text.contains("five_hour"), "{text}");
         assert!(!text.contains("1792783200000"), "{text}");
-        assert!(text.contains("5-hour"), "{text}");
+        assert!(text.contains("5-hour 8% used, resets "), "{text}");
+        // One account: no "#1 last", and the figure's age in words.
+        assert!(text.contains("the one account that takes work"), "{text}");
+        assert!(text.contains("read 40s ago"), "{text}");
+        assert!(!text.contains("#1"), "{text}");
+        assert_eq!(ordinal(1), "1st");
+        assert_eq!(ordinal(12), "12th");
+        assert_eq!(ordinal(22), "22nd");
     }
 }
