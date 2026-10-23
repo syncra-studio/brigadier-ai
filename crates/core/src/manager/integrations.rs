@@ -616,8 +616,8 @@ impl SessionManager {
             .clone()
     }
 
-    /// Tests: reads the catalog from `roots` instead. The flows that do run on Unix only.
-    #[cfg(all(test, unix))]
+    /// Tests: reads the catalog from `roots` instead. The flows that do run on macOS only.
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn set_registry(&self, roots: Roots) {
         *self.registry.write().unwrap_or_else(|p| p.into_inner()) = Registry::new(roots);
     }

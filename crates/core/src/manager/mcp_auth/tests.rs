@@ -5,11 +5,14 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
-use brigadier_registry::{Agent, Catalog, Secret, Session, SignIn, claude_key};
+use brigadier_registry::Catalog;
+#[cfg(target_os = "macos")]
+use brigadier_registry::{Agent, Secret, Session, SignIn, claude_key};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION, WWW_AUTHENTICATE};
@@ -17,7 +20,9 @@ use hyper::{Request, Response, StatusCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::stores::{Credential, Found, now_ms};
+use super::stores::now_ms;
+#[cfg(target_os = "macos")]
+use super::stores::{Credential, Found};
 use super::*;
 
 /// What the fake servers take and saw.
@@ -232,6 +237,7 @@ fn roots(home: &Path) -> Roots {
     Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap()
 }
 
+#[cfg(target_os = "macos")]
 fn session(agent: Agent) -> Session<'static> {
     Session {
         agent,
@@ -249,6 +255,7 @@ fn server<'a>(catalog: &'a Catalog, id: &str) -> &'a Server {
 
 /// Claude Code's credentials (its Keychain item, else its file), as `memory` and `home` hold
 /// them; reads of the item ask the user.
+#[cfg(target_os = "macos")]
 fn put_claude(memory: &Memory, roots: &Roots, blob: &Value) {
     match Homes::new(roots).claude_item {
         Some((service, account)) => {
