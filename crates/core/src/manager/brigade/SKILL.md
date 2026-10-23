@@ -1,6 +1,6 @@
 ---
 name: brigade
-description: Run a job with workers of your own when it calls for them - parallel parts, a long build, research, a second vendor's review - through the `brigadier` command. Needs the Brigadier app. Read it before your first `brigadier start`.
+description: Run a job with workers of your own when it calls for them - parallel parts, a long build, research, a second vendor's review - through the `brigadier` command. Needs the Brigadier app. Read it, with your first look at the files, before your first `brigadier start`.
 ---
 
 # Brigade
@@ -49,6 +49,15 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope."
 
 - The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`). The worker sees only its brief, never this protocol.
 - A plan or brief built from decisions cites their ids. Lines of your own say "proposed", and a gap the decisions don't cover goes to `brigadier ask`, never a silent fill.
+
+## One short job: four calls
+
+After this skill, one shell call each; the table has every flag, so skip `--help`.
+
+1. Look at the files, with `brigadier models` (and `brigadier ledger show --rules` if the user gave rules) in the same call.
+2. `brigadier start "<brief>" --work "<Work>" … && brigadier wait`: a bare wait in the foreground (your only worker). A ledger entry this settles goes first in the call.
+3. On **turn ended**, done: its acceptance commands (no `| tail`: it hides a failure) and `git log`, then `&& brigadier close <id>`, so it closes only if they pass. Other events: Waves.
+4. Your answer. `brigadier workers` or `read` only if something failed.
 
 ## Waves
 

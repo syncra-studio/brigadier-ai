@@ -135,8 +135,9 @@ mod tests {
             SKILL.lines().count()
         );
         // A session that reads it keeps it in context for every later call (the w152 bench:
-        // about 3.1k tokens written once, then read again on each call).
-        assert!(SKILL.len() <= 8_900, "{} bytes", SKILL.len());
+        // about 3.1k tokens written once, then read again on each call). The short-job path
+        // added 0.7 KB to save a whole call (w155).
+        assert!(SKILL.len() <= 9_600, "{} bytes", SKILL.len());
         // Said once: the standing instructions already hold a worker's claim, and the Waves
         // list holds the events.
         assert!(!SKILL.contains("A worker's claim is not a fact"));
@@ -144,6 +145,17 @@ mod tests {
         // Waits in proportion (the w152 bench): a background wait and the turn it ends cost a
         // small job's parent about 9 cost units more than a foreground one.
         assert!(SKILL.contains("One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn"));
+        // A short job's parent takes four calls, not five or more (the w152/w154 benches): the
+        // reads in one, start and wait in one, checks and close in one, then the answer.
+        for line in [
+            "## One short job: four calls",
+            "so skip `--help`",
+            "`brigadier start \"<brief>\" --work \"<Work>\" … && brigadier wait`",
+            "(no `| tail`: it hides a failure) and `git log`, then `&& brigadier close <id>`, so it closes only if they pass",
+            "`brigadier workers` or `read` only if something failed",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
         assert!(SKILL.starts_with("---\nname: brigade\ndescription: "));
         for command in [
             "brigadier models",
