@@ -8,9 +8,9 @@ import { StrengthRow } from "@/app/settings/routing/StrengthRow";
 import { strengthFor } from "@/app/settings/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
 import { ListOrderedIcon, SpeedometerLatencySpeed } from "@/components/icons";
-import { SettingsCard } from "@/components/shared";
+import { type ModelGroup, SettingsCard } from "@/components/shared";
 import { request } from "@/ipc/client";
-import type { TaskCategory } from "@/ipc/generated";
+import type { ModelRules, TaskCategory } from "@/ipc/generated";
 import { refreshProviders } from "@/state/actions";
 import { loadModelRules } from "@/state/modelRules";
 import { modelAvailable } from "@/state/providers";
@@ -22,12 +22,12 @@ export const MORE_ROWS = {
   strength: { label: "Model strength", description: "How good each model is at a kind of work, out of 10" },
   steps: {
     label: "How a model is picked",
-    description: "Your choice, then your order, the shipped advice and finally your rules",
+    description: "What decides the model a new worker runs on, and what wins",
   },
   refresh: {
     label: "Refresh models",
     description:
-      "Asks each agent for the models it offers, checks every account's usage and reset times, and reads the latest ratings and shipped advice again, so the advice the thread reads is up to date. Your own rows and rules stay as they are.",
+      "Asks each agent for the models it offers, checks every account's usage and reset times, and reads the latest ratings and automatic advice again, so the advice the thread reads is up to date. Your own rows and rules stay as they are.",
   },
 } as const;
 
@@ -44,6 +44,8 @@ export function More({
   category,
   onCategory,
   now,
+  rules,
+  groups,
 }: {
   open: MoreRow;
   onOpen: (row: MoreRow) => void;
@@ -51,6 +53,9 @@ export function More({
   category: TaskCategory;
   onCategory: (category: TaskCategory) => void;
   now: number;
+  /** The rules file, for How a model is picked's example. */
+  rules: ModelRules | null;
+  groups: readonly ModelGroup[];
 }) {
   const view = useUsage((s) => s.view);
   const availability = useApp((s) => s.settings);
@@ -99,7 +104,7 @@ export function More({
               onRefresh={() =>
                 refreshing.run(async () => {
                   // The live state `brigadier models` shows (each agent's models, every
-                  // account's usage), the ratings, then the shipped advice and your file.
+                  // account's usage), the ratings, then the automatic advice and your file.
                   await Promise.all([refreshProviders(null), request({ method: "checkRegistry" })]);
                   await refreshUsage();
                   await loadModelRules();
@@ -119,7 +124,7 @@ export function More({
           open={open === "steps"}
           onToggle={() => toggle("steps")}
         >
-          <StepsList />
+          <StepsList rules={rules} groups={groups} />
         </MoreRowHead>
       </SettingsCard>
     </SettingsSection>

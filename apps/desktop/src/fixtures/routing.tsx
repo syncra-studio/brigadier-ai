@@ -280,7 +280,7 @@ function Fixture() {
             { work: "Docs", agent: "claude", model: "sonnet", effort: "low", reason: "Hand edit." },
             { work: "Docs", agent: "codex", model: "gpt-6", effort: null, reason: "Hand edit." },
           ];
-          file.rules = [...file.rules, { type: "allow", agent: "codex", names: ["gpt-6"] }, { type: "forbid", names: ["opus"], work: "Architecture and broad changes" }];
+          file.rules = [...file.rules, { type: "allow", agent: "codex", names: ["gpt-6"] }, { type: "forbid", names: ["opus"], work: "Architecture and broad changes" }, { type: "forbid", names: ["sonnet"], work: "Docs" }];
           openSettings("general");
         },
         () => openSettings("routing"),
@@ -296,6 +296,7 @@ function Fixture() {
         },
         () => {
           seen.steps = all('[data-slot="routing-steps"] li').map(text);
+          seen.stepsExample = text(document.querySelector('[data-slot="routing-steps-example"]'));
           seen.strengthClosed = !document.querySelector('[data-slot="model-strength"]');
           revealSetting(ROUTING_PAGE_ROWS.strength.label);
         },

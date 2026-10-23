@@ -36,7 +36,7 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   assert.equal(seen.readsAtOpen, 1);
   // A shipped kind opened in place: Automatic, the shipped model picked now; My order copies it into the file.
   assert.equal(seen.mode, "Automatic");
-  assert.equal(seen.whoPicks, "Who picksThe shipped advice, updated with each releaseAutomaticMy order");
+  assert.equal(seen.whoPicks, "Who picksAutomatic advice, updated with each releaseAutomaticMy order");
   assert.equal(seen.shipped, "1Opus 5.5Picked nowHigh effortStrong default for work that needs judgment across a codebase.");
   const architecture = {
     work: "Architecture and broad changes",
@@ -107,12 +107,13 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   assert.deepEqual(seen.kindsAfterHandEdit, [
     "Architecture and broad changesAutomatic · Your rules keep Opus 5.5 out, so it can't start",
     ...kinds.slice(1),
-    "DocsYour order · Sonnet 5.5, then GPT-6Sonnet 5.5 · Low",
+    "DocsYour order · Sonnet 5.5, then GPT-6GPT-6",
   ]);
   assert.deepEqual(seen.rulesAfterHandEdit, [
     ...rules,
     "Only use GPT-6 on CodexEverywhere · Codex chats, sessions and workers run on nothing else",
     "Don't use Opus 5.5 for Architecture and broad changesArchitecture and broad changes only · Its workers can't run on it",
+    "Don't use Sonnet 5.5 for DocsDocs only · Its workers can't run on it",
   ]);
   assert.equal(
     seen.skipped,
@@ -120,12 +121,12 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   );
   // How a model is picked, step by step; Model strength stays closed when search shows the steps.
   assert.deepEqual(seen.steps, [
-    "1Your choiceAn agent, model or effort the thread names for a worker is used as given",
-    "2Your orderOtherwise the first model of your order for its kind of work that your rules allow",
-    "3AutomaticOtherwise the shipped advice for that kind of work, the same way",
-    "4Your rulesLast, a choice a rule forbids, everywhere or for that work, is refused, quoting the rule",
+    "1Your choiceIf you or the thread name a model or effort for the worker, that is used.",
+    "2Your orderIf not, the worker takes the first model in your order for its kind of work that your rules allow.",
+    "3AutomaticWith no order of your own, it takes the first model of the automatic advice that your rules allow.",
+    "4Your rulesLast, your rules check the result: a model they keep out, or an effort above your cap, is refused and the worker doesn't start. Your rules win over everything above.",
   ]);
-  assert.equal(seen.strengthClosed, true);
+  assert.equal(seen.stepsExample, "For example, Docs: your rules keep Sonnet 5.5 out, so GPT-6, next in your order, runs.");  assert.equal(seen.strengthClosed, true);
   assert.deepEqual(seen.strength, [
     "1Opus 5.5Frontier9.1",
     "2GPT-6Frontier9.0",

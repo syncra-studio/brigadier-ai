@@ -41,7 +41,7 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
           truncate
           quiet
           title="Who picks"
-          line={ordering ? "Your order: the first model your rules allow takes it" : "The shipped advice, updated with each release"}
+          line={ordering ? "Your order: the first model your rules allow takes it" : "Automatic advice, updated with each release"}
         />
         <Segmented
           label={`How ${name} picks a model`}

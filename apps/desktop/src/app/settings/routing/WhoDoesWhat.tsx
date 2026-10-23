@@ -6,7 +6,7 @@ import type { ModelRules } from "@/ipc/generated";
 
 export const WHO_DOES_WHAT = {
   label: "Who does what",
-  description: "Shipped advice for each kind of work. Open one to set your own order of models and their effort.",
+  description: "Automatic advice for each kind of work. Open one to set your own order of models and their effort.",
 } as const;
 
 /**

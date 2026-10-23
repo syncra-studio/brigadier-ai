@@ -77,6 +77,8 @@ export function RoutingPage() {
         category={kind}
         onCategory={setKind}
         now={now}
+        rules={rules}
+        groups={groups}
       />
     </SettingsPage>
   );
