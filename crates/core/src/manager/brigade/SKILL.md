@@ -12,7 +12,7 @@ Everything goes through `brigadier` (`brigadier <command> --help` for details; `
 | Command | Use |
 |---|---|
 | `brigadier models` | Before each start: which provider, model and effort fits, what's left on each account, the user's rules. |
-| `brigadier start "<brief>" --title T [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
+| `brigadier start "<brief>" --title T [--work KIND] [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
 | `brigadier wait [<id>…] [--timeout S]` | Block until a worker event: turn ended (with its last message), needs input, gone, usage limit, fresh context. Workers send you nothing on their own: this is how you hear from them. |
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
@@ -31,7 +31,7 @@ In a Chat, a worker works in the repository `--repo <path>` names (a worktree of
 
 ## Pick the model
 
-Read `brigadier models` before each `brigadier start` and pick provider, model and effort yourself from its guidance and what is left. The user's rules shown there bind you; `start` refuses what they forbid. A provider out of quota: move bounded work to the other one.
+Read `brigadier models` before each `brigadier start`. Pick the row whose Work fits the job and pass it as `--work "<Work>"`: the row (the user's, else the shipped one) picks the agent, model and effort, and the receipt names it. Add `--agent`, `--model` or `--effort` only to override one of them, from the guidance and what is left. The user's rules shown there bind you; `start` refuses what they forbid. A provider out of quota: override with the other one for bounded work.
 
 ## Brief: five lines
 
