@@ -366,6 +366,10 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Settings · Routing | `WhoPicks` | `app/settings/routing/WhoPicks.tsx` | `WhoPicks` | |
 | Settings · Routing | `AutoPicks` | `app/settings/routing/AutoPicks.tsx` | `AutoPicks` | |
 | Settings · Routing | `OrderPlace` | `app/settings/routing/OrderPlace.tsx` | `OrderPlace` | |
+| Settings · Routing | `OrderList` | `app/settings/routing/OrderList.tsx` | `OrderList` | foundations.pen `AL8pa` › Order list |
+| Settings · Routing | `Rules`, `Rule row` | `app/settings/routing/Rules.tsx` | `Rules` | foundations.pen `jlV2S`, `QlVJ4` › Rule row |
+| Settings · Routing | `Draft row` | `app/settings/routing/Rules.tsx` | `Rules` | shown inside it; foundations.pen `QlVJ4` › Draft row |
+| Settings · Routing | `TargetItems` | `app/settings/routing/pickers.tsx` | `TargetItems` | foundations.pen `v2biKX` › Target items |
 | Settings · Browser | `DownloadRow` | `app/settings/DownloadRow.tsx` | `DownloadRow` | |
 | Settings · Browser | `HistoryDay` | `app/settings/DayGroup.tsx` | `DayGroup` | |
 | Settings · Browser | `VisitRow` | `app/settings/VisitRow.tsx` | `VisitRow` | |

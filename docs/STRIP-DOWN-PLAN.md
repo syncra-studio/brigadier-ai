@@ -1443,6 +1443,15 @@ refresh the routing for automatic choosing, which all these then go as the \"adv
   - A flow test: `brigadier start --work <kind>` with no `--model` starts the row's model and effort, and
     the receipt names the row.
 - After S33 (shared `M/models.rs`) and S28 (shared `plain_workers.rs`).
+- **As built (follow-up, 10-23):** the five foundations.pen Routing rows (`jlV2S`, `vqDc3`, `QlVJ4`, `AL8pa`,
+  `v2biKX`) on the four kinds of work. The file format grows two things:
+  - Several rows of one Work are an order (Automatic / My order on the page): the first row the rules allow
+    takes `brigadier start --work`, else the first, which is then refused. A Work's rows replace its shipped rows.
+  - A rule may name one Work: `forbid for <Work>: …`, `allow <agent> for <Work>: …`, `effort-ceiling for <Work>:
+    …`. It judges only `brigadier start --work <Work>`; chats, sessions and `brigadier models`' list ignore it.
+  - Each rule row says its scope and effect ("Everywhere · Chats, sessions and workers can't run on it",
+    "<Work> only · Its workers can't run on it"); a draft that would refuse a kind names it with an Open link.
+  - Not built (G18, no router): the pen's Prefer effect, scores, Explanation view, Route sections, 7 steps.
 
 **S33. A neutral shipped rules file (w95 item 16).** Codex.
 (user, 2026-10-23: the shipped default must not carry the user's personal rules)
