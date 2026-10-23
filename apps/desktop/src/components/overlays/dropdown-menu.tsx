@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { useRef } from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
 import { Check, ChevronRight, Dot } from "@/components/icons";
@@ -19,12 +20,33 @@ function DropdownMenuPortal({
   );
 }
 
+/**
+ * Opens on a pointer press or a key, as Radix's trigger does, and on a click no pointer press
+ * came before: an accessibility press (VoiceOver's, the computer-use helper's) is such a click,
+ * and Radix alone would leave the menu shut (#564).
+ */
 function DropdownMenuTrigger({
+  onPointerDown,
+  onClick,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
+  const pointer = useRef(false);
   return (
     <DropdownMenuPrimitive.Trigger
       data-slot="dropdown-menu-trigger"
+      onPointerDown={(event) => {
+        pointer.current = true;
+        onPointerDown?.(event);
+      }}
+      onClick={(event) => {
+        onClick?.(event);
+        const pressed = pointer.current;
+        pointer.current = false;
+        if (pressed || event.defaultPrevented) return;
+        // Pressed as a pointer would: Radix opens (or shuts) it, and an open menu elsewhere shuts.
+        event.currentTarget.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+        pointer.current = false;
+      }}
       {...props}
     />
   );

@@ -11,6 +11,8 @@ test("the composer keeps its place as the app starts: no rail opening under the 
   assert.equal(seen.underStartup!.railOpens, false);
   assert.equal(seen.revealed!.field, "editor");
   assert.equal(seen.revealed!.height, seen.underStartup!.height);
+  // #564: a new chat has no "Latest response" heading.
+  assert.equal((seen as unknown as { latestResponse: number }).latestResponse, 0);
   // Once the app shows, a rail opens as it appears.
   assert.equal(seen.later!.railOpens, true);
 });

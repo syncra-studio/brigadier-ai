@@ -383,7 +383,8 @@ const ThreadRoot: FC<{
               <ThreadScrollToBottom />
               {Capsule && <Capsule />}
               <div className="pointer-events-auto flex flex-col gap-4">
-                <LatestResponse />
+                {/* A new chat has no response to go to (#564). */}
+                {!isEmpty && <LatestResponse />}
                 {AboveComposer && <AboveComposer />}
                 <Composer autoFocus={autoFocus} placeholder={placeholder} />
               </div>

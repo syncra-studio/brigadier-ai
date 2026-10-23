@@ -9,6 +9,7 @@ export * from "./error-line";
 export * from "./input";
 export * from "./kbd";
 export * from "./nav-row";
+export * from "./picker-button";
 export * from "./round-badge";
 export * from "./segmented";
 export * from "./send-button";

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 
+import { PickerButton } from "@/components/controls/picker-button";
 import { composerPill } from "@/components/conversation/elements/surfaces";
 import { Bolt, Check, ChevronDown, ProviderGlyph } from "@/components/icons";
 import {
@@ -212,28 +213,29 @@ export function ModelSelector({
     );
   };
   const single = groups.length === 1 ? groups[0] : undefined;
+  const id = useId();
   return (
     <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
+        <PickerButton
+          label={label}
+          shown={auto ? [`${id}-name`] : [fast && `${id}-fast`, `${id}-name`, effort && `${id}-effort`]}
           disabled={disabled}
           data-slot="model-selector-trigger"
           className={cn(composerPill, "text-muted-foreground gap-1", className)}
         >
           {auto ? (
-            <span className="text-foreground truncate">{automatic?.label ?? "Automatic"}</span>
+            <span id={`${id}-name`} className="text-foreground truncate">{automatic?.label ?? "Automatic"}</span>
           ) : (
             <>
               <ProviderGlyph provider={value.provider} className="size-icon-sm shrink-0" />
-              {fast && <Bolt aria-label="Fast" className="text-foreground" />}
-              <span className="text-foreground truncate">{name}</span>
-              {effort && <span className="shrink-0">{effortLabel(effort)}</span>}
+              {fast && <Bolt id={`${id}-fast`} aria-label="Fast" className="text-foreground" />}
+              <span id={`${id}-name`} className="text-foreground truncate">{name}</span>
+              {effort && <span id={`${id}-effort`} className="shrink-0">{effortLabel(effort)}</span>}
             </>
           )}
           <ChevronDown className="size-icon-xs!" />
-        </button>
+        </PickerButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         side="top"

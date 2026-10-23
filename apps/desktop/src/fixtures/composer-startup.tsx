@@ -69,6 +69,8 @@ async function run() {
   await until("the editor", () => measure().field === "editor");
   await sleep(100);
   seen.revealed = measure();
+  // A new chat has no reply to jump to, so no "Latest response" heading (#564).
+  seen.latestResponse = document.querySelectorAll("[data-slot=latest-response]").length;
   const before = railItem();
   show({ type: "draft", kind: "chat" }, "second");
   await until("the next composer", () => railItem() !== null && railItem() !== before);

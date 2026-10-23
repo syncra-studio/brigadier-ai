@@ -28,6 +28,9 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   assert.equal(seen.notSetUp, 0);
   assert.equal(seen.addAgent, true);
   assert.deepEqual(seen.afterSwitch, { page: false, disabled: ["codex"] });
+  // A screen reader's press on a row opens its page and leaves its switch alone (#564).
+  assert.deepEqual(seen.rowPress, { tag: "BUTTON", label: "Claude: open its accounts and models", inside: 0, switchInButton: false });
+  assert.deepEqual(seen.disabledAfterPress, ["codex"]);
   assert.equal(seen.header, "ClaudeMaxReady · Claude Code by AnthropicEnabledCheck again");
   // Its logo sits before its name, in the design's 44px tile drawn as the overview rows' (#386).
   const rowMark = seen.rowMark as Record<string, string>;

@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { MouseEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { PlanChip, ROW_TITLE, UsageMeter } from "@/app/settings/providers/parts";
@@ -60,29 +60,30 @@ export function ProviderAgentRow({
   } else {
     line = ["Ready", count, status?.version && `v${status.version}`].filter(Boolean).join(" · ");
   }
-  const open = () => onOpen(provider);
   // The row's switch toggles the agent; it doesn't open its page.
   const onClick = (event: MouseEvent) => {
     if (event.target instanceof Element && event.target.closest('[data-slot="switch"]')) return;
-    open();
-  };
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-    event.preventDefault();
-    open();
+    onOpen(provider);
   };
 
   return (
+    // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- the button over it is the keyboard's and a screen reader's
     <div
-      role="button"
-      tabIndex={0}
-      aria-label={`${label}: open its accounts and models`}
       data-slot="agent-row"
       data-setting={label}
       onClick={onClick}
-      onKeyDown={onKeyDown}
-      className="hover:bg-foreground/5 flex cursor-default items-center gap-3.5 px-4 py-3 transition-colors"
+      className="hover:bg-foreground/5 relative flex cursor-default items-center gap-3.5 px-4 py-3 transition-colors"
     >
+      {/* What opens the page, for the keyboard and a screen reader: a real button over the whole
+          row, its click the row's. A row that was itself the button gave an accessibility press
+          to the first control inside it, the switch, which turned the agent off (#564). The
+          pointer goes through it to the row, as before. */}
+      <button
+        type="button"
+        aria-label={`${label}: open its accounts and models`}
+        data-slot="agent-row-open"
+        className="pointer-events-none absolute inset-0"
+      />
       <ProviderGlyph provider={provider} tile="md" dim={!on} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex min-w-0 items-center gap-2">

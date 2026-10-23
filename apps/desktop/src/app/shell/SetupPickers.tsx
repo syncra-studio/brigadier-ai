@@ -1,4 +1,4 @@
-import { type FC, useRef, useState } from "react";
+import { type FC, useId, useRef, useState } from "react";
 
 import { useRuleRefusals } from "@/app/conversation/ruleRefusals";
 import { useAction } from "@/app/conversation/useAction";
@@ -20,7 +20,7 @@ import {
   ShieldTerminal,
   Warning,
 } from "@/components/icons";
-import { Button } from "@/components/controls";
+import { Button, PickerButton } from "@/components/controls";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/overlays";
 import type {
   Conversation,
@@ -116,13 +116,14 @@ export function PermissionPicker({
   const value: PermissionLevel = untrusted ? "ask" : chosen;
   const full = value === "full";
   const Icon = PERMISSION_ICONS[value];
+  const id = useId();
   return (
     <>
       <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label="Permission level"
+          <PickerButton
+            label="Permission level"
+            shown={[`${id}-level`]}
             data-slot="permission-picker"
             // The menu opens upward, so ↑ opens it too, as ↓, Enter and Space do (#95).
             onKeyDown={(event) => {
@@ -137,8 +138,8 @@ export function PermissionPicker({
             )}
           >
             <Icon />
-            <span className="truncate @max-md/composer:hidden">{PERMISSION_LABELS[value]}</span>
-          </button>
+            <span id={`${id}-level`} className="truncate @max-md/composer:hidden">{PERMISSION_LABELS[value]}</span>
+          </PickerButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           side="top"

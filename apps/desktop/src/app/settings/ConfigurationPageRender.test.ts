@@ -32,7 +32,8 @@ test("Configuration saves the default, and the session's picker switches it to F
 });
 
 // The real page in Chromium over a faked daemon: one headless card of the defaults with a line
-// each, every section shown, the explanations in the menus (Automatic first, each level's allowance and risk), and
+// each, every section shown, the explanations in the menus (Automatic first, each level's allowance and risk), the
+// pickers named with their choice and opened by a click alone, as an accessibility press does, and
 // an old page's link and a search landing on their rows.
 test("Configuration shows its defaults in one card and explains the choices in its menus", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "configuration.html?drive=1", "configuration-result", 30000);
@@ -62,6 +63,12 @@ test("Configuration shows its defaults in one card and explains the choices in i
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
   assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Accept edits"]);
+  // A picker's name is its label, then its choice (#564).
+  assert.deepEqual(seen.names, [
+    "Model for sessions Automatic (Opus 5.5)",
+    "Model for chats Automatic (Opus 5.5)",
+    "Default permission level Accept edits",
+  ]);
   assert.deepEqual(seen.sessionsMenu, [["Automatic (Opus 5.5)", "The first signed-in agent’s default model."]]);
   assert.deepEqual(seen.chatsMenu, [["Automatic (Opus 5.5)", "The same model as new sessions."]]);
   assert.deepEqual(

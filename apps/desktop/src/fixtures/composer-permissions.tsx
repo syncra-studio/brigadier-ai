@@ -115,6 +115,18 @@ async function drive() {
     pill.focus();
     key(pill, "ArrowUp");
     seen.fromArrowUp = (await until("the menu from ↑", menu)).dataset.state;
+    key(menu()!, "Escape");
+    await until("the menu to close", () => !menu());
+    // An accessibility press (VoiceOver, the computer-use helper) is a click with no pointer press
+    // before it; it opens each pill's menu too (#564).
+    await until("the focus back on the permission pill", () => document.activeElement?.matches("[data-slot=permission-picker]"));
+    pill.click();
+    seen.permissionPress = (await until("the menu from a bare click", menu)).dataset.state;
+    key(menu()!, "Escape");
+    await until("the menu to close", () => !menu());
+    await sleep(100);
+    document.querySelector<HTMLElement>("[data-slot=model-selector-trigger]")!.click();
+    seen.modelPress = (await until("the model picker from a bare click", () => document.querySelector<HTMLElement>("[data-slot=model-selector]"))).dataset.state;
   } catch (error) {
     seen.error = String(error);
   }

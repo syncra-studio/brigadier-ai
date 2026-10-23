@@ -67,6 +67,15 @@ const text = (element: Element | null | undefined) => element?.textContent?.trim
 const trigger = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const press = (element: Element | null | undefined) =>
   element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+/** The name a screen reader reads: its labelledby elements' labels or words, else its label. */
+const accessibleName = (element: Element | null) => {
+  const ids = element?.getAttribute("aria-labelledby")?.split(" ") ?? [];
+  if (ids.length === 0) return element?.getAttribute("aria-label") ?? "";
+  return ids.map((id) => {
+    const named = document.getElementById(id);
+    return named?.getAttribute("aria-label") ?? text(named);
+  }).join(" ");
+};
 const closeMenu = () =>
   document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 /** The open menu's choices: their name, then the line under it. */
@@ -121,6 +130,8 @@ function Fixture() {
         seen.buttons = all("main button").map(text).filter((name) => name === "Use automatic");
         seen.levelRow = all("[data-setting]").some((row) => text(row).endsWith("Default"));
         seen.triggers = Object.values(MENUS).map((label) => text(trigger(label)));
+        // Each picker says the choice it holds (#564).
+        seen.names = Object.values(MENUS).map((label) => accessibleName(trigger(label)));
         seen.skill = { helper: text(skill()?.querySelector(".text-xs")), buttons: skillButtons().map(text) };
         skillButton("Reset to shipped")?.click();
       },
@@ -140,12 +151,13 @@ function Fixture() {
         seen.sessionsMenu = menuChoices().slice(0, 2);
         closeMenu();
       },
-      () => press(trigger(MENUS.chats!)),
+      // A click alone, as an accessibility press (VoiceOver's) is, opens a menu too (#564).
+      () => trigger(MENUS.chats!)?.click(),
       () => {
         seen.chatsMenu = menuChoices().slice(0, 1);
         closeMenu();
       },
-      () => press(trigger(MENUS.permission!)),
+      () => trigger(MENUS.permission!)?.click(),
       () => {
         seen.permissionMenu = menuChoices();
         closeMenu();

@@ -321,9 +321,19 @@ function Fixture() {
           page: Boolean(document.querySelector('[data-slot="agent-page"]')),
           disabled: useApp.getState().settings.disabledProviders,
         };
-        openClaude();
+        // Opened as a screen reader presses the row: a click alone on its button, a real one
+        // with no control inside it to take the press, and no switch inside a role=button (#564).
+        const press = document.querySelector<HTMLElement>('[data-slot="agent-row"][data-setting="Claude"] [data-slot="agent-row-open"]');
+        seen.rowPress = {
+          tag: press?.tagName,
+          label: press?.getAttribute("aria-label"),
+          inside: press?.children.length,
+          switchInButton: Boolean(document.querySelector('[role="button"] [role="switch"]')),
+        };
+        press?.click();
       },
       () => {
+        seen.disabledAfterPress = useApp.getState().settings.disabledProviders;
         seen.header = text(document.querySelector('[data-slot="settings-page"] header'));
         seen.claudeMark = headerMark();
         seen.cli = text(document.querySelector('[data-slot="agent-cli"]'));

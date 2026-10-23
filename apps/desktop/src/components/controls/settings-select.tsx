@@ -1,5 +1,6 @@
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useId } from "react";
 
+import { PickerButton } from "@/components/controls/picker-button";
 import type { Choice } from "@/components/controls/segmented";
 import { Check, ChevronDown } from "@/components/icons";
 import {
@@ -27,25 +28,26 @@ export function SettingsSelectTrigger({
   children,
   ...props
 }: {
-  /** The accessible name, usually the row's label. */
+  /** The accessible name, usually the row's label; the value it shows follows it. */
   label: string;
   icon?: ReactNode;
   placeholder?: boolean;
   children: ReactNode;
-} & Omit<ComponentProps<"button">, "children">) {
+} & Omit<ComponentProps<"button">, "children" | "aria-label" | "aria-labelledby">) {
+  const value = useId();
   return (
-    <button
-      type="button"
-      aria-label={label}
+    <PickerButton
+      label={label}
+      shown={[value]}
       {...props}
       className={cn(selectTrigger, "inline-flex shrink-0", icon ? "gap-2" : "gap-1", className)}
     >
       {icon}
-      <span className={cn("min-w-0 flex-1 truncate text-start", placeholder && "text-muted-foreground")}>
+      <span id={value} className={cn("min-w-0 flex-1 truncate text-start", placeholder && "text-muted-foreground")}>
         {children}
       </span>
       <ChevronDown aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
-    </button>
+    </PickerButton>
   );
 }
 /**
@@ -77,7 +79,7 @@ export function SettingsSelect<T extends string>({
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild disabled={disabled}>
-        <SettingsSelectTrigger id={id} label={label} icon={icon} className={className}>
+        <SettingsSelectTrigger {...(id && { id })} label={label} icon={icon} className={className}>
           {chosen?.shown ?? chosen?.label}
         </SettingsSelectTrigger>
       </DropdownMenuTrigger>

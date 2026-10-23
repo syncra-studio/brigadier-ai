@@ -13,4 +13,6 @@ test("the permission menu opens from the / menu's Permissions command and from â
   assert.equal(seen.stillOpen, "open");
   assert.equal(seen.model, "open");
   assert.equal(seen.fromArrowUp, "open");
+  assert.equal(seen.permissionPress, "open");
+  assert.equal(seen.modelPress, "open");
 });
