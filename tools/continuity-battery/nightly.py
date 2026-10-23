@@ -20,9 +20,14 @@ ARMS = ("seam", "plain", "zed")
 
 
 def decision_checks(result):
-    """The same six decision-survival checks, without ledger markers for CLI arms."""
+    """Scenario checks, without ledger markers for CLI arms."""
     if not result.get("rows"):
-        return {}
+        items = result.get("items")
+        if not isinstance(items, dict):
+            return {}
+        checks = {f"recall.{key}": row.get("verdict") == "pass" for key, row in items.items()}
+        checks.update({f"apply.{key}": row["action"] for key, row in items.items() if row.get("action") is not None})
+        return checks
     t1, t3 = result.get("t1", {}), result.get("t3", {})
     brief = list(t3.get("items", {}).values())
     checks = {
@@ -87,7 +92,7 @@ def provider_report(provider, output, daemon, live, selected_arm=None):
     if not live:
         report.update(status="skipped", reason="needs the user: secrets")
     else:
-        # Same scripts in both arms. Short stays bounded; long crosses 400k of inert input.
+        # Same scripts in every arm. Short stays bounded; long crosses 400k of inert input.
         for block, profile, fillers, ballast in (("recall", "short", 9, 1200),
                                                  ("recall", "long", 90, 3500),
                                                  ("decisions", "long", 90, 3500)):
@@ -211,9 +216,9 @@ def prepare(summary):
                             r.get("checks", {}).get(key) for r in pair[arm]]
                 left, right = mean(values("seam")), mean(values("zed"))
                 dollars = key in ("list_price_usd", "reported_cost_usd")
-                qualified = block != "decisions" or all(
+                qualified = bool(pair["seam"] and pair["zed"]) and (block != "decisions" or all(
                     r.get("contexts_before_checks") is not None and r["contexts_before_checks"] >= 3
-                    for rows in pair.values() for r in rows)
+                    for rows in pair.values() for r in rows))
                 comparisons.append({"provider": provider["provider"], "block": block, "profile": profile,
                                     "check": key, "seam": left, "zed": right,
                                     "seam_meets_zed": None if left is None or right is None else
@@ -235,8 +240,9 @@ def markdown(summary):
         for row in provider["arms"]:
             get = lambda k: "unavailable" if row.get(k) is None else str(row[k])
             lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('zed_compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
+        for row in provider["arms"]:
             if row.get("reason"):
-                lines += ["", row["reason"], ""]
+                lines += ["", f"{row['block']}/{row['profile']} {row['arm']}: " + row["reason"], ""]
         lines += ["", "Price-weighted ratios: " + ", ".join(f"{r['block']}/{r['profile']} {r.get('price_weighted_ratio', 'unavailable')}" for r in provider["arms"] if r["arm"] == "seam"), ""]
     lines += ["## List-price aggregates", "", NOTE, "",
               "| Provider | Script | Size | Arm | Mean list-price USD | USD vs plain |",
@@ -258,9 +264,9 @@ def markdown(summary):
             if row["status"] == "complete":
                 lines += ["", f"### {provider['provider']} {row['block']}/{row['profile']} {row['arm']}", ""]
                 lines += role_table(row.get("roles", {}))
-    lines += ["", "Decisions-survive scores require three observed seams or native compactions; fewer contexts are an unqualified observation.",
+    lines += ["", "Decisions-survive scores require three observed seams or native compactions; fewer contexts are an unqualified observation. Explicit Zed compactions count as transitions.",
               "Cold-return cost includes only later uncached requests; no observed return or missing price is unavailable. It never triggers an issue.",
-              "Missing reported prices are unavailable, never zero. Short and long use the same tasks and filler schedule in both arms.", "", "## Weekly real lineages", "", json.dumps(summary.get("weekly", {})), "", "## Regressions", ""]
+              "Missing reported prices are unavailable, never zero. Short and long use the same tasks and filler schedule in all arms.", "", "## Weekly real lineages", "", json.dumps(summary.get("weekly", {})), "", "## Regressions", ""]
     lines += summary["regressions"] or ["None measured (skipped and incomplete runs are not passes)."]
     return "\n".join(lines) + "\n"
 

@@ -47,7 +47,7 @@ class PlainBattery(battery.Battery):
     def fault(self, kind):
         def record(step):
             self.seams.append({"kind": kind, "request": step.get("request"), "skipped":
-                               "plain CLI comparison uses only its own automatic compaction"})
+                               "native CLI transport does not inject Brigadier daemon faults"})
         return record
 
     def send(self, name, text, fault=None, *, tool_less=False):

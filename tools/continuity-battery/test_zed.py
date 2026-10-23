@@ -137,6 +137,9 @@ class ZedTests(unittest.TestCase):
             self.assertEqual(run.result["zed_compactions"], 1)
 
     def test_reports_compare_all_checks_prices_and_skip_reasons(self):
+        recall = nightly.metrics({"items": {"rule": {"verdict": "pass", "action": True},
+                                           "ticket": {"verdict": "unknown"}}})
+        self.assertEqual(recall["checks"], {"recall.rule": True, "recall.ticket": False, "apply.rule": True})
         fixture = {"arm": "zed", "rows": {"own_decision": {"unprompted": True, "recalled": True}},
                    "t1": {key: True for key in ("jsdoc", "named", "spdx", "padding", "dates")},
                    "t2_scored": {"pass": True}, "t3": {"items": {"a": "stated"}, "unmarked_additions": []},
@@ -172,6 +175,31 @@ class ZedTests(unittest.TestCase):
                     nightly.provider_report(provider, root / "input", "/unused", False, arm)
             result = nightly.collect(root / "input", root / "output")
             self.assertTrue(all(p["status"] == "skipped" for p in result["providers"]))
+
+    def test_nightly_fetch_failure_rows_remain_skipped(self):
+        class FakeProcess:
+            returncode = 0
+
+            def __init__(self, command, **kwargs):
+                evidence = Path(command[command.index("--evidence") + 1])
+                evidence.write_text(json.dumps({"status": "skipped", "errors": [],
+                    "reason": "skipped: could not fetch pinned Zed compaction prompt (offline)"}))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def wait(self, **kwargs):
+                return 0
+
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as folder, \
+             patch("nightly.subprocess.Popen", FakeProcess):
+            nightly.provider_report("claude", Path(folder), "/unused", True, "zed")
+            report = json.loads((Path(folder) / "claude-zed.json").read_text())
+            self.assertEqual([row["status"] for row in report["arms"]], ["skipped"] * 3)
+            self.assertTrue(all("could not fetch" in row["reason"] for row in report["arms"]))
 
     def test_zed_decisions_share_scenarios_and_plain_own_decision_scoring(self):
         class ZedDecisions(decisions.Decisions, zed.ZedBattery):
