@@ -369,3 +369,41 @@ async fn deleting_a_chat_removes_its_repo_workers_session_files() {
     }
     flow.stop().await;
 }
+
+/// A Chat's worker with no repository works in a folder of its own, which Archive removes: after
+/// Restore it reads reported but is closed, never offered for more work in a folder that is gone.
+#[tokio::test]
+async fn a_chats_folder_worker_is_closed_after_archive_and_restore() {
+    let script: Script = Arc::new(move |turn| {
+        Box::pin(async move {
+            let worker = turn
+                .env(GRANT_ENV)
+                .and_then(|grant| turn.host.grants().resolve(grant));
+            if matches!(worker, Some(Role::Worker { .. })) {
+                return Reply::text("Notes written.");
+            }
+            if !turn.input.contains("Write notes") {
+                return Reply::text("ok");
+            }
+            let answer = brigadier(&turn, started(None, false, None, "Write notes.")).await;
+            wait_for(&turn, &[id_of(&answer).as_str()], 1).await;
+            Reply::text("Written.")
+        })
+    });
+    let flow = Flow::start("chat-folder-worker-archive", Options::default(), script).await;
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, "Write notes").await;
+    answered(&flow, &chat).await;
+    let task = flow.core.tasks(&chat).await.unwrap().remove(0);
+    assert_eq!(task.state, crate::work::TaskState::Reported);
+    let folder = PathBuf::from(task.workspace.as_ref().unwrap().worktree.clone().unwrap());
+    assert!(folder.exists());
+    flow.manager.archive(chat.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&chat).await;
+    assert!(!folder.exists(), "its folder goes with the archive");
+    flow.manager.restore(chat.clone()).await.unwrap();
+    let task = flow.core.tasks(&chat).await.unwrap().remove(0);
+    assert_eq!(task.state, crate::work::TaskState::Reported);
+    assert!(task.plain.as_ref().unwrap().closed, "{task:#?}");
+    flow.stop().await;
+}

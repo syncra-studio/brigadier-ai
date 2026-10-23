@@ -1016,16 +1016,37 @@ impl SessionManager {
         }
         let outputs = self.final_outputs(task).await;
         self.keep_saved_files(&task.id).await;
+        // What goes now: everything when its worktree goes; else all but the worktree, a folder
+        // of its own (a worker with no repository) with the rest.
+        let released: Vec<Artifact> = if remove_worktree {
+            Vec::new()
+        } else {
+            ledger
+                .artifacts(&owner)
+                .into_iter()
+                .filter(|artifact| !matches!(artifact, Artifact::Worktree { .. }))
+                .collect()
+        };
+        let folder_goes = remove_worktree
+            || task
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.worktree.as_deref())
+                .is_some_and(|folder| {
+                    released.iter().any(|artifact| {
+                        matches!(artifact, Artifact::ScratchDir { path } if path == folder)
+                    })
+                });
         let _ = self
             .update_task(&task.conversation_id, &task.id, |current| {
                 // A worker that had reported reads so after a restore. Its session can send it
-                // more while its worktree is kept; one that went with the archive is closed.
+                // more while its folder is kept; one whose folder went with the archive is closed.
                 let reported = current.state == TaskState::Reported && current.plain.is_some();
                 if !current.state.is_final() && !reported {
                     current.state = TaskState::Stopped;
                 }
                 if let Some(plain) = &mut current.plain
-                    && !(reported && !remove_worktree)
+                    && !(reported && !folder_goes)
                 {
                     plain.closed = true;
                 }
@@ -1039,12 +1060,7 @@ impl SessionManager {
             // Disposal records a durable retry if a merged worktree cannot go yet.
             let _ = ledger.dispose(&owner).await;
         } else {
-            let artifacts = ledger
-                .artifacts(&owner)
-                .into_iter()
-                .filter(|artifact| !matches!(artifact, Artifact::Worktree { .. }))
-                .collect();
-            let _ = ledger.release(&owner, artifacts).await;
+            let _ = ledger.release(&owner, released).await;
         }
         self.grants.revoke_owner(&owner);
         self.tasks_lock().remove(&task.id);
