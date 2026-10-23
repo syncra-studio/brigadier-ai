@@ -375,8 +375,21 @@ mod tests {
         assert_eq!(row.source, "user");
     }
     #[test]
-    fn user_rules_are_displayed_and_quote_the_rule() {
+    fn shipped_default_has_no_rules() {
         let policy = Policy::parse(DEFAULT_RULES).unwrap();
+        assert!(policy.entries.is_empty());
+        for provider in ProviderKind::ALL {
+            assert!(!policy.restricts_models(provider));
+            assert!(
+                policy
+                    .refusal(provider, &["claude-fable-5-1", "any-model"], Some("ultra"))
+                    .is_none()
+            );
+        }
+    }
+    #[test]
+    fn user_rules_are_displayed_and_quote_the_rule() {
+        let policy = Policy::parse("- forbid: fable\n- effort-ceiling: high\n").unwrap();
         assert_eq!(policy.entries[0].0, "forbid: fable");
         assert!(
             policy

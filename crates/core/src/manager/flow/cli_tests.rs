@@ -1279,7 +1279,99 @@ async fn the_kept_tools_run_behind_brigadier_as_the_callers_own() {
     flow.stop().await;
 }
 
-/// Default rules refuse and quote Fable; removing only that directive admits the exact request.
+/// A fresh rules file admits every model and effort offered by either CLI.
+#[tokio::test]
+async fn models_fresh_rules_admit_every_offered_model() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("The requested model started.");
+            }
+            if turn.input.contains("Try every offered model.") {
+                let models = brigadier(&turn, CliRequest::Models).await;
+                assert_eq!(models["rules"], json!([]));
+                let offered = models["models"].as_array().unwrap();
+                assert!(offered.iter().any(|m| m["agent"] == "claude"));
+                assert!(offered.iter().any(|m| m["agent"] == "codex"));
+                for model in offered {
+                    for effort in model["efforts"].as_array().unwrap() {
+                        let request = StartRequest {
+                            agent: Some(serde_json::from_value(model["agent"].clone()).unwrap()),
+                            model: Some(model["model"].as_str().unwrap().into()),
+                            effort: Some(effort.as_str().unwrap().into()),
+                            local: true,
+                            ..start("Reply once.")
+                        };
+                        let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                        assert!(result.get("error").is_none(), "{model:#}: {result:#}");
+                        seen.lock().unwrap().insert(
+                            format!("{}:{}:{}", model["agent"], model["model"], effort),
+                            result,
+                        );
+                    }
+                }
+                let count: usize = offered
+                    .iter()
+                    .map(|model| model["efforts"].as_array().unwrap().len())
+                    .sum();
+                seen.lock()
+                    .unwrap()
+                    .insert("offered count".into(), json!(count));
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start(
+        "cli-models-fresh",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                light_model: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script,
+    )
+    .await;
+    let path = flow.manager.models_rules_path();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        super::super::models::DEFAULT_RULES.as_bytes(),
+        "the isolated home starts with the shipped rules file"
+    );
+    flow.say("Try every offered model.").await;
+    flow.until("every offered model ran", |b| {
+        let count = answers
+            .lock()
+            .unwrap()
+            .get("offered count")
+            .and_then(Value::as_u64);
+        count.is_some_and(|count| count > 0 && b.tasks.len() == count as usize)
+            && b.tasks
+                .values()
+                .all(|t| t.state == crate::work::TaskState::Reported)
+    })
+    .await;
+    flow.settled().await;
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        super::super::models::DEFAULT_RULES.as_bytes()
+    );
+    assert!(
+        flow.specs()
+            .iter()
+            .all(|(_, spec)| spec.allowed_models.is_none())
+    );
+    flow.stop().await;
+}
+
+/// User rules refuse and quote Fable; removing only that directive admits the exact request.
 #[tokio::test]
 async fn models_rules_are_the_only_gate_on_start() {
     let answers = Answers::default();
@@ -1341,8 +1433,12 @@ async fn models_rules_are_the_only_gate_on_start() {
         })
     });
     let flow = Flow::start("cli-model-rules", Options::default(), script).await;
+    let path = flow.manager.models_rules_path();
+    let rules = "# My rules\r\n\r\n- forbid: fable\r\n- effort-ceiling: high\r\n";
+    std::fs::write(&path, rules).unwrap();
     flow.say("Try the model.").await;
     flow.settled().await;
+    assert_eq!(std::fs::read(&path).unwrap(), rules.as_bytes());
     {
         let seen = answers.lock().unwrap();
         assert_eq!(seen["start"]["error"]["code"], "refused");
@@ -1361,11 +1457,10 @@ async fn models_rules_are_the_only_gate_on_start() {
         );
     }
     assert!(flow.board().await.tasks.is_empty());
-    let path = flow.manager.models_rules_path();
     let rules = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("- forbid: fable\n", "");
-    std::fs::write(&path, rules).unwrap();
+        .replace("- forbid: fable\r\n", "");
+    std::fs::write(&path, &rules).unwrap();
     flow.say("Try the model.").await;
     flow.until("the allowed worker ran", |b| {
         b.tasks
@@ -1374,6 +1469,7 @@ async fn models_rules_are_the_only_gate_on_start() {
     })
     .await;
     flow.settled().await;
+    assert_eq!(std::fs::read(&path).unwrap(), rules.as_bytes());
     let seen = answers.lock().unwrap().clone();
     assert!(seen["start"].get("error").is_none(), "{seen:#?}");
     assert_eq!(seen["start"]["worker"]["model"], "claude-fable-5-1");
