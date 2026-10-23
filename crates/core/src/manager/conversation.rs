@@ -1475,6 +1475,49 @@ impl SessionManager {
         state.notes.push(text);
     }
 
+    /// Puts `envelope` before the thread now: steered into its running turn when one runs and
+    /// may take it (not compacting, stopped, held at a seam or behind a running command), else
+    /// into its inbox once (by its label), starting a turn when it is idle. `Some(true)`: its
+    /// CLI took it in the running turn; `Some(false)`: it waits in the inbox; `None`: the
+    /// conversation takes nothing (gone, closing or archived).
+    pub(super) async fn steer_or_queue(
+        &self,
+        id: &ConversationId,
+        envelope: Envelope,
+    ) -> Option<bool> {
+        let conv = self.conv(id).ok()?;
+        {
+            let state = conv.state.lock().await;
+            let cli = state.cli.clone().filter(|_| {
+                state.busy
+                    && !state.compacting
+                    && !state.interrupted
+                    && !state.seam.held
+                    && state.holding.is_empty()
+            });
+            if let Some(cli) = cli
+                && cli
+                    .session
+                    .steer(TurnInput::text(envelope.text.clone()))
+                    .await
+                    .is_ok()
+            {
+                drop(state);
+                let bytes = envelope.text.len();
+                self.log_injection(id, envelope.kind, envelope.label, None, bytes)
+                    .await;
+                return Some(true);
+            }
+        }
+        if conv.inbox_count(&envelope, None).await > 0 {
+            return Some(false);
+        }
+        let conv = self.queue_envelope(id, envelope, None).await?;
+        self.settle_requests(id).await;
+        self.kick(&conv);
+        Some(false)
+    }
+
     /// Unpauses the queue and sends its next message if nothing runs.
     pub async fn resume_queue(&self, id: ConversationId) -> Result<crate::work::MessageQueue> {
         let queue = self.core.set_queue_paused(&id, false).await?;
@@ -4043,11 +4086,17 @@ impl SessionManager {
                 let (started, nets) = {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
-                    // The CLI took the turn: the net's messages in it were heard (S29).
+                    // The CLI took the turn: the net's messages (S29) and other sessions'
+                    // messages (S30) in it were heard.
                     let nets: Vec<String> = state
                         .in_turn_envelopes
                         .iter()
-                        .filter(|(envelope, _)| envelope.kind == InjectionKind::WorkerEvents)
+                        .filter(|(envelope, _)| {
+                            matches!(
+                                envelope.kind,
+                                InjectionKind::WorkerEvents | InjectionKind::PeerMessage
+                            )
+                        })
                         .map(|(envelope, _)| envelope.label.clone())
                         .collect();
                     let own =
@@ -4087,6 +4136,7 @@ impl SessionManager {
                 };
                 for label in &nets {
                     self.net_heard(&conv.id, label);
+                    self.session_message_taken(&conv.id, label);
                 }
                 if let Some(request) = started {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
@@ -4427,6 +4477,8 @@ impl SessionManager {
         };
         // Its workers' events no wait took reach it now, once (S29).
         self.net_soon(&conv.id);
+        // A `brigadier wait` on this session looks again (S30).
+        self.session_turns.notify_waiters();
         if let Some(text) = unshown {
             self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, &text)
                 .await;

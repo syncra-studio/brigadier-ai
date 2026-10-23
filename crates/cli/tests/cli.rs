@@ -185,7 +185,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 rule: "forbid: fable".into(),
             }],
         }),
-        CliRequest::Sessions => CliReply::ok(&SessionsOutput {
+        CliRequest::Sessions { .. } => CliReply::ok(&SessionsOutput {
             project: Some("brigadier-ai".into()),
             sessions: vec![
                 SessionRow {
@@ -200,6 +200,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     }),
                     workers: 2,
                     caller: true,
+                    project: None,
                 },
                 SessionRow {
                     id: "0000beef".into(),
@@ -209,6 +210,7 @@ fn sample(request: &CliRequest) -> CliReply {
                     changes: None,
                     workers: 0,
                     caller: false,
+                    project: None,
                 },
             ],
         }),
@@ -331,6 +333,7 @@ fn sample(request: &CliRequest) -> CliReply {
             id: id.clone(),
             queued: answer.is_none(),
             answered: *answer,
+            message: None,
         }),
         CliRequest::Wait { timeout_secs, .. } if timeout_secs.is_some() => {
             CliReply::ok(&WaitOutput {

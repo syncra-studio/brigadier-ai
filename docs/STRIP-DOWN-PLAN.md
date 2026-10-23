@@ -1381,6 +1381,17 @@ the how is proposed unless tagged. Steps on disjoint files carry ∥.
   - A flow test: `send` to another session's worker is refused.
   - The `--json` schema tests cover the new targets.
 - After S29 (shared `crates/cli` and `plain_workers.rs`).
+- **As built:** a message gets an id (`sm-…`) and is kept in the recipient's
+  `record/session-messages.jsonl` before anything sends it; it is steered into a running turn, else queued once
+  (by its id) and starts a turn. It is seen once its CLI took it: the steer was accepted, or the turn carrying it
+  started. After a restart a message not seen is seen if the recipient's own CLI session files hold its id in an
+  input record, and is sent again otherwise (SESSION-MESSAGING-PLAN §durability's three crash points, each a flow
+  test). Its CLI gets it under a header, `[message from session "‹title›" (‹id›) · sm-…]`, which names whom to
+  answer; the thread draws it with the existing message-from-a-session bubble. Chats count as sessions:
+  `sessions --all` lists every project's sidebar sessions and every Chat, with its project. `wait <session>`
+  returns once the session rests, took everything the caller sent it, and a turn ended after that; it takes
+  sessions or workers, not both. A worker can't message a session. Known gap: Claude may take a steered message
+  only after the running turn's result, so a `wait` can return that turn's end.
 
 **S31. No `tmp/` sweep (w95 item 13; #532).** Codex.
 (user, 2026-10-23: the grill's design stands: `tmp/` is a plain `TMPDIR`)

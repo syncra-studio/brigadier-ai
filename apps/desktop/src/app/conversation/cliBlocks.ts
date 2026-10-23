@@ -294,6 +294,20 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
   };
 }
 
+/**
+ * Another session's message (S30): `brigadier send <session>` gives it to this session's CLI
+ * under a header naming the sender, `[message from session "‹title›" (‹id›) · sm-…]`.
+ */
+const FROM_SESSION = /^\[message from session "[^"]*" \(([^)]+)\) · (sm-[0-9a-f]+)\]\n?/;
+
+/** A user message as the thread shows it: another session's when its header says so, its body without the header. */
+function fromSession(message: Message): { message: Message; text: string } {
+  const header = FROM_SESSION.exec(message.text);
+  if (!header) return { message, text: message.text };
+  const text = message.text.slice(header[0].length);
+  return { message: { ...message, id: header[2]!, role: "peer", text, peer: { messageId: header[2]!, from: header[1]! } }, text };
+}
+
 /** Whether an entry starts a turn: the user's own message in the session's thread. */
 function startsTurn(entry: FileEntry): boolean {
   return entry.event.type === "message" && entry.event.role === "user" && !entry.parent && !entry.steer;
@@ -400,8 +414,8 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
       // turn) starts with the CLI's message, not the user's: it keeps its own id.
       const first = requests[0];
       const id = first !== undefined && !blocks.some((earlier) => earlier.user?.kind === "message" && earlier.user.message.id === first) ? first : event.itemId;
-      const message = userMessage(conversationId, entry, id, event.text, position + 1);
-      block.user = { kind: "message", message, text: event.text };
+      const said = fromSession(userMessage(conversationId, entry, id, event.text, position + 1));
+      block.user = said.message.role === "peer" ? { kind: "peer", ...said, earlier: false } : { kind: "message", ...said };
       blocks.push(block);
       times.push([[position, atMs]]);
       return;
@@ -417,8 +431,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         if (event.type === "message" && event.role === "user") {
           // A steer answers its own request, the next the turn names.
           const id = current.requestIds[current.steers.length + 1] ?? event.itemId;
-          const message = userMessage(conversationId, entry, id, event.text, position + 1);
-          current.steers.push({ message, text: event.text, position });
+          current.steers.push({ ...fromSession(userMessage(conversationId, entry, id, event.text, position + 1)), position });
           return;
         }
         if (event.type === "message" && event.role !== "assistant") return;
@@ -527,7 +540,7 @@ export function cliThreadTree(
   };
   for (const block of blocks) {
     if (block.user?.kind === "message") block.user = { kind: "message", ...asSent(block.user.message, block.user.text) };
-    block.steers = block.steers.map((steer) => ({ ...steer, ...asSent(steer.message, steer.text) }));
+    block.steers = block.steers.map((steer) => (steer.message.role === "peer" ? steer : { ...steer, ...asSent(steer.message, steer.text) }));
   }
   const carried = new Set(view.turns.flatMap((turn) => turn.requests));
   const heard = Math.max(

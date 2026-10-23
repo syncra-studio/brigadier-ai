@@ -43,8 +43,11 @@ pub struct CliCall {
     rename_all_fields = "camelCase"
 )]
 pub enum CliRequest {
-    /// The project's sidebar sessions.
-    Sessions,
+    /// The project's sidebar sessions; with `all`, every project's and every Chat.
+    Sessions {
+        #[serde(default)]
+        all: bool,
+    },
     /// Live models, account usage, guidance and the user's rules.
     Models,
     /// The calling session's own workers.
@@ -59,14 +62,16 @@ pub enum CliRequest {
     },
     /// A new worker of the calling session.
     Start(Box<StartRequest>),
-    /// A message to one of the caller's workers, or the answer to its open permission prompt.
+    /// A message to one of the caller's workers or to another session, or the answer to a
+    /// worker's open permission prompt.
     Send {
         id: String,
         /// The message; absent when `answer` is given.
         text: Option<String>,
         answer: Option<Answer>,
     },
-    /// The next events of the caller's workers (all of them when `ids` is empty).
+    /// The next events of the caller's workers (all of them when `ids` is empty), or the next
+    /// turn end of the sessions `ids` names.
     Wait {
         ids: Vec<String>,
         /// Absent: until an event comes.
@@ -344,6 +349,9 @@ pub struct SessionRow {
     pub workers: u32,
     /// It is the calling session.
     pub caller: bool,
+    /// Its project (`sessions --all`); absent for a Chat or without `--all`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// A session's state, as its sidebar row shows it.
@@ -654,6 +662,9 @@ pub struct SendOutput {
     /// The answer given to its open permission prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered: Option<Answer>,
+    /// A message to another session: its id, as the other session's thread shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// `brigadier wait`.

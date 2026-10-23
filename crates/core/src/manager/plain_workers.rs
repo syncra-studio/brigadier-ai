@@ -629,14 +629,16 @@ impl SessionManager {
                 short(&task.id.0)
             ))),
             Target::Session(session) => Err(refused(format!(
-                "refused: {} is a session, not a worker; sessions don't message each other",
+                "refused: {} is a session, not a worker; close acts only on this session's own \
+                 workers",
                 short(&session.id.0)
             ))),
         }
     }
 
     /// `brigadier send`: a message to one of the caller's workers, queued into its turn when
-    /// it works; or the answer to its CLI's open permission prompt.
+    /// it works; or the answer to its CLI's open permission prompt; or a message to another
+    /// session, as that session's (S30).
     pub(super) async fn cli_send(
         &self,
         caller: &CliCaller,
@@ -644,6 +646,13 @@ impl SessionManager {
         text: Option<String>,
         answer: Option<Answer>,
     ) -> Result<CliReply> {
+        if caller.task_id.is_none()
+            && let Ok(Target::Session(to)) = self.cli_target(caller, id).await
+        {
+            return Ok(self
+                .message_another_session(caller, &to, text, answer)
+                .await);
+        }
         let task = match self.own_worker(caller, id).await {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
@@ -678,6 +687,7 @@ impl SessionManager {
                 id: shown,
                 queued: false,
                 answered: Some(answer),
+                message: None,
             }));
         }
         let text = text.unwrap_or_default();
@@ -696,7 +706,40 @@ impl SessionManager {
             id: shown,
             queued,
             answered: None,
+            message: None,
         }))
+    }
+
+    /// `brigadier send <session> <text>`: the text reaches session `to` as the caller's.
+    async fn message_another_session(
+        &self,
+        caller: &CliCaller,
+        to: &Conversation,
+        text: Option<String>,
+        answer: Option<Answer>,
+    ) -> CliReply {
+        let shown = short(&to.id.0);
+        if to.id == caller.conversation_id {
+            return refused(format!("refused: {shown} is this session"));
+        }
+        if answer.is_some() {
+            return refused(format!(
+                "refused: {shown} is a session; --allow and --deny answer a worker's prompt"
+            ));
+        }
+        let from = match self.core.conversation(&caller.conversation_id) {
+            Ok(from) => from,
+            Err(err) => return CliReply::error(ErrorCode::Failed, err.to_string()),
+        };
+        let (message, queued) = self
+            .message_session(&from, to, &text.unwrap_or_default())
+            .await;
+        CliReply::ok(&SendOutput {
+            id: shown,
+            queued,
+            answered: None,
+            message: Some(message),
+        })
     }
 
     /// `brigadier wait`: the caller's workers' next events, as soon as there is one, or none
@@ -713,6 +756,30 @@ impl SessionManager {
                 refused("refused: a worker has no workers to wait for"),
                 None,
             ));
+        }
+        let mut sessions = Vec::new();
+        for id in ids {
+            if let Ok(Target::Session(session)) = self.cli_target(caller, id).await {
+                if session.id == caller.conversation_id {
+                    return Ok((
+                        refused(format!("refused: {} is this session", short(&session.id.0))),
+                        None,
+                    ));
+                }
+                sessions.push(*session);
+            }
+        }
+        if !sessions.is_empty() {
+            if sessions.len() < ids.len() {
+                return Ok((
+                    refused("refused: wait on workers or on sessions, not both"),
+                    None,
+                ));
+            }
+            let out = self
+                .wait_for_sessions(caller, &sessions, timeout_secs)
+                .await;
+            return Ok((CliReply::ok(&out), None));
         }
         let mut tasks = HashSet::new();
         for id in ids {

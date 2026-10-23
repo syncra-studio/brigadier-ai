@@ -2304,6 +2304,8 @@ mod project_sessions_tests;
 #[cfg(unix)]
 mod session_dir_tests;
 #[cfg(unix)]
+mod session_messages_tests;
+#[cfg(unix)]
 mod session_states_tests;
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]

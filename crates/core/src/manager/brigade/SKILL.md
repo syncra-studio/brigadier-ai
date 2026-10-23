@@ -17,6 +17,7 @@ Everything goes through `brigadier` (`brigadier <command> --help` for details; `
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one when its work is in. |
+| `brigadier sessions [--all]` / `brigadier send <session> "<text>"` / `brigadier wait <session>` | Other sessions, in every project with `--all`; `show` and `read` take their ids. Message one only when the user asks, or when it is absolutely needed: it gets your message as yours, never as its user's, and may answer. `wait` returns at its turn end. Another session's workers are out of reach. |
 | `brigadier ask "<question>" [--option O]…` | Ask the user on a card. Recommended option first. |
 
 In a Chat, a worker works in the repository `--repo <path>` names (a worktree of it, or its checkout with `--local`), or without `--repo` in a folder of its own with no git. A worker can't start workers of its own.

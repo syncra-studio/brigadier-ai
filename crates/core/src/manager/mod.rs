@@ -82,6 +82,7 @@ mod seam;
 pub mod search;
 mod secrets;
 mod session_dir;
+mod session_messages;
 mod setup_script;
 mod side_chat;
 mod sidecars;
@@ -169,6 +170,10 @@ pub struct SessionManager {
     worker_events: worker_events::WorkerEvents,
     /// When each working worker's CLI last said anything, for its `quiet` event.
     worker_quiet: Arc<worker_events::Quiet>,
+    /// Wakes a `brigadier wait <session>` at a turn end or a message seen (S30).
+    session_turns: tokio::sync::Notify,
+    /// One writer at a time for the sessions' messages' files (S30).
+    session_mail: std::sync::Mutex<()>,
     /// Its sessions' worker rows: their CLIs and git (S14).
     worker_rows: worker_rows::WorkerRows,
     /// The cards a `brigadier ask` waits on: their answers go back to it, not into the thread.
@@ -376,6 +381,8 @@ impl SessionManager {
             tasks: Mutex::new(HashMap::new()),
             worker_events: Default::default(),
             worker_quiet: Default::default(),
+            session_turns: tokio::sync::Notify::new(),
+            session_mail: std::sync::Mutex::new(()),
             worker_rows: Default::default(),
             cli_asks: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),

@@ -114,10 +114,11 @@ const fn choice(
 pub const COMMANDS: &[Command] = &[
     Command {
         name: "sessions",
-        summary: "List this project's sidebar sessions.",
+        summary: "List this project's sidebar sessions (--all: every project's, and Chats).",
         details: "Each row: id, state, title, branch, lines added and removed, and how many \
-                  workers it has. Workers are never listed here; see `brigadier workers`.",
-        args: &[],
+                  workers it has (with --all, its project too). Workers are never listed here; \
+                  see `brigadier workers`. `show` and `read` take any of these ids.",
+        args: &[switch("all", "Every project's sessions, and every Chat.")],
         available: true,
         schema: include_str!("../schemas/sessions.schema.json"),
     },
@@ -238,12 +239,17 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "send",
-        summary: "Send one of this session's workers a message, or answer its permission prompt.",
+        summary: "Send a worker of yours or another session a message, or answer a worker's \
+                  permission prompt.",
         details: "A message is queued into its turn if it is working, else it starts a turn. \
-                  --allow or --deny answers the permission prompt its CLI shows (a \
-                  `needs-input` event of `brigadier wait`).",
+                  Another session (an id of `brigadier sessions --all`) gets it as a message \
+                  from this session, never as its user's, and may answer with `brigadier send` \
+                  back. Message another session only when the user asks, or when it is \
+                  absolutely needed. Another session's workers are out of reach. --allow or \
+                  --deny answers the permission prompt a worker's CLI shows (a `needs-input` \
+                  event of `brigadier wait`).",
         args: &[
-            positional("id", "The worker."),
+            positional("id", "The worker, or another session."),
             switch("allow", "Allow what its permission prompt asks."),
             switch("deny", "Deny what its permission prompt asks."),
             rest("text", "The message.", false),
@@ -258,9 +264,11 @@ pub const COMMANDS: &[Command] = &[
                   failed, interrupted, gone, usage limit, fresh context, quiet (20 minutes \
                   without a word while it works). Without ids, any of them. Each event is \
                   heard once, kept across a restart. Keep one running in the background while \
-                  workers run: it wakes you when it returns.",
+                  workers run: it wakes you when it returns. Given sessions instead, it returns \
+                  at the end of their turn (once it took what you sent it), with its last \
+                  message.",
         args: &[
-            rest("id", "The workers to wait for.", false),
+            rest("id", "The workers, or the sessions, to wait for.", false),
             flag("timeout", "SECONDS", "Give up after this long."),
         ],
         available: true,

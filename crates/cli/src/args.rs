@@ -248,7 +248,9 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
         return Ok(None);
     }
     Ok(Some(match command.name {
-        "sessions" => CliRequest::Sessions,
+        "sessions" => CliRequest::Sessions {
+            all: args.switch("all"),
+        },
         "models" => CliRequest::Models,
         "workers" => CliRequest::Workers,
         "show" => CliRequest::Show { id: id() },
@@ -745,7 +747,14 @@ mod tests {
 
     #[test]
     fn the_read_commands_parse_into_their_requests() {
-        assert_eq!(run(&["sessions"]), (CliRequest::Sessions, false));
+        assert_eq!(
+            run(&["sessions"]),
+            (CliRequest::Sessions { all: false }, false)
+        );
+        assert_eq!(
+            run(&["sessions", "--all"]),
+            (CliRequest::Sessions { all: true }, false)
+        );
         assert_eq!(run(&["workers", "--json"]), (CliRequest::Workers, true));
         assert_eq!(
             run(&["show", "ab12"]).0,

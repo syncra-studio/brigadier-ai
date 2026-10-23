@@ -365,3 +365,26 @@ test("a seam: Brigadier's message is its line in the turn, and the divider stand
   // While the thread writes its note, no divider yet.
   assert.deepEqual(cliBlocks({ ...own, seams: [{ ...seam, open: true, at: null }] }, "conv").flatMap((block) => block.seams), []);
 });
+
+test("another session's message shows as that session's, its header gone, as a turn's start and as a steer", () => {
+  const from = "c-0123456789abcdef";
+  const sent = (id: string, text: string) => `[message from session "API work" (${from}) · ${id}]\n${text}`;
+  const peers: ThreadView = {
+    entries: [
+      user("u1", sent("sm-aaaaaaaaaaaa", "Can you check the schema?"), 1000),
+      user("s1", sent("sm-bbbbbbbbbbbb", "Also the docs."), 1100, { steer: true }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Checked." }, 1200),
+      user("u2", "My own words", 2000),
+    ],
+    turns: [turn("u1", 1000, 1500, "done"), turn("u2", 2000, 2500, "done")],
+  };
+  const [first, second] = cliBlocks(peers, "c1", NO_BOARD);
+  assert.equal(first!.user?.kind, "peer");
+  assert.equal(first!.user?.kind === "peer" && first!.user.text, "Can you check the schema?");
+  assert.deepEqual(first!.user?.kind === "peer" && first!.user.message.peer, { messageId: "sm-aaaaaaaaaaaa", from });
+  assert.equal(first!.user?.kind === "peer" && first!.user.message.id, "sm-aaaaaaaaaaaa");
+  assert.equal(first!.steers[0]!.message.role, "peer");
+  assert.equal(first!.steers[0]!.text, "Also the docs.");
+  assert.equal(second!.user?.kind, "message");
+  assert.equal(second!.user?.kind === "message" && second!.user.text, "My own words");
+});

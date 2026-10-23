@@ -45,7 +45,7 @@ pub(super) async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         .expect("the CLI has its session's grant");
     let command = match &request {
         CliRequest::Models => "models",
-        CliRequest::Sessions => "sessions",
+        CliRequest::Sessions { .. } => "sessions",
         CliRequest::Workers => "workers",
         CliRequest::Show { .. } => "show",
         CliRequest::Read { .. } => "read",
@@ -113,7 +113,7 @@ fn looking(answers: Answers) -> Script {
                 keep(&format!("worker env {}", task_id.0), seen_env(&turn));
                 keep(
                     "worker sessions",
-                    brigadier(&turn, CliRequest::Sessions).await,
+                    brigadier(&turn, CliRequest::Sessions { all: false }).await,
                 );
                 keep(
                     "worker workers",
@@ -140,7 +140,7 @@ fn looking(answers: Answers) -> Script {
             }
             if turn.input.contains("Look around.") {
                 keep("thread env", seen_env(&turn));
-                let sessions = brigadier(&turn, CliRequest::Sessions).await;
+                let sessions = brigadier(&turn, CliRequest::Sessions { all: false }).await;
                 let workers = brigadier(&turn, CliRequest::Workers).await;
                 let worker = workers["workers"][0]["id"].as_str().unwrap().to_owned();
                 let other = sessions["sessions"]
@@ -372,8 +372,9 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     assert_eq!(screen[0]["role"], "user");
     assert!(screen[0]["text"].as_str().unwrap().contains("Look around."));
 
-    // Another project's session isn't found by id.
-    assert_eq!(answers["show elsewhere"]["error"]["code"], "not-found");
+    // Another project's session is found by id too (S30).
+    assert_eq!(answers["show elsewhere"]["kind"], "session");
+    assert_eq!(answers["show elsewhere"]["id"], short(&elsewhere.0));
     flow.stop().await;
 }
 
@@ -684,7 +685,10 @@ fn starting(answers: Answers) -> Script {
                 .await,
             );
             keep("workers", brigadier(&turn, CliRequest::Workers).await);
-            keep("sessions", brigadier(&turn, CliRequest::Sessions).await);
+            keep(
+                "sessions",
+                brigadier(&turn, CliRequest::Sessions { all: false }).await,
+            );
             keep(
                 "close a",
                 brigadier(&turn, CliRequest::Close { id: a_id.clone() }).await,

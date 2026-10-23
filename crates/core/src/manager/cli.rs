@@ -22,7 +22,9 @@ use brigadier_providers::{ProviderEvent, ProviderKind};
 
 use super::SessionManager;
 use super::worker_events::HeldEvents;
-use crate::model::{Conversation, ConversationId, Environment, Lifecycle, Setup, TaskId};
+use crate::model::{
+    Conversation, ConversationId, ConversationKind, Environment, Lifecycle, Setup, TaskId,
+};
 use crate::tools::Role;
 use crate::work::{ConversationActivity, DiffStat, RunState, Task, TaskState};
 
@@ -399,7 +401,10 @@ impl SessionManager {
         }
         let reply = match call.request {
             CliRequest::Models => self.cli_models(caller).await.map(|o| CliReply::ok(&o)),
-            CliRequest::Sessions => self.cli_sessions(caller).await.map(|o| CliReply::ok(&o)),
+            CliRequest::Sessions { all } => self
+                .cli_sessions(caller, all)
+                .await
+                .map(|o| CliReply::ok(&o)),
             CliRequest::Workers => self.cli_workers(caller).await.map(|o| CliReply::ok(&o)),
             CliRequest::Show { id } => self.cli_show(caller, &id).await,
             CliRequest::Read { id, last, screen } => self.cli_read(caller, &id, last, screen).await,
@@ -451,15 +456,50 @@ impl SessionManager {
                     && conversation.lifecycle != Lifecycle::Archived
             })
             .collect();
-        // Pinned first, then the latest active first, as the sidebar lists them.
-        sessions.sort_by(|a, b| {
-            b.pinned_at_ms
-                .is_some()
-                .cmp(&a.pinned_at_ms.is_some())
-                .then(b.pinned_at_ms.cmp(&a.pinned_at_ms))
-                .then(b.updated_at_ms.cmp(&a.updated_at_ms))
-        });
+        sidebar_order(&mut sessions);
         Ok((project, sessions))
+    }
+
+    /// Every project's sidebar sessions and every Chat, each with its project's name, in the
+    /// sidebar's order (S30): what `sessions --all` lists and `show`, `read`, `send` and
+    /// `wait` reach. The caller is among them.
+    fn cli_every_session(
+        &self,
+        caller: &CliCaller,
+    ) -> crate::Result<Vec<(Option<String>, Conversation)>> {
+        let catalog = self.core.visible_catalog();
+        let names: HashMap<_, _> = catalog
+            .projects
+            .iter()
+            .map(|project| (project.id.clone(), project.name.clone()))
+            .collect();
+        let mut sessions: Vec<Conversation> = catalog
+            .conversations
+            .into_iter()
+            .filter(|conversation| {
+                let chat = conversation.kind == ConversationKind::Chat
+                    && conversation.side_of.is_none()
+                    && conversation.tab_chat.is_none();
+                (conversation.is_tab() || chat) && conversation.lifecycle != Lifecycle::Archived
+            })
+            .collect();
+        if sessions
+            .iter()
+            .all(|session| session.id != caller.conversation_id)
+        {
+            sessions.push(self.core.conversation(&caller.conversation_id)?);
+        }
+        sidebar_order(&mut sessions);
+        Ok(sessions
+            .into_iter()
+            .map(|session| {
+                let project = session
+                    .project_id
+                    .as_ref()
+                    .and_then(|id| names.get(id).cloned());
+                (project, session)
+            })
+            .collect())
     }
 
     async fn cli_activity(&self) -> HashMap<ConversationId, ConversationActivity> {
@@ -493,11 +533,16 @@ impl SessionManager {
         }
     }
 
-    async fn cli_sessions(&self, caller: &CliCaller) -> crate::Result<SessionsOutput> {
-        let (project, conversations) = self.cli_project_sessions(caller)?;
+    async fn cli_sessions(&self, caller: &CliCaller, all: bool) -> crate::Result<SessionsOutput> {
+        let (project, own) = self.cli_project_sessions(caller)?;
+        let conversations: Vec<(Option<String>, Conversation)> = if all {
+            self.cli_every_session(caller)?
+        } else {
+            own.into_iter().map(|session| (None, session)).collect()
+        };
         let activity = self.cli_activity().await;
         let mut sessions = Vec::with_capacity(conversations.len());
-        for conversation in conversations {
+        for (in_project, conversation) in conversations {
             let (branch, _, _) = session_place(&conversation);
             let workers = self.core.tasks(&conversation.id).await?.len();
             sessions.push(SessionRow {
@@ -508,6 +553,7 @@ impl SessionManager {
                 changes: self.cli_session_changes(&conversation.id).await,
                 workers: u32::try_from(workers).unwrap_or(u32::MAX),
                 caller: conversation.id == caller.conversation_id && caller.task_id.is_none(),
+                project: in_project,
             });
         }
         Ok(SessionsOutput { project, sessions })
@@ -538,7 +584,7 @@ impl SessionManager {
         Ok(WorkersOutput { session, workers })
     }
 
-    /// The session or worker of the caller's project that `id` names.
+    /// The session or worker that `id` names: of any project, or a Chat (S30).
     pub(super) async fn cli_target(
         &self,
         caller: &CliCaller,
@@ -548,8 +594,8 @@ impl SessionManager {
             CliReply::error(
                 ErrorCode::NotFound,
                 format!(
-                    "no session or worker of this project has the id {id:?}; see `brigadier \
-                     sessions` and `brigadier workers`"
+                    "no session or worker has the id {id:?}; see `brigadier sessions --all` \
+                     and `brigadier workers`"
                 ),
             )
         };
@@ -559,9 +605,9 @@ impl SessionManager {
         }
         let matches =
             |full: &str| full == id || (id.len() >= MIN_ID && short(full).starts_with(id));
-        let (_, sessions) = self.cli_project_sessions(caller).map_err(failed)?;
+        let sessions = self.cli_every_session(caller).map_err(failed)?;
         let mut found: Vec<Target> = Vec::new();
-        for session in sessions {
+        for (_, session) in sessions {
             for task in self.core.tasks(&session.id).await.map_err(failed)? {
                 if matches(&task.id.0) {
                     found.push(Target::Worker(Box::new(task)));
@@ -840,6 +886,17 @@ fn is_answer(event: &ProviderEvent) -> bool {
             ..
         }
     )
+}
+
+/// Pinned first, then the latest active first, as the sidebar lists them.
+fn sidebar_order(sessions: &mut [Conversation]) {
+    sessions.sort_by(|a, b| {
+        b.pinned_at_ms
+            .is_some()
+            .cmp(&a.pinned_at_ms.is_some())
+            .then(b.pinned_at_ms.cmp(&a.pinned_at_ms))
+            .then(b.updated_at_ms.cmp(&a.updated_at_ms))
+    });
 }
 
 #[cfg(test)]

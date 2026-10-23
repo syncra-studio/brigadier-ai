@@ -61,6 +61,10 @@
           },
           "caller": {
             "type": "boolean"
+          },
+          "project": {
+            "type": "string",
+            "description": "Its project (`sessions --all`); absent for a Chat or without `--all`."
           }
         }
       }

@@ -366,7 +366,7 @@ async fn a_side_chat_reads_and_changes_only_its_tabs_page_or_file_behind_brigadi
                             "page brain",
                             tool(Tool::Brain, "search", json!({"query": "x"})),
                         ),
-                        ("page sessions", CliRequest::Sessions),
+                        ("page sessions", CliRequest::Sessions { all: false }),
                     ];
                     for (name, request) in calls {
                         keep(&answers, name, brigadier(&turn, request).await);

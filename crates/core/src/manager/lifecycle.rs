@@ -135,6 +135,8 @@ impl SessionManager {
             // What its workers did that it hadn't heard yet (S29).
             if conversation.lifecycle != Lifecycle::Archived {
                 self.recover_worker_events(&conversation.id).await;
+                // Other sessions' messages its CLI never took (S30).
+                self.recover_session_messages(&conversation.id).await;
             }
             // Merge cards are retired: open ones close, and no card answer merges.
             if conversation.lifecycle != Lifecycle::Archived {

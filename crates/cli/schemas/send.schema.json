@@ -21,6 +21,10 @@
         "deny"
       ],
       "description": "The answer given to its open permission prompt."
+    },
+    "message": {
+      "type": "string",
+      "description": "A message to another session: its id, as the other session's thread shows it."
     }
   }
 }

@@ -53,28 +53,40 @@ pub fn sessions(output: &SessionsOutput) -> String {
         out.push_str("No sessions.\n");
         return out;
     }
-    let mut rows = vec![vec![
+    let all = output
+        .sessions
+        .iter()
+        .any(|session| session.project.is_some());
+    let mut head: Vec<String> = vec![
         "ID".into(),
         "STATE".into(),
         "CHANGES".into(),
         "WORKERS".into(),
         "BRANCH".into(),
-        "TITLE".into(),
-    ]];
+    ];
+    if all {
+        head.push("PROJECT".into());
+    }
+    head.push("TITLE".into());
+    let mut rows = vec![head];
     for session in &output.sessions {
         let title = if session.caller {
             format!("{} (this session)", session.title)
         } else {
             session.title.clone()
         };
-        rows.push(vec![
+        let mut row = vec![
             session.id.clone(),
             session.state.word().into(),
             changes(session.changes),
             session.workers.to_string(),
             session.branch.clone().unwrap_or_else(|| "-".into()),
-            title,
-        ]);
+        ];
+        if all {
+            row.push(session.project.clone().unwrap_or_else(|| "-".into()));
+        }
+        row.push(title);
+        rows.push(row);
     }
     out.push_str(&table(&rows));
     out
@@ -275,8 +287,17 @@ pub fn send(output: &SendOutput) -> String {
     match output.answered {
         Some(Answer::Allow) => format!("Allowed what {} asked.\n", output.id),
         Some(Answer::Deny) => format!("Denied what {} asked.\n", output.id),
-        None if output.queued => format!("Queued into {}'s turn.\n", output.id),
-        None => format!("Sent; {} works on it.\n", output.id),
+        None => {
+            let sent = match &output.message {
+                Some(message) => format!("Sent {message} to session {}", output.id),
+                None => format!("Sent to {}", output.id),
+            };
+            if output.queued {
+                format!("{sent}: queued into its turn.\n")
+            } else {
+                format!("{sent}: it works on it.\n")
+            }
+        }
     }
 }
 
