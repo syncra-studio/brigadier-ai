@@ -142,6 +142,17 @@ export type BlockCompaction = {
 };
 
 /**
+ * A seam after the block (G12): the session went on in a fresh context, from a hand-off note
+ * the thread wrote (openable), or with none (`death` says why).
+ */
+export type BlockSeam = {
+  n: number;
+  note: string | null;
+  start: string | null;
+  death: string | null;
+};
+
+/**
  * A message steered into the block's running turn: the user's bubble, or another session's
  * message block (a message steered in, or a reply to the request), inside the block.
  */
@@ -203,6 +214,10 @@ export type Block = {
   steers: BlockSteer[];
   /** Compactions in its turn, or after it. */
   compactions: BlockCompaction[];
+  /** Seams after it: a fresh context took over from here. */
+  seams: BlockSeam[];
+  /** Brigadier's one message of a seam in its turn ("write your hand-off note"), where it came. */
+  nudges: number[];
   /** The requests it shows: its own (the key), then the steered ones. */
   requestIds: string[];
   state: BlockState;
@@ -482,6 +497,7 @@ export type SequenceSource = {
   cards: readonly BlockCard[];
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
+  nudges?: readonly number[];
   orchestratorSteps: readonly BlockOrchestratorStep[];
   thinking?: readonly ThinkingSegment[];
   state?: BlockState;
@@ -496,6 +512,8 @@ export type SequenceEntry =
   | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; requestId?: string; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
+  /** Brigadier asked the thread for its hand-off note (G12): its line, not a user's bubble. */
+  | { kind: "nudge"; position: number }
   | { kind: "row"; row: BlockRow; position: number }
   /** More than an hour passed in the turn before what follows, which came at `atMs` (#130). */
   | { kind: "gap"; atMs: number; position: number };
@@ -536,6 +554,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     ...source.compactions
       .filter((compaction) => compaction.inTurn)
       .map((compaction) => ({ kind: "compaction" as const, compaction, position: compaction.position })),
+    ...(source.nudges ?? []).map((position) => ({ kind: "nudge" as const, position })),
     // A proof shows with the merge message, under the answer, not in the work.
     ...source.orchestratorSteps.filter((step) => step.kind.type !== "proof").map((step) => ({
       kind: "orchestrator" as const,
@@ -734,6 +753,8 @@ export function blockShows(block: Block): boolean {
     block.orchestratorSteps.length > 0 ||
     block.thinking.length > 0 ||
     block.compactions.length > 0 ||
+    block.seams.length > 0 ||
+    block.nudges.length > 0 ||
     block.state !== "done"
   );
 }

@@ -5,6 +5,7 @@ import { ActivityItems } from "@/app/conversation/ActivityItems";
 import { AnswerActions } from "@/app/conversation/AnswerActions";
 import { BlockError } from "@/app/conversation/BlockError";
 import { CompactionBlock } from "@/app/conversation/CompactionBlock";
+import { SeamDivider } from "@/app/conversation/SeamRows";
 import { ContinuedFrom } from "@/app/conversation/ContinuedFrom";
 import { JoinedAnswer } from "@/app/conversation/JoinedAnswer";
 import { JoinedAnswerActions } from "@/app/conversation/JoinedAnswerActions";
@@ -25,6 +26,7 @@ import { deniedCall } from "@/app/conversation/activity/words";
 import {
   type BlockCard,
   type BlockCompaction,
+  type BlockSeam,
   type BlockOrchestratorStep,
   type BlockRow,
   type BlockState,
@@ -75,6 +77,10 @@ export type BlockMeta = {
   steers: { position: number; text: string; atMs: number; attachments: AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   /** Compactions of a Chat's context in the turn, or after it. */
   compactions: BlockCompaction[];
+  /** Seams after it (G12). */
+  seams: BlockSeam[];
+  /** Brigadier's seam message in its turn, by position. */
+  nudges: number[];
   state: BlockState;
   startedAtMs: number;
   endedAtMs: number | null;
@@ -336,6 +342,9 @@ export const RequestBlock: FC = () => {
         .map((compaction) => (
           <CompactionBlock key={compaction.id} compaction={compaction} />
         ))}
+      {meta.seams.map((seam) => (
+        <SeamDivider key={seam.n} seam={seam} />
+      ))}
     </MessagePrimitive.Root>
   );
 };

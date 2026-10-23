@@ -1,0 +1,722 @@
+//! The seam in the conversation driver (S22, [`crate::manager::seam`]): the nudge, closing the
+//! predecessor, starting the successor from its hand-off, the held messages and recovery.
+//!
+//! - **Nudge.** Past the threshold, with no background job or open permission card, the one
+//!   message is steered into the running turn; with none running it starts a turn of its own.
+//!   `seam.json` says `nudged` before it is sent.
+//! - **Hold.** While nudged nothing else reaches the thread: a user message waits in the queue
+//!   (persisted), anything else in memory, for the successor. If the note turn is still going
+//!   a minute after a message came, it is stopped and the seam closes without waiting.
+//! - **Close.** The turn that read the nudge ends: with a note or without, the seam closes
+//!   (`closed`) and the predecessor's CLI goes.
+//! - **Successor.** The next turn writes `starting` with a session id reserved for it and the
+//!   messages it carries, starts a fresh CLI under that id, and sends the hand-off with them;
+//!   once sent, the seam is complete and the generation one more.
+//! - **Death.** "Prompt is too long", or a CLI that can't be resumed, ends the generation
+//!   without a note: the next message starts the successor, told to check git first.
+
+use std::sync::Arc;
+
+use brigadier_providers::{Origin, TurnInput};
+
+use super::{Cli, ConvLive, Envelope};
+use crate::manager::SessionManager;
+use crate::manager::seam::{
+    Boot, Phase, Seam, SeamEnd, SeamFile, bootstrap, handoff_line, note_path, nudge, read_seam,
+    start_path, write_seam,
+};
+use crate::manager::session_dir::read_lineage;
+use crate::model::{ConversationId, ConversationKind, Message};
+use crate::now_ms;
+use crate::work::{CardState, InjectionKind};
+
+/// The seam's in-memory part of a conversation's state.
+#[derive(Default)]
+pub(super) struct SeamLive {
+    /// A nudge is being sent.
+    nudging: bool,
+    /// The nudge goes as a turn of its own, this text, once none runs.
+    nudge_due: Option<String>,
+    /// `seam.json` says `nudged`: nothing but the note turn reaches the CLI.
+    pub(super) held: bool,
+    /// The CLI took the nudge in (its stream said it): the turn it is in ends the generation.
+    seen: bool,
+    /// The note turn is being stopped: when it ends, the seam closes whatever it wrote.
+    force: bool,
+    /// Counts the hold timers armed; only the newest acts.
+    hold_timer: u64,
+    hold_armed: bool,
+    /// The session id the next CLI starts under (a successor's, reserved in `seam.json`).
+    pub(super) reserved: Option<String>,
+    /// The seam closed and its successor starts by itself, when nothing else starts it first
+    /// ([`SeamConfig::carry_on`](crate::manager::seam::SeamConfig)).
+    pub(super) carry_on: bool,
+}
+
+/// A successor about to start: its seam, how its predecessor ended and what it carries.
+pub(super) struct Successor {
+    n: u32,
+    end: SeamEnd,
+    messages: Vec<String>,
+}
+
+impl Successor {
+    pub(super) fn n(&self) -> u32 {
+        self.n
+    }
+}
+
+/// Why a generation ended without its note when the CLI said nothing better.
+const NO_NOTE: &str = "it ended its turn without writing one";
+const HELD_TOO_LONG: &str = "it was still working a minute after a message came";
+const RESTARTED: &str = "Brigadier restarted before it wrote one";
+const NOT_RESUMED: &str = "its CLI session could not be resumed";
+const TOO_LONG: &str = "its context was too long for the model";
+
+impl SessionManager {
+    /// Whether conversation `conv` goes on at seams rather than by rebirth.
+    pub(in crate::manager) fn seam_on(&self, conv: &ConvLive) -> bool {
+        conv.kind == ConversationKind::Session && self.seam_config().on
+    }
+
+    pub(in crate::manager) async fn read_seam_of(&self, id: &ConversationId) -> SeamFile {
+        let record = self.session_dir(id).record();
+        crate::manager::blocking(move || Ok(read_seam(&record)))
+            .await
+            .unwrap_or_default()
+    }
+
+    async fn write_seam_of(&self, id: &ConversationId, file: SeamFile) -> crate::Result<()> {
+        let record = self.session_dir(id).record();
+        crate::manager::blocking(move || write_seam(&record, &file)).await
+    }
+
+    /// The CLI said how full its context is: past the threshold, the nudge.
+    pub(super) async fn seam_context(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        used: i64,
+        window: Option<i64>,
+    ) {
+        if used >= self.seam_config().threshold(window) {
+            self.seam_nudge(conv, cli, used, true).await;
+        }
+    }
+
+    /// Asks for the hand-off once per generation: steered into the running turn when
+    /// `steer` and one runs, else as a turn of its own. Not while the CLI runs jobs in the
+    /// background or a permission card is open: their ends report the context again.
+    pub(super) async fn seam_nudge(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        used: i64,
+        steer: bool,
+    ) {
+        {
+            let mut state = conv.state.lock().await;
+            if state.seam.nudging || state.seam.held || state.seam.nudge_due.is_some() {
+                return;
+            }
+            state.seam.nudging = true;
+        }
+        let sent = self.send_nudge(conv, cli, used, steer).await;
+        let mut state = conv.state.lock().await;
+        state.seam.nudging = false;
+        if sent == Some(false) {
+            drop(state);
+            self.kick(conv);
+        }
+    }
+
+    /// `Some(true)`: steered in; `Some(false)`: due as a turn of its own; `None`: not now.
+    async fn send_nudge(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        used: i64,
+        steer: bool,
+    ) -> Option<bool> {
+        let mut file = self.read_seam_of(&conv.id).await;
+        if file.phase != Phase::Live
+            || conv.has_cli_jobs().await
+            || self.open_permission(&conv.id).await
+        {
+            return None;
+        }
+        let record = self.session_dir(&conv.id).record();
+        let note = note_path(&record, file.generation);
+        if let Some(dir) = note.parent()
+            && let Err(err) = std::fs::create_dir_all(dir)
+        {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not make the hand-off folder"; conversation = %conv.id, error = %err);
+        }
+        file.phase = Phase::Nudged {
+            at_ms: now_ms(),
+            tokens: used,
+            predecessor: Some(cli.session.native_id()),
+        };
+        if let Err(err) = self.write_seam_of(&conv.id, file).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the seam"; conversation = %conv.id, error = %err);
+            return None;
+        }
+        let text = nudge(&note);
+        let mut state = conv.state.lock().await;
+        state.seam.held = true;
+        let running = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli))
+            && state.busy
+            && !state.interrupted
+            && !state.compacting;
+        if steer
+            && running
+            && cli
+                .session
+                .steer(TurnInput::text(text.clone()))
+                .await
+                .is_ok()
+        {
+            drop(state);
+            crate::logging::private_trace!(conv.private_logs, info, "asked for the hand-off note"; conversation = %conv.id, used);
+            self.log_injection(
+                &conv.id,
+                InjectionKind::Seam,
+                "hand-off note".into(),
+                None,
+                text.len(),
+            )
+            .await;
+            return Some(true);
+        }
+        state.seam.nudge_due = Some(text);
+        Some(false)
+    }
+
+    /// Whether a permission card of the conversation's own waits on the user.
+    async fn open_permission(&self, id: &ConversationId) -> bool {
+        self.core.board(id).await.is_ok_and(|board| {
+            board
+                .approvals
+                .values()
+                .any(|approval| approval.state == CardState::Pending)
+        })
+    }
+
+    /// A closed seam's successor that starts by itself, taken for the next turn: when nothing
+    /// else is there to start it.
+    pub(super) fn take_carry_on(state: &mut super::ConvState) -> Option<Envelope> {
+        if !std::mem::take(&mut state.seam.carry_on) {
+            return None;
+        }
+        Some(Envelope {
+            kind: InjectionKind::Seam,
+            label: "carry on".into(),
+            task_id: None,
+            text: crate::manager::seam::CARRY_ON.into(),
+        })
+    }
+
+    /// The nudge due as a turn of its own, taken for the next turn.
+    pub(super) fn take_due_nudge(state: &mut super::ConvState) -> Option<Envelope> {
+        let text = state.seam.nudge_due.take()?;
+        state.seam.seen = true;
+        Some(Envelope {
+            kind: InjectionKind::Seam,
+            label: "hand-off note".into(),
+            task_id: None,
+            text,
+        })
+    }
+
+    /// The CLI's stream showed a user message: the nudge, once taken in.
+    pub(super) async fn seam_heard(&self, conv: &ConvLive, text: &str) {
+        if text.starts_with(crate::thread_view::NUDGE_MARK) {
+            conv.state.lock().await.seam.seen = true;
+        }
+    }
+
+    /// A turn of the session's CLI is ending (before it is marked over): the nudge it read
+    /// closes the seam, and past the threshold with none sent yet, one is due. Answers whether
+    /// the seam closed (the next turn then retires the CLI).
+    pub(super) async fn seam_turn_end(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>) -> bool {
+        let file = self.read_seam_of(&conv.id).await;
+        match file.phase {
+            Phase::Nudged { at_ms, .. } => {
+                let note = note_path(&self.session_dir(&conv.id).record(), file.generation);
+                let (seen, force, why) = {
+                    let state = conv.state.lock().await;
+                    let why = if state.limit_hit.is_some() {
+                        "it hit its usage limit".to_owned()
+                    } else if let Some(error) = &state.turn_error {
+                        format!("its turn failed: {error}")
+                    } else if state.interrupted && !state.seam.force {
+                        "the user stopped it".to_owned()
+                    } else {
+                        NO_NOTE.to_owned()
+                    };
+                    (state.seam.seen, state.seam.force, why)
+                };
+                let written = note.is_file();
+                if !(written || seen || force) {
+                    // The nudge is still on its way into the CLI: its own turn takes it.
+                    self.arm_seam_hold(conv).await;
+                    return false;
+                }
+                let death = (!written).then(|| if force { HELD_TOO_LONG.into() } else { why });
+                self.close_seam(conv, file, Some(at_ms), death).await
+            }
+            Phase::Live => {
+                let used = conv.state.lock().await.context;
+                if let Some((used, window)) = used
+                    && used >= self.seam_config().threshold(window)
+                {
+                    self.seam_nudge(conv, cli, used, false).await;
+                }
+                false
+            }
+            Phase::Closed { .. } | Phase::Starting { .. } => false,
+        }
+    }
+
+    /// Ends generation `file.generation`: `closed`, with `death` when it left no note.
+    async fn close_seam(
+        &self,
+        conv: &Arc<ConvLive>,
+        mut file: SeamFile,
+        nudged_at_ms: Option<i64>,
+        death: Option<String>,
+    ) -> bool {
+        let predecessor = match &file.phase {
+            Phase::Nudged { predecessor, .. } => predecessor.clone(),
+            _ => conv
+                .state
+                .lock()
+                .await
+                .cli
+                .as_ref()
+                .map(|cli| cli.session.native_id()),
+        };
+        file.phase = Phase::Closed {
+            end: SeamEnd {
+                predecessor,
+                nudged_at_ms,
+                closed_at_ms: now_ms(),
+                death,
+            },
+        };
+        if let Err(err) = self.write_seam_of(&conv.id, file).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the seam"; conversation = %conv.id, error = %err);
+            return false;
+        }
+        crate::logging::private_trace!(conv.private_logs, info, "the session's generation ended at its seam"; conversation = %conv.id);
+        let mut state = conv.state.lock().await;
+        state.seam.held = false;
+        state.seam.seen = false;
+        state.seam.force = false;
+        state.seam.hold_armed = false;
+        state.seam.hold_timer += 1;
+        state.seam.carry_on = self.seam_config().carry_on;
+        true
+    }
+
+    /// The CLI's context overflowed ("prompt is too long"): the generation ends without a note.
+    pub(super) async fn seam_too_long(&self, conv: &Arc<ConvLive>) {
+        let file = self.read_seam_of(&conv.id).await;
+        let nudged = match &file.phase {
+            Phase::Live => None,
+            Phase::Nudged { at_ms, .. } => Some(*at_ms),
+            Phase::Closed { .. } | Phase::Starting { .. } => return,
+        };
+        // The turn's end looks for the next turn, which retires the CLI first.
+        self.close_seam(conv, file, nudged, Some(TOO_LONG.into()))
+            .await;
+    }
+
+    /// A message came while the note turn runs, or the turn ended before its CLI took the
+    /// nudge in: a minute on, the seam closes whatever the CLI is doing.
+    pub(super) async fn arm_seam_hold(&self, conv: &Arc<ConvLive>) {
+        let timer = {
+            let mut state = conv.state.lock().await;
+            if !state.seam.held || state.seam.hold_armed {
+                return;
+            }
+            state.seam.hold_armed = true;
+            state.seam.hold_timer += 1;
+            state.seam.hold_timer
+        };
+        let hold = self.seam_config().hold;
+        let (manager, conv) = (self.arc(), conv.clone());
+        self.spawn(async move {
+            tokio::time::sleep(hold).await;
+            let cli = {
+                let mut state = conv.state.lock().await;
+                if state.seam.hold_timer != timer || !state.seam.held {
+                    return;
+                }
+                state.seam.force = true;
+                state.cli.clone().filter(|_| state.busy)
+            };
+            match cli {
+                // Its end closes the seam.
+                Some(cli) => {
+                    let _ = cli.session.interrupt().await;
+                }
+                None => {
+                    let file = manager.read_seam_of(&conv.id).await;
+                    let Phase::Nudged { at_ms, .. } = file.phase else {
+                        return;
+                    };
+                    let written =
+                        note_path(&manager.session_dir(&conv.id).record(), file.generation)
+                            .is_file();
+                    let death = (!written).then(|| HELD_TOO_LONG.to_owned());
+                    // The next turn retires the CLI first.
+                    if manager.close_seam(&conv, file, Some(at_ms), death).await {
+                        manager.kick(&conv);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Before the next turn: a closed seam's predecessor CLI, still up (a limit kept it), goes.
+    pub(super) async fn seam_retire(&self, conv: &Arc<ConvLive>) {
+        let open = {
+            let state = conv.state.lock().await;
+            state.cli.is_some() && !state.busy && !state.closing
+        };
+        if open
+            && matches!(
+                self.read_seam_of(&conv.id).await.phase,
+                Phase::Closed { .. }
+            )
+        {
+            conv.close_cli().await;
+        }
+    }
+
+    /// The turn about to start goes to a successor when the seam is closed, or when the CLI
+    /// could not be resumed (`reseed`): `starting` is written, with the session id reserved
+    /// for it and the messages it carries, before its CLI exists.
+    pub(super) async fn seam_successor(
+        &self,
+        conv: &Arc<ConvLive>,
+        users: &[Message],
+    ) -> Option<Successor> {
+        let mut file = self.read_seam_of(&conv.id).await;
+        let Phase::Closed { end } = file.phase.clone() else {
+            return None;
+        };
+        let reserved = uuid::Uuid::new_v4().to_string();
+        let provider = self
+            .core
+            .conversation(&conv.id)
+            .ok()
+            .and_then(|conversation| super::setup_choice(&conversation))
+            .map_or(brigadier_providers::ProviderKind::Claude, |choice| {
+                choice.provider
+            });
+        let messages: Vec<String> = users.iter().map(|message| message.id.clone()).collect();
+        file.phase = Phase::Starting {
+            end: end.clone(),
+            successor: reserved.clone(),
+            provider,
+            messages: messages.clone(),
+        };
+        if let Err(err) = self.write_seam_of(&conv.id, file.clone()).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the successor's start"; conversation = %conv.id, error = %err);
+            return None;
+        }
+        let mut state = conv.state.lock().await;
+        state.seam.reserved = Some(reserved);
+        state.seam.carry_on = false;
+        state.fresh = true;
+        // The predecessor's context is not the successor's.
+        state.context = None;
+        state.checkpoint = None;
+        // Nothing is in the new session yet: whatever it carries goes in whole.
+        state.continuing.clear();
+        state.continuing_envelopes.clear();
+        Some(Successor {
+            n: file.generation,
+            end,
+            messages,
+        })
+    }
+
+    /// A session whose CLI could not be resumed goes on as at a seam with no note: its
+    /// generation ends, and `cli`, already started fresh, is the successor.
+    pub(super) async fn seam_unresumed(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        users: &[Message],
+    ) -> Option<Successor> {
+        let mut file = self.read_seam_of(&conv.id).await;
+        let end = SeamEnd {
+            predecessor: read_lineage(&self.session_dir(&conv.id).record())
+                .last()
+                .map(|session| session.session_id.clone())
+                .filter(|id| *id != cli.session.native_id()),
+            nudged_at_ms: None,
+            closed_at_ms: now_ms(),
+            death: Some(NOT_RESUMED.into()),
+        };
+        let messages: Vec<String> = users.iter().map(|message| message.id.clone()).collect();
+        file.phase = Phase::Starting {
+            end: end.clone(),
+            successor: cli.session.native_id(),
+            provider: cli.provider,
+            messages: messages.clone(),
+        };
+        self.write_seam_of(&conv.id, file.clone()).await.ok()?;
+        let mut state = conv.state.lock().await;
+        state.seam.held = false;
+        state.context = None;
+        state.checkpoint = None;
+        state.continuing.clear();
+        state.continuing_envelopes.clear();
+        drop(state);
+        Some(Successor {
+            n: file.generation,
+            end,
+            messages,
+        })
+    }
+
+    /// The successor's CLI is up: its id is the one recorded (Codex picks its own), and its
+    /// hand-off is written to disk. Answers the hand-off for its first input.
+    pub(super) async fn seam_handoff(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        successor: &Successor,
+    ) -> crate::Result<String> {
+        let id = conv.id.clone();
+        let mut file = self.read_seam_of(&id).await;
+        if let Phase::Starting {
+            successor: reserved,
+            provider,
+            ..
+        } = &mut file.phase
+            && (*reserved != cli.session.native_id() || *provider != cli.provider)
+        {
+            *reserved = cli.session.native_id();
+            *provider = cli.provider;
+            self.write_seam_of(&id, file).await?;
+        }
+        let dir = self.session_dir(&id);
+        let key = id.short().to_owned();
+        let blobs = self.core.store().blobs().root().to_path_buf();
+        let (n, death) = (successor.n, successor.end.death.clone());
+        let own = cli.session.native_id();
+        crate::manager::blocking(move || {
+            let record = dir.record();
+            let lineage: Vec<_> = read_lineage(&record)
+                .into_iter()
+                .filter(|session| session.session_id != own)
+                .collect();
+            let files: Vec<_> = lineage
+                .iter()
+                .filter_map(|session| {
+                    let file = session.file.as_ref()?;
+                    Some((
+                        session.provider,
+                        brigadier_providers::session_file::locate(
+                            session.provider,
+                            std::path::Path::new(file),
+                        ),
+                    ))
+                })
+                .collect();
+            let entries = crate::manager::records::transcript(&files);
+            let note_at = note_path(&record, n);
+            let note = std::fs::read_to_string(&note_at).ok();
+            let ledger_at = dir.ledger();
+            let ledger = std::fs::read_to_string(&ledger_at).ok();
+            let start = start_path(&record, n);
+            let text = bootstrap(&Boot {
+                n,
+                key: &key,
+                folder: dir.root(),
+                ledger_path: &ledger_at,
+                ledger: ledger.as_deref(),
+                lineage: &lineage,
+                note_path: &note_at,
+                note: note.as_deref(),
+                start_path: &start,
+                death: if note.is_some() {
+                    None
+                } else {
+                    Some(death.as_deref().unwrap_or(NO_NOTE))
+                },
+                entries: &entries,
+                blobs: &blobs,
+            });
+            if let Some(parent) = start.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| crate::Error::Invalid(err.to_string()))?;
+            }
+            std::fs::write(&start, &text).map_err(|err| crate::Error::Invalid(err.to_string()))?;
+            Ok(text)
+        })
+        .await
+    }
+
+    /// The successor took its hand-off: the seam is complete and its generation current.
+    pub(super) async fn seam_started(
+        &self,
+        conv: &Arc<ConvLive>,
+        cli: &Arc<Cli>,
+        successor: Successor,
+    ) {
+        let mut file = self.read_seam_of(&conv.id).await;
+        let record = self.session_dir(&conv.id).record();
+        complete(
+            &mut file,
+            &record,
+            successor.n,
+            cli.session.native_id(),
+            cli.provider,
+            successor.end,
+            successor.messages,
+        );
+        if let Err(err) = self.write_seam_of(&conv.id, file).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the successor"; conversation = %conv.id, error = %err);
+        }
+    }
+
+    /// The successor's CLI did not take its first turn: the seam is closed again, and the next
+    /// try reserves another id.
+    pub(super) async fn seam_not_started(&self, conv: &Arc<ConvLive>, successor: Successor) {
+        let mut file = self.read_seam_of(&conv.id).await;
+        file.phase = Phase::Closed { end: successor.end };
+        let _ = self.write_seam_of(&conv.id, file).await;
+        conv.close_cli().await;
+    }
+
+    /// After a restart, before cut-off turns are marked: the seam goes on from `seam.json`. A
+    /// nudged generation ends (with the note it wrote, or without); a successor that was
+    /// starting is asked whether it took its hand-off, and only if it didn't do its messages
+    /// go again, to the next successor.
+    pub(in crate::manager) async fn recover_seam(&self, id: &ConversationId) {
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        if !self.seam_on(&conv) {
+            return;
+        }
+        let record = self.session_dir(id).record();
+        let mut file = self.read_seam_of(id).await;
+        let carry_on = self.seam_config().carry_on;
+        match file.phase.clone() {
+            Phase::Live => {}
+            Phase::Closed { .. } => conv.state.lock().await.seam.carry_on = carry_on,
+            Phase::Nudged {
+                at_ms, predecessor, ..
+            } => {
+                let written = note_path(&record, file.generation).is_file();
+                file.phase = Phase::Closed {
+                    end: SeamEnd {
+                        predecessor,
+                        nudged_at_ms: Some(at_ms),
+                        closed_at_ms: now_ms(),
+                        death: (!written).then(|| RESTARTED.into()),
+                    },
+                };
+                if self.write_seam_of(id, file).await.is_ok() {
+                    conv.state.lock().await.seam.carry_on = carry_on;
+                }
+            }
+            Phase::Starting {
+                end,
+                successor,
+                provider,
+                messages,
+            } => {
+                let line = handoff_line(file.generation, id.short());
+                if self.runtime.took_input(provider, &successor, &line).await {
+                    let n = file.generation;
+                    complete(&mut file, &record, n, successor, provider, end, messages);
+                    let _ = self.write_seam_of(id, file).await;
+                    return;
+                }
+                file.phase = Phase::Closed { end };
+                if self.write_seam_of(id, file).await.is_err() {
+                    return;
+                }
+                // Never delivered: they go again, as the user sent them, and their request
+                // isn't marked cut off.
+                let Ok(all) = self.core.all_messages(id).await else {
+                    return;
+                };
+                if let Ok(board) = self.core.board(id).await
+                    && board
+                        .cut_off_request
+                        .as_ref()
+                        .is_some_and(|cut| messages.contains(&cut.request))
+                {
+                    self.core.take_cut_off_request(id).await;
+                }
+                let again: Vec<Message> = all
+                    .into_iter()
+                    .filter(|message| messages.contains(&message.id))
+                    .collect();
+                let mut state = conv.state.lock().await;
+                // Its messages start the next successor; with none, it carries on by itself.
+                state.seam.carry_on = carry_on && again.is_empty();
+                state.pending.extend(again);
+            }
+        }
+    }
+
+    /// The CLI session a session resumes: after a seam its successor, whatever the log says
+    /// last (a restart may have come before the successor's start was logged).
+    pub(super) async fn seam_resume(
+        &self,
+        conv: &ConvLive,
+        provider: brigadier_providers::ProviderKind,
+    ) -> Option<String> {
+        if !self.seam_on(conv) {
+            return None;
+        }
+        let file = self.read_seam_of(&conv.id).await;
+        if file.phase != Phase::Live {
+            return None;
+        }
+        file.seams
+            .last()
+            .filter(|seam| seam.provider == provider)
+            .map(|seam| seam.successor.clone())
+    }
+
+    /// Where the next CLI starts: under the successor's reserved id, if one is.
+    pub(super) fn seam_origin(reserved: Option<String>) -> Option<Origin> {
+        reserved.map(|native_id| Origin::NewAs { native_id })
+    }
+}
+
+/// Seam `n` is complete: its successor runs, as generation `n + 1`.
+fn complete(
+    file: &mut SeamFile,
+    record: &std::path::Path,
+    n: u32,
+    successor: String,
+    provider: brigadier_providers::ProviderKind,
+    end: SeamEnd,
+    messages: Vec<String>,
+) {
+    let note = note_path(record, n);
+    file.seams.push(Seam {
+        n,
+        end,
+        successor,
+        provider,
+        started_at_ms: now_ms(),
+        note: note.is_file().then(|| note.display().to_string()),
+        start: start_path(record, n).display().to_string(),
+        messages,
+    });
+    file.generation = n + 1;
+    file.phase = Phase::Live;
+}

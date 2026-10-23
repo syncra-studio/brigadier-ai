@@ -84,6 +84,7 @@ mod refcheck;
 mod review;
 mod routing;
 mod run;
+mod seam;
 pub mod search;
 mod secrets;
 mod session_dir;
@@ -151,6 +152,9 @@ pub struct ManagerConfig {
     /// The running `brigadierd`: CLIs run its hooks, and `brigadier` and the computer-use
     /// helper are found beside it.
     pub daemon_exe: PathBuf,
+    /// Tests: how sessions go on past a long context, in place of the environment's.
+    #[cfg(test)]
+    pub(crate) seam: Option<seam::SeamConfig>,
 }
 
 pub struct SessionManager {
@@ -255,6 +259,8 @@ pub struct SessionManager {
     thread_news: tokio::sync::broadcast::Sender<crate::thread_view::ThreadNews>,
     /// CLI session files read for threads.
     session_files: crate::thread_view::FileCache,
+    /// How sessions go on past a long context ([`seam`]).
+    seam: std::sync::Mutex<seam::SeamConfig>,
     /// Tests: the home whose CLI settings folder trust is written to. Without it, tests write
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
@@ -301,6 +307,10 @@ impl SessionManager {
         spawner: Spawner,
         config: ManagerConfig,
     ) -> Result<Arc<Self>> {
+        #[cfg(test)]
+        let seam_config = config.seam.unwrap_or_else(seam::SeamConfig::from_env);
+        #[cfg(not(test))]
+        let seam_config = seam::SeamConfig::from_env();
         let env = runtime.cli_env().clone();
         let git = Git::new(
             env.which("git").unwrap_or_else(|| PathBuf::from("git")),
@@ -412,6 +422,7 @@ impl SessionManager {
             cli_threads: std::sync::Mutex::default(),
             thread_news: tokio::sync::broadcast::channel(1024).0,
             session_files: crate::thread_view::FileCache::default(),
+            seam: std::sync::Mutex::new(seam_config),
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
             activity: Arc::default(),
@@ -762,6 +773,17 @@ impl SessionManager {
     /// Whether `task` is being stopped right now.
     pub(crate) fn is_stopping(&self, task: &TaskId) -> bool {
         self.stopping_lock().contains(task)
+    }
+
+    /// How sessions go on past a long context.
+    pub(crate) fn seam_config(&self) -> seam::SeamConfig {
+        *self.seam.lock().unwrap()
+    }
+
+    /// Tests: sets how sessions go on past a long context.
+    #[cfg(test)]
+    pub(crate) fn set_seam(&self, config: seam::SeamConfig) {
+        *self.seam.lock().unwrap() = config;
     }
 
     /// The live state of a conversation, created on first use.

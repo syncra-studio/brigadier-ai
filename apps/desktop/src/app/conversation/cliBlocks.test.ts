@@ -306,3 +306,46 @@ test("a call's kind, detail and exit read as the engine's", () => {
   assert.equal(exitOf('[{"type":"text","text":"[exit 1] failed"}]'), 1);
   assert.equal(exitOf("fine"), undefined);
 });
+
+test("a seam: Brigadier's message is its line in the turn, and the divider stands before the successor's first turn", () => {
+  const seam = { n: 1, open: false, at: "u3", nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null };
+  const steered: ThreadView = {
+    entries: [
+      user("u1", "Grow", 1000),
+      user("n1", "[Brigadier] A fresh session will continue this work.", 1100, { steer: true }),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Handed off." }, 1200),
+      user("u3", "After", 2000),
+    ],
+    turns: [turn("u1", 1000, 1300, "done"), turn("u3", 2000, 2100, "done")],
+    seams: [seam],
+  };
+  const [first, second] = cliBlocks(steered, "conv");
+  assert.ok(first && second);
+  assert.deepEqual(first.steers, []);
+  assert.deepEqual(first.nudges, [1]);
+  assert.deepEqual(first.seams, [{ n: 1, note: seam.note, start: seam.start, death: null }]);
+  assert.deepEqual(second.seams, []);
+
+  // Sent as a turn of its own: that turn has no user bubble; the successor not started yet, the
+  // divider ends the thread.
+  const own: ThreadView = {
+    entries: [
+      user("u1", "Big", 1000),
+      at({ type: "message", itemId: "a1", role: "assistant", text: "Big." }, 1100),
+      user("n1", "[Brigadier] A fresh session will continue this work.", 1200),
+      at({ type: "message", itemId: "a2", role: "assistant", text: "Handed off." }, 1300),
+    ],
+    turns: [turn("u1", 1000, 1150, "done"), turn("n1", 1200, 1400, "done")],
+    seams: [{ ...seam, at: null, note: null, death: "it ended its turn without writing one" }],
+  };
+  const blocks = cliBlocks(own, "conv");
+  assert.deepEqual(
+    blocks.map((block) => [block.key, block.user?.kind ?? null, block.nudges, block.seams.map((each) => each.death)]),
+    [
+      ["u1", "message", [], []],
+      ["n1", null, [2], ["it ended its turn without writing one"]],
+    ],
+  );
+  // While the thread writes its note, no divider yet.
+  assert.deepEqual(cliBlocks({ ...own, seams: [{ ...seam, open: true, at: null }] }, "conv").flatMap((block) => block.seams), []);
+});

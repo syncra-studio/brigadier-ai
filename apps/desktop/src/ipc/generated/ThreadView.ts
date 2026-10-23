@@ -2,6 +2,7 @@
 import type { BackgroundTask } from "./BackgroundTask";
 import type { FileEntry } from "./FileEntry";
 import type { McpServerState } from "./McpServerState";
+import type { SeamMark } from "./SeamMark";
 import type { ThreadTurn } from "./ThreadTurn";
 import type { WorkerRow } from "./WorkerRow";
 
@@ -29,4 +30,8 @@ mcp?: Array<McpServerState>,
 /**
  * Its own workers (`brigadier start`), as their CLIs and git show them (S14).
  */
-workers?: Array<WorkerRow>, };
+workers?: Array<WorkerRow>, 
+/**
+ * Its seams (G12): where a fresh context took over, each drawn as a divider.
+ */
+seams?: Array<SeamMark>, };

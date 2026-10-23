@@ -282,6 +282,8 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
     thinking: [],
     steers: [],
     compactions: [],
+    seams: [],
+    nudges: [],
     requestIds: requestIds.length > 0 ? [...requestIds] : [key],
     state: "working",
     error: null,
@@ -368,9 +370,24 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   // Each block's CLI items, by position and time.
   const times: [number, number][][] = [];
   let block: Block | null = null;
+  const seams = view.seams ?? [];
+  const nudges = new Set(seams.flatMap((seam) => (seam.nudge ? [seam.nudge] : [])));
   view.entries.forEach((entry, position) => {
     if (entry.parent) return;
     const { event } = entry;
+    // Brigadier's one message at a seam is its line in the turn, never a bubble of the user's;
+    // sent as a turn of its own, that turn has no user message.
+    if (event.type === "message" && event.role === "user" && nudges.has(event.itemId)) {
+      if (startsTurn(entry)) {
+        if (block) settle(block, view.turns[blocks.length - 1]);
+        block = emptyBlock(event.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
+        blocks.push(block);
+        times.push([[position, entry.atMs ?? 0]]);
+      }
+      if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
+      block?.nudges.push(position);
+      return;
+    }
     if (startsTurn(entry) && event.type === "message") {
       if (block) settle(block, view.turns[blocks.length - 1]);
       const requests = view.turns[blocks.length]?.requests ?? [];
@@ -454,6 +471,15 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
   });
   if (block) settle(block, view.turns[blocks.length - 1]);
   if (board) place(blocks, times, board);
+  // Each seam's divider after the turn before its successor's first message, or after the last
+  // turn while the successor is still to come.
+  for (const seam of seams) {
+    if (seam.open) continue;
+    const next = seam.at === null ? blocks.length : blocks.findIndex((each) => each.key === seam.at);
+    const before = blocks[next < 0 ? -1 : next - 1];
+    if (next < 0 || !before) continue;
+    before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death });
+  }
   return blocks;
 }
 

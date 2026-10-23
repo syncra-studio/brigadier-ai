@@ -41,6 +41,38 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<WorkerRow>>", optional)]
     pub workers: Vec<WorkerRow>,
+    /// Its seams (G12): where a fresh context took over, each drawn as a divider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<SeamMark>>", optional)]
+    pub seams: Vec<SeamMark>,
+}
+
+/// The first words of the one message Brigadier sends at a seam (G12): write your hand-off.
+pub(crate) const NUDGE_MARK: &str = "[Brigadier] A fresh session will continue this work.";
+/// How a successor's hand-off begins (`[Brigadier hand-off <n> · <session>]`) and ends; the
+/// first message of the successor follows it.
+pub(crate) const HANDOFF_MARK: &str = "[Brigadier hand-off ";
+pub(crate) const HANDOFF_END: &str = "[End of the hand-off]";
+
+/// A seam of the thread: the divider "Fresh context · hand-off note" (G12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SeamMark {
+    /// The generation it ended, from 1.
+    pub n: u32,
+    /// It is under way: the thread is writing its note, and no divider shows yet.
+    pub open: bool,
+    /// The successor's first message, which the divider stands before; none until the
+    /// successor started (the divider then ends the thread).
+    pub at: Option<String>,
+    /// Brigadier's message asking for the hand-off, shown as Brigadier's line, not the user's.
+    pub nudge: Option<String>,
+    /// The hand-off note, once written.
+    pub note: Option<String>,
+    /// What the successor started from.
+    pub start: Option<String>,
+    /// Why the session ended without a note.
+    pub death: Option<String>,
 }
 
 /// One of a session's own workers, as its CLI and git show it: what the session's Workers
@@ -301,6 +333,7 @@ pub(crate) fn view(
         background: live.map(|live| live.background.clone()).unwrap_or_default(),
         mcp: live.map(|live| live.mcp.clone()).unwrap_or_default(),
         workers: Vec::new(),
+        seams: Vec::new(),
     }
 }
 

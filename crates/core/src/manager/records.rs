@@ -34,7 +34,7 @@ pub(crate) const HANDOFF_DIR: &str = "handoff";
 const HITS: u32 = 8;
 const HITS_MAX: u32 = 30;
 /// Most transcript items one read returns.
-const READ_MAX: i64 = 50;
+pub(crate) const READ_MAX: i64 = 50;
 /// What marks a ledger entry that points at a file.
 const LEARNED: &str = "Learned from reading";
 
@@ -390,7 +390,7 @@ fn transcript_stamp(
 }
 
 /// A session's transcript: its CLI files' items, oldest generation first.
-fn transcript(files: &[(brigadier_providers::ProviderKind, PathBuf)]) -> Vec<FileEntry> {
+pub(crate) fn transcript(files: &[(brigadier_providers::ProviderKind, PathBuf)]) -> Vec<FileEntry> {
     let mut entries = Vec::new();
     for (provider, path) in files {
         let more = session_file::read(*provider, path).unwrap_or_default();
@@ -402,7 +402,10 @@ fn transcript(files: &[(brigadier_providers::ProviderKind, PathBuf)]) -> Vec<Fil
 /// What a transcript item says, as search and read show it: its role, its text, and the file
 /// its whole output was saved to, when it was (Claude's `tool-results/`, or the blob the Bash
 /// hook kept it in when it trimmed it).
-fn entry_text(entry: &FileEntry, blobs: &Path) -> Option<(&'static str, String, Option<String>)> {
+pub(crate) fn entry_text(
+    entry: &FileEntry,
+    blobs: &Path,
+) -> Option<(&'static str, String, Option<String>)> {
     let saved = |kept: &Option<Box<brigadier_providers::KeptOutput>>| {
         kept.as_ref()
             .and_then(|kept| kept.file.as_ref())

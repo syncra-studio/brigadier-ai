@@ -133,6 +133,8 @@ impl SessionManager {
             // before anything can settle a request it still works for (the rebirth's
             // delivery settles them), and before reviews are told again (so a review in it
             // already isn't told twice).
+            // A seam the restart came in goes on from its record (S22).
+            crate::heap(|| self.recover_seam(&conversation.id)).await;
             let rebirth = self.unfinished_stop(&conversation.id).await.is_some();
             if !rebirth {
                 self.mark_cut_off_turn(&conversation.id).await;

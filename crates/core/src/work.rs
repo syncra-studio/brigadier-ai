@@ -2916,6 +2916,8 @@ pub enum InjectionKind {
     PeerMessage,
     /// The result of a job the thread's CLI ran in the background, or what became of it.
     BackgroundRun,
+    /// The one message at a seam (G12): write the hand-off note.
+    Seam,
 }
 
 /// An injection's kind as stored, older names included: an earlier run's per-phase `phase`
@@ -2940,6 +2942,7 @@ enum StoredInjectionKind {
     Phase,
     PeerMessage,
     BackgroundRun,
+    Seam,
 }
 
 impl<'de> Deserialize<'de> for InjectionKind {
@@ -2961,6 +2964,7 @@ impl<'de> Deserialize<'de> for InjectionKind {
             StoredInjectionKind::Run | StoredInjectionKind::Phase => Self::Run,
             StoredInjectionKind::PeerMessage => Self::PeerMessage,
             StoredInjectionKind::BackgroundRun => Self::BackgroundRun,
+            StoredInjectionKind::Seam => Self::Seam,
         })
     }
 }

@@ -302,6 +302,8 @@ function useItems(
           orchestratorSteps: block.orchestratorSteps,
           thinking: block.thinking,
           compactions: block.compactions,
+          seams: block.seams,
+          nudges: block.nudges,
           steers: block.steers.map((steer) => {
             const peer = peerOf(steer.message);
             return {

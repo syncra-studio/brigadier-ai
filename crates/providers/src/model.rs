@@ -1058,6 +1058,12 @@ impl<'de> Deserialize<'de> for Access {
 )]
 pub enum Origin {
     New,
+    /// A new session under `nativeId`, chosen before it starts so a restart can find it (a
+    /// seam's successor). Claude takes it (`--session-id`); Codex picks its own thread id, so
+    /// there it is a plain new session and its caller records the id it got.
+    NewAs {
+        native_id: String,
+    },
     /// Continue the CLI session or thread `nativeId`.
     Resume {
         native_id: String,

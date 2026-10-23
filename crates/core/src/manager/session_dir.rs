@@ -66,7 +66,6 @@ impl SessionDir {
     }
 
     /// The ledger the session keeps as it works (S17); nothing makes it but the session.
-    #[cfg(test)]
     pub(crate) fn ledger(&self) -> PathBuf {
         self.record().join(LEDGER_FILE)
     }

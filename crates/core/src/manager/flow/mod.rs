@@ -779,7 +779,8 @@ impl Provider for FakeCli {
                 .map(|(_, value)| value.clone())
                 .unwrap_or_default();
             let native_id = match &spec.origin {
-                brigadier_providers::model::Origin::Resume { native_id } => native_id.clone(),
+                brigadier_providers::model::Origin::Resume { native_id }
+                | brigadier_providers::model::Origin::NewAs { native_id } => native_id.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
             };
             // Like Codex's adapter: an ephemeral thread is never saved, so nothing is recorded.
@@ -1195,6 +1196,25 @@ impl ProviderSession for FakeSession {
                     if unread.is_empty() {
                         break reply;
                     }
+                    // Claude keeps what it took in as a queued command, and echoes it.
+                    if let Some(file) = &session_file {
+                        for text in &unread {
+                            let uuid = uuid::Uuid::new_v4().to_string();
+                            session_line(
+                                file,
+                                serde_json::json!({"type": "attachment", "uuid": uuid,
+                                    "attachment": {"type": "queued_command", "prompt": text,
+                                        "source_uuid": uuid}}),
+                            );
+                            let _ = tx
+                                .send(ProviderEvent::Message {
+                                    item_id: uuid,
+                                    role: Speaker::User,
+                                    text: text.clone(),
+                                })
+                                .await;
+                        }
+                    }
                     turn = Turn {
                         input: unread.join("\n"),
                         ..again
@@ -1362,6 +1382,7 @@ async fn boot(
     script: &Script,
     specs: &Specs,
     behavior: &Arc<FakeBehavior>,
+    seam: Option<crate::manager::seam::SeamConfig>,
 ) -> (Arc<SessionManager>, Arc<Core>) {
     let data = data.to_owned();
     let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
@@ -1422,6 +1443,7 @@ async fn boot(
         ManagerConfig {
             // Inside an app bundle that has no computer-use helper until a test puts one there.
             daemon_exe: data.join("Brigadier.app/Contents/MacOS/brigadierd"),
+            seam,
         },
     )
     .await
@@ -1671,6 +1693,8 @@ pub(crate) struct Flow {
     pub behavior: Arc<FakeBehavior>,
     /// The permission level its sessions start on.
     permission: PermissionLevel,
+    /// How its managers go on past a long context, restarted ones too (none: the env's).
+    pub seam: Option<crate::manager::seam::SeamConfig>,
 }
 
 /// What a scripted session is set up with.
@@ -1734,7 +1758,7 @@ impl Flow {
             store.append(seed_events(seed)).await.unwrap();
         }
         let specs = Specs::default();
-        let (manager, core) = boot(&data, store, &script, &specs, &options.behavior).await;
+        let (manager, core) = boot(&data, store, &script, &specs, &options.behavior, None).await;
         dir.ledger = Some(manager.runtime.ledger().clone());
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
@@ -1785,6 +1809,7 @@ impl Flow {
             specs,
             behavior: options.behavior,
             permission: options.permission,
+            seam: None,
         }
     }
 
@@ -1802,7 +1827,15 @@ impl Flow {
         tokio::time::sleep(closed).await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
-        let (manager, core) = boot(&data, store, &self.script, &self.specs, &self.behavior).await;
+        let (manager, core) = boot(
+            &data,
+            store,
+            &self.script,
+            &self.specs,
+            &self.behavior,
+            self.seam,
+        )
+        .await;
         self.dir.ledger = Some(manager.runtime.ledger().clone());
         self.manager = manager;
         self.core = core;
@@ -1815,7 +1848,15 @@ impl Flow {
         self.manager.halt().await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
-        let (manager, core) = boot(&data, store, &self.script, &self.specs, &self.behavior).await;
+        let (manager, core) = boot(
+            &data,
+            store,
+            &self.script,
+            &self.specs,
+            &self.behavior,
+            self.seam,
+        )
+        .await;
         self.dir.ledger = Some(manager.runtime.ledger().clone());
         self.manager = manager;
         self.core = core;
@@ -2248,6 +2289,8 @@ mod preview_tests;
 mod quota_resume_tests;
 #[cfg(unix)]
 mod rebirth_words_tests;
+#[cfg(unix)]
+mod seam_tests;
 #[cfg(unix)]
 mod source_branch_tests;
 #[cfg(unix)]

@@ -322,7 +322,8 @@ impl SessionManager {
             .collect();
         let records = thread_view::read_turns(&record);
         let threads = self.cli_threads.lock().unwrap();
-        let view = thread_view::view(files, threads.get(id), &records);
+        let mut view = thread_view::view(files, threads.get(id), &records);
+        view.seams = super::seam::marks(&record, &mut view.entries);
         Ok(view)
     }
 

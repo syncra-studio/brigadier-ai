@@ -1096,7 +1096,9 @@ fn start_params(
 fn opening(spec: &SessionSpec, start: p::ThreadStartParams) -> Opening {
     let ephemeral = spec.ephemeral.then_some(true);
     match &spec.origin {
-        Origin::New => Opening::Start(p::ThreadStartParams { ephemeral, ..start }),
+        Origin::New | Origin::NewAs { .. } => {
+            Opening::Start(p::ThreadStartParams { ephemeral, ..start })
+        }
         Origin::Resume { native_id } => Opening::Resume(p::ThreadResumeParams {
             thread_id: native_id.clone(),
             cwd: start.cwd,

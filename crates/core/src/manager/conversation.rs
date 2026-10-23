@@ -141,6 +141,7 @@ pub(crate) struct Envelope {
 }
 
 mod overflow;
+mod seam;
 mod watchdog;
 
 /// A live CLI session of a conversation or task.
@@ -328,6 +329,8 @@ struct ConvState {
     /// What the thread's last CLI was started with, kept after it closes: its note fork starts
     /// the same way, to share its cached start (BUILD-PLAN B5).
     fork_base: Option<Arc<rebirth::ForkBase>>,
+    /// Where the session's seam stands, as far as `record/seam.json` needn't keep it (S22).
+    seam: seam::SeamLive,
 }
 
 impl ConvState {
@@ -1220,6 +1223,10 @@ impl SessionManager {
     pub async fn steer_queued(&self, id: ConversationId, item_id: String) -> Result<()> {
         self.admit()?;
         let conv = self.conv(&id)?;
+        // At a seam it stays queued for the successor (S22).
+        if conv.state.lock().await.seam.held {
+            return Ok(());
+        }
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(&id, &item_id).await?;
@@ -1244,11 +1251,22 @@ impl SessionManager {
         paused: bool,
     ) -> Result<SendOutcome> {
         let id = &conv.id;
-        let busy = {
+        let (busy, held) = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
-            state.busy
+            (state.busy, state.seam.held)
         };
+        // At a seam a message waits, kept in the queue, for the successor (S22).
+        if held {
+            let item = conv
+                .user_write(
+                    self.core
+                        .enqueue(id, text, attachments, mentions, queue_index, false),
+                )
+                .await?;
+            self.arm_seam_hold(conv).await;
+            return Ok(SendOutcome::Queued(item));
+        }
         if steer && busy {
             let message = conv
                 .user_write(
@@ -1287,7 +1305,7 @@ impl SessionManager {
         let cli = state
             .cli
             .clone()
-            .filter(|_| state.busy && !state.compacting);
+            .filter(|_| state.busy && !state.compacting && !state.seam.held);
         let steered = match cli {
             Some(cli) => {
                 // What waits for the next user message (a card's decision) goes with it.
@@ -1502,7 +1520,7 @@ impl SessionManager {
         let cli = state
             .cli
             .clone()
-            .filter(|_| state.busy && !state.compacting && !state.interrupted);
+            .filter(|_| state.busy && !state.compacting && !state.interrupted && !state.seam.held);
         if let Some(cli) = cli
             && cli
                 .session
@@ -2056,7 +2074,10 @@ impl SessionManager {
         self.retire_moved_thread(&conv).await;
         self.stop_moved_previews(&conv.id).await;
         self.end_stand_in(&conv).await;
-        if conv.kind == ConversationKind::Session {
+        let seam_on = self.seam_on(&conv);
+        if seam_on {
+            self.seam_retire(&conv).await;
+        } else if conv.kind == ConversationKind::Session {
             self.rebirth_if_ready(&conv).await;
             self.rebirth_if_cache_expired(&conv).await;
         }
@@ -2067,6 +2088,7 @@ impl SessionManager {
         }
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
+        let mut carry = false;
         // `origin`: the request the envelopes belong to, which their notes speak of.
         let (users, envelopes, request, mut user_notes) = loop {
             let mut state = conv.state.lock().await;
@@ -2080,13 +2102,28 @@ impl SessionManager {
             {
                 return;
             }
-            let mut users = std::mem::take(&mut state.pending);
+            // At a seam only the hand-off turn runs; the rest waits for the successor.
+            let due = if seam_on {
+                Self::take_due_nudge(&mut state)
+            } else {
+                None
+            };
+            if due.is_none() && state.seam.held {
+                return;
+            }
+            let mut users = if due.is_some() {
+                Vec::new()
+            } else {
+                std::mem::take(&mut state.pending)
+            };
             let notes = if users.is_empty() {
                 Vec::new()
             } else {
                 std::mem::take(&mut state.notes)
             };
-            let envelopes = if users.is_empty() {
+            let envelopes = if let Some(nudge) = due {
+                vec![(nudge, None)]
+            } else if users.is_empty() {
                 take_one_request(&mut state.inbox)
             } else {
                 Vec::new()
@@ -2105,6 +2142,15 @@ impl SessionManager {
                     }
                 }
             }
+            // Past a closed seam with nothing else to start it (no message, none queued), the
+            // successor carries on by itself, when the seam is set to.
+            let envelopes = match (carry && users.is_empty() && envelopes.is_empty())
+                .then(|| Self::take_carry_on(&mut state))
+                .flatten()
+            {
+                Some(carry_on) => vec![(carry_on, None)],
+                None => envelopes,
+            };
             if users.is_empty() && envelopes.is_empty() {
                 drop(state);
                 // Nothing left to say: the thread is idle and the requests settle.
@@ -2112,6 +2158,10 @@ impl SessionManager {
                 self.settle_requests(&conv.id).await;
                 if session && !sent_queued && self.send_queued(&conv).await {
                     sent_queued = true;
+                    continue;
+                }
+                if seam_on && !carry && conv.state.lock().await.seam.carry_on {
+                    carry = true;
                     continue;
                 }
                 // A pull request GitHub merged while the session was busy or idle is
@@ -2173,12 +2223,21 @@ impl SessionManager {
             // A note the workspace left (a fresh branch) reaches this turn.
             user_notes.append(&mut conv.state.lock().await.notes);
         }
+        // Past a closed seam the turn goes to a successor (S22).
+        let mut successor = if seam_on {
+            self.seam_successor(&conv, &users).await
+        } else {
+            None
+        };
         let cli = match self.ensure_cli(&conv).await {
             Ok(cli) => cli,
             // Archived or deleted meanwhile: its cleanup took this turn's work along (a
             // restored one starts over from what is in its log).
             Err(_) if !self.is_attached(&conv) => return,
             Err(err) => {
+                if let Some(successor) = successor {
+                    self.seam_not_started(&conv, successor).await;
+                }
                 let message = err.to_string();
                 self.fail_turn(&conv, users, envelopes, &message).await;
                 return;
@@ -2198,7 +2257,7 @@ impl SessionManager {
             let briefing = state.briefing.take();
             // A session that cannot resume its CLI starts from a Recovery briefing.
             let briefing = briefing.or_else(|| {
-                (reseed && session).then(|| BriefingPlan {
+                (reseed && session && !seam_on).then(|| BriefingPlan {
                     swap_started_at_ms: now_ms(),
                     stopped: None,
                     trigger: RebirthTrigger::Recovery,
@@ -2209,6 +2268,10 @@ impl SessionManager {
             });
             (reseed, briefing)
         };
+        // A CLI that could not be resumed goes on as at a seam with no note.
+        if seam_on && reseed && successor.is_none() {
+            successor = self.seam_unresumed(&conv, &cli, &users).await;
+        }
         let (landed, landed_envelopes) = {
             let mut state = conv.state.lock().await;
             (
@@ -2243,7 +2306,36 @@ impl SessionManager {
             });
         }
         let mut reborn = None;
-        if let Some(plan) = briefing {
+        let handoff = match &successor {
+            Some(successor) => Some((
+                successor.n(),
+                self.seam_handoff(&conv, &cli, successor).await,
+            )),
+            None => None,
+        };
+        if let Some((n, handoff)) = handoff {
+            match handoff {
+                Ok(text) => {
+                    self.log_injection(
+                        &conv.id,
+                        InjectionKind::Seam,
+                        format!("hand-off {n}"),
+                        None,
+                        text.len(),
+                    )
+                    .await;
+                    input.prepend_text(&text);
+                }
+                Err(err) => {
+                    if let Some(successor) = successor {
+                        self.seam_not_started(&conv, successor).await;
+                    }
+                    let message = format!("Could not write the hand-off: {err}");
+                    self.fail_turn(&conv, users, envelopes, &message).await;
+                    return;
+                }
+            }
+        } else if let Some(plan) = briefing {
             let (text, mut record) = self
                 .briefing(
                     &conv.id,
@@ -2294,6 +2386,9 @@ impl SessionManager {
         conv.state.lock().await.awaiting_start = true;
         if let Err(err) = cli.session.send(input).await {
             conv.state.lock().await.awaiting_start = false;
+            if let Some(successor) = successor {
+                self.seam_not_started(&conv, successor).await;
+            }
             // The briefing goes with the next try.
             if let Some((plan, _)) = reborn {
                 conv.state.lock().await.briefing = Some(plan);
@@ -2301,6 +2396,9 @@ impl SessionManager {
             let message = format!("The CLI did not take the turn: {err}");
             self.fail_turn(&conv, users, envelopes, &message).await;
             return;
+        }
+        if let Some(successor) = successor {
+            self.seam_started(&conv, &cli, successor).await;
         }
         if let Some((_, record)) = reborn {
             crate::logging::private_trace!(conv.private_logs, info, "orchestrator reborn"; conversation = %conv.id, generation = record.generation, tokens = record.briefing_tokens, trigger = ?record.trigger);
@@ -2513,9 +2611,14 @@ impl SessionManager {
         // them. Given them, a Claude thread ran a long command as its own background job more
         // often than through `run`, whose result then never reached the request.
         let grant_redactor = super::secrets::redactor(grant_values.clone());
-        let fresh = std::mem::take(&mut conv.state.lock().await.fresh);
+        let (fresh, reserved) = {
+            let mut state = conv.state.lock().await;
+            (std::mem::take(&mut state.fresh), state.seam.reserved.take())
+        };
         let resume = if fresh {
             None
+        } else if let Some(successor) = self.seam_resume(conv, choice.provider).await {
+            Some(successor)
         } else {
             self.last_native_id(&conv.id, choice.provider).await
         };
@@ -2545,7 +2648,8 @@ impl SessionManager {
                 Some(native_id) => Origin::Resume {
                     native_id: native_id.clone(),
                 },
-                None => Origin::New,
+                // A successor starts under the id its seam reserved.
+                None => Self::seam_origin(reserved).unwrap_or(Origin::New),
             },
             // Resumed on the next message, rebirth or restart.
             ephemeral: false,
@@ -3645,6 +3749,15 @@ impl SessionManager {
         }
         let turn = conv.items().turn();
         self.image_row(&conv.id, &event, log_seq, turn).await;
+        if let ProviderEvent::Message {
+            role: ProviderRole::User,
+            text,
+            ..
+        } = &event
+            && self.seam_on(conv)
+        {
+            self.seam_heard(conv, text).await;
+        }
         match &event {
             ProviderEvent::Reasoning { item_id, text } => {
                 let request_id = conv.state.lock().await.request.clone();
@@ -3737,6 +3850,15 @@ impl SessionManager {
                     },
                 )
                 .await;
+            }
+            // "Prompt is too long" past a seam: the generation ends without a note (S22).
+            ProviderEvent::Error { error }
+                if self.seam_on(conv)
+                    && error.kind == ErrorKind::ContextWindow
+                    && !error.will_retry =>
+            {
+                conv.state.lock().await.turn_error = Some(error.message.clone());
+                self.seam_too_long(conv).await;
             }
             // "Prompt is too long" on a session thread: reborn, never a failed request (D2.3b).
             ProviderEvent::Error { error }
@@ -4068,10 +4190,18 @@ impl SessionManager {
                     }
                     window
                 };
-                // Mid-turn, near the model's limit: commit, or stop and be reborn (D2.3b).
-                if conv.kind == ConversationKind::Session {
+                // Past the seam, the hand-off (S22); else, mid-turn near the model's limit: commit,
+                // or stop and be reborn (D2.3b).
+                if self.seam_on(conv) {
+                    self.seam_context(conv, cli, *used_tokens, window).await;
+                } else if conv.kind == ConversationKind::Session {
                     self.thread_context(conv, cli, *used_tokens, window).await;
                 }
+            }
+            // The CLI would compact: the seam comes now.
+            ProviderEvent::CompactionRefused if self.seam_on(conv) => {
+                let used = conv.state.lock().await.context.map_or(0, |(used, _)| used);
+                self.seam_nudge(conv, cli, used, true).await;
             }
             ProviderEvent::CompactionRefused if conv.kind == ConversationKind::Session => {
                 let tokens = conv.state.lock().await.context.map_or(0, |(used, _)| used);
@@ -4263,8 +4393,12 @@ impl SessionManager {
             self.meter_child_threads(cli, TokenOwner::Conversation(&conv.id))
                 .await;
             // Before the next turn may start: a turn admitted in between would still run on
-            // this CLI, past the swap threshold.
-            self.consider_rebirth(conv, cli).await;
+            // this CLI, past the swap threshold (or the seam).
+            if self.seam_on(conv) {
+                self.seam_turn_end(conv, cli).await;
+            } else {
+                self.consider_rebirth(conv, cli).await;
+            }
         }
         if self.finish_thread_stall(conv).await {
             return;

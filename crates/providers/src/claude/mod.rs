@@ -279,7 +279,7 @@ impl Claude {
             args.push(prompt.clone());
         }
         match &spec.origin {
-            Origin::New => {
+            Origin::New | Origin::NewAs { .. } => {
                 args.push("--session-id".into());
                 args.push(native_id.into());
             }
@@ -1051,7 +1051,7 @@ impl Provider for Claude {
                 Error::Invalid(format!("working directory {}: {err}", spec.cwd.display()))
             })?;
             let native_id = match &spec.origin {
-                Origin::Resume { native_id } => native_id.clone(),
+                Origin::Resume { native_id } | Origin::NewAs { native_id } => native_id.clone(),
                 Origin::New | Origin::Fork { .. } => uuid::Uuid::new_v4().to_string(),
             };
             // A session whose saved transcript is gone can't be resumed: said here, rather than
