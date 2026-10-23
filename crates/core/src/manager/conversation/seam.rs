@@ -43,7 +43,7 @@ pub(super) struct SeamLive {
     nudging: bool,
     /// The nudge goes as a turn of its own, this text, once none runs.
     nudge_due: Option<String>,
-    /// `seam.json` says `nudged`: nothing but the note turn reaches the CLI.
+    /// `seam.json` says `nudged` (or is about to): nothing but the note turn reaches the CLI.
     pub(super) held: bool,
     /// The CLI took the nudge in (its stream said it): the turn it is in ends the generation.
     seen: bool,
@@ -195,13 +195,25 @@ impl SessionManager {
             tokens: used,
             predecessor: Some(cli.session.native_id()),
         };
+        // Held before the file says so: a message that finds the seam nudged waits for the
+        // successor, at most a minute.
+        conv.state.lock().await.seam.held = true;
         if let Err(err) = self.write_seam_of(&conv.id, file).await {
+            conv.state.lock().await.seam.held = false;
             crate::logging::private_trace!(conv.private_logs, warn, "could not record the seam"; conversation = %conv.id, error = %err);
             return None;
         }
+        // So does one queued just before.
+        if self
+            .core
+            .conversation_view(conv.id.clone(), 1)
+            .await
+            .is_ok_and(|view| !view.queue.items.is_empty())
+        {
+            self.arm_seam_hold(conv).await;
+        }
         let text = nudge(&note);
         let mut state = conv.state.lock().await;
-        state.seam.held = true;
         let running = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli))
             && state.busy
             && !state.interrupted

@@ -345,6 +345,50 @@ async fn a_note_turn_still_working_a_minute_after_a_message_is_stopped() {
 }
 
 #[tokio::test]
+async fn a_message_queued_just_before_the_nudge_waits_a_minute_at_most() {
+    let inputs: Inputs = Arc::default();
+    let base = thread(inputs.clone(), Arc::default());
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (at_grow, go) = (reached.clone(), release.clone());
+    let mut flow = Flow::start(
+        "seam-queued",
+        options(),
+        script(move |turn| {
+            let (base, at_grow, go) = (base.clone(), at_grow.clone(), go.clone());
+            async move {
+                if turn.input.starts_with(NUDGE_MARK) {
+                    turn.stopped().await;
+                    return Reply::text("");
+                }
+                if turn.input == "Grow." {
+                    at_grow.notify_one();
+                    go.notified().await;
+                }
+                base(turn).await
+            }
+        }),
+    )
+    .await;
+    seam_on(&mut flow, Duration::from_millis(300));
+    flow.say("Grow.").await;
+    reached.notified().await;
+    // Queued while the turn runs, before the seam.
+    flow.say("Meanwhile.").await;
+    release.notify_one();
+    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    flow.idle().await;
+    assert_eq!(
+        file.seams[0].end.death.as_deref(),
+        Some("it was still working a minute after a message came")
+    );
+    let meanwhile = given(&inputs, "Meanwhile.");
+    assert_eq!(meanwhile.len(), 1, "{meanwhile:?}");
+    assert_eq!(meanwhile[0].0, file.seams[0].successor);
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn a_stop_in_the_note_turn_leaves_the_successor_to_the_users_next_message() {
     let inputs: Inputs = Arc::default();
     let base = thread(inputs.clone(), Arc::default());
