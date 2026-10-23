@@ -200,3 +200,50 @@ fn texts(view: &ThreadView) -> Vec<String> {
         })
         .collect()
 }
+
+/// The daemon dies mid-turn, and the thread goes on with another turn: the cut turn, which
+/// the CLI never ended, reads interrupted, not done (#557).
+#[tokio::test]
+async fn a_turn_cut_by_a_crash_reads_interrupted_after_later_turns() {
+    let holding = Arc::new(tokio::sync::Notify::new());
+    let held = holding.clone();
+    let mut flow = Flow::start(
+        "cli-thread-crash",
+        Options {
+            behavior: Arc::new(FakeBehavior {
+                session_file: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let held = held.clone();
+            async move {
+                if turn.input.contains("Hold.") {
+                    held.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                Reply::text("Looked.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Hold.").await;
+    holding.notified().await;
+    flow.crash().await;
+    flow.settled().await;
+    flow.say("Look again.").await;
+    eventually("the next turn ends", || {
+        let view = flow.manager.thread_view(&flow.conversation).unwrap();
+        view.turns.len() == 2 && view.turns[1].end.is_some()
+    })
+    .await;
+    let view = flow.manager.thread_view(&flow.conversation).unwrap();
+    let ends: Vec<_> = view.turns.iter().map(|turn| turn.end).collect();
+    assert_eq!(
+        ends,
+        [Some(TurnEnd::Interrupted), Some(TurnEnd::Done)],
+        "{view:#?}"
+    );
+    flow.stop().await;
+}

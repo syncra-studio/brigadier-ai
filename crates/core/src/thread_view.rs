@@ -350,7 +350,8 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
         })
         .map(|(index, _)| index)
         .collect();
-    // A turn's lines, added up: its requests, and its end.
+    // A turn's lines, added up: its requests, and its end. A turn with lines but no end never
+    // ended: the CLI or Brigadier went under it (#557).
     let mut recorded: HashMap<&str, (Vec<String>, Option<&TurnRecord>)> = HashMap::new();
     for record in records {
         let Some(id) = record.user_message.as_deref() else {
@@ -400,7 +401,9 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 ProviderEvent::Error { error } if entry.parent.is_none() => limit_of(error),
                 _ => None,
             });
-            let (requests, record) = recorded.remove(id.as_str()).unwrap_or_default();
+            let noted = recorded.remove(id.as_str());
+            let cut = noted.as_ref().is_some_and(|(_, end)| end.is_none());
+            let (requests, record) = noted.unwrap_or_default();
             turn.requests = requests;
             turn.limit = record.and_then(|record| record.limit.clone()).or(limit);
             if let Some(record) = record {
@@ -409,6 +412,9 @@ fn turns(entries: &[FileEntry], records: &[TurnRecord], running: bool) -> Vec<Th
                 turn.ended_at_ms = record.ended_at_ms;
             } else if last && running {
                 turn.ended_at_ms = None;
+            } else if cut {
+                turn.end = Some(TurnEnd::Interrupted);
+                turn.error = error;
             } else if let Some(marker) = marker {
                 turn.end = Some(marker);
                 turn.error = error;
