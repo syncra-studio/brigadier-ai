@@ -2092,6 +2092,14 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
         }
     })
     .await;
+    // Its turn reads done, as its row does: its CLI's file says no turn's end (#556).
+    let view = flow
+        .manager
+        .worker_thread(&flow.conversation, &row.id)
+        .await
+        .unwrap();
+    let ends: Vec<_> = view.turns.iter().map(|turn| turn.end).collect();
+    assert_eq!(ends, [Some(crate::thread_view::TurnEnd::Done)], "{view:#?}");
     let lineage = crate::ledger::lineage_owner(&flow.conversation.0);
     let held = flow.manager.runtime.ledger().artifacts(&lineage);
     let sessions = held

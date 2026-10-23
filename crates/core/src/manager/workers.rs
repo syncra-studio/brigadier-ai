@@ -1361,7 +1361,9 @@ impl SessionManager {
                     }
                     Some(mut event) => {
                         live.note_event(&cli, &event).await;
-                        self.note_worker_cli(&live.conversation_id, &live.id, &event);
+                        if let Some(line) = self.note_worker_cli(&live.conversation_id, &live.id, &event) {
+                            self.note_worker_turn(&live.conversation_id, &live.id, &line).await;
+                        }
                         self.watch_worker(&live.conversation_id, &live.id, &event);
                         deadline = None;
                         self.record_worker_events(&live.id, std::mem::take(&mut deltas)).await;

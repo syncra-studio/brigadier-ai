@@ -18,7 +18,9 @@ use brigadier_providers::{LimitHit, McpStatus, ProviderEvent, Role, TurnStatus};
 
 use super::{SessionManager, blocking};
 use crate::model::ConversationId;
-use crate::thread_view::{self, ThreadNews, TurnEnd, WorkerRow, WorkerWait, WorkerWaitKind};
+use crate::thread_view::{
+    self, ThreadNews, TurnEnd, TurnRecord, WorkerRow, WorkerWait, WorkerWaitKind,
+};
 use crate::work::{ApprovalSubject, CardState, DiffStat, Task, TaskId, TaskState};
 use crate::{Result, now_ms};
 
@@ -42,6 +44,11 @@ pub(crate) struct WorkerCli {
     pub fresh_context: bool,
     /// The open turn had an error the CLI won't retry.
     errored: bool,
+    /// The open turn's user message, once its CLI said it.
+    user_message: Option<String>,
+    /// The line the last event adds to the worker's `record/turns.jsonl`: its turn's start, or
+    /// its end, which its CLI's file doesn't say (#556).
+    line: Option<TurnRecord>,
 }
 
 /// What git says of a worker's work against its session's branch.
@@ -67,7 +74,11 @@ pub(crate) struct WorkerRows {
 
 /// Follows `event` of a worker's CLI into `cli`; whether its rows changed.
 pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> bool {
-    let before = cli.clone();
+    cli.line = None;
+    let before = WorkerCli {
+        user_message: None,
+        ..cli.clone()
+    };
     cli.last_event_ms = Some(at);
     match event {
         ProviderEvent::TurnStarted { .. } => {
@@ -76,15 +87,23 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 cli.fresh_context = false;
                 cli.limit = None;
                 cli.errored = false;
+                cli.user_message = None;
             }
         }
+        // A turn's own message (Codex says it once its turn started); a steer's adds nothing.
         ProviderEvent::Message {
-            role: Role::User, ..
-        } if !cli.open => {
-            cli.open = true;
-            cli.fresh_context = false;
-            cli.limit = None;
-            cli.errored = false;
+            item_id,
+            role: Role::User,
+            ..
+        } if !cli.open || cli.user_message.is_none() => {
+            if !cli.open {
+                cli.open = true;
+                cli.fresh_context = false;
+                cli.limit = None;
+                cli.errored = false;
+            }
+            cli.user_message = Some(item_id.clone());
+            cli.line = Some(turn_line(cli, None, None));
         }
         ProviderEvent::Error { error } if !error.will_retry => {
             cli.errored = true;
@@ -101,14 +120,20 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
                 TurnStatus::Interrupted => TurnEnd::Stopped,
                 TurnStatus::Failed => TurnEnd::Failed,
             });
+            cli.line = Some(turn_line(cli, cli.last_end, Some(at)));
         }
         ProviderEvent::Exited { .. } if cli.open => {
             cli.open = false;
             cli.last_end = Some(TurnEnd::Interrupted);
+            cli.line = Some(turn_line(cli, cli.last_end, Some(at)));
         }
         _ => {}
     }
-    let mut now = cli.clone();
+    let mut now = WorkerCli {
+        user_message: None,
+        line: None,
+        ..cli.clone()
+    };
     now.last_event_ms = before.last_event_ms;
     let changed = now != before
         || cli
@@ -118,6 +143,18 @@ pub(crate) fn follow(cli: &mut WorkerCli, event: &ProviderEvent, at: i64) -> boo
         cli.sent_event_ms = Some(at);
     }
     changed
+}
+
+/// The `record/turns.jsonl` line of `cli`'s turn: its start, or its `end` at `ended_at_ms`.
+fn turn_line(cli: &WorkerCli, end: Option<TurnEnd>, ended_at_ms: Option<i64>) -> TurnRecord {
+    TurnRecord {
+        user_message: cli.user_message.clone(),
+        end,
+        error: None,
+        ended_at_ms,
+        requests: Vec::new(),
+        limit: None,
+    }
 }
 
 /// A worker's row from its task (its link to the session, its title and model, its branch),
@@ -166,15 +203,18 @@ pub(crate) fn row(
 
 impl SessionManager {
     /// Follows an event of worker `task`'s CLI (of session `conversation`) into its row.
+    /// Answers the line it adds to the worker's `record/turns.jsonl` ([`Self::note_worker_turn`]).
     pub(super) fn note_worker_cli(
         &self,
         conversation: &ConversationId,
         task: &TaskId,
         event: &ProviderEvent,
-    ) {
-        let changed = {
+    ) -> Option<TurnRecord> {
+        let (changed, line) = {
             let mut held = self.worker_rows.cli.lock().unwrap();
-            follow(held.entry(task.clone()).or_default(), event, now_ms())
+            let cli = held.entry(task.clone()).or_default();
+            let changed = follow(cli, event, now_ms());
+            (changed, cli.line.take())
         };
         let git_now = matches!(
             event,
@@ -187,6 +227,27 @@ impl SessionManager {
         ) || matches!(event, ProviderEvent::FileChanges { .. });
         if changed || git_now || git_soon {
             self.workers_changed(conversation, git_now);
+        }
+        line
+    }
+
+    /// Adds `line` to worker `task`'s `record/turns.jsonl`, as a session's thread notes its
+    /// turns: a Claude worker's file says no turn's end.
+    pub(super) async fn note_worker_turn(
+        &self,
+        conversation: &ConversationId,
+        task: &TaskId,
+        line: &TurnRecord,
+    ) {
+        if line.user_message.is_none() {
+            return;
+        }
+        let Ok(task) = self.task_by_id(conversation, task).await else {
+            return;
+        };
+        let record = self.session_dir(conversation).worker(&task).join("record");
+        if let Err(err) = thread_view::append_turn(&record, line) {
+            tracing::warn!(task = %task.id, error = %err, "could not note a worker's turn");
         }
     }
 
@@ -463,7 +524,8 @@ impl SessionManager {
             open: true,
             ..Default::default()
         });
-        Ok(thread_view::view(files, live.as_ref(), &[]))
+        let records = thread_view::read_turns(&record);
+        Ok(thread_view::view(files, live.as_ref(), &records))
     }
 
     /// Whether session `id` has had worker rows sent.
@@ -538,6 +600,53 @@ mod tests {
         follow(&mut cli, &error(ErrorKind::Overloaded, None), 6);
         follow(&mut cli, &turn_end(TurnStatus::Completed), 7);
         assert_eq!(cli.last_end, Some(TurnEnd::Failed));
+    }
+
+    fn said(id: &str) -> ProviderEvent {
+        ProviderEvent::Message {
+            item_id: id.into(),
+            role: Role::User,
+            text: "…".into(),
+        }
+    }
+
+    /// The lines of a worker's `record/turns.jsonl`: its turn's start once its message came
+    /// (after its start, as Codex says it, or as it opens, as Claude does), and its end (#556).
+    #[test]
+    fn a_turn_notes_its_start_and_end_for_its_record() {
+        let mut cli = WorkerCli::default();
+        follow(&mut cli, &said("u1"), 1);
+        let start = cli.line.take().expect("its start");
+        assert_eq!(
+            (start.user_message.as_deref(), start.end),
+            (Some("u1"), None)
+        );
+        follow(&mut cli, &said("steer"), 2);
+        assert_eq!(cli.line, None, "a steer starts no turn");
+        follow(&mut cli, &turn_end(TurnStatus::Completed), 3);
+        let end = cli.line.take().expect("its end");
+        assert_eq!(
+            (end.user_message.as_deref(), end.end, end.ended_at_ms),
+            (Some("u1"), Some(TurnEnd::Done), Some(3))
+        );
+        follow(&mut cli, &ProviderEvent::TurnStarted { turn_id: None }, 4);
+        assert_eq!(cli.line, None);
+        assert!(!follow(&mut cli, &said("u2"), 5), "nothing the row shows");
+        assert_eq!(cli.line.take().unwrap().user_message.as_deref(), Some("u2"));
+        follow(
+            &mut cli,
+            &ProviderEvent::Exited {
+                code: Some(1),
+                signal: None,
+                stderr_tail: None,
+            },
+            6,
+        );
+        let end = cli.line.take().expect("its end");
+        assert_eq!(
+            (end.user_message.as_deref(), end.end),
+            (Some("u2"), Some(TurnEnd::Interrupted))
+        );
     }
 
     #[test]
