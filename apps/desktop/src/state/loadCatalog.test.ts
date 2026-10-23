@@ -64,3 +64,39 @@ test("a fresh catalog still removes old cached rows that had no live change", as
   assert.deepEqual(useApp.getState().projects, {});
   assert.deepEqual(useApp.getState().conversations, {});
 });
+
+test("a stale cached row's other fields come from the catalog, only its live change is kept", async () => {
+  useApp.setState({ projects: { project }, conversations: { session: { ...session, title: "Missed rename" } } });
+  const fresh = { ...session, title: "Fresh name", updatedAtMs: 2 };
+  const answer = deferredCatalog({ projects: [project], conversations: [fresh], settings: useApp.getState().settings });
+  const loading = loadCatalog();
+  const message = { id: "m1", conversationId: session.id, createdAtMs: 5 } as unknown as Extract<EventEnvelope["event"], { type: "messageAppended" }>["message"];
+  applyEvents([event({ type: "messageAppended", message })]);
+  answer(); await loading;
+  assert.equal(useApp.getState().conversations.session?.title, "Fresh name");
+  assert.equal(useApp.getState().conversations.session?.updatedAtMs, 5);
+});
+
+test("overlapping reads do not take each other's snapshot for a live change", async () => {
+  useApp.setState({ projects: { project }, conversations: { session } });
+  const answers: (() => void)[] = [];
+  const catalogs = [
+    { projects: [project], conversations: [{ ...session, title: "Older" }], settings: useApp.getState().settings },
+    { projects: [project], conversations: [{ ...session, title: "Newer" }], settings: useApp.getState().settings },
+  ];
+  mockIPC((_command, payload) => {
+    const req = (payload as { request: Request }).request;
+    if (req.method === "getCatalog") {
+      const catalog = catalogs[answers.length];
+      return new Promise((resolve) => answers.push(() => resolve({ method: "getCatalog", catalog })));
+    }
+    if (req.method === "keepTabChats") return { method: req.method };
+    throw new Error(`Unexpected request: ${req.method}`);
+  });
+  const first = loadCatalog();
+  const second = loadCatalog();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  answers[0]!(); await first;
+  answers[1]!(); await second;
+  assert.equal(useApp.getState().conversations.session?.title, "Newer");
+});

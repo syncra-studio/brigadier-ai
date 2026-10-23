@@ -72,7 +72,7 @@ import {
   upsertRawSession,
   useApp,
 } from "@/state/store";
-import { trackCatalogChanges } from "@/state/catalogRefresh";
+import { replacingCatalog, trackCatalogChanges } from "@/state/catalogRefresh";
 import { migrateDrafts } from "@/state/pageTabs";
 import { pruneSideChats } from "@/state/sessionTabResources";
 import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
@@ -120,7 +120,8 @@ export async function loadCatalog(): Promise<void> {
     // hide the row until another catalog read, even as its thread keeps receiving messages.
     const { projects, conversations } = changes.merge(catalog);
     changes.stop();
-    replaceCatalog(projects, conversations, catalog.settings);
+    // Another read in flight must not take this snapshot for live changes.
+    replacingCatalog(() => replaceCatalog(projects, conversations, catalog.settings));
     reopenLastSelection();
     pruneRightSidebarTabs(conversations.map((conversation) => conversation.id));
     pruneSideChats(conversations);
