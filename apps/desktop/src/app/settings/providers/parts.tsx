@@ -32,8 +32,7 @@ export function CheckAgainButton({ busy, ...props }: ComponentProps<"button"> & 
 export function PlanChip({ plan, large = false }: { plan: string; large?: boolean }) {
   return (
     <Badge data-slot="plan-chip" variant="secondary" className={cn("shrink-0", !large && "text-2xs font-normal")}>
-      {plan.charAt(0).toUpperCase()}
-      {plan.slice(1)}
+      {plan.charAt(0).toUpperCase() + plan.slice(1)}
     </Badge>
   );
 }

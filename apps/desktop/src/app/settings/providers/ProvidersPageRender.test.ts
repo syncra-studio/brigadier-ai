@@ -36,6 +36,8 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   const rowMark = seen.rowMark as Record<string, string>;
   assert.ok(rowMark, "the overview rows draw a logo");
   assert.deepEqual(seen.claudeMark, { provider: "claude", glyph: true, size: [44, 44], beforeTitle: true, tile: rowMark });
+  // One text node, so VoiceOver reads "Max" whole, not "M", "ax" (#580).
+  assert.equal(seen.planChipNodes, 1);
   assert.equal(seen.cli, "Claude Code CLIv2.1.0 · v2.1.4 is outUpdate");
   assert.equal(seen.updateEnabled, true);
   assert.equal(seen.location, "Location/usr/local/bin/claudeChange");

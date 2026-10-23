@@ -301,6 +301,8 @@ function Fixture() {
           meter: text(row.querySelector('[data-slot="account-usage"]')),
         }));
         seen.rowMark = surface(document.querySelector('[data-slot="agent-row"] [data-slot="agent-mark"]'));
+        // One text node, so a screen reader reads "Max" whole, not "M", "ax" (#580).
+        seen.planChipNodes = document.querySelector('[data-slot="plan-chip"]')?.childNodes.length;
         seen.notSetUp = all('[data-slot="agent-not-set-up"]').length;
         seen.addAgent = Boolean(button("Add another agent"));
         // The fallback switch (S38): off by default, and its click turns it on.
