@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench
 from bench import Daemon, cleanup_native, keep, models_file, remove_empty_project, task_prompt, worker_start
 from metrics import parse
+from economics import call, combine, rates
 from tasks import TASKS, fixture, grade
 from nightly import collect, issue, regressions
 
@@ -56,6 +57,66 @@ class Accounting(unittest.TestCase):
             path.write_text('{}\n')
             with self.assertRaises(RuntimeError):
                 parse(path, "codex", "task")
+
+    def test_role_prices_follow_native_models_and_keep_legacy_units(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            root = Path(tmp)
+            def native(name, model):
+                path = root / name
+                path.write_text(json.dumps({"type": "assistant", "message": {
+                    "id": "m", "model": model, "usage": {"input_tokens": 10,
+                    "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30, "output_tokens": 4,
+                    "cache_creation": {"ephemeral_1h_input_tokens": 20}}}}))
+                return parse(path, "claude", "")
+            parent = native("parent.jsonl", "claude-opus-5-5")
+            worker = native("worker.jsonl", "claude-sonnet-5-5")
+            self.assertAlmostEqual(parent["economics"]["list_price_usd"], .000286)
+            self.assertAlmostEqual(worker["economics"]["list_price_usd"], .000143)
+            self.assertEqual(parent["cost_units"], worker["cost_units"])
+            roles = {"parent": parent["economics"], "worker": worker["economics"]}
+            self.assertEqual(roles["parent"]["uncached_input"], 30)
+            self.assertEqual(roles["parent"]["cache_hit_ratio"], .5)
+            base = dict(provider="claude", status="complete", task="t1", run=1, grade={"passed": True},
+                        wall_s=1, raw_tokens=64, cost_units=parent["cost_units"], api_calls=1,
+                        usage=parent["usage"], models=parent["models"], brigadier_commands=0,
+                        ledger_adds=0, injected_messages=0, injected_bytes=0)
+            report = dict(source="fixture", fixture_version=1, effort="low", runs=[
+                dict(base, arm="A", economics=parent["economics"]), dict(base, arm="W", roles=roles)])
+            bench.write(report, root / "report")
+            saved = json.loads((root / "report/report.json").read_text())
+            self.assertAlmostEqual(saved["aggregate"][1]["list_price_ratio"], 1.5)
+            self.assertAlmostEqual(saved["aggregate"][1]["mean_list_price_usd"], .000429)
+            self.assertIn("Cache hit ratio", (root / "report/report.md").read_text())
+            self.assertIn("claude-sonnet-5-5", (root / "report/report.md").read_text())
+            unknown = native("unknown.jsonl", "unpublished-codex-id")
+            self.assertIsNone(unknown["economics"]["list_price_usd"])
+            report["runs"][1]["roles"]["worker"] = unknown["economics"]
+            bench.write(report, root / "report")
+            self.assertIsNone(report["aggregate"][1]["mean_list_price_usd"])
+            self.assertIsNone(report["aggregate"][1]["list_price_ratio"])
+            self.assertIn("n/a", (root / "report/report.md").read_text())
+
+    def test_codex_prices_each_native_model_and_context_tier(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            rows = []
+            for model, total, cached, output, context in (
+                    ("gpt-6.1-sol", 100, 20, 5, 100),
+                    ("gpt-6-astra", 300100, 100020, 15, 300000)):
+                rows += [{"type": "turn_context", "payload": {"model": model}},
+                         {"type": "event_msg", "payload": {"type": "token_count", "info": {
+                             "total_token_usage": {"input_tokens": total, "cached_input_tokens": cached,
+                                                   "output_tokens": output},
+                             "last_token_usage": {"input_tokens": context}}}}]
+            path.write_text("\n".join(map(json.dumps, rows)))
+            result = parse(path, "codex", "")
+            self.assertAlmostEqual(result["economics"]["list_price_usd"], 4.200962)
+            self.assertEqual(result["economics"]["models"], ["gpt-6-astra", "gpt-6.1-sol"])
+            self.assertEqual(result["economics"]["usage"], result["usage"])
+            self.assertEqual(rates("claude-opus-5-5-20261001"), rates("claude-opus-5-5"))
+            self.assertIsNone(rates("opus"))
+            self.assertIsNone(combine([])["cache_hit_ratio"])
+            self.assertIsNone(call({"input": 20}, "gpt-6.1-sol")["list_price_usd"])
 
     def test_native_cleanup_removes_only_the_owned_project(self):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:

@@ -141,6 +141,29 @@ Without those variables, the weekly artifact records the missing opt-in. Manual 
 also sample once; other weekdays report that the sample is not due. Run locally with
 `python3 tools/continuity-battery/lineages.py --record /absolute/session/record --output /tmp/weekly.json`.
 
+Cache economics is captured from native transcripts before cleanup, using the model each
+session actually ran. Each recall/decision report now has a numeric JSON companion with the
+same basename (`report.md` → `report.json`), retaining only report metadata and economics,
+not conversation content. The first native session is `parent`; later sessions aggregate under
+`successor`, including provider fallback. The battery's worker claim is injected text, so it has
+no actual worker cost. Bench runs with real workers also report a `worker` role.
+
+Each role includes uncached input (`input + cache_write`), cache-read tokens, hit ratio
+(`cache_read / (input + cache_write + cache_read)`), output, native models and `list_price_usd`.
+The shared [price table](../bench/prices.json) records current standard list prices, source URLs
+and verification dates. Native one-hour versus five-minute writes and per-call context tiers
+select the rate. Absent TTL uses a labelled short-write estimate; unavailable native models or
+prices are `n/a` (null dollars with `price_status: "n/a"` in JSON). Estimates exclude regional,
+service-tier and tool fees and are not subscription charges. Legacy evidence without native
+model IDs is unpriced; the requested CLI alias is never substituted.
+
+The nightly `report.md` and `report.json` add these role columns, mean list-price dollars per
+provider/script/size/arm and a dollar ratio to the matching plain arm. `summary.json` remains
+an identical compatibility artifact. A missing price in any completed observation makes that
+mean/ratio unavailable. Existing provider-reported `usage.cost_usd`, cold-return costs,
+price-weighted ratios and regression rules retain their previous meanings. The T3 rubric judge
+remains outside the metered subject run.
+
 Offline verification (no model calls):
 
 ```sh

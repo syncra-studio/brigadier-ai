@@ -12,6 +12,9 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / "tools/bench"))
+from economics import NOTE, combine, historical, mean_usd, ratio, role_table, usd
 FIELDS = ("input", "cached_input", "cache_write", "output", "cost_usd")
 
 
@@ -30,7 +33,10 @@ def metrics(result):
     # The plain arm writes `kind`; the seam arm's rows are the daemon's own, with `step`.
     cold = [row for row in usage[1:] if (row.get("kind") or row.get("step")) == "thread"
             and row.get("cached_input") == 0]
-    return {"usage": totals,
+    roles = result.get("roles") or {"parent": historical(
+        {"input": totals["input"], "cache_write": totals["cache_write"],
+         "cache_read": totals["cached_input"], "output": totals["output"]}, [])}
+    return {"usage": totals, "roles": roles, "list_price_usd": combine(roles.values())["list_price_usd"],
             "compactions": result.get("compactions"),
             "seams": result.get("seams_before_checks", result.get("size_seams_before_faults", 0)),
             "contexts_before_checks": result.get("seams_before_checks"),
@@ -142,7 +148,33 @@ def regressions(summary, previous=None):
     return found
 
 
+def prepare(summary):
+    aggregates = []
+    for provider in summary["providers"]:
+        for row in provider["arms"]:
+            if row.get("status") == "complete" and "list_price_usd" not in row:
+                usage = row.get("usage", {})
+                row["roles"] = row.get("roles") or {"parent": historical({
+                    "input": usage.get("input"), "cache_write": usage.get("cache_write"),
+                    "cache_read": usage.get("cached_input"), "output": usage.get("output")}, [])}
+                row["list_price_usd"] = combine(row["roles"].values())["list_price_usd"]
+        keys = sorted({(r["block"], r["profile"], r["arm"]) for r in provider["arms"]
+                       if r["status"] == "complete"})
+        for block, profile, arm in keys:
+            rows = [r for r in provider["arms"] if (r["block"], r["profile"], r["arm"], r["status"]) ==
+                    (block, profile, arm, "complete")]
+            plain = [r for r in provider["arms"] if (r["block"], r["profile"], r["arm"], r["status"]) ==
+                     (block, profile, "plain", "complete")]
+            amount, baseline = mean_usd(rows), mean_usd(plain)
+            aggregates.append({"provider": provider["provider"], "block": block, "profile": profile,
+                               "arm": arm, "mean_list_price_usd": amount,
+                               "list_price_ratio": amount / baseline if amount is not None and baseline else None})
+    summary["aggregate"] = aggregates
+    return summary
+
+
 def markdown(summary):
+    prepare(summary)
     lines = ["# Continuity nightly", "", "Report only. Regressions open issues; no number gates work.",
              "", f"Run: {summary['run_url']}", f"Source: `{summary['source']}`", ""]
     for provider in summary["providers"]:
@@ -153,7 +185,18 @@ def markdown(summary):
             get = lambda k: "unavailable" if row.get(k) is None else str(row[k])
             lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
         lines += ["", "Price-weighted ratios: " + ", ".join(f"{r['block']}/{r['profile']} {r.get('price_weighted_ratio', 'unavailable')}" for r in provider["arms"] if r["arm"] == "seam"), ""]
-    lines += ["Decisions-survive scores require three observed seams or native compactions; fewer contexts are an unqualified observation.",
+    lines += ["## List-price aggregates", "", NOTE, "",
+              "| Provider | Script | Size | Arm | Mean list-price USD | USD vs plain |",
+              "|---|---|---|---|---:|---:|"]
+    for row in summary["aggregate"]:
+        lines.append(f"| {row['provider']} | {row['block']} | {row['profile']} | {row['arm']} | "
+                     f"{usd(row['mean_list_price_usd'])} | {ratio(row['list_price_ratio'])} |")
+    for provider in summary["providers"]:
+        for row in provider["arms"]:
+            if row["status"] == "complete":
+                lines += ["", f"### {provider['provider']} {row['block']}/{row['profile']} {row['arm']}", ""]
+                lines += role_table(row.get("roles", {}))
+    lines += ["", "Decisions-survive scores require three observed seams or native compactions; fewer contexts are an unqualified observation.",
               "Cold-return cost includes only later uncached requests; no observed return or missing price is unavailable. It never triggers an issue.",
               "Missing reported prices are unavailable, never zero. Short and long use the same tasks and filler schedule in both arms.", "", "## Weekly real lineages", "", json.dumps(summary.get("weekly", {})), "", "## Regressions", ""]
     lines += summary["regressions"] or ["None measured (skipped and incomplete runs are not passes)."]
@@ -164,7 +207,8 @@ def collect(inputs, output, previous=None):
     output.mkdir(parents=True, exist_ok=True)
     providers = []
     for provider in ("claude", "codex"):
-        files = list(inputs.rglob(f"{provider}-*.json"))
+        files = [p for p in inputs.rglob(f"{provider}-*.json") if p.name in
+                 {f"{provider}-{arm}.json" for arm in ("seam", "plain", "both")}]
         reports = [json.loads(file.read_text()) for file in files]
         providers.append({"provider": provider,
                           "status": "skipped" if reports and all(r["status"] == "skipped" for r in reports)
@@ -178,7 +222,9 @@ def collect(inputs, output, previous=None):
                "baseline": previous is None, "providers": providers,
                "weekly": json.loads(weekly.read_text()) if weekly else {"status": "skipped", "reason": "weekly sample not due"}}
     summary["regressions"] = regressions(summary, previous)
+    prepare(summary)
     (output / "summary.json").write_text(json.dumps(summary, indent=2))
+    (output / "report.json").write_text(json.dumps(summary, indent=2))
     (output / "report.md").write_text(markdown(summary))
     for path in inputs.rglob("*.md"):
         shutil.copyfile(path, output / path.name)

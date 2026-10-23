@@ -21,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 from metrics import FIELDS, cost, parse, records
+from economics import NOTE, combine, historical, mean_usd, ratio, role_table, usd
 from tasks import TASKS, VERSION, fixture, grade
 
 spec = importlib.util.spec_from_file_location("bench_ipc", ROOT / "tools/live-smoke/smoke.py")
@@ -262,7 +263,7 @@ class Daemon:
             page = self.call("listOrchestratorLog", conversationId=self.conv, before=before, limit=500)["page"]
             entries.extend(page["entries"])
             if not page["hasMore"] or not page["entries"]:
-                return entries
+                return sorted(entries, key=lambda e: e["streamSeq"])
             before = min(e["streamSeq"] for e in page["entries"])
 
     def run(self, repo, arm, provider, model, prompt):
@@ -305,8 +306,11 @@ class Daemon:
             raise RuntimeError("No parent native session recorded")
         parent_files = list(dict.fromkeys(parent_files))
         metrics = parse(self.kept[parent_files[0]][1], provider, prompt)
+        roles = {"parent": metrics["economics"]}
+        successors = []
         for filename in parent_files[1:]:
-            other = parse(self.kept[filename][1], provider, prompt)
+            other = parse(self.kept[filename][1], self.kept[filename][0], prompt)
+            successors.append(other["economics"])
             metrics["usage"] = dict(Counter(metrics["usage"]) + Counter(other["usage"]))
             for key in ("raw_tokens", "cost_units", "brigadier_commands", "ledger_adds", "injected_messages", "injected_bytes", "api_calls", "tools"):
                 metrics[key] += other[key]
@@ -323,13 +327,21 @@ class Daemon:
         # Commands/injections include each captured child, but token totals use the daemon meter
         # for workers so a worker's provider-native stream is never counted twice.
         worker_models = set()
+        child_economics = []
         for original, (p, saved) in self.kept.items():
             if original in parent_files:
                 continue
             child = parse(saved, p, prompt)
             worker_models.update(child["models"])
+            child_economics.append(child["economics"])
             for key in ("brigadier_commands", "ledger_adds", "injected_messages", "injected_bytes", "api_calls", "tools"):
                 metrics[key] += child[key]
+        if successors:
+            roles["successor"] = combine(successors)
+        if workers:
+            roles["worker"] = combine(child_economics) if child_economics else historical(worker_usage, [])
+        metrics["roles"] = roles
+        metrics["economics"] = combine(roles.values())
         metrics["parent_usage"] = dict(metrics["usage"])
         metrics["parent_cost_units"] = metrics["cost_units"]
         metrics["usage"] = dict(Counter(metrics["usage"]) + Counter(worker_usage))
@@ -371,7 +383,38 @@ class Daemon:
             raise RuntimeError("Cleanup: " + "; ".join(map(str, errors)))
 
 
+def prepare(report):
+    """Enrich both current and kept reports without changing legacy metering or regression fields."""
+    for row in report["runs"]:
+        if row["status"] != "complete":
+            continue
+        if "roles" not in row:
+            row["roles"] = {"parent": row.get("economics") or historical(
+                row.get("parent_usage", row["usage"]), row.get("models", []))}
+            if any(row.get("worker_usage", {}).values()):
+                row["roles"]["worker"] = historical(row["worker_usage"], row.get("worker_models", []))
+        row["economics"] = combine(row["roles"].values())
+        row["list_price_usd"] = row["economics"]["list_price_usd"]
+    report["aggregate"] = []
+    for provider, arm in sorted({(r["provider"], r["arm"]) for r in report["runs"]}):
+        rows = [r for r in report["runs"] if (r["provider"], r["arm"], r["status"]) == (provider, arm, "complete")]
+        if not rows:
+            continue
+        plain = [r for r in report["runs"] if r["provider"] == provider and r["arm"] ==
+                 ("A" if provider == "claude" else "B") and r["status"] == "complete"]
+        amount, baseline = mean_usd(rows), mean_usd(plain)
+        avg = lambda key, rs: sum(r[key] for r in rs) / len(rs) if rs else None
+        item = {"provider": provider, "arm": arm, "mean_list_price_usd": amount,
+                "list_price_ratio": amount / baseline if amount is not None and baseline else None}
+        for key in ("cost_units", "raw_tokens", "wall_s"):
+            base = avg(key, plain)
+            item[key + "_ratio"] = avg(key, rows) / base if base else None
+        report["aggregate"].append(item)
+    return report
+
+
 def markdown(report):
+    prepare(report)
     lines = ["# CLI bench", "", "Report only; regressions never gate CI or releases.", "",
              f"Source: `{report['source']}`; fixture v{report['fixture_version']}; effort {report['effort']}; worker model {report.get('worker_model', 'pinned')}", "",
              "| Arm | Task/run | Status | Pass | Wall s | First output s | Worktree s | API calls | Input / cache write / cache read / output | Cost units | CLI commands | Ledger adds | Injected msgs / bytes |",
@@ -384,12 +427,24 @@ def markdown(report):
         number = lambda k: f"{r[k]:.2f}" if r.get(k) is not None else "unavailable"
         tokens = " / ".join(str(r["usage"].get(k, 0)) for k in FIELDS)
         lines.append(f"| {label} | {r['task']}/{r['run']} | complete | {r['grade']['passed']} | {number('wall_s')} | {number('first_output_s')} | {number('worktree_s')} | {r['api_calls']} | {tokens} | {number('cost_units')} | {r['brigadier_commands']} | {r['ledger_adds']} | {r['injected_messages']} / {r['injected_bytes']} |")
-    lines += ["", "## Aggregate", "", "| Arm | Passed/runs | Mean wall s | Mean raw tokens | Mean cost units |", "|---|---:|---:|---:|---:|"]
+    lines += ["", "## Aggregate", "", "| Arm | Passed/runs | Mean wall s | Mean raw tokens | Mean cost units | Wall / raw / units vs plain | Mean list-price USD | USD vs plain |", "|---|---:|---:|---:|---:|---|---:|---:|"]
     for provider, arm in sorted({(r["provider"], r["arm"]) for r in report["runs"]}):
         rows = [r for r in report["runs"] if r["provider"] == provider and r["arm"] == arm and r["status"] == "complete"]
         if rows:
             avg = lambda k: sum(r[k] for r in rows) / len(rows)
-            lines.append(f"| {provider} {arm} | {sum(r['grade']['passed'] for r in rows)}/{len(rows)} | {avg('wall_s'):.2f} | {avg('raw_tokens'):.0f} | {avg('cost_units'):.2f} |")
+            aggregate = next(a for a in report["aggregate"] if (a["provider"], a["arm"]) == (provider, arm))
+            ratios = " / ".join(ratio(aggregate[k + "_ratio"]) for k in ("wall_s", "raw_tokens", "cost_units"))
+            lines.append(f"| {provider} {arm} | {sum(r['grade']['passed'] for r in rows)}/{len(rows)} | {avg('wall_s'):.2f} | {avg('raw_tokens'):.0f} | {avg('cost_units'):.2f} | {ratios} | {usd(aggregate['mean_list_price_usd'])} | {ratio(aggregate['list_price_ratio'])} |")
+    lines += ["", "## Cache economics by role", "", NOTE, ""]
+    for row in report["runs"]:
+        if row["status"] != "complete":
+            continue
+        lines += [f"### {row['provider']} {row['arm']} {row['task']}/{row['run']}", ""]
+        lines += role_table(row["roles"])
+        lines += ["", "Total list-price USD: " + usd(row["list_price_usd"]), ""]
+        notes = row["economics"].get("notes", [])
+        if notes:
+            lines += ["; ".join(notes), ""]
     workers = [r for r in report["runs"] if r["arm"] == "W" and r["status"] == "complete"]
     if workers:
         lines += ["", "## Workers", "", "| Task/run | Started as | Rules row | Transcript models |", "|---|---|---|---|"]
@@ -402,6 +457,7 @@ def markdown(report):
 
 
 def write(report, output):
+    prepare(report)
     output.mkdir(parents=True, exist_ok=True)
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     (output / "report.md").write_text(markdown(report))

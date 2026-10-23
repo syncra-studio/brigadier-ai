@@ -21,12 +21,71 @@ class NightlyTests(unittest.TestCase):
             for provider in ("claude", "codex"):
                 for arm in ("seam", "plain"):
                     nightly.provider_report(provider, root / "input", "/missing/daemon", False, arm)
+            (root / "input/claude-recall-short-seam.json").write_text(json.dumps({"provider": "claude", "roles": {}}))
             result = nightly.collect(root / "input", root / "output")
             self.assertEqual([p["status"] for p in result["providers"]], ["skipped", "skipped"])
             self.assertTrue(all(p["reason"] == "needs the user: secrets" for p in result["providers"]))
             self.assertEqual(result["regressions"], [])
             self.assertIn("needs the user: secrets", (root / "output/report.md").read_text())
             self.assertEqual(json.loads((root / "output/summary.json").read_text()), result)
+            self.assertEqual(json.loads((root / "output/report.json").read_text()), result)
+
+    def test_native_roles_prices_and_public_report_roundtrip(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w158-battery-") as folder:
+            root = Path(folder)
+            entries = []
+            for i, model in enumerate(("claude-opus-5-5", "claude-sonnet-5-5")):
+                native = root / f"native-{i}.jsonl"
+                native.write_text(json.dumps({"type": "assistant", "message": {"id": "m", "model": model,
+                    "usage": {"input_tokens": 10, "cache_creation_input_tokens": 20,
+                              "cache_read_input_tokens": 30, "output_tokens": 4,
+                              "cache_creation": {"ephemeral_1h_input_tokens": 20}}}}))
+                entries.append({"entry": {"provider": "claude", "event": {
+                    "type": "sessionStarted", "file": str(native), "model": "opus"}}})
+            roles = battery.capture_roles(entries + entries)
+            self.assertEqual(set(roles), {"parent", "successor"})
+            self.assertEqual(roles["successor"]["models"], ["claude-sonnet-5-5"])
+            self.assertEqual(roles["parent"]["uncached_input"], 30)
+            self.assertEqual(roles["parent"]["cache_read"], 30)
+            self.assertEqual(roles["parent"]["cache_hit_ratio"], .5)
+            self.assertEqual(roles["parent"]["output"], 4)
+            result = {"roles": roles, "provider": "claude", "plain_events": ["private context"]}
+            markdown = "\n".join(battery.economics_markdown(result))
+            battery.write_report(result, markdown, root / "report.md")
+            saved = json.loads((root / "report.json").read_text())
+            self.assertAlmostEqual(saved["list_price_usd"], .000429)
+            self.assertNotIn("private context", json.dumps(saved))
+            self.assertIn("Cache hit ratio", markdown)
+            self.assertEqual(nightly.metrics(result)["roles"], roles)
+            missing = root / "missing.jsonl"
+            missing.write_text(json.dumps({"type": "assistant", "message": {"id": "m", "model": "no-price",
+                                          "usage": {"input_tokens": 10}}}))
+            entries[1]["entry"]["event"]["file"] = str(missing)
+            result["roles"] = battery.capture_roles(entries)
+            self.assertIsNone(nightly.metrics(result)["list_price_usd"])
+            self.assertIn("n/a", "\n".join(battery.economics_markdown(result)))
+            missing.unlink()
+            result["roles"] = battery.capture_roles(entries)
+            self.assertFalse(result["roles"]["successor"]["usage_available"])
+            self.assertIsNone(nightly.metrics(result)["list_price_usd"])
+
+    def test_list_price_aggregates_preserve_reported_cost_regressions(self):
+        roles = {"parent": battery.historical({"input": 100}, ["claude-opus-5-5"])}
+        summary = {"run_url": "fixture", "source": "fixture", "regressions": [], "providers": [{
+            "provider": "claude", "status": "complete", "arms": [
+                {"block": "recall", "profile": "short", "arm": arm, "status": "complete",
+                 "roles": roles, "list_price_usd": price, "usage": {"cost_usd": None}}
+                for arm, price in (("plain", 1), ("seam", 2), ("seam", 4))]}]}
+        self.assertEqual(nightly.regressions(summary), [])
+        text = nightly.markdown(summary)
+        seam = summary["aggregate"][1]
+        self.assertEqual(seam["mean_list_price_usd"], 3)
+        self.assertEqual(seam["list_price_ratio"], 3)
+        self.assertIn("$3.000000", text)
+        summary["providers"][0]["arms"][2]["list_price_usd"] = None
+        nightly.prepare(summary)
+        self.assertIsNone(summary["aggregate"][1]["mean_list_price_usd"])
+        self.assertIsNone(summary["aggregate"][1]["list_price_ratio"])
 
     def test_cold_return_is_reported_but_never_a_regression(self):
         fixture = json.loads((nightly.ROOT / "apps/desktop/src/fixtures/continuity-artifact.json").read_text())

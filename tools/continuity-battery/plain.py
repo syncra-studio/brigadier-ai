@@ -110,6 +110,9 @@ class PlainBattery(battery.Battery):
     def capture(self):
         path = self.native_path()
         self.native_files = [str(path)] if path else []
+        if path:
+            self.result["roles"] = battery.capture_roles([{"entry": {"provider": self.args.provider,
+                "event": {"type": "sessionStarted", "file": str(path)}}}])
         self.result.update(compactions=self.generations(), native_session_id=getattr(self, "native_id", None),
                            plain_events=getattr(self, "raw_events", []), ledger=battery.read_text(self.repo / "ledger.md"))
 

@@ -344,6 +344,7 @@ def report(result, judge_model):
               "T1's JSDoc and T2's answers are read by regular expressions; the evidence keeps the raw text.",
               "", "Run problems: " + ("; ".join(result["errors"]) or "none"),
               "Cleanup: " + ("; ".join(map(str, result.get("cleanup", []))) or "own session, project, daemon and scratch root removed"), ""]
+    lines += battery.economics_markdown(result)
     return "\n".join(lines)
 
 
@@ -353,7 +354,7 @@ def rescore(evidence, report_path, judge_model):
     result.pop("rows", None)
     score(result, judge_model)
     Path(evidence).write_text(json.dumps(result, indent=2))
-    Path(report_path).write_text(report(result, judge_model))
+    battery.write_report(result, report(result, judge_model), report_path)
 
 
 def main():
@@ -411,7 +412,7 @@ def main():
             run.errors.append("score: " + str(error))
         run.cleanup()
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.report).write_text(report(run.result, args.judge_model))
+        battery.write_report(run.result, report(run.result, args.judge_model), args.report)
         battery.log("report: " + args.report)
     return 0 if "items" in run.result else 2
 

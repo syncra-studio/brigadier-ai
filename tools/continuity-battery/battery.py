@@ -17,6 +17,9 @@ import time
 
 sys.dont_write_bytecode = True
 SRC = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC / "tools/bench"))
+from metrics import parse as parse_native
+from economics import NOTE, combine, historical, role_table, usd
 spec = importlib.util.spec_from_file_location("live_smoke", SRC / "tools/live-smoke/smoke.py")
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
@@ -355,6 +358,7 @@ class Battery:
                                     if (event := e["entry"].get("event") or {}).get("type") == "sessionStarted"
                                     and event.get("file") and e["entry"].get("provider") == self.args.provider})
         from lineages import compactions
+        self.result["roles"] = capture_roles(entries)
         self.result["compactions"] = sum(compactions(file, self.args.provider) for file in self.native_files)
         self.result["native_calls"] = native_calls(entries)
         self.result["seam_observations"] = seam_observations(self.result)
@@ -420,11 +424,63 @@ class Battery:
         if trusted:
             self.cleanup_notes.append("Kept scratch records to undo remaining folder trust: " + str(self.root))
         self.result["cleanup"] = self.cleanup_notes
+        prepare_economics(self.result)
         # Evidence is intentionally private; only the concise text report is committed.
         if self.args.evidence:
             Path(self.args.evidence).write_text(json.dumps(self.result, indent=2))
         if not trusted:
             shutil.rmtree(self.root)
+
+
+def capture_roles(entries):
+    """Use native model IDs, including a successor that ran on a different provider."""
+    parts, seen = {}, set()
+    for entry in entries:
+        event = entry["entry"].get("event") or {}
+        filename = event.get("file")
+        if event.get("type") != "sessionStarted" or not filename or filename in seen:
+            continue
+        role = "parent" if not seen else "successor"
+        seen.add(filename)
+        try:
+            value = parse_native(filename, entry["entry"].get("provider", "claude"), "")["economics"]
+        except (OSError, RuntimeError):
+            value = historical({}, [])
+            value["usage_available"] = False
+            value["notes"] = ["Native transcript unavailable; role usage and price unavailable"]
+        parts.setdefault(role, []).append(value)
+    return {role: combine(values) for role, values in parts.items()}
+
+
+def prepare_economics(result):
+    if not result.get("roles"):
+        # Old evidence may have only CLI aliases. Do not price those as an actual model.
+        totals = {k: sum(u.get(alias, 0) or 0 for u in result.get("usage", []))
+                  for k, alias in (("input", "input"), ("cache_write", "cache_write"),
+                                   ("cache_read", "cached_input"), ("output", "output"))}
+        result["roles"] = {"parent": historical(totals, [])}
+    result["economics"] = combine(result["roles"].values())
+    result["list_price_usd"] = result["economics"]["list_price_usd"]
+    return result
+
+
+def economics_markdown(result):
+    prepare_economics(result)
+    lines = ["", "## Cache economics by role", "", NOTE, ""] + role_table(result["roles"])
+    lines += ["", "Total list-price USD: " + usd(result["list_price_usd"]), ""]
+    lines += result["economics"].get("notes", [])
+    return lines
+
+
+def write_report(result, text, path):
+    """Public numeric report beside Markdown; full evidence stays private."""
+    prepare_economics(result)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    public = {k: result[k] for k in ("source", "started_at", "provider", "model", "arm", "threshold",
+                                    "roles", "economics", "list_price_usd") if k in result}
+    path.with_suffix(".json").write_text(json.dumps(public, indent=2) + "\n")
 
 
 def read_text(path):
@@ -569,6 +625,7 @@ def report(result):
         lines += ["Harness note: this first run spent a timeout waiting on the crash/restart requests after they "
                   "were already Failed. The waiter now accepts Failed as terminal. Subsequent requests completed; "
                   "these waits do not imply the session stayed stuck.", ""]
+    lines += economics_markdown(result)
     return "\n".join(lines)
 
 
@@ -616,8 +673,7 @@ def main():
         except Exception as error:
             battery.errors.append("capture: " + str(error))
         battery.cleanup()
-        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.report).write_text(report(battery.result))
+        write_report(battery.result, report(battery.result), args.report)
         log("report: " + args.report)
     # A partial/infrastructure run is distinguishable; recall failures never affect exit.
     return 0 if "items" in battery.result else 2

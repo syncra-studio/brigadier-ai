@@ -75,6 +75,24 @@ Columns and JSON fields:
   output wins over streaming duplicates); Codex's last cumulative rollout usage, subtracting
   cached input from total input. Codex does not separately report cache writes, so that field is
   zero, meaning unreported. Reasoning is already inside output and is never added again.
+- **Cache economics by role**: `roles.parent`, `roles.worker` and `roles.successor` (when present)
+  contain native `usage`, `uncached_input` (`input + cache_write`), `cache_read`,
+  `cache_hit_ratio` (`cache_read / (input + cache_write + cache_read)`), `output`, native
+  `models`, and `list_price_usd`. Successors aggregate subsequent parent sessions; worker
+  usage is read from child transcripts for this table. Legacy totals below still use the daemon
+  worker meter. `list_price_usd` on the run sums all roles once.
+  [prices.json](prices.json) is the shared USD-per-million standard-rate table, with a source
+  URL and verification date on every model. Native cache TTL and per-call context select the
+  write rate and context tier. Missing TTL uses short writes, explicitly labelled as an estimate.
+  Unknown models have `price_status: "n/a"` and null dollar values in JSON (`n/a` in Markdown),
+  never a guessed parent rate. CLI aliases such as `opus` are not native model IDs.
+  Old aggregate-only artifacts cannot resolve mixed models or context tiers; those prices stay
+  unavailable. A single-model Claude legacy aggregate is labelled as a short-write estimate.
+  Estimates exclude regional, service-tier and tool fees and do not measure subscription quota.
+- **Aggregate dollars**: mean `list_price_usd` per completed arm and `list_price_ratio` against
+  the same provider's plain arm (A/B), beside wall/raw/cost-unit ratios, in Markdown and JSON
+  `aggregate`. Any missing price makes the dollar mean and ratio unavailable. Skipped and
+  incomplete runs do not enter means. These dollar columns do not change regression rules.
 - **Raw tokens**: the sum of those four fields. **Cost units**: price-weighted kilotokens,
   Claude `(input + 1.25*write + .1*read + 5*output)/1000`; Codex
   `(uncached_input + .1*cached + 8*output)/1000`. Compare within a provider, never across providers.
