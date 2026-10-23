@@ -462,7 +462,8 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     args.push("-c".into());
     args.push("notify=[]".into());
     // Commands run in a plain (non-login) shell. A login shell, and the login environment
-    // Codex snapshots from one, would rebuild PATH and drop the command gate's shims.
+    // Codex snapshots from one, would rebuild PATH and lose the folder `brigadier` ships in,
+    // which the session's environment puts first.
     args.push("-c".into());
     args.push("allow_login_shell=false".into());
     args

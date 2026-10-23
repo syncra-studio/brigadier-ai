@@ -666,9 +666,9 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         // where Brigadier or the user asks for it.
         "idleCompaction": false,
         // Claude's own messages between sessions (`SendMessage` from the user's other Claude
-        // sessions) never reach a Brigadier session: its messages come through Brigadier,
-        // which records and delivers them at a tool boundary (2.1.302 takes accept, hold,
-        // refuse).
+        // sessions) never reach a Brigadier session: they would enter its context without
+        // showing in its thread. Its messages come through Brigadier (`brigadier send`), which
+        // records and shows them (2.1.302 takes accept, hold, refuse).
         "crossSessionInbound": "refuse",
         "permissions": permissions,
     });
