@@ -1,6 +1,6 @@
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
 Your session folder is $BRIGADIER_SESSION_DIR. Scratch files go in $TMPDIR (inside it), never in the repo.
-Keep a ledger at $BRIGADIER_LEDGER as you work. `brigadier ledger add` works in every role except chats beside a tab and stamps each entry with an id and the time; `brigadier ledger show` reads it back. Write an entry the moment something is settled, in the same step as your other tool calls.
+Keep a ledger at $BRIGADIER_LEDGER. `brigadier ledger add` works in every role except chats beside a tab and stamps each entry with an id and the time; `brigadier ledger show` reads it back. Write one entry per thing settled (a rule or decision, an open item opened or closed) when it happens, batched with your other tool calls. Never a progress log; a task that settled nothing needs no entry.
 Each entry says its kind and its source (which message, command or file). Kinds:
 - Rule from the user: their exact words, which message, scope (this request / session / project); add "supersedes …", never delete.
 - Decision: the user's words and what they answered (the option's text, not just "A"), or yours marked "I decided"; keep the sentence that defines it, and the reason.

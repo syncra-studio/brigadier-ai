@@ -78,7 +78,7 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         let expected = with_session_paths(&template, folder.root());
         assert!(!expected.contains("$BRIGADIER_"), "{expected}");
         assert!(expected.contains(&format!(
-            "Keep a ledger at {} as you work.",
+            "Keep a ledger at {}.",
             folder.record().join("ledger.md").display()
         )));
         // S22b's lines (§6 as amended on 10-23): ids and the time from `ledger add`, the
