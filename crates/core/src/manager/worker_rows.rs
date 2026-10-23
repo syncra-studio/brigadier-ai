@@ -415,9 +415,20 @@ impl SessionManager {
         }
     }
 
-    /// Drops every worker's git read held in memory, as a daemon restart does.
+    /// Whether worker `task`'s CLI is idle after a turn that ended done, as its events tell.
+    pub(crate) fn worker_turn_done(&self, task: &TaskId) -> bool {
+        self.worker_rows
+            .cli
+            .lock()
+            .unwrap()
+            .get(task)
+            .is_some_and(|cli| !cli.open && cli.last_end == Some(TurnEnd::Done))
+    }
+
+    /// Drops every worker's CLI and git reads held in memory, as a daemon restart does.
     #[cfg(test)]
-    pub(crate) fn forget_workers_git(&self) {
+    pub(crate) fn forget_worker_reads(&self) {
+        self.worker_rows.cli.lock().unwrap().clear();
         self.worker_rows.git.lock().unwrap().clear();
     }
 

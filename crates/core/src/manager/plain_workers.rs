@@ -691,6 +691,9 @@ impl SessionManager {
             Ok(task) => task,
             Err(reply) => return Ok(reply),
         };
+        // A worker closed after a turn that ended done is done, not stopped: its row reads so
+        // after a restart too, when no CLI event of its is held any more.
+        let done = self.worker_turn_done(&task.id);
         let closed = self
             .stop_worker(
                 &task.conversation_id,
@@ -702,6 +705,9 @@ impl SessionManager {
             self.update_task(&task.conversation_id, &task.id, |task| {
                 if let Some(plain) = &mut task.plain {
                     plain.closed = true;
+                }
+                if done && task.state == TaskState::Stopped {
+                    task.state = TaskState::Done;
                 }
             })
             .await?;

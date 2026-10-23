@@ -1571,7 +1571,7 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
         .and_then(|task| task.workspace.as_ref()?.worktree.clone())
         .unwrap();
     super::git(&checkout, &["worktree", "remove", "--force", &worktree]);
-    flow.manager.forget_workers_git();
+    flow.manager.forget_worker_reads();
     let b = by(&read().await, "Writer");
     assert!(b.merged, "{b:#?}");
     assert_eq!(b.ahead, 0);
@@ -1665,6 +1665,20 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
         .unwrap();
     let row = rows.first().cloned().expect("its row stays");
     assert!(row.gone, "{row:#?}");
+    assert_eq!(row.last_end, Some(crate::thread_view::TurnEnd::Done));
+    // Closed after a turn that ended done, it reads done after a restart too, with none of
+    // its CLI's events held.
+    flow.manager.forget_worker_reads();
+    let rows = flow
+        .manager
+        .worker_rows_of(&flow.conversation, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows[0].last_end,
+        Some(crate::thread_view::TurnEnd::Done),
+        "{rows:#?}"
+    );
     super::eventually_async("its thread to read after close", || {
         let manager = flow.manager.clone();
         let id = flow.conversation.clone();
