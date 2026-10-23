@@ -3,7 +3,7 @@ export const OWN_RUNS = new Set(["run", "run_unsandboxed"]);
 
 /** A short reply's first line: `[exit 0]`. */
 const EXIT_LINE = /^\[exit (-?\d+)\]\r?\n/;
-/** A long reply's first line, its digest's header: `exit 0 [full output: read_artifact out-…, 120 lines, 6000 bytes]`. */
+/** A long reply's first line, its digest's header: `exit 0 [full output: out-… in <file>, 120 lines, 6000 bytes]`. */
 const DIGEST_LINE = /^exit (-?\d+) \[full output: [^\]\n]*\](?:\r?\n|$)/;
 /** What a `run` that commits adds on a line of its own after the output. */
 const COMMIT_NOTE = /^(Committed [0-9a-f]+ ".*" with your trailer: .*|Not committed: .*|Nothing to commit: .*)$/;

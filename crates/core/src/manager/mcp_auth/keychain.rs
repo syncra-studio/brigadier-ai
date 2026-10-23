@@ -43,8 +43,6 @@ pub(crate) trait Keychain: Send + Sync {
     ) -> Result<Option<Zeroizing<Vec<u8>>>, StoreError>;
     /// Whether an item exists, from its attributes alone: never asks the user.
     fn exists(&self, service: &str, account: &str) -> Result<bool, StoreError>;
-    /// Replaces an existing item's data, never making one.
-    fn update(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError>;
     /// Makes or replaces one of Brigadier's own items.
     fn set(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError>;
     /// Deletes Brigadier's own item `account` ([`OWN_SERVICE`]), if there is one: never an item
@@ -66,9 +64,7 @@ pub(crate) struct System;
 mod mac {
     use std::sync::Mutex;
 
-    use security_framework::item::{
-        ItemClass, ItemSearchOptions, ItemUpdateOptions, ItemUpdateValue, Limit, update_item,
-    };
+    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
     use security_framework::os::macos::keychain::SecKeychain;
     use security_framework::passwords;
     use zeroize::Zeroizing;
@@ -138,15 +134,6 @@ mod mac {
             }
         }
 
-        fn update(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError> {
-            let _asking = PROMPTS.lock().unwrap_or_else(|p| p.into_inner());
-            let mut update = ItemUpdateOptions::new();
-            update.set_value(ItemUpdateValue::Data(
-                core_foundation::data::CFData::from_buffer(data),
-            ));
-            update_item(&search(service, account), &update).map_err(|err| error(err.code()))
-        }
-
         fn set(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError> {
             let _asking = PROMPTS.lock().unwrap_or_else(|p| p.into_inner());
             passwords::set_generic_password(service, account, data).map_err(|err| error(err.code()))
@@ -173,10 +160,6 @@ impl Keychain for Missing {
     }
 
     fn exists(&self, _: &str, _: &str) -> Result<bool, StoreError> {
-        Err(StoreError::Unsupported)
-    }
-
-    fn update(&self, _: &str, _: &str, _: &[u8]) -> Result<(), StoreError> {
         Err(StoreError::Unsupported)
     }
 
@@ -247,17 +230,6 @@ impl Keychain for Memory {
 
     fn exists(&self, service: &str, account: &str) -> Result<bool, StoreError> {
         Ok(self.item(service, account).is_some())
-    }
-
-    fn update(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError> {
-        let mut items = self.items.lock().unwrap();
-        match items.get_mut(&(service.into(), account.into())) {
-            Some(item) => {
-                *item = data.to_vec();
-                Ok(())
-            }
-            None => Err(StoreError::Failed("no such item".into())),
-        }
     }
 
     fn set(&self, service: &str, account: &str, data: &[u8]) -> Result<(), StoreError> {

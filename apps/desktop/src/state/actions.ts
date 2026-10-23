@@ -1013,9 +1013,7 @@ function stopShows(stop: Stop): boolean {
   });
   if (!over || !stop.turn) return over;
   const run = board?.run ?? activity?.run ?? "idle";
-  const answering = Object.values(board?.requests ?? {}).some(
-    (each) => each.state.type === "working" || each.state.type === "waiting",
-  );
+  const answering = Object.values(board?.requests ?? {}).some((each) => each.state.type === "working");
   return run !== "running" && run !== "starting" && !answering;
 }
 

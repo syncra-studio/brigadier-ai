@@ -978,7 +978,8 @@ impl Runtime {
     }
 
     async fn record_overview(&self, mut overview: ProviderOverview) {
-        // A model seen for the first time is known before routing can pick it.
+        // A model seen for the first time is known, and an older one turned off before a picker
+        // offers it.
         if let Some(catalog) = &overview.models {
             let ids: Vec<String> = catalog
                 .models

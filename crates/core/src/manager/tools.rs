@@ -4,24 +4,18 @@
 
 use std::collections::HashSet;
 
-use brigadier_providers::{FileSearch, ProviderKind, SearchKind};
+use brigadier_providers::{FileSearch, SearchKind};
 
 use super::SessionManager;
-use super::prompts;
-use super::workers::route_label;
-use crate::model::{ConversationId, DomainEvent, Environment, MessageRole, PermissionLevel, Setup};
+
+use crate::model::{ConversationId, DomainEvent, MessageRole, PermissionLevel};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
-    ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, MockupPart,
-    OrchestratorStep, OrchestratorStepKind, QuestionItem, QuestionKind, QuestionOption, Task,
-    TaskId, TaskKind, WorkerRole,
+    ApprovalSubject, DecisionSource, InjectionKind, OrchestratorStep, OrchestratorStepKind,
+    QuestionItem, QuestionOption, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
-/// Largest slice `read_artifact` returns.
-const ARTIFACT_PAGE_MAX: u32 = 16_000;
-/// The most bytes of a `stop_worker` reason the thread shows.
-const STOP_REASON_MAX: usize = 300;
 /// The most feedback cards the thread offers in one request (several when the user asked, #483).
 const FEEDBACK_OFFERS_MAX: usize = 10;
 
@@ -32,27 +26,13 @@ impl SessionManager {
         call: OrchestratorCall,
     ) -> ToolReply {
         let name = call.name();
-        let is_artifact = matches!(call, OrchestratorCall::ReadArtifact(_));
-        let image = match &call {
-            OrchestratorCall::ReadArtifact(args) => {
-                self.read_image_artifact(&conversation_id, &args.id).await
-            }
-            _ => None,
-        };
-        let reply = match image {
-            Some(reply) => reply,
-            None => match self.run_orchestrator_call(&conversation_id, call).await {
-                Ok(text) => ToolReply::ok(text),
-                Err(err) => ToolReply::error(err.to_string()),
-            },
+        let reply = match self.run_orchestrator_call(&conversation_id, call).await {
+            Ok(text) => ToolReply::ok(text),
+            Err(err) => ToolReply::error(err.to_string()),
         };
         self.log_injection(
             &conversation_id,
-            if is_artifact {
-                InjectionKind::Artifact
-            } else {
-                InjectionKind::ToolResult
-            },
+            InjectionKind::ToolResult,
             name.into(),
             None,
             reply.text.len(),
@@ -67,408 +47,6 @@ impl SessionManager {
         call: OrchestratorCall,
     ) -> Result<String> {
         match call {
-            OrchestratorCall::DelegateTask(mut args) => {
-                // In plan mode nothing merges.
-                if args.kind == TaskKind::Merge {
-                    crate::heap(|| self.check_plan_mode(id)).await?;
-                }
-                let role = match (args.kind, args.role) {
-                    (TaskKind::Implement, None) => Some(WorkerRole::Lead),
-                    (TaskKind::Merge, None) => Some(WorkerRole::Merge),
-                    (
-                        TaskKind::Implement,
-                        Some(role @ (WorkerRole::Lead | WorkerRole::Parallel | WorkerRole::Fix)),
-                    ) => Some(role),
-                    (TaskKind::Merge, Some(WorkerRole::Merge)) => Some(WorkerRole::Merge),
-                    (_, None) => None,
-                    (kind, Some(role)) => {
-                        return Err(Error::Invalid(format!(
-                            "a {kind:?} task can't be a {role:?}: leads, parallel workers and fixes are implement tasks; start a verifier with start_verifier"
-                        )));
-                    }
-                };
-                let subject = match (&args.subject, args.kind) {
-                    // An operator works on apps, not on another task's change.
-                    (Some(_), TaskKind::Operate) => {
-                        return Err(Error::Invalid(
-                            "an operate task takes no `subject`: name the app, dev build or \
-                             files it works on in its spec"
-                                .into(),
-                        ));
-                    }
-                    (Some(reference), kind) => {
-                        let subject = crate::heap(|| self.find_task(id, reference)).await?;
-                        // A merge is finished by its own worker.
-                        if kind == TaskKind::Merge && subject.kind == TaskKind::Merge {
-                            return Err(Error::Invalid(super::landing::merge_of_merge(
-                                subject.number,
-                                subject
-                                    .workspace
-                                    .as_ref()
-                                    .and_then(|w| w.target.as_deref())
-                                    .unwrap_or_default(),
-                            )));
-                        }
-                        Some(subject)
-                    }
-                    (None, TaskKind::Review) => {
-                        return Err(Error::Invalid(
-                            "a review task needs `subject`: the task whose change it reviews"
-                                .into(),
-                        ));
-                    }
-                    // With no task, the worker merges the session's base into the session
-                    // branch: only a new worktree has a base.
-                    (None, TaskKind::Merge) => {
-                        if !matches!(
-                            self.core.conversation(id)?.setup,
-                            Some(Setup::Session {
-                                environment: Environment::NewWorktree { .. },
-                                ..
-                            })
-                        ) {
-                            return Err(Error::Invalid(
-                                "a merge task needs `subject`, the task whose work conflicts \
-                                 with the session's branch: this session works on a local \
-                                 checkout, so it has no base to merge in"
-                                    .into(),
-                            ));
-                        }
-                        None
-                    }
-                    (None, _) => None,
-                };
-                let given = |field: &Option<String>| {
-                    field
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                        .map(str::to_owned)
-                };
-                let (target, end_state) = (given(&args.target), given(&args.end_state));
-                let built = match given(&args.matches_mockup) {
-                    Some(reference) => Some(self.find_task(id, &reference).await?),
-                    None => None,
-                };
-                let (mockup, mockup_images) =
-                    mockup_part(args.mockup, built.as_ref(), args.kind, role)?;
-                if args.live_look && (args.kind != TaskKind::Implement || mockup.is_some()) {
-                    return Err(Error::Invalid(
-                        "`live_look` is for an implement task that only looks at the \
-                         integrated tree's dev build: no mockup, no other kind"
-                            .into(),
-                    ));
-                }
-                if args.kind == TaskKind::Operate {
-                    if target.is_none() || end_state.is_none() {
-                        return Err(Error::Invalid(
-                            "an operate task needs `target` (the app, dev build or URL it works \
-                             in, and the window if known) and `end_state` (what must be true at \
-                             the end, checkable on screen)"
-                                .into(),
-                        ));
-                    }
-                } else if args.target.is_some() || args.end_state.is_some() {
-                    return Err(Error::Invalid(format!(
-                        "`target` and `end_state` are for operate tasks; a {:?} task takes its \
-                         goal from its spec",
-                        args.kind
-                    )));
-                }
-                if args.kind == TaskKind::Review
-                    && subject
-                        .as_ref()
-                        .is_some_and(|s| s.candidate.is_none() && s.report.is_none())
-                {
-                    return Err(Error::Invalid(
-                        "the subject task has nothing to review yet".into(),
-                    ));
-                }
-                let effort = match args.effort.trim().to_lowercase().as_str() {
-                    effort @ ("low" | "medium" | "high") => effort.to_owned(),
-                    other => {
-                        return Err(Error::Invalid(format!(
-                            "unknown effort \"{other}\": use \"low\", \"medium\" or \"high\""
-                        )));
-                    }
-                };
-                // The request it takes whole, bound by its identity: the task belongs to it.
-                let (spec, request) = match args.include_request {
-                    true => {
-                        let request = crate::heap(|| self.request_for(id, None))
-                            .await
-                            .ok_or_else(|| {
-                                Error::Invalid(
-                                    "include_request: no request is running; write it into the spec"
-                                        .into(),
-                                )
-                            })?;
-                        let verbatim = crate::heap(|| self.request_verbatim(id, &request)).await?;
-                        (format!("{}{verbatim}", args.spec), Some(request))
-                    }
-                    false => (args.spec.clone(), None),
-                };
-                let areas = task_areas(&args.areas)?;
-                let floor = match args.quality.as_deref().map(str::trim) {
-                    None | Some("" | "normal") => None,
-                    Some("high") => Some(brigadier_router::QualityTier::Frontier),
-                    Some(other) => {
-                        return Err(Error::Invalid(format!(
-                            "unknown quality \"{other}\": use \"high\" or leave it out"
-                        )));
-                    }
-                };
-                let needs = if args.image_generation {
-                    vec![brigadier_router::Capability::ImageGeneration]
-                } else {
-                    Vec::new()
-                };
-                // Resolved in place: one more list held across this branch's awaits would
-                // outgrow the dispatch future's bound.
-                args.integrations =
-                    crate::heap(|| self.resolve_integrations(id, &args.integrations)).await?;
-                let mut attachments =
-                    crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
-                for image in mockup_images {
-                    // Same bytes under another name are still that screen's `mockup-N` file.
-                    if !attachments
-                        .iter()
-                        .any(|given| given.id == image.id && given.name == image.name)
-                    {
-                        attachments.push(image);
-                    }
-                }
-                let pin = pin(args.provider.as_deref(), args.model, Some(effort))?;
-                let avoid = subject
-                    .as_ref()
-                    .filter(|_| args.kind == TaskKind::Review)
-                    .map(|s| brigadier_router::Author {
-                        provider: s.route.choice.provider,
-                        model: s.route.choice.model.clone(),
-                    });
-                let task = crate::heap(|| {
-                    self.create_task_as(
-                        id,
-                        args.title,
-                        args.kind,
-                        spec,
-                        pin,
-                        avoid,
-                        Vec::new(),
-                        None,
-                        subject,
-                        attachments,
-                        areas,
-                        floor,
-                        needs,
-                        super::workers::TaskExtra {
-                            role,
-                            target,
-                            end_state,
-                            mockup,
-                            design: args.design,
-                            live_look: args.live_look,
-                            request,
-                            integrations: args.integrations,
-                            ..Default::default()
-                        },
-                    )
-                })
-                .await?;
-                crate::heap(|| {
-                    self.orchestrator_step(
-                        id,
-                        OrchestratorStepKind::Created {
-                            task_id: task.id.clone(),
-                        },
-                    )
-                })
-                .await;
-                if let Some(wait) = &task.quota_wait {
-                    return Ok(format!(
-                        "Created task-{} ({:?}), but no model it may use can take it now: {}. It \
-                         starts on its own when one can (after a reset, or when the user changes \
-                         their routing); its report arrives later as a message. The user sees \
-                         it waiting.",
-                        task.number, task.kind, wait.reason
-                    ));
-                }
-                Ok(format!(
-                    "Started task-{} ({:?}) on {}: {}. Its report arrives later as a message; don't wait for it. \
-                     The user sees the worker live.",
-                    task.number,
-                    task.kind,
-                    route_label(&task),
-                    task.route.reason
-                ))
-            }
-            OrchestratorCall::MessageWorker(mut args) => {
-                let mut task = crate::heap(|| self.find_task(id, &args.task)).await?;
-                self.refuse_user_stopped(id, &task).await?;
-                if !args.attachments.is_empty() {
-                    let given =
-                        crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
-                    args.text = crate::heap(|| self.with_files(&task, given, args.text)).await?;
-                }
-                // A later request's turn hands the worker its question: the report that
-                // answers it, and the reply after it, belong to the request that asked.
-                if !task.state.is_final()
-                    && let Some(later) = crate::heap(|| self.later_request_for(id, &task)).await
-                {
-                    task = crate::heap(|| {
-                        self.update_task(id, &task.id, |task| task.request_id = Some(later))
-                    })
-                    .await?;
-                    crate::heap(|| self.settle_requests(id)).await;
-                }
-                let (reply, answered) =
-                    crate::heap(|| self.message_worker(id, &task, args.text.clone(), "the thread"))
-                        .await?;
-                let text = super::brains::cut(args.text.trim(), crate::work::STEP_TEXT_MAX);
-                crate::heap(|| {
-                    self.update_task(id, &task.id, |task| messaged(task, args.text, answered))
-                })
-                .await?;
-                crate::heap(|| {
-                    self.orchestrator_step(
-                        id,
-                        OrchestratorStepKind::Messaged {
-                            task_id: task.id,
-                            text: Some(text),
-                        },
-                    )
-                })
-                .await;
-                Ok(reply)
-            }
-            OrchestratorCall::AnswerWorker(args) => {
-                let task = crate::heap(|| self.find_task(id, &args.task)).await?;
-                self.refuse_user_stopped(id, &task).await?;
-                let reply =
-                    crate::heap(|| self.answer_worker(&task, args.answer.clone(), args.why))
-                        .await?;
-                crate::heap(|| {
-                    self.update_task(id, &task.id, |task| messaged(task, args.answer, true))
-                })
-                .await?;
-                Ok(reply)
-            }
-            OrchestratorCall::RouteFollowUp(args) => {
-                crate::heap(|| self.route_follow_up(id, &args)).await
-            }
-            OrchestratorCall::StopWorker(args) => {
-                let reason = super::brains::one_line(&args.reason, STOP_REASON_MAX);
-                if reason.is_empty() {
-                    return Err(Error::Invalid(
-                        "stop_worker needs a `reason`: one line saying why the worker stops \
-                         (the user reads it)."
-                            .into(),
-                    ));
-                }
-                let task = crate::heap(|| self.find_task(id, &args.task)).await?;
-                crate::heap(|| self.stop_worker(id, &task, reason)).await?;
-                Ok(format!("Stopped task-{}.", task.number))
-            }
-            OrchestratorCall::RerunTask(args) => {
-                crate::heap(|| self.rerun_by_thread(id, args)).await
-            }
-            OrchestratorCall::AskUser(args) => {
-                let items = ask_round(args.questions)?;
-                let task_id = match &args.task {
-                    Some(reference) => {
-                        Some(crate::heap(|| self.find_task(id, reference)).await?.id)
-                    }
-                    None => None,
-                };
-                let asked = items.len();
-                let title = args
-                    .title
-                    .as_deref()
-                    .map(|title| super::brains::one_line(title, 80))
-                    .filter(|title| !title.is_empty());
-                crate::heap(|| {
-                    self.open_round(id, task_id, QuestionKind::Orchestrator, items, title)
-                })
-                .await?;
-                Ok(format!(
-                    "Asked the user {} on one card. The answers arrive as an [answer] message in this request; carry on with anything that doesn't depend on them.",
-                    if asked == 1 {
-                        "1 question".to_owned()
-                    } else {
-                        format!("{asked} questions")
-                    }
-                ))
-            }
-            OrchestratorCall::ReadReport(args) => {
-                let (task, here) = crate::heap(|| self.find_report(id, &args.task)).await?;
-                let report = task.report.as_ref().ok_or_else(|| {
-                    Error::Invalid(format!("task-{} has not reported yet", task.number))
-                })?;
-                let mut text = prompts::report_text(&task, report, &route_label(&task));
-                let step = if here {
-                    OrchestratorStepKind::ReadReport { task_id: task.id }
-                } else {
-                    text = format!("[from another session of this project]\n{text}");
-                    OrchestratorStepKind::ReadArtifact {
-                        name: format!(
-                            "the report \u{201c}{}\u{201d} from another session",
-                            task.title
-                        ),
-                    }
-                };
-                crate::heap(|| self.orchestrator_step(id, step)).await;
-                Ok(text)
-            }
-            OrchestratorCall::ReadArtifact(args) => {
-                // A trimmed command output of this conversation's (`out-<id>`), or a report's
-                // artifact of this project.
-                let output = crate::heap(|| self.output_blob(id, args.id.trim())).await?;
-                if output.is_none() {
-                    crate::heap(|| self.check_artifact(id, &args.id)).await?;
-                }
-                let limit = args
-                    .limit
-                    .unwrap_or(ARTIFACT_PAGE_MAX)
-                    .min(ARTIFACT_PAGE_MAX);
-                let offset = args.offset.unwrap_or(0);
-                let blob = output
-                    .as_ref()
-                    .map_or_else(|| args.id.clone(), |(blob, _)| blob.clone());
-                let (bytes, total) =
-                    crate::heap(|| self.core.read_blob_range(blob, offset, limit)).await?;
-                let text = match std::str::from_utf8(&bytes) {
-                    Ok(text) => text.to_owned(),
-                    // A page may end inside a character.
-                    Err(err) if err.error_len().is_none() => {
-                        String::from_utf8_lossy(&bytes[..err.valid_up_to()]).into_owned()
-                    }
-                    Err(_) => return Ok(format!("{} is not text ({total} bytes).", args.id)),
-                };
-                let end = offset + text.len() as u64;
-                // Paging on through the same artifact is one read.
-                if offset == 0 {
-                    let name = match output {
-                        Some((_, name)) => name,
-                        None => crate::heap(|| self.artifact_name(id, &args.id)).await,
-                    };
-                    crate::heap(|| {
-                        self.orchestrator_step(id, OrchestratorStepKind::ReadArtifact { name })
-                    })
-                    .await;
-                }
-                Ok(format!(
-                    "[artifact {} bytes {offset}–{end} of {total}]\n{text}{}",
-                    args.id,
-                    if end < total {
-                        format!("\n[more: read_artifact with offset {end}]")
-                    } else {
-                        String::new()
-                    }
-                ))
-            }
-            OrchestratorCall::StoreOutput(args) => {
-                crate::heap(|| self.store_output_tool(id, args)).await
-            }
             OrchestratorCall::QueryBrain(args) => {
                 crate::heap(|| {
                     self.query_brain_tool(
@@ -484,9 +62,6 @@ impl SessionManager {
             OrchestratorCall::Remember(args) => crate::heap(|| self.remember_tool(id, args)).await,
             OrchestratorCall::SearchTranscript(args) => {
                 crate::heap(|| self.search_transcript_tool(id, args)).await
-            }
-            OrchestratorCall::AttachProof(args) => {
-                crate::heap(|| self.attach_proof(id, args)).await
             }
             OrchestratorCall::RequestApproval(args) => {
                 crate::heap(|| {
@@ -574,65 +149,19 @@ impl SessionManager {
                 })
                 .await
             }
-            OrchestratorCall::ListTasks => {
-                let tasks = crate::heap(|| self.core.tasks(id)).await?;
-                if tasks.is_empty() {
-                    return Ok("No tasks yet.".to_owned());
-                }
-                let board = self.core.board(id).await.ok();
-                let listed = tasks
-                    .iter()
-                    .map(|task| {
-                        let by_user = board
-                            .as_ref()
-                            .is_some_and(|board| self.user_stopped(board, &task.id));
-                        format!(
-                            "task-{} {:?} {:?}{} on {}: {}{}",
-                            task.number,
-                            task.kind,
-                            task.state,
-                            if by_user {
-                                " (stopped by the user)"
-                            } else {
-                                ""
-                            },
-                            route_label(task),
-                            task.title,
-                            task.blocked_reason
-                                .as_ref()
-                                .map(|r| format!(" ({r})"))
-                                .unwrap_or_default()
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Ok(listed)
-            }
         }
-    }
-
-    /// Refuses a call that would message, steer or approve a task the user stopped.
-    pub(crate) async fn refuse_user_stopped(&self, id: &ConversationId, task: &Task) -> Result<()> {
-        let stopped = match self.core.board(id).await {
-            Ok(board) => self.user_stopped(&board, &task.id),
-            Err(_) => false,
-        };
-        if stopped {
-            return Err(Error::Invalid(super::workers::user_stopped_refusal(task)));
-        }
-        Ok(())
     }
 
     /// Files a row for the thread under the request the orchestrator serves.
     pub(crate) async fn orchestrator_step(&self, id: &ConversationId, kind: OrchestratorStepKind) {
-        let request = self.request_for(id, None).await;
+        let request = self.request_for(id).await;
         self.orchestrator_step_in(id, request, kind).await;
     }
 
-    /// Says a moment of the conversation (a usage limit, a switch of model, provider or
-    /// account) as a divider in the thread, under the request it happened in (`task`'s own).
-    pub(crate) async fn moment(&self, id: &ConversationId, task: Option<&TaskId>, text: String) {
-        let request = self.request_for(id, task).await;
+    /// Says a moment of the conversation (a usage limit, a switch of account) as a divider in
+    /// the thread, under the request it happened in.
+    pub(crate) async fn moment(&self, id: &ConversationId, text: String) {
+        let request = self.request_for(id).await;
         self.orchestrator_step_in(id, request, OrchestratorStepKind::Moment { text })
             .await;
     }
@@ -659,111 +188,6 @@ impl SessionManager {
         }
     }
 
-    /// The task `reference` names for `read_report`: one of this session's (by number or id),
-    /// else, by its id, one of another session of the same project (as a Brain answer names
-    /// it). Whether it is this session's comes with it.
-    async fn find_report(&self, id: &ConversationId, reference: &str) -> Result<(Task, bool)> {
-        match self.find_task(id, reference).await {
-            Ok(task) => return Ok((task, true)),
-            Err(Error::NotFound(_)) => {}
-            Err(err) => return Err(err),
-        }
-        let wanted = TaskId(reference.trim().to_owned());
-        for other in self.project_conversations(id) {
-            if let Ok(board) = self.core.board(&other).await
-                && let Some(task) = board.tasks.get(&wanted)
-            {
-                return Ok((task.clone(), false));
-            }
-        }
-        Err(Error::Invalid(format!(
-            "{reference} is not a task of this session or of another session of this project. Task numbers (task-3) are this session's; a report from another session is read by the task id its Brain answer names (\"from report <id>\")."
-        )))
-    }
-
-    /// `read_artifact` reads what a report of this project stored (its artifacts and
-    /// outputs, a kept patch), from this session or another of the project; nothing else in
-    /// the store.
-    async fn check_artifact(&self, id: &ConversationId, artifact: &str) -> Result<ArtifactRef> {
-        let named = |task: &Task| {
-            task.report
-                .iter()
-                .flat_map(|report| &report.artifacts)
-                .chain(&task.outputs)
-                .chain(task.kept.iter().filter_map(|kept| match kept {
-                    crate::work::KeptWork::Diff { artifact, .. } => Some(artifact),
-                    _ => None,
-                }))
-                .find(|known| known.id == artifact)
-                .cloned()
-        };
-        for conversation in std::iter::once(id.clone()).chain(self.project_conversations(id)) {
-            if let Ok(board) = self.core.board(&conversation).await
-                && let Some(known) = board.tasks.values().find_map(named)
-            {
-                return Ok(known);
-            }
-        }
-        Err(Error::Invalid(format!(
-            "{artifact} is not an artifact of a report in this project. Use an id a report, read_report or query_brain gave you."
-        )))
-    }
-
-    /// `read_artifact` on a report's image (an operate worker's last screenshot): the image
-    /// itself, which the model reads; `None` for anything else.
-    async fn read_image_artifact(&self, id: &ConversationId, artifact: &str) -> Option<ToolReply> {
-        let known = self.check_artifact(id, artifact.trim()).await.ok()?;
-        if !known.mime.starts_with("image/") {
-            return None;
-        }
-        let reply = match self
-            .core
-            .read_blob_range(known.id.clone(), 0, u32::MAX)
-            .await
-        {
-            Ok((bytes, total)) => ToolReply::ok(format!(
-                "[artifact {} · {} · {total} bytes]",
-                known.id, known.title
-            ))
-            .with_image(known.mime.clone(), bytes),
-            Err(err) => ToolReply::error(err.to_string()),
-        };
-        self.orchestrator_step(id, OrchestratorStepKind::ReadArtifact { name: known.title })
-            .await;
-        Some(reply)
-    }
-
-    /// The project's other conversations (sessions of the same project), newest first.
-    fn project_conversations(&self, id: &ConversationId) -> Vec<ConversationId> {
-        let Some(project) = self.core.conversation(id).ok().and_then(|c| c.project_id) else {
-            return Vec::new();
-        };
-        let mut others: Vec<_> = self
-            .core
-            .catalog()
-            .conversations
-            .into_iter()
-            .filter(|c| c.id != *id && c.project_id.as_ref() == Some(&project))
-            .collect();
-        others.sort_by_key(|c| std::cmp::Reverse(c.updated_at_ms));
-        others.into_iter().map(|c| c.id).collect()
-    }
-
-    /// An artifact's title from the report that lists it, else "an artifact".
-    async fn artifact_name(&self, id: &ConversationId, artifact: &str) -> String {
-        let Ok(board) = self.core.board(id).await else {
-            return "an artifact".into();
-        };
-        board
-            .tasks
-            .values()
-            .filter_map(|task| task.report.as_ref())
-            .flat_map(|report| &report.artifacts)
-            .chain(board.tasks.values().flat_map(|task| &task.outputs))
-            .find(|known| known.id == artifact)
-            .map_or_else(|| "an artifact".into(), |known| known.title.clone())
-    }
-
     pub(crate) async fn worker_call(
         &self,
         conversation_id: ConversationId,
@@ -771,50 +195,6 @@ impl SessionManager {
         call: WorkerCall,
     ) -> ToolReply {
         let result = match call {
-            WorkerCall::AskOrchestrator(args) => {
-                self.worker_question(&conversation_id, &task_id, args).await
-            }
-            // The app shows the note from the call itself, in the worker's live events.
-            WorkerCall::NoteProgress(args) => {
-                if args.note.trim().is_empty() {
-                    Err(Error::Invalid(
-                        "Give the note: a few words on where you are.".into(),
-                    ))
-                } else {
-                    Ok("Noted: it shows under your name until your next note.".into())
-                }
-            }
-            WorkerCall::QueryBrain(args) => {
-                self.note_brain_query(&conversation_id, &task_id).await;
-                // A claim's source is re-read where the worker works.
-                let worktree = self
-                    .task_by_id(&conversation_id, &task_id)
-                    .await
-                    .ok()
-                    .and_then(|task| task.workspace)
-                    .and_then(|workspace| workspace.worktree)
-                    .map(std::path::PathBuf::from);
-                self.query_brain_tool(
-                    &conversation_id,
-                    worktree.as_deref(),
-                    args.query,
-                    args.history.unwrap_or(false),
-                    args.page,
-                )
-                .await
-            }
-            WorkerCall::SubmitReport(args) => {
-                self.worker_report(&conversation_id, &task_id, args).await
-            }
-            WorkerCall::CodeSearch(args) => self
-                .code_search_tool(&conversation_id, args)
-                .await
-                .map(|(text, _)| text),
-            WorkerCall::CodeRefs(args) => self
-                .code_refs_tool(&conversation_id, args)
-                .await
-                .map(|(text, _)| text),
-            WorkerCall::ProjectMap => self.project_map_tool(&conversation_id).await,
             WorkerCall::StartPreview(args) => {
                 crate::heap(|| self.start_worker_preview(&conversation_id, &task_id, args)).await
             }
@@ -865,7 +245,7 @@ impl SessionManager {
         if what.is_empty() {
             return Err(Error::Invalid("`what` is empty".into()));
         }
-        let request = self.request_for(id, None).await;
+        let request = self.request_for(id).await;
         match args.kind {
             NoteKind::Decided => {
                 self.record_decision(
@@ -950,7 +330,7 @@ impl SessionManager {
                 "The setting is that way already: nothing to suggest.".into(),
             ));
         }
-        let request = self.request_for(id, None).await;
+        let request = self.request_for(id).await;
         let conv = self.conv(id)?;
         let _notice = conv.full_access_notice.lock().await;
         let board = self.core.board(id).await?;
@@ -991,7 +371,7 @@ impl SessionManager {
                 "`title` and `body` must both be written".into(),
             ));
         }
-        let request = self.request_for(id, None).await;
+        let request = self.request_for(id).await;
         let conv = self.conv(id)?;
         let _offer = conv.feedback_offer.lock().await;
         let board = self.core.board(id).await?;
@@ -1123,206 +503,6 @@ impl SessionManager {
         .await;
         Ok(())
     }
-
-    /// The user's attachments in this conversation, by id.
-    /// A message to a worker with the user's attachments written into its scratch folder, like
-    /// a new task's, and their paths named after the text: it reads them there.
-    async fn with_files(
-        &self,
-        task: &Task,
-        attachments: Vec<AttachmentRef>,
-        text: String,
-    ) -> Result<String> {
-        let scratch = task
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.scratch.clone())
-            .filter(|scratch| !scratch.is_empty())
-            .ok_or_else(|| {
-                Error::Invalid(format!(
-                    "task-{} has no folder to put files in yet; send them once it has started",
-                    task.number
-                ))
-            })?;
-        let carrier = Task {
-            attachments,
-            ..task.clone()
-        };
-        let files = self
-            .worker_files(&carrier, std::path::Path::new(&scratch))
-            .await;
-        if files.len() < carrier.attachments.len() {
-            return Err(Error::Invalid(
-                "an attachment couldn't be given to the worker; check its id".into(),
-            ));
-        }
-        let paths: Vec<String> = files
-            .iter()
-            .map(|file| file.path.display().to_string())
-            .collect();
-        Ok(format!(
-            "{text}\n\nFiles with this message (open each one): {}",
-            paths.join(", ")
-        ))
-    }
-
-    async fn find_attachments(
-        &self,
-        id: &ConversationId,
-        ids: &[String],
-    ) -> Result<Vec<AttachmentRef>> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut found: Vec<Option<AttachmentRef>> = vec![None; ids.len()];
-        let mut before = None;
-        // Newest first, page by page, until every attachment is found or history ends.
-        while found.iter().any(Option::is_none) {
-            let page = self.core.list_messages(id.clone(), before, 500).await?;
-            for attachment in page.messages.iter().flat_map(|m| m.attachments.iter()) {
-                for (wanted, slot) in ids.iter().zip(found.iter_mut()) {
-                    if slot.is_none() && &attachment.id == wanted {
-                        *slot = Some(attachment.clone());
-                    }
-                }
-            }
-            match page.messages.first() {
-                Some(oldest) if page.has_more => before = Some(oldest.seq),
-                _ => break,
-            }
-        }
-        ids.iter()
-            .zip(found)
-            .map(|(wanted, attachment)| {
-                attachment.ok_or_else(|| {
-                    Error::NotFound(format!("attachment {wanted} in this conversation"))
-                })
-            })
-            .collect()
-    }
-}
-
-fn pin(
-    provider: Option<&str>,
-    model: Option<String>,
-    effort: Option<String>,
-) -> Result<Option<brigadier_router::Pin>> {
-    let provider = match provider.map(|p| p.trim().to_lowercase()) {
-        None => None,
-        Some(p) if p.is_empty() => None,
-        Some(p) if p == "claude" => Some(ProviderKind::Claude),
-        Some(p) if p == "codex" => Some(ProviderKind::Codex),
-        Some(p) => {
-            return Err(Error::Invalid(format!(
-                "unknown provider {p}: use claude or codex"
-            )));
-        }
-    };
-    let model = model.filter(|m| !m.trim().is_empty());
-    let effort = effort.filter(|e| !e.trim().is_empty());
-    if provider.is_none() && model.is_none() && effort.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(brigadier_router::Pin {
-        provider,
-        model,
-        effort,
-        by_user: false,
-    }))
-}
-
-/// `delegate_task`'s areas; none given: routing infers them from the spec.
-fn task_areas(names: &[String]) -> Result<Option<Vec<brigadier_router::Area>>> {
-    if names.is_empty() {
-        return Ok(None);
-    }
-    names
-        .iter()
-        .map(|name| {
-            serde_json::from_value(serde_json::Value::String(name.trim().to_lowercase())).map_err(
-                |_| {
-                    Error::Invalid(format!(
-                        "unknown area \"{name}\": use frontend, backend, infra, docs or tests"
-                    ))
-                },
-            )
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(Some)
-}
-
-/// What the orchestrator's message to a task's worker leaves on the task: the message (its
-/// checks read it), and, unless it answered the worker's own question, the end of Brigadier
-/// landing it on its own: a steer takes the task over.
-fn messaged(task: &mut Task, text: String, answered: bool) {
-    task.messages.push(text);
-    if !answered {
-        task.landing = None;
-    }
-}
-
-/// A delegated task's part in a mockup first (SESSION-FIXES-PLAN.md Q10), from
-/// `delegate_task`'s `mockup` and the task `matches_mockup` named (`built`), with the images it
-/// is given: the real work gets the mockup's, as files to match.
-fn mockup_part(
-    builds: bool,
-    built: Option<&Task>,
-    kind: TaskKind,
-    role: Option<WorkerRole>,
-) -> Result<(Option<MockupPart>, Vec<AttachmentRef>)> {
-    if !builds && built.is_none() {
-        return Ok((None, Vec::new()));
-    }
-    if builds && built.is_some() {
-        return Err(Error::Invalid(
-            "a task builds a mockup (`mockup`) or matches one (`matches_mockup`), not both".into(),
-        ));
-    }
-    if kind != TaskKind::Implement || role != Some(WorkerRole::Lead) {
-        return Err(Error::Invalid(
-            "a mockup, and the real work that matches one, is an implement task with one lead \
-             (role lead)"
-                .into(),
-        ));
-    }
-    let Some(built) = built else {
-        return Ok((Some(MockupPart::Builds), Vec::new()));
-    };
-    if built.mockup != Some(MockupPart::Builds) {
-        return Err(Error::Invalid(format!(
-            "task-{} didn't build a mockup: `matches_mockup` names the task delegated with \
-             `mockup: true`",
-            built.number
-        )));
-    }
-    let images: Vec<AttachmentRef> = built
-        .outputs
-        .iter()
-        .filter(|output| output.mime.starts_with("image/"))
-        .map(|output| AttachmentRef {
-            id: output.id.clone(),
-            name: output
-                .file_name
-                .clone()
-                .unwrap_or_else(|| output.title.clone()),
-            mime: output.mime.clone(),
-            bytes: output.bytes,
-            pasted: false,
-            inline: None,
-        })
-        .collect();
-    if images.is_empty() {
-        return Err(Error::Invalid(format!(
-            "task-{} has no mockup images yet: the real work starts once its report brings them",
-            built.number
-        )));
-    }
-    Ok((
-        Some(MockupPart::Matches {
-            task: built.id.clone(),
-        }),
-        images,
-    ))
 }
 
 /// The most questions one card asks, and the most options one question offers.
@@ -1384,114 +564,6 @@ pub(super) fn ask_round(questions: Vec<crate::tools::AskQuestion>) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn answering_a_question_keeps_brigadiers_fix_loop_and_a_steer_ends_it() {
-        let mut task: Task = serde_json::from_value(serde_json::json!({
-            "id": "t1",
-            "conversationId": "c1",
-            "number": 1,
-            "position": 0,
-            "title": "Add the flag",
-            "kind": "implement",
-            "spec": "Add the flag.",
-            "access": { "repo": "write", "network": false, "unsandboxed": false },
-            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
-            "state": "blocked",
-            "attachments": [],
-            "landing": "Add the flag",
-            "fixRounds": 1,
-            "createdAtMs": 0,
-            "updatedAtMs": 0
-        }))
-        .expect("a task");
-        messaged(&mut task, "Yes, src/index.js may change.".into(), true);
-        assert_eq!(task.landing.as_deref(), Some("Add the flag"));
-        assert_eq!(
-            task.messages,
-            vec!["Yes, src/index.js may change.".to_owned()]
-        );
-        messaged(&mut task, "Stop and use the old API instead.".into(), false);
-        assert_eq!(task.landing, None);
-        assert_eq!(task.messages.len(), 2);
-    }
-
-    /// Q10: a mockup is an implement lead; the real work names a task that built one and has
-    /// images, and gets those images (only those) as its files.
-    #[test]
-    fn the_real_work_gets_the_mockups_images_and_only_a_built_mockup_can_be_matched() {
-        let implement = (TaskKind::Implement, Some(WorkerRole::Lead));
-        let (none, images) = mockup_part(false, None, implement.0, implement.1).unwrap();
-        assert_eq!((none, images.len()), (None, 0));
-        let (builds, images) = mockup_part(true, None, implement.0, implement.1).unwrap();
-        assert_eq!((builds, images.len()), (Some(MockupPart::Builds), 0));
-        for (kind, role) in [
-            (TaskKind::Scout, None),
-            (TaskKind::Implement, Some(WorkerRole::Parallel)),
-            (TaskKind::Implement, Some(WorkerRole::Fix)),
-        ] {
-            let refused = mockup_part(true, None, kind, role).unwrap_err().to_string();
-            assert!(
-                refused.contains("implement task with one lead"),
-                "{refused}"
-            );
-        }
-
-        let output = |name: &str, mime: &str| ArtifactRef {
-            id: format!("hash-{name}"),
-            title: name.to_owned(),
-            kind: crate::work::ArtifactKind::File,
-            mime: mime.to_owned(),
-            bytes: 7,
-            file_name: Some(name.to_owned()),
-        };
-        let mut built: Task = serde_json::from_value(serde_json::json!({
-            "id": "t2",
-            "conversationId": "c1",
-            "number": 2,
-            "position": 0,
-            "title": "Density toggle mockup",
-            "kind": "implement",
-            "spec": "Build the mockup.",
-            "access": { "repo": "write", "network": false, "unsandboxed": false },
-            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
-            "state": "reported",
-            "attachments": [],
-            "createdAtMs": 0,
-            "updatedAtMs": 0
-        }))
-        .expect("a task");
-        let matches = |built: &Task| mockup_part(false, Some(built), implement.0, implement.1);
-        let unbuilt = matches(&built).unwrap_err().to_string();
-        assert!(
-            unbuilt.contains("task-2 didn't build a mockup"),
-            "{unbuilt}"
-        );
-        built.mockup = Some(MockupPart::Builds);
-        let early = matches(&built).unwrap_err().to_string();
-        assert!(early.contains("no mockup images yet"), "{early}");
-        built.outputs = vec![
-            output("mockup-1.png", "image/png"),
-            output("notes.md", "text/markdown"),
-            output("mockup-2.png", "image/png"),
-        ];
-        let (part, images) = matches(&built).unwrap();
-        assert_eq!(
-            part,
-            Some(MockupPart::Matches {
-                task: built.id.clone()
-            })
-        );
-        let names: Vec<_> = images.iter().map(|image| image.name.as_str()).collect();
-        assert_eq!(names, ["mockup-1.png", "mockup-2.png"]);
-        assert_eq!(images[0].id, "hash-mockup-1.png");
-        assert!(!images[0].pasted && images[0].inline.is_none());
-
-        let both = mockup_part(true, Some(&built), implement.0, implement.1)
-            .unwrap_err()
-            .to_string();
-        assert!(both.contains("not both"), "{both}");
-    }
 
     #[test]
     fn a_blank_option_leaves_the_recommendation_on_the_option_it_named() {

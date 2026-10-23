@@ -34,7 +34,7 @@ workspace: string,
  */
 pid: number | null, state: PreviewState, startedAtMs: number, endedAtMs: number | null, 
 /**
- * The latest snapshot of its log (`out-<id>`, read with `read_artifact`).
+ * The latest snapshot of its log (`out-<id>`, a stored output).
  */
 log: string | null, 
 /**

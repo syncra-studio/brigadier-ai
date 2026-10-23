@@ -58,22 +58,3 @@ pub struct Outcome {
     #[ts(optional)]
     pub rerun: Option<crate::Rerun>,
 }
-
-/// What a project's outcomes say about one model for one category.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct Learned {
-    pub provider: ProviderKind,
-    pub model: String,
-    pub category: TaskCategory,
-    /// Outcomes counted (stopped tasks and hand-offs are not).
-    pub samples: u32,
-    pub success_rate: f64,
-    pub review_pass_rate: Option<f64>,
-    pub avg_rework: Option<f64>,
-    pub verification_pass_rate: Option<f64>,
-    pub median_duration_ms: Option<i64>,
-    pub median_tokens: Option<i64>,
-    /// Added to the model's registry strength for this category in this project.
-    pub adjustment: f64,
-}

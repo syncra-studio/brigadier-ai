@@ -10,17 +10,15 @@
 //!   a file that does not exist, or one the worker wrote outside its worktree and scratch folder
 //!   (a temp folder), which nobody could read once the task ended.
 
-use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
 
 use brigadier_providers::redact::Redactor;
 
 use super::{SessionManager, blocking, secrets};
 use crate::ConversationId;
-use crate::tools::{ArtifactInput, StoreOutput};
-use crate::work::{ArtifactKind, ArtifactRef, StoredCopy, Task, TaskKind};
+
+use crate::work::{ArtifactKind, ArtifactRef, StoredCopy, Task};
 use crate::{Error, Result};
 
 /// The folder in a worker's scratch folder for files meant for the orchestrator or the user.
@@ -29,17 +27,6 @@ const OUTPUTS_DIR: &str = "outputs";
 const FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// Most files kept from an outputs folder.
 const OUTPUTS_MAX: usize = 50;
-/// Folders whose files outlive nobody's task: the system's temp folders.
-const TEMP_ROOTS: &[&str] = &[
-    "/tmp",
-    "/private/tmp",
-    "/var/folders",
-    "/private/var/folders",
-];
-/// Characters that end a path mentioned in a report.
-const PATH_END: &[char] = &[
-    '`', '"', '\'', '(', ')', '[', ']', '<', '>', ',', ';', '|', '*',
-];
 
 /// A worker's outputs folder.
 pub(crate) fn outputs_dir(scratch: &Path) -> PathBuf {
@@ -132,118 +119,7 @@ fn write_in(folder: &std::os::fd::OwnedFd, name: &str, bytes: &[u8]) -> crate::R
     placed
 }
 
-/// A file to store with a report.
-#[derive(Debug)]
-struct Found {
-    path: PathBuf,
-    title: String,
-    /// Its path in the outputs folder, for files there.
-    output: Option<String>,
-}
-
-/// What a report hands over besides its text.
-pub(crate) struct ReportFiles {
-    pub artifacts: Vec<ArtifactRef>,
-    pub outputs: Vec<ArtifactRef>,
-}
-
-/// Where a report's files may live, and where they must not.
-struct Places {
-    /// The scratch folder, as recorded and as resolved.
-    scratch: Vec<PathBuf>,
-    outputs: PathBuf,
-    home: Option<PathBuf>,
-    /// Brigadier's data folder (worktrees, scratch folders), as recorded and as resolved: never
-    /// a lost place, even when it sits in a temp folder.
-    data: Vec<PathBuf>,
-    /// Folders whose files are lost when the task ends: temp folders, Codex's generated
-    /// images (removed with its thread).
-    lost: Vec<PathBuf>,
-    /// When the task started: a lost file older than that is not the worker's.
-    since: std::time::SystemTime,
-}
-
-impl Places {
-    fn in_scratch(&self, path: &Path) -> bool {
-        self.scratch.iter().any(|root| path.starts_with(root))
-    }
-
-    /// `path` as mentioned: absolute, `~/…`, or relative to the scratch folder (`outputs/…`).
-    fn resolve(&self, path: &str) -> Option<PathBuf> {
-        if let Some(rest) = path.strip_prefix("~/") {
-            return Some(self.home.as_ref()?.join(rest));
-        }
-        let path = Path::new(path);
-        Some(if path.is_absolute() {
-            path.to_owned()
-        } else {
-            self.scratch.first()?.join(path)
-        })
-    }
-
-    /// A path listed under `artifacts`: as [`Places::resolve`], except that a relative path
-    /// missing from the scratch folder may name a file in the outputs folder (`notes.md`).
-    fn resolve_listed(&self, path: &str) -> Option<PathBuf> {
-        let resolved = self.resolve(path)?;
-        let in_outputs = self.outputs.join(path);
-        Some(
-            if Path::new(path).is_relative() && !resolved.exists() && in_outputs.exists() {
-                in_outputs
-            } else {
-                resolved
-            },
-        )
-    }
-}
-
 impl SessionManager {
-    /// Checks and stores the files a report names or mentions, and the outputs folder.
-    /// `Error::Invalid` says what the worker must fix.
-    pub(crate) async fn report_files(
-        &self,
-        task: &Task,
-        redactor: Option<Arc<Redactor>>,
-        listed: &[ArtifactInput],
-        texts: Vec<String>,
-    ) -> Result<ReportFiles> {
-        let scratch = task
-            .workspace
-            .as_ref()
-            .map(|w| PathBuf::from(&w.scratch))
-            .ok_or_else(|| Error::Invalid("the task has no workspace".into()))?;
-        let mut places = self.places(&scratch, task.created_at_ms);
-        if task.kind == TaskKind::Operate {
-            // An operate task changes files through apps: the document it edited and saved is
-            // the job's result, kept by the app, not an output lost with a temp folder. Asking
-            // for a copy cost a resubmitted report (and a model call) on every document task.
-            places.lost.clear();
-        }
-        let listed = listed.to_vec();
-        let outputs = places.outputs.clone();
-        let found = blocking(move || {
-            collect(&places, &listed, &texts).map_err(|problems| {
-                Error::Invalid(format!(
-                    "Your report was not accepted:\n- {}\nFix this and call submit_report again. Files for the thread or the user go in your outputs folder ({}); name them under `artifacts`.",
-                    problems.join("\n- "),
-                    outputs.display()
-                ))
-            })
-        })
-        .await?;
-        let mut files = ReportFiles {
-            artifacts: Vec::new(),
-            outputs: Vec::new(),
-        };
-        for file in found {
-            let artifact = self.store_file(&file.path, file.title, &redactor).await?;
-            match file.output {
-                Some(_) => files.outputs.push(artifact),
-                None => files.artifacts.push(artifact),
-            }
-        }
-        Ok(files)
-    }
-
     /// The files in a task's outputs folder as it ends, stored; titles given in the report are
     /// kept. `None` when there is nothing new to record.
     pub(crate) async fn final_outputs(&self, task: &Task) -> Option<Vec<ArtifactRef>> {
@@ -282,106 +158,6 @@ impl SessionManager {
             }
         }
         (stored != task.outputs).then_some(stored)
-    }
-
-    /// `store_output`: a file the thread wrote kept as a task's output under its file name, in
-    /// place of the task's output of that name, so an `outputs/<name>` link opens it and the
-    /// task card and the answer's Save… save it (issue #27). While the task's outputs folder is
-    /// still there, the file takes the place of the same-named files in it too, so what the
-    /// task's end stores keeps it. Brigadier's private folder is never read, as in the sandbox.
-    pub(crate) async fn store_output_tool(
-        &self,
-        id: &ConversationId,
-        args: StoreOutput,
-    ) -> Result<String> {
-        let task = self.find_task(id, &args.task).await?;
-        let base = match self.effective_workspace(id).await {
-            Ok(Some(workspace)) => workspace.path,
-            _ => std::env::temp_dir(),
-        };
-        let path = super::reads::absolute(&base, args.path.trim());
-        let run_dir = self.runtime.platform().paths().run_dir.clone();
-        let private = run_dir.canonicalize().unwrap_or_else(|_| run_dir.clone());
-        if path.starts_with(&private) || path.starts_with(&run_dir) {
-            return Err(Error::Invalid(format!(
-                "{} is in Brigadier's private folder: store a file you wrote",
-                path.display()
-            )));
-        }
-        let size = {
-            let path = path.clone();
-            blocking(move || std::fs::metadata(&path).map_err(|err| io_error(&path, err))).await?
-        };
-        if !size.is_file() {
-            return Err(Error::Invalid(format!("{} is not a file", path.display())));
-        }
-        if size.len() > FILE_MAX_BYTES {
-            return Err(Error::Invalid(format!(
-                "{} is larger than 8 MB; store a smaller file",
-                path.display()
-            )));
-        }
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .ok_or_else(|| Error::Invalid(format!("{} has no file name", path.display())))?;
-        let same = |output: &ArtifactRef| output.file_name.as_deref() == Some(name.as_str());
-        // The worker's title (its path in the outputs folder, or the report's) stays.
-        let title = task
-            .outputs
-            .iter()
-            .find(|output| same(output))
-            .map_or_else(|| name.clone(), |output| output.title.clone());
-        let replaced = task.outputs.iter().any(same);
-        let redactor = self.task_redactor(&task).await;
-        let artifact = self.store_file(&path, title, &redactor).await?;
-        if let Some(workspace) = &task.workspace {
-            let outputs = outputs_dir(Path::new(&workspace.scratch));
-            if outputs.is_dir() {
-                let bytes = self.artifact_bytes(&artifact.id).await?;
-                let name = name.clone();
-                blocking(move || {
-                    let mut folders: Vec<PathBuf> = output_files(&outputs)
-                        .into_iter()
-                        .filter(|(file, _)| file.file_name().is_some_and(|base| *base == *name))
-                        .filter_map(|(file, _)| file.parent().map(Path::to_owned))
-                        .collect();
-                    if folders.is_empty() {
-                        folders.push(outputs);
-                    }
-                    folders
-                        .iter()
-                        .try_for_each(|folder| write_unfollowed(folder, &name, &bytes))
-                })
-                .await?;
-            }
-        }
-        self.update_task(id, &task.id, |task| {
-            task.outputs.retain(|output| !same(output));
-            task.outputs.push(artifact);
-        })
-        .await?;
-        // Another task's file of the same name could answer a plain `outputs/<name>`.
-        let shared = self
-            .core
-            .tasks(id)
-            .await?
-            .iter()
-            .any(|other| other.id != task.id && other.outputs.iter().any(&same));
-        let link = if shared {
-            format!("outputs/task-{}/{name}", task.number)
-        } else {
-            format!("outputs/{name}")
-        };
-        Ok(format!(
-            "Kept {name} as task-{}'s output{}. Link it as [{name}]({link}): the user opens and saves it from there and from the task card.",
-            task.number,
-            if replaced {
-                ", in place of the worker's"
-            } else {
-                ""
-            }
-        ))
     }
 
     /// Copies an image a Codex worker generated into its outputs folder.
@@ -448,171 +224,6 @@ impl SessionManager {
                 .map(|name| name.to_string_lossy().into_owned()),
         })
     }
-
-    fn places(&self, scratch: &Path, since_ms: i64) -> Places {
-        let env = self.runtime.cli_env();
-        let home = env.home();
-        let mut lost: Vec<PathBuf> = TEMP_ROOTS.iter().map(PathBuf::from).collect();
-        if let Some(tmp) = env.var("TMPDIR").filter(|tmp| !tmp.is_empty()) {
-            lost.push(PathBuf::from(tmp));
-        }
-        let codex_home = match env.var("CODEX_HOME").filter(|dir| !dir.is_empty()) {
-            Some(dir) => Some(PathBuf::from(dir)),
-            None => home.as_ref().map(|home| home.join(".codex")),
-        };
-        lost.extend(codex_home.map(|dir| dir.join("generated_images")));
-        let with_real = |dir: &Path| {
-            let mut dirs = vec![dir.to_owned()];
-            dirs.extend(std::fs::canonicalize(dir).ok());
-            dirs
-        };
-        Places {
-            scratch: with_real(scratch),
-            outputs: outputs_dir(scratch),
-            home,
-            data: with_real(&self.data_dir),
-            lost,
-            since: UNIX_EPOCH + Duration::from_millis(u64::try_from(since_ms).unwrap_or(0)),
-        }
-    }
-}
-
-/// The files a report hands over, or what is wrong with it.
-fn collect(
-    places: &Places,
-    listed: &[ArtifactInput],
-    texts: &[String],
-) -> std::result::Result<Vec<Found>, Vec<String>> {
-    let mut found: Vec<Found> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut problems = Vec::new();
-    let mut add = |path: PathBuf, title: String, found: &mut Vec<Found>| {
-        if let Ok(real) = std::fs::canonicalize(&path)
-            && seen.insert(real.clone())
-        {
-            found.push(Found {
-                path: real,
-                title,
-                output: None,
-            });
-        }
-    };
-
-    for artifact in listed {
-        let Some(path) = places.resolve_listed(&artifact.path) else {
-            problems.push(format!("`{}` is not a path you can use", artifact.path));
-            continue;
-        };
-        match std::fs::metadata(&path) {
-            Err(_) => problems.push(format!(
-                "`{}` (in artifacts) does not exist. Save the file first, or leave it out.",
-                artifact.path
-            )),
-            Ok(meta) if meta.is_dir() => problems.push(format!(
-                "`{}` (in artifacts) is a folder: name the files in it.",
-                artifact.path
-            )),
-            Ok(_) if !inside(&places.scratch, &path) => problems.push(format!(
-                "`{}` is outside your scratch folder, so nobody can read it after the task ends. Copy it into your outputs folder and name that copy instead.",
-                artifact.path
-            )),
-            Ok(meta) if meta.len() > FILE_MAX_BYTES => problems.push(format!(
-                "`{}` is larger than 8 MB; save a smaller file.",
-                artifact.path
-            )),
-            Ok(_) => add(path, artifact.title.clone(), &mut found),
-        }
-    }
-
-    for text in texts {
-        for mention in mentions(text, places) {
-            let Some(path) = places.resolve(&mention) else {
-                continue;
-            };
-            let path = normalize(&path);
-            if places.in_scratch(&path) {
-                match std::fs::metadata(&path) {
-                    Err(_) => problems.push(format!(
-                        "your report mentions `{mention}`, which does not exist. Write the file, or don't mention it."
-                    )),
-                    Ok(meta) if meta.is_file() && !inside(&places.scratch, &path) => {
-                        problems.push(format!(
-                            "`{mention}` links to a file outside your scratch folder, so it is not kept. Copy the file itself into your outputs folder and mention that copy instead."
-                        ));
-                    }
-                    Ok(meta) if meta.is_file() && meta.len() > FILE_MAX_BYTES => {
-                        problems.push(format!(
-                            "`{mention}` is larger than 8 MB; save a smaller file."
-                        ));
-                    }
-                    Ok(meta) if meta.is_file() => {
-                        // Its path in the scratch folder, or in the outputs folder.
-                        let relative = places
-                            .scratch
-                            .iter()
-                            .find_map(|root| path.strip_prefix(root).ok())
-                            .unwrap_or(&path);
-                        let title = relative
-                            .strip_prefix(OUTPUTS_DIR)
-                            .unwrap_or(relative)
-                            .display()
-                            .to_string();
-                        add(path, title, &mut found);
-                    }
-                    Ok(_) => {}
-                }
-            } else if !places.data.iter().any(|root| path.starts_with(root))
-                && places.lost.iter().any(|root| path.starts_with(root))
-                && std::fs::metadata(&path).is_ok_and(|meta| {
-                    // A folder mentioned ("/tmp") is not a file it made.
-                    meta.is_file()
-                        && meta
-                            .modified()
-                            .is_ok_and(|modified| modified >= places.since)
-                })
-            {
-                problems.push(format!(
-                    "your report points to `{mention}`, which is outside your worktree and scratch folder: it is not kept, and nobody can read it after the task ends. Move it into your outputs folder and mention that path instead."
-                ));
-            }
-        }
-    }
-
-    // The outputs folder, whole: files named above keep their titles.
-    let outputs = output_files(&places.outputs);
-    if outputs.len() > OUTPUTS_MAX {
-        problems.push(format!(
-            "your outputs folder holds {} files; keep at most {OUTPUTS_MAX} (put the rest in an archive).",
-            outputs.len()
-        ));
-    }
-    for (path, name) in outputs {
-        match std::fs::metadata(&path) {
-            Ok(meta) if meta.len() > FILE_MAX_BYTES => problems.push(format!(
-                "`{}` in your outputs folder is larger than 8 MB; save a smaller file.",
-                path.display()
-            )),
-            _ => {}
-        }
-        match found.iter_mut().find(|file| file.path == path) {
-            Some(file) => file.output = Some(name),
-            None if seen.insert(path.clone()) => found.push(Found {
-                path,
-                title: name.clone(),
-                output: Some(name),
-            }),
-            None => {}
-        }
-    }
-
-    // A path mentioned twice is one problem.
-    let mut listed_once = HashSet::new();
-    problems.retain(|problem| listed_once.insert(problem.clone()));
-    if problems.is_empty() {
-        Ok(found)
-    } else {
-        Err(problems)
-    }
 }
 
 /// Regular files in an outputs folder (resolved), with their paths inside it, in order.
@@ -652,72 +263,6 @@ fn output_files(outputs: &Path) -> Vec<(PathBuf, String)> {
     }
     files.sort_by(|a, b| a.1.cmp(&b.1));
     files
-}
-
-/// Paths mentioned in a report's text that may be files the worker made: absolute ones,
-/// `~/…` and `outputs/…`. The scratch folder's path may contain spaces, so it is matched
-/// whole first.
-fn mentions(text: &str, places: &Places) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut rest = text.to_owned();
-    for root in &places.scratch {
-        let root = root.display().to_string();
-        while let Some(start) = rest.find(&root) {
-            let tail = &rest[start + root.len()..];
-            let end = tail
-                .find(|c: char| c.is_whitespace() || PATH_END.contains(&c))
-                .unwrap_or(tail.len());
-            found.push(clean(&format!("{root}{}", &tail[..end])));
-            rest.replace_range(start..start + root.len() + end, " ");
-        }
-    }
-    for word in rest.split(|c: char| c.is_whitespace() || PATH_END.contains(&c)) {
-        if word.starts_with('/') && word.len() > 1
-            || word.starts_with("~/")
-            || word.starts_with("outputs/")
-        {
-            found.push(clean(word));
-        }
-    }
-    found.retain(|path| path.len() > 1);
-    found
-}
-
-/// A mentioned path without trailing punctuation or a `:line` suffix.
-fn clean(path: &str) -> String {
-    let path = path.trim_end_matches(['.', ':', '!', '?']);
-    let name_start = path.rfind('/').map_or(0, |i| i + 1);
-    match path[name_start..].find(':') {
-        Some(colon)
-            if path[name_start + colon + 1..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit()) =>
-        {
-            path[..name_start + colon].to_owned()
-        }
-        _ => path.to_owned(),
-    }
-}
-
-/// `path` with `.` and `..` resolved lexically, so a mention cannot climb out of a folder.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Whether `path` resolves to a place inside one of `roots`.
-fn inside(roots: &[PathBuf], path: &Path) -> bool {
-    std::fs::canonicalize(path).is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)))
 }
 
 pub(crate) fn mime_for(path: &Path) -> String {

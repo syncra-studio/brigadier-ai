@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { ActionError } from "@/app/inspector/providers/ActionError";
 import { FixtureList } from "@/app/inspector/providers/FixtureList";
@@ -23,11 +23,19 @@ import { formatDateTime } from "@/lib/format";
 import { loadProviders, refreshProviders, simulateUsageLimit } from "@/state/actions";
 import { useApp } from "@/state/store";
 
+// Development builds only: not part of a release bundle.
+const FaultControl = import.meta.env.DEV
+  ? lazy(() => import("@/app/inspector/FaultControl").then((module) => ({ default: module.FaultControl })))
+  : null;
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Raw provider sessions, provider state and replay fixtures (Phase 2 adapter debugging). */
+/**
+ * Raw provider sessions, provider state and replay fixtures (Phase 2 adapter debugging); in
+ * development builds, a control that makes a provider hit a limit for one task or conversation.
+ */
 export function ProvidersTab() {
   const selected = useApp((s) => s.providers.selected);
   const loaded = useApp((s) => s.providers.view !== null);
@@ -56,6 +64,11 @@ export function ProvidersTab() {
       <StartSessionForm />
       <SessionList />
       <FixtureList />
+      {FaultControl && (
+        <Suspense fallback={null}>
+          <FaultControl />
+        </Suspense>
+      )}
     </div>
   );
 }

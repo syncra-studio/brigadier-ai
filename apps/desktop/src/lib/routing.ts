@@ -1,13 +1,9 @@
 import type { ModelGroup } from "@/components/shared/model-selector";
 import type {
-  Area,
   Heat,
   LimitHit,
   ModelChoice,
-  OverrideEffect,
-  OverrideRule,
   OverrideTarget,
-  Project,
   ProviderKind,
   ProviderOverview,
   QualityTier,
@@ -17,14 +13,12 @@ import type {
 } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { modelName } from "@/lib/setup";
-import { isNoWorkRule } from "@/lib/workRules";
 
 export { isExpensive } from "@/lib/setup";
-export { isNoWorkRule, noWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
 
 /**
- * Routing in words: the names the Usage page, worker cards, the Providers page and the
- * Inspector's preview share, and the sentences they build (limits, rules, reset times).
+ * Models and limits in words: the names the Usage page, worker cards and the Providers page
+ * share, and the sentences they build (limits, reset times).
  */
 
 /** Vendors as sentences name them ("Claude opus hit its 5-hour limit"). */
@@ -48,36 +42,6 @@ export const CATEGORIES: readonly TaskCategory[] = [
   "orchestrate",
 ];
 
-/** What a category is, as "for …" reads it ("never use X for implementation"). */
-export const CATEGORY_LABELS: Record<TaskCategory, string> = {
-  scout: "scouting",
-  research: "research",
-  implement: "implementation",
-  review: "review",
-  merge: "merging",
-  verify: "verification",
-  operate: "using apps",
-  design: "designs and images",
-  chat: "chat",
-  orchestrate: "orchestration",
-  gitText: "writing git text",
-};
-
-/** A kind of work in plain words, as the Providers page names it: "Write code". */
-export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
-  scout: "Explore the code",
-  research: "Research",
-  implement: "Write code",
-  review: "Review changes",
-  merge: "Resolve conflicts",
-  verify: "Run checks",
-  operate: "Use apps",
-  design: "Make designs and images",
-  chat: "Take over a chat",
-  orchestrate: "Coordinate work",
-  gitText: "Write commit messages",
-};
-
 /** A kind of work as "best for …" reads it: "Best for writing code and reviewing changes". */
 export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   scout: "exploring code",
@@ -93,29 +57,6 @@ export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   gitText: "writing commit messages",
 };
 
-/** The least capable tier each kind of work runs on unless the orchestrator asks for more. A copy of the router's `default_floor`, which decides; a router test fails when they differ. */
-export const DEFAULT_FLOORS: Record<TaskCategory, QualityTier> = {
-  scout: "light",
-  research: "standard",
-  implement: "frontier",
-  review: "frontier",
-  merge: "frontier",
-  verify: "light",
-  operate: "strong",
-  design: "strong",
-  chat: "light",
-  orchestrate: "strong",
-  gitText: "light",
-};
-
-const TIER_ORDER: readonly QualityTier[] = ["unrated", "light", "standard", "strong", "frontier"];
-
-/** Whether a tier is below another. */
-export function tierBelow(tier: QualityTier, floor: QualityTier): boolean {
-  return TIER_ORDER.indexOf(tier) < TIER_ORDER.indexOf(floor);
-}
-
-
 /** A ranked place as the page names it: "Claude Opus 5.5", "Newest Claude opus", "Any Codex model". */
 export function placeName(target: OverrideTarget, groups: readonly ModelGroup[]): string {
   switch (target.type) {
@@ -127,16 +68,6 @@ export function placeName(target: OverrideTarget, groups: readonly ModelGroup[])
       return choiceName(groups, { provider: target.provider, model: target.id, effort: null });
   }
 }
-
-export const AREAS: readonly Area[] = ["frontend", "backend", "infra", "docs", "tests"];
-
-export const AREA_LABELS: Record<Area, string> = {
-  frontend: "frontend",
-  backend: "backend",
-  infra: "infra",
-  docs: "docs",
-  tests: "tests",
-};
 
 export const TIER_LABELS: Record<QualityTier, string> = {
   unrated: "Unrated",
@@ -263,73 +194,10 @@ export function limitPhrase(
 
 // ----- rules -----------------------------------------------------------------------------
 
-const EFFECT_WORDS: Record<OverrideEffect, string> = {
-  never: "Never use",
-  prefer: "Prefer",
-  only: "Only use",
-};
-
-export const EFFECT_LABELS: Record<OverrideEffect, string> = {
-  never: "Never",
-  prefer: "Prefer",
-  only: "Only",
-};
-
-/** "Codex", "Claude opus models", "Codex gpt-6-luna". */
-export function targetName(target: OverrideTarget, groups: readonly ModelGroup[]): string {
-  switch (target.type) {
-    case "vendor":
-      return VENDOR_LABELS[target.provider];
-    case "family":
-      return `${VENDOR_LABELS[target.provider]} ${target.family} models`;
-    case "model":
-      return choiceName(groups, { provider: target.provider, model: target.id, effort: null });
-  }
-}
-
 /** "a, b and c". */
 export function joinWords(words: readonly string[], last = "and"): string {
   if (words.length <= 1) return words.join("");
   return `${words.slice(0, -1).join(", ")} ${last} ${words.at(-1)}`;
-}
-
-/**
- * A rule as a sentence: "Never use Codex gpt-6-luna for frontend in brigadier-ai", "Prefer
- * Claude for review or merging", "Only use Codex for backend implementation".
- */
-export function ruleSentence(
-  rule: OverrideRule,
-  groups: readonly ModelGroup[],
-  projects: Record<string, Project>,
-): string {
-  if (isNoWorkRule(rule)) return `Don't give ${targetName(rule.target, groups)} work`;
-  const categories = rule.categories.map((category) => CATEGORY_LABELS[category]);
-  const areas = rule.areas.map((area) => AREA_LABELS[area]);
-  let scope = "";
-  if (categories.length > 0 && areas.length > 0) {
-    scope = ` for ${joinWords(areas, "or")} ${joinWords(categories, "or")}`;
-  } else if (categories.length > 0) {
-    scope = ` for ${joinWords(categories, "or")}`;
-  } else if (areas.length > 0) {
-    scope = ` for ${joinWords(areas, "or")}`;
-  }
-  const where = rule.projectId
-    ? ` in ${projects[rule.projectId]?.name ?? "a removed project"}`
-    : "";
-  return `${EFFECT_WORDS[rule.effect]} ${targetName(rule.target, groups)}${scope}${where}`;
-}
-
-/** Whether two targets name the same thing. */
-export function sameTarget(a: OverrideTarget, b: OverrideTarget): boolean {
-  if (a.type !== b.type || a.provider !== b.provider) return false;
-  if (a.type === "family" && b.type === "family") return a.family === b.family;
-  if (a.type === "model" && b.type === "model") return a.id === b.id;
-  return true;
-}
-
-/** A new rule's id. */
-export function newRuleId(): string {
-  return crypto.randomUUID();
 }
 
 /** "+1.5", "−2", "0": a score contribution with its sign. */

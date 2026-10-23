@@ -135,15 +135,6 @@ pub(crate) struct ReportLearning {
 }
 
 impl ReportLearning {
-    /// The order of a task's reports, going on after `version` (kept on the task).
-    pub(crate) fn after(version: Option<u64>) -> Self {
-        let version = version.unwrap_or(0);
-        Self {
-            next: AtomicU64::new(version),
-            stored: tokio::sync::Mutex::new(version),
-        }
-    }
-
     pub(super) fn next(&self) -> u64 {
         self.next.fetch_add(1, Ordering::Relaxed) + 1
     }
@@ -670,7 +661,6 @@ impl SessionManager {
         })
         .await;
         self.brain_job_tick().await;
-        self.research_tick().await;
     }
 
     /// The Brains' counters for the daemon's metrics.
@@ -2625,7 +2615,7 @@ pub(crate) fn report_text(task: &Task, report: &Report) -> String {
     text
 }
 
-/// A report as the Brain keeps it: [`report_text`], then its artifacts, for `read_artifact`.
+/// A report as the Brain keeps it: [`report_text`], then its artifacts.
 fn report_body(task: &Task, report: &Report) -> String {
     let mut text = report_text(task, report);
     let artifacts: Vec<&ArtifactRef> = report.artifacts.iter().chain(&task.outputs).collect();

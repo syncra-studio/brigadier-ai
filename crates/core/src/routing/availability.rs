@@ -1,49 +1,17 @@
-//! Picker visibility and preferences for the remaining legacy router (Settings → Providers).
-//! Explicit session and worker choices use only the user's model rules file.
+//! Which agents and models the user lets Brigadier use (Settings → Providers). Explicit session
+//! and worker choices use only the user's model rules file.
 //!
 //! - An agent switched off ([`Settings::disabled_providers`]) and a model made unavailable
-//!   ([`Settings::hidden_models`]) are out of every picker and legacy automatic routing.
+//!   ([`Settings::hidden_models`]) are out of every picker and the commit message writer.
 //!   Conversations already running keep their model.
-//! - Whether the orchestrator may hand a model worker tasks is a `never` rule for the worker
-//!   kinds of work ([`worker_rule`]): a Chat's stand-in and an orchestrator are left alone.
-//! - A model seen after its agent's first list ([`Settings::known_models`]) starts with that
-//!   rule, so it gets no work until the user allows it; its agent's first list is taken as
-//!   known, so turning this on (or signing in) changes nothing for the models already there.
 //! - An older model ([`brigadier_providers::ModelInfo::legacy`]) starts unavailable, once
 //!   ([`Settings::older_models_off`]): the user turns on the ones they want, and that choice
-//!   stands. One the user's rules or orders already name stays as it is.
+//!   stands. One the user's own choices already name stays as it is.
 
 use brigadier_providers::ProviderKind;
-use brigadier_router::{
-    MergedModel, OverrideEffect, OverrideRule, OverrideTarget, ProviderState, TaskCategory,
-};
+use brigadier_router::{OverrideEffect, OverrideTarget};
 
 use crate::model::{ModelChoice, ModelRef, SETTINGS_VERSION, Settings};
-
-/// The kinds of work the orchestrator hands to workers: what a "Don't give work" rule is
-/// about. Not `chat` (a Chat's stand-in) or `orchestrate`.
-pub const WORKER_CATEGORIES: [TaskCategory; 8] = [
-    TaskCategory::Scout,
-    TaskCategory::Research,
-    TaskCategory::Implement,
-    TaskCategory::Review,
-    TaskCategory::Merge,
-    TaskCategory::Verify,
-    TaskCategory::Operate,
-    TaskCategory::Design,
-];
-
-/// Whether a rule keeps its model from exactly `kinds` of work, everywhere: a worker switch
-/// or "Don't give work" rule saved when the worker kinds were those.
-fn never_for_exactly(rule: &OverrideRule, kinds: &[TaskCategory]) -> bool {
-    rule.effect == OverrideEffect::Never
-        && rule.categories.len() == kinds.len()
-        && kinds
-            .iter()
-            .all(|category| rule.categories.contains(category))
-        && rule.areas.is_empty()
-        && rule.project_id.is_none()
-}
 
 /// The agent isn't switched off.
 pub fn provider_on(settings: &Settings, provider: ProviderKind) -> bool {
@@ -59,72 +27,23 @@ pub fn model_available(settings: &Settings, provider: ProviderKind, id: &str) ->
             .any(|model| model.provider == provider && model.id == id)
 }
 
-/// How the id of a [`worker_rule`] Brigadier added for a model it just saw starts: the Routing
-/// page tags that model "New" until the user turns its switch.
-pub const NEW_MODEL_RULE: &str = "new-model-";
-
-/// The rule keeping a model it just saw from worker tasks everywhere, the rule the Routing
-/// page's switch turns off and on (the switch writes its own id).
-pub fn worker_rule(provider: ProviderKind, id: &str, now_ms: i64) -> OverrideRule {
-    OverrideRule {
-        id: format!("{NEW_MODEL_RULE}{}", uuid::Uuid::now_v7()),
-        effect: OverrideEffect::Never,
-        target: OverrideTarget::Model {
-            provider,
-            id: id.to_owned(),
-        },
-        categories: WORKER_CATEGORIES.to_vec(),
-        areas: Vec::new(),
-        project_id: None,
-        created_at_ms: now_ms,
-    }
-}
-
-/// Whether `rule` is [`worker_rule`] for this model.
-pub fn is_worker_rule(rule: &OverrideRule, provider: ProviderKind, id: &str) -> bool {
-    matches!(&rule.target, OverrideTarget::Model { provider: p, id: m } if *p == provider && m == id)
-        && never_for_exactly(rule, &WORKER_CATEGORIES)
-}
-
-/// The settings with the models of `provider`'s list recorded as known, or `None` when all
-/// of them already are. Each model seen after the agent's first list gets [`worker_rule`]
-/// (not an expensive one: routing never gives it work by itself, and the rule would block the
-/// user's own pick);
-/// each older one (`older`: the list's legacy models, each its id and the id it resolves to)
-/// is turned off the first time.
+/// The settings with the models of `provider`'s list (`ids`) recorded as known and its older
+/// ones (`older`: each its id and the id it resolves to) turned off the first time they are
+/// seen, or `None` when nothing is new.
 pub fn note_models(
     settings: &Settings,
     provider: ProviderKind,
     ids: &[String],
     older: &[(String, Option<String>)],
-    now_ms: i64,
 ) -> Option<Settings> {
-    let first_list = !settings
-        .known_models
-        .iter()
-        .any(|model| model.provider == provider);
     let mut next = settings.clone();
     for id in ids {
-        if next
-            .known_models
-            .iter()
-            .any(|model| model.provider == provider && &model.id == id)
-        {
-            continue;
-        }
-        next.known_models.push(ModelRef {
+        let model = ModelRef {
             provider,
             id: id.clone(),
-        });
-        if !first_list
-            && !brigadier_router::names_expensive(id)
-            && !next
-                .routing_overrides
-                .iter()
-                .any(|rule| is_worker_rule(rule, provider, id))
-        {
-            next.routing_overrides
-                .push(worker_rule(provider, id, now_ms));
+        };
+        if !next.known_models.contains(&model) {
+            next.known_models.push(model);
         }
     }
     for (id, resolved) in older {
@@ -145,60 +64,36 @@ pub fn note_models(
 }
 
 /// Whether the user's own choices name this model (`named` matches its id or the id it
-/// resolves to): an order, a prefer or only rule, the default chat or orchestrator model, or
-/// the commit message writer. It is in use by choice.
+/// resolves to): the default chat or orchestrator model, or the commit message writer. It is
+/// in use by choice.
 fn named_by_user(
     settings: &Settings,
     provider: ProviderKind,
     named: impl Fn(&str) -> bool,
 ) -> bool {
-    let names = |target: &OverrideTarget| matches!(target, OverrideTarget::Model { provider: p, id } if *p == provider && named(id));
     let chosen = |choice: &Option<ModelChoice>| {
         choice.as_ref().is_some_and(|choice| {
             choice.provider == provider && choice.model.as_deref().is_some_and(&named)
         })
     };
-    settings
-        .routing_rankings
-        .iter()
-        .any(|ranking| ranking.entries.iter().any(|entry| names(&entry.target)))
-        || settings
-            .routing_overrides
-            .iter()
-            .any(|rule| rule.effect != OverrideEffect::Never && names(&rule.target))
-        || [
-            &settings.default_chat_model,
-            &settings.default_orchestrator,
-            &settings.git_writer,
-        ]
-        .into_iter()
-        .any(chosen)
+    [
+        &settings.default_chat_model,
+        &settings.default_orchestrator,
+        &settings.git_writer,
+    ]
+    .into_iter()
+    .any(chosen)
 }
 
-/// Settings a client sent, written over `current`: a model the core recorded as known since
-/// the client read its copy stays known, with the rule keeping it from worker tasks, so a
-/// change made on a page open from before can't give that model work.
+/// Settings a client sent, written over `current`: a model recorded as known since the client
+/// read its copy stays known, and an older model turned off meanwhile stays off, so a page open
+/// from before can't turn it back on.
 pub fn rebase(current: &Settings, mut incoming: Settings) -> Settings {
     for model in &current.known_models {
-        if incoming.known_models.contains(model) {
-            continue;
-        }
-        incoming.known_models.push(model.clone());
-        for rule in current
-            .routing_overrides
-            .iter()
-            .filter(|rule| is_worker_rule(rule, model.provider, &model.id))
-        {
-            if !incoming
-                .routing_overrides
-                .iter()
-                .any(|kept| kept.id == rule.id)
-            {
-                incoming.routing_overrides.push(rule.clone());
-            }
+        if !incoming.known_models.contains(model) {
+            incoming.known_models.push(model.clone());
         }
     }
-    // An older model turned off since the client read its copy stays off.
     for model in &current.older_models_off {
         if incoming.older_models_off.contains(model) {
             continue;
@@ -212,42 +107,34 @@ pub fn rebase(current: &Settings, mut incoming: Settings) -> Settings {
     incoming
 }
 
-/// Whether a settings change may let work waiting for quota run now: new rules or rankings,
-/// an agent or model turned back on, or switching to another agent turned on.
+/// Whether a settings change may let work waiting for quota run now: an agent or model turned
+/// back on.
 pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
-    (after.switch_providers && !before.switch_providers)
-        || before.routing_overrides != after.routing_overrides
-        || before.routing_rankings != after.routing_rankings
-        || before.disabled_providers != after.disabled_providers
+    before.disabled_providers != after.disabled_providers
         || before.hidden_models != after.hidden_models
 }
 
 /// Saved settings brought up to [`SETTINGS_VERSION`], or `None` when they already are.
 ///
 /// Version 1: an agent switched off before used to be a `never` rule for the whole agent,
-/// everywhere, for all work; such a rule becomes the agent switched off. Every other rule
-/// stays as it is.
+/// everywhere, for all work; such a rule becomes the agent switched off.
 ///
-/// Version 2: a model's worker switch saved before operate work existed covers it too, so a
-/// model kept from worker tasks stays kept from all of them.
+/// Versions 2 and 5 widened routing rules, which Brigadier no longer keeps (S16b).
 ///
 /// Version 3: merging on its own used to default on; settings saved before this version read
 /// it as off, once. A user's own later choice (on or off) after that is kept from then on.
 ///
 /// Version 4: account switching is set per agent, and the one switch saved before covers
 /// every agent: off, every agent's work stays on its default account.
-///
-/// Version 5: a rule keeping a model from every worker kind of work, saved before design
-/// work existed, covers it too.
 pub fn migrate(settings: &Settings) -> Option<Settings> {
     if settings.settings_version >= SETTINGS_VERSION {
         return None;
     }
     let mut next = settings.clone();
     if settings.settings_version < 1 {
-        next.routing_overrides.retain(|rule| {
+        for rule in &settings.legacy_routing_overrides {
             let OverrideTarget::Vendor { provider } = rule.target else {
-                return true;
+                continue;
             };
             let off = rule.effect == OverrideEffect::Never
                 && rule.categories.is_empty()
@@ -255,19 +142,6 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
                 && rule.project_id.is_none();
             if off && !next.disabled_providers.contains(&provider) {
                 next.disabled_providers.push(provider);
-            }
-            !off
-        });
-    }
-    // The worker kinds as they were before operate (version 2) and design (version 5) work.
-    let before_operate = &WORKER_CATEGORIES[..6];
-    let before_design = &WORKER_CATEGORIES[..7];
-    if settings.settings_version < 2 {
-        for rule in &mut next.routing_overrides {
-            if matches!(rule.target, OverrideTarget::Model { .. })
-                && never_for_exactly(rule, before_operate)
-            {
-                rule.categories.push(TaskCategory::Operate);
             }
         }
     }
@@ -278,45 +152,9 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
             }
         }
     }
-    if settings.settings_version < 5 {
-        for rule in &mut next.routing_overrides {
-            if never_for_exactly(rule, before_design) {
-                rule.categories.push(TaskCategory::Design);
-            }
-        }
-    }
+    next.legacy_routing_overrides.clear();
     next.settings_version = SETTINGS_VERSION;
     Some(next)
-}
-
-/// What routing may consider: the models of agents switched on that aren't made unavailable.
-/// An agent switched off, or one whose listed models are all unavailable, counts as signed
-/// out: routing would otherwise take its missing list as not read yet and offer its registry
-/// models instead.
-pub fn routable(
-    settings: &Settings,
-    models: &[MergedModel],
-    providers: &[ProviderState],
-) -> (Vec<MergedModel>, Vec<ProviderState>) {
-    let kept: Vec<MergedModel> = models
-        .iter()
-        .filter(|model| model_available(settings, model.provider, &model.id))
-        .cloned()
-        .collect();
-    let providers = providers
-        .iter()
-        .map(|state| {
-            let listed = models.iter().any(|model| model.provider == state.provider);
-            let left = kept.iter().any(|model| model.provider == state.provider);
-            ProviderState {
-                logged_in: state.logged_in
-                    && provider_on(settings, state.provider)
-                    && (left || !listed),
-                ..state.clone()
-            }
-        })
-        .collect();
-    (kept, providers)
 }
 
 #[cfg(test)]
@@ -328,75 +166,26 @@ mod tests {
     }
 
     #[test]
-    fn an_agents_first_list_is_known_without_rules() {
-        let settings = Settings::default();
-        let next = note_models(
-            &settings,
-            ProviderKind::Claude,
-            &ids(&["opus", "haiku"]),
-            &[],
-            1,
-        )
-        .expect("the models are new");
-        assert_eq!(next.known_models.len(), 2);
-        assert!(next.routing_overrides.is_empty());
-    }
-
-    #[test]
     fn an_older_model_starts_off_once_and_the_users_choice_stands() {
-        let opus = ModelRef {
-            provider: ProviderKind::Claude,
-            id: "opus".into(),
-        };
         let old = ModelRef {
             provider: ProviderKind::Claude,
             id: "opus-4-8".into(),
         };
-        let list = ids(&["opus", "opus-4-8"]);
         let older = [("opus-4-8".to_owned(), Some("claude-opus-4-8".to_owned()))];
-        let next = note_models(&Settings::default(), ProviderKind::Claude, &list, &older, 1)
+        let list = ids(&["opus", "opus-4-8"]);
+        let next = note_models(&Settings::default(), ProviderKind::Claude, &list, &older)
             .expect("the models are new");
+        assert_eq!(next.known_models.len(), 2);
         assert_eq!(next.hidden_models, vec![old.clone()]);
         assert!(!model_available(&next, ProviderKind::Claude, "opus-4-8"));
         assert!(model_available(&next, ProviderKind::Claude, "opus"));
         // The user turns it on: the next list leaves it on.
         let on = Settings {
             hidden_models: Vec::new(),
-            ..next
+            ..next.clone()
         };
-        assert!(note_models(&on, ProviderKind::Claude, &list, &older, 2).is_none());
-        // Settings from before: an older model already known is turned off once too.
-        let before = Settings {
-            known_models: vec![opus.clone(), old.clone()],
-            ..Settings::default()
-        };
-        let after =
-            note_models(&before, ProviderKind::Claude, &list, &older, 3).expect("turned off once");
-        assert_eq!(after.hidden_models, vec![old.clone()]);
-        // One the user's order names stays on.
-        let ranked = Settings {
-            routing_rankings: vec![brigadier_router::Ranking {
-                id: "r".into(),
-                category: TaskCategory::Implement,
-                areas: Vec::new(),
-                project_id: None,
-                manual: true,
-                entries: vec![brigadier_router::RankedEntry {
-                    target: OverrideTarget::Model {
-                        provider: ProviderKind::Claude,
-                        id: "opus-4-8".into(),
-                    },
-                    effort: None,
-                }],
-                only: false,
-                updated_at_ms: 0,
-            }],
-            ..before
-        };
-        let kept = note_models(&ranked, ProviderKind::Claude, &list, &older, 4).expect("noted");
-        assert!(kept.hidden_models.is_empty());
-        assert_eq!(kept.older_models_off, vec![old.clone()]);
-        // So does the default chat model.
+        assert!(note_models(&on, ProviderKind::Claude, &list, &older).is_none());
+        // One the default chat model names stays on.
         let chat = Settings {
             default_chat_model: Some(ModelChoice {
                 provider: ProviderKind::Claude,
@@ -405,162 +194,44 @@ mod tests {
                 fast: None,
                 account: None,
             }),
-            ..Settings {
-                known_models: vec![opus.clone(), old.clone()],
-                ..Settings::default()
-            }
+            ..Settings::default()
         };
-        let kept = note_models(&chat, ProviderKind::Claude, &list, &older, 5).expect("noted");
+        let kept = note_models(&chat, ProviderKind::Claude, &list, &older).expect("noted");
         assert!(kept.hidden_models.is_empty());
-        // A page open from before can't turn it back on by writing its old copy.
-        let stale = Settings::default();
-        let written = rebase(&after, stale);
+        assert_eq!(kept.older_models_off, vec![old.clone()]);
+        // A page open from before can't turn it back on, or forget the models, by writing its
+        // old copy.
+        let written = rebase(&next, Settings::default());
         assert!(!model_available(&written, ProviderKind::Claude, "opus-4-8"));
-    }
-
-    #[test]
-    fn a_model_seen_later_gets_no_worker_tasks() {
-        let settings = note_models(
-            &Settings::default(),
-            ProviderKind::Claude,
-            &ids(&["opus"]),
-            &[],
-            1,
-        )
-        .expect("the models are new");
-        let next = note_models(
-            &settings,
-            ProviderKind::Claude,
-            &ids(&["opus", "fresh", "claude-mythos-5"]),
-            &[],
-            2,
-        )
-        .expect("fresh is new");
-        // An expensive model needs no rule: routing uses it only where the user picks it.
-        assert_eq!(next.routing_overrides.len(), 1);
-        let rule = &next.routing_overrides[0];
-        assert!(is_worker_rule(rule, ProviderKind::Claude, "fresh"));
-        assert!(rule.id.starts_with(NEW_MODEL_RULE));
-        assert!(!rule.categories.contains(&TaskCategory::Chat));
-        assert!(!rule.categories.contains(&TaskCategory::Orchestrate));
-        // Seen again: nothing changes, and a rule the user removed stays removed.
-        let mut allowed = next.clone();
-        allowed.routing_overrides.clear();
-        assert!(
-            note_models(
-                &allowed,
-                ProviderKind::Claude,
-                &ids(&["opus", "fresh"]),
-                &[],
-                3
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn another_agents_first_list_is_known_too() {
-        let settings = note_models(
-            &Settings::default(),
-            ProviderKind::Claude,
-            &ids(&["opus"]),
-            &[],
-            1,
-        )
-        .expect("the models are new");
-        let next = note_models(&settings, ProviderKind::Codex, &ids(&["sol"]), &[], 2)
-            .expect("sol is new");
-        assert!(next.routing_overrides.is_empty());
+        assert_eq!(written.known_models, next.known_models);
     }
 
     #[test]
     fn the_old_agent_switch_becomes_the_agent_off() {
-        let off = OverrideRule {
-            id: "off".into(),
-            effect: OverrideEffect::Never,
-            target: OverrideTarget::Vendor {
-                provider: ProviderKind::Codex,
-            },
-            categories: Vec::new(),
-            areas: Vec::new(),
-            project_id: None,
-            created_at_ms: 0,
-        };
-        let scoped = OverrideRule {
-            id: "reviews".into(),
-            categories: vec![TaskCategory::Review],
-            ..off.clone()
-        };
-        let settings = Settings {
-            routing_overrides: vec![off, scoped.clone()],
-            settings_version: 0,
-            ..Settings::default()
-        };
+        let settings: Settings = serde_json::from_str(
+            r#"{"routingOverrides":[
+                {"id":"off","effect":"never","target":{"type":"vendor","provider":"codex"},"categories":[],"areas":[],"projectId":null,"createdAtMs":0},
+                {"id":"reviews","effect":"never","target":{"type":"vendor","provider":"claude"},"categories":["review"],"createdAtMs":0}
+            ],"settingsVersion":0}"#,
+        )
+        .unwrap();
         let next = migrate(&settings).expect("version 0 converts");
         assert_eq!(next.disabled_providers, vec![ProviderKind::Codex]);
-        assert_eq!(next.routing_overrides, vec![scoped]);
         assert_eq!(next.settings_version, SETTINGS_VERSION);
         assert!(migrate(&next).is_none());
+        // The old rules are read once, never saved again.
+        let json = serde_json::to_value(&next).unwrap();
+        assert!(json.get("routingOverrides").is_none());
     }
 
     #[test]
-    fn an_old_worker_switch_covers_operate_work() {
-        let old = OverrideRule {
-            categories: WORKER_CATEGORIES[..6].to_vec(),
-            ..worker_rule(ProviderKind::Claude, "haiku", 0)
-        };
-        let settings = Settings {
-            routing_overrides: vec![old],
-            settings_version: 1,
-            ..Settings::default()
-        };
-        let next = migrate(&settings).expect("version 1 converts");
-        assert!(is_worker_rule(
-            &next.routing_overrides[0],
-            ProviderKind::Claude,
-            "haiku"
-        ));
-        assert!(migrate(&next).is_none());
-    }
-
-    /// #503: a model kept from every worker kind before design work existed stays kept from
-    /// design work; a rule naming some kinds stays as it is.
-    #[test]
-    fn an_old_worker_switch_covers_design_work() {
-        let switch = OverrideRule {
-            categories: WORKER_CATEGORIES[..7].to_vec(),
-            ..worker_rule(ProviderKind::Codex, "gpt-6-astra", 0)
-        };
-        let vendor = OverrideRule {
-            id: "no-work".into(),
-            target: OverrideTarget::Vendor {
-                provider: ProviderKind::Claude,
-            },
-            ..switch.clone()
-        };
-        let some = OverrideRule {
-            id: "some".into(),
-            categories: vec![TaskCategory::Verify, TaskCategory::GitText],
-            ..switch.clone()
-        };
-        let settings = Settings {
-            routing_overrides: vec![switch, vendor, some.clone()],
-            settings_version: 4,
-            ..Settings::default()
-        };
-        let next = migrate(&settings).expect("version 4 converts");
-        assert!(is_worker_rule(
-            &next.routing_overrides[0],
-            ProviderKind::Codex,
-            "gpt-6-astra"
-        ));
-        assert!(
-            next.routing_overrides[1]
-                .categories
-                .contains(&TaskCategory::Design)
-        );
-        assert_eq!(next.routing_overrides[2], some);
-        assert!(migrate(&next).is_none());
+    fn settings_saved_with_routing_still_load() {
+        let saved: Settings = serde_json::from_str(
+            r#"{"routingOverrides":[],"routingRankings":[{"id":"r","category":"review","manual":true,"updatedAtMs":0}],"knownModels":[{"provider":"claude","id":"opus"}],"switchProviders":false,"userName":"Ann","settingsVersion":5}"#,
+        )
+        .unwrap();
+        assert_eq!(saved.user_name, "Ann");
+        assert!(migrate(&saved).is_none());
     }
 
     #[test]
@@ -569,7 +240,6 @@ mod tests {
         let off = migrate(&saved(r#"{"switchAccounts":false,"settingsVersion":3}"#))
             .expect("version 3 converts");
         assert_eq!(off.manual_accounts, ProviderKind::ALL.to_vec());
-        assert!(off.switch_providers);
         let on = migrate(&saved(r#"{"switchAccounts":true,"settingsVersion":3}"#))
             .expect("version 3 converts");
         assert!(on.manual_accounts.is_empty());
@@ -579,85 +249,6 @@ mod tests {
         let json = serde_json::to_value(&off).unwrap();
         assert!(json.get("switchAccounts").is_none());
         assert!(migrate(&off).is_none());
-    }
-
-    fn listed_model(id: &str, resolved: &str, is_default: bool) -> brigadier_providers::ModelInfo {
-        brigadier_providers::ModelInfo {
-            id: id.into(),
-            display_name: format!("Model {id}"),
-            description: String::new(),
-            resolved: Some(resolved.into()),
-            efforts: Vec::new(),
-            default_effort: None,
-            is_default,
-            input_modalities: Vec::new(),
-            fast: None,
-            legacy: false,
-        }
-    }
-
-    #[test]
-    fn an_agent_with_every_listed_model_unavailable_gets_no_work() {
-        let settings = Settings {
-            hidden_models: vec![ModelRef {
-                provider: ProviderKind::Claude,
-                id: "opus".into(),
-            }],
-            ..Settings::default()
-        };
-        let listed = [listed_model("opus", "claude-opus-5-5", true)];
-        let merged = brigadier_router::merge(
-            &brigadier_router::Registry::bundled(),
-            &[(ProviderKind::Claude, &listed)],
-            &[],
-            &[],
-        );
-        let states = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
-            provider,
-            logged_in: true,
-            quota: None,
-        });
-        let (models, providers) = routable(&settings, &merged, &states);
-        assert!(models.is_empty());
-        // Signed out as routing sees it, so its registry models aren't offered instead.
-        assert!(!providers[0].logged_in);
-        // Codex's list isn't read yet: that is routing's to judge, as before.
-        assert!(providers[1].logged_in);
-    }
-
-    #[test]
-    fn a_client_write_keeps_models_seen_meanwhile() {
-        let read = note_models(
-            &Settings::default(),
-            ProviderKind::Claude,
-            &ids(&["opus"]),
-            &[],
-            1,
-        )
-        .expect("the models are new");
-        // The core sees `fresh` while a page still holds `read`, then the page writes.
-        let current = note_models(
-            &read,
-            ProviderKind::Claude,
-            &ids(&["opus", "fresh"]),
-            &[],
-            2,
-        )
-        .expect("fresh is new");
-        let sent = Settings {
-            disabled_providers: vec![ProviderKind::Codex],
-            ..read.clone()
-        };
-        let written = rebase(&current, sent);
-        assert_eq!(written.disabled_providers, vec![ProviderKind::Codex]);
-        assert_eq!(written.known_models, current.known_models);
-        assert_eq!(written.routing_overrides, current.routing_overrides);
-        // A page that saw `fresh` and allowed it keeps it allowed.
-        let allowed = Settings {
-            routing_overrides: Vec::new(),
-            ..current.clone()
-        };
-        assert!(rebase(&current, allowed).routing_overrides.is_empty());
     }
 
     #[test]
@@ -680,19 +271,6 @@ mod tests {
         };
         assert!(wakes_waiting_work(&off, &agent_on));
         assert!(wakes_waiting_work(&off, &model_on));
-        let worker_allowed = note_models(
-            &note_models(&off, ProviderKind::Claude, &ids(&["opus"]), &[], 1).expect("new"),
-            ProviderKind::Claude,
-            &ids(&["opus", "fresh"]),
-            &[],
-            2,
-        )
-        .expect("fresh is new");
-        let allowed = Settings {
-            routing_overrides: Vec::new(),
-            ..worker_allowed.clone()
-        };
-        assert!(wakes_waiting_work(&worker_allowed, &allowed));
         let unrelated = Settings {
             keep_awake_lid_closed: !off.keep_awake_lid_closed,
             ..off.clone()
@@ -701,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_models_and_agents_off_are_not_routable() {
+    fn unavailable_models_and_agents_off_are_out() {
         let settings = Settings {
             disabled_providers: vec![ProviderKind::Codex],
             hidden_models: vec![ModelRef {
@@ -713,20 +291,7 @@ mod tests {
         assert!(model_available(&settings, ProviderKind::Claude, "opus"));
         assert!(!model_available(&settings, ProviderKind::Claude, "haiku"));
         assert!(!model_available(&settings, ProviderKind::Codex, "sol"));
-        let states = [
-            ProviderState {
-                provider: ProviderKind::Claude,
-                logged_in: true,
-                quota: None,
-            },
-            ProviderState {
-                provider: ProviderKind::Codex,
-                logged_in: true,
-                quota: None,
-            },
-        ];
-        let (_, providers) = routable(&settings, &[], &states);
-        assert!(providers[0].logged_in);
-        assert!(!providers[1].logged_in);
+        assert!(provider_on(&settings, ProviderKind::Claude));
+        assert!(!provider_on(&settings, ProviderKind::Codex));
     }
 }

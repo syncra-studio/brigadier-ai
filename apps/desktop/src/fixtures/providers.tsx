@@ -9,7 +9,7 @@ import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureInput } from "@/fixtures/input";
 import { colourOf, fillsCard, surface, switchLook, wait as pause } from "@/fixtures/look";
-import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
+import { accounts, overviews, projects, usageView } from "@/fixtures/providersData";
 import type { AgentConnect, ProviderOverview, Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { applyConnectEvents } from "@/state/connect";
@@ -19,8 +19,8 @@ import { useUpdates } from "@/state/updates";
 /*
  * ?drive=1 reads the agents, opens Claude's page, reveals one account's email, picks a binary
  * that isn't one and then one that is, leaves the page and comes back, follows the old Usage
- * page's link, searches for a row that moved to Routing and shows this computer's login added
- * again, writing what it saw to #providers-result (ProvidersPageRender.test.ts reads it).
+ * page's link and shows this computer's login added again, writing what it saw to
+ * #providers-result (ProvidersPageRender.test.ts reads it).
  * Without it the page stays as it opens, for screenshots; ?agent=claude opens Claude's page.
  * ?drive=missing starts with Codex not on this computer and walks its Set up (Connect) through
  * a failed install, Try again, its sign-in and the agent coming in, to #providers-result too;
@@ -51,7 +51,6 @@ const missingCodex = (fields: Partial<NonNullable<ProviderOverview["status"]>>) 
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
-  settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings, switchProviders: true },
   projects,
   accounts: { accounts, warnings: [] },
   providers: {
@@ -144,12 +143,8 @@ mockIPC((command, payload) => {
       }
       return { method: req.method, settings: req.settings };
     }
-    case "getRankingsRefresh":
-      return { method: req.method, refresh: null };
     case "getUsage":
-      return { method: req.method, usage: usageView(null) };
-    case "previewRoutes":
-      return { method: req.method, routes: previewRoutes(req.areas, req.author) };
+      return { method: req.method, usage: usageView() };
     case "checkAgentPath":
       if (req.path.startsWith("/opt/elsewhere/")) {
         throw { code: "invalid", message: `${req.path} isn't Claude Code: it didn't say its version` };
@@ -202,14 +197,6 @@ const inView = (element: Element | undefined | null) => {
   const box = element.getBoundingClientRect();
   return box.bottom > 0 && box.top < window.innerHeight;
 };
-const typeSearch = (value: string) => {
-  const input = document.querySelector<HTMLInputElement>('input[aria-label="Search settings"]');
-  if (!input) return;
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-};
-
 function Fixture() {
   const page = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [result, setResult] = useState("");
@@ -308,7 +295,6 @@ function Fixture() {
         const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
         seen.settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
         probe.remove();
-        seen.fallback = Boolean(document.querySelector('[data-setting="Switch to another agent automatically"]'));
         seen.agents = all('[data-slot="agent-row"]').map((row) => ({
           name: row.dataset.setting,
           state: text(row.querySelector('[data-slot="agent-state"]')),
@@ -382,10 +368,6 @@ function Fixture() {
       },
       () => {
         seen.afterBack = titles();
-        typeSearch("Who does what");
-      },
-      () => {
-        seen.searched = useApp.getState().selection;
         // This computer's login is also added here (#263): one row, the added one, in use.
         const [own, ...rest] = listed;
         if (!own?.status) return;

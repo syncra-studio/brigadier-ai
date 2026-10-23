@@ -26,7 +26,6 @@ use brigadier_providers::{Artifact, ProviderKind};
 use super::workers::repo_access_for;
 use super::{SessionManager, blocking};
 use crate::model::{ConversationId, FolderTrustReport, PermissionLevel, Project, ProjectId, Setup};
-use crate::work::Task;
 use crate::{Error, Result};
 
 /// The ledger owner of the folder trust a project's answer wrote.
@@ -134,24 +133,6 @@ impl SessionManager {
     /// back stays recorded (and is retried at the next start).
     pub(super) async fn forget_project_trust(&self, id: &ProjectId) -> Vec<String> {
         self.runtime.ledger().dispose(&owner(id)).await.failures
-    }
-
-    /// A terminal of a trusted folder's task that starts outside the checkout (a read-only
-    /// Codex worker's scratch folder): `cli` trusts that folder too, until the task ends.
-    pub(super) async fn trust_terminal_folder(&self, task: &Task, cli: TrustCli, cwd: &Path) {
-        if self.repo_trust(&task.conversation_id) != Some(true) {
-            return;
-        }
-        let failures = self
-            .write_cli_trust(
-                &format!("task:{}", task.id),
-                &cwd.display().to_string(),
-                &[cli],
-            )
-            .await;
-        if !failures.is_empty() {
-            tracing::warn!(task = %task.id, ?failures, "a terminal's folder trust was not written");
-        }
     }
 
     /// The files `cli` keeps folder trust in, for the CLIs' environment: the user's own, and
@@ -339,7 +320,7 @@ impl SessionManager {
                 }
                 let live = self.existing_task_live(&task.id);
                 let cli = match &live {
-                    Some(live) => live.has_cli().await,
+                    Some(live) => live.executing().await,
                     None => false,
                 };
                 let busy = match &live {

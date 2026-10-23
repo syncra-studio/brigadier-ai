@@ -2,9 +2,8 @@
 import type { ProviderKind } from "./ProviderKind";
 
 /**
- * A provider, model or effort asked for by the orchestrator (`delegate_task`) or the user.
- * Every part is optional; what is left out is routed. Kept on the task, so a hand-off or a
- * resume keeps it ([`Query::hold_pin`]).
+ * A provider, model or effort asked for by the orchestrator or the user, as tasks recorded
+ * before S16b keep it. Every part is optional.
  */
 export type Pin = { provider: ProviderKind | null, 
 /**

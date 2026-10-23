@@ -18,12 +18,9 @@ use brigadier_providers::{
     TurnInput,
 };
 
-use brigadier_router::{
-    Decision, Exclusion, MergedModel, Needs, Pin, QualityTier, Routed, TaskCategory,
-};
+use brigadier_router::{MergedModel, QualityTier};
 
 use super::landing::diff_stat_of;
-use super::routing::{Ask, Trial};
 use super::source_actions::MergedPr;
 use super::{SessionManager, blocking, git_error};
 use crate::accounts::AccountRef;
@@ -224,18 +221,9 @@ impl SessionManager {
         self.admit()?;
         let _fence = self.enter(id)?;
         let (path, _) = self.checkout(id)?;
-        let project = self.core.conversation(id)?.project_id;
         let merged = if push { self.merged_pr(id).await } else { None };
-        self.commit_at(
-            path,
-            project,
-            merged,
-            message,
-            include_unstaged,
-            push,
-            amend,
-        )
-        .await
+        self.commit_at(path, merged, message, include_unstaged, push, amend)
+            .await
     }
 
     /// The user's commit in a project's folder, from the Source pane of a session not started
@@ -250,16 +238,8 @@ impl SessionManager {
     ) -> Result<CommitOutcome> {
         self.admit()?;
         let path = self.project_checkout(project)?;
-        self.commit_at(
-            path,
-            Some(project.clone()),
-            None,
-            message,
-            include_unstaged,
-            push,
-            amend,
-        )
-        .await
+        self.commit_at(path, None, message, include_unstaged, push, amend)
+            .await
     }
 
     /// `merged`: the session's pull request GitHub merged, whose kept branch a push replaces.
@@ -267,7 +247,6 @@ impl SessionManager {
     async fn commit_at(
         &self,
         path: PathBuf,
-        project: Option<ProjectId>,
         merged: Option<MergedPr>,
         message: Option<String>,
         include_unstaged: bool,
@@ -303,8 +282,7 @@ impl SessionManager {
             }
             _ => {
                 let patch = self.pending_patch(&path, include_unstaged).await?;
-                self.write_commit_message(project.as_ref(), &path, &patch)
-                    .await?
+                self.write_commit_message(&path, &patch).await?
             }
         };
         let message = if self.core.settings().omit_ai_coauthors {
@@ -399,7 +377,6 @@ impl SessionManager {
     /// write it, when it didn't.
     pub(super) async fn write_commit_message(
         &self,
-        project: Option<&ProjectId>,
         path: &Path,
         patch: &str,
     ) -> Result<(String, Option<String>)> {
@@ -420,7 +397,6 @@ impl SessionManager {
         let (message, why) = self
             .write_text(
                 settings.git_writer.as_ref(),
-                project,
                 &system,
                 &prompt,
                 "the message",
@@ -435,58 +411,54 @@ impl SessionManager {
     }
 
     /// A short text (`what`, for errors: "the message") written in a throwaway session with no
-    /// tools, by `chosen` (else Automatic, routing's pick for git text): its reply as written.
-    /// A model at its usage limit hands it to routing's next pick (another account, then the
-    /// other provider). With it, why the `chosen` model didn't write it, when it didn't.
+    /// tools, by `chosen` (else Automatic: a ready CLI's cheapest model for chores): its reply
+    /// as written. A model at its usage limit hands it to another account of its provider,
+    /// then to the next model. With it, why the `chosen` model didn't write it, when it didn't.
     pub(super) async fn write_text(
         &self,
         chosen: Option<&ModelChoice>,
-        project: Option<&ProjectId>,
         system: &str,
         prompt: &str,
         what: &str,
     ) -> Result<(String, Option<String>)> {
-        let mut exclude: Vec<Exclusion> = Vec::new();
+        let mut exclude: Vec<(ProviderKind, String)> = Vec::new();
         let mut limited: Vec<(AccountRef, String)> = Vec::new();
         let mut runs = 0;
-        // Each pass either runs the writer or rules a model out, and routing runs out of
-        // models; the cap only guards against a pick that ignores its exclusions.
+        // Each pass either runs the writer or rules a model out, and the models run out; the
+        // cap only guards against a pick that ignores its exclusions.
         for _ in 0..WRITE_ATTEMPTS * 4 {
             if runs == WRITE_ATTEMPTS {
                 break;
             }
-            let (routed, mut account, why) =
-                self.writer_route(chosen, project, &exclude, what).await?;
+            let (choice, mut account, why) = self.writer_route(chosen, &exclude, what).await?;
+            let model = choice.model.clone().unwrap_or_default();
             // The user's model writes it as they set it, Fast included.
             let fast = why.is_none() && chosen.is_some_and(|chosen| chosen.fast == Some(true));
-            if limited.contains(&(account.clone(), routed.model.clone())) {
+            if limited.contains(&(account.clone(), model.clone())) {
                 // Another account of the same model that still has room, else that model is
                 // out until its reset.
                 match self
                     .runtime
-                    .switch_target(&account, Some(&routed.model))
-                    .filter(|next| !limited.contains(&(next.clone(), routed.model.clone())))
+                    .switch_target(&account, choice.model.as_deref())
+                    .filter(|next| !limited.contains(&(next.clone(), model.clone())))
                 {
                     Some(next) => account = next,
                     None => {
-                        exclude.push(Exclusion {
-                            provider: routed.provider,
-                            model: Some(routed.model.clone()),
-                        });
+                        exclude.push((choice.provider, model));
                         continue;
                     }
                 }
             }
             runs += 1;
             match self
-                .run_writer(&routed, fast, &account, system, prompt)
+                .run_writer(&choice, fast, &account, system, prompt)
                 .await?
             {
                 // Why the user's model didn't write it, of the pass that did.
                 Some(text) => return Ok((text, why)),
                 None => {
-                    tracing::info!(model = %routed.model, "the writer hit its usage limit");
-                    limited.push((account, routed.model));
+                    tracing::info!(model = %model, "the writer hit its usage limit");
+                    limited.push((account, model));
                 }
             }
         }
@@ -496,66 +468,65 @@ impl SessionManager {
     }
 
     /// The model, effort and account the next message is written with, and why it isn't the
-    /// user's `chosen` one when it isn't. Automatic: routing's pick for git text.
+    /// user's `chosen` one when it isn't. Automatic: the first ready CLI's cheapest model the
+    /// user left on ([`Self::writer_model`]), leaving out the `exclude`d ones.
     async fn writer_route(
         &self,
         chosen: Option<&ModelChoice>,
-        project: Option<&crate::model::ProjectId>,
-        exclude: &[Exclusion],
+        exclude: &[(ProviderKind, String)],
         what: &str,
-    ) -> Result<(Routed, AccountRef, Option<String>)> {
-        let ask = |pin: Option<Pin>| Ask {
-            category: TaskCategory::GitText,
-            areas: &[],
-            floor: brigadier_router::default_floor(TaskCategory::GitText),
-            floor_binds: false,
-            needs: Needs::default(),
-            pin,
-            hold_pin: false,
-            avoid: None,
-            distinct_from: Vec::new(),
-            exclude,
-            project_id: project,
-            trial: Trial::Never,
+    ) -> Result<(ModelChoice, AccountRef, Option<String>)> {
+        let excluded = |provider: ProviderKind, model: Option<&str>| {
+            exclude
+                .iter()
+                .any(|(p, m)| *p == provider && Some(m.as_str()) == model)
         };
-        if let Some(chosen) = chosen {
-            let pin = Pin {
-                provider: Some(chosen.provider),
-                model: chosen.model.clone(),
-                effort: chosen.effort.clone(),
-                by_user: true,
-            };
-            if let Decision::Run(routed) = self.decide(&ask(Some(pin))).await
-                && routed.provider == chosen.provider
-                && chosen
-                    .model
-                    .as_deref()
-                    .is_none_or(|model| model == routed.model)
-            {
-                let account = self.runtime.account_for(chosen);
-                return Ok((routed, account, None));
-            }
+        let settings = self.core.settings();
+        let switched_on = |choice: &ModelChoice| {
+            choice.model.as_deref().is_none_or(|id| {
+                crate::routing::availability::model_available(&settings, choice.provider, id)
+            })
+        };
+        if let Some(chosen) = chosen
+            && self.provider_ready(chosen.provider)
+            && switched_on(chosen)
+            && !excluded(chosen.provider, chosen.model.as_deref())
+            && self.choice_available(chosen).await
+        {
+            let account = self.runtime.account_for(chosen);
+            return Ok((chosen.clone(), account, None));
         }
-        let routed = match self.decide(&ask(None)).await {
-            Decision::Run(routed) => routed,
-            Decision::Wait(waiting) => {
-                return Err(Error::Invalid(format!(
-                    "no model can write {what} now: {}",
-                    waiting.reason
-                )));
+        for provider in ProviderKind::ALL {
+            if !self.provider_ready(provider) {
+                continue;
             }
-        };
-        let why = chosen.map(|chosen| {
-            format!(
-                "{} isn't available now, so Automatic wrote the message with {}.",
-                choice_name(chosen.provider, chosen.model.as_deref()),
-                choice_name(routed.provider, Some(&routed.model)),
-            )
-        });
-        let account = self
-            .runtime
-            .launch_account(routed.provider, Some(&routed.model));
-        Ok((routed, account, why))
+            let Some((model, effort)) = self.writer_model(provider) else {
+                continue;
+            };
+            let choice = ModelChoice {
+                provider,
+                model: Some(model),
+                effort,
+                fast: None,
+                account: None,
+            };
+            if excluded(provider, choice.model.as_deref()) || !self.choice_available(&choice).await
+            {
+                continue;
+            }
+            let why = chosen.map(|chosen| {
+                format!(
+                    "{} isn't available now, so Automatic wrote the message with {}.",
+                    choice_name(chosen.provider, chosen.model.as_deref()),
+                    choice_name(provider, choice.model.as_deref()),
+                )
+            });
+            let account = self
+                .runtime
+                .launch_account(provider, choice.model.as_deref());
+            return Ok((choice, account, why));
+        }
+        Err(Error::Invalid(format!("no model can write {what} now")))
     }
 
     /// The latest commit subjects of the checkout's branch, for the writer to match; none
@@ -573,12 +544,12 @@ impl SessionManager {
         .unwrap_or_default()
     }
 
-    /// One try of the message writer on `routed`'s model (on its fast tier when `fast`) under
-    /// `account`: its reply, or `None` when it hit its usage limit (noted, so routing and the
-    /// account choice move on).
+    /// One try of the message writer on `choice`'s model (on its fast tier when `fast`) under
+    /// `account`: its reply, or `None` when it hit its usage limit (noted, so the account
+    /// choice moves on).
     async fn run_writer(
         &self,
-        routed: &Routed,
+        choice: &ModelChoice,
         fast: bool,
         account: &AccountRef,
         system: &str,
@@ -592,8 +563,8 @@ impl SessionManager {
         })?;
         let spec = SessionSpec {
             cwd: dir.clone(),
-            model: Some(routed.model.clone()),
-            effort: routed.effort.clone(),
+            model: choice.model.clone(),
+            effort: choice.effort.clone(),
             fast,
             origin: Origin::New,
             ephemeral: true,
@@ -671,6 +642,28 @@ impl SessionManager {
         let _ = self.runtime.ledger().dispose(&owner).await;
         let _ = tokio::fs::remove_dir_all(&dir).await;
         written
+    }
+
+    /// The model Automatic writes git text with on `provider`: its cheapest model for chores
+    /// ([`Self::cheapest`]), else the first model of its list the user left on.
+    fn writer_model(&self, provider: ProviderKind) -> Option<(String, Option<String>)> {
+        if let Ok(cheapest) = self.cheapest(provider) {
+            return Some(cheapest);
+        }
+        let settings = self.core.settings();
+        let listed = self
+            .runtime
+            .overview(provider)
+            .and_then(|overview| overview.models)
+            .map(|catalog| catalog.models)
+            .unwrap_or_default();
+        listed
+            .iter()
+            .find(|model| {
+                !model.legacy
+                    && crate::routing::availability::model_available(&settings, provider, &model.id)
+            })
+            .map(|model| (model.id.clone(), None))
     }
 
     /// The provider's cheapest model for a one-off chore, at low effort where it has efforts:

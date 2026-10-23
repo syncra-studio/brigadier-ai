@@ -3,8 +3,6 @@
 //! checkout they work in, only while the user trusts the folder; reviewers and other one-shot
 //! runs never get it.
 
-use serde_json::json;
-
 use brigadier_providers::{ProviderKind, SessionSpec, ToolSet};
 
 use super::auto_merge_tests::script;
@@ -13,15 +11,8 @@ use super::{Flow, Options, Reply};
 fn flow_script() -> super::Script {
     script(|turn| async move {
         if turn.is_orchestrator() && turn.input.contains("Add the file.") {
-            let reply = turn
-                .call(
-                    "delegate_task",
-                    json!({"effort": "high", "title": "Add the file", "kind": "implement",
-                           "spec": "Create file.txt.", "provider": "claude"}),
-                )
-                .await;
-            assert!(!reply.is_error, "{}", reply.text);
-            return Reply::text("Delegated.");
+            turn.start_worker("Add the file", "Create file.txt.").await;
+            return Reply::text("Started a worker.");
         }
         Reply::text("Done.")
     })
@@ -49,8 +40,8 @@ async fn a_thread_and_its_worker_get_the_projects_setup_in_a_trusted_folder() {
     let workers = of(&flow, ToolSet::Lean);
     assert!(!workers.is_empty(), "a worker ran");
     for worker in &workers {
-        let worktree = worker.add_dirs.first().expect("the worker's worktree");
-        assert_eq!(worker.project.as_ref(), Some(worktree), "{worker:#?}");
+        // It starts in its worktree, as a CLI started there would.
+        assert_eq!(worker.project.as_ref(), Some(&worker.cwd), "{worker:#?}");
     }
     // Every other run keeps the sealed setup.
     assert!(

@@ -7,10 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
-
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::work::RequestState;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -97,72 +94,6 @@ async fn a_threads_scratch_goes_once_its_request_is_over() {
     .await;
     super::eventually("its processes to end", || all_ended(&children)).await;
     assert!(tmp.is_dir(), "{}", tmp.display());
-    end(&children);
-    flow.stop().await;
-}
-
-/// A request waiting on the user's answer keeps the thread's scratch; once it is over, it goes.
-#[tokio::test]
-async fn a_waiting_request_keeps_the_threads_scratch() {
-    let children: Arc<Mutex<Vec<Child>>> = Arc::default();
-    let made = children.clone();
-    let flow = Flow::start(
-        "scratch-waiting",
-        Options::default(),
-        script(move |turn| {
-            let made = made.clone();
-            async move {
-                if turn.input.contains("[answer]") {
-                    return Reply::text("Kept the CSV export.");
-                }
-                litter(&turn, &made);
-                let asked = turn
-                    .call(
-                        "ask_user",
-                        json!({ "questions": [{ "question": "Which format?",
-                            "options": [{ "label": "CSV" }, { "label": "JSON" }],
-                            "recommended": 0 }] }),
-                    )
-                    .await;
-                assert!(!asked.is_error, "{}", asked.text);
-                Reply::text("")
-            }
-        }),
-    )
-    .await;
-    flow.say("Plan the export.").await;
-    let board = flow
-        .until("the request to wait on its card", |board| {
-            board
-                .latest_request()
-                .is_some_and(|request| request.state == RequestState::Waiting)
-        })
-        .await;
-    flow.settled().await;
-    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
-    // Give a sweep the time it would take: nothing goes.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    assert!(tmp.join("bt-main/target/out.bin").exists());
-    assert!(
-        children
-            .lock()
-            .unwrap()
-            .iter_mut()
-            .all(|child| child.try_wait().ok().flatten().is_none())
-    );
-    let card = board
-        .questions
-        .values()
-        .find(|question| question.is_open())
-        .unwrap()
-        .id
-        .clone();
-    flow.manager
-        .answer_question(flow.conversation.clone(), card, vec!["CSV".into()], None)
-        .await
-        .unwrap();
-    super::eventually("the scratch to go", || !tmp.join("bt-main").exists()).await;
-    super::eventually("its processes to end", || all_ended(&children)).await;
     end(&children);
     flow.stop().await;
 }

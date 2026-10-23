@@ -105,7 +105,7 @@ status: string,
  */
 durationMs: number, 
 /**
- * The `out-…` alias of its stored output, which `read_artifact` reads. It is also the
+ * The `out-…` alias of its stored output. It is also the
  * check's evidence reference: a report or a claim cites it (BUILD-PLAN E1, E2).
  */
 artifact: string | null, 

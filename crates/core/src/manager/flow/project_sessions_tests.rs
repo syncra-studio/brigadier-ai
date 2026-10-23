@@ -423,64 +423,6 @@ fn bash(status: brigadier_providers::ItemStatus) -> brigadier_providers::Provide
     }
 }
 
-/// A thread that, besides [`writing`] and merging on the user's click, runs a long command on
-/// "Run the tests.", routes the follow-up it gets meanwhile as `routing` says, and waits at
-/// the gate. Every thread input is logged by worktree.
-fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
-    let write = writing(None);
-    script(move |turn| {
-        let (inputs, write, routing) = (inputs.clone(), write.clone(), routing.clone());
-        async move {
-            if !turn.is_orchestrator() {
-                return Reply::text("Done.");
-            }
-            inputs
-                .lock()
-                .unwrap()
-                .push((turn.cwd.clone(), turn.input.clone()));
-            if turn.input.contains("[merge] The user clicked") {
-                let reply = turn.call("finish_session", serde_json::json!({})).await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Merged.");
-            }
-            if !said(&turn, "Run the tests.") {
-                return write(turn).await;
-            }
-            turn.emit(bash(brigadier_providers::ItemStatus::InProgress))
-                .await;
-            // An earlier follow-up that joined on its own may have left its steer unread:
-            // route the one this turn is for.
-            let text = routing.follow_up.lock().unwrap().clone();
-            let mut block = String::new();
-            while let Some(next) = turn.steered().await {
-                if next.contains("[follow-up ") && next.contains(&text) {
-                    block = next;
-                    break;
-                }
-            }
-            let id = block
-                .split("[follow-up ")
-                .nth(1)
-                .and_then(|rest| rest.split(']').next())
-                .unwrap_or_default()
-                .to_owned();
-            let mut args = routing.args.lock().unwrap().clone();
-            args["follow_up"] = serde_json::Value::String(id);
-            let reply = turn.call("route_follow_up", args).await;
-            assert!(!reply.is_error, "{}", reply.text);
-            if reply.text.starts_with("It joins this work") {
-                // The joined message, steered into this turn.
-                turn.steered().await;
-            }
-            routing.results.lock().unwrap().push(reply.text);
-            routing.gate.notified().await;
-            turn.emit(bash(brigadier_providers::ItemStatus::Completed))
-                .await;
-            Reply::text("The tests pass.")
-        }
-    })
-}
-
 impl Routing {
     /// Runs one routed follow-up on `tab`: "Run the tests.", then `follow_up` while it works,
     /// routed by `args`. Returns route_follow_up's answer, with the turn still at the gate.
@@ -549,204 +491,6 @@ fn last_queue(flow: &Flow, id: &ConversationId) -> crate::work::MessageQueue {
     })
 }
 
-/// Queued routes: the thread's choice is carried out as it says. join steers it in; wait
-/// keeps it queued; new_session keeps it queued with the offer and starts nothing; session
-/// sends it to the sibling as the user's message, with a notice here that Undo takes back;
-/// session to a sibling that merged goes through with that fact; a session that isn't there
-/// leaves it unsorted.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
-    let inputs: Inputs = Arc::default();
-    let routes = Arc::new(Routing::default());
-    let flow = Flow::start(
-        "sessions-routes",
-        Options::default(),
-        routing(inputs.clone(), routes.clone()),
-    )
-    .await;
-    let a = flow.conversation.clone();
-    let b = sibling_of(&flow, &a).await;
-    flow.say_to(&a, "Write alpha.").await;
-    flow.settled_in(&a).await;
-    flow.say_to(&b, "Write beta.").await;
-    flow.settled_in(&b).await;
-    let (Some(folder_a), _, _) = worktree(&flow, &a) else {
-        panic!("a's worktree")
-    };
-    let (Some(folder_b), _, _) = worktree(&flow, &b) else {
-        panic!("b's worktree")
-    };
-
-    // join
-    let joined = routes
-        .route(
-            &flow,
-            &a,
-            "Also check the docs.",
-            serde_json::json!({ "route": "join" }),
-        )
-        .await;
-    assert!(joined.starts_with("It joins this work"), "{joined}");
-    assert!(last_queue(&flow, &a).items.is_empty());
-    routes.release(&flow, &a, &inputs).await;
-
-    // wait
-    let waits = routes
-        .route(
-            &flow,
-            &a,
-            "Then bump the version.",
-            serde_json::json!({ "route": "wait" }),
-        )
-        .await;
-    assert!(waits.starts_with("It waits in the queue"), "{waits}");
-    let queue = last_queue(&flow, &a);
-    assert_eq!(queue.items.len(), 1);
-    assert!(!queue.items[0].deciding && !queue.items[0].offer_tab);
-    routes.release(&flow, &a, &inputs).await;
-
-    // new_session: the offer, and no session started.
-    let tabs = flow.core.catalog().conversations.len();
-    let offered = routes
-        .route(
-            &flow,
-            &a,
-            "Draft the release notes.",
-            serde_json::json!({ "route": "new_session" }),
-        )
-        .await;
-    assert!(
-        offered.contains("\"Open as a new session\" or \"Run here\""),
-        "{offered}"
-    );
-    let queue = last_queue(&flow, &a);
-    assert_eq!(queue.items.len(), 1);
-    assert!(queue.items[0].offer_tab && !queue.items[0].deciding);
-    assert_eq!(
-        flow.core.catalog().conversations.len(),
-        tabs,
-        "no session started"
-    );
-    // The turn ends and the offer stays until the user picks; "Run here" sends it here.
-    routes.gate.notify_one();
-    flow.settled_in(&a).await;
-    let queue = last_queue(&flow, &a);
-    assert!(
-        queue.items.len() == 1 && queue.items[0].offer_tab,
-        "still offered"
-    );
-    let notes = "Draft the release notes.";
-    let heard_before = heard(&inputs, &folder_a, notes);
-    let requests_before = flow.board_of(&a).await.requests.len();
-    flow.manager
-        .run_queued_here(&a, &queue.items[0].id)
-        .await
-        .unwrap();
-    // Its request too: the queue drops the item a write before the request shows.
-    flow.until_in(&a, "the queued message to run", |board| {
-        board.queue.items.is_empty() && board.requests.len() > requests_before
-    })
-    .await;
-    flow.settled_in(&a).await;
-    assert_eq!(
-        heard(&inputs, &folder_a, notes),
-        heard_before + 1,
-        "ran here"
-    );
-
-    // A session that isn't there: a fact, and the follow-up stays the thread's to sort.
-    let nowhere = routes
-        .route(
-            &flow,
-            &a,
-            "Also lint it.",
-            serde_json::json!({ "route": "session", "session": "nope" }),
-        )
-        .await;
-    assert!(
-        nowhere.contains("No other session of this project is session nope"),
-        "{nowhere}"
-    );
-    assert!(nowhere.contains(&b.0), "lists the sessions: {nowhere}");
-    // Still unsorted: deciding, or already joined by itself after the judging wait.
-    let queue = last_queue(&flow, &a);
-    assert!(queue.moved.is_empty() && queue.items.iter().all(|item| item.deciding));
-    routes.release(&flow, &a, &inputs).await;
-
-    // session: it goes to B as the user's message; A keeps a notice.
-    let message = "Rename the beta file.";
-    let moved = routes
-        .route(
-            &flow,
-            &a,
-            message,
-            serde_json::json!({ "route": "session", "session": b.0 }),
-        )
-        .await;
-    assert!(moved.contains("It went to session"), "{moved}");
-    assert!(moved.contains("notice with Undo"), "{moved}");
-    assert!(!moved.contains("already merged"), "{moved}");
-    let queue = last_queue(&flow, &a);
-    assert!(queue.items.is_empty(), "{:?}", queue.items);
-    assert_eq!(queue.moved.len(), 1);
-    assert_eq!(queue.moved[0].to, b);
-    assert_eq!(queue.moved[0].text, message);
-    routes.release(&flow, &a, &inputs).await;
-    flow.settled_in(&b).await;
-    assert_eq!(heard(&inputs, &folder_b, message), 1, "B got it");
-    assert_eq!(
-        heard(&inputs, &folder_b, "whose thread sent it on to you"),
-        0,
-        "the message only, as the user wrote it"
-    );
-    let a_heard = heard(&inputs, &folder_a, message);
-
-    // Undo: it is A's again; B is told nothing.
-    let item = last_queue(&flow, &a).moved[0].id.clone();
-    flow.manager.settle_moved(&a, &item, true).await.unwrap();
-    flow.settled_in(&a).await;
-    assert!(last_queue(&flow, &a).moved.is_empty());
-    assert_eq!(
-        heard(&inputs, &folder_a, message),
-        a_heard + 1,
-        "sent here again"
-    );
-    flow.say_to(&b, "Write gamma.").await;
-    flow.settled_in(&b).await;
-    assert_eq!(heard(&inputs, &folder_b, "took their message"), 0);
-
-    // B merges; a follow-up routed to it goes, with the fact attached.
-    flow.manager
-        .merge_session(&b, super::click())
-        .await
-        .unwrap();
-    flow.until_in(&b, "b's merge", |board| {
-        board
-            .orchestrator_steps
-            .iter()
-            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
-    })
-    .await;
-    flow.settled_in(&b).await;
-    let late = routes
-        .route(
-            &flow,
-            &a,
-            "Also tidy the beta file.",
-            serde_json::json!({ "route": "session", "session": b.0 }),
-        )
-        .await;
-    assert!(late.contains("It went to session"), "{late}");
-    assert!(
-        late.contains("has already merged into `main` at "),
-        "{late}"
-    );
-    routes.release(&flow, &a, &inputs).await;
-    flow.settled_in(&b).await;
-    assert_eq!(heard(&inputs, &folder_b, "Also tidy the beta file."), 1);
-    flow.stop().await;
-}
-
 /// A request that settles with the tab's branch ahead of base records one RequestReady with
 /// the head; the tab reads ready, then merged after its merge (whose request records none),
 /// and the board names those states.
@@ -762,9 +506,8 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     let a = flow.conversation.clone();
     let b = sibling_of(&flow, &a).await;
     let state = |id: &ConversationId| {
-        let tab = flow.core.conversation(id).unwrap();
-        let manager = flow.manager.clone();
-        async move { manager.tab_state(&tab).await }
+        let (flow, id) = (&flow, id.clone());
+        async move { flow.settled_state(&id).await }
     };
     assert_eq!(state(&b).await, None, "a new tab has no state");
 
@@ -813,13 +556,6 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         .count();
     assert_eq!(recorded, 1);
 
-    let words = |flow: &Flow, id: &ConversationId| {
-        let tab = flow.core.conversation(id).unwrap();
-        let manager = flow.manager.clone();
-        async move { manager.tab_words(&tab).await }
-    };
-    assert_eq!(words(&flow, &a).await, "ready to merge");
-
     flow.manager
         .merge_session(&a, super::click())
         .await
@@ -845,6 +581,5 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         1,
         "the merge's own request is not ready"
     );
-    assert_eq!(words(&flow, &a).await, "merged");
     flow.stop().await;
 }

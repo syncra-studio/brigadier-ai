@@ -1,5 +1,5 @@
 //! What the session's thread read and searched (THREAD-PLAN.md Q8 lever 1, phase 2 step 5),
-//! for the context pack phase 3 writes for each worker.
+//! recorded on its board. The worker context packs that read it went in S16b.
 //!
 //! The thread's CLI tells it as [`ProviderEvent::Looked`], in the same words for both vendors
 //! (Claude's `Read`, `Grep` and `Glob`, and the simple reads and searches of its `Bash`
@@ -20,7 +20,6 @@ use brigadier_providers::{FileSearch, LineRange, ProviderEvent};
 
 use super::SessionManager;
 use super::conversation::ConvLive;
-use crate::Result;
 use crate::model::{ConversationId, DomainEvent};
 use crate::work::{ThreadRead, ThreadSearch};
 
@@ -60,7 +59,8 @@ pub(crate) struct ReadFile {
     pub(crate) recency: u64,
 }
 
-/// What [`SessionManager::thread_reads`] returns.
+/// The log as it stands, for its tests: nothing reads it since context packs went (S16b).
+#[cfg(test)]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ThreadReads {
     /// Most recently read first.
@@ -141,6 +141,7 @@ impl ReadLog {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> ThreadReads {
         let mut files: Vec<ReadFile> = self.files.values().cloned().collect();
         files.sort_by_key(|file| std::cmp::Reverse(file.recency));
@@ -177,40 +178,6 @@ fn merge(lines: &mut Vec<LineRange>, range: LineRange) {
 }
 
 impl SessionManager {
-    /// What the session's thread read and searched, for the context pack each worker starts
-    /// with (THREAD-PLAN.md Q8 lever 1, phase 3): per file the union of the lines it read
-    /// (or the whole file), most recently read first; then its searches, most recent first,
-    /// with the files they found. Only the thread's own tool calls count, never a worker's.
-    ///
-    /// Bounded per conversation: the [`FILES_KEPT`] most recently read files, the
-    /// [`SEARCHES_KEPT`] latest searches and [`HITS_STORED`] files per search. What goes past
-    /// those is counted (`dropped_files`, `dropped_searches`, a search's `more_hits`), never
-    /// dropped silently. Files outside the thread's workspace are kept, marked `outside`.
-    #[cfg_attr(not(all(test, unix)), allow(dead_code))]
-    pub(crate) async fn thread_reads(&self, id: &ConversationId) -> Result<ThreadReads> {
-        Ok(self.core.board(id).await?.thread_reads.snapshot())
-    }
-
-    /// [`Self::thread_reads`] with what the thread's running turn read so far and isn't
-    /// recorded yet, for a worker its turn starts (phase 3's context pack). The pump records
-    /// what is held as soon as the thread starts a `delegate_task` call, before the call
-    /// reaches Brigadier, so a read made just before it is in the board either way.
-    pub(crate) async fn thread_reads_now(&self, id: &ConversationId) -> Result<ThreadReads> {
-        let mut log = (*self.core.board(id).await?.thread_reads).clone();
-        let held = match self.conv(id) {
-            Ok(conv) => conv.peek_looked().await,
-            Err(_) => Vec::new(),
-        };
-        if !held.is_empty() {
-            let workspace = self.recorded_workspace(id).map(|workspace| workspace.path);
-            let scratch = self.thread_cwd(id);
-            let (reads, searches) =
-                super::blocking(move || Ok(resolve(held, workspace.as_deref(), &scratch))).await?;
-            log.apply(&reads, &searches);
-        }
-        Ok(log.snapshot())
-    }
-
     /// Holds what one of the thread's tool calls read or searched until its turn ends.
     pub(super) async fn hold_looked(&self, conv: &ConvLive, event: ProviderEvent) {
         if let Some(batch) = conv.hold_looked(event).await {

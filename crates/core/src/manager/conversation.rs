@@ -4,19 +4,12 @@
 //! gone. Turns are non-blocking for everyone else:
 //!
 //! - A message sent while no turn runs starts one. While a turn runs it waits in the queue,
-//!   or is steered into the turn when the user asks (a queued message's Steer).
-//! - In a session, a message sent while the newest answer still works (its turn, a worker or
-//!   a card) is a follow-up: it waits in the queue, marked deciding, while the orchestrator
-//!   judges it with `route_follow_up`. One that belongs to that answer joins it (steered in,
-//!   shown inside its block); one of its own waits until no answer works, then goes as its
-//!   own request. Judging is optional: a follow-up the orchestrator didn't judge by the end
-//!   of its turn joins that turn's request, and one still unjudged after [`DECIDING_WAIT`]
-//!   (the thread is inside a long command) joins the working answer. A message steered in while a command of the thread's runs says so
+//!   or is steered into the turn when the user asks (a queued message's Steer), as with a
+//!   plain CLI. A message steered in while a command of the thread's runs says so
 //!   (`held_by`) until that command ends and the thread can read it.
-//! - Worker results arrive as [`Envelope`]s in the inbox. Only final reports, blocking
-//!   questions, card outcomes and task failures ever enter the orchestrator's context;
-//!   worker progress never does. An envelope arriving while the orchestrator is idle starts
-//!   a turn.
+//! - What Brigadier tells the thread (a card's outcome, a CI result) arrives as an
+//!   [`Envelope`] in the inbox. An envelope arriving while the orchestrator is idle starts a
+//!   turn.
 //! - Each turn serves one user request (see [`crate::work::UserRequest`]). When a turn ends,
 //!   the next one carries, in this order: user messages that could not be steered; else
 //!   every envelope of one request (a worker's question first); else the next queued
@@ -50,7 +43,7 @@ use super::{EventSource, SessionManager};
 use crate::knowledge::RebirthTrigger;
 use crate::model::{
     CardId, ConversationId, ConversationKind, ConversationStatus, DomainEvent, Lifecycle, Mention,
-    Message, MessageRole, ModelChoice, ModelFallback, Notice, Setup, streams,
+    Message, MessageRole, ModelChoice, Notice, Setup, streams,
 };
 use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
@@ -67,10 +60,6 @@ use crate::{Error, Result, now_ms};
 
 /// Text deltas arriving within this window are stored as one event.
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
-
-/// How long a follow-up waits for the thread's judgment before it joins the working answer:
-/// a thread inside a long command can't judge it, and the user shouldn't watch it decide.
-pub(crate) const DECIDING_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 20 });
 
 /// Characters of a CLI job's output its message to the thread carries (the end of it).
 const JOB_OUTPUT_TAIL: usize = 4000;
@@ -154,26 +143,6 @@ pub(crate) struct Envelope {
     pub task_id: Option<TaskId>,
     /// The text the orchestrator reads.
     pub text: String,
-}
-
-/// A reset time as a notice names it: "21:10" today, "Mon 21:10" within the week, else
-/// "Oct 24 21:10", in the computer's time zone.
-pub(super) fn reset_clock(at_ms: i64, now_ms: i64) -> String {
-    let zone = jiff::tz::TimeZone::system();
-    let (Ok(at), Ok(now)) = (
-        jiff::Timestamp::from_millisecond(at_ms),
-        jiff::Timestamp::from_millisecond(now_ms),
-    ) else {
-        return "?".into();
-    };
-    let (at, now) = (at.to_zoned(zone.clone()), now.to_zoned(zone));
-    let days = (at.date() - now.date()).get_days();
-    let format = match days {
-        0 => "%H:%M",
-        1..=6 => "%a %H:%M",
-        _ => "%b %-d %H:%M",
-    };
-    at.strftime(format).to_string()
 }
 
 /// Where Brigadier's MCP server finds its grant, in its environment.
@@ -301,15 +270,6 @@ struct ConvState {
     withdrawn: HashSet<TaskId>,
     /// The user messages the running turn carries (resent after a Chat fallback).
     in_turn: Vec<Message>,
-    /// Queued follow-ups the orchestrator is asked about in an inbox envelope, each with the
-    /// request that envelope belongs to.
-    asking: Vec<(String, Option<String>)>,
-    /// Queued follow-ups the running turn was asked about: the ones it leaves undecided wait
-    /// in the queue when it ends.
-    asked: Vec<String>,
-    /// Follow-ups that joined the working answer unjudged after [`DECIDING_WAIT`]: the
-    /// thread's late judgment of one is answered so.
-    joined_unjudged: Vec<String>,
     /// The thread's commands running now (shell, `run`, a Codex shell item), by
     /// item, oldest first: what a message sent into the turn waits behind.
     holding: Vec<(String, HeldBy)>,
@@ -645,11 +605,6 @@ impl ConvLive {
         std::mem::take(&mut self.state.lock().await.looked)
     }
 
-    /// What the thread read and searched since it was last recorded, left held.
-    pub(super) async fn peek_looked(&self) -> Vec<ProviderEvent> {
-        self.state.lock().await.looked.clone()
-    }
-
     /// The conversation's CLI session, while one runs.
     pub(crate) async fn live_cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.clone()
@@ -902,17 +857,6 @@ impl ConvLive {
         }
     }
 
-    /// Whether the user's Stop of the session came while `request` was open, and no turn of
-    /// it ran since.
-    pub(super) async fn stopped_open(&self, request: &str) -> bool {
-        self.state.lock().await.stopped_open.contains(request)
-    }
-
-    /// `task`'s news, marked on its way ([`SessionManager::announcing`]), isn't coming.
-    pub(super) async fn not_announcing(&self, task: &TaskId) {
-        self.state.lock().await.announcing.remove(task);
-    }
-
     /// Holds new turns while startup recovers what the stop left (`true`); released, whether
     /// something waits for a turn.
     pub(super) async fn recovering(&self, on: bool) -> bool {
@@ -1071,6 +1015,87 @@ pub(super) struct RequestActivity {
 }
 
 impl SessionManager {
+    /// Brings the conversation's requests up to date, as a plain CLI's turns go: a request
+    /// works while its turn runs (or its message waits for the turn that carries it, or the
+    /// CLI's background jobs it started still run), and its turn's end ends it, stopped or
+    /// failed when the turn was. A message waits only for the running turn.
+    pub(crate) async fn settle_requests(&self, conversation_id: &ConversationId) {
+        let Ok(board) = self.core.board(conversation_id).await else {
+            return;
+        };
+        if board.requests.is_empty() {
+            return;
+        }
+        let Ok(conv) = self.conv(conversation_id) else {
+            return;
+        };
+        let activity = conv.request_activity().await;
+        for request in board.requests.values() {
+            let id = request.id.as_str();
+            let outcome = activity.outcomes.get(id);
+            let jobs = activity.background.get(id).copied();
+            let state = if activity.running.as_deref() == Some(id)
+                || (activity.carried.contains(id) && outcome.is_none())
+                || (jobs.is_some() && outcome.is_none())
+            {
+                RequestState::Working
+            } else if let Some(outcome) = outcome {
+                outcome.clone()
+            } else if matches!(
+                request.state,
+                RequestState::Stopped | RequestState::Failed { .. }
+            ) {
+                request.state.clone()
+            } else {
+                RequestState::Done
+            };
+            let over = state != RequestState::Working;
+            let jobs = jobs.filter(|running| *running > 0 && !over);
+            if over && matches!(request.state, RequestState::Working | RequestState::Waiting) {
+                // Before it reads done: whether it left work ready to merge, and the files a
+                // sibling tab changed too, are known by then. A pull request its turn merged on
+                // GitHub is recorded, and the session branch moved onto the new base, first.
+                // Boxed: its future stays off this one's stack.
+                Box::pin(self.reconcile_pr_merge(conversation_id, Some(id))).await;
+                self.note_ready(conversation_id, id).await;
+                self.close_request_tabs(conversation_id, id);
+            }
+            if let Err(err) = self
+                .core
+                .update_request(conversation_id, id, state, jobs)
+                .await
+            {
+                tracing::debug!(conversation = %conversation_id, error = %err, "could not update a request");
+            }
+        }
+        // No turn runs or waits to run: the next queued message goes.
+        let waiting = conv.kind == ConversationKind::Session
+            && activity.running.is_none()
+            && activity.carried.is_empty()
+            && !board.queue.paused
+            && board
+                .queue
+                .next_to_send()
+                .is_some_and(|item| !item.deciding);
+        if waiting {
+            self.kick(&conv);
+        }
+        // Requests all over: what the thread's commands left goes.
+        self.sweep_scratch_when_over(&conv);
+    }
+
+    /// The request new rows are filed under: the running turn's, else the conversation's
+    /// newest.
+    pub(crate) async fn request_for(&self, conversation_id: &ConversationId) -> Option<String> {
+        if let Ok(conv) = self.conv(conversation_id)
+            && let Some(request) = conv.running_request().await
+        {
+            return Some(request);
+        }
+        let board = self.core.board(conversation_id).await.ok()?;
+        board.latest_request().map(|request| request.id.clone())
+    }
+
     /// Sends a user message: starts a turn, or queues it, or steers it into the running turn.
     /// With `queue_index` (and no `steer`) it queues at that slot whenever it would wait: while
     /// a turn runs, whatever the queueing setting, or while the queue is paused.
@@ -1224,24 +1249,22 @@ impl SessionManager {
         Ok(queue)
     }
 
-    /// Sends a queued message now, into the running turn or a session's working answer (or
-    /// as a new turn when nothing works).
+    /// Sends a queued message now, into the running turn (or as a new turn when none runs).
     pub async fn steer_queued(&self, id: ConversationId, item_id: String) -> Result<()> {
         self.admit()?;
         let conv = self.conv(&id)?;
-        let working = self.working_request(&id).await;
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(&id, &item_id).await?;
                 self.core.append_queued(id.clone(), item).await
             })
             .await?;
-        self.join_working(&conv, message, working).await;
+        self.join_working(&conv, message).await;
         Ok(())
     }
 
-    /// A session's message: a follow-up while the newest answer works (see the module docs),
-    /// else a new turn, or a place in the queue while an older request's turn runs.
+    /// A session's message, as a plain CLI takes it: steered into the running turn when the
+    /// user steers, else a place in the queue while a turn runs, else a new turn.
     #[allow(clippy::too_many_arguments)]
     async fn send_to_session(
         &self,
@@ -1254,35 +1277,23 @@ impl SessionManager {
         paused: bool,
     ) -> Result<SendOutcome> {
         let id = &conv.id;
-        let working = self.working_request(id).await;
         let busy = {
             let mut state = conv.state.lock().await;
             state.last_activity_ms = now_ms();
             state.busy
         };
-        if steer && (busy || working.is_some()) {
+        if steer && busy {
             let message = conv
                 .user_write(
                     self.core
                         .append_user_message(id.clone(), text, attachments, mentions),
                 )
                 .await?;
-            self.join_working(conv, message.clone(), working).await;
+            self.join_working(conv, message.clone()).await;
             return Ok(SendOutcome::Sent(message));
         }
-        if let Some(working) = working.filter(|_| !paused) {
-            let item = conv
-                .user_write(
-                    self.core
-                        .enqueue(id, text, attachments, mentions, queue_index, true),
-                )
-                .await?;
-            self.ask_follow_up(conv, &item, working).await;
-            return Ok(SendOutcome::Queued(item));
-        }
         if busy || paused {
-            // An older request's turn runs (the newest answer is done), or the queue is paused:
-            // it waits for its own turn.
+            // A turn runs, or the queue is paused: it waits for its own turn.
             let item = conv
                 .user_write(
                     self.core
@@ -1302,15 +1313,9 @@ impl SessionManager {
         Ok(SendOutcome::Sent(message))
     }
 
-    /// Sends `message` into the answer that works now: steered into the running turn, or (the
-    /// orchestrator idle while workers run) carried by the next turn. Either way the thread
-    /// shows it inside that answer's block (`working`, the newest request, when idle).
-    pub(super) async fn join_working(
-        &self,
-        conv: &Arc<ConvLive>,
-        message: Message,
-        working: Option<String>,
-    ) {
+    /// Sends `message` into the running turn, which the thread shows it inside; else (the
+    /// turn just ended, or is still starting) the next turn carries it.
+    pub(super) async fn join_working(&self, conv: &Arc<ConvLive>, message: Message) {
         let mut state = conv.state.lock().await;
         let cli = state
             .cli
@@ -1346,7 +1351,7 @@ impl SessionManager {
         } else {
             // The turn is still starting (or none runs): the next turn carries it.
             state.pending.push(message.clone());
-            working
+            None
         };
         drop(state);
         self.note_steered(conv, message.request_id.as_deref(), into)
@@ -1448,243 +1453,9 @@ impl SessionManager {
         }
     }
 
-    /// Asks the orchestrator whether follow-up `item` belongs to the working answer of request
-    /// `working`: in its running turn, or in a turn of that request's own.
-    async fn ask_follow_up(&self, conv: &Arc<ConvLive>, item: &QueuedMessage, working: String) {
-        let preview = match self.core.board(&conv.id).await {
-            Ok(board) => {
-                // The block's own question: the first request of its steer chain.
-                let mut request = board.requests.get(&working);
-                for _ in 0..board.requests.len() {
-                    match request
-                        .and_then(|of| of.steered_into.as_deref())
-                        .and_then(|into| board.requests.get(into))
-                    {
-                        Some(into) => request = Some(into),
-                        None => break,
-                    }
-                }
-                request.map(|of| of.preview.clone()).unwrap_or_default()
-            }
-            Err(_) => String::new(),
-        };
-        let words = self.core.brief_words(&item.text, &item.attachments).await;
-        let files: Vec<AttachmentRef> = item
-            .attachments
-            .iter()
-            .filter(|attachment| !attachment.pasted)
-            .cloned()
-            .collect();
-        let mut tabs = Vec::new();
-        for tab in self.siblings(&conv.id).unwrap_or_default() {
-            tabs.push(prompts::TabLine {
-                state: self.tab_words(&tab).await.to_owned(),
-                id: tab.id.0,
-                title: tab.title,
-            });
-        }
-        let text = prompts::follow_up(&item.id, &preview, &words, &files, &tabs);
-        let mut state = conv.state.lock().await;
-        let steered = match (&state.cli, state.busy) {
-            (Some(cli), true) => cli
-                .session
-                .steer(TurnInput::text(text.clone()))
-                .await
-                .is_ok(),
-            _ => false,
-        };
-        self.judge_within(conv, &item.id);
-        if steered {
-            state.asked.push(item.id.clone());
-            let held = state.held_by();
-            if held.is_some() {
-                state.held_items.push(item.id.clone());
-            }
-            drop(state);
-            if let Some(held) = held {
-                self.hold(conv, &[], std::slice::from_ref(&item.id), held)
-                    .await;
-            }
-            self.log_injection(
-                &conv.id,
-                InjectionKind::FollowUp,
-                "follow-up".into(),
-                None,
-                text.len(),
-            )
-            .await;
-            return;
-        }
-        state.asking.push((item.id.clone(), Some(working.clone())));
-        drop(state);
-        let envelope = Envelope {
-            kind: InjectionKind::FollowUp,
-            label: "follow-up".into(),
-            task_id: None,
-            text,
-        };
-        self.deliver_for(&conv.id, envelope, Some(working)).await;
-    }
-
-    /// `route_follow_up`: the orchestrator's judgment of a queued follow-up. One that joins
-    /// the working answer is sent into it now; one of its own waits in the queue, offering a
-    /// new session when the thread says so; one for another session of the project goes there.
-    pub(crate) async fn route_follow_up(
-        &self,
-        id: &ConversationId,
-        args: &crate::tools::RouteFollowUp,
-    ) -> Result<String> {
-        use crate::tools::FollowUpRoute;
-        let item_id = args.follow_up.as_str();
-        let Some(route) = args.chosen() else {
-            return Err(Error::Invalid(
-                "route_follow_up needs a `route`: \"join\", \"wait\", \"new_session\" or \
-                 \"session\"."
-                    .into(),
-            ));
-        };
-        // The session it names, before anything changes: one that isn't there leaves it
-        // unsorted.
-        let sibling = match route {
-            FollowUpRoute::Session => match self.sibling_named(id, args.session.as_deref())? {
-                Ok(sibling) => Some(sibling),
-                Err(fact) => return Ok(fact),
-            },
-            _ => None,
-        };
-        let conv = self.conv(id)?;
-        {
-            let mut state = conv.state.lock().await;
-            state.asked.retain(|asked| asked != item_id);
-            state.asking.retain(|(asking, _)| asking != item_id);
-            if state.joined_unjudged.iter().any(|joined| joined == item_id) {
-                state.joined_unjudged.retain(|joined| joined != item_id);
-                return Ok(
-                    "It already joined this work after waiting to be judged and reaches you as \
-                     the user's message: act on it and answer it in the final answer with the \
-                     rest."
-                        .into(),
-                );
-            }
-        }
-        let queued = self
-            .core
-            .board(id)
-            .await?
-            .queue
-            .items
-            .iter()
-            .any(|item| item.id == item_id);
-        if !queued {
-            return Ok(
-                "The user already sent, changed or removed that follow-up; nothing to do.".into(),
-            );
-        }
-        match route {
-            FollowUpRoute::Wait => {
-                self.core.settle_queued(id, &[item_id.to_owned()]).await?;
-                Ok(
-                    "It waits in the queue and reaches you as its own request once this work is \
-                     done."
-                        .into(),
-                )
-            }
-            FollowUpRoute::NewSession => {
-                self.core.offer_queued_as_tab(id, item_id).await?;
-                Ok(
-                    "It waits in the queue offering the user \"Open as a new session\" or \
-                     \"Run here\" until they pick: a new session of this project starts with \
-                     it, or it reaches you as its own request once this work is done."
-                        .into(),
-                )
-            }
-            FollowUpRoute::Session => match sibling {
-                Some(sibling) => self.move_follow_up(id, item_id, &sibling).await,
-                None => unreachable!("a session route has its session"),
-            },
-            FollowUpRoute::Join => {
-                let working = self.working_request(id).await;
-                let message = conv
-                    .user_write(async {
-                        let item = self.core.take_queued(id, item_id).await?;
-                        self.core.append_queued(id.clone(), item).await
-                    })
-                    .await?;
-                self.join_working(&conv, message, working).await;
-                Ok(
-                    "It joins this work and reaches you now as the user's message. Act on it (a \
-                     running worker gets it with message_worker) and answer it in the final \
-                     answer with the rest."
-                        .into(),
-                )
-            }
-        }
-    }
-
-    /// Gives the thread [`DECIDING_WAIT`] to judge follow-up `item_id`; one still unjudged
-    /// then joins the working answer, the thread reading it as soon as it can (a command it
-    /// runs ends), so the user never watches it decide for minutes.
-    fn judge_within(&self, conv: &Arc<ConvLive>, item_id: &str) {
-        let (manager, conv, item_id) = (self.arc(), conv.clone(), item_id.to_owned());
-        self.spawn(async move {
-            tokio::time::sleep(DECIDING_WAIT).await;
-            manager.join_unjudged(&conv, &item_id).await;
-        });
-    }
-
-    async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str) {
-        {
-            let mut state = conv.state.lock().await;
-            let unjudged = state.asked.iter().any(|asked| asked == item_id)
-                || state.asking.iter().any(|(asking, _)| asking == item_id);
-            if !unjudged {
-                return;
-            }
-            state.asked.retain(|asked| asked != item_id);
-            state.asking.retain(|(asking, _)| asking != item_id);
-            state.joined_unjudged.push(item_id.to_owned());
-            state.held_items.retain(|held| held != item_id);
-        }
-        let working = self.working_request(&conv.id).await;
-        self.join_follow_up(conv, item_id, working).await;
-    }
-
-    /// Follow-up `item_id`, still deciding in the queue, joins request `working`.
-    async fn join_follow_up(&self, conv: &Arc<ConvLive>, item_id: &str, working: Option<String>) {
-        let id = &conv.id;
-        let deciding = self.core.board(id).await.is_ok_and(|board| {
-            board
-                .queue
-                .items
-                .iter()
-                .any(|item| item.id == item_id && item.deciding)
-        });
-        if !deciding {
-            return;
-        }
-        let message = conv
-            .user_write(async {
-                let item = self.core.take_queued(id, item_id).await?;
-                self.core
-                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
-                    .await
-            })
-            .await;
-        match message {
-            Ok(message) => self.join_working(conv, message, working).await,
-            Err(err) => {
-                crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged follow-up"; conversation = %id, error = %err);
-            }
-        }
-    }
-
-    /// Sends a session's next queued message once no answer works (one that only waits on the
-    /// user doesn't hold it): returns whether one is now pending. Holds the driver's lock, so
-    /// two callers never send two at once.
+    /// Sends a session's next queued message once no turn runs: returns whether one is now
+    /// pending. Holds the driver's lock, so two callers never send two at once.
     async fn send_queued(&self, conv: &Arc<ConvLive>) -> bool {
-        if self.answer_working(&conv.id).await {
-            return false;
-        }
         let mut state = conv.state.lock().await;
         if state.busy || state.held || !state.pending.is_empty() || !state.inbox.is_empty() {
             return false;
@@ -1800,9 +1571,6 @@ impl SessionManager {
         // Messages waiting for quota: the user no longer wants them sent. After a retry that
         // is looking now (it could record the wait again once they are gone).
         let retrying = conv.retry.lock().await;
-        // The newest answer that works only for what Brigadier owes it (a CI watch, a held
-        // merge, a review it left its answer to) has no turn to interrupt: it ends Stopped.
-        let owed = self.owed_only(&conv).await;
         let open: Vec<String> = match self.core.board(&id).await {
             Ok(board) => board
                 .requests
@@ -1817,9 +1585,6 @@ impl SessionManager {
         let (stopped, handed_over, waits_on_jobs) = {
             let mut state = conv.state.lock().await;
             state.stopped_open.extend(open);
-            if let Some(request) = owed {
-                state.outcomes.insert(request, RequestState::Stopped);
-            }
             // A request that waits only for the CLI's background jobs ends Stopped; the turn
             // their end starts is the CLI's own again.
             let running = state.busy.then(|| state.request.clone()).flatten();
@@ -1981,16 +1746,7 @@ impl SessionManager {
         // It worked until it was last recorded, not across the time Brigadier was closed.
         if let Err(err) = self
             .core
-            .update_request_at(
-                id,
-                &request,
-                failed,
-                false,
-                false,
-                Vec::new(),
-                None,
-                cut_off.at_ms,
-            )
+            .update_request_at(id, &request, failed, None, cut_off.at_ms)
             .await
         {
             tracing::warn!(conversation = %id, error = %err, "could not mark a cut-off turn");
@@ -2192,7 +1948,7 @@ impl SessionManager {
     /// Queues an envelope for the orchestrator, starting a turn if it is idle. It belongs to
     /// its task's request (or the running turn's, or the newest).
     pub(crate) async fn deliver(&self, id: &ConversationId, envelope: Envelope) {
-        let request = self.request_for(id, envelope.task_id.as_ref()).await;
+        let request = self.request_for(id).await;
         self.deliver_for(id, envelope, request).await;
     }
 
@@ -2262,36 +2018,6 @@ impl SessionManager {
         Some(conv)
     }
 
-    /// Adds `text` to `task`'s report still waiting in the orchestrator's inbox, so one turn
-    /// reads both. False once the report was read (or never queued): then `text` needs a
-    /// delivery of its own.
-    pub(crate) async fn fold_into_queued_report(&self, task: &Task, text: &str) -> bool {
-        let Ok(conv) = self.conv(&task.conversation_id) else {
-            return false;
-        };
-        let label = format!("report task-{}", task.number);
-        let mut state = conv.state.lock().await;
-        let Some((queued, request)) = state.inbox.iter_mut().find(|(queued, _)| {
-            queued.kind == InjectionKind::Report
-                && queued.task_id.as_ref() == Some(&task.id)
-                && queued.label == label
-        }) else {
-            return false;
-        };
-        let was = queued.text.clone();
-        queued.text.push('\n');
-        queued.text.push_str(text);
-        let (envelope, request) = (queued.clone(), request.clone());
-        self.keep_queued(
-            &task.conversation_id,
-            &envelope,
-            request.as_deref(),
-            Some(was),
-        )
-        .await;
-        true
-    }
-
     /// Marks `task` as having news for the orchestrator on its way: call it before the task's
     /// state changes, when an envelope about that change follows ([`Self::deliver`]). A turn
     /// that starts in between then does not tell the orchestrator that nothing else runs.
@@ -2299,9 +2025,7 @@ impl SessionManager {
         let Ok(conv) = self.conv(&task.conversation_id) else {
             return;
         };
-        let request = self
-            .request_for(&task.conversation_id, Some(&task.id))
-            .await;
+        let request = self.request_for(&task.conversation_id).await;
         conv.state
             .lock()
             .await
@@ -2333,25 +2057,6 @@ impl SessionManager {
         if let Ok(conv) = self.conv(id) {
             conv.state.lock().await.answering.remove(card);
         }
-    }
-
-    /// The tasks of `request` with an envelope still to come: queued for a later turn, or
-    /// being put together.
-    pub(super) async fn announced(&self, conv: &ConvLive, request: &str) -> HashSet<TaskId> {
-        let state = conv.state.lock().await;
-        state
-            .inbox
-            .iter()
-            .filter(|(_, of)| of.as_deref() == Some(request))
-            .filter_map(|(envelope, _)| envelope.task_id.clone())
-            .chain(
-                state
-                    .announcing
-                    .iter()
-                    .filter(|(_, of)| of.as_deref() == Some(request))
-                    .map(|(task, _)| task.clone()),
-            )
-            .collect()
     }
 
     /// No turn runs, none starts and none is being handed over: a run state still at Running
@@ -2416,7 +2121,7 @@ impl SessionManager {
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         // `origin`: the request the envelopes belong to, which their notes speak of.
-        let (users, envelopes, request, origin, mut user_notes) = loop {
+        let (users, envelopes, request, mut user_notes) = loop {
             let mut state = conv.state.lock().await;
             if state.busy
                 || state.closing
@@ -2439,18 +2144,6 @@ impl SessionManager {
             } else {
                 Vec::new()
             };
-            if let Some((_, request)) = envelopes
-                .iter()
-                .find(|(envelope, _)| envelope.kind == InjectionKind::FollowUp)
-            {
-                // The follow-ups asked about in this request's envelopes: this turn judges them.
-                let request = request.clone();
-                let (asked, asking) = std::mem::take(&mut state.asking)
-                    .into_iter()
-                    .partition::<Vec<_>, _>(|(_, of)| *of == request);
-                state.asking = asking;
-                state.asked.extend(asked.into_iter().map(|(item, _)| item));
-            }
             if users.is_empty() && envelopes.is_empty() && !session {
                 match self.core.pop_queued(&conv.id).await {
                     Ok(Some(item)) => match self.core.append_queued(conv.id.clone(), item).await {
@@ -2485,17 +2178,9 @@ impl SessionManager {
                 }
                 return;
             }
-            let origin = match users.last() {
+            let request = match users.last() {
                 Some(message) => message.request_id.clone(),
                 None => envelopes[0].1.clone(),
-            };
-            // In a Chat, what comes for an earlier request after the user wrote again is
-            // answered under their newest one, at the thread's end where they look (#440). A
-            // session keeps it with its own request, whose changes, reviews and merge it is.
-            let request = if users.is_empty() && !session {
-                self.newest_request_after(&conv.id, origin.clone()).await
-            } else {
-                origin.clone()
             };
             state.busy = true;
             state.interrupted = false;
@@ -2517,7 +2202,7 @@ impl SessionManager {
             state.in_turn_envelopes.clone_from(&envelopes);
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
-            break (users, envelopes, request, origin, notes);
+            break (users, envelopes, request, notes);
         };
         self.settle_requests(&conv.id).await;
         self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
@@ -2591,9 +2276,10 @@ impl SessionManager {
             .filter(|(envelope, _)| !landed_envelopes.contains(envelope))
             .cloned()
             .collect();
-        let notes = self
-            .request_notes(&conv.id, &unread, origin.as_deref())
-            .await;
+        let notes: Vec<String> = unread
+            .iter()
+            .map(|(envelope, _)| envelope.text.clone())
+            .collect();
         let unsent: Vec<Message> = users
             .iter()
             .filter(|message| !landed.contains(&message.id))
@@ -2690,7 +2376,7 @@ impl SessionManager {
         envelopes: Vec<(Envelope, Option<String>)>,
         message: &str,
     ) {
-        let (asked, failed) = {
+        let failed = {
             let mut state = conv.state.lock().await;
             state.busy = false;
             state.compacting = false;
@@ -2711,12 +2397,8 @@ impl SessionManager {
             let mut inbox = envelopes;
             inbox.append(&mut state.inbox);
             state.inbox = inbox;
-            (std::mem::take(&mut state.asked), failed)
+            failed
         };
-        // Its follow-ups wait in the queue; the carried envelopes ask again.
-        if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
-            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
-        }
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
         if failed.is_none() {
@@ -3180,21 +2862,6 @@ impl SessionManager {
         }
     }
 
-    /// A Claude worker's `Stop` hook (`brigadierd hook stop`), with its grant (BUILD-PLAN E2).
-    pub(crate) fn stop_hook_command(&self, grant: String) -> OutputHook {
-        OutputHook {
-            command: self.config.daemon_exe.clone(),
-            args: vec![
-                "hook".into(),
-                "stop".into(),
-                "--data-dir".into(),
-                self.data_dir.to_string_lossy().into_owned(),
-            ],
-            env: vec![(super::tool_output::STOP_GRANT_ENV.into(), grant)],
-            timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
-        }
-    }
-
     /// A thread's output hook (`brigadierd hook post-tool-use`), with its grant; a Codex
     /// thread's reads Codex's events (`--codex`), for a subfolder's rules only (#121).
     fn output_hook(&self, grant: String, provider: ProviderKind) -> OutputHook {
@@ -3289,16 +2956,8 @@ impl SessionManager {
                     append_input_text(
                         &mut inline,
                         &format!(
-                            "\n[attachment {} \"{}\" ({}, {} bytes){}]",
-                            attachment.id,
-                            attachment.name,
-                            attachment.mime,
-                            attachment.bytes,
-                            if is_image(&attachment.mime) {
-                                ""
-                            } else {
-                                "; pass its id to delegate_task so a worker can read it"
-                            }
+                            "\n[attachment {} \"{}\" ({}, {} bytes)]",
+                            attachment.id, attachment.name, attachment.mime, attachment.bytes,
                         ),
                     );
                 }
@@ -3723,15 +3382,9 @@ impl SessionManager {
                         }
                         // Stored whole before it is recorded cut (BUILD-PLAN D2.1).
                         self.keep_output(&mut event).await;
-                        // A worker it starts gets what the thread read so far in its context
-                        // pack: recorded when the call starts, before it reaches Brigadier.
                         if matches!(
                             &event,
                             ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. }
-                        ) || matches!(
-                            &event,
-                            ProviderEvent::ToolCall { name, status: ItemStatus::InProgress, .. }
-                                if name.ends_with("delegate_task")
                         ) {
                             self.record_held_looked(&conv).await;
                         }
@@ -3878,7 +3531,7 @@ impl SessionManager {
                 };
                 if let Err(err) = self
                     .core
-                    .update_request(&conv.id, request, state, false, false, Vec::new(), None)
+                    .update_request(&conv.id, request, state, None)
                     .await
                 {
                     tracing::warn!(conversation = %conv.id, error = %err, "could not mark the turn interrupted");
@@ -4655,7 +4308,7 @@ impl SessionManager {
             return;
         }
         let reborn;
-        let (limit_hit, ended, landed, carried, asked, served, end_commands, unshown) = {
+        let (limit_hit, ended, landed, carried, served, end_commands, unshown) = {
             let mut state = conv.state.lock().await;
             // A Codex command still running when its turn ended goes on as its CLI's job.
             let words = std::mem::take(&mut state.command_words);
@@ -4753,7 +4406,6 @@ impl SessionManager {
                 ended,
                 state.landed,
                 std::mem::take(&mut state.in_turn),
-                std::mem::take(&mut state.asked),
                 served,
                 end_commands,
                 unshown,
@@ -4764,16 +4416,6 @@ impl SessionManager {
                 .await;
         }
         self.release_held(conv).await;
-        // Follow-ups the turn left unsorted join its request (route_follow_up is optional);
-        // after a stop, a failure, a limit or a rebirth they wait in the queue for their own
-        // turn.
-        if status == TurnStatus::Completed && limit_hit.is_none() && reborn.is_none() {
-            for item_id in &asked {
-                self.join_follow_up(conv, item_id, served.clone()).await;
-            }
-        } else if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
-            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
-        }
         if let Some(tokens) = reborn {
             // Not from inside the CLI's own event pump: closing the CLI waits for it.
             let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());
@@ -4808,33 +4450,18 @@ impl SessionManager {
                 });
                 return;
             }
-            match self.stand_in_choice(conv, &cli.model).await {
-                Ok(next) => {
-                    // Its turn goes on there. Not from inside the CLI's own event pump: closing
-                    // the CLI waits for it.
-                    let (manager, conv, from) = (self.arc(), conv.clone(), cli.model.clone());
-                    let until = limit.resets_at_ms;
-                    self.spawn(async move {
-                        manager.stand_in(&conv, &from, next, until, carried).await;
-                    });
-                    return;
+            // Its own model's reset frees the messages: they wait for it.
+            if let Some(waiting) = own_reset(&cli.model, &limit) {
+                let waits = self
+                    .wait_for_model(conv, cli, waiting, carried, served, limit.kind)
+                    .await;
+                self.set_run(&conv.id, RunState::Idle, None).await;
+                self.settle_requests(&conv.id).await;
+                // Stopped meanwhile: what the user sent since (a Resume, a message) goes now.
+                if !waits {
+                    self.kick(conv);
                 }
-                Err(waiting) => {
-                    // Its own model's reset frees the messages too.
-                    if let Some(waiting) = with_own_reset(waiting, &cli.model, &limit) {
-                        let waits = self
-                            .wait_for_model(conv, cli, waiting, carried, served, limit.kind)
-                            .await;
-                        self.set_run(&conv.id, RunState::Idle, None).await;
-                        self.settle_requests(&conv.id).await;
-                        // Stopped meanwhile: what the user sent since (a Resume, a message)
-                        // goes now.
-                        if !waits {
-                            self.kick(conv);
-                        }
-                        return;
-                    }
-                }
+                return;
             }
             // Nowhere to go: the turn fails (unless the user stopped it meanwhile).
             let unserved = {
@@ -4851,7 +4478,7 @@ impl SessionManager {
                 }
             };
             if let Some(error) = unserved {
-                self.moment(&conv.id, None, error).await;
+                self.moment(&conv.id, error).await;
             }
         }
         self.set_run(&conv.id, RunState::Idle, None).await;
@@ -4993,158 +4620,6 @@ impl SessionManager {
         state.briefing = Some(plan);
     }
 
-    /// The model a conversation continues on after `cli`'s model hit a usage limit: the
-    /// router's choice for its kind of conversation, less that model (its provider too when
-    /// the limit is provider-wide), if one is usable; only its own agent's with switching to
-    /// another agent off.
-    ///
-    /// Without one: the reason to wait, when a reset or the user's rules and rankings could
-    /// change that (else nothing: the turn fails as before).
-    async fn stand_in_choice(
-        &self,
-        conv: &ConvLive,
-        from: &ModelChoice,
-    ) -> std::result::Result<brigadier_router::Routed, Option<brigadier_router::Waiting>> {
-        let category = match conv.kind {
-            ConversationKind::Session => brigadier_router::TaskCategory::Orchestrate,
-            ConversationKind::Chat => brigadier_router::TaskCategory::Chat,
-        };
-        let project = self
-            .core
-            .conversation(&conv.id)
-            .ok()
-            .and_then(|conversation| conversation.project_id);
-        let mut exclude = vec![brigadier_router::Exclusion {
-            provider: from.provider,
-            model: from.model.clone(),
-        }];
-        // With switching to another agent off, it stands in on its own agent or waits.
-        if !self.core.settings().switch_providers {
-            exclude.extend(
-                ProviderKind::ALL
-                    .into_iter()
-                    .filter(|provider| *provider != from.provider)
-                    .map(|provider| brigadier_router::Exclusion {
-                        provider,
-                        model: None,
-                    }),
-            );
-        }
-        let decision = self
-            .decide(&super::routing::Ask {
-                category,
-                areas: &[],
-                floor: brigadier_router::default_floor(category),
-                floor_binds: false,
-                needs: brigadier_router::Needs::default(),
-                pin: None,
-                hold_pin: false,
-                avoid: None,
-                distinct_from: Vec::new(),
-                exclude: &exclude,
-                project_id: project.as_ref(),
-                trial: super::routing::Trial::Never,
-            })
-            .await;
-        let next = match decision {
-            brigadier_router::Decision::Run(next) => next,
-            brigadier_router::Decision::Wait(waiting) => {
-                let waits = waiting.resets_at_ms.is_some()
-                    || waiting.rule.is_some()
-                    || waiting.ranking.is_some();
-                return Err(waits.then_some(waiting));
-            }
-        };
-        Ok(next)
-    }
-
-    /// A conversation's model hit its usage limit: it continues on `next`, which starts over
-    /// from the transcript (an orchestrator from a recovery briefing), and the turn is sent
-    /// again. Only the conversation's stand-in is recorded: its setup, the project's and the
-    /// app's saved choices are left alone (Q17). The chosen model takes over again after its
-    /// reset ([`Self::end_stand_in`]).
-    async fn stand_in(
-        &self,
-        conv: &Arc<ConvLive>,
-        from: &ModelChoice,
-        next: brigadier_router::Routed,
-        until_ms: Option<i64>,
-        carried: Vec<Message>,
-    ) {
-        let choice = ModelChoice {
-            provider: next.provider,
-            model: Some(next.model.clone()),
-            effort: next.effort.clone(),
-            fast: None,
-            account: None,
-        };
-        let replaces = match self.core.conversation(&conv.id) {
-            Ok(conversation) => conversation
-                .fallback
-                .clone()
-                .map(|fallback| fallback.replaces)
-                .or_else(|| setup_choice(&conversation))
-                .unwrap_or_else(|| from.clone()),
-            Err(_) => from.clone(),
-        };
-        let stand_in = format!("{} {}", next.provider.label(), next.model);
-        let vendor = from.provider.label();
-        // Back when the soonest of the provider's accounts can take work again.
-        let (accounts, back) = self
-            .runtime
-            .provider_back_at(from.provider, from.model.as_deref());
-        let until_ms = back.or(until_ms);
-        let reason = if accounts > 1 {
-            format!("Every {vendor} account hit its usage limit")
-        } else {
-            format!("{vendor} hit its usage limit")
-        };
-        let until = match until_ms {
-            Some(at) => format!("until {}", reset_clock(at, now_ms())),
-            None => "until its limit resets".into(),
-        };
-        self.moment(
-            &conv.id,
-            None,
-            format!("{reason}; continuing on {stand_in} {until}, then back on {vendor}."),
-        )
-        .await;
-        conv.restarting(WriteCause::Reroute).await;
-        conv.close_cli().await;
-        let fallback = ModelFallback {
-            choice,
-            replaces,
-            reason,
-            since_ms: now_ms(),
-            until_ms,
-        };
-        if let Err(err) = self.core.set_fallback(&conv.id, Some(fallback)).await {
-            crate::logging::private_trace!(conv.private_logs, warn, "could not record the stand-in model"; conversation = %conv.id, error = %err);
-        }
-        let stopped = {
-            let mut state = conv.state.lock().await;
-            // A new session, not an old one of that vendor, briefed from the transcript.
-            state.fresh = true;
-            state.reseed = true;
-            // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
-            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
-            if !stopped {
-                let mut pending = carried;
-                pending.append(&mut state.pending);
-                state.pending = pending;
-                // A fresh session never read them.
-                let envelopes = state.carry_envelopes(false);
-                self.keep_carried(&conv.id, &envelopes).await;
-            }
-            stopped
-        };
-        // Stopped meanwhile: its turn is over, as a stopped turn's is (else the next one runs).
-        if stopped {
-            self.set_run(&conv.id, RunState::Idle, None).await;
-        }
-        self.kick(conv);
-    }
-
     /// `cli`'s account hit its limit and another account of its provider can take the work:
     /// the same CLI session resumes there (every account shares the CLI's session history).
     /// The failed turn's messages (`carried`) go again, or, once the CLI had begun that turn
@@ -5171,7 +4646,6 @@ impl SessionManager {
         };
         self.moment(
             &conv.id,
-            None,
             format!(
                 "{} {stopped} on {from}; continuing on {to}.",
                 cli.provider.label()
@@ -5239,7 +4713,7 @@ impl SessionManager {
         &self,
         conv: &Arc<ConvLive>,
         cli: &Cli,
-        waiting: brigadier_router::Waiting,
+        waiting: ModelWait,
         carried: Vec<Message>,
         served: Option<String>,
         limit: brigadier_providers::LimitKind,
@@ -5272,10 +4746,10 @@ impl SessionManager {
             crate::logging::private_trace!(conv.private_logs, info, "messages wait for quota"; conversation = %conv.id, reason = %waiting.reason);
             self.moment(
                 &conv.id,
-                None,
                 format!(
-                    "{}. Your message waits and goes on its own once a model you allow can take it.",
-                    waiting.reason.trim_end_matches('.')
+                    "{}. Your message waits and goes on its own once {} can take it again.",
+                    waiting.reason.trim_end_matches('.'),
+                    from.provider.label()
                 ),
             )
             .await;
@@ -5286,11 +4760,7 @@ impl SessionManager {
 
     /// Records what a waiting conversation waits for (when that changed) and sets the timer
     /// that looks again.
-    async fn keep_conversation_waiting(
-        &self,
-        conv: &Arc<ConvLive>,
-        waiting: brigadier_router::Waiting,
-    ) {
+    async fn keep_conversation_waiting(&self, conv: &Arc<ConvLive>, waiting: ModelWait) {
         let known = self
             .core
             .conversation(&conv.id)
@@ -5314,8 +4784,8 @@ impl SessionManager {
         let wait = QuotaWait {
             reason: waiting.reason,
             resets_at_ms: waiting.resets_at_ms,
-            rule: waiting.rule,
-            ranking: waiting.ranking,
+            rule: None,
+            ranking: None,
             since_ms: known.as_ref().map_or_else(now_ms, |known| known.since_ms),
             messages,
             model: model.or_else(|| known.as_ref().and_then(|known| known.model.clone())),
@@ -5422,43 +4892,15 @@ impl SessionManager {
                 .as_ref()
                 .and_then(|wait| wait.resets_at_ms)
                 .filter(|at| *at > now_ms());
-            match self.stand_in_choice(conv, &from).await {
-                Ok(next) => {
-                    self.stop_waiting(conv).await;
-                    // Its messages are in `pending` already.
-                    self.stand_in(conv, &from, next, known_reset, Vec::new())
-                        .await;
-                }
-                Err(Some(mut waiting)) => {
-                    // A reset still ahead (its own model's, from its limit) frees it too.
-                    waiting.resets_at_ms = match (waiting.resets_at_ms, known_reset) {
-                        (Some(named), Some(known)) => Some(named.min(known)),
-                        (named, known) => named.or(known),
-                    };
-                    self.keep_conversation_waiting(conv, waiting).await;
-                }
-                // No reset or routing change would help now; it still waits for its own model.
-                Err(None) => {
-                    let waiting = match conversation.quota_wait {
-                        Some(wait) => brigadier_router::Waiting {
-                            reason: wait.reason,
-                            resets_at_ms: known_reset,
-                            rule: wait.rule,
-                            ranking: wait.ranking,
-                        },
-                        None => brigadier_router::Waiting {
-                            reason: format!(
-                                "{} can't run now",
-                                super::fallback::model_label(&from)
-                            ),
-                            resets_at_ms: known_reset,
-                            rule: None,
-                            ranking: None,
-                        },
-                    };
-                    self.keep_conversation_waiting(conv, waiting).await;
-                }
-            }
+            // It still waits for its own model.
+            let waiting = ModelWait {
+                reason: match conversation.quota_wait {
+                    Some(wait) => wait.reason,
+                    None => format!("{} can't run now", super::fallback::model_label(&from)),
+                },
+                resets_at_ms: known_reset,
+            };
+            self.keep_conversation_waiting(conv, waiting).await;
         })
     }
 
@@ -5597,11 +5039,9 @@ impl SessionManager {
             state.waited_account = wait.account.clone();
             state.waited_limit = wait.limit_kind;
         }
-        let waiting = brigadier_router::Waiting {
+        let waiting = ModelWait {
             reason: wait.reason,
             resets_at_ms: wait.resets_at_ms,
-            rule: wait.rule,
-            ranking: wait.ranking,
         };
         self.keep_conversation_waiting(&conv, waiting).await;
     }
@@ -5672,7 +5112,6 @@ impl SessionManager {
         if !changed {
             self.moment(
                 &conv.id,
-                None,
                 format!(
                     "{} is available again; continuing with it.",
                     fallback.replaces.provider.label()
@@ -6071,23 +5510,13 @@ fn inline_document(attachment: &AttachmentRef, kind: &str, text: &str) -> String
 fn pasted_inline(text: &str, attachment: &AttachmentRef, kind: ConversationKind) -> String {
     let session = kind == ConversationKind::Session;
     if text.len() <= INLINE_TEXT_MAX_BYTES {
-        if !session {
-            return text.to_owned();
-        }
-        return format!(
-            "{text}\n[the pasted text above is also attachment {}: pass its id to delegate_task \
-             to give a worker the exact text]",
-            attachment.id
-        );
+        return text.to_owned();
     }
     let head = &text[..text.floor_char_boundary(PASTE_HEAD_BYTES)];
     let tail = &text[text.ceil_char_boundary(text.len() - PASTE_TAIL_BYTES)..];
     let left_out = text.len() - head.len() - tail.len();
     let whole = if session {
-        format!(
-            "; all of it is attachment {}: pass its id to delegate_task so a worker can read it",
-            attachment.id
-        )
+        format!("; all of it is attachment {}", attachment.id)
     } else {
         String::new()
     };
@@ -6190,8 +5619,7 @@ fn inline_image_note(
     };
     if kind == ConversationKind::Session {
         format!(
-            "{what}; attachment {} ({}, {} bytes): pass its id to delegate_task so a worker \
-             can see it",
+            "{what}; attachment {} ({}, {} bytes)",
             attachment.id, attachment.mime, attachment.bytes
         )
     } else {
@@ -6264,31 +5692,19 @@ pub(crate) fn safe_file_name(name: &str) -> String {
     }
 }
 
-/// What a conversation whose model hit `limit` waits for, when no model can stand in: what
-/// the router named, freed by that model's own reset as well when that comes sooner; or that
-/// reset alone. Nothing when neither is known (the turn fails as before).
-fn with_own_reset(
-    waiting: Option<brigadier_router::Waiting>,
-    from: &ModelChoice,
-    limit: &LimitHit,
-) -> Option<brigadier_router::Waiting> {
-    match waiting {
-        Some(mut waiting) => {
-            waiting.resets_at_ms = match (waiting.resets_at_ms, limit.resets_at_ms) {
-                (Some(named), Some(own)) => Some(named.min(own)),
-                (named, own) => named.or(own),
-            };
-            Some(waiting)
-        }
-        None => limit
-            .resets_at_ms
-            .map(|resets_at_ms| brigadier_router::Waiting {
-                reason: format!("{} hit its usage limit", from.provider.label()),
-                resets_at_ms: Some(resets_at_ms),
-                rule: None,
-                ranking: None,
-            }),
-    }
+/// What a conversation whose model hit `limit` waits for: that limit's reset. Nothing when it
+/// isn't known (the turn fails as before).
+fn own_reset(from: &ModelChoice, limit: &LimitHit) -> Option<ModelWait> {
+    limit.resets_at_ms.map(|resets_at_ms| ModelWait {
+        reason: format!("{} hit its usage limit", from.provider.label()),
+        resets_at_ms: Some(resets_at_ms),
+    })
+}
+
+/// What a conversation waits for, while its model can't run.
+struct ModelWait {
+    reason: String,
+    resets_at_ms: Option<i64>,
 }
 
 /// The model a conversation's setup picks: a session's orchestrator, a Chat's model.
@@ -6460,7 +5876,7 @@ mod tests {
                 .contains("attachment a")
         );
         assert!(
-            inline_image_note(Some(2), &attachment, ConversationKind::Session)
+            !inline_image_note(Some(2), &attachment, ConversationKind::Session)
                 .contains("delegate_task")
         );
     }

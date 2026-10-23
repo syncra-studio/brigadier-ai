@@ -8,7 +8,7 @@
 //! answering approval cards.
 //!
 //! - [`Role::Orchestrator`] may call the orchestrator tools ([`OrchestratorCall`]).
-//! - [`Role::Worker`] may call the worker tools ([`WorkerCall`]) for its own task.
+//! - [`Role::Worker`] is a plain worker's, for its `brigadier` calls ([`WorkerCall`]).
 //!
 //! The MCP server (`crates/mcp-server`) maps MCP tool calls onto these types; the session
 //! manager implements [`ToolHost`].
@@ -18,23 +18,20 @@ use std::sync::Mutex;
 
 use brigadier_providers::BoxFuture;
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
 use crate::model::{ConversationId, ProjectId, TaskId};
-use crate::work::{ChecksResult, FeedbackKind, ReviewVerdict, TaskKind, WorkerRole};
+use crate::work::FeedbackKind;
 
 /// What a grant allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Role {
     /// The orchestrator of a session (its thread).
     Orchestrator { conversation_id: ConversationId },
-    /// The worker running one task.
+    /// A plain worker, for its `brigadier` calls.
     Worker {
         conversation_id: ConversationId,
         task_id: TaskId,
-        /// It checks a change or plan in a gate: it decides from what it was given and its
-        /// own evidence alone, so it has no `ask_thread`.
-        checks: bool,
     },
     /// A Brain job (skeleton pass, enrichment) of a project: it reads and records nodes.
     BrainJob {
@@ -54,12 +51,6 @@ pub enum Role {
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): it may only store the
     /// thread's command output, and calls no tools.
     OutputHook { conversation_id: ConversationId },
-    /// A Claude worker's `Stop` hook (`brigadierd hook stop`): it may only ask whether its
-    /// worker's turn may end, and calls no tools (BUILD-PLAN E2).
-    StopHook {
-        conversation_id: ConversationId,
-        task_id: TaskId,
-    },
 }
 
 /// The tools of a tab's chat, by what its tab shows.
@@ -120,252 +111,6 @@ impl Grants {
 
 // ----- orchestrator tools ----------------------------------------------------------------
 
-/// `delegate_task`: start a worker. Returns at once with the task's number; the report arrives
-/// later as a message.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DelegateTask {
-    /// A plain 2–4 word job name, unique among this chat's workers, e.g. "Add JSON output".
-    /// Describe the job, without roles, phases or internal task ids.
-    pub title: String,
-    /// What the task does. `implement` and `merge` tasks change code and land their commits
-    /// (a merge task's worker merges with git itself); the others only read and report.
-    pub kind: TaskKind,
-    /// The full task spec for the worker: goal, context, constraints, what "done" means and how
-    /// to verify it. The worker sees nothing else of the conversation.
-    pub spec: String,
-    /// Optional provider override: "claude" or "codex". Leave it out to let Brigadier route.
-    #[serde(default)]
-    pub provider: Option<String>,
-    /// Optional model id override (from that provider's model list).
-    #[serde(default)]
-    pub model: Option<String>,
-    /// The worker's reasoning effort, picked per task: "medium" for small, bounded work (one or
-    /// two files, a UI tweak or small UI feature, copy), "low" for a mechanical edit, "high" for
-    /// cross-area, risky or unclear work.
-    pub effort: String,
-    /// For `review` tasks: the task whose candidate commit is reviewed, e.g. "task-2". For
-    /// `merge` tasks: the task whose work conflicts with the branch it lands on; none to merge
-    /// the session's base into the session branch. For a `fix`: the task whose work it fixes.
-    /// Of a phase's verifier, it continues from that work and lands it with its own.
-    #[serde(default)]
-    pub subject: Option<String>,
-    /// For `operate`: the app, dev build path or URL to work in, and the window if known.
-    #[serde(default)]
-    pub target: Option<String>,
-    /// For `operate`: what must be true at the end, checkable on screen.
-    #[serde(default)]
-    pub end_state: Option<String>,
-    /// Ids of the user's attachments the worker should get as files.
-    #[serde(default)]
-    pub attachments: Vec<String>,
-    /// True when this worker takes the whole request: Brigadier adds the message that started
-    /// it verbatim after the spec, with each message steered into it since and who sent each
-    /// (the user, or another session). Don't copy the request into the spec then. Files still
-    /// go by `attachments`.
-    #[serde(default)]
-    pub include_request: bool,
-    /// Optional: the parts of the codebase it touches ("frontend", "backend", "infra",
-    /// "docs", "tests"), when the spec's paths don't make it plain. Routing and the user's
-    /// routing rules go by them.
-    #[serde(default)]
-    pub areas: Vec<String>,
-    /// Optional: "high" when the task needs the vendors' best models (hard or risky work);
-    /// leave it out otherwise.
-    #[serde(default)]
-    pub quality: Option<String>,
-    /// True when the task must generate images: only some models can, and Brigadier keeps
-    /// it on one that can, hand-offs included.
-    #[serde(default)]
-    pub image_generation: bool,
-    /// True when the task makes designs or images: edits design files (Pencil's `.pen`),
-    /// draws mockups or generates images. Routing files it under design work, which the user's
-    /// routing rules can name. A mockup or image generation counts as design by itself.
-    #[serde(default)]
-    pub design: bool,
-    /// Its part in the request: "lead" (the default for implement tasks), "parallel" (a stream
-    /// of its own files next to the lead) or "fix" (what a verifier left, or what a landed task
-    /// left unfixed).
-    #[serde(default)]
-    pub role: Option<WorkerRole>,
-    /// True for an implement task that builds a mockup the user asked for: a static preview of
-    /// the screen from the project's real components with fake data, reported as screenshots.
-    /// It lands only once the user says yes to the real work.
-    #[serde(default)]
-    pub mockup: bool,
-    /// For the implement task that builds the real change after a mockup: the mockup's task,
-    /// e.g. "task-2". It gets the mockup's images and compares the live app with them.
-    #[serde(default)]
-    pub matches_mockup: Option<String>,
-    /// True for the one implement task that looks at the visible changes live, once the
-    /// session's full checks pass: it builds the integrated tree's own dev app in its worktree
-    /// (the session's tip), launches it itself with a scratch data folder and checks each
-    /// change it is told of; it changes nothing. Other workers never build the app.
-    #[serde(default)]
-    pub live_look: bool,
-    /// MCP servers the worker needs besides its own agent's, by name (or id) from the list
-    /// your instructions give: a server only another agent, Claude Desktop or Cursor has.
-    /// Only what the task needs: each one's tools fill the worker's context.
-    #[serde(default)]
-    pub integrations: Vec<String>,
-}
-
-/// `message_worker`: answer a worker's blocking question, or steer a running worker.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MessageWorker {
-    /// The task, e.g. "task-3".
-    pub task: String,
-    /// The answer or instruction.
-    pub text: String,
-    /// Ids of the user's attachments the worker should get as files with it (marked
-    /// screenshots of a mockup, say).
-    #[serde(default)]
-    pub attachments: Vec<String>,
-}
-
-/// `answer_worker`: answer the question a worker waits on (`ask_thread`).
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AnswerWorker {
-    /// The task, e.g. "task-3".
-    pub task: String,
-    /// The answer: what the worker should do.
-    pub answer: String,
-    /// Why, in a few words (the brief says so, the worker's recommendation fits, a decision
-    /// settled it).
-    pub why: String,
-}
-
-/// `route_follow_up`: sorts a message the user sent while the orchestrator works on their
-/// request.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RouteFollowUp {
-    /// The follow-up's id, from its [follow-up …] block.
-    pub follow_up: String,
-    /// Where it goes. Optional only for the older form, which gave `joins` instead.
-    #[serde(default)]
-    pub route: Option<FollowUpRoute>,
-    /// For route "session": the other session's id, from the [follow-up …] block or
-    /// `brigadier sessions`. `tab` is its older name (rule R).
-    #[serde(default, alias = "tab")]
-    pub session: Option<String>,
-    /// The older form, from before routes (rule R: a session's cached schema still sends it):
-    /// true is "join", false is "wait".
-    #[serde(default)]
-    #[schemars(skip)]
-    pub joins: Option<bool>,
-}
-
-/// Where a follow-up goes (`route_follow_up`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum FollowUpRoute {
-    /// It belongs to this work: it joins it now.
-    Join,
-    /// A request of its own that has to come after this work (it builds on its result or
-    /// changes the same files): it waits in the queue until this work is done.
-    Wait,
-    /// Separate work, with a different goal that leaves the files this request is changing
-    /// alone: it waits, and offers the user "Open as a new session". `new_tab` is its older
-    /// name (rule R).
-    #[serde(alias = "new_tab")]
-    NewSession,
-    /// It belongs to another session of this project (`session`): it goes there. `tab` is
-    /// its older name (rule R).
-    #[serde(alias = "tab")]
-    Session,
-}
-
-impl RouteFollowUp {
-    /// The route asked for, the older `joins` read as join or wait.
-    pub fn chosen(&self) -> Option<FollowUpRoute> {
-        self.route.or(self.joins.map(|joins| {
-            if joins {
-                FollowUpRoute::Join
-            } else {
-                FollowUpRoute::Wait
-            }
-        }))
-    }
-}
-
-/// A task reference only.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct TaskRef {
-    /// The task, e.g. "task-3".
-    pub task: String,
-}
-
-/// `attach_proof`: a screenshot, short recording, log or test output the thread made of the
-/// change, shown with its reply (the merge message's proof).
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AttachProof {
-    /// The image (PNG, JPEG, GIF, WebP), recording (MP4, MOV, WebM) or text output (.log,
-    /// .txt) file, at most 11 MB (text 1 MB); relative to your checkout.
-    pub path: String,
-    /// What it shows, in a few words the user reads under it: "Added a todo with a due date".
-    #[serde(default)]
-    pub caption: Option<String>,
-    /// For a text file: "log" for a program's output, "test" for a test run's. A picture is a
-    /// screenshot and a video a recording without it.
-    #[serde(default)]
-    pub kind: Option<crate::work::ProofKind>,
-    /// The preview it shows ("preview-2"), when it was taken of one of yours.
-    #[serde(default)]
-    pub preview: Option<String>,
-    /// Where it was taken when that isn't a preview of yours or a browser_screenshot: the
-    /// page's URL, the device ("iPhone 16 simulator"), the file or the command.
-    #[serde(default)]
-    pub taken_on: Option<String>,
-}
-
-/// `stop_worker`: stop a worker for good, saying why.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StopWorker {
-    /// The task, e.g. "task-3".
-    pub task: String,
-    /// Why it stops, in one line the user reads, e.g. "No longer needed: the user dropped
-    /// the export".
-    pub reason: String,
-}
-
-/// `rerun_task`: run a scout or research task again once, one tier up, when its answer lacks
-/// support.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RerunTask {
-    /// The task, e.g. "task-3".
-    pub task: String,
-    /// Why its answer falls short, in one line, e.g. "It names no file for the parser".
-    pub why: String,
-}
-
-/// `store_output`: keep a file the thread wrote (a corrected copy of a worker's deliverable) as
-/// a task's output.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StoreOutput {
-    /// The task whose output it becomes, e.g. "task-3": the one whose file it corrects.
-    pub task: String,
-    /// The file, by its full path or a path in your workspace. It takes the place of the
-    /// task's output with the same file name.
-    pub path: String,
-}
-
-/// `read_report`: a task of this session, or a report from another session of the project.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReportRef {
-    /// This session's task, e.g. "task-3"; or another session's task by the id a Brain
-    /// answer names ("from report <id>").
-    pub task: String,
-}
-
 /// `ask_user`: a round of questions only the user can answer (product choices, unclear
 /// requirements), shown as one card they answer at once.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -406,20 +151,6 @@ pub struct AskOption {
     /// One short line on what it means, when the label alone doesn't say it.
     #[serde(default)]
     pub description: Option<String>,
-}
-
-/// `read_artifact`: page through a stored artifact (transcript, diff, command output, note).
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReadArtifact {
-    /// The artifact id from a report.
-    pub id: String,
-    /// Byte offset to start at.
-    #[serde(default)]
-    pub offset: Option<u64>,
-    /// Bytes to read (at most 16000).
-    #[serde(default)]
-    pub limit: Option<u32>,
 }
 
 /// `start_preview`: a long-running process (a dev server, the app) the user can look at.
@@ -807,20 +538,9 @@ pub struct OfferFeedback {
 /// A tool call from an orchestrator.
 #[derive(Debug, Clone)]
 pub enum OrchestratorCall {
-    DelegateTask(DelegateTask),
-    MessageWorker(MessageWorker),
-    AnswerWorker(AnswerWorker),
-    RouteFollowUp(RouteFollowUp),
-    StopWorker(StopWorker),
-    RerunTask(RerunTask),
-    AskUser(AskUser),
-    ReadReport(ReportRef),
-    ReadArtifact(ReadArtifact),
-    StoreOutput(StoreOutput),
     QueryBrain(QueryBrain),
     Remember(Remember),
     SearchTranscript(SearchTranscript),
-    AttachProof(AttachProof),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
@@ -829,7 +549,6 @@ pub enum OrchestratorCall {
     WatchCi(CiPush),
     SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
-    ListTasks,
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
@@ -848,7 +567,6 @@ pub const THREAD_TOOLS: &[&str] = &[
     "query_brain",
     "remember",
     "search_transcript",
-    "attach_proof",
     "request_approval",
     "note_for_user",
     "ci_status",
@@ -862,42 +580,13 @@ pub const THREAD_TOOLS: &[&str] = &[
     "suggest_setting",
 ];
 
-/// The thread's tools a Chat has too (Q76): a Chat is a thread without a project, so it runs
-/// workers and asks on cards, and has nothing of git, checks, landing or other sessions.
-pub const CHAT_THREAD_TOOLS: &[&str] = &[
-    "delegate_task",
-    "message_worker",
-    "answer_worker",
-    "stop_worker",
-    "ask_user",
-    "read_report",
-    "read_artifact",
-    "store_output",
-];
-
 impl OrchestratorCall {
-    /// Whether a Chat may make this call ([`CHAT_THREAD_TOOLS`]).
-    pub fn in_chat(&self) -> bool {
-        CHAT_THREAD_TOOLS.contains(&self.name())
-    }
-
     /// The MCP tool name.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::DelegateTask(_) => "delegate_task",
-            Self::MessageWorker(_) => "message_worker",
-            Self::AnswerWorker(_) => "answer_worker",
-            Self::RouteFollowUp(_) => "route_follow_up",
-            Self::StopWorker(_) => "stop_worker",
-            Self::RerunTask(_) => "rerun_task",
-            Self::AskUser(_) => "ask_user",
-            Self::ReadReport(_) => "read_report",
-            Self::ReadArtifact(_) => "read_artifact",
-            Self::StoreOutput(_) => "store_output",
             Self::QueryBrain(_) => "query_brain",
             Self::Remember(_) => "remember",
             Self::SearchTranscript(_) => "search_transcript",
-            Self::AttachProof(_) => "attach_proof",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
@@ -906,7 +595,6 @@ impl OrchestratorCall {
             Self::WatchCi(_) => "watch_ci",
             Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
-            Self::ListTasks => "list_tasks",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
@@ -923,293 +611,21 @@ impl OrchestratorCall {
 
 // ----- worker tools ----------------------------------------------------------------------
 
-/// `ask_thread`: a blocking question. The call returns the thread's answer.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AskOrchestrator {
-    /// The question, with the context the thread needs to answer it.
-    pub question: String,
-    /// What it is about: `operational` (a choice your task leaves to you: which file, which
-    /// test, an order of steps), `consent` (merging, deleting, pushing, spending, anything
-    /// outward) or `product` (what the user gets). Product unless you say.
-    #[serde(default)]
-    pub about: QuestionAbout,
-    /// For an operational question only: what you will do if no answer comes within the
-    /// hour. Consent and product questions wait for their answer whatever this says.
-    #[serde(default)]
-    pub safe_default: Option<String>,
-}
-
-/// What a worker's question is about (BUILD-PLAN E2): only an operational one may go on with
-/// its safe default when nobody answers.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum QuestionAbout {
-    Operational,
-    Consent,
-    #[default]
-    Product,
-}
-
-/// `note_progress`: where a worker is in its plan, shown under its name while it works.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct NoteProgress {
-    /// A few words on where you are, such as "Step 3 of 5: wiring the exporter" (one line).
-    pub note: String,
-}
-
-/// A file the worker saved in its scratch folder, attached to its report.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ArtifactInput {
-    /// Path of the file, inside the worker's scratch folder (absolute, or relative to it).
-    pub path: String,
-    /// What the file holds, in a few words.
-    pub title: String,
-}
-
-/// `submit_report`: the worker's final structured report (about 800 tokens at most; details go
-/// into artifacts). Call it exactly once, at the end: the orchestrator reads only this report,
-/// never your messages.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SubmitReport {
-    /// What was done and what you found, in a few sentences. It must hold your findings (or
-    /// name the artifact that does): never say they are below or in a message.
-    pub summary: String,
-    /// Repo-relative paths changed, created or deleted. Every new file must be listed (or its
-    /// folder): a report that leaves one out is refused until you list or delete it.
-    #[serde(default, deserialize_with = "paths")]
-    pub changes: Vec<String>,
-    /// Decisions made and why, one per line, each with its evidence as `learned` says.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub decisions: Vec<String>,
-    /// What the next worker in this area should know that the code doesn't say plainly (a
-    /// trap, a command that works, where something lives), one per line. Each is kept in the
-    /// project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact
-    /// words there`] or [evidence: out-… `the words of that check's output`].
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub learned: Vec<String>,
-    /// Exactly what was verified and how (commands run and their results), one item per line.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub verification: Vec<String>,
-    /// Each "done when" criterion of the task, one per line: its status in brackets, the
-    /// criterion, then the evidence, e.g. "[met] `pnpm test` passes: 41 passed (out-1a2b3c4d)".
-    /// The status is [met], [not met] or [not checked]; [met] needs its evidence: the out-… id
-    /// its check's result ends with, or path:12-14 with the exact words in backticks.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub done_when: Vec<String>,
-    /// Questions left open, or (for reviews) the exact issues to fix, one per line.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub open_questions: Vec<String>,
-    /// Risks and assumptions the work rests on, and what you skipped and why, one per line.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub risks: Vec<String>,
-    /// What only the user can do (a credential, a sign-in, a push, a paid signup, an account
-    /// id), one per line. Finish everything else around it.
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub needs_user: Vec<String>,
-    /// Merge tasks only: each file you removed on purpose, with why, one per line
-    /// ("src/old.rs: main replaced it with src/new.rs").
-    #[serde(default, deserialize_with = "lines")]
-    #[schemars(with = "String", extend("default" = ""))]
-    pub deleted: Vec<String>,
-    /// Review tasks only: the verdict on the reviewed change.
-    #[serde(default)]
-    pub verdict: Option<ReviewVerdict>,
-    /// Verify tasks only: whether every check you ran passed, one failed, or you could not
-    /// run them.
-    #[serde(default)]
-    pub checks: Option<ChecksResult>,
-    /// Files from your scratch folder with details the report leaves out.
-    #[serde(default)]
-    pub artifacts: Vec<ArtifactInput>,
-}
-
-/// A report list given as one text, one item per line, or as a list. The schema asks for text:
-/// a model writing long items full of quotes and backticks sometimes emits a list as bare text,
-/// which breaks the call's JSON, while it writes a text field reliably. A list may hold objects
-/// too (`{"criterion", "status", "evidence"}`): a Codex worker spent 2–3 rejected calls a report
-/// guessing the shape, so every item becomes a line.
-fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Lines {
-        Text(String),
-        List(Vec<serde_json::Value>),
-    }
-    Ok(match Option::<Lines>::deserialize(deserializer)? {
-        None => Vec::new(),
-        Some(Lines::List(items)) => items
-            .iter()
-            .map(item_line)
-            .filter(|item| !empty_item(item))
-            .collect(),
-        Some(Lines::Text(text)) => text_lines(&text),
-    })
-}
-
-fn text_lines(text: &str) -> Vec<String> {
-    text.lines()
-        .map(|line| {
-            let line = line.trim();
-            line.strip_prefix("- ")
-                .or_else(|| line.strip_prefix("* "))
-                .unwrap_or(line)
-        })
-        .filter(|line| !empty_item(line))
-        .map(str::to_owned)
-        .collect()
-}
-
-/// One report line from a list item: a text as it is; an object as its status in brackets, its
-/// criterion, then its evidence ("[met] Name reads Grace: the expect held"), with any other
-/// fields after them; anything else as JSON.
-fn item_line(item: &serde_json::Value) -> String {
-    use serde_json::Value;
-    let text = |v: &Value| match v {
-        Value::String(s) => s.trim().to_owned(),
-        Value::Null => String::new(),
-        other => other.to_string(),
-    };
-    let Value::Object(fields) = item else {
-        return text(item);
-    };
-    let pick = |keys: &[&str]| {
-        keys.iter()
-            .find_map(|k| fields.get(*k).map(text))
-            .filter(|s| !s.is_empty())
-    };
-    const STATUS: [&str; 3] = ["status", "state", "met"];
-    const WHAT: [&str; 6] = ["criterion", "item", "text", "name", "title", "check"];
-    const WHY: [&str; 5] = ["evidence", "detail", "details", "how", "result"];
-    let mut line = String::new();
-    if let Some(status) = pick(&STATUS) {
-        let status = match status.as_str() {
-            "true" => "met".to_owned(),
-            "false" => "not met".to_owned(),
-            _ => status.trim_matches(['[', ']']).to_lowercase(),
-        };
-        line.push_str(&format!("[{status}] "));
-    }
-    if let Some(what) = pick(&WHAT) {
-        line.push_str(&what);
-    }
-    if let Some(why) = pick(&WHY) {
-        if !line.is_empty() && !line.ends_with("] ") {
-            line.push_str(": ");
-        }
-        line.push_str(&why);
-    }
-    for (key, value) in fields {
-        if STATUS.contains(&key.as_str())
-            || WHAT.contains(&key.as_str())
-            || WHY.contains(&key.as_str())
-        {
-            continue;
-        }
-        let value = text(value);
-        if !value.is_empty() {
-            line.push_str(&format!(
-                "{}{key}: {value}",
-                if line.is_empty() { "" } else { "; " }
-            ));
-        }
-    }
-    line.trim().to_owned()
-}
-
-/// The changed paths, without a placeholder that says there are none. One text, a path a line
-/// or comma-separated, is taken too.
-fn paths<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Paths {
-        Text(String),
-        List(Vec<serde_json::Value>),
-    }
-    Ok(match Option::<Paths>::deserialize(deserializer)? {
-        None => Vec::new(),
-        Some(Paths::List(items)) => items
-            .iter()
-            .map(|item| match item {
-                serde_json::Value::Object(o) => o
-                    .get("path")
-                    .or_else(|| o.get("file"))
-                    .map_or_else(|| item_line(item), item_line),
-                other => item_line(other),
-            })
-            .filter(|path| !empty_item(path))
-            .collect(),
-        Some(Paths::Text(text)) => text.split([',', '\n']).flat_map(text_lines).collect(),
-    })
-}
-
-/// Whether a report line only says the list is empty ("None.", "N/A", "-", "None for
-/// implementation."): some models fill every section, and a placeholder under needs_user must
-/// not read as something for the user.
-fn empty_item(item: &str) -> bool {
-    const PLACEHOLDERS: [&str; 6] = ["none", "n/a", "na", "nothing", "no", "none needed"];
-    // A placeholder qualified by what it is about ("None for this task", "Nothing needed for
-    // the build"), as long as no second sentence or clause follows that could hold a real ask.
-    const QUALIFIED: [&str; 7] = [
-        "none for ",
-        "none needed ",
-        "nothing needed",
-        "none required",
-        "nothing required",
-        "no action needed",
-        "no action required",
-    ];
-    let item = item
-        .trim()
-        .trim_matches(|c: char| {
-            c.is_whitespace() || c.is_ascii_punctuation() || matches!(c, '—' | '–')
-        })
-        .to_lowercase();
-    let one_clause = !item.contains([';', ':', '—', '–']) && !item.contains(". ");
-    item.is_empty()
-        || PLACEHOLDERS.contains(&item.as_str())
-        || (one_clause && QUALIFIED.iter().any(|start| item.starts_with(start)))
-}
-
-/// A tool call from a worker.
+/// A plain worker's call, made with `brigadier preview`.
 #[derive(Debug, Clone)]
 pub enum WorkerCall {
-    AskOrchestrator(AskOrchestrator),
-    SubmitReport(SubmitReport),
-    QueryBrain(QueryBrain),
-    CodeSearch(CodeSearch),
-    CodeRefs(CodeRefs),
-    ProjectMap,
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
-    NoteProgress(NoteProgress),
 }
 
 impl WorkerCall {
-    /// The MCP tool name.
+    /// The tool's name.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::AskOrchestrator(_) => "ask_thread",
-            Self::SubmitReport(_) => "submit_report",
-            Self::QueryBrain(_) => "query_brain",
-            Self::CodeSearch(_) => "code_search",
-            Self::CodeRefs(_) => "code_refs",
-            Self::ProjectMap => "project_map",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",
-            Self::NoteProgress(_) => "note_progress",
         }
     }
 }
@@ -1557,141 +973,4 @@ pub trait ToolHost: Send + Sync {
     /// A call to `tool` whose arguments didn't match its schema: the host may count it (the
     /// bench's tripwire report). It changes nothing for the caller.
     fn bad_call(&self, _grant: &str, _tool: &str) {}
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn report(json: serde_json::Value) -> SubmitReport {
-        serde_json::from_value(json).expect("a valid report")
-    }
-
-    #[test]
-    fn a_report_list_may_be_text_one_item_per_line() {
-        let report = report(serde_json::json!({
-            "summary": "Done.",
-            "verification": "- Ran `pnpm test -- \"src/api\"`: 12 passed.\n\n* Read C:\\repo\\a.ts\nNo bullet",
-        }));
-        assert_eq!(
-            report.verification,
-            [
-                "Ran `pnpm test -- \"src/api\"`: 12 passed.",
-                "Read C:\\repo\\a.ts",
-                "No bullet"
-            ]
-        );
-        assert!(report.decisions.is_empty());
-    }
-
-    #[test]
-    fn a_report_list_may_still_be_a_list_or_null() {
-        let report = report(serde_json::json!({
-            "summary": "Done.",
-            "decisions": ["Kept the old name."],
-            "open_questions": null,
-        }));
-        assert_eq!(report.decisions, ["Kept the old name."]);
-        assert!(report.open_questions.is_empty());
-    }
-
-    #[test]
-    fn done_when_risks_and_needs_user_are_lines_too() {
-        let report = report(serde_json::json!({
-            "summary": "Done.",
-            "done_when": "- [met] `pnpm test` passes: 41 passed\n- [not checked] the smoke run",
-            "risks": ["Assumes Node 22."],
-            "needs_user": "Set STRIPE_KEY in .env",
-        }));
-        assert_eq!(
-            report.done_when,
-            [
-                "[met] `pnpm test` passes: 41 passed",
-                "[not checked] the smoke run"
-            ]
-        );
-        assert_eq!(report.risks, ["Assumes Node 22."]);
-        assert_eq!(report.needs_user, ["Set STRIPE_KEY in .env"]);
-    }
-
-    #[test]
-    fn a_report_takes_the_shapes_a_codex_worker_sends() {
-        // Measured 2026-10-09: objects for done_when and a string for changes were rejected,
-        // 2–3 calls a report.
-        let report = report(serde_json::json!({
-            "summary": "Done.",
-            "changes": "src/a.ts, src/b.ts\nnotes/c.md",
-            "done_when": [
-                {"criterion": "Name reads Grace", "status": "met", "evidence": "the expect held"},
-                {"criterion": "Nothing else changed", "met": false},
-                {"status": "[not checked]", "evidence": "no screenshot"}
-            ],
-            "verification": [{"check": "observe", "result": "Level 37"}, 3, "Saved."],
-            "risks": [{"risk": "the window may move"}],
-        }));
-        assert_eq!(report.changes, ["src/a.ts", "src/b.ts", "notes/c.md"]);
-        assert_eq!(
-            report.done_when,
-            [
-                "[met] Name reads Grace: the expect held",
-                "[not met] Nothing else changed",
-                "[not checked] no screenshot"
-            ]
-        );
-        assert_eq!(report.verification, ["observe: Level 37", "3", "Saved."]);
-        assert_eq!(report.risks, ["risk: the window may move"]);
-        let listed = self::report(serde_json::json!({
-            "summary": "Done.",
-            "changes": [{"path": "src/a.ts", "change": "edited"}],
-        }));
-        assert_eq!(listed.changes, ["src/a.ts"]);
-    }
-
-    #[test]
-    fn placeholder_lines_leave_a_report_list_empty() {
-        let report = report(serde_json::json!({
-            "summary": "Done.",
-            "changes": ["src/a.ts", "None."],
-            "decisions": "- None\n- N/A.",
-            "done_when": ["[met] tests pass: 41 passed", "none needed"],
-            "open_questions": ["None."],
-            "risks": "-\nNothing.\n(none)",
-            "needs_user": ["  no  ", "n/a", "None for implementation.", "Nothing needed for the build"],
-        }));
-        assert_eq!(report.changes, ["src/a.ts"]);
-        assert!(report.decisions.is_empty());
-        assert_eq!(report.done_when, ["[met] tests pass: 41 passed"]);
-        assert!(report.open_questions.is_empty());
-        assert!(report.risks.is_empty());
-        assert!(report.needs_user.is_empty());
-        // A real item that starts like a placeholder stays.
-        let kept = self::report(serde_json::json!({
-            "summary": "Done.",
-            "needs_user": "None of the keys are set: add STRIPE_KEY to .env",
-        }));
-        assert_eq!(
-            kept.needs_user,
-            ["None of the keys are set: add STRIPE_KEY to .env"]
-        );
-        // So does a qualified placeholder that goes on to ask for something.
-        let asks = self::report(serde_json::json!({
-            "summary": "Done.",
-            "needs_user": "None for the code; paste one real screenshot in the app",
-        }));
-        assert_eq!(asks.needs_user.len(), 1);
-    }
-
-    #[test]
-    fn the_schema_asks_for_text() {
-        let schema = serde_json::to_value(schemars::schema_for!(SubmitReport)).expect("schema");
-        let verification = &schema["properties"]["verification"];
-        assert!(
-            verification.to_string().contains("\"string\""),
-            "{verification}"
-        );
-        assert!(
-            !verification.to_string().contains("array"),
-            "{verification}"
-        );
-    }
 }

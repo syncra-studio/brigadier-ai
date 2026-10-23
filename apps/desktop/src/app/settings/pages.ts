@@ -14,7 +14,6 @@ import { STORAGE_ROWS, StoragePage } from "@/app/settings/storage/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/settings/providers/ProvidersPage";
-import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/settings/routing/RoutingPage";
 import {
   Archive,
   Brain,
@@ -29,7 +28,6 @@ import {
   Plugin,
   SettingsCog,
   SettingsSlider,
-  Shuffle,
   Storage,
 } from "@/components/icons";
 import { preloadable } from "@/lib/preloadable";
@@ -89,7 +87,6 @@ const INSPECTOR_ROWS: readonly SettingsRowCopy[] = [
   { label: "Processes", description: "The processes Brigadier runs" },
   { label: "Performance", description: "Metrics against the performance budgets" },
   { label: "Providers", description: "Raw provider sessions" },
-  { label: "Routing preview", description: "What routing would pick" },
 ];
 
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "Browser & Data", "System", "end"];
@@ -159,16 +156,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: PluginsPage,
     get rows() { return integrationSearchRows(); },
-  },
-  {
-    id: "routing",
-    label: "Routing",
-    formerly: ["Who does what"],
-    icon: Shuffle,
-    group: "Agents",
-    component: RoutingPage,
-    rows: Object.values(ROUTING_PAGE_ROWS),
-    prefetch: prefetchUsage,
   },
   {
     id: "git",

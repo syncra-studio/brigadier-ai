@@ -291,49 +291,6 @@ fn expiry(expires_in: Option<u64>) -> Option<u64> {
     expires_in.map(|secs| now_ms().saturating_add(secs.saturating_mul(1000)))
 }
 
-/// Renews `credential` at `endpoint` with its refresh token. The answer's refresh token
-/// replaces the old one when it has one (rotation); otherwise the old one stays.
-pub(crate) async fn refresh(
-    http: &reqwest::Client,
-    endpoint: &str,
-    credential: &Credential,
-    resource: Option<&str>,
-) -> Result<Credential, OAuthError> {
-    let refresh_token = credential
-        .refresh_token
-        .as_ref()
-        .ok_or_else(|| OAuthError::Failed("The sign-in has no refresh token.".into()))?;
-    let mut form = vec![
-        ("grant_type", "refresh_token".to_owned()),
-        ("refresh_token", refresh_token.expose().to_owned()),
-    ];
-    if let Some(resource) = resource {
-        form.push(("resource", resource.to_owned()));
-    }
-    let answer = token_request(
-        http,
-        endpoint,
-        form,
-        credential.client_id.as_deref(),
-        credential.client_secret.as_ref(),
-    )
-    .await?;
-    Ok(Credential {
-        access_token: Secret::new(answer.access_token),
-        refresh_token: answer
-            .refresh_token
-            .filter(|token| !token.is_empty())
-            .map(Secret::new)
-            .or_else(|| credential.refresh_token.clone()),
-        expires_at: expiry(answer.expires_in),
-        client_id: credential.client_id.clone(),
-        client_secret: credential.client_secret.clone(),
-        token_endpoint: Some(endpoint.to_owned()),
-        since: credential.since,
-        found: credential.found.clone(),
-    })
-}
-
 fn random(bytes: usize) -> Result<String, OAuthError> {
     let mut buffer = vec![0u8; bytes];
     getrandom::fill(&mut buffer).map_err(|err| failed(NOT_STARTED, err))?;

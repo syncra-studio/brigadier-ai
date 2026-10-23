@@ -101,8 +101,9 @@ fn seen_env(turn: &Turn) -> Value {
     })
 }
 
-/// Each thread starts one worker when asked; the main session's thread looks around with
-/// `brigadier` when asked; each worker calls `brigadier` as itself, then reports.
+/// Each thread starts one worker with `brigadier start` when asked; the main session's thread
+/// looks around with `brigadier` when asked; each worker calls `brigadier` as itself, then
+/// answers.
 fn looking(answers: Answers) -> Script {
     Arc::new(move |turn| {
         let answers = answers.clone();
@@ -110,7 +111,10 @@ fn looking(answers: Answers) -> Script {
             let keep = |name: &str, value: Value| {
                 answers.lock().unwrap().insert(name.into(), value);
             };
-            if let Some(Role::Worker { task_id, .. }) = turn.host.grants().resolve(&turn.grant) {
+            let worker = turn
+                .env(GRANT_ENV)
+                .and_then(|grant| turn.host.grants().resolve(grant));
+            if let Some(Role::Worker { task_id, .. }) = worker {
                 keep(&format!("worker env {}", task_id.0), seen_env(&turn));
                 keep(
                     "worker sessions",
@@ -120,10 +124,6 @@ fn looking(answers: Answers) -> Script {
                     "worker workers",
                     brigadier(&turn, CliRequest::Workers).await,
                 );
-                let reply = turn
-                    .call("submit_report", json!({"summary": "Three lines."}))
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Reported: three lines.");
             }
             let Some(conversation) = turn.conversation() else {
@@ -131,15 +131,16 @@ fn looking(answers: Answers) -> Script {
             };
             let me = conversation.0.clone();
             if turn.input.contains("Start a worker.") {
-                let reply = turn
-                    .call(
-                        "delegate_task",
-                        json!({"effort": "medium", "title": "Count the lines",
-                               "kind": "scout", "spec": "Count the lines in README.",
-                               "provider": "claude"}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
+                let started = brigadier(
+                    &turn,
+                    CliRequest::Start(Box::new(StartRequest {
+                        title: Some("Count the lines".into()),
+                        agent: Some(Agent::Claude),
+                        ..start("Count the lines in README.")
+                    })),
+                )
+                .await;
+                assert!(started.get("error").is_none(), "{started:#}");
                 return Reply::text("Started a worker.");
             }
             if turn.input.contains("Look around.") {
@@ -226,8 +227,11 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
 
     for session in [&flow.conversation, &docs] {
         flow.say_to(session, "Start a worker.").await;
-        flow.until_in(session, "its worker reported", |board| {
-            board.tasks.values().any(|task| task.report.is_some())
+        flow.until_in(session, "its worker answered", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == crate::work::TaskState::Reported)
         })
         .await;
         flow.settled_in(session).await;
@@ -256,13 +260,18 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
                "data dir": data, "first on path": bin,
                "grant": answers["thread env"]["grant"]})
     );
+    // A plain worker's only grant is the one its `brigadier` calls carry.
     for task in [&mine, &theirs] {
         let seen = &answers[&format!("worker env {}", task.id.0)];
         assert_eq!(
             seen,
-            &json!({"session": task.id.0, "grant is the turn's": true,
+            &json!({"session": task.id.0, "grant is the turn's": seen["grant is the turn's"],
                     "data dir": data, "first on path": bin, "grant": seen["grant"]})
         );
+        assert!(matches!(
+            flow.manager.grants().resolve(seen["grant"].as_str().unwrap()),
+            Some(Role::Worker { task_id, .. }) if task_id == task.id
+        ));
     }
 
     // `sessions`: this project's two sidebar sessions, this one marked, no worker, nothing of
@@ -323,7 +332,7 @@ async fn sessions_lists_sidebar_sessions_and_workers_only_the_callers_own() {
     assert_eq!(shown["kind"], "worker");
     assert_eq!(shown["parent"], short(&flow.conversation.0));
     assert_eq!(shown["task"], "Count the lines in README.");
-    assert_eq!(shown["report"], "Three lines.");
+    assert!(shown["report"].is_null(), "{shown:#}");
     let read = &answers["read worker"];
     assert_eq!(read["view"], "last");
     assert_eq!(
@@ -396,26 +405,14 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
     const WORKER_RUNS: usize = 1100;
     let script: Script = Arc::new(|turn| {
         Box::pin(async move {
-            if let Some(Role::Worker { .. }) = turn.host.grants().resolve(&turn.grant) {
+            if turn.worker().is_some() {
                 for n in 0..WORKER_RUNS {
                     turn.emit(command(n)).await;
                 }
-                let reply = turn
-                    .call("submit_report", json!({"summary": "Ran them."}))
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Ran them all.");
             }
             if turn.input.contains("Start a worker.") {
-                let reply = turn
-                    .call(
-                        "delegate_task",
-                        json!({"effort": "medium", "title": "Run them",
-                               "kind": "scout", "spec": "Run the commands.",
-                               "provider": "claude"}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
+                turn.start_worker("Run them", "Run the commands.").await;
                 return Reply::text("Started a worker.");
             }
             if turn.input.contains("Run them.") {
@@ -498,8 +495,11 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
 
     // A worker's `--last N` past one page of its events reads back as far as asked.
     flow.say("Start a worker.").await;
-    flow.until("its worker reported", |board| {
-        board.tasks.values().any(|task| task.report.is_some())
+    flow.until("its worker answered", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Reported)
     })
     .await;
     flow.settled().await;
@@ -1285,7 +1285,7 @@ async fn models_rules_are_the_only_gate_on_start() {
                 let at = std::time::Instant::now();
                 let models = brigadier(&turn, CliRequest::Models).await;
                 assert!(at.elapsed() < std::time::Duration::from_millis(200));
-                let settings_usage = turn.host.usage_view(None).await.unwrap();
+                let settings_usage = turn.host.usage_view().await.unwrap();
                 for provider in settings_usage.providers {
                     for account in provider.accounts {
                         let row = models["accounts"]

@@ -6,10 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
-use serde_json::json;
-
 use super::{Flow, Options, Reply, Scratch, Script, Turn};
-use crate::manager::workers::test_data_dir;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -42,28 +39,18 @@ where
     (passed, folders.try_iter().collect())
 }
 
-/// A session whose worker is mid-turn: a live task, so its test data folder is there. Sends
-/// the session's folder and that one.
+/// A session whose worker is mid-turn: a live task, so its folder is there. Sends the
+/// session's folder and that one.
 async fn waiting_lead(name: &str, sent: &Sender<PathBuf>) -> Flow {
     let flow = Flow::start(
         name,
         Options::default(),
         script(|turn| async move {
-            if turn.is_orchestrator() {
-                if !turn.input.contains("[report") {
-                    let reply = turn
-                        .call(
-                            "delegate_task",
-                            json!({"effort": "high", "title": "Add a file", "kind": "implement",
-                                   "spec": "Create one.txt.", "provider": "claude"}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                }
-                return Reply::text("");
+            if turn.worker().is_some() {
+                std::future::pending::<()>().await;
             }
-            std::future::pending::<()>().await;
-            Reply::text("")
+            turn.start_worker("Add a file", "Create one.txt.").await;
+            Reply::text("Started.")
         }),
     )
     .await;
@@ -76,7 +63,10 @@ async fn waiting_lead(name: &str, sent: &Sender<PathBuf>) -> Flow {
                 .any(|task| task.state == crate::work::TaskState::Running)
         })
         .await;
-    let folder = test_data_dir(&Flow::task(&board, 1).id);
+    let folder = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .worker(Flow::task(&board, 1));
     assert!(folder.is_dir());
     sent.send(flow.dir.to_path_buf()).unwrap();
     sent.send(folder).unwrap();

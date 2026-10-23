@@ -154,7 +154,7 @@ function accountsChecked(generation: number, limitMs: number): Promise<boolean> 
 }
 
 /**
- * A provider or account check changes windows, estimates and balancing, and a rankings change
+ * A provider or account check changes windows and estimates, and a rankings change
  * the models' ratings: read the view (and Activity, if shown) again.
  */
 export function applyUsageEvents(batch: readonly EventEnvelope[]): void {

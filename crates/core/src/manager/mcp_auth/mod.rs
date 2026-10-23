@@ -1,19 +1,9 @@
-//! Sign-ins to remote MCP servers, shared between the agents (docs/research/phase7-probes.md
-//! (j)). A server one agent is signed in to serves the other's workers, and a sign-in in
-//! Brigadier serves every agent's:
+//! Sign-ins to remote MCP servers (docs/research/phase7-probes.md (j)): which of each agent's
+//! stores holds a usable sign-in, for Settings, and sign-ins made in Brigadier.
 //!
-//! - Such a worker gets the server at Brigadier's proxy on 127.0.0.1 ([`proxy`]), one address
-//!   per worker and server, which takes only that worker's own key. The proxy adds a fresh
-//!   access token to each request: it renews the token when it is about to expire, or once
-//!   after the server answers 401, and replays the request.
-//! - A renewal takes the owning CLI's own lock, reads its store again (the CLI may have renewed
-//!   it already), refreshes, and writes the new tokens back to the CLI's store, so the CLI
-//!   keeps working when its authorization server rotates refresh tokens. A store that changed
-//!   under it, a write that doesn't read back, or a refused refresh token ends the reuse.
 //! - Settings' reads never ask the user ([`Prober`] `quiet`): a store that would ask reads as
-//!   unknown. A worker that needs another agent's sign-in reads it as the system allows, which
-//!   may show the Keychain's prompt once. A refusal is remembered (no read asks again) until
-//!   the user asks for it ([`McpAuth::ask_again`]).
+//!   unknown. A refusal is remembered (no read asks again) until the user asks for it
+//!   ([`McpAuth::ask_again`]).
 //! - A sign-in in Brigadier runs in the background: it can be cancelled while it waits for the
 //!   browser, its page opened again, and its sign-in signed out of. Its link stays here.
 //!
@@ -23,19 +13,16 @@
 mod keychain;
 mod locks;
 mod oauth;
-mod proxy;
 mod stores;
 #[cfg(test)]
 mod tests;
 
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use brigadier_registry::{
-    CodexStore, OAuthClient, Owner, Probe, Roots, Secret, Server, SignInStores, Transport,
-    sha256_hex,
+    CodexStore, Owner, Probe, Roots, Server, SignInStores, Transport, sha256_hex,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -51,8 +38,6 @@ pub(crate) use stores::{Homes, Place};
 /// How long a store read stays known (a usable sign-in, or none), so Settings' polling reads
 /// a store at most this often.
 const KNOWN_FOR: Duration = Duration::from_secs(30);
-/// An access token is renewed when it expires within this.
-const RENEW_WITHIN: Duration = Duration::from_secs(60);
 
 /// How a sign-in in Brigadier went. It never carries a token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -70,19 +55,6 @@ pub enum McpSignInStatus {
     Cancelled,
     /// Why, in a short plain sentence.
     Failed { reason: String },
-}
-
-/// One worker's way to one server through the proxy.
-#[derive(Debug, Clone)]
-pub(crate) struct Route {
-    /// The worker's key, the only one this route takes.
-    pub grant: String,
-    pub place: Place,
-    pub url: String,
-    /// The server's configured headers but `Authorization`, added to each request.
-    pub headers: Vec<(String, Secret)>,
-    pub client: Option<OAuthClient>,
-    pub homes: Homes,
 }
 
 type Slot = Arc<tokio::sync::Mutex<Option<Credential>>>;
@@ -120,12 +92,8 @@ impl Refusal {
     }
 }
 
-/// Whether a worker's key is still live.
-pub(crate) type Alive = Arc<dyn Fn(&str) -> bool + Send + Sync>;
-
 pub(crate) struct McpAuth {
     keychain: Mutex<Arc<dyn Keychain>>,
-    alive: Alive,
     /// What a store held when last read, for [`KNOWN_FOR`].
     known: Mutex<HashMap<Place, (Instant, Probe)>>,
     /// The sign-ins in use, by place: one renewal at a time each.
@@ -137,8 +105,6 @@ pub(crate) struct McpAuth {
     refused: Mutex<HashSet<Refusal>>,
     /// When the user signed in to Brigadier's own sign-ins (ms since the epoch), as read.
     since: Mutex<HashMap<Place, u64>>,
-    routes: Mutex<HashMap<String, Arc<Route>>>,
-    proxy: tokio::sync::OnceCell<SocketAddr>,
     sign_ins: Mutex<HashMap<String, SignInRun>>,
     http: reqwest::Client,
 }
@@ -161,26 +127,17 @@ async fn off<T: Send + 'static>(
 }
 
 impl McpAuth {
-    pub(crate) fn new(keychain: Arc<dyn Keychain>, alive: Alive) -> Self {
+    pub(crate) fn new(keychain: Arc<dyn Keychain>) -> Self {
         Self {
             keychain: Mutex::new(keychain),
-            alive,
             known: Mutex::default(),
             live: Mutex::default(),
             dead: Mutex::default(),
             refused: Mutex::default(),
             since: Mutex::default(),
-            routes: Mutex::default(),
-            proxy: tokio::sync::OnceCell::new(),
             sign_ins: Mutex::default(),
             http: oauth::client(),
         }
-    }
-
-    /// Tests: the Keychain the stores are read through.
-    #[cfg(all(test, target_os = "macos"))]
-    pub(crate) fn set_keychain(&self, keychain: Arc<dyn Keychain>) {
-        *lock(&self.keychain) = keychain;
     }
 
     /// Whether this system can keep Brigadier's own sign-ins.
@@ -217,12 +174,6 @@ impl McpAuth {
     fn forget(&self, place: &Place) {
         lock(&self.known).remove(place);
         lock(&self.live).remove(place);
-    }
-
-    /// Stops reusing the sign-in `credential` at `place`.
-    fn bury(&self, place: &Place, credential: &Credential) {
-        lock(&self.dead).insert(place.clone(), fingerprint(credential));
-        self.forget(place);
     }
 
     fn know(&self, place: &Place, probe: Probe) {
@@ -262,23 +213,6 @@ impl McpAuth {
                 Probe::Unknown
             }
         }
-    }
-
-    /// Fails when the user refused reading `place`: nothing reads it until they ask again.
-    fn not_refused(&self, place: &Place) -> Result<(), String> {
-        if lock(&self.refused).contains(&Refusal::of(place)) {
-            return Err(format!(
-                "the system wasn't allowed to let Brigadier read {}'s sign-in",
-                place.owner()
-            ));
-        }
-        Ok(())
-    }
-
-    /// Tests: what was read of every store is past [`KNOWN_FOR`].
-    #[cfg(test)]
-    pub(crate) fn age(&self) {
-        lock(&self.known).clear();
     }
 
     /// What `place` holds: refused until the user asks again, known within [`KNOWN_FOR`], else
@@ -326,156 +260,6 @@ impl McpAuth {
             slot.try_lock()
                 .is_ok_and(|held| held.as_ref().is_some_and(Credential::usable))
         })
-    }
-
-    /// A route for `route`'s worker to its server through the proxy: its address.
-    pub(crate) async fn route(self: &Arc<Self>, route: Route) -> Result<String, String> {
-        let me = Arc::downgrade(self);
-        let addr = self
-            .proxy
-            .get_or_try_init(|| proxy::start(me))
-            .await
-            .map_err(|err| format!("the sign-in proxy didn't start: {err}"))?;
-        let id = uuid::Uuid::new_v4().simple().to_string();
-        let mut routes = lock(&self.routes);
-        routes.retain(|_, route| (self.alive)(&route.grant));
-        routes.insert(id.clone(), Arc::new(route));
-        Ok(format!("http://{addr}/mcp/{id}"))
-    }
-
-    fn route_of(&self, id: &str) -> Option<Arc<Route>> {
-        lock(&self.routes).get(id).cloned()
-    }
-
-    /// The access token to send for `route`: renewed when it is about to expire, or when the
-    /// server refused `refused` (the token last sent) and no one has renewed it since.
-    pub(crate) async fn token(
-        &self,
-        route: &Route,
-        refused: Option<&Secret>,
-    ) -> Result<Secret, String> {
-        let slot = self.slot(&route.place);
-        let mut held = slot.lock().await;
-        if held.is_none() {
-            self.not_refused(&route.place)?;
-            let (stores, place) = (self.stores(route.homes.clone()), route.place.clone());
-            match off(move || stores.read(&place, false)).await {
-                Ok(Some(credential))
-                    if credential.usable() && !self.is_dead(&route.place, &credential) =>
-                {
-                    *held = Some(credential);
-                }
-                Ok(_) => {
-                    self.know(&route.place, Probe::Absent);
-                    return Err(format!(
-                        "{} holds no usable sign-in for it now",
-                        route.place.owner()
-                    ));
-                }
-                Err(err) => {
-                    self.read_failed(&route.place, &err);
-                    return Err(format!(
-                        "{}'s sign-in couldn't be read: {err}",
-                        route.place.owner()
-                    ));
-                }
-            }
-        }
-        let current = held.as_ref().map(|credential| {
-            (
-                refused.is_some_and(|token| *token == credential.access_token)
-                    || credential.due(RENEW_WITHIN),
-                credential.access_token.clone(),
-            )
-        });
-        match current {
-            Some((false, token)) => Ok(token),
-            _ => {
-                let renewed = self.renew(route, held.take()).await?;
-                let token = renewed.access_token.clone();
-                *held = Some(renewed);
-                Ok(token)
-            }
-        }
-    }
-
-    /// Renews `ours` under the owner's lock: the store's own when the owner renewed it
-    /// meanwhile, else refreshed and written back to the store.
-    async fn renew(&self, route: &Route, ours: Option<Credential>) -> Result<Credential, String> {
-        let place = &route.place;
-        self.not_refused(place)?;
-        let stores = Arc::new(self.stores(route.homes.clone()));
-        let taken = {
-            let (stores, place) = (stores.clone(), place.clone());
-            off(move || {
-                let locks = stores.renewal_lock(&place)?;
-                Ok((locks, stores.read(&place, false)?))
-            })
-            .await
-        };
-        let (locks, now) = taken.map_err(|err| {
-            self.read_failed(place, &err);
-            format!("{}'s sign-in couldn't be read: {err}", place.owner())
-        })?;
-        let Some(now) = now.filter(|now| now.usable() && !self.is_dead(place, now)) else {
-            drop(locks);
-            self.forget(place);
-            return Err(format!(
-                "{} holds no usable sign-in for it now",
-                place.owner()
-            ));
-        };
-        let renewed_by_owner = ours
-            .as_ref()
-            .is_some_and(|ours| ours.access_token != now.access_token);
-        if renewed_by_owner && !now.due(RENEW_WITHIN) {
-            return Ok(now);
-        }
-        let now = now.with_client(route.client.as_ref());
-        // The resource the tokens are for goes with the refresh (RFC 8707), as with the
-        // sign-in; the stores don't keep it.
-        let (endpoint, resource) = match (
-            oauth::discover(&self.http, &route.url, &route.headers).await,
-            &now.token_endpoint,
-        ) {
-            (Ok(found), stored) => (
-                stored.clone().unwrap_or(found.auth.token_endpoint),
-                Some(found.resource),
-            ),
-            (Err(_), Some(stored)) => (stored.clone(), None),
-            (Err(err), None) => return Err(err.to_string()),
-        };
-        let renewed = match oauth::refresh(&self.http, &endpoint, &now, resource.as_deref()).await {
-            Ok(renewed) => renewed,
-            Err(err) => {
-                if err == oauth::OAuthError::Refused {
-                    self.bury(place, &now);
-                } else {
-                    self.forget(place);
-                }
-                tracing::warn!(owner = place.owner(), reason = %err, "an MCP sign-in wasn't renewed");
-                return Err(err.to_string());
-            }
-        };
-        let written = {
-            let (place, now, renewed) = (place.clone(), now.clone(), renewed.clone());
-            off(move || stores.write_back(&place, &now, &renewed)).await
-        };
-        drop(locks);
-        match written {
-            Ok(()) => {
-                self.know(place, Probe::Usable);
-                Ok(renewed)
-            }
-            Err(err) => {
-                tracing::warn!(owner = place.owner(), reason = %err, "a renewed MCP sign-in couldn't be written back; it is no longer reused");
-                self.bury(place, &now);
-                Err(format!(
-                    "{}'s sign-in changed while it was renewed",
-                    place.owner()
-                ))
-            }
-        }
     }
 
     /// A new sign-in in Brigadier to the server kept at `place`, opened with `open`: its id,
@@ -704,9 +488,5 @@ impl Prober<'_> {
     pub(crate) fn pending_sign_in(&self, server: &Server) -> Option<String> {
         self.place(Owner::Brigadier, server)
             .and_then(|place| self.auth.pending_sign_in(&place))
-    }
-
-    pub(crate) fn homes(&self) -> &Homes {
-        &self.stores.homes
     }
 }

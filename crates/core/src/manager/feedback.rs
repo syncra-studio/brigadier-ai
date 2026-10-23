@@ -97,7 +97,6 @@ impl SessionManager {
         let (reply, _) = self
             .write_text(
                 None,
-                None,
                 &write_prompt(),
                 &write_turn(text, issues.as_deref()),
                 "the report",
@@ -124,7 +123,6 @@ impl SessionManager {
             }
             match self
                 .write_text(
-                    None,
                     None,
                     JUDGE_PROMPT,
                     &judge_turn(&reports, &bodies),

@@ -1,25 +1,8 @@
-//! The machine guard: Brigadier holds back new workers while the machine struggles,
-//! automatically and with no setting (PLAN.md §10.7).
-//!
-//! - Serious heat or critical memory pressure holds new workers. They wait with a grey row in
-//!   the thread and start when it eases. Work already running is left alone.
-//! - Commands are the CLIs' own: Brigadier never queues, stops or pauses them.
+//! Processes by their pid and start time, so a later process reusing a pid is never taken
+//! for one Brigadier knows (a preview's tree).
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use brigadier_sandbox::{Heat, MachineLoad, MemoryPressure, Platform};
+use brigadier_sandbox::Platform;
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
-
-use crate::model::MachineStepReason;
-
-/// How often the watch reads the machine's load.
-pub(crate) const TICK: Duration = Duration::from_secs(2);
-/// How long something waiting for the machine sleeps between looks at whether it is still
-/// wanted.
-pub(crate) const RECHECK: Duration = Duration::from_secs(20);
 
 /// A process by its pid and start time, so a later process reusing the pid is never taken
 /// for it.
@@ -29,119 +12,6 @@ pub(crate) struct Proc {
     pub pid: u32,
     /// Start time, in ms since the Unix epoch.
     pub started_ms: i64,
-}
-
-/// The guard, read every [`TICK`].
-pub(crate) struct MachineWatch {
-    pub(crate) guard: MachineGuard,
-}
-
-impl MachineWatch {
-    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
-        Self {
-            guard: MachineGuard::new(platform),
-        }
-    }
-
-    /// Waits until workers can start or what holds them changes (heat, memory), at most `max`;
-    /// whether the machine eased.
-    pub(crate) async fn eased_within(&self, max: Duration) -> bool {
-        let mut changes = self.guard.subscribe();
-        let reason = MachineStepReason::from_load(self.guard.current());
-        let _ = tokio::time::timeout(
-            max,
-            changes.wait_for(|load| {
-                !load.workers_held() || MachineStepReason::from_load(*load) != reason
-            }),
-        )
-        .await;
-        !self.guard.current().workers_held()
-    }
-}
-
-/// Where the guard reads the machine's load from.
-pub(crate) struct MachineGuard {
-    platform: Arc<dyn Platform>,
-    /// A load set in place of the OS's (tests).
-    fake: Mutex<Option<MachineLoad>>,
-    /// A development build's stand-in for the OS: a file naming the load (`calm`, `hot`,
-    /// `memory` (warning), `memory-critical`, `critical`), from `BRIGADIER_FAKE_MACHINE`,
-    /// so the guard can be tried live.
-    fake_file: Option<PathBuf>,
-    load: watch::Sender<MachineLoad>,
-}
-
-impl MachineGuard {
-    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
-        let fake_file = cfg!(debug_assertions)
-            .then(|| std::env::var_os("BRIGADIER_FAKE_MACHINE"))
-            .flatten()
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from);
-        Self {
-            platform,
-            fake: Mutex::new(None),
-            fake_file,
-            load: watch::Sender::new(MachineLoad::default()),
-        }
-    }
-
-    /// Reads the load now and tells whoever waits on it when it changed.
-    pub(crate) fn read(&self) -> MachineLoad {
-        let fake = *self.fake.lock().unwrap_or_else(|p| p.into_inner());
-        let load = match (fake, &self.fake_file) {
-            (Some(load), _) => load,
-            (None, Some(file)) => std::fs::read_to_string(file)
-                .map(|text| parse_fake(&text))
-                .unwrap_or_default(),
-            (None, None) => self.platform.machine().load(),
-        };
-        self.load.send_if_modified(|known| {
-            let changed = *known != load;
-            *known = load;
-            changed
-        });
-        load
-    }
-
-    /// The load as last read.
-    pub(crate) fn current(&self) -> MachineLoad {
-        *self.load.borrow()
-    }
-
-    /// Changes of the load, as they are read.
-    pub(crate) fn subscribe(&self) -> watch::Receiver<MachineLoad> {
-        self.load.subscribe()
-    }
-
-    /// Stands in for the OS from now on (tests).
-    #[cfg(test)]
-    pub(crate) fn fake(&self, load: MachineLoad) {
-        *self.fake.lock().unwrap_or_else(|p| p.into_inner()) = Some(load);
-        self.read();
-    }
-}
-
-fn parse_fake(text: &str) -> MachineLoad {
-    match text.trim() {
-        "hot" => MachineLoad {
-            heat: Heat::Serious,
-            memory: MemoryPressure::Normal,
-        },
-        "memory" => MachineLoad {
-            heat: Heat::Nominal,
-            memory: MemoryPressure::Warning,
-        },
-        "memory-critical" => MachineLoad {
-            heat: Heat::Nominal,
-            memory: MemoryPressure::Critical,
-        },
-        "critical" => MachineLoad {
-            heat: Heat::Critical,
-            memory: MemoryPressure::Normal,
-        },
-        _ => MachineLoad::default(),
-    }
 }
 
 /// `pid` as a [`Proc`], if it runs.
@@ -201,10 +71,11 @@ pub(crate) fn continue_tree(platform: &dyn Platform, root: Proc, members: &[Proc
 
 #[cfg(all(test, unix))]
 pub(crate) mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::Arc;
     use std::sync::atomic::Ordering;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use super::*;
 
@@ -251,20 +122,6 @@ pub(crate) mod tests {
             assert!(Instant::now() < deadline, "timed out");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-    }
-
-    #[tokio::test]
-    async fn memory_warning_allows_workers_but_critical_holds_them() {
-        let dir = TempDir::new();
-        let watch = MachineWatch::new(platform(dir.path()));
-        watch.guard.fake(parse_fake("memory"));
-        assert!(watch.eased_within(Duration::ZERO).await);
-        watch.guard.fake(parse_fake("memory-critical"));
-        assert!(!watch.eased_within(Duration::ZERO).await);
-        watch.guard.fake(parse_fake("hot"));
-        assert!(!watch.eased_within(Duration::ZERO).await);
-        watch.guard.fake(parse_fake("calm"));
-        assert!(watch.eased_within(Duration::ZERO).await);
     }
 
     /// The native platform, with a chosen PID failing identity reads after a countdown.
@@ -390,25 +247,5 @@ pub(crate) mod tests {
         assert!(gone(&*platform, proc) && gone(&unreadable, proc));
         sleeper.wait().unwrap();
         assert!(gone(&*platform, proc));
-    }
-
-    #[test]
-    fn a_fake_load_stands_in_for_the_os() {
-        let dir = TempDir::new();
-        let guard = MachineGuard::new(platform(dir.path()));
-        let changes = guard.subscribe();
-        guard.fake(MachineLoad {
-            heat: Heat::Serious,
-            memory: MemoryPressure::Normal,
-        });
-        assert!(guard.current().workers_held());
-        assert!(changes.has_changed().unwrap());
-        assert_eq!(parse_fake("critical\n").heat, Heat::Critical);
-        assert_eq!(parse_fake("memory").memory, MemoryPressure::Warning);
-        assert_eq!(
-            parse_fake("memory-critical").memory,
-            MemoryPressure::Critical
-        );
-        assert_eq!(parse_fake("calm"), MachineLoad::default());
     }
 }

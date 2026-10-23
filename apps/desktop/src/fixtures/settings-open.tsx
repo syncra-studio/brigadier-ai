@@ -101,8 +101,8 @@ function usages(provider: ProviderKind): AccountUsage[] {
 
 const USAGE: UsageView = {
   providers: [
-    { provider: "claude", accounts: usages("claude"), balancing: null },
-    { provider: "codex", accounts: usages("codex"), balancing: null },
+    { provider: "claude", accounts: usages("claude") },
+    { provider: "codex", accounts: usages("codex") },
   ],
   activity: [],
   // The models' plain descriptions on Providers come from here.
@@ -112,8 +112,6 @@ const USAGE: UsageView = {
     strengths: {}, areaStrengths: {}, efforts: [], contextWindow: null, knowledgeCutoff: null,
     modalities: { input: [], output: [], tools: [] }, legacy: false, excluded: false, trial: null, research: null,
   }],
-  learned: [],
-  projectId: null,
   registry: { revision: 1, updated: "2026-10-01", source: "bundled", models: 0, fetchedAtMs: null, checkedAtMs: null, error: null } as UsageView["registry"],
 };
 
@@ -191,10 +189,6 @@ function answer(method: string, req: Request | null): unknown {
       return { method: req.method, usage: USAGE };
     case "getUsageActivity":
       return { method: req.method, activity: { sinceMs: NOW - 7 * DAY, accounts: [] } };
-    case "getRankingsRefresh":
-      return { method: req.method, refresh: null };
-    case "previewRoutes":
-      return { method: req.method, routes: [] };
     case "listMemories":
       return { method: req.method, memories: [{ id: "m1" }, { id: "m2" }] };
     case "getComputerUse":
@@ -226,7 +220,7 @@ const waiting = (method: string) => calls.some((call) => call.method === method 
 // ----- the layout ------------------------------------------------------------------------------
 
 const PAGES: SettingsPageId[] = [
-  "general", "voice", "configuration", "shortcuts", "providers", "plugins", "routing", "git", "computerUse",
+  "general", "voice", "configuration", "shortcuts", "providers", "plugins", "git", "computerUse",
   "browser", "browserImport", "storage", "inspector", "archived",
 ];
 

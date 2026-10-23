@@ -513,8 +513,8 @@ pub struct ArtifactRef {
 }
 
 /// A command's output the thread's model got as a digest, kept whole in the blob store
-/// (THREAD-PLAN.md Q4). The model reads it with `read_artifact` by its alias, in this
-/// conversation only; it goes with the conversation.
+/// (THREAD-PLAN.md Q4). The digest names its alias and the blob's file, which the model reads
+/// with its own tools; it goes with the conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredOutput {
@@ -618,7 +618,7 @@ pub struct Preview {
     pub started_at_ms: i64,
     #[serde(default)]
     pub ended_at_ms: Option<i64>,
-    /// The latest snapshot of its log (`out-<id>`, read with `read_artifact`).
+    /// The latest snapshot of its log (`out-<id>`, a stored output).
     #[serde(default)]
     pub log: Option<String>,
     /// A local HTTP URL printed by this preview; never for an app preview, whose window is
@@ -2145,25 +2145,21 @@ pub struct UserRequest {
     /// The user's Undo of what its workers landed, once they used it.
     #[serde(default)]
     pub undo: Option<RequestUndo>,
-    /// When it worked, oldest first; the last is open while it works. Waiting for quota is
-    /// work; waits for the user are not. Absent on requests stored before it was kept.
+    /// When it worked, as recorded before S16b; no longer kept.
     #[serde(default)]
     pub worked: Vec<WorkSpan>,
-    /// When it waited for the user's answer to its own question card, oldest first; the last is
-    /// open while a card waits (BUILD-PLAN A9). Its header shows this time apart from the work.
+    /// When it waited for its own question card, as recorded before S16b; no longer kept.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<WorkSpan>>", optional)]
     pub waited: Vec<WorkSpan>,
-    /// When Brigadier quit mid-turn and it stood interrupted, oldest first: each from its last
-    /// record before the quit to its Continue. The Inspector's times leave these out.
+    /// When it stood interrupted after a quit, as recorded before S16b; no longer kept.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<WorkSpan>>", optional)]
     pub closed: Vec<WorkSpan>,
-    /// It is `Waiting` only for quota (a worker paused until a model is free), not for the
-    /// user.
+    /// It waited only for quota, as recorded before S16b; no longer kept.
     #[serde(default)]
     pub quota_wait: bool,
-    /// The sessions whose replies it waits for: it rests "Waiting for ‹title›".
+    /// The sessions whose replies it waited for, as recorded before S16b; no longer kept.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<ConversationId>>", optional)]
     pub waiting_for: Vec<ConversationId>,
@@ -2204,57 +2200,6 @@ pub struct WorkSpan {
     pub from_ms: i64,
     /// Absent while it still works.
     pub to_ms: Option<i64>,
-}
-
-impl UserRequest {
-    /// Moves it to `state` at `now`: a work span opens when it starts working (or waits only
-    /// for quota) and closes when it waits for the user or is over; a waited span is open
-    /// while it waits for the user's answer to its question card (`card_wait`).
-    pub fn moved_to(&mut self, state: RequestState, quota_wait: bool, card_wait: bool, now: i64) {
-        if self.worked.is_empty() {
-            // Stored before spans were kept: what it did so far counts from its start.
-            let working = self.state == RequestState::Working || self.quota_wait;
-            self.worked.push(WorkSpan {
-                from_ms: self.started_at_ms,
-                to_ms: if working {
-                    None
-                } else {
-                    Some(self.ended_at_ms.unwrap_or(now))
-                },
-            });
-        }
-        let quota_wait = quota_wait && state == RequestState::Waiting;
-        let works = state == RequestState::Working || quota_wait;
-        let on_card = card_wait && state == RequestState::Waiting && !quota_wait;
-        fn track(spans: &mut Vec<WorkSpan>, on: bool, now: i64) {
-            let open = spans.last_mut().filter(|span| span.to_ms.is_none());
-            match open {
-                Some(span) if !on => span.to_ms = Some(now.max(span.from_ms)),
-                None if on => spans.push(WorkSpan {
-                    from_ms: now,
-                    to_ms: None,
-                }),
-                _ => {}
-            }
-        }
-        track(&mut self.worked, works, now);
-        track(&mut self.waited, on_card, now);
-        // Continued after a quit cut it off: it stood still from its last record until now.
-        if works
-            && crate::manager::interrupted_by_quit(&self.state)
-            && let Some(from_ms) = self.ended_at_ms
-        {
-            self.closed.push(WorkSpan {
-                from_ms,
-                to_ms: Some(now.max(from_ms)),
-            });
-        }
-        if self.state != state {
-            self.ended_at_ms = (state != RequestState::Working).then_some(now);
-        }
-        self.state = state;
-        self.quota_wait = quota_wait;
-    }
 }
 
 /// A turn's exact git snapshot diff, with files introduced by merges grouped separately.

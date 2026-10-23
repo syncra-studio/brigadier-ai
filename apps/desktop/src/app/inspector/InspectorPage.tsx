@@ -6,7 +6,6 @@ import { OrchestratorTab } from "@/app/inspector/OrchestratorTab";
 import { PerformanceTab } from "@/app/inspector/PerformanceTab";
 import { ProcessesTab } from "@/app/inspector/ProcessesTab";
 import { ProvidersTab } from "@/app/inspector/providers/ProvidersTab";
-import { RoutingTab } from "@/app/inspector/RoutingTab";
 import { SettingsPage } from "@/app/settings/parts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/controls";
 import { setInspectorTab } from "@/state/actions";
@@ -19,16 +18,15 @@ function isTab(value: string): value is InspectorTab {
     value === "brain" ||
     value === "processes" ||
     value === "performance" ||
-    value === "providers" ||
-    value === "routing"
+    value === "providers"
   );
 }
 
 /**
  * The Inspector, a page of Settings for developers: the live event stream, the open session's
- * orchestrator context, the Project Brains, processes, metrics against the §4 budgets, raw
- * provider sessions, and a routing preview, a tab each. The tabs fill the page's column down
- * to the window's bottom, each scrolling on its own.
+ * orchestrator context, the Project Brains, processes, metrics against the §4 budgets and raw
+ * provider sessions, a tab each. The tabs fill the page's column down to the window's bottom,
+ * each scrolling on its own.
  */
 export function InspectorPage() {
   const tab = useApp((s) => s.inspector.tab);
@@ -57,7 +55,6 @@ export function InspectorPage() {
             <TabsTrigger value="processes">Processes</TabsTrigger>
             <TabsTrigger value="performance">Performance</TabsTrigger>
             <TabsTrigger value="providers">Providers</TabsTrigger>
-            <TabsTrigger value="routing">Routing</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="events" className="flex min-h-0 flex-col">
@@ -77,9 +74,6 @@ export function InspectorPage() {
         </TabsContent>
         <TabsContent value="providers" className="flex min-h-0 flex-col">
           <ProvidersTab />
-        </TabsContent>
-        <TabsContent value="routing" className="flex min-h-0 flex-col">
-          <RoutingTab />
         </TabsContent>
       </Tabs>
     </SettingsPage>

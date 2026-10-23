@@ -8,11 +8,9 @@ import type { LinkTarget } from "./LinkTarget";
 import type { ModelChoice } from "./ModelChoice";
 import type { ModelRef } from "./ModelRef";
 import type { NotifyFinished } from "./NotifyFinished";
-import type { OverrideRule } from "./OverrideRule";
 import type { PermissionLevel } from "./PermissionLevel";
 import type { ProjectSwitches } from "./ProjectSwitches";
 import type { ProviderKind } from "./ProviderKind";
-import type { Ranking } from "./Ranking";
 
 /**
  * User settings persisted by the core.
@@ -130,16 +128,6 @@ notifyFinished: NotifyFinished,
  */
 notifyNeedsYou: boolean, 
 /**
- * The user's routing rules, global and per project. They always win over the router's
- * scores and quota balancing.
- */
-routingOverrides: Array<OverrideRule>, 
-/**
- * The user's manual rankings per kind of work (global and per project, with area
- * overrides): where one is Manual, routing tries its models top-down instead of scoring.
- */
-routingRankings: Array<Ranking>, 
-/**
  * Agents switched off on the Providers page: their models are hidden from every picker
  * and get no work, not even in the background. Conversations already running go on.
  */
@@ -154,9 +142,8 @@ agentPaths: Array<AgentPath>,
  */
 hiddenModels: Array<ModelRef>, 
 /**
- * Every model Brigadier has seen in its agent's list. One seen after its agent's first
- * list starts without worker tasks (a "Don't give work" rule, which the user removes in
- * Settings → Providers).
+ * Every model Brigadier has seen in its agent's list: startup doesn't wait for an agent
+ * whose every known model is made unavailable.
  */
 knownModels: Array<ModelRef>, 
 /**
@@ -177,11 +164,6 @@ accounts: Array<AccountEntry>,
  * its usage limit carries on with the next such account.
  */
 manualAccounts: Array<ProviderKind>, 
-/**
- * Work moves to another agent when its own can't take it (every account it may use at
- * its limit). Off: it waits for the limit to reset.
- */
-switchProviders: boolean, 
 /**
  * The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
  * it is detected from the speech.

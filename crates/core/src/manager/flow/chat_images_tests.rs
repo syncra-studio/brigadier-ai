@@ -3,15 +3,14 @@
 //! whose image reaches the Chat as the task's output.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use brigadier_providers::{ItemStatus, ProviderEvent, ProviderKind, ToolSet};
-use serde_json::json;
 
-use super::chat_thread_tests::{answered, new_chat, shown};
+use super::chat_thread_tests::answered;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::model::{ConversationId, ConversationKind, ModelChoice, SetupRequest, TabTarget};
-use crate::work::{OrchestratorStepKind, TaskState, ThreadItemKind};
+use crate::work::{OrchestratorStepKind, ThreadItemKind};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -216,99 +215,5 @@ async fn a_codex_tab_chat_makes_an_image_and_it_goes_with_the_chat() {
         .expect("the tab chat runs on Codex with a tab chat's tools");
     let kept = image_is_shown(&flow, &chat, &source).await;
     images_go_with(&flow, &chat, &kept).await;
-    flow.stop().await;
-}
-
-/// A Chat on Claude asks for an image through a worker: the task needs image generation, so
-/// it runs on Codex, whose generated image is kept as the task's output, and the Chat's link
-/// to it opens that stored copy.
-#[tokio::test]
-async fn a_claude_chat_gets_an_image_from_a_codex_worker() {
-    let workers: Arc<Mutex<Vec<ProviderKind>>> = Arc::default();
-    let seen = workers.clone();
-    let flow = Flow::start(
-        "chat-images-worker",
-        Options::default(),
-        script(move |turn| {
-            let seen = seen.clone();
-            async move {
-                if turn.chat().is_none() {
-                    seen.lock().unwrap().push(turn.provider);
-                    let source = turn.cwd.join("generated_images/sunset.png");
-                    generate(&turn, "ig_1", &source).await;
-                    // Copied as it is made, before the model's next call comes.
-                    let copy = outputs_folder(&turn).join("sunset.png");
-                    super::eventually("the image in the outputs folder", || copy.exists()).await;
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "Drew it: outputs/sunset.png."}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("Reported.");
-                }
-                if turn.input.contains("[report task-1") {
-                    return Reply::text("Here it is: [sunset.png](outputs/sunset.png)");
-                }
-                if !turn.input.contains("Draw me a sunset.") {
-                    return Reply::text("");
-                }
-                let reply = turn
-                    .call(
-                        "delegate_task",
-                        json!({"effort": "medium", "title": "Draw a sunset", "kind": "research",
-                               "spec": "Make a picture of a sunset over the sea.",
-                               "image_generation": true}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                Reply::text("")
-            }
-        }),
-    )
-    .await;
-    let chat = new_chat(&flow).await;
-    flow.say_to(&chat, "Draw me a sunset.").await;
-    let board = answered(&flow, &chat).await;
-    let task = board.tasks.values().next().expect("a task");
-    assert_eq!(task.state, TaskState::Done);
-    assert!(
-        task.needs
-            .contains(&brigadier_router::Capability::ImageGeneration)
-    );
-    assert_eq!(*workers.lock().unwrap(), [ProviderKind::Codex]);
-    // The worker's CLI keeps Codex's usual tools, image generation among them.
-    assert!(
-        flow.specs()
-            .iter()
-            .any(|(provider, spec)| *provider == ProviderKind::Codex
-                && spec.tools == ToolSet::Lean)
-    );
-    let output = task
-        .outputs
-        .iter()
-        .find(|output| output.file_name.as_deref() == Some("sunset.png"))
-        .expect("the image is the task's output");
-    assert_eq!(output.mime, "image/png");
-    let stored = flow
-        .manager
-        .stored_output(&chat, "outputs/sunset.png", None)
-        .await
-        .unwrap()
-        .expect("the Chat's link opens the stored image");
-    assert_eq!(stored.task_id, task.id);
-    let copy = flow
-        .manager
-        .artifact_copy(stored.artifact.id.clone(), "sunset.png".into())
-        .await
-        .unwrap();
-    assert_eq!(std::fs::read(copy).unwrap(), PNG);
-    assert!(
-        shown(&flow, &chat)
-            .await
-            .iter()
-            .any(|text| text.contains("](outputs/sunset.png)"))
-    );
     flow.stop().await;
 }

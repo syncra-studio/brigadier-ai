@@ -49,9 +49,6 @@ impl SessionManager {
         if !self.brain_work().is_empty() {
             return Some("Brain work");
         }
-        if !self.research.jobs.is_empty() {
-            return Some("model research");
-        }
         if self.activity.running.load(Ordering::SeqCst) > 0 {
             return Some("a background model turn");
         }

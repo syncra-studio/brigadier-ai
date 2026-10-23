@@ -211,16 +211,6 @@ impl SessionManager {
             .push(text);
     }
 
-    /// The `learned` lines planted for a report of a worker of `conversation`, taken.
-    pub(crate) fn planted_learned(&self, conversation: &ConversationId) -> Vec<String> {
-        self.faults
-            .planted
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(conversation)
-            .unwrap_or_default()
-    }
-
     /// Fails unless a CLI session on `provider` runs for `key`.
     async fn running_on(&self, key: &FaultKey, provider: ProviderKind) -> Result<()> {
         let running = match key {

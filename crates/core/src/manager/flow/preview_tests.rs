@@ -260,24 +260,8 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
         log.starts_with("[preview-1 \"site\" starting, not ready yet ("),
         "{log}"
     );
-    assert!(log.contains("full log: read_artifact out-"), "{log}");
+    assert!(log.contains("full log: /"), "{log}");
     assert!(log.ends_with("listening on 8123"), "{log}");
-    let alias = log
-        .split("read_artifact ")
-        .nth(1)
-        .unwrap()
-        .split(',')
-        .next()
-        .unwrap()
-        .to_owned();
-    let (blob, _) = flow
-        .manager
-        .output_blob(&flow.conversation, &alias)
-        .await
-        .unwrap()
-        .unwrap();
-    let (bytes, _) = flow.core.read_blob_range(blob, 0, 1_000).await.unwrap();
-    assert_eq!(bytes, b"listening on 8123\n");
     assert!(alive(&flow, pid));
 
     flow.settled().await;
@@ -288,7 +272,7 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
     assert!(
         stopped.starts_with(
             "preview-1 \"site\": stopped (stopped by the thread); removed from the user's \
-             list, its log: read_artifact out-"
+             list, its log: /"
         ),
         "{stopped}"
     );
@@ -377,7 +361,10 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
         last.contains("removed; its ID is no longer available"),
         "{last}"
     );
-    assert!(last.contains("read_artifact"), "{last}");
+    assert!(
+        last.contains("Its stored log remains readable: /"),
+        "{last}"
+    );
 
     // An end on its own, after the start answered.
     flow.say("start sleep 2; echo 'Error: port 3000 is taken' >&2; exit 4")
@@ -417,10 +404,19 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     );
     let board = flow.board().await;
     let ids = board.previews.keys().cloned().collect::<Vec<_>>();
-    let aliases = board
+    let files = board
         .previews
         .values()
-        .filter_map(|p| p.log.clone())
+        .filter_map(|p| p.log.as_ref())
+        .map(|alias| {
+            let hash = board.outputs[alias].blob.parse().unwrap();
+            flow.core
+                .store()
+                .blobs()
+                .file_of(&hash)
+                .display()
+                .to_string()
+        })
         .collect::<Vec<_>>();
     flow.manager
         .clear_previews(flow.conversation.clone())
@@ -431,14 +427,14 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     let last = inputs.lock().unwrap().last().cloned().unwrap();
     assert!(last.contains("The user cleared"), "{last}");
     assert!(
-        last.contains("stored logs remain readable through read_artifact"),
+        last.contains("their stored logs remain readable: "),
         "{last}"
     );
     for id in ids {
         assert!(last.contains(&id), "{last}");
     }
-    for alias in aliases {
-        assert!(last.contains(&format!("read_artifact {alias}")), "{last}");
+    for file in files {
+        assert!(last.contains(&file), "{last}");
     }
     flow.stop().await;
 }
@@ -1609,235 +1605,6 @@ fn started_id(reply: &str) -> String {
     format!("preview-{digits}")
 }
 
-/// A worker's previews (issue #203): each is recorded with its task, runs past the worker's
-/// report and the thread's next turn, and ends with its task's folder, while another
-/// worker's keep running. A worker stops its own and reaches no other's. A build and its app
-/// launched as one command is an app preview that reads Building while the build runs.
-#[tokio::test]
-async fn a_workers_preview_carries_its_task_and_ends_with_its_folder() {
-    let tmp = scratch("workers");
-    let pids = tmp.join("child.pid");
-    let replies: Replies = Arc::default();
-    let log = replies.clone();
-    let child = pids.clone();
-    let flow = Flow::start(
-        "preview-workers",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            let child = child.clone();
-            async move {
-                let call = |tool: &'static str, args: serde_json::Value| {
-                    let turn = &turn;
-                    let log = log.clone();
-                    async move {
-                        let reply = turn.call(tool, args).await;
-                        assert!(!reply.is_error, "{tool}: {}", reply.text);
-                        log.lock()
-                            .unwrap()
-                            .push((tool.to_owned(), reply.text.clone()));
-                        reply.text
-                    }
-                };
-                if turn.is_orchestrator() {
-                    if turn.earlier == 0 {
-                        for (title, spec) in [("Show the site", "site"), ("Show the app", "app")] {
-                            call(
-                                "delegate_task",
-                                json!({"effort": "high", "title": title, "kind": "implement",
-                                       "spec": spec, "provider": "claude"}),
-                            )
-                            .await;
-                        }
-                    } else if turn.input.contains("Land task-1.") {
-                        call("land_phase", json!({"task": "task-1"})).await;
-                    }
-                    return Reply::text("");
-                }
-                let number = turn.task_number().unwrap();
-                if number == 1 {
-                    call(
-                        "start_preview",
-                        json!({"command": server(&child), "name": "site"}),
-                    )
-                    .await;
-                } else {
-                    let app = turn.cwd.join("target/Demo.app/Contents/MacOS/demo");
-                    std::fs::create_dir_all(app.parent().unwrap()).unwrap();
-                    std::fs::write(&app, "#!/bin/sh\nexec sleep 600\n").unwrap();
-                    std::fs::set_permissions(
-                        &app,
-                        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-                    )
-                    .unwrap();
-                    let command = format!(
-                        "echo '   Compiling demo v0.1.0' && sleep 1 && \"{}\"",
-                        app.display()
-                    );
-                    call(
-                        "start_preview",
-                        json!({"command": command, "name": "dev app"}),
-                    )
-                    .await;
-                    let extra = call(
-                        "start_preview",
-                        json!({"command": "echo listening on 8124; sleep 600", "name": "extra"}),
-                    )
-                    .await;
-                    call("stop_preview", json!({"id": started_id(&extra)})).await;
-                }
-                turn.write(&format!("task-{number}.txt"), "shown\n");
-                turn.git(&["add", &format!("task-{number}.txt")]);
-                turn.git(&["commit", "-qm", "Show it"]);
-                call(
-                    "submit_report",
-                    json!({"summary": "Shown.", "changes": [format!("task-{number}.txt")]}),
-                )
-                .await;
-                Reply::text("Reported.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Show the site and the app.").await;
-    let board = flow
-        .until("both workers' previews and reports", |board| {
-            running(board).len() == 2
-                && std::fs::read_to_string(&pids).is_ok_and(|pid| !pid.trim().is_empty())
-                && replies
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|(tool, _)| tool == "submit_report")
-                    .count()
-                    == 2
-        })
-        .await;
-    let (one, two) = (
-        Flow::task(&board, 1).id.clone(),
-        Flow::task(&board, 2).id.clone(),
-    );
-    let of = |board: &Board, task: &crate::model::TaskId| -> Preview {
-        board
-            .sorted_previews()
-            .into_iter()
-            .find(|preview| preview.task_id.as_ref() == Some(task))
-            .unwrap()
-    };
-    let site = of(&board, &one);
-    let app = of(&board, &two);
-    assert_eq!(site.name, "site");
-    assert!(site.workspace.contains("workers/1-"), "{}", site.workspace);
-    assert_eq!(app.kind, crate::work::PreviewKind::App);
-    // A worker's preview is its task's request's.
-    let request = Flow::task(&board, 1).request_id.clone();
-    assert!(request.is_some());
-    assert_eq!(site.request_id, request);
-    // A worker has no read_artifact: its preview replies never point it there.
-    for (tool, text) in replies.lock().unwrap().iter() {
-        if tool.contains("preview") {
-            assert!(!text.contains("read_artifact"), "{tool}: {text}");
-        }
-    }
-    // The worker's own Stop removed its extra preview; it reached none of the other's.
-    assert_eq!(board.previews.len(), 2, "{:?}", board.previews.keys());
-    let err = flow
-        .manager
-        .stop_preview_tool(&flow.conversation, Some(&site.id), Some(&two))
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("not one of your previews"),
-        "{err}"
-    );
-    if crate::manager::preview_ready::SEES_WINDOWS {
-        // Still building (its log's last line compiles), and no window: it reads Building.
-        flow.until("the app to read building", |board| {
-            of(board, &two).building && of(board, &two).state == PreviewState::Starting
-        })
-        .await;
-    }
-    let child = child_pid(&pids);
-
-    // The thread's next turn checks its own workspace: a worker's preview isn't the thread's.
-    flow.say("Hello.").await;
-    flow.settled().await;
-    assert_eq!(running(&flow.board().await).len(), 2);
-
-    // Landing task-1 removes its worktree: its preview ends, and task-2's runs on.
-    flow.say("Land task-1.").await;
-    let board = flow
-        .until("task-1's preview to end", |board| {
-            running(board)
-                .iter()
-                .all(|preview| preview.task_id.as_ref() != Some(&one))
-        })
-        .await;
-    gone(&flow, child).await;
-    assert_eq!(running(&board).len(), 1);
-    assert_eq!(of(&board, &two).id, app.id);
-    flow.stop().await;
-}
-
-/// A task's folder going while its worker starts a preview: the start is refused, so no
-/// preview outlives the folder it runs in.
-#[tokio::test]
-async fn a_start_racing_its_tasks_end_is_refused() {
-    let go = Arc::new(tokio::sync::Notify::new());
-    let replies: Replies = Arc::default();
-    let (log, wait) = (replies.clone(), go.clone());
-    let flow = Flow::start(
-        "preview-worker-race",
-        Options::default(),
-        script(move |turn| {
-            let (log, wait) = (log.clone(), wait.clone());
-            async move {
-                if turn.is_orchestrator() {
-                    if turn.earlier == 0 {
-                        let reply = turn
-                            .call(
-                                "delegate_task",
-                                json!({"effort": "high", "title": "Show it", "kind": "scout",
-                                       "spec": "Show it."}),
-                            )
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                    }
-                    return Reply::text("");
-                }
-                wait.notified().await;
-                let reply = turn
-                    .call(
-                        "start_preview",
-                        json!({"command": "sleep 600", "name": "late"}),
-                    )
-                    .await;
-                log.lock()
-                    .unwrap()
-                    .push((format!("{}", reply.is_error), reply.text));
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Show it.").await;
-    let board = flow
-        .until("the worker", |board| !board.tasks.is_empty())
-        .await;
-    let task = Flow::task(&board, 1).id.clone();
-    flow.manager
-        .stop_task_previews(&flow.conversation, &task)
-        .await;
-    go.notify_one();
-    flow.until("the refused start", |_| !replies.lock().unwrap().is_empty())
-        .await;
-    let (error, text) = replies.lock().unwrap()[0].clone();
-    assert_eq!(error, "true", "{text}");
-    assert!(text.contains("your task has ended"), "{text}");
-    assert!(flow.board().await.previews.is_empty());
-    flow.stop().await;
-}
-
 /// A preview recorded before workers had previews (no `taskId`, no `building`) still loads.
 #[test]
 fn a_preview_recorded_before_worker_previews_loads() {
@@ -1854,237 +1621,4 @@ fn a_preview_recorded_before_worker_previews_loads() {
     .unwrap();
     assert_eq!(preview.task_id, None);
     assert!(!preview.building);
-}
-
-/// A stopped task's previews stop before its unfinished work is kept (review R21.1): what a
-/// preview writes as it stops is in the kept commit, and nothing writes after it.
-#[tokio::test]
-async fn a_stopped_tasks_preview_stops_before_its_work_is_kept() {
-    let flow = Flow::start(
-        "preview-worker-kept",
-        Options::default(),
-        script(move |turn| async move {
-            if turn.is_orchestrator() {
-                if turn.earlier == 0 {
-                    let reply = turn
-                        .call(
-                            "delegate_task",
-                            json!({"effort": "high", "title": "Build it", "kind": "implement",
-                                   "spec": "Build it.", "provider": "claude"}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                }
-                return Reply::text("");
-            }
-            if turn.earlier == 0 {
-                let reply = turn
-                    .call(
-                        "start_preview",
-                        json!({"command": "trap 'echo stopped > stopped.txt; exit 0' TERM; \
-                                           echo building > building.txt; \
-                                           while :; do sleep 1; done",
-                               "name": "build", "kind": "app"}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-            }
-            Reply::text("Still building.")
-        }),
-    )
-    .await;
-    flow.say("Build it.").await;
-    // Stopped once its shell set its trap: a SIGTERM before that ends it writing nothing.
-    let board = flow
-        .until("the worker's preview to set its trap", |board| {
-            board
-                .sorted_previews()
-                .iter()
-                .any(|preview| preview.task_id.is_some() && preview.state.is_live())
-                && Flow::task(board, 1)
-                    .workspace
-                    .as_ref()
-                    .and_then(|workspace| workspace.worktree.as_ref())
-                    .is_some_and(|worktree| Path::new(worktree).join("building.txt").exists())
-        })
-        .await;
-    let task = Flow::task(&board, 1).id.clone();
-    flow.manager.stop_task(task.clone()).await.unwrap();
-    let board = flow
-        .until("task-1 stopped", |board| {
-            Flow::task(board, 1).state == crate::work::TaskState::Stopped
-        })
-        .await;
-    let Some(crate::work::KeptWork::Branch { commit, .. }) = &Flow::task(&board, 1).kept else {
-        panic!("kept on its branch: {:?}", Flow::task(&board, 1).kept);
-    };
-    assert_eq!(
-        super::git(&flow.repo, &["show", &format!("{commit}:stopped.txt")]).trim(),
-        "stopped"
-    );
-    assert!(running(&board).is_empty());
-    // Its folder is gone with its worker: the start guard forgets it (review R21.4).
-    super::eventually("the ended task to be forgotten", || {
-        !flow.manager.previews.task_ended(&task)
-    })
-    .await;
-    flow.stop().await;
-}
-
-/// A worker's preview that ends on its own after its worker reported: the thread hears of it as
-/// the worker's, in the worker's folder, and is not invited to start it again in its own
-/// (review R21.3).
-#[tokio::test]
-async fn the_thread_hears_a_workers_preview_ended_without_restarting_it() {
-    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
-    let inputs = heard.clone();
-    let flow = Flow::start(
-        "preview-worker-ended",
-        Options::default(),
-        script(move |turn| {
-            let inputs = inputs.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    inputs.lock().unwrap().push(turn.input.clone());
-                    if turn.earlier == 0 {
-                        let reply = turn
-                            .call(
-                                "delegate_task",
-                                json!({"effort": "high", "title": "Show it", "kind": "implement",
-                                       "spec": "Show it.", "provider": "claude"}),
-                            )
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                    }
-                    return Reply::text("");
-                }
-                if turn.earlier == 0 {
-                    let reply = turn
-                        .call(
-                            "start_preview",
-                            json!({"command": "echo listening on 8126; sleep 4; exit 3",
-                                   "name": "short"}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    turn.write("shown.txt", "shown\n");
-                    turn.git(&["add", "shown.txt"]);
-                    turn.git(&["commit", "-qm", "Show it"]);
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "Shown.", "changes": ["shown.txt"]}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                }
-                Reply::text("Reported.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Show it.").await;
-    flow.until("the worker's preview to end", |board| {
-        board.sorted_previews().iter().any(|preview| {
-            preview.task_id.is_some() && matches!(preview.state, PreviewState::Exited { .. })
-        })
-    })
-    .await;
-    flow.settled().await;
-    flow.say("Hello.").await;
-    flow.settled().await;
-    let all = heard.lock().unwrap().join("\n---\n");
-    assert!(
-        all.contains("\"short\", task-1's preview in its own folder, ended on its own (exit 3)"),
-        "{all}"
-    );
-    assert!(!all.contains("Start it again"), "{all}");
-    flow.stop().await;
-}
-
-/// Don't trust (issue #235): an idle worker's preview, started with the worker's own access,
-/// stops with its CLI instead of running on with the access the folder no longer allows.
-#[tokio::test]
-async fn an_untrusted_folder_stops_an_idle_workers_preview() {
-    let flow = Flow::start(
-        "preview-worker-untrusted",
-        Options::default(),
-        script(move |turn| async move {
-            if turn.is_orchestrator() {
-                if turn.earlier == 0 {
-                    let reply = turn
-                        .call(
-                            "delegate_task",
-                            json!({"effort": "high", "title": "Show it", "kind": "implement",
-                                   "spec": "Show it.", "provider": "claude"}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                }
-                return Reply::text("");
-            }
-            if turn.earlier == 0 {
-                let reply = turn
-                    .call(
-                        "start_preview",
-                        json!({"command": "echo listening on 8125; sleep 600", "name": "site"}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                turn.write("shown.txt", "shown\n");
-                turn.git(&["add", "shown.txt"]);
-                turn.git(&["commit", "-qm", "Show it"]);
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "Shown.", "changes": ["shown.txt"]}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-            }
-            Reply::text("Reported.")
-        }),
-    )
-    .await;
-    flow.say("Show it.").await;
-    let board = flow
-        .until("the reported worker's preview", |board| {
-            board
-                .tasks
-                .values()
-                .any(|task| task.state == crate::work::TaskState::Reported)
-                && running(board)
-                    .iter()
-                    .any(|preview| preview.task_id.is_some())
-        })
-        .await;
-    let preview = running(&board).pop().unwrap();
-    let pid = preview.pid.unwrap();
-    let project = flow
-        .core
-        .conversation(&flow.conversation)
-        .unwrap()
-        .project_id
-        .unwrap();
-    flow.manager
-        .set_folder_trust(project, None, false)
-        .await
-        .unwrap();
-    let board = flow
-        .until("the worker's preview to stop", |board| {
-            !board.previews[&preview.id].state.is_live()
-        })
-        .await;
-    assert!(
-        matches!(&board.previews[&preview.id].state, PreviewState::Stopped { reason } if reason.contains("trust")),
-        "{:?}",
-        board.previews[&preview.id].state
-    );
-    gone(&flow, pid).await;
-    // The worker is idle, not stopped: it resumes under Ask.
-    assert_eq!(
-        Flow::task(&board, 1).state,
-        crate::work::TaskState::Reported
-    );
-    flow.stop().await;
 }

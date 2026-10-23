@@ -5,7 +5,6 @@
 use std::sync::Arc;
 
 use brigadier_providers::{NoticeLevel, ProviderEvent, ProviderKind};
-use serde_json::json;
 use tokio::sync::Notify;
 
 use super::{Flow, Options, Reply, Script, Turn};
@@ -77,61 +76,5 @@ async fn an_injected_context_window_error_ends_the_threads_turn() {
     let ended: Vec<_> = board.requests.values().map(|r| r.state.clone()).collect();
     // Its first turn failed on the error; the fresh session's answer ended it.
     assert_eq!(ended, vec![RequestState::Done]);
-    flow.stop().await;
-}
-
-/// A planted `learned` line is added to the next report a worker of the conversation submits,
-/// once.
-#[tokio::test]
-async fn a_planted_learned_line_reaches_the_next_worker_report_once() {
-    const PLANTED: &str = "The data file is written atomically.";
-    let flow = Flow::start(
-        "fault-planted-learned",
-        Options::default(),
-        script(|turn| async move {
-            if turn.is_orchestrator() {
-                if turn.input.contains("List the files.") {
-                    let reply = turn
-                        .call(
-                            "delegate_task",
-                            json!({"effort": "medium", "title": "List the files",
-                                   "kind": "scout", "spec": "List the files."}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("");
-                }
-                return Reply::text("Noted.");
-            }
-            let reply = turn
-                .call(
-                    "submit_report",
-                    json!({"summary": "One file.", "learned": "There is one file."}),
-                )
-                .await;
-            assert!(!reply.is_error, "{}", reply.text);
-            Reply::text("Reported.")
-        }),
-    )
-    .await;
-    flow.manager
-        .debug_plant_learned(flow.conversation.clone(), PLANTED.into());
-    flow.say("List the files.").await;
-    let board = flow
-        .until("the scout reported", |board| {
-            board.tasks.values().any(|task| task.report.is_some())
-        })
-        .await;
-    let report = board
-        .tasks
-        .values()
-        .find_map(|task| task.report.clone())
-        .unwrap();
-    assert_eq!(
-        report.learned,
-        vec!["There is one file.".to_owned(), PLANTED.to_owned()]
-    );
-    // Taken once: nothing is left for a later report.
-    assert!(flow.manager.planted_learned(&flow.conversation).is_empty());
     flow.stop().await;
 }

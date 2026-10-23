@@ -18,16 +18,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use brigadier_providers::cli::CliEnv;
 use brigadier_providers::login_mark::{claude_keychain_account, claude_keychain_service};
 use brigadier_registry::{
-    CodexStore, OAuthClient, Owner, Roots, Secret, Server, Transport, claude_key, claude_lock_name,
-    codex_keys, identity, sha256_hex,
+    CodexStore, Owner, Roots, Secret, Server, Transport, claude_key, codex_keys, identity,
+    sha256_hex,
 };
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 use zeroize::Zeroizing;
 
 use super::keychain::{Keychain, StoreError};
-use super::locks::{self, Held};
+use super::locks::{self};
 
 /// Brigadier's own sign-ins: one item per server, its account the hash of its identity.
 pub(crate) const OWN_SERVICE: &str = "Brigadier MCP sign-ins";
@@ -188,12 +187,6 @@ impl Credential {
             || (!self.access_token.expose().is_empty() && !self.expires_within(Duration::ZERO))
     }
 
-    /// Its access token is due for renewal: expired, or expiring within `margin` when a refresh
-    /// token can renew it early. One without a refresh token serves until it expires.
-    pub(crate) fn due(&self, margin: Duration) -> bool {
-        self.expires_within(Duration::ZERO) || (self.renewable() && self.expires_within(margin))
-    }
-
     fn renewable(&self) -> bool {
         self.refresh_token
             .as_ref()
@@ -211,19 +204,6 @@ impl Credential {
         self.expires_at
             .is_some_and(|at| now_ms().saturating_add(margin) >= at)
     }
-
-    /// The configured client of the server's config, where the store has none.
-    pub(crate) fn with_client(mut self, client: Option<&OAuthClient>) -> Self {
-        if let Some(client) = client {
-            if self.client_id.is_none() {
-                self.client_id.clone_from(&client.client_id);
-            }
-            if self.client_secret.is_none() {
-                self.client_secret.clone_from(&client.client_secret);
-            }
-        }
-        self
-    }
 }
 
 /// Where the CLIs keep their stores on this machine.
@@ -233,9 +213,6 @@ pub(crate) struct Homes {
     pub claude_item: Option<(String, String)>,
     /// Claude Code's config folder, which holds `.credentials.json`.
     pub claude_dir: PathBuf,
-    /// Where Claude Code keeps its locks (`CLAUDE_SECURESTORAGE_CONFIG_DIR`, else its config
-    /// folder).
-    pub claude_locks: PathBuf,
     pub codex_home: PathBuf,
 }
 
@@ -251,15 +228,9 @@ impl Homes {
             .then(|| claude_keychain_service(&env, &roots.claude_dir))
             .flatten()
             .map(|service| (service, claude_keychain_account(env.var("USER"))));
-        let claude_locks = roots
-            .vars
-            .get("CLAUDE_SECURESTORAGE_CONFIG_DIR")
-            .filter(|dir| !dir.is_empty())
-            .map_or_else(|| roots.claude_dir.clone(), PathBuf::from);
         Self {
             claude_item,
             claude_dir: roots.claude_dir.clone(),
-            claude_locks,
             codex_home: roots.codex_home.clone(),
         }
     }
@@ -301,26 +272,6 @@ fn read_file(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, StoreError> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(failed("reading a credentials file", err)),
     }
-}
-
-/// Replaces `path` with `bytes`, readable by the user alone.
-fn write_file(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| StoreError::Failed("a credentials file has no folder".into()))?;
-    let partial = dir.join(format!(".brigadier-{}", uuid::Uuid::new_v4().simple()));
-    let written = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        std::io::Write::write_all(&mut options.open(&partial)?, bytes)?;
-        std::fs::rename(&partial, path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&partial);
-    }
-    written.map_err(|err| failed("writing a credentials file", err))
 }
 
 #[derive(Deserialize)]
@@ -672,178 +623,6 @@ impl Stores {
             since: None,
             found: Found::CodexFile(key),
         }))
-    }
-
-    /// The owner's lock around renewing `place`'s sign-in, as the owning CLI takes it.
-    pub(crate) fn renewal_lock(&self, place: &Place) -> Result<Vec<Held>, StoreError> {
-        match place {
-            Place::Claude { key, .. } => Ok(vec![locks::claude(
-                &self.homes.claude_locks.join(claude_lock_name(key)),
-                Duration::from_secs(60),
-            )?]),
-            // Either key may be the one this Codex build hashes: both are taken, in order.
-            Place::Codex { keys, .. } => {
-                let mut names: Vec<String> = keys
-                    .iter()
-                    .map(|key| format!("{}.lock", sha256_hex(key)))
-                    .collect();
-                names.sort();
-                names.dedup();
-                names
-                    .iter()
-                    .map(|name| locks::codex(&self.homes.codex_lock(name), false))
-                    .collect()
-            }
-            Place::Brigadier { .. } => Ok(Vec::new()),
-        }
-    }
-
-    /// Writes `renewed` back where `old` was read, changing nothing else there, then reads it
-    /// back to check. The caller holds [`Self::renewal_lock`]. Fails, writing nothing, when the
-    /// entry is gone, belongs to another server, or no longer holds `old`'s tokens.
-    pub(crate) fn write_back(
-        &self,
-        place: &Place,
-        old: &Credential,
-        renewed: &Credential,
-    ) -> Result<(), StoreError> {
-        let unchanged = |access: Option<&Value>, refresh: Option<&Value>| {
-            access.and_then(Value::as_str) == Some(old.access_token.expose())
-                && refresh.and_then(Value::as_str) == old.refresh_token.as_ref().map(Secret::expose)
-        };
-        let gone = || StoreError::Failed("the stored sign-in changed or is gone".into());
-        let new_access = || Value::String(renewed.access_token.expose().to_owned());
-        let new_refresh = || {
-            renewed.refresh_token.as_ref().map_or(Value::Null, |token| {
-                Value::String(token.expose().to_owned())
-            })
-        };
-        match (place, &old.found) {
-            (Place::Claude { key, url }, found @ (Found::ClaudeItem | Found::ClaudeFile)) => {
-                let _writing = locks::claude(
-                    &self.homes.claude_locks.join(".storage-write"),
-                    Duration::from_secs(15),
-                )?;
-                let (bytes, now_found) = self.claude_bytes(false)?.ok_or_else(gone)?;
-                if now_found != *found {
-                    return Err(gone());
-                }
-                let mut blob: Value = serde_json::from_slice(&bytes)
-                    .map_err(|err| failed("Claude Code's credentials", err))?;
-                drop(bytes);
-                let entry = blob
-                    .get_mut("mcpOAuth")
-                    .and_then(|all| all.get_mut(key.as_str()))
-                    .and_then(Value::as_object_mut)
-                    .ok_or_else(gone)?;
-                if entry.get("serverUrl").and_then(Value::as_str) != Some(url)
-                    || !unchanged(entry.get("accessToken"), entry.get("refreshToken"))
-                {
-                    return Err(gone());
-                }
-                entry.insert("accessToken".into(), new_access());
-                if renewed.refresh_token.is_some() {
-                    entry.insert("refreshToken".into(), new_refresh());
-                }
-                match renewed.expires_at {
-                    Some(at) => entry.insert("expiresAt".into(), Value::from(at)),
-                    None => entry.remove("expiresAt"),
-                };
-                let bytes = Zeroizing::new(
-                    serde_json::to_vec(&blob).map_err(|err| failed("Claude's credentials", err))?,
-                );
-                drop(blob);
-                match found {
-                    Found::ClaudeItem => {
-                        let (service, account) =
-                            self.homes.claude_item.as_ref().ok_or_else(gone)?;
-                        self.keychain.update(service, account, &bytes)?;
-                    }
-                    _ => write_file(&self.homes.claude_file(), &bytes)?,
-                }
-            }
-            (Place::Codex { name, url, .. }, Found::CodexItem(account)) => {
-                let bytes = self
-                    .keychain
-                    .get(CODEX_SERVICE, account, false)?
-                    .ok_or_else(gone)?;
-                let mut item: Value =
-                    serde_json::from_slice(&bytes).map_err(|err| failed("Codex's sign-in", err))?;
-                drop(bytes);
-                if item.get("url").and_then(Value::as_str) != Some(url)
-                    || item.get("server_name").and_then(Value::as_str) != Some(name)
-                {
-                    return Err(gone());
-                }
-                let tokens = item
-                    .get_mut("token_response")
-                    .and_then(Value::as_object_mut)
-                    .ok_or_else(gone)?;
-                if !unchanged(tokens.get("access_token"), tokens.get("refresh_token")) {
-                    return Err(gone());
-                }
-                tokens.insert("access_token".into(), new_access());
-                if renewed.refresh_token.is_some() {
-                    tokens.insert("refresh_token".into(), new_refresh());
-                }
-                // Codex works the remaining time out from `expires_at` when it reads.
-                tokens.remove("expires_in");
-                item["expires_at"] = renewed.expires_at.map_or(Value::Null, Value::from);
-                let bytes = Zeroizing::new(
-                    serde_json::to_vec(&item).map_err(|err| failed("Codex's sign-in", err))?,
-                );
-                drop(item);
-                self.keychain.update(CODEX_SERVICE, account, &bytes)?;
-            }
-            (Place::Codex { name, url, .. }, Found::CodexFile(key)) => {
-                let _writing = locks::codex(&self.homes.codex_lock("file-store.lock"), false)?;
-                let bytes = read_file(&self.homes.codex_file())?.ok_or_else(gone)?;
-                let mut file: Value = serde_json::from_slice(&bytes)
-                    .map_err(|err| failed("Codex's credentials file", err))?;
-                drop(bytes);
-                let entry = file
-                    .get_mut(key.as_str())
-                    .and_then(Value::as_object_mut)
-                    .ok_or_else(gone)?;
-                if entry.get("server_url").and_then(Value::as_str) != Some(url)
-                    || entry.get("server_name").and_then(Value::as_str) != Some(name)
-                    || !unchanged(entry.get("access_token"), entry.get("refresh_token"))
-                {
-                    return Err(gone());
-                }
-                entry.insert("access_token".into(), new_access());
-                if renewed.refresh_token.is_some() {
-                    entry.insert("refresh_token".into(), new_refresh());
-                }
-                entry.insert(
-                    "expires_at".into(),
-                    renewed.expires_at.map_or(Value::Null, Value::from),
-                );
-                let bytes = Zeroizing::new(
-                    serde_json::to_vec(&file).map_err(|err| failed("Codex's credentials", err))?,
-                );
-                drop(file);
-                write_file(&self.homes.codex_file(), &bytes)?;
-            }
-            (Place::Brigadier { identity, url }, Found::Own) => {
-                let _writing = OWN_WRITES.lock().unwrap_or_else(PoisonError::into_inner);
-                match self.read(place, false)? {
-                    Some(now)
-                        if now.access_token == old.access_token
-                            && now.refresh_token == old.refresh_token => {}
-                    _ => return Err(gone()),
-                }
-                self.put_own(identity, url, renewed)?;
-            }
-            _ => return Err(gone()),
-        }
-        // Read back: the store must now hold the new token.
-        match self.read(place, false)? {
-            Some(now) if now.access_token == renewed.access_token => Ok(()),
-            _ => Err(StoreError::Failed(
-                "the renewed sign-in didn't read back".into(),
-            )),
-        }
     }
 
     /// Stores Brigadier's own sign-in to the server `identity` names.

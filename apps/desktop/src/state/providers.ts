@@ -1,18 +1,11 @@
-import type { ModelRef, OverrideRule, ProviderKind, Settings } from "@/ipc/generated";
-import { isNoWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
+import type { ModelRef, ProviderKind, Settings } from "@/ipc/generated";
 import { editSettings } from "@/state/settings";
 
 /**
- * Which agents and models the user lets Brigadier use (the core's `routing::availability`):
- *
- * - An agent switched off (`disabledProviders`) and a model made unavailable (`hiddenModels`)
- *   are out of every picker and get no work at all. The Providers page sets these.
- * - Whether the orchestrator may give a model worker tasks is a "Don't give work" rule (`never`
- *   for the worker kinds of work only), so a model can still run a chat or a session. Rules,
- *   under Providers' Advanced, set it.
+ * Which agents and models the user lets Brigadier use (the core's `routing::availability`): an
+ * agent switched off (`disabledProviders`) and a model made unavailable (`hiddenModels`) are
+ * out of every picker. The Providers page sets these.
  */
-
-export { WORKER_CATEGORIES };
 
 /** The part of the settings that says what's available. */
 export type Availability = Pick<Settings, "disabledProviders" | "hiddenModels">;
@@ -30,44 +23,6 @@ export function modelAvailable(settings: Availability, model: ModelRef): boolean
     providerOn(settings, model.provider) &&
     !settings.hiddenModels.some((hidden) => sameRef(hidden, model))
   );
-}
-
-/** A "Don't give work" rule about `model`: it gets no worker tasks, anywhere. */
-export function isWorkerRule(rule: OverrideRule, model: ModelRef): boolean {
-  return rule.target.type === "model" && sameRef(rule.target, model) && isNoWorkRule(rule);
-}
-
-/**
- * How the id of a worker rule the core added for a model it just saw starts (the core's
- * `availability::NEW_MODEL_RULE`): Providers tags that model "New".
- */
-const NEW_MODEL_RULE = "new-model-";
-
-/** A "Don't give work" rule the core added for a model it saw after its agent's first list. */
-export function isNewModelRule(rule: OverrideRule): boolean {
-  return rule.id.startsWith(NEW_MODEL_RULE) && rule.target.type === "model" && isNoWorkRule(rule);
-}
-
-/** A model Brigadier saw after its agent's first list, not given work until the user allows it. */
-export function isNewModel(rules: readonly OverrideRule[], model: ModelRef): boolean {
-  return rules.some((rule) => isNewModelRule(rule) && isWorkerRule(rule, model));
-}
-
-/** A rule keeping a model from all work everywhere (what the old model switch wrote). */
-function blocksModel(rule: OverrideRule, model: ModelRef): boolean {
-  return (
-    rule.effect === "never" &&
-    rule.target.type === "model" &&
-    sameRef(rule.target, model) &&
-    rule.categories.length === 0 &&
-    rule.areas.length === 0 &&
-    rule.projectId === null
-  );
-}
-
-/** Whether the orchestrator may give `model` worker tasks (Brigadier's own rules aside). */
-export function mayWork(rules: readonly OverrideRule[], model: ModelRef): boolean {
-  return !rules.some((rule) => isWorkerRule(rule, model) || blocksModel(rule, model));
 }
 
 /** Switches an agent on or off. */

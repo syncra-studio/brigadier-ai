@@ -1,6 +1,6 @@
 import { useAction } from "@/app/conversation/useAction";
 import { ROW_LINE, ROW_TITLE } from "@/app/settings/providers/parts";
-import { bestFor } from "@/app/settings/routing/models";
+import { bestFor } from "@/app/settings/providers/bestFor";
 import { SettingsSwitch } from "@/app/settings/parts";
 import { ErrorLine } from "@/components/controls";
 import { InfoCircle } from "@/components/icons";

@@ -3,8 +3,6 @@ use std::collections::HashMap;
 
 use brigadier_providers::{ItemStatus, ProviderEvent, Role};
 
-use super::Timing;
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
     Server,
@@ -83,15 +81,7 @@ pub(crate) fn command_kind(command: &str) -> CommandKind {
     result
 }
 
-impl CommandKind {
-    pub(crate) fn deadline(self, timing: &Timing) -> i64 {
-        match self {
-            Self::Server => timing.server,
-            Self::Build => timing.build,
-            Self::Normal => timing.command,
-        }
-    }
-}
+impl CommandKind {}
 
 /// Pure classification against the preceding evidence for the same item and event kind.
 /// Transport liveness, notices, quota/status snapshots and echoed user input prove no work.
@@ -338,13 +328,6 @@ impl Progress {
 
     pub(crate) fn waiting(&self) -> bool {
         !self.waits.is_empty()
-    }
-
-    pub(crate) fn command_deadline(&self, timing: &Timing) -> Option<i64> {
-        self.commands
-            .values()
-            .map(|(kind, at)| at.saturating_add(kind.deadline(timing)))
-            .min()
     }
 
     pub(crate) fn command(&self) -> Option<CommandKind> {
@@ -603,35 +586,6 @@ mod tests {
     }
 
     #[test]
-    fn watchdog_build_output_extends_its_deadline_but_chatter_does_not() {
-        let timing = Timing::scaled(180);
-        let mut evidence = Progress::default();
-        assert!(evidence.observe(&command("cargo build"), 0));
-        assert_eq!(evidence.command_deadline(&timing), Some(30 * 60_000));
-        assert!(!evidence.observe(
-            &ProviderEvent::Progress {
-                item_id: "c".into()
-            },
-            29 * 60_000
-        ));
-        let output = ProviderEvent::CommandOutputDelta {
-            item_id: "c".into(),
-            text: "compiled crate one".into(),
-        };
-        assert!(evidence.observe(&output, 29 * 60_000));
-        assert_eq!(evidence.command_deadline(&timing), Some(59 * 60_000));
-        assert!(!evidence.observe(&output, 58 * 60_000));
-        assert_eq!(evidence.command_deadline(&timing), Some(59 * 60_000));
-        let text = ProviderEvent::MessageDelta {
-            item_id: "m".into(),
-            text: "still working".into(),
-            phase: None,
-        };
-        assert!(evidence.observe(&text, 58 * 60_000));
-        assert_eq!(evidence.command_deadline(&timing), Some(59 * 60_000));
-    }
-
-    #[test]
     fn watchdog_wait_tools_are_exempt_until_they_finish() {
         for name in [
             "await",
@@ -652,22 +606,6 @@ mod tests {
             assert!(evidence.waiting(), "{name}");
             evidence.observe(&event(ItemStatus::Completed), 1);
             assert!(!evidence.waiting(), "{name}");
-        }
-    }
-    #[test]
-    fn watchdog_foreground_server_output_does_not_extend_its_deadline() {
-        let timing = Timing::scaled(180);
-        let mut evidence = Progress::default();
-        evidence.observe(&command("pnpm dev"), 0);
-        for minute in 1..=10 {
-            evidence.observe(
-                &ProviderEvent::CommandOutputDelta {
-                    item_id: "c".into(),
-                    text: format!("request {minute}"),
-                },
-                minute * 60_000,
-            );
-            assert_eq!(evidence.command_deadline(&timing), Some(2 * 60_000));
         }
     }
 }

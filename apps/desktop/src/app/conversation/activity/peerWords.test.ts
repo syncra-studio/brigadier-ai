@@ -14,7 +14,6 @@ import {
   replyOf,
   sentByCaption,
   UNKNOWN_SESSION,
-  waitingWords,
 } from "@/app/conversation/activity/peerWords";
 import type { Conversation, ItemStatus, PeerMessage, PeerState, Project } from "@/ipc/generated";
 
@@ -107,12 +106,8 @@ test("only a message the receiver has opens it there", () => {
   assert.deepEqual(STATES.filter(receiverHasIt).map((state) => state.type), ["pending", "delivered", "seen", "replied", "dropped"]);
 });
 
-test("a received message's caption, and a request's words while it waits for replies", () => {
+test("a received message's caption", () => {
   assert.equal(sentByCaption({ title: "API work", project: "Handbook" }), "Sent by API work from another session");
-  assert.equal(waitingWords([]), "Waiting for a reply");
-  assert.equal(waitingWords(["Docs"]), "Waiting for Docs to reply");
-  assert.equal(waitingWords(["Docs", "Style guide"]), "Waiting for Docs and Style guide to reply");
-  assert.equal(waitingWords(["Docs", "Style guide", "Release notes"]), "Waiting for Docs, Style guide and Release notes to reply");
 });
 
 const record = (messageId: string, outgoing: boolean, replyTo?: string): PeerMessage => ({

@@ -1,17 +1,14 @@
-//! The Usage page's read and the Inspector's routing preview (PLAN.md §6 Phase 5).
+//! The Usage page's read.
 
 use std::collections::{HashMap, HashSet};
 
 use brigadier_providers::ProviderKind;
-use brigadier_router::{Area, Heat, TaskCategory};
 
 use super::SessionManager;
-use super::routing::{Ask, Trial};
 use crate::accounts::AccountRef;
 use crate::model::{
-    AccountActivity, AccountTokens, AccountUsage, AuthorPreview, ConversationId,
-    ConversationTokens, ModelChoice, ProjectId, ProviderUsage, RoutePreview, RoutePreviewOutcome,
-    RoutingActivity, TokenCount, UsageActivity, UsageView, WindowHistory,
+    AccountActivity, AccountTokens, AccountUsage, ConversationId, ConversationTokens, ModelChoice,
+    ProviderUsage, RoutingActivity, TokenCount, UsageActivity, UsageView, WindowHistory,
 };
 use crate::routing::TurnUsage;
 use crate::work::AttemptEnd;
@@ -26,19 +23,10 @@ const ACTIVITY_DAYS_MAX: u32 = 31;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 impl SessionManager {
-    /// Everything the Usage page shows. `project`: whose outcomes to show what routing learned
-    /// from (every project's when absent).
-    pub async fn usage_view(&self, project: Option<ProjectId>) -> Result<UsageView> {
+    /// Everything the Usage page shows.
+    pub async fn usage_view(&self) -> Result<UsageView> {
         let now = now_ms();
-        let inputs = self.routing_inputs(project.as_ref(), now).await;
-        let learned = match (&project, self.runtime.routing_store()) {
-            (Some(_), _) => inputs.learned,
-            (None, Some(store)) => {
-                let outcomes = store.outcomes(None).await.unwrap_or_default();
-                brigadier_router::learn(&outcomes, &inputs.models, &inputs.registry)
-            }
-            (None, None) => Vec::new(),
-        };
+        let inputs = self.routing_inputs(now).await;
         let working = self.working_accounts().await;
         let providers = inputs
             .providers
@@ -56,18 +44,12 @@ impl SessionManager {
                         account: candidate.account,
                     })
                     .collect(),
-                balancing: state
-                    .quota
-                    .as_ref()
-                    .and_then(|quota| balancing(state.provider, quota, &inputs.providers)),
             })
             .collect();
         Ok(UsageView {
             providers,
             activity: self.routing_activity(now).await,
             models: inputs.models,
-            learned,
-            project_id: project,
             registry: self.runtime.registry().info(),
         })
     }
@@ -176,7 +158,8 @@ impl SessionManager {
                             .conversation(&id)
                             .map_or_else(|_| "A removed conversation".into(), |c| c.title),
                         conversation_id: id,
-                        project_id: project.map(|project| ProjectId(project.to_owned())),
+                        project_id: project
+                            .map(|project| crate::model::ProjectId(project.to_owned())),
                         tokens,
                     }
                 })
@@ -236,160 +219,6 @@ impl SessionManager {
         activity.sort_by_key(|item| std::cmp::Reverse(activity_at(item)));
         activity
     }
-
-    /// What routing would choose for each task category now, for the next task in `project`
-    /// touching `areas`: the same question a submitted task asks, the next trial slot
-    /// included; a review as if `author`'s vendor wrote the change. Starts nothing and takes
-    /// no trial slot.
-    pub async fn preview_routes(
-        &self,
-        project: Option<ProjectId>,
-        areas: Vec<Area>,
-        author: Option<ProviderKind>,
-    ) -> Vec<RoutePreview> {
-        let settings = self.core.settings();
-        let cross_vendor = ProviderKind::ALL
-            .into_iter()
-            .filter(|kind| {
-                crate::routing::availability::provider_on(&settings, *kind)
-                    && self.runtime.provider_signed_in(*kind)
-            })
-            .count()
-            > 1;
-        let rankings = settings.routing_rankings;
-        let mut previews = Vec::new();
-        for category in TaskCategory::ALL {
-            let (preview, trial_slot) = self
-                .preview_one(category, &areas, project.as_ref(), author)
-                .await;
-            let ranking_id = brigadier_router::ranking_for(
-                &rankings,
-                category,
-                &areas,
-                project.as_ref().map(|id| id.0.as_str()),
-            )
-            .map(|ranking| ranking.id.clone());
-            // Asked without an author, a review shows each vendor's change: it goes to the
-            // other vendor when one can take it. With one vendor signed in and on, there is no
-            // other vendor to show.
-            let mut by_author = Vec::new();
-            if category == TaskCategory::Review && author.is_none() && cross_vendor {
-                for provider in ProviderKind::ALL {
-                    let (preview, _) = self
-                        .preview_one(category, &areas, project.as_ref(), Some(provider))
-                        .await;
-                    by_author.push(AuthorPreview {
-                        author: provider,
-                        outcome: preview_outcome(preview.decision),
-                    });
-                }
-            }
-            previews.push(RoutePreview {
-                category,
-                areas: areas.clone(),
-                outcome: preview_outcome(preview.decision),
-                candidates: preview.candidates,
-                ranking_id,
-                places: preview.places,
-                trial_slot,
-                by_author,
-            });
-        }
-        previews
-    }
-
-    /// One category's preview: the question a submitted task asks, a review as if `author`'s
-    /// vendor wrote the change.
-    async fn preview_one(
-        &self,
-        category: TaskCategory,
-        areas: &[Area],
-        project: Option<&ProjectId>,
-        author: Option<ProviderKind>,
-    ) -> (brigadier_router::Preview, bool) {
-        self.preview(&Ask {
-            category,
-            areas,
-            floor: brigadier_router::default_floor(category),
-            floor_binds: false,
-            // An operator looks at the screen, whatever it is sent.
-            needs: brigadier_router::Needs {
-                image_input: category == TaskCategory::Operate,
-                ..brigadier_router::Needs::default()
-            },
-            pin: None,
-            hold_pin: false,
-            // A review of a change goes to another vendor than its author's.
-            avoid: author
-                .filter(|_| category == TaskCategory::Review)
-                .map(|provider| brigadier_router::Author {
-                    provider,
-                    model: None,
-                }),
-            distinct_from: Vec::new(),
-            exclude: &[],
-            project_id: project,
-            trial: Trial::Peek,
-        })
-        .await
-    }
-}
-
-/// A routing decision as the preview reports it.
-fn preview_outcome(decision: brigadier_router::Decision) -> RoutePreviewOutcome {
-    match decision {
-        brigadier_router::Decision::Run(routed) => {
-            let route = super::routing::route_from(routed);
-            RoutePreviewOutcome::Chosen {
-                choice: route.choice,
-                reason: route.reason,
-                explanation: route.explanation,
-            }
-        }
-        brigadier_router::Decision::Wait(waiting) => RoutePreviewOutcome::Wait {
-            reason: waiting.reason,
-            resets_at_ms: waiting.resets_at_ms,
-            rule: waiting.rule,
-            ranking: waiting.ranking,
-        },
-    }
-}
-
-/// What balancing does about a hot provider, when another can take its work.
-fn balancing(
-    provider: ProviderKind,
-    quota: &brigadier_router::ProviderQuota,
-    all: &[brigadier_router::ProviderState],
-) -> Option<String> {
-    if !matches!(quota.heat, Heat::Hot | Heat::Limited) {
-        return None;
-    }
-    let other = all.iter().find(|state| {
-        state.provider != provider
-            && state.logged_in
-            && state
-                .quota
-                .as_ref()
-                .is_none_or(|quota| matches!(quota.heat, Heat::Cool | Heat::Warm))
-    })?;
-    let hot = quota
-        .windows
-        .iter()
-        .filter(|window| window.window.model.is_none())
-        .max_by_key(|window| window.heat)
-        .map_or("usage", |window| window.window.label.as_str());
-    Some(match quota.heat {
-        Heat::Limited => format!(
-            "New work goes to {} until {}'s {hot} window resets",
-            other.provider.label(),
-            provider.label()
-        ),
-        _ => format!(
-            "New work shifts to {} where it can while {}'s {hot} window runs hot",
-            other.provider.label(),
-            provider.label()
-        ),
-    })
 }
 
 /// Why a model handed its task on, in a few words.

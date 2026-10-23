@@ -23,7 +23,7 @@ use brigadier_store::{BlobHash, StoredEvent};
 use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
 use super::SessionManager;
-use crate::model::{ConversationId, DomainEvent, TaskId, streams};
+use crate::model::{ConversationId, DomainEvent, streams};
 use crate::work::OrchestratorEntry;
 
 /// Events read per page.
@@ -128,28 +128,6 @@ pub(crate) fn thread_event(stored: &StoredEvent) -> Decoded {
 }
 
 impl SessionManager {
-    /// A worker hand-off's transcript.md and outputs/ in `dir` (`<scratch>/handoff`), written
-    /// again from the start: an earlier hand-off's outputs go first.
-    pub(crate) async fn export_handoff_transcript(
-        &self,
-        task: &crate::work::Task,
-        dir: &Path,
-    ) -> Export {
-        if let Err(err) = tokio::fs::remove_dir_all(dir.join(OUTPUTS_DIR)).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(task = %task.id, error = %err, "could not clear an earlier hand-off's outputs");
-        }
-        self.export_worker_transcript(&task.id, dir).await
-    }
-
-    /// Exports the task's worker transcript to `dir`/transcript.md, with whole outputs in
-    /// `dir`/outputs/.
-    pub(crate) async fn export_worker_transcript(&self, id: &TaskId, dir: &Path) -> Export {
-        self.export_stream(streams::task(id), worker_event, "The worker", dir)
-            .await
-    }
-
     /// Exports the conversation's thread transcript likewise.
     pub(crate) async fn export_thread_transcript(&self, id: &ConversationId, dir: &Path) -> Export {
         self.export_stream(streams::orchestrator(id), thread_event, "The thread", dir)

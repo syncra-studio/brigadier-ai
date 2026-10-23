@@ -119,7 +119,7 @@ impl SessionManager {
         let Some((repo, branch)) = self.local_checkout(id) else {
             return;
         };
-        let Some(request) = self.request_for(id, None).await else {
+        let Some(request) = self.request_for(id).await else {
             return;
         };
         let Some((start, tip)) = self.recorded_files(id, &request, &branch).await else {

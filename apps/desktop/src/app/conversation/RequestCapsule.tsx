@@ -37,14 +37,11 @@ export function useRequestDiff(requestId: string | null): DiffStat | null {
   return merged && merged.files.length > 0 ? merged : null;
 }
 
-/** The newest non-steered request that is still working or waiting owns the surface. */
+/** The newest non-steered request that is still working owns the surface. */
 export function activeRequest(requests: Readonly<Record<string, UserRequest>>): UserRequest | null {
   return (
     Object.values(requests)
-      .filter((request) =>
-        request.steeredInto === null &&
-        (request.state.type === "working" || request.state.type === "waiting"),
-      )
+      .filter((request) => request.steeredInto === null && request.state.type === "working")
       .toSorted((a, b) => b.startedAtMs - a.startedAtMs)[0] ?? null
   );
 }

@@ -2,7 +2,6 @@
 
 /**
  * The part of a codebase a task touches, for user rules ("never use X for frontend") and
- * per-area strengths. Named by the orchestrator (`delegate_task`), else derived from the
- * paths its spec names.
+ * per-area strengths.
  */
 export type Area = "frontend" | "backend" | "infra" | "docs" | "tests";

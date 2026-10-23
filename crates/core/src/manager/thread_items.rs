@@ -220,10 +220,7 @@ pub(super) fn step_detail(args: &serde_json::Value) -> Option<String> {
 /// whole self stored under it.
 pub(super) fn digest_alias(output: &str) -> Option<String> {
     let first = output.lines().next()?;
-    first
-        .contains("[full output: read_artifact out-")
-        .then(|| crate::digest::digest_alias(first).map(str::to_owned))
-        .flatten()
+    crate::digest::digest_alias(first).map(str::to_owned)
 }
 
 impl SessionManager {
@@ -656,15 +653,18 @@ mod tests {
         assert_eq!((stats[0].insertions, stats[0].deletions), (0, 0));
     }
 
-    /// Only a digest's header names a stored output; an output that only mentions an alias
-    /// doesn't.
+    /// Only a digest's header names a stored output, as it does now or did before S16b; an
+    /// output that only mentions an alias doesn't.
     #[test]
     fn a_digest_names_where_its_whole_output_is() {
-        let digest =
-            "exit 2 [full output: read_artifact out-1a2b3c4d, 3000 lines, 26890 bytes]\nline 0";
+        let digest = "exit 2 [full output: out-1a2b3c4d in /data/blobs/ab/abcd, 3000 lines, 26890 bytes]\nline 0";
         assert_eq!(digest_alias(digest).as_deref(), Some("out-1a2b3c4d"));
+        let old =
+            "exit 2 [full output: read_artifact out-1a2b3c4d, 3000 lines, 26890 bytes]\nline 0";
+        assert_eq!(digest_alias(old).as_deref(), Some("out-1a2b3c4d"));
         let json = r#"[{"type":"text","text":"exit 0 [full output: read_artifact out-0000ffff, 9 lines, 9000 bytes]\nok"}]"#;
         assert_eq!(digest_alias(json).as_deref(), Some("out-0000ffff"));
         assert_eq!(digest_alias("ok\nsee read_artifact out-1a2b3c4d"), None);
+        assert_eq!(digest_alias("ok\nsee out-1a2b3c4d"), None);
     }
 }

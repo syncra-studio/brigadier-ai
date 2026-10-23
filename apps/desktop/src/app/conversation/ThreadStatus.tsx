@@ -9,16 +9,12 @@ import type { QuotaWait } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 
-const NONE: readonly string[] = [];
-
 export type ThreadStatusProps = {
   requestIds: string[];
   state: BlockState;
   thinkingLive: boolean;
   compacting: boolean;
   quotaWait: QuotaWait | null;
-  /** The sessions whose replies it waits for, by title. */
-  waitingFor?: readonly string[];
 };
 
 /** What a live turn's last line says now, its workers by name; `null` when nothing. */
@@ -27,7 +23,7 @@ export function useThreadStatusHead(props: ThreadStatusProps | null): StatusHead
   const json = useBoard((s) => {
     const board = s.board;
     if (!board || !props) return null;
-    const input: StatusInput = { board, ...props, waitingFor: props.waitingFor ?? NONE };
+    const input: StatusInput = { board, ...props };
     return JSON.stringify(threadStatus(input));
   });
   const view = useMemo(() => (json ? (JSON.parse(json) as ThreadStatusView) : null), [json]);
@@ -63,6 +59,6 @@ export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
 
 /** The line under an answer whose request still waits (see `answeredHead`). */
 export const AnsweredStatus: FC<ThreadStatusProps & { waiting: boolean; reopened: boolean }> = ({ waiting, reopened, ...props }) => {
-  const head = answeredHead(useThreadStatusHead(props), { waitingFor: props.waitingFor ?? NONE, waiting, reopened });
+  const head = answeredHead(useThreadStatusHead(props), { waiting, reopened });
   return head ? <StatusLine head={head} /> : null;
 };

@@ -38,6 +38,7 @@ const HELPER_APP_ENV: &str = "BRIGADIER_CU_APP";
 /// The skill every agent gets, Brigadier's own workflow for the tools.
 const SKILL: &str = include_str!("computer_use_skill.md");
 /// A tool call may wait for the helper to start and for a permission the user is granting.
+#[cfg_attr(not(test), allow(dead_code))]
 const TOOL_TIMEOUT_SECS: u64 = 120;
 
 /// The helper's copy in the data folder, once placed.
@@ -58,7 +59,9 @@ pub(super) struct Placed {
     token: String,
 }
 
-/// What an agent gets for computer use.
+/// What an agent gets for computer use. No agent gets it since engine workers went (S16b):
+/// it stays as the driver's own interface (STRIP-DOWN-PLAN S13).
+#[allow(dead_code)]
 pub(crate) struct ComputerUseKit {
     pub server: McpServer,
     /// The Brigadier-owned plugin folder holding the `computer-use` skill.
@@ -74,6 +77,7 @@ impl SessionManager {
     /// `always_load`: its tools are in the model's list from the start (a GUI job) instead of
     /// behind Claude's tool search. `None` when it is off or the helper can't be placed; the
     /// agent then simply works without it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn computer_use_kit(
         &self,
         owner: &str,

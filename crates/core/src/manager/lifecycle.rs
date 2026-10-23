@@ -23,8 +23,7 @@ use std::time::{Duration, SystemTime};
 use brigadier_providers::{Artifact, BoxFuture, ItemStatus};
 
 use super::conversation::{ConvLive, Envelope};
-use super::prompts;
-use super::workers::{route_label, test_data_dir, test_data_root};
+use super::workers::{test_data_dir, test_data_root};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
     Conversation, ConversationId, ConversationKind, Environment, Lifecycle, Setup, streams,
@@ -164,44 +163,24 @@ impl SessionManager {
             };
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
                 match task.state {
-                    // A merge worker sent back during its landing, or its report Brigadier was
-                    // to land on its own: the restart ended that, so the orchestrator decides.
-                    _ if interrupted_fix(&task) => {
-                        crate::heap(|| self.recover_fix(&task)).await;
-                        continue;
-                    }
-                    // Its worktree and session stay: the terminal is gone, and the session
-                    // goes back to its worker (or the end under way finishes).
-                    TaskState::TakenOver => {
-                        crate::heap(|| self.recover_takeover(&task)).await;
-                        continue;
-                    }
-                    // A write task that reported changing nothing has nothing to land.
-                    TaskState::Reported if self.changed_nothing(&task).await => {
-                        crate::heap(|| self.dispose_task(&task, TaskState::Done)).await;
-                        continue;
-                    }
-                    // Its worktree is intact; the worker resumes when sent back to work.
+                    // Its worktree is intact; the worker resumes when its session sends it more.
                     TaskState::Reported | TaskState::ReadyToLand if task.kind.writes() => continue,
-                    // Stopped for dying twice: its worktree and session stay, for message_worker
-                    // once the cause is fixed (SESSION-FIXES-PLAN.md Q4). Nothing resumes it.
-                    TaskState::Blocked if task.deaths.len() >= 2 => continue,
-                    // No CLI ran; it waits for quota as before.
-                    TaskState::Paused if task.quota_wait.is_some() => {
-                        self.keep_waiting(&task).await;
-                        continue;
-                    }
-                    // Waiting (on its outline's go-ahead, an answer, a review, an approval) or
-                    // paused by the user: its worktree and session stay, and it carries on from
-                    // its wait (BUILD-PLAN D1.4).
-                    TaskState::Blocked | TaskState::Paused
+                    // Its CLI stopped with Brigadier: its worktree and session stay, and it goes
+                    // on, resumed, once its session sends it more or the user resumes it.
+                    TaskState::Running
+                    | TaskState::Starting
+                    | TaskState::Blocked
+                    | TaskState::Paused
                         if conversation.lifecycle != Lifecycle::Archived
                             && task.native_session.is_some() =>
                     {
-                        // Boxed, as each big await here: recovery runs on a runtime thread's
-                        // stack.
-                        let active = conversation.lifecycle == Lifecycle::Active;
-                        crate::heap(|| self.recover_waiting(&task, active)).await;
+                        let _ = self
+                            .update_task(&conversation.id, &task.id, |t| {
+                                t.state = TaskState::Paused;
+                                t.blocked_reason =
+                                    Some("Brigadier restarted while it worked.".into());
+                            })
+                            .await;
                         continue;
                     }
                     // A read task that reported is done.
@@ -239,14 +218,6 @@ impl SessionManager {
                             },
                         )
                         .await;
-                        continue;
-                    }
-                    // Its CLI session resumes (SESSION-FIXES-PLAN.md Q4).
-                    TaskState::Running | TaskState::Starting
-                        if conversation.lifecycle == Lifecycle::Active
-                            && task.native_session.is_some() =>
-                    {
-                        crate::heap(|| self.resume_after_restart(&task)).await;
                         continue;
                     }
                     _ => {}
@@ -359,47 +330,6 @@ impl SessionManager {
                 Err(err) => tracing::warn!(error = %err, "could not sweep the test data folders"),
             }
         });
-    }
-
-    /// A merge task sent back to its worker during its landing, cut off by the restart while
-    /// the worker merged again (or before its report landed): its worktree stays and it waits
-    /// as reported; the orchestrator gets its report, and decides.
-    async fn recover_fix(&self, task: &Task) {
-        let checking = task.state != TaskState::Reported;
-        let Ok(task) = self
-            .update_task(&task.conversation_id, &task.id, |t| {
-                t.landing = None;
-                t.state = TaskState::Reported;
-                t.blocked_reason = None;
-            })
-            .await
-        else {
-            return;
-        };
-        let mut text = match &task.report {
-            Some(report) => prompts::report_envelope(&task, report, &route_label(&task)),
-            None => String::new(),
-        };
-        let n = task.number;
-        text.push_str(&if checking {
-            format!(
-                "\n[not landed task-{n}] Its worker was sent back to finish its merge, and Brigadier restarted while it worked; nothing landed. Send it back to finish (message_worker), then call land_phase for task-{n}."
-            )
-        } else {
-            format!(
-                "\n[not landed task-{n}] This is the report after its worker was sent back; Brigadier restarted before landing it, so nothing landed. Call land_phase for task-{n}."
-            )
-        });
-        self.deliver(
-            &task.conversation_id,
-            Envelope {
-                kind: InjectionKind::Report,
-                label: format!("report task-{}", task.number),
-                task_id: Some(task.id.clone()),
-                text: text.trim_start().to_owned(),
-            },
-        )
-        .await;
     }
 
     /// Hibernates conversations idle for longer than the setting.
@@ -1473,24 +1403,6 @@ pub(super) fn conversation_owner(conversation: &Conversation) -> (String, &'stat
     }
 }
 
-/// Whether a restart cut off a fix Brigadier was landing on its own: the worker's fix report
-/// waits for the checks Brigadier had not started yet, or the worker was still making it (a
-/// task waiting for quota keeps waiting, and lands its fix when it reports).
-fn interrupted_fix(task: &Task) -> bool {
-    task.kind.writes()
-        && task.landing.is_some()
-        && task.quota_wait.is_none()
-        && matches!(
-            task.state,
-            TaskState::Reported
-                | TaskState::Queued
-                | TaskState::Starting
-                | TaskState::Running
-                | TaskState::Blocked
-                | TaskState::Paused
-        )
-}
-
 /// The task test data folders in `root`.
 fn test_folders(root: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -1655,41 +1567,5 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("brigadier-test-"))
         }));
-    }
-
-    fn task(state: TaskState, landing: bool) -> Task {
-        let mut task: Task = serde_json::from_value(serde_json::json!({
-            "id": "t1",
-            "conversationId": "c1",
-            "number": 1,
-            "position": 0,
-            "title": "Add the flag",
-            "kind": "implement",
-            "spec": "Add the flag.",
-            "access": { "repo": "write", "network": false, "unsandboxed": false },
-            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
-            "state": "reported",
-            "attachments": [],
-            "createdAtMs": 0,
-            "updatedAtMs": 0
-        }))
-        .expect("a task");
-        task.state = state;
-        task.landing = landing.then(|| "Add the flag".to_owned());
-        task
-    }
-
-    #[test]
-    fn a_fix_a_restart_cut_off_goes_to_the_orchestrator() {
-        // Its fix report, not yet checked, and a worker still fixing.
-        assert!(interrupted_fix(&task(TaskState::Reported, true)));
-        assert!(interrupted_fix(&task(TaskState::Running, true)));
-        // A report the orchestrator already has, and a landing under way (handled apart).
-        assert!(!interrupted_fix(&task(TaskState::Reported, false)));
-        assert!(!interrupted_fix(&task(TaskState::Landing, true)));
-        assert!(!interrupted_fix(&task(TaskState::ReadyToLand, true)));
-        let mut review = task(TaskState::Reported, true);
-        review.kind = crate::work::TaskKind::Review;
-        assert!(!interrupted_fix(&review));
     }
 }

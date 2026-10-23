@@ -1,7 +1,7 @@
 //! Changes cards are git diffs of retained turn trees. No tool-call ownership inference.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use brigadier_git::Oid;
@@ -643,57 +643,6 @@ impl SessionManager {
             }
         }
         Ok(outcome)
-    }
-
-    pub(super) async fn threads_uncommitted(
-        &self,
-        id: &ConversationId,
-        checkout: &Path,
-        files: &[String],
-    ) -> BTreeSet<String> {
-        let Ok(board) = self.core.board(id).await else {
-            return BTreeSet::new();
-        };
-        let mut candidates = Vec::new();
-        for request in board.requests.values() {
-            if let Ok(Some(turn)) = self.snapshot_turn_record(id, &request.id).await {
-                candidates.push(turn.number);
-            }
-        }
-        let (git, checkout, session, files) = (
-            self.git.clone(),
-            checkout.to_owned(),
-            id.0.clone(),
-            files.to_vec(),
-        );
-        blocking(move || {
-            let repo = git.open(&checkout).map_err(git_error)?;
-            let head = repo
-                .file_blobs(&repo.resolve("HEAD").map_err(git_error)?)
-                .map_err(git_error)?;
-            let mut own = BTreeSet::new();
-            for number in candidates {
-                let Ok(start) = repo.turn_tree(&session, number, false) else {
-                    continue;
-                };
-                let Ok(end) = repo.turn_tree(&session, number, true) else {
-                    continue;
-                };
-                let start = repo.file_blobs(&start).map_err(git_error)?;
-                let end = repo.file_blobs(&end).map_err(git_error)?;
-                for path in &files {
-                    if start.get(path) == head.get(path)
-                        && end.get(path) != start.get(path)
-                        && repo.checkout_blob(path).map_err(git_error)?.as_ref() == end.get(path)
-                    {
-                        own.insert(path.clone());
-                    }
-                }
-            }
-            Ok(own)
-        })
-        .await
-        .unwrap_or_default()
     }
 
     pub(super) async fn delete_turn_snapshots(&self, id: &ConversationId) -> Result<()> {

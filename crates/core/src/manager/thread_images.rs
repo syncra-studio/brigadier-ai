@@ -8,7 +8,7 @@ use brigadier_providers::{ItemStatus, ProviderEvent};
 
 use super::{SessionManager, blocking};
 use crate::model::ConversationId;
-use crate::work::{OrchestratorStepKind, ProofKind, ThreadItemKind};
+use crate::work::{OrchestratorStepKind, ThreadItemKind};
 use crate::{Error, Result};
 
 /// The file name, without its extension, of the copy kept of generated image `item_id`.
@@ -45,9 +45,6 @@ fn mime(path: &Path) -> Option<&'static str> {
     }
 }
 
-/// A text proof's limit: a log or test output past it is cut by the thread first.
-const MAX_TEXT: u64 = 1024 * 1024;
-
 /// Where a browser_screenshot was taken, kept beside the picture so `attach_proof` knows it.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,13 +58,6 @@ pub(super) fn shot_note_path(picture: &Path) -> PathBuf {
     let mut name = picture.as_os_str().to_owned();
     name.push(".where");
     PathBuf::from(name)
-}
-
-/// A URL's scheme, host and port: two pages of one preview share it.
-fn origin(url: &str) -> Option<&str> {
-    let rest = url.split_once("://")?.1;
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    Some(&url[..url.len() - rest.len() + end])
 }
 
 impl SessionManager {
@@ -164,139 +154,6 @@ impl SessionManager {
         .await;
     }
 
-    /// `attach_proof`: keeps a copy of the thread's screenshot or recording and shows it with
-    /// the reply it is writing, the merge message.
-    pub(crate) async fn attach_proof(
-        &self,
-        id: &ConversationId,
-        args: crate::tools::AttachProof,
-    ) -> Result<String> {
-        let base = match self.effective_workspace(id).await {
-            Ok(Some(workspace)) => workspace.path,
-            _ => self.owned_dir("orch", &id.0),
-        };
-        // Resolved, links followed: Brigadier's private folder is never read, as in the sandbox.
-        let source = super::reads::absolute(&base, args.path.trim());
-        let run_dir = self.runtime.platform().paths().run_dir.clone();
-        let private = run_dir.canonicalize().unwrap_or_else(|_| run_dir.clone());
-        if source.starts_with(&private) || source.starts_with(&run_dir) {
-            return Err(Error::Invalid(format!(
-                "{} is in Brigadier's private folder: attach a file you made",
-                source.display()
-            )));
-        }
-        let name = source
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let mime = mime(&source)
-            .filter(|mime| *mime != "image/heic" && *mime != "image/tiff" && *mime != "image/bmp");
-        let Some(mime) = mime else {
-            return Err(Error::Invalid(format!(
-                "{name} isn't a PNG, JPEG, GIF or WebP image, an MP4, MOV or WebM recording, or a \
-                 .log or .txt output"
-            )));
-        };
-        let kind = match mime {
-            "text/plain" => match args.kind {
-                Some(ProofKind::Test) => ProofKind::Test,
-                _ => ProofKind::Log,
-            },
-            _ if mime.starts_with("video/") => ProofKind::Recording,
-            _ => ProofKind::Screenshot,
-        };
-        let board = self.core.board(id).await?;
-        let preview = match args.preview.as_deref().map(str::trim) {
-            Some(wanted) if !wanted.is_empty() => {
-                Some(board.previews.get(wanted).cloned().ok_or_else(|| {
-                    Error::Invalid(format!("{wanted} isn't one of your previews"))
-                })?)
-            }
-            _ => None,
-        };
-        // A browser_screenshot's page, kept beside it.
-        let note = {
-            let note = shot_note_path(&source);
-            blocking(move || {
-                Ok(std::fs::read(&note)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<ShotNote>(&bytes).ok()))
-            })
-            .await?
-        };
-        let taken_on = args
-            .taken_on
-            .map(|on| on.trim().to_owned())
-            .filter(|on| !on.is_empty())
-            .or_else(|| note.as_ref().map(|note| note.url.clone()))
-            .or_else(|| preview.as_ref().and_then(|preview| preview.url.clone()));
-        // A page of one of the session's previews is that preview's, the latest first.
-        let preview = preview.map(|preview| preview.id).or_else(|| {
-            let page = origin(taken_on.as_deref()?)?;
-            board
-                .sorted_previews()
-                .into_iter()
-                .rev()
-                .find(|preview| preview.url.as_deref().and_then(origin) == Some(page))
-                .map(|preview| preview.id)
-        });
-        let proof = format!("proof-{}", uuid::Uuid::new_v4().simple());
-        let ext = source
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("bin")
-            .to_ascii_lowercase();
-        let target = self.thread_images_dir(id).join(format!("{proof}.{ext}"));
-        let kept = target.clone();
-        let changed_at = blocking(move || {
-            let meta = std::fs::metadata(&source)
-                .map_err(|_| Error::Invalid(format!("{} isn't there", source.display())))?;
-            if !meta.is_file() {
-                return Err(Error::Invalid(format!("{} isn't a file", source.display())));
-            }
-            if kind == ProofKind::Log || kind == ProofKind::Test {
-                if meta.len() > MAX_TEXT {
-                    return Err(Error::Invalid(
-                        "It is over 1 MB: attach the part of the output that shows it".into(),
-                    ));
-                }
-            } else if meta.len() > MAX_IMAGE {
-                return Err(Error::Invalid(
-                    "It is over 11 MB: attach a smaller screenshot or a shorter recording".into(),
-                ));
-            }
-            std::fs::create_dir_all(kept.parent().expect("image folder")).map_err(image_io)?;
-            std::fs::copy(&source, &kept).map_err(image_io)?;
-            Ok(meta
-                .modified()
-                .ok()
-                .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
-                .and_then(|at| i64::try_from(at.as_millis()).ok()))
-        })
-        .await?;
-        self.orchestrator_step(
-            id,
-            OrchestratorStepKind::Proof {
-                id: proof,
-                name: name.clone(),
-                mime: mime.to_owned(),
-                caption: args
-                    .caption
-                    .map(|caption| caption.trim().to_owned())
-                    .filter(|caption| !caption.is_empty()),
-                file: target.to_string_lossy().into_owned(),
-                kind: Some(kind),
-                taken_on,
-                preview,
-                taken_at_ms: note.map(|note| note.taken_at_ms).or(changed_at),
-            },
-        )
-        .await;
-        Ok(format!(
-            "Attached {name}: the user sees it under your reply. Don't link or describe the file again."
-        ))
-    }
-
     /// Returns the image an item of this conversation's CLI thread names (its own image, or a
     /// `view_image` or `Read` of one), or a proof the thread attached, bounded before and
     /// during read.
@@ -383,31 +240,4 @@ async fn read_bounded(path: PathBuf) -> Result<(String, String)> {
         Ok((brigadier_providers::image_base64(&bytes), mime.to_owned()))
     })
     .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Two pages of one preview share an origin; another port is another preview.
-    #[test]
-    fn a_pages_origin_is_its_scheme_host_and_port() {
-        assert_eq!(
-            origin("http://127.0.0.1:5173/settings?x=1"),
-            Some("http://127.0.0.1:5173")
-        );
-        assert_eq!(
-            origin("http://localhost:3000"),
-            Some("http://localhost:3000")
-        );
-        assert_eq!(
-            origin("http://localhost:3000#top"),
-            Some("http://localhost:3000")
-        );
-        assert_eq!(origin("iPhone 16 simulator"), None);
-        assert_ne!(
-            origin("http://localhost:3001/"),
-            origin("http://localhost:3000/")
-        );
-    }
 }

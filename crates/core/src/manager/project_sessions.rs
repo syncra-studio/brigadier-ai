@@ -7,9 +7,7 @@ use crate::model::{
     Conversation, ConversationId, EnvironmentRequest, Lifecycle, Mention, Setup, SetupRequest,
 };
 use crate::work::AttachmentRef;
-use crate::work::{
-    MovedAs, MovedMessage, OrchestratorStepKind, RequestState, SettledTab, TabState,
-};
+use crate::work::{MovedAs, OrchestratorStepKind, SettledTab, TabState};
 use crate::{Error, Result};
 
 use super::SessionManager;
@@ -207,16 +205,6 @@ impl SessionManager {
         settled
     }
 
-    /// Where `tab` stands ([`crate::board::Board::tab_state`]), with its branch's commits
-    /// ahead of base counted now, and whether its latest merge is reverted.
-    pub(super) async fn tab_state(&self, tab: &Conversation) -> Option<TabState> {
-        let ahead = self.tab_ahead(tab).await.map(|(_, ahead)| ahead);
-        let board = self.core.board(&tab.id).await.ok()?;
-        let reverted = self.merge_reverted(tab, &board, ahead).await;
-        let turn = self.cli_turn(&tab.id);
-        board.tab_state(&tab.id, turn, tab.quota_wait.is_some(), ahead, reverted)
-    }
-
     /// Whether `tab`'s latest recorded merge is reverted on its base now (asked of git only
     /// when it would read merged: nothing of it ahead).
     async fn merge_reverted(
@@ -348,34 +336,6 @@ impl SessionManager {
         self.tab_tip(tab, base).await
     }
 
-    /// `tab`'s state in the thread's words: its tab state, else idle or sleeping.
-    pub(super) async fn tab_words(&self, tab: &Conversation) -> &'static str {
-        match self.tab_state(tab).await {
-            Some(state) => state.words(),
-            None => self.idle_or_sleeping(tab).await,
-        }
-    }
-
-    /// Where a session stands when it has no tab state: `working`, `idle` or `sleeping`.
-    async fn idle_or_sleeping(&self, conversation: &Conversation) -> &'static str {
-        if conversation.lifecycle == Lifecycle::Hibernated {
-            return "sleeping";
-        }
-        let live = self.convs_lock().get(&conversation.id).cloned();
-        let busy = match live {
-            Some(conv) => conv.running_request().await.is_some(),
-            None => false,
-        };
-        let working = busy
-            || self.core.board(&conversation.id).await.is_ok_and(|board| {
-                board
-                    .requests
-                    .values()
-                    .any(|request| request.state == RequestState::Working)
-            });
-        if working { "working" } else { "idle" }
-    }
-
     /// Records [`DomainEvent::RequestReady`] for `request` of `id`, which is ending, when its
     /// session branch is ahead of its base now: once per request and head.
     ///
@@ -394,180 +354,9 @@ impl SessionManager {
             tracing::debug!(conversation = %id, error = %err, "could not record a ready request");
         }
     }
-
-    /// The other open sessions of `id`'s project.
-    pub(super) fn siblings(&self, id: &ConversationId) -> Result<Vec<Conversation>> {
-        let me = self.core.conversation(id)?;
-        let Some(project) = me.project_id.clone().filter(|_| me.is_tab()) else {
-            return Ok(Vec::new());
-        };
-        let mut tabs: Vec<Conversation> = self
-            .core
-            .visible_catalog()
-            .conversations
-            .into_iter()
-            .filter(|tab| {
-                tab.id != *id
-                    && tab.is_tab()
-                    && !tab.deleting
-                    && tab.lifecycle != crate::model::Lifecycle::Archived
-                    && tab.project_id.as_ref() == Some(&project)
-            })
-            .collect();
-        tabs.sort_by(|a, b| a.created_at_ms.cmp(&b.created_at_ms).then(a.id.cmp(&b.id)));
-        Ok(tabs)
-    }
 }
 
 impl SessionManager {
-    /// The sibling session of `id` that route "session" names, or the fact why there is none
-    /// (the follow-up stays unsorted).
-    pub(super) fn sibling_named(
-        &self,
-        id: &ConversationId,
-        tab: Option<&str>,
-    ) -> Result<std::result::Result<Conversation, String>> {
-        let siblings = self.siblings(id)?;
-        let Some(tab) = tab else {
-            return Err(Error::Invalid(
-                "route \"session\" needs `session`: the other session's id.".into(),
-            ));
-        };
-        if let Some(sibling) = siblings.iter().find(|sibling| sibling.id.0 == tab) {
-            return Ok(Ok(sibling.clone()));
-        }
-        let listed: Vec<String> = siblings
-            .iter()
-            .map(|sibling| format!("\"{}\" (session {})", sibling.title, sibling.id))
-            .collect();
-        Ok(Err(if listed.is_empty() {
-            "This project has no other session; the follow-up is still yours to sort.".into()
-        } else {
-            format!(
-                "No other session of this project is session {tab}; they are {}. The \
-                 follow-up is still yours to sort.",
-                listed.join(", ")
-            )
-        }))
-    }
-
-    /// Route "session": queued follow-up `item_id` of `id` goes to sibling `tab` as the user's
-    /// message (queued there if it works), and this session keeps a notice with Undo. A
-    /// sibling that already merged takes it too.
-    pub(super) async fn move_follow_up(
-        &self,
-        id: &ConversationId,
-        item_id: &str,
-        tab: &Conversation,
-    ) -> Result<String> {
-        let index = self
-            .core
-            .board(id)
-            .await?
-            .queue
-            .items
-            .iter()
-            .position(|item| item.id == item_id)
-            .unwrap_or(0);
-        let item = self.core.take_queued(id, item_id).await?;
-        // This session's workers mean nothing there.
-        let mentions: Vec<Mention> = item
-            .mentions
-            .iter()
-            .filter(|mention| !matches!(mention, Mention::Task { .. }))
-            .cloned()
-            .collect();
-        let sent = match crate::heap(|| {
-            self.send_message(
-                tab.id.clone(),
-                item.text.clone(),
-                item.attachments.clone(),
-                mentions,
-                false,
-                None,
-            )
-        })
-        .await
-        {
-            Ok(SendOutcome::Sent(message)) => MovedAs::Sent {
-                message_id: message.id,
-            },
-            Ok(SendOutcome::Queued(queued)) => MovedAs::Queued { item_id: queued.id },
-            Err(err) => {
-                self.core
-                    .enqueue(
-                        id,
-                        item.text,
-                        item.attachments,
-                        item.mentions,
-                        Some(index as u32),
-                        false,
-                    )
-                    .await?;
-                return Ok(format!(
-                    "It couldn't go to session \"{}\" ({err}); it waits in this session's \
-                     queue as its own request.",
-                    tab.title
-                ));
-            }
-        };
-        let queued = matches!(sent, MovedAs::Queued { .. });
-        self.core
-            .keep_moved(
-                id,
-                MovedMessage {
-                    id: item.id,
-                    text: item.text,
-                    attachments: item.attachments,
-                    mentions: item.mentions,
-                    to: tab.id.clone(),
-                    to_title: tab.title.clone(),
-                    moved_at_ms: crate::now_ms(),
-                    sent,
-                },
-            )
-            .await?;
-        Ok(format!(
-            "It went to session \"{}\" (session {}) as the user's message{}; this session \
-             shows the user a notice with Undo.{}",
-            tab.title,
-            tab.id,
-            if queued {
-                ", waiting in its queue while it works"
-            } else {
-                ""
-            },
-            self.merged_fact(tab).await
-        ))
-    }
-
-    /// " Session ‹B› has already merged into `main` at ‹sha›." when it has, else nothing.
-    async fn merged_fact(&self, tab: &Conversation) -> String {
-        let Ok(board) = self.core.board(&tab.id).await else {
-            return String::new();
-        };
-        let Some(base) = board
-            .orchestrator_steps
-            .iter()
-            .rev()
-            .find_map(|step| match &step.kind {
-                OrchestratorStepKind::Merged { base, .. } => Some(base.clone()),
-                _ => None,
-            })
-        else {
-            return String::new();
-        };
-        let at = match self.tab_tip(tab, &base).await {
-            Some((tip, 0)) => format!(" at {}", &tip[..tip.len().min(12)]),
-            Some((_, since)) => format!("; its branch has {since} commit(s) since"),
-            None => String::new(),
-        };
-        format!(
-            " Session \"{}\" has already merged into `{base}`{at}.",
-            tab.title
-        )
-    }
-
     /// `tab`'s branch tip, and how many of its commits `base` lacks. A commit its upstream has
     /// is not the session's: a new branch starts from the base as its remote has it, which may
     /// be ahead of the local base (#495).

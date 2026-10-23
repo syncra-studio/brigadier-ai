@@ -31,12 +31,13 @@ use brigadier_providers::{ApprovalDecision, ProviderKind, TurnStatus};
 
 use super::cli::{CliCaller, Target, short, worker_row};
 use super::session_dir::{WorkspaceRecord, write_atomic};
-use super::workers::{TaskExtra, TaskLive, Workspace, task_branch};
+use super::workers::{TaskLive, Workspace, task_branch};
 use super::{SessionManager, blocking, git_error};
-use crate::model::{Conversation, ConversationId, Environment, PermissionLevel, Setup};
+use crate::model::{
+    Conversation, ConversationId, Environment, ModelChoice, PermissionLevel, Setup,
+};
 use crate::work::{
-    Approval, ApprovalSubject, AttemptEnd, CardId, CardState, PlainWorker, Task, TaskId, TaskKind,
-    TaskState,
+    Approval, ApprovalSubject, AttemptEnd, CardId, CardState, PlainWorker, Task, TaskId, TaskState,
 };
 use crate::{Error, Result, now_ms};
 
@@ -195,11 +196,12 @@ impl SessionManager {
             },
         };
         let title = start.title.unwrap_or_else(|| title_of(&start.prompt));
-        let pin = brigadier_router::Pin {
-            provider: Some(provider),
+        let choice = ModelChoice {
+            provider,
             model: start.model,
             effort: start.effort,
-            by_user: false,
+            fast: None,
+            account: None,
         };
         let plain = PlainWorker {
             permission,
@@ -210,25 +212,7 @@ impl SessionManager {
             closed: false,
         };
         let task = crate::heap(|| {
-            self.create_task_as(
-                &caller.conversation_id,
-                title,
-                TaskKind::Implement,
-                start.prompt,
-                Some(pin),
-                None,
-                Vec::new(),
-                None,
-                None,
-                Vec::new(),
-                None,
-                None,
-                Vec::new(),
-                TaskExtra {
-                    plain: Some(plain),
-                    ..Default::default()
-                },
-            )
+            self.create_plain_task(&caller.conversation_id, title, start.prompt, choice, plain)
         })
         .await?;
         self.orchestrator_step(
@@ -504,12 +488,21 @@ impl SessionManager {
     /// A plain worker's CLI ended on its own: the worker is gone, and its session hears why.
     /// Its unfinished work is kept on its branch, as a stop keeps it.
     pub(super) async fn plain_gone(&self, task: &Task, exit: &str) {
-        let reason = format!("Its CLI ended: {exit}.");
+        self.plain_failed(task, format!("Its CLI ended: {exit}."))
+            .await;
+    }
+
+    /// A plain worker failed (`reason`): it is gone, and its session hears why. Its unfinished
+    /// work is kept on its branch, as a stop keeps it.
+    pub(super) async fn plain_failed(&self, task: &Task, reason: String) {
         let _ = self
             .update_task(&task.conversation_id, &task.id, |task| {
                 task.error = Some(reason.clone());
             })
             .await;
+        if let Some(live) = self.existing_task_live(&task.id) {
+            live.close_cli().await;
+        }
         // Heard before the worker turns final: a `brigadier wait` that sees it final with
         // nothing queued ends empty and would miss it.
         let mut event = event(&task.id, EventKind::Gone);
@@ -606,7 +599,7 @@ impl SessionManager {
             }
         }
         let queued = live.busy().await;
-        self.message_worker(&task.conversation_id, &task, text, "its session")
+        self.message_worker(&task.conversation_id, &task, text)
             .await?;
         Ok(CliReply::ok(&SendOutput {
             id: shown,

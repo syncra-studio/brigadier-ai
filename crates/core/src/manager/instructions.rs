@@ -32,37 +32,12 @@
 
 use std::path::{Path, PathBuf};
 
-use brigadier_providers::ProviderKind;
-
 use super::SessionManager;
 use crate::model::ConversationId;
 use crate::tools::Role;
 
 /// Bytes of instructions carried at most.
 const MAX_BYTES: usize = 32 * 1024;
-
-/// The instruction files `provider` does not load itself, formatted for the worker prompt.
-/// Rules of a subfolder come whole only when the task's spec names a path under it; the
-/// others are listed, to read before changing files there (BUILD-PLAN D1.6).
-pub(crate) async fn for_worker(provider: ProviderKind, worktree: &Path, spec: &str) -> String {
-    let (worktree, named) = (worktree.to_owned(), named_paths(spec));
-    tokio::task::spawn_blocking(move || {
-        let rules = found_rules(&worktree, provider == ProviderKind::Claude);
-        let (pinned, left_out): (Vec<Rule>, Vec<Rule>) = rules.into_iter().partition(|rule| {
-            rule.folder
-                .as_ref()
-                .is_none_or(|folder| named.iter().any(|path| Path::new(path).starts_with(folder)))
-        });
-        format_rules(
-            &pinned,
-            &left_out,
-            "The task spec wins over them",
-            "Read one before you change files under its folder.",
-        )
-    })
-    .await
-    .unwrap_or_default()
-}
 
 /// The workspace's instruction files, formatted for the thread's prompt: its working
 /// directory is its own folder outside the repository, so neither CLI finds them itself. A
@@ -285,22 +260,6 @@ impl Rule {
     }
 }
 
-/// The paths a task's spec names (words with a `/` in them, relative to the worktree).
-fn named_paths(spec: &str) -> Vec<String> {
-    spec.split(|c: char| {
-        c.is_whitespace() || matches!(c, '`' | '"' | '\'' | '(' | ')' | ',' | '[' | ']')
-    })
-    .map(|word| {
-        let word = word
-            .trim_end_matches(['.', ':', ';'])
-            .trim_start_matches("./");
-        word.split(':').next().unwrap_or(word)
-    })
-    .filter(|word| word.contains('/') && !word.starts_with('/') && !word.contains(".."))
-    .map(str::to_owned)
-    .collect()
-}
-
 /// The instruction files in `worktree` (`root_agents`: its root `AGENTS.md` too), each once.
 fn found_rules(worktree: &Path, root_agents: bool) -> Vec<Rule> {
     let mut found = Vec::new();
@@ -472,7 +431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_thread_gets_every_instruction_file_once_a_codex_worker_what_codex_misses() {
+    async fn the_thread_gets_every_instruction_file_once() {
         let dir =
             Temp(std::env::temp_dir().join(format!("brigadier-instr-{}", uuid::Uuid::new_v4())));
         std::fs::create_dir_all(dir.join("app")).unwrap();
@@ -490,26 +449,11 @@ mod tests {
         assert_eq!(thread.matches("Use pnpm.").count(), 1, "{thread}");
         assert!(thread.contains("### app/CLAUDE.md (applies to files under app/)"));
         assert!(thread.contains("The user's request wins over them"));
-        // A worker whose spec names a path under app/ gets app's rules whole.
-        let spec = "Fix app/button.tsx.";
-        let worker = for_worker(ProviderKind::Codex, &dir, spec).await;
-        assert!(
-            !worker.contains("Use pnpm."),
-            "Codex loads the root file itself: {worker}"
-        );
-        assert!(worker.contains("Keep components small."));
-        assert!(worker.contains("The task spec wins over them"));
-        // A Claude worker starts outside its worktree: it gets every file, the root's too.
-        let claude = for_worker(ProviderKind::Claude, &dir, spec).await;
-        assert_eq!(claude.matches("Use pnpm.").count(), 1, "{claude}");
-        assert!(claude.contains("Keep components small."));
-        assert!(claude.contains("The task spec wins over them"));
     }
 
     /// Done when (D1.6, in part): a Claude thread in a monorepo starts with the root's rules
     /// whole and a sub-package's only named, so its first call is smaller; the sub-package's
-    /// rules come with the first file it touches there, outermost first. A worker on another
-    /// package gets that package's rules and only names the rest.
+    /// rules come with the first file it touches there, outermost first.
     #[tokio::test]
     async fn only_the_rules_that_apply_are_loaded_and_the_rest_are_listed() {
         let dir =
@@ -557,16 +501,5 @@ mod tests {
         );
         assert!(rules_for(&dir, &dir.join("README.md")).is_empty());
         assert!(rules_for(Path::new("/elsewhere"), &web.join("x")).is_empty());
-        // A worker on packages/api gets its rules whole and the web's only named.
-        let worker = for_worker(
-            ProviderKind::Claude,
-            &dir,
-            "Add a health route in `packages/api/routes.ts`.",
-        )
-        .await;
-        assert!(worker.contains("Every handler logs its route."), "{worker}");
-        assert!(!worker.contains("Web components"), "{worker}");
-        assert!(worker.contains("apps/web/CLAUDE.md (files under apps/web/)"));
-        assert!(worker.contains("Read one before you change files under its folder."));
     }
 }

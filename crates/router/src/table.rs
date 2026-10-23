@@ -1,66 +1,43 @@
-//! What each task category is called, which vendor its ties go to, and matching model names
-//! and effort levels.
-
-use brigadier_providers::ProviderKind;
+//! What each task category is called, and matching model names and effort levels.
 
 use crate::TaskCategory;
 
-/// One task category: the vendor its ties go to, and its name in a sentence.
+/// One task category: its name in a sentence.
 pub(crate) struct Row {
-    /// Vendor order when both score the same.
-    pub(crate) order: [ProviderKind; 2],
     /// What the task is, for the reason sentence ("for review").
     pub(crate) purpose: &'static str,
 }
 
-const CLAUDE_FIRST: [ProviderKind; 2] = [ProviderKind::Claude, ProviderKind::Codex];
-const CODEX_FIRST: [ProviderKind; 2] = [ProviderKind::Codex, ProviderKind::Claude];
-
-/// See the crate docs for the tie order.
+/// The category's row.
 pub(crate) fn row(category: TaskCategory) -> &'static Row {
     match category {
         TaskCategory::Scout => &Row {
-            order: CODEX_FIRST,
             purpose: "scouting",
         },
         TaskCategory::Research => &Row {
-            order: CODEX_FIRST,
             purpose: "research",
         },
         TaskCategory::Implement => &Row {
-            order: CLAUDE_FIRST,
             purpose: "implementation",
         },
-        TaskCategory::Review => &Row {
-            order: CODEX_FIRST,
-            purpose: "review",
-        },
+        TaskCategory::Review => &Row { purpose: "review" },
         TaskCategory::Merge => &Row {
-            order: CLAUDE_FIRST,
             purpose: "conflict resolution",
         },
         TaskCategory::Verify => &Row {
-            order: CODEX_FIRST,
             purpose: "verification",
         },
         TaskCategory::Operate => &Row {
-            order: CLAUDE_FIRST,
             purpose: "operating apps on screen",
         },
         TaskCategory::Design => &Row {
-            order: CLAUDE_FIRST,
             purpose: "designs and images",
         },
-        TaskCategory::Chat => &Row {
-            order: CLAUDE_FIRST,
-            purpose: "chat",
-        },
+        TaskCategory::Chat => &Row { purpose: "chat" },
         TaskCategory::Orchestrate => &Row {
-            order: CLAUDE_FIRST,
             purpose: "orchestration",
         },
         TaskCategory::GitText => &Row {
-            order: CLAUDE_FIRST,
             purpose: "writing git text",
         },
     }
@@ -99,57 +76,4 @@ pub(crate) fn rank(effort: &str) -> Option<u8> {
         "ultra" => 7,
         _ => return None,
     })
-}
-
-/// The effort to run at: `wanted`, fitted to the levels a model accepts
-/// (the strongest accepted level not above it, else the weakest accepted one; `None`: no
-/// catalog to check against). `None` when nothing is wanted, the level is unknown, or the model
-/// has no effort control. Returns whether the level was lowered.
-pub(crate) fn fit_effort_in(
-    efforts: Option<&[String]>,
-    wanted: Option<&str>,
-) -> (Option<String>, bool) {
-    let Some(wanted) = wanted else {
-        return (None, false);
-    };
-    let Some(wanted_rank) = rank(wanted) else {
-        return (None, false);
-    };
-    let target = wanted_rank;
-    let Some(efforts) = efforts else {
-        return (Some(wanted.to_ascii_lowercase()), false);
-    };
-    if efforts.is_empty() {
-        return (None, false);
-    }
-    let accepted = || {
-        efforts
-            .iter()
-            .filter_map(|effort| rank(effort).map(|rank| (rank, effort)))
-    };
-    let chosen = accepted()
-        .filter(|(rank, _)| *rank <= target)
-        .max_by_key(|(rank, _)| *rank)
-        .or_else(|| accepted().min_by_key(|(rank, _)| *rank));
-    match chosen {
-        Some((rank, effort)) => (Some(effort.clone()), rank < wanted_rank),
-        None => (None, false),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn effort_is_fitted_to_the_cli_without_a_brigadier_ceiling() {
-        let efforts = vec!["high".into(), "xhigh".into(), "max".into()];
-        assert_eq!(
-            fit_effort_in(Some(&efforts), Some("max")),
-            (Some("max".into()), false)
-        );
-        assert_eq!(
-            fit_effort_in(None, Some("ultra")),
-            (Some("ultra".into()), false)
-        );
-    }
 }

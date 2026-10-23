@@ -18,7 +18,8 @@
 //!   quits at once doesn't cut short the others' handling of SIGTERM.
 //! - Its stdout and stderr go to one log file in `<data>/previews/<conversation>`. Reading it
 //!   (`preview_log`) stores a snapshot in the blob store under an `out-<id>` alias, as a long
-//!   command output is (`super::tool_output`), and the final log is stored when it ends.
+//!   command output is (`super::tool_output`), and the final log is stored when it ends; the
+//!   replies name the stored file, which the thread reads with its own tools.
 //!
 //! **Access.** The daemon starts it as a plain process in its own process group, as the
 //! user's terminal would: Brigadier adds no sandbox (G5).
@@ -257,11 +258,13 @@ impl SessionManager {
     /// Who starts a preview for the worker of `task_id`: in its worktree (or scratch folder),
     /// while it runs.
     async fn worker_starter(&self, id: &ConversationId, task_id: &TaskId) -> Result<Starter> {
-        match self.existing_task_live(task_id) {
-            Some(live) => live.tool_access().await,
-            None => None,
+        let running = match self.existing_task_live(task_id) {
+            Some(live) => live.executing().await,
+            None => false,
+        };
+        if !running {
+            return Err(Error::Invalid("the task's worker isn't running".into()));
         }
-        .ok_or_else(|| Error::Invalid("the task's worker isn't running".into()))?;
         let task = self.task_by_id(id, task_id).await?;
         let workspace = task
             .workspace
@@ -611,24 +614,12 @@ impl SessionManager {
         if ended_at_once {
             live.ended.cancelled().await;
             return self
-                .preview_log_for(
-                    id,
-                    Some(&preview_id),
-                    Some(START_TAIL),
-                    None,
-                    task.is_some(),
-                )
+                .preview_log_for(id, Some(&preview_id), Some(START_TAIL), None)
                 .await
                 .map(|log| format!("{preview_id} ended at once.\n{log}"));
         }
         let output = self
-            .preview_log_for(
-                id,
-                Some(&preview_id),
-                Some(START_TAIL),
-                None,
-                task.is_some(),
-            )
+            .preview_log_for(id, Some(&preview_id), Some(START_TAIL), None)
             .await
             .unwrap_or_default();
         let state = if live.ready.is_cancelled() {
@@ -917,17 +908,8 @@ impl SessionManager {
                 "[preview] Your {} \"{}\" {told}; it is not running now.",
                 preview.id, preview.name
             );
-            let rounds = task.rework_rounds;
-            match self.tell_worker(id, task, note, "Brigadier").await {
-                // A note is no rework round.
-                Ok(_) => {
-                    let _ = self
-                        .update_task(id, &task.id, |t| {
-                            t.rework_rounds = t.rework_rounds.min(rounds);
-                        })
-                        .await;
-                    return;
-                }
+            match self.message_worker(id, task, note).await {
+                Ok(()) => return,
                 Err(err) => {
                     tracing::info!(task = %task.id, error = %err, "a worker took no note that its preview ended");
                 }
@@ -1144,7 +1126,7 @@ impl SessionManager {
                 None => return Ok("You have started no preview.".into()),
             },
         };
-        self.preview_log_for(id, Some(&found), tail_lines, wait_secs, true)
+        self.preview_log_for(id, Some(&found), tail_lines, wait_secs)
             .await
     }
 
@@ -1158,19 +1140,18 @@ impl SessionManager {
         tail_lines: Option<u32>,
         wait_secs: Option<u32>,
     ) -> Result<String> {
-        self.preview_log_for(id, preview, tail_lines, wait_secs, false)
+        self.preview_log_for(id, preview, tail_lines, wait_secs)
             .await
     }
 
-    /// [`Self::preview_log`], for a worker when `worker`: it has no `read_artifact`, so its
-    /// reply names no `out-<id>`.
+    /// [`Self::preview_log`], for the thread or a worker: its reply names the file the whole
+    /// log is stored in, which either reads with its own tools.
     async fn preview_log_for(
         &self,
         id: &ConversationId,
         preview: Option<&str>,
         tail_lines: Option<u32>,
         wait_secs: Option<u32>,
-        worker: bool,
     ) -> Result<String> {
         let board = self.core.board(id).await?;
         let mut found = match preview.map(str::trim).filter(|wanted| !wanted.is_empty()) {
@@ -1232,12 +1213,18 @@ impl SessionManager {
             }
         };
         let total_lines = count_lines(&bytes);
-        let reference = match &alias {
-            Some(_) if worker => format!("{total_lines} lines, {} bytes in all", bytes.len()),
-            Some(alias) => format!(
-                "full log: read_artifact {alias}, {total_lines} lines, {} bytes",
+        let file = match &alias {
+            Some(alias) => self.stored_file(id, alias).await,
+            None => None,
+        };
+        let reference = match file {
+            Some(file) => format!(
+                "full log: {file}, {total_lines} lines, {} bytes",
                 bytes.len()
             ),
+            None if alias.is_some() => {
+                format!("{total_lines} lines, {} bytes in all", bytes.len())
+            }
             None => "no output yet".into(),
         };
         let tail = tail(&bytes, lines);
@@ -1524,6 +1511,26 @@ impl SessionManager {
     }
 
     /// Only ended rows go; stored logs may still be referenced by the thread.
+    /// Where the stored output `alias` of conversation `id` is on disk, for the thread or a
+    /// worker to read with its own tools.
+    async fn stored_file(&self, id: &ConversationId, alias: &str) -> Option<String> {
+        let board = self.core.board(id).await.ok()?;
+        self.blob_file(&board.outputs.get(alias)?.blob)
+    }
+
+    /// The file holding stored blob `blob`.
+    fn blob_file(&self, blob: &str) -> Option<String> {
+        let hash = blob.parse().ok()?;
+        Some(
+            self.core
+                .store()
+                .blobs()
+                .file_of(&hash)
+                .display()
+                .to_string(),
+        )
+    }
+
     pub async fn clear_previews(&self, id: ConversationId) -> Result<()> {
         let board = self.core.board(&id).await?;
         let ids = board
@@ -1540,7 +1547,9 @@ impl SessionManager {
                     board.previews[id]
                         .log
                         .as_ref()
-                        .map(|alias| format!("{id}: read_artifact {alias}"))
+                        .and_then(|alias| board.outputs.get(alias))
+                        .and_then(|output| self.blob_file(&output.blob))
+                        .map(|file| format!("{id}: {file}"))
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
@@ -1554,7 +1563,7 @@ impl SessionManager {
                 )
                 .await?;
             if let Ok(conv) = self.conv(&id) {
-                conv.note(format!("[preview] The user cleared {cleared}. Their preview IDs are no longer available; stored logs remain readable through read_artifact. {logs}")).await;
+                conv.note(format!("[preview] The user cleared {cleared}. Their preview IDs are no longer available; their stored logs remain readable: {logs}")).await;
             }
         }
         Ok(())
@@ -1579,25 +1588,22 @@ impl SessionManager {
             return Ok("No preview is running.".into());
         }
         self.remove_stopped_previews(id, &stopped).await?;
-        Ok(stopped
-            .iter()
-            .map(|preview| {
-                // A worker has no read_artifact.
-                let log = preview
-                    .log
-                    .as_ref()
-                    .filter(|_| task.is_none())
-                    .map(|alias| format!(", its log: read_artifact {alias}"))
-                    .unwrap_or_default();
-                format!(
-                    "{} \"{}\": {}; removed from the user's list{log}",
-                    preview.id,
-                    preview.name,
-                    state_words(preview)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"))
+        let mut lines = Vec::new();
+        for preview in &stopped {
+            let log = match &preview.log {
+                Some(alias) => self.stored_file(id, alias).await,
+                None => None,
+            }
+            .map(|file| format!(", its log: {file}"))
+            .unwrap_or_default();
+            lines.push(format!(
+                "{} \"{}\": {}; removed from the user's list{log}",
+                preview.id,
+                preview.name,
+                state_words(preview)
+            ));
+        }
+        Ok(lines.join("\n"))
     }
 
     /// Records removal only after the stop has durably recorded each preview's end.
@@ -1642,13 +1648,12 @@ impl SessionManager {
         let removed = self.remove_stopped_previews(id, &stopped).await;
         if let Ok(conv) = self.conv(id) {
             for preview in stopped {
-                let log = preview
-                    .log
-                    .as_ref()
-                    .map(|alias| {
-                        format!(" Its stored log remains readable: read_artifact {alias}.")
-                    })
-                    .unwrap_or_default();
+                let log = match &preview.log {
+                    Some(alias) => self.stored_file(id, alias).await,
+                    None => None,
+                }
+                .map(|file| format!(" Its stored log remains readable: {file}."))
+                .unwrap_or_default();
                 let outcome = if removed.is_ok() {
                     "was stopped by the user and removed; its ID is no longer available"
                 } else {

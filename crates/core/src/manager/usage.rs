@@ -21,8 +21,6 @@ pub(crate) enum TokenOwner<'a> {
     Task(&'a ConversationId, &'a TaskId),
     /// A Brain job of a project.
     Project(&'a ProjectId),
-    /// Brigadier's own upkeep for no conversation or project (researching a new model).
-    Upkeep,
 }
 
 /// Rollouts written this long before the last look for child threads are looked at again: a
@@ -118,7 +116,7 @@ impl SessionManager {
                 TokenOwner::Task(id, task) => {
                     Some((id.0.clone(), StepKind::Worker, Some(task.0.clone())))
                 }
-                TokenOwner::Project(_) | TokenOwner::Upkeep => None,
+                TokenOwner::Project(_) => None,
             };
             if let Some((conversation, step, task)) = carried {
                 last = store
@@ -190,7 +188,6 @@ impl SessionManager {
             TokenOwner::Project(project) => {
                 (None, Some(project.0.clone()), None, StepKind::Brain, None)
             }
-            TokenOwner::Upkeep => (None, None, None, StepKind::Upkeep, None),
         };
         TurnUsage {
             at_ms,

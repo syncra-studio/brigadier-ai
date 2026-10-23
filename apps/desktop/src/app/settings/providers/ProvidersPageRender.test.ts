@@ -9,14 +9,13 @@ import { renderFixtureLive } from "@/fixtures/headless";
 // busiest limit, a row's switch that doesn't open it, an agent's page (Update when a newer CLI is
 // out, Location's Change keeping only a real binary, every limit with when it resets, the models),
 // emails masked with one revealed until the page or the agent's is left, the old Usage page's link landing on
-// an agent's accounts, Routing found by its old name, and this computer's login added again.
+// an agent's accounts, and this computer's login added again.
 test("Providers lists the agents, and an agent's page has its installation, accounts and models", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "providers.html?drive=1", "providers-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.equal(seen.title, "Providers");
   // The page's column is the one every Settings page has (#259).
   assert.equal(seen.settingsColumn, true);
-  assert.equal(seen.fallback, true);
   assert.deepEqual(seen.agents, [
     { name: "Claude", state: "Ready · 3 accounts · v2.1.0", meter: "Weekly · in use69%" },
     { name: "Codex", state: "Ready · 1 account · v2.1.0", meter: "Weekly · in use69%" },
@@ -67,8 +66,6 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   assert.equal(seen.back, true);
   // Going back to the agents hides a revealed email too.
   assert.deepEqual(seen.afterBack, masked);
-  // Routing's old name finds its page.
-  assert.deepEqual(seen.searched, { type: "settings", page: "routing" });
   // The same account as this computer's login and added here is one row: the added one, saying
   // it is this computer's login, in use when either is (#263).
   assert.deepEqual(seen.twin, [
@@ -183,7 +180,7 @@ test("Providers draws its cards, rows and switches as Settings › General does"
     agent: { cards: unknown[]; switch: unknown };
   };
   assert.ok(seen.general.card, "General has a card");
-  assert.equal(seen.overview.cards.length, 3);
+  assert.equal(seen.overview.cards.length, 2);
   for (const card of [...seen.overview.cards, ...seen.agent.cards]) assert.deepEqual(card, seen.general.card);
   assert.equal(seen.agent.cards.length, 3);
   assert.equal(seen.overview.hover, seen.overview.wash);

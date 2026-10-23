@@ -6,10 +6,7 @@ use brigadier_providers::{
     Access, Artifact, McpServerState, ModelCatalog, ProviderEvent, ProviderKind, ProviderStatus,
     QuotaSnapshot, TextPhase,
 };
-use brigadier_router::{
-    Area, Explanation, Learned, MergedModel, OverrideRule, ProviderQuota, QuotaSample, RankedPlace,
-    Ranking, RegistryInfo, RouteCandidate, TaskCategory,
-};
+use brigadier_router::{MergedModel, OverrideRule, ProviderQuota, QuotaSample, RegistryInfo};
 
 use crate::knowledge::{BrainJob, MemoryChange, RebirthThresholds};
 use crate::work::{
@@ -981,12 +978,12 @@ pub struct Settings {
     /// Approvals and questions waiting for the user raise a desktop notification.
     #[serde(default = "default_true")]
     pub notify_needs_you: bool,
-    /// The user's routing rules, global and per project. They always win over the router's
-    /// scores and quota balancing.
-    pub routing_overrides: Vec<OverrideRule>,
-    /// The user's manual rankings per kind of work (global and per project, with area
-    /// overrides): where one is Manual, routing tries its models top-down instead of scoring.
-    pub routing_rankings: Vec<Ranking>,
+    /// The routing rules saved before Brigadier stopped routing work itself (S16b): read once
+    /// by [`crate::routing::availability::migrate`] for an agent switched off the old way,
+    /// never saved again.
+    #[serde(rename = "routingOverrides", skip_serializing)]
+    #[ts(skip)]
+    pub legacy_routing_overrides: Vec<OverrideRule>,
     /// Agents switched off on the Providers page: their models are hidden from every picker
     /// and get no work, not even in the background. Conversations already running go on.
     pub disabled_providers: Vec<ProviderKind>,
@@ -995,9 +992,8 @@ pub struct Settings {
     pub agent_paths: Vec<AgentPath>,
     /// Models the Providers page makes unavailable: hidden from every picker and never used.
     pub hidden_models: Vec<ModelRef>,
-    /// Every model Brigadier has seen in its agent's list. One seen after its agent's first
-    /// list starts without worker tasks (a "Don't give work" rule, which the user removes in
-    /// Settings → Providers).
+    /// Every model Brigadier has seen in its agent's list: startup doesn't wait for an agent
+    /// whose every known model is made unavailable.
     pub known_models: Vec<ModelRef>,
     /// Older models Brigadier has turned off once, when it first saw them: from then on the
     /// user's switch decides.
@@ -1017,9 +1013,6 @@ pub struct Settings {
     /// starts on its account whose weekly window resets soonest, and work whose account hits
     /// its usage limit carries on with the next such account.
     pub manual_accounts: Vec<ProviderKind>,
-    /// Work moves to another agent when its own can't take it (every account it may use at
-    /// its limit). Off: it waits for the limit to reset.
-    pub switch_providers: bool,
     /// The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
     /// it is detected from the speech.
     pub dictation_language: String,
@@ -1223,8 +1216,7 @@ impl Default for Settings {
             follow_up: FollowUp::default(),
             notify_finished: NotifyFinished::default(),
             notify_needs_you: true,
-            routing_overrides: Vec::new(),
-            routing_rankings: Vec::new(),
+            legacy_routing_overrides: Vec::new(),
             disabled_providers: Vec::new(),
             agent_paths: Vec::new(),
             hidden_models: Vec::new(),
@@ -1233,7 +1225,6 @@ impl Default for Settings {
             accounts: Vec::new(),
             legacy_switch_accounts: true,
             manual_accounts: Vec::new(),
-            switch_providers: true,
             dictation_language: String::new(),
             dictation_words: Vec::new(),
             dictation_microphone: String::new(),
@@ -1323,17 +1314,6 @@ pub enum MachineStepReason {
     #[default]
     Heat,
     Memory,
-}
-
-impl MachineStepReason {
-    /// Heat takes precedence when both limits hold work.
-    pub(crate) fn from_load(load: brigadier_sandbox::MachineLoad) -> Self {
-        if load.heat >= brigadier_sandbox::Heat::Serious {
-            Self::Heat
-        } else {
-            Self::Memory
-        }
-    }
 }
 
 /// A grey thread row about the machine (PLAN.md §10.7): a worker or a build waiting for the
@@ -2023,9 +2003,6 @@ pub struct ProviderUsage {
     pub provider: ProviderKind,
     /// Its accounts: the user's own login first, then the extra ones as added.
     pub accounts: Vec<AccountUsage>,
-    /// What balancing does about it now ("New scouting and research go to Codex while
-    /// Claude's weekly window runs hot").
-    pub balancing: Option<String>,
 }
 
 /// One account on the Usage page: its own windows, read from that account alone.
@@ -2103,65 +2080,9 @@ pub struct UsageView {
     pub providers: Vec<ProviderUsage>,
     /// Newest first; hand-offs from the last 7 days, and everything waiting now.
     pub activity: Vec<RoutingActivity>,
-    /// Every model the CLIs offer, merged with the registry, research and trials.
+    /// Every model the CLIs offer, merged with the registry and research.
     pub models: Vec<MergedModel>,
-    /// What outcomes taught routing in `project_id` (every project when absent).
-    pub learned: Vec<Learned>,
-    pub project_id: Option<ProjectId>,
     pub registry: RegistryInfo,
-}
-
-/// What routing would choose for one category right now, for the next task submitted (the
-/// Routing page and the Inspector's routing preview). Nothing is started and no trial slot is
-/// taken.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct RoutePreview {
-    pub category: TaskCategory,
-    pub areas: Vec<Area>,
-    pub outcome: RoutePreviewOutcome,
-    /// Every model weighed: the chosen one first, then the order routing would try the others
-    /// in, then those that can't take the task now.
-    pub candidates: Vec<RouteCandidate>,
-    /// The ranking that applies here (Manual or Automatic), if the user has one.
-    pub ranking_id: Option<String>,
-    /// The manual ranking in force, place by place; empty when routing scores.
-    pub places: Vec<RankedPlace>,
-    /// The next task of this kind holds a trial slot (a new model may try it).
-    pub trial_slot: bool,
-    /// For a review asked without an author: what it would run on for each vendor's change,
-    /// since a review goes to the other vendor from the author when one can take it.
-    #[serde(default)]
-    pub by_author: Vec<AuthorPreview>,
-}
-
-/// What a review would run on when `author`'s vendor wrote the change.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthorPreview {
-    pub author: ProviderKind,
-    pub outcome: RoutePreviewOutcome,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum RoutePreviewOutcome {
-    Chosen {
-        choice: ModelChoice,
-        reason: String,
-        explanation: Option<Explanation>,
-    },
-    /// Nothing it may use is available: a task would wait.
-    Wait {
-        reason: String,
-        resets_at_ms: Option<i64>,
-        rule: Option<String>,
-        ranking: Option<String>,
-    },
 }
 
 /// A replayable recording.
@@ -2569,7 +2490,7 @@ pub enum DomainEvent {
         status: String,
         /// How long it ran (for a cached result, how long it ran then).
         duration_ms: u64,
-        /// The `out-…` alias of its stored output, which `read_artifact` reads. It is also the
+        /// The `out-…` alias of its stored output. It is also the
         /// check's evidence reference: a report or a claim cites it (BUILD-PLAN E1, E2).
         artifact: Option<String>,
         /// The hash of the check's whole input fingerprint (the tree, the command, its workdir,

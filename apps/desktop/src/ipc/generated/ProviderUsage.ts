@@ -9,9 +9,4 @@ export type ProviderUsage = { provider: ProviderKind,
 /**
  * Its accounts: the user's own login first, then the extra ones as added.
  */
-accounts: Array<AccountUsage>, 
-/**
- * What balancing does about it now ("New scouting and research go to Codex while
- * Claude's weekly window runs hot").
- */
-balancing: string | null, };
+accounts: Array<AccountUsage>, };

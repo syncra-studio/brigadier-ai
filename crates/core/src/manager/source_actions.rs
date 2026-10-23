@@ -439,16 +439,8 @@ impl SessionManager {
     ) -> Result<(String, Option<String>)> {
         self.admit()?;
         let path = self.source_dir(target)?;
-        let project = match target {
-            WorkspaceTarget::Conversation { conversation_id } => {
-                self.core.conversation(conversation_id)?.project_id
-            }
-            WorkspaceTarget::Project { project_id } => Some(project_id.clone()),
-        };
         let patch = self.pending_patch(&path, false).await?;
-        let (message, note) = self
-            .write_commit_message(project.as_ref(), &path, &patch)
-            .await?;
+        let (message, note) = self.write_commit_message(&path, &patch).await?;
         let message = if self.core.settings().omit_ai_coauthors {
             brigadier_git::strip_ai_coauthors(&message)
         } else {

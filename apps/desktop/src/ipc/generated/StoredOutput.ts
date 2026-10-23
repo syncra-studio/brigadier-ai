@@ -3,8 +3,8 @@ import type { OutputSource } from "./OutputSource";
 
 /**
  * A command's output the thread's model got as a digest, kept whole in the blob store
- * (THREAD-PLAN.md Q4). The model reads it with `read_artifact` by its alias, in this
- * conversation only; it goes with the conversation.
+ * (THREAD-PLAN.md Q4). The digest names its alias and the blob's file, which the model reads
+ * with its own tools; it goes with the conversation.
  */
 export type StoredOutput = { 
 /**

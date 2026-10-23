@@ -1,18 +1,17 @@
 //! `app_state` and `read_terminal` (Q90): the window tells its part over an app call, the
-//! daemon's terminals the rest; a long terminal is cut like `run`'s output, with an id
-//! `read_artifact` reads; another session's terminal and a closed window say so plainly.
+//! daemon's terminals the rest; a long terminal is cut like `run`'s output, naming the file the
+//! rest is stored in; another session's terminal and a closed window say so plainly.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use brigadier_providers::TerminalCommand;
-use serde_json::json;
 
 use super::{Flow, Options, Reply, Script};
 use crate::app_call::{AppAnswer, AppOp, OpenPanels, TabView, WindowView};
 use crate::manager::{HostedTerminal, TerminalHost, TerminalSnapshot};
-use crate::tools::{AppToolCall, OrchestratorCall, ReadArtifact, ReadTerminal};
+use crate::tools::{AppToolCall, ReadTerminal};
 
 fn quiet() -> Script {
     Arc::new(|_| Box::pin(async { Reply::text("") }))
@@ -306,28 +305,6 @@ async fn read_terminal_reads_plain_text_and_cuts_a_long_one_like_run() {
     assert!(!long.is_error, "{}", long.text);
     assert!(long.text.len() < 8 * 1024, "{} bytes", long.text.len());
     assert!(long.text.contains("line 1999"), "{}", long.text);
-    let id = long
-        .text
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-'))
-        .find(|word| word.starts_with("out-"))
-        .unwrap_or_else(|| panic!("no read_artifact id in {}", long.text))
-        .to_owned();
-    let rest = flow
-        .manager
-        .orchestrator_call(
-            flow.conversation.clone(),
-            OrchestratorCall::ReadArtifact(
-                serde_json::from_value::<ReadArtifact>(json!({ "id": id })).unwrap(),
-            ),
-        )
-        .await;
-    assert!(!rest.is_error, "{}", rest.text);
-    assert!(
-        rest.text.contains("line 0\n"),
-        "{}",
-        &rest.text[..400.min(rest.text.len())]
-    );
-    assert!(!rest.text.contains('\u{1b}'));
 
     let other = read("terminal-9").await;
     assert!(other.is_error);

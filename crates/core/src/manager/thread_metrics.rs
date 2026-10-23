@@ -833,62 +833,6 @@ mod tests {
         );
     }
 
-    /// Brigadier quit mid-turn and the user pressed Continue a day later: the Inspector's times
-    /// leave out the time it was closed (#197).
-    #[test]
-    fn a_requests_times_leave_out_the_time_brigadier_was_closed() {
-        use crate::work::{OrchestratorStep, TaskId};
-        let mut request: UserRequest = serde_json::from_value(serde_json::json!({
-            "id": "r1",
-            "conversationId": "c",
-            "preview": "Fix the login",
-            "state": { "type": "working" },
-            "startedAtMs": 1_000,
-            "endedAtMs": null,
-        }))
-        .expect("a request");
-        const DAY: i64 = 86_400_000;
-        // Last recorded at 11 s, marked interrupted on the next start, continued a day later.
-        let interrupted = RequestState::Failed {
-            error: super::super::conversation::INTERRUPTED_BY_QUIT.into(),
-        };
-        request.moved_to(interrupted, false, false, 11_000);
-        request.moved_to(RequestState::Working, false, false, 11_000 + DAY);
-        request.moved_to(RequestState::Done, false, false, 31_000 + DAY);
-        assert_eq!(
-            request.closed,
-            [crate::work::WorkSpan {
-                from_ms: 11_000,
-                to_ms: Some(11_000 + DAY)
-            }]
-        );
-        let mut board = Board::default();
-        board.requests.insert("r1".into(), request);
-        board.orchestrator_steps = vec![OrchestratorStep {
-            request_id: Some("r1".into()),
-            kind: OrchestratorStepKind::Landed {
-                task_ids: vec![TaskId("t1".into())],
-                commits: 1,
-                branch: "main".into(),
-                head: "abc".into(),
-            },
-            at_ms: 25_000 + DAY,
-            position: 0,
-        }];
-        let mut first = row(Some("r1"), None, 10, 100);
-        first.at_ms = 4_000;
-        first.step = Some(StepKind::Thread);
-        let mut review = row(Some("r1"), None, 5, 0);
-        review.at_ms = 41_000 + DAY;
-        review.step = Some(StepKind::Review);
-        let summary = &request_summaries(&[first, review], &board)[0];
-        assert_eq!(summary.first_event_ms, Some(3_000));
-        assert_eq!(summary.landed_ms, Some(24_000));
-        assert_eq!(summary.answer_ms, Some(30_000));
-        assert_eq!(summary.settled_ms, Some(40_000));
-        assert_eq!(summary.ended, None);
-    }
-
     /// One Claude session's stream through the parser and the meter (BUILD-PLAN B0): each
     /// call's usage as `message_start` carries it, then the turn's result. Returns the row.
     fn replayed(

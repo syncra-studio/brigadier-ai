@@ -7,7 +7,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use brigadier_providers::ProviderKind;
-use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{
@@ -23,33 +22,20 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-/// A thread that delegates one implement task when asked to add a greeting, and a worker that
-/// writes hello.txt and reports.
+/// A thread that starts one worker when asked to add a greeting, and a worker that writes
+/// hello.txt.
 fn delegating() -> Script {
     script(|turn| async move {
-        if turn.is_orchestrator() {
-            if turn.input.contains("Please add a greeting") {
-                let reply = turn
-                    .call(
-                        "delegate_task",
-                        json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
-                               "spec": "Create hello.txt."}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("");
-            }
-            return Reply::text("Done.");
+        if turn.worker().is_some() {
+            turn.write("hello.txt", "hello\n");
+            return Reply::text("Added hello.txt.");
         }
-        turn.write("hello.txt", "hello\n");
-        let reply = turn
-            .call(
-                "submit_report",
-                json!({"summary": "Added hello.txt.", "changes": ["hello.txt"]}),
-            )
-            .await;
-        assert!(!reply.is_error, "{}", reply.text);
-        Reply::text("Reported.")
+        if turn.input.contains("Please add a greeting") {
+            turn.start_worker("Add a greeting", "Create hello.txt.")
+                .await;
+            return Reply::text("");
+        }
+        Reply::text("Done.")
     })
 }
 

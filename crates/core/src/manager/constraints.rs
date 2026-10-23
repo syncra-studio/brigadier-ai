@@ -26,8 +26,6 @@ use crate::{Error, Result, now_ms};
 
 /// A constraint's words carried in a brief, at most.
 pub(crate) const WORDS_MAX: usize = 4_000;
-/// The heading of a worker brief's constraints section.
-pub(crate) const BRIEF_HEADING: &str = "## The user's standing constraints";
 /// The heading of a rebirth briefing's constraints section.
 pub(crate) const REBIRTH_HEADING: &str =
     "[The user's standing constraints, in their own words: each holds until the user changes it]";
@@ -187,22 +185,6 @@ pub(crate) fn briefing_text(constraints: &[Constraint]) -> String {
     text
 }
 
-/// A worker brief's constraints section; `None` without any.
-pub(crate) fn brief_text(constraints: &[Constraint]) -> Option<String> {
-    if constraints.is_empty() {
-        return None;
-    }
-    let mut text = format!(
-        "{BRIEF_HEADING}\n\nThe user's own words, exactly as they set them. Follow every one; an exception the user gave is listed as its own constraint. If your task can't be done within one, stop and say so in your report instead of working around it.\n\n"
-    );
-    for constraint in constraints {
-        text.push_str(&line(constraint));
-        text.push('\n');
-    }
-    text.truncate(text.trim_end().len());
-    Some(text)
-}
-
 impl SessionManager {
     /// `remember` with kind `constraint`: the user's words from the message `user_message`
     /// names (the whole message, or the exact span `quote` matches), kept verbatim with its
@@ -297,19 +279,6 @@ impl SessionManager {
                 .map(|old| format!("; it replaces {old}"))
                 .unwrap_or_default()
         ))
-    }
-
-    /// `text`, a worker's first message, with the constraints in force for `conversation`
-    /// before it (a hand-off's and a reroute's successor get them as a new worker does).
-    pub(crate) async fn with_constraints(
-        &self,
-        conversation: &ConversationId,
-        text: String,
-    ) -> String {
-        match brief_text(&self.active_constraints(conversation).await) {
-            Some(section) => format!("{section}\n\n{text}"),
-            None => text,
-        }
     }
 
     /// Every constraint in force for `id`: the project's, the session's, and those of its
@@ -441,36 +410,5 @@ mod tests {
             key(ConstraintScope::Session, &conversation, "r", 3, "b")
         );
         assert_eq!(parse_key("decision:x"), None);
-    }
-
-    #[test]
-    fn briefs_carry_every_constraint_verbatim_and_name_a_cut() {
-        let short = Constraint {
-            id: "n1".into(),
-            scope: ConstraintScope::Session,
-            seq: 4,
-            words: "Never edit src/money.ts.\nExcept its tests.".into(),
-            replaces: None,
-        };
-        let long = Constraint {
-            id: "n2".into(),
-            scope: ConstraintScope::Project,
-            seq: 7,
-            words: "x".repeat(WORDS_MAX + 10),
-            replaces: Some("n0".into()),
-        };
-        let brief = brief_text(&[short.clone(), long.clone()]).unwrap();
-        assert!(brief.starts_with(BRIEF_HEADING));
-        assert!(brief.contains("- n1 (for this session; the user's message #4):\n  \"Never edit src/money.ts.\n  Except its tests.\""), "{brief}");
-        assert!(brief.contains(
-            "- n2 (for every session of this project; the user's message #7, replaces n0)"
-        ));
-        assert!(brief.contains(&format!(
-            "[cut here: message #7, bytes {WORDS_MAX}–{} not shown; query_brain n2 gives it whole]",
-            WORDS_MAX + 10
-        )));
-        assert!(briefing_text(&[short]).starts_with(REBIRTH_HEADING));
-        assert_eq!(briefing_text(&[]), "");
-        assert_eq!(brief_text(&[]), None);
     }
 }

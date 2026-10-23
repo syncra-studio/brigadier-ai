@@ -233,23 +233,15 @@ test("a worker open in the user's terminal waits on the user", () => {
     { text: "Working in your terminal", tone: "needsYou" });
 });
 
-test("a turn resting on other sessions' replies says whom it waits for", () => {
-  assert.deepEqual(head(input({}, { state: "waiting", waitingFor: ["Docs"] })), { text: "Waiting for Docs to reply", tone: "still" });
-  assert.deepEqual(head(input({}, { state: "waiting", waitingFor: ["Docs", "Release notes"] })), {
-    text: "Waiting for Docs and Release notes to reply", tone: "still",
-  });
-});
-
 test("an answered request's line shows once it waits or a late result reopened it", () => {
   // Still in the same working span: neither waiting nor reopened.
-  const span = { waitingFor: [], waiting: false, reopened: false };
+  const span = { waiting: false, reopened: false };
   // What the thread merely does between its turns shows only once it waits or a late result reopened it.
   assert.equal(answeredHead({ text: "Thinking", tone: "busy" }, span), null);
   assert.deepEqual(answeredHead({ text: "Thinking", tone: "busy" }, { ...span, reopened: true }), { text: "Thinking", tone: "busy" });
-  // The user first, then the sessions it waits on.
-  assert.deepEqual(answeredHead({ text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" }, { ...span, waitingFor: ["Docs"] }),
+  // What waits on the user shows whatever else.
+  assert.deepEqual(answeredHead({ text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" }, span),
     { text: "Awaiting approval", tone: "needsYou", waitsOn: "approval" });
-  assert.deepEqual(answeredHead({ text: "Thinking", tone: "busy" }, { ...span, waitingFor: ["Docs"] }), { text: "Waiting for Docs to reply", tone: "still" });
 });
 
 test("a run's elapsed time is short", () => {

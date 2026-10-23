@@ -35,7 +35,6 @@ import { useUsage, useUsageRefresh } from "@/state/usage";
 
 /** The page's rows, for Settings search; its parts render this copy. */
 export const PROVIDERS_ROWS = {
-  switch: OVERVIEW_ROWS.switch,
   agents: {
     label: "Agents",
     description: "The coding agents Brigadier runs: how each stands, the busiest limit in use, and its switch",

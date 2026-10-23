@@ -88,19 +88,7 @@ pub(crate) struct PeerRecord {
     pub(crate) hold: Option<ReplyHold>,
 }
 
-impl PeerRecord {
-    /// A message this session sent asking for a reply, still on its way or being worked on:
-    /// its request waits for the reply (one waiting for the user's OK waits on its card).
-    pub(crate) fn awaits_reply(&self) -> bool {
-        self.outgoing
-            && self.reply_to.is_none()
-            && !self.settled
-            && matches!(
-                self.state,
-                PeerState::Pending | PeerState::Delivered | PeerState::Seen
-            )
-    }
-}
+impl PeerRecord {}
 
 /// What the thread is known to have written, without its commits' trailer saying so.
 #[derive(Debug, Clone, PartialEq)]
@@ -200,23 +188,6 @@ pub(crate) struct Board {
 }
 
 impl Board {
-    /// The sessions request `request` waits for a reply from, oldest message first.
-    pub(crate) fn awaited_peers(&self, request: &str) -> Vec<ConversationId> {
-        let mut awaited: Vec<&PeerRecord> = self
-            .peer_messages
-            .values()
-            .filter(|record| record.request_id.as_deref() == Some(request) && record.awaits_reply())
-            .collect();
-        awaited.sort_by_key(|record| record.position);
-        let mut peers: Vec<ConversationId> = Vec::new();
-        for record in awaited {
-            if !peers.contains(&record.peer) {
-                peers.push(record.peer.clone());
-            }
-        }
-        peers
-    }
-
     /// The conversation's activity, or `None` when nothing of it runs or waits for the user,
     /// with `turn`, where its CLI's turn stands ([`activity_of`]).
     pub(crate) fn activity(
@@ -268,28 +239,6 @@ impl Board {
             },
             turn.last_end,
         )
-    }
-
-    /// Where the session stands (WORKSPACES-PLAN.md "States"): needs you (a permission prompt,
-    /// plan, question or MCP sign-in open, or its last turn failed), working (its CLI's turn is
-    /// open or starting, or `quota_wait`: its messages wait for a limit to reset), ready (idle
-    /// with commits its base lacks), merged (a merge of its work, recorded or seen in git, and
-    /// nothing newer unmerged), reverted (that merge reverted on the base since, `reverted`),
-    /// or none (untouched, or idle with nothing to merge).
-    ///
-    /// `ahead` is its branch's commits not in base now, from git; without it the records
-    /// decide: a request that settled ready after the last merge is ready.
-    pub(crate) fn tab_state(
-        &self,
-        id: &ConversationId,
-        turn: CliTurn,
-        quota_wait: bool,
-        ahead: Option<u32>,
-        reverted: bool,
-    ) -> Option<TabState> {
-        state_of(self.activity(id, turn).as_ref(), quota_wait, || {
-            self.settled_state(ahead, reverted)
-        })
     }
 
     /// The session's state with nothing running or waiting: ready, merged, reverted or none,
@@ -1245,33 +1194,7 @@ pub(crate) fn sign_ins(servers: &[McpServerState]) -> Vec<String> {
         .collect()
 }
 
-/// [`Board::tab_state`] from its activity: the first that holds wins, as the app's `tabState`
-/// decides it too (both read `sidebar_states.json`'s cases in their tests).
-pub(crate) fn state_of(
-    activity: Option<&ConversationActivity>,
-    quota_wait: bool,
-    settled: impl FnOnce() -> Option<TabState>,
-) -> Option<TabState> {
-    if let Some(activity) = activity {
-        // A run a usage limit stopped waits for the reset rather than for the user.
-        if !activity.approvals.is_empty()
-            || !activity.questions.is_empty()
-            || !activity.sign_ins.is_empty()
-            || (activity.failed && !quota_wait)
-        {
-            return Some(TabState::NeedsYou);
-        }
-        if activity.turn_open || activity.run == RunState::Starting {
-            return Some(TabState::Working);
-        }
-    }
-    if quota_wait {
-        return Some(TabState::Working);
-    }
-    settled()
-}
-
-/// The sidebar's states table both the engine and the app follow, case by case.
+/// The sidebar's states table the app follows: the engine marks its failures and stops.
 #[cfg(test)]
 mod shared_states_tests {
     use super::*;
@@ -1299,16 +1222,13 @@ mod shared_states_tests {
         questions: Vec<CardId>,
         #[serde(default)]
         servers: Vec<Server>,
-        #[serde(default)]
-        quota_wait: bool,
-        settled: Option<TabState>,
-        expect: Option<TabState>,
         /// The app's words for it: a tab state, or "failed" or "stopped".
         status: Option<String>,
     }
 
+    /// The app names a failure or a stop where the engine marks it.
     #[test]
-    fn the_engine_reads_each_shared_case_as_the_app_does() {
+    fn the_engine_marks_each_shared_case_as_the_app_does() {
         let cases: Vec<Case> = serde_json::from_str(include_str!("sidebar_states.json")).unwrap();
         assert!(cases.len() >= 20);
         for case in cases {
@@ -1337,13 +1257,6 @@ mod shared_states_tests {
                 },
                 case.turn.last_end,
             );
-            assert_eq!(
-                state_of(activity.as_ref(), case.quota_wait, || case.settled),
-                case.expect,
-                "{}",
-                case.name
-            );
-            // The app names a failure or a stop where the engine marks it.
             let marked = |word: &str| case.status.as_deref() == Some(word);
             if marked("failed") {
                 assert!(activity.as_ref().is_some_and(|a| a.failed), "{}", case.name);
@@ -1363,15 +1276,10 @@ mod shared_states_tests {
 mod tab_state_tests {
     use super::*;
     use crate::work::TaskState;
-    use crate::work::{Question, QuestionKind};
 
     /// No turn of the CLI open, and none ended.
     const IDLE: CliTurn = CliTurn {
         open: false,
-        last_end: None,
-    };
-    const OPEN: CliTurn = CliTurn {
-        open: true,
         last_end: None,
     };
 
@@ -1383,29 +1291,12 @@ mod tab_state_tests {
         serde_json::from_value(json).unwrap()
     }
 
-    fn run(state: &str) -> DomainEvent {
-        event(serde_json::json!({
-            "type": "runStateChanged", "conversationId": "tab", "state": state,
-            "error": null, "requestId": "r1",
-        }))
-    }
-
     fn ready(request: &str) -> DomainEvent {
         DomainEvent::RequestReady {
             conversation_id: id(),
             request_id: request.into(),
             head: "abc123".into(),
         }
-    }
-
-    fn merged() -> DomainEvent {
-        event(serde_json::json!({
-            "type": "orchestratorStepped",
-            "step": {
-                "requestId": "r2", "atMs": 0, "position": 0,
-                "kind": { "type": "merged", "branch": "brigadier/tab/session", "base": "main", "commits": 1 },
-            },
-        }))
     }
 
     /// A last turn the user stopped marks the session stopped, through a reconnect (the board
@@ -1466,110 +1357,6 @@ mod tab_state_tests {
         assert!(board.activity(&tab, IDLE).is_none());
     }
 
-    /// Each row of the states table, first match winning: a new tab has none (not Merged); an
-    /// open question needs the user, over an open turn; a quota wait or an open turn works,
-    /// a CI watch alone doesn't; a request that settled ahead of base is ready; a merge after
-    /// it is merged, until a later request settles ahead again; idle with nothing to merge is
-    /// none.
-    #[test]
-    fn a_tab_states_from_needs_you_down_to_none() {
-        let tab = id();
-        let mut board = Board::default();
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            None,
-            "an untouched tab"
-        );
-        assert_eq!(
-            board.tab_state(&tab, IDLE, true, None, false),
-            Some(TabState::Working),
-            "its messages wait for a limit to reset"
-        );
-
-        board.apply(&run("running"), 1);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            None,
-            "a run with no turn open"
-        );
-        assert_eq!(
-            board.tab_state(&tab, OPEN, false, None, false),
-            Some(TabState::Working)
-        );
-        board.questions.insert(
-            CardId("q1".into()),
-            Question {
-                id: CardId("q1".into()),
-                conversation_id: tab.clone(),
-                task_id: None,
-                request_id: Some("r1".into()),
-                position: 2,
-                kind: QuestionKind::Orchestrator,
-                text: "Which colour?".into(),
-                options: Vec::new(),
-                recommended: None,
-                items: Vec::new(),
-                answer: None,
-                answers: Vec::new(),
-                title: None,
-                created_at_ms: 0,
-                answered_at_ms: None,
-                words_id: None,
-                answered_by: None,
-            },
-        );
-        assert_eq!(
-            board.tab_state(&tab, OPEN, false, None, false),
-            Some(TabState::NeedsYou)
-        );
-        board.questions.clear();
-        board.apply(&run("idle"), 3);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            None,
-            "idle, nothing ahead"
-        );
-
-        // A CI watch alone is no work.
-        board.apply(
-            &event(serde_json::json!({
-                "type": "orchestratorStepped",
-                "step": {
-                    "requestId": "r1", "atMs": 0, "position": 0,
-                    "kind": {
-                        "type": "ciWatch", "repo": "o/n", "branch": "main", "sha": "97c298d5",
-                        "waiting": false, "runs": [], "result": null, "consent": null,
-                    },
-                },
-            })),
-            4,
-        );
-        assert_eq!(board.tab_state(&tab, IDLE, false, None, false), None);
-        board.orchestrator_steps.clear();
-
-        board.apply(&ready("r1"), 5);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            Some(TabState::Ready)
-        );
-        board.apply(&merged(), 6);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            Some(TabState::Merged)
-        );
-        board.apply(&ready("r3"), 7);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            Some(TabState::Ready),
-            "newer work"
-        );
-        board.apply(&merged(), 8);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            Some(TabState::Merged)
-        );
-    }
-
     fn merged_at(position: i64, commit: &str) -> DomainEvent {
         event(serde_json::json!({
             "type": "orchestratorStepped",
@@ -1581,86 +1368,6 @@ mod tab_state_tests {
                 },
             },
         }))
-    }
-
-    /// A failed run (the CLI did not take the turn) needs the user, in the activity snapshot
-    /// too (so a reconnect keeps it), until the next run starts; so does a last turn that
-    /// failed, until the next turn opens; a limit's wait over a failed run is work, not the
-    /// user's.
-    #[test]
-    fn a_failed_run_needs_the_user_until_the_next_one_starts() {
-        let tab = id();
-        let mut board = Board::default();
-        board.apply(&run("failed"), 1);
-        let activity = board
-            .activity(&tab, IDLE)
-            .expect("a failed run is in the snapshot");
-        assert!(activity.failed);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            Some(TabState::NeedsYou)
-        );
-        assert_eq!(
-            board.tab_state(&tab, IDLE, true, None, false),
-            Some(TabState::Working),
-            "the limit's wait wins"
-        );
-        board.apply(&run("starting"), 2);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, None, false),
-            Some(TabState::Working)
-        );
-        board.apply(&run("idle"), 3);
-        assert!(board.activity(&tab, IDLE).is_none(), "it cleared");
-        let failed = CliTurn {
-            open: false,
-            last_end: Some(TurnEnd::Failed),
-        };
-        assert_eq!(
-            board.tab_state(&tab, failed, false, None, false),
-            Some(TabState::NeedsYou)
-        );
-        assert_eq!(
-            board.tab_state(
-                &tab,
-                CliTurn {
-                    open: true,
-                    ..failed
-                },
-                false,
-                None,
-                false
-            ),
-            Some(TabState::Working)
-        );
-    }
-
-    /// A reverted latest merge reads reverted, and newer work ready again.
-    #[test]
-    fn a_reverted_merge() {
-        let tab = id();
-        let mut board = Board::default();
-        board.apply(&merged_at(4, "m1"), 4);
-        assert_eq!(board.latest_merge(), Some(("m1".to_owned(), 2)));
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(0), false),
-            Some(TabState::Merged)
-        );
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(0), true),
-            Some(TabState::Reverted)
-        );
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(1), true),
-            Some(TabState::Ready),
-            "newer work"
-        );
-        board.apply(&merged_at(9, "m2"), 9);
-        assert_eq!(
-            board.latest_merge(),
-            Some(("m2".to_owned(), 2)),
-            "the latest merge"
-        );
     }
 
     /// Proof counts from the last merge on; a pull request seen is kept until seen otherwise.
@@ -1712,55 +1419,6 @@ mod tab_state_tests {
         board.apply(&seen(None), 5);
         assert_eq!(board.pull_request, None);
         assert!(KINDS.contains(&seen(None).kind()));
-    }
-
-    /// A merge with no recorded ready request (merged right away) still reads merged.
-    #[test]
-    fn a_merge_alone_reads_merged() {
-        let mut board = Board::default();
-        board.apply(&merged(), 1);
-        assert_eq!(
-            board.tab_state(&id(), IDLE, false, None, false),
-            Some(TabState::Merged)
-        );
-    }
-
-    /// With git's count: commits ahead read ready whatever the records say (a late request
-    /// after a merge), none ahead read merged once the work was merged or was ever ready (a
-    /// merge from the Source panel or a terminal records no step), and an untouched tab none.
-    #[test]
-    fn the_branchs_count_now_decides_ready_and_merged() {
-        let tab = id();
-        let mut board = Board::default();
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(0), false),
-            None,
-            "untouched"
-        );
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(2), false),
-            Some(TabState::Ready)
-        );
-        board.apply(&ready("r1"), 1);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(0), false),
-            Some(TabState::Merged),
-            "merged elsewhere"
-        );
-        board.apply(&merged(), 2);
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(1), false),
-            Some(TabState::Ready),
-            "newer commits"
-        );
-        assert_eq!(
-            board.tab_state(&tab, IDLE, false, Some(0), false),
-            Some(TabState::Merged)
-        );
-        assert_eq!(
-            board.tab_state(&tab, OPEN, false, Some(1), false),
-            Some(TabState::Working)
-        );
     }
 
     /// One ready record per request: the board keeps each request's head.

@@ -195,8 +195,13 @@ impl SessionManager {
             Ok(items) => items,
             Err(err) => return Ok(usage(err.to_string())),
         };
+        // Held before the card opens: an answer as quick as the card reaches this ask, never
+        // the thread.
+        let id = CardId::generate();
+        let _hold = self.cli_asks.hold(id.clone());
         let (card, answered) = self
             .open_round(
+                id,
                 &caller.conversation_id,
                 None,
                 QuestionKind::Orchestrator,
@@ -204,7 +209,6 @@ impl SessionManager {
                 ask.title,
             )
             .await?;
-        let _hold = self.cli_asks.hold(card.id.clone());
         match answered.await {
             Ok(CardAnswer::Answered) => {}
             _ => {

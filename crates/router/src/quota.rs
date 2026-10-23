@@ -1,5 +1,5 @@
-//! The quota monitor's view of each provider, as routing reads it: every usage window with a
-//! rolling estimate of where it ends up, and how hot the provider runs.
+//! The quota monitor's view of each provider: every usage window with a rolling estimate of
+//! where it ends up, and how hot the provider runs.
 //!
 //! The daemon's quota monitor builds these from the CLIs' own reports (Claude's `get_usage`
 //! and `rate_limit_event`, Codex's `account/rateLimits/*`) and its sample history.
@@ -64,6 +64,16 @@ pub struct ProviderQuota {
     /// that model).
     pub heat: Heat,
     pub observed_at_ms: Option<i64>,
+}
+
+/// A provider as the app sees it now: logged in or not, and its quota.
+#[derive(Debug, Clone)]
+pub struct ProviderState {
+    pub provider: ProviderKind,
+    /// Installed and logged in.
+    pub logged_in: bool,
+    /// The quota monitor's view; `None` before the first read.
+    pub quota: Option<ProviderQuota>,
 }
 
 /// One sample of a window's use, for the Usage page's charts.

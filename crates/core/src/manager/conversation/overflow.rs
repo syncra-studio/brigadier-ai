@@ -315,8 +315,22 @@ impl SessionManager {
     /// The thread's workspace's last commit, in a line.
     async fn thread_last_commit(&self, id: &ConversationId) -> Option<String> {
         let workspace = self.effective_workspace(id).await.ok()??;
-        self.last_commit(std::path::PathBuf::from(&workspace.path))
-            .await
+        let (git, path) = (self.git.clone(), std::path::PathBuf::from(&workspace.path));
+        crate::manager::blocking(move || {
+            let worktree = git
+                .open_worktree(&path)
+                .map_err(crate::manager::git_error)?;
+            let head = worktree.head().map_err(crate::manager::git_error)?;
+            let repo = git.open(&path).map_err(crate::manager::git_error)?;
+            let log = repo.log(&head, 1).map_err(crate::manager::git_error)?;
+            Ok(log.first().map(|commit| {
+                let hash = &commit.commit.0;
+                format!("{} {}", &hash[..12.min(hash.len())], commit.subject)
+            }))
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// After a restart: a thread whose turn was stopped for a rebirth that never happened

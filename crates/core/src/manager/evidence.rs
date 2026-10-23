@@ -164,55 +164,6 @@ pub(crate) fn lines_cite(cite: &str) -> Option<(String, usize, usize)> {
     Some((path.to_owned(), from, to))
 }
 
-/// What follows a "done when" line's [met] status, when it has one.
-pub(crate) fn met(line: &str) -> Option<&str> {
-    let line = line
-        .trim_start()
-        .trim_start_matches(['-', '*'])
-        .trim_start();
-    let head = line.get(..5)?;
-    head.eq_ignore_ascii_case("[met]").then(|| &line[5..])
-}
-
-/// The `out-…` ids a text names.
-pub(crate) fn output_ids(text: &str) -> Vec<String> {
-    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-        .filter_map(output_alias)
-        .map(str::to_owned)
-        .collect()
-}
-
-/// The `path:lines` cites of a text, each with the backticked words right after it.
-pub(crate) fn quoted_lines(text: &str) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    let mut at = 0;
-    while at < text.len() {
-        let rest = &text[at..];
-        let Some(start) = rest.find(|c: char| !c.is_whitespace()) else {
-            break;
-        };
-        let word_at = at + start;
-        let len = text[word_at..]
-            .find(char::is_whitespace)
-            .unwrap_or(text.len() - word_at);
-        let word = &text[word_at..word_at + len];
-        at = word_at + len;
-        let cite = word.trim_matches(|c: char| "`()[],;".contains(c));
-        if lines_cite(cite).is_none() {
-            continue;
-        }
-        if let Some(quote) = text[at..]
-            .trim_start()
-            .strip_prefix('`')
-            .and_then(|rest| rest.split_once('`'))
-            .map(|(quote, _)| quote.to_owned())
-        {
-            found.push((cite.to_owned(), quote));
-        }
-    }
-    found
-}
-
 /// A line of a worker's report without its `[evidence: …]` tags, and what they cite with
 /// their words.
 pub(crate) fn evidence_tags(line: &str) -> (String, Vec<(String, String)>) {
@@ -273,57 +224,6 @@ impl SessionManager {
             roots,
             blobs: Arc::new(move |hash| blobs.get_blocking(hash).ok().flatten()),
         }
-    }
-
-    /// The "done when" lines of `task`'s report marked [met] that name no evidence (BUILD-PLAN
-    /// E2): a check's `out-…` id this session stored, or lines of a file in the worker's
-    /// checkout with the exact words they show (`path:12-14 `words``). A verifier of an
-    /// overnight phase also names every criterion of its phase by its id.
-    pub(crate) async fn unevidenced_met(
-        &self,
-        task: &crate::work::Task,
-        lines: &[String],
-    ) -> Vec<String> {
-        let board = self.core.board(&task.conversation_id).await.ok();
-        let worktree = task
-            .workspace
-            .as_ref()
-            .and_then(|workspace| workspace.worktree.clone())
-            .map(PathBuf::from);
-        let reader = self.sources_for(&task.conversation_id, worktree.as_deref());
-        let mut missing = Vec::new();
-        for line in lines {
-            let Some(rest) = met(line) else {
-                continue;
-            };
-            let outputs = output_ids(rest);
-            let stored = outputs.iter().any(|alias| {
-                board
-                    .as_ref()
-                    .is_some_and(|board| board.outputs.contains_key(alias.as_str()))
-            });
-            let read = !stored && {
-                let cited = quoted_lines(rest);
-                let reader = reader.clone();
-                super::blocking(move || {
-                    Ok(cited.iter().any(|(cite, quote)| {
-                        reader
-                            .check(&Source {
-                                cite: cite.clone(),
-                                quote: quote.clone(),
-                                blob: None,
-                            })
-                            .is_some_and(|checked| checked.holds)
-                    }))
-                })
-                .await
-                .unwrap_or(false)
-            };
-            if !stored && !read {
-                missing.push(line.clone());
-            }
-        }
-        missing
     }
 
     /// `nodes` with each claim's sources re-read for a use in conversation `id`.
@@ -412,25 +312,6 @@ mod tests {
         assert_eq!(lines_cite("src/a.rs:0"), None);
         assert_eq!(output_alias("check out-1a2b3c4d"), Some("out-1a2b3c4d"));
         assert_eq!(output_alias("run-3"), None);
-    }
-
-    #[test]
-    fn a_met_line_names_its_evidence() {
-        assert_eq!(
-            met("[met] tests pass: out-1a2b3c4d"),
-            Some(" tests pass: out-1a2b3c4d")
-        );
-        assert_eq!(met("- [MET] x"), Some(" x"));
-        assert_eq!(met("[not met] x"), None);
-        assert_eq!(
-            output_ids("passes (out-1a2b3c4d, out-99)"),
-            ["out-1a2b3c4d", "out-99"]
-        );
-        assert_eq!(
-            quoted_lines("the docs say so: README.md:3 `Retries stop` and more"),
-            [("README.md:3".to_owned(), "Retries stop".to_owned())]
-        );
-        assert!(quoted_lines("README.md:3 says so").is_empty());
     }
 
     #[test]

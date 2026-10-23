@@ -8,7 +8,7 @@ use serde_json::json;
 
 use brigadier_providers::{ItemStatus, ProviderEvent};
 
-use super::{Flow, Options, Reply, Script, Turn, git};
+use super::{Flow, Options, Reply, Script, Turn};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -225,79 +225,5 @@ async fn two_sessions_heavy_commands_run_at_once_without_a_lease_row() {
         assert!(!leased, "a machine row in {id:?}");
     }
     assert_eq!(std::fs::read_dir(&rendezvous).unwrap().count(), 2);
-    flow.stop().await;
-}
-
-/// Brigadier starts no review, no checks and no fix by itself: not for a turn in which the
-/// thread commits 240 lines of code over 6 files, nor for a worker's landing. Only the agents
-/// start them (their own shell, delegate_task).
-#[tokio::test]
-async fn a_big_commit_and_a_landing_start_no_review_check_or_fix() {
-    let flow = Flow::start(
-        "no-auto-pipeline",
-        Options::default(),
-        script(|turn| async move {
-            if !turn.is_orchestrator() {
-                turn.write("feature.rs", "pub fn feature() {}\n");
-                turn.git(&["add", "feature.rs"]);
-                turn.git(&["commit", "-qm", "Add the feature"]);
-                let reply = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "Added feature.rs.", "changes": ["feature.rs"]}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("Reported.");
-            }
-            if turn.input.contains("[report task-1 ") {
-                let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
-                assert!(reply.text.starts_with("Landed "), "{}", reply.text);
-                return Reply::text("Built the modules and the feature.");
-            }
-            if turn.input.starts_with("Build the modules") {
-                let workspace = &turn.cwd;
-                for module in ["a", "b", "c", "d", "e", "f"] {
-                    let text: String = (1..=40)
-                        .map(|n| format!("pub fn {module}_{n}() {{}}\n"))
-                        .collect();
-                    std::fs::write(workspace.join(format!("{module}.rs")), text).unwrap();
-                }
-                git(workspace, &["add", "-A"]);
-                git(
-                    workspace,
-                    &[
-                        "commit",
-                        "-qm",
-                        "Add six modules\n\nBrigadier-Author: thread",
-                    ],
-                );
-                let reply = turn
-                    .call(
-                        "delegate_task",
-                        json!({"effort": "low", "title": "Add the feature", "kind": "implement",
-                               "spec": "Add feature.rs with an empty `feature` function."}),
-                    )
-                    .await;
-                assert!(!reply.is_error, "{}", reply.text);
-                return Reply::text("");
-            }
-            Reply::text("Noted.")
-        }),
-    )
-    .await;
-    flow.say("Build the modules and the feature.").await;
-    flow.until("the landing", |board| {
-        board
-            .tasks
-            .values()
-            .any(|task| task.state == crate::work::TaskState::Landed)
-    })
-    .await;
-    flow.settled().await;
-    // Time for anything automatic to start.
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-    let board = flow.board().await;
-    assert_eq!(board.tasks.len(), 1, "{:#?}", board.tasks);
     flow.stop().await;
 }

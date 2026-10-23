@@ -217,9 +217,7 @@ export function stoppedBoard(board: Board, stops: readonly Stop[]): Board {
     if (tasks !== shown.tasks) shown = { ...shown, tasks };
     if (!stop.turn) continue;
     // The answers it worked on end with the turn, as the daemon ends them.
-    const open = Object.values(shown.requests).filter(
-      (request) => request.state.type === "working" || request.state.type === "waiting",
-    );
+    const open = Object.values(shown.requests).filter((request) => request.state.type === "working");
     const running = shown.run === "running" || shown.run === "starting";
     if (!running && open.length === 0 && shown.doing === null) continue;
     shown = {
@@ -294,7 +292,7 @@ export function disposeSideBoard(store: BoardStore): void {
   keepBoard(store.getState().board);
 }
 
-/** The newest request's id and the request of its steer chain that still works or waits, if any. */
+/** The newest request's id and the request of its steer chain that still works, if any. */
 export function liveRequest(board: Pick<Board, "requests">): { newest: string; live: UserRequest } | null {
   const requests = Object.values(board.requests);
   const latest = requests.reduce<UserRequest | null>(
@@ -309,7 +307,7 @@ export function liveRequest(board: Pick<Board, "requests">): { newest: string; l
   let request = latest;
   // A steer chain is short; the bound only guards against a cycle in stored data.
   for (let hops = 0; request && hops < requests.length; hops += 1) {
-    if (latest && (request.state.type === "working" || request.state.type === "waiting")) return { newest: latest.id, live: request };
+    if (latest && request.state.type === "working") return { newest: latest.id, live: request };
     request = request.steeredInto ? (board.requests[request.steeredInto] ?? null) : null;
   }
   return null;

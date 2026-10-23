@@ -142,18 +142,6 @@ impl SessionManager {
     }
 }
 
-#[cfg(all(test, unix))]
-impl ConvLive {
-    pub(crate) async fn watchdog_snapshot(&self) -> (bool, i64, Option<i64>) {
-        let state = self.state.lock().await;
-        (
-            state.landed && !state.awaiting_start,
-            state.watchdog.last_ms,
-            state.watchdog.reported,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

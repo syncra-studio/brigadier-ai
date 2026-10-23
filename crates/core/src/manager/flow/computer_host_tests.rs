@@ -313,11 +313,10 @@ fn bundle_helper(flow: &Flow) {
 }
 
 /// The thread has no computer tools, while computer use is on and its helper is ready: no
-/// `computer` server, no skill plugin and no word of them in its instructions. A live look
-/// at an app goes to a worker, which has them. Given them, a Claude thread ran a long command
-/// as its own background job more often than through `run`.
+/// `computer` server, no skill plugin and no word of them in its instructions. Given them, a
+/// Claude thread ran a long command as its own background job more often than through `run`.
 #[tokio::test]
-async fn the_thread_has_no_computer_tools_while_workers_do() {
+async fn the_thread_has_no_computer_tools() {
     let flow = flow("thread-no-computer").await;
     bundle_helper(&flow);
     assert!(flow.manager.core.settings().computer_use);
@@ -343,6 +342,5 @@ async fn the_thread_has_no_computer_tools_while_workers_do() {
     assert_eq!(servers, ["brigadier"]);
     assert!(spec.skill_plugins.is_empty());
     let prompt = spec.append_system_prompt.as_deref().unwrap();
-    assert!(!prompt.contains(crate::manager::prompts::COMPUTER_USE));
-    assert!(prompt.contains("use them with the computer tools; you can't"));
+    assert!(!prompt.contains("computer tools"), "{prompt}");
 }

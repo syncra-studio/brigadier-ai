@@ -187,6 +187,67 @@ impl Turn {
         }
     }
 
+    /// The plain worker whose CLI takes this turn, by the grant its `brigadier` calls carry
+    /// (`None` for a session's thread or a Chat).
+    pub fn worker(&self) -> Option<crate::work::TaskId> {
+        let grant = self.env(brigadier_cli::protocol::GRANT_ENV)?;
+        match self.host.grants().resolve(grant)? {
+            crate::tools::Role::Worker { task_id, .. } => Some(task_id),
+            _ => None,
+        }
+    }
+
+    /// Starts a plain worker titled `title` on `prompt` as the session's `brigadier start`
+    /// would, on its own CLI; answers its task.
+    pub async fn start_worker(&self, title: &str, prompt: &str) -> crate::work::TaskId {
+        use brigadier_cli::protocol::{CliCall, CliReply, CliRequest, PROTOCOL, StartRequest};
+        let session = self
+            .env(brigadier_cli::protocol::SESSION_ENV)
+            .expect("the CLI knows its session");
+        let grant = self
+            .env(brigadier_cli::protocol::GRANT_ENV)
+            .expect("the CLI has its session's grant");
+        let caller = self
+            .host
+            .cli_caller(session, grant)
+            .expect("the session's own grant is accepted");
+        let request = CliRequest::Start(Box::new(StartRequest {
+            title: Some(title.into()),
+            agent: None,
+            model: None,
+            effort: None,
+            local: false,
+            base: None,
+            permission: None,
+            lean: false,
+            skills: Vec::new(),
+            prompt: prompt.into(),
+        }));
+        let call = CliCall {
+            protocol: PROTOCOL,
+            request,
+        };
+        let shown = match self.host.cli_call(&caller, call).await {
+            CliReply::Ok { output } => output["worker"]["id"]
+                .as_str()
+                .expect("the worker's id")
+                .to_owned(),
+            CliReply::Error { error } => panic!("brigadier start: {error:?}"),
+        };
+        let id = self
+            .conversation()
+            .expect("a session's thread starts workers");
+        self.host
+            .core
+            .tasks(&id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|task| task.id.0.ends_with(&shown))
+            .expect("the started worker's task")
+            .id
+    }
+
     /// Calls a Brigadier tool as the session's model would.
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
         let call = match name {
@@ -341,17 +402,6 @@ impl Turn {
     }
 
     /// Reports `event` as the session's CLI would, mid-turn.
-    /// What this worker's `Stop` hook would answer now (BUILD-PLAN E2): why its turn may not
-    /// end yet, or `None`. `active`: the CLI already continued once for the hook.
-    pub async fn stop_decision(&self, active: bool) -> Option<String> {
-        let Some(crate::tools::Role::Worker { task_id, .. }) =
-            self.host.grants.resolve(&self.grant)
-        else {
-            panic!("only a worker has a Stop hook");
-        };
-        self.host.stop_decision(&task_id, active).await
-    }
-
     pub async fn emit(&self, event: ProviderEvent) {
         // Claude keeps a finished command in its session file: its Bash call, then the result.
         if let (
@@ -405,43 +455,26 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     use OrchestratorCall as O;
     use WorkerCall as W;
     match name {
-        "delegate_task" => ToolCall::Orchestrator(O::DelegateTask(arg(name, args))),
-        "message_worker" => ToolCall::Orchestrator(O::MessageWorker(arg(name, args))),
-        "answer_worker" => ToolCall::Orchestrator(O::AnswerWorker(arg(name, args))),
-        "stop_worker" => ToolCall::Orchestrator(O::StopWorker(arg(name, args))),
-        "rerun_task" => ToolCall::Orchestrator(O::RerunTask(arg(name, args))),
-        "ask_user" => ToolCall::Orchestrator(O::AskUser(arg(name, args))),
-        "read_report" => ToolCall::Orchestrator(O::ReadReport(arg(name, args))),
-        "store_output" => ToolCall::Orchestrator(O::StoreOutput(arg(name, args))),
-        "query_brain" if orchestrator => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
-        "query_brain" => ToolCall::Worker(W::QueryBrain(arg(name, args))),
+        "query_brain" => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
         "remember" => ToolCall::Orchestrator(O::Remember(arg(name, args))),
         "search_transcript" => ToolCall::Orchestrator(O::SearchTranscript(arg(name, args))),
-        "attach_proof" => ToolCall::Orchestrator(O::AttachProof(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
-        "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),
-        "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
-        "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
-        "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
-        "note_progress" => ToolCall::Worker(W::NoteProgress(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
         "save_report" => ToolCall::Orchestrator(O::SaveReport(arg(name, args))),
-        "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
         "start_preview" if orchestrator => ToolCall::Orchestrator(O::StartPreview(arg(name, args))),
         "stop_preview" if orchestrator => ToolCall::Orchestrator(O::StopPreview(arg(name, args))),
         "preview_log" if orchestrator => ToolCall::Orchestrator(O::PreviewLog(arg(name, args))),
         "start_preview" => ToolCall::Worker(W::StartPreview(arg(name, args))),
         "stop_preview" => ToolCall::Worker(W::StopPreview(arg(name, args))),
         "preview_log" => ToolCall::Worker(W::PreviewLog(arg(name, args))),
-        "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
+        "project_map" => ToolCall::Orchestrator(O::ProjectMap),
         "clean_up" => ToolCall::Orchestrator(O::CleanUp),
-        "project_map" => ToolCall::Worker(W::ProjectMap),
         "app_state" => ToolCall::App(crate::tools::AppToolCall::State),
         "read_terminal" => ToolCall::App(crate::tools::AppToolCall::ReadTerminal(arg(name, args))),
         "open_in_app" => ToolCall::App(crate::tools::AppToolCall::Open(arg(name, args))),
@@ -1981,6 +2014,16 @@ impl Flow {
     }
 
     /// The board of the session `id`.
+    /// The settled state the app reads for session `id` (ready, merged or reverted), if any.
+    pub async fn settled_state(&self, id: &ConversationId) -> Option<crate::work::TabState> {
+        self.manager
+            .settled_tabs()
+            .await
+            .into_iter()
+            .find(|tab| tab.conversation_id == *id)
+            .map(|tab| tab.state)
+    }
+
     pub async fn board_of(&self, id: &ConversationId) -> Board {
         self.core.board(id).await.unwrap()
     }
@@ -2136,12 +2179,6 @@ mod auto_merge_tests;
 #[cfg(unix)]
 mod background_tests;
 #[cfg(unix)]
-mod bad_tool_call_tests;
-#[cfg(unix)]
-mod base_merge_tests;
-#[cfg(unix)]
-mod brain_first_tests;
-#[cfg(unix)]
 mod branch_prefix_tests;
 #[cfg(unix)]
 mod brigade_tests;
@@ -2156,29 +2193,15 @@ mod chat_images_tests;
 #[cfg(unix)]
 mod chat_thread_tests;
 #[cfg(unix)]
-mod claim_evidence_tests;
-#[cfg(unix)]
-mod clean_up_tests;
-#[cfg(unix)]
 mod cli_tests;
 mod cli_thread_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[cfg(unix)]
 mod computer_host_tests;
 #[cfg(unix)]
-mod constraints_tests;
-#[cfg(unix)]
 mod decision_index_tests;
 #[cfg(unix)]
-mod deliverable_tests;
-#[cfg(unix)]
-mod design_work_tests;
-#[cfg(unix)]
-mod ending_tests;
-#[cfg(unix)]
 mod engine_tests;
-#[cfg(unix)]
-mod grilling_tests;
 #[cfg(unix)]
 mod open_in_app_tests;
 #[cfg(unix)]
@@ -2199,17 +2222,9 @@ mod git_writing_tests;
 #[cfg(unix)]
 mod honesty_tests;
 #[cfg(unix)]
-mod integrations_tests;
-#[cfg(unix)]
 mod interrupted_turn_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
-#[cfg(unix)]
-mod kept_output_tests;
-#[cfg(unix)]
-mod lean_work_tests;
-#[cfg(unix)]
-mod limited_input_tests;
 #[cfg(unix)]
 mod litter_tests;
 #[cfg(unix)]
@@ -2224,10 +2239,6 @@ mod mention_tests;
 mod merge_by_user_tests;
 #[cfg(unix)]
 mod merge_queue_tests;
-#[cfg(unix)]
-mod mockup_tests;
-#[cfg(unix)]
-mod near_limit_tests;
 #[cfg(unix)]
 mod no_push_tests;
 #[cfg(unix)]
@@ -2246,17 +2257,7 @@ mod preview_tests;
 #[cfg(unix)]
 mod quota_resume_tests;
 #[cfg(unix)]
-mod reads_tests;
-#[cfg(unix)]
 mod rebirth_words_tests;
-#[cfg(unix)]
-mod rerun_tests;
-#[cfg(unix)]
-mod restart_waits_tests;
-#[cfg(unix)]
-mod resume_tests;
-#[cfg(unix)]
-mod review_picks_tests;
 #[cfg(unix)]
 mod source_branch_tests;
 #[cfg(unix)]
@@ -2270,19 +2271,11 @@ mod search_tests;
 #[cfg(unix)]
 mod spare_worktree_tests;
 #[cfg(unix)]
-mod stop_hook_tests;
-#[cfg(unix)]
-mod stopped_run_tests;
-#[cfg(unix)]
 mod subfolder_rules_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
-mod successor_tests;
-#[cfg(unix)]
 mod tab_chat_tests;
-#[cfg(unix)]
-mod takeover_tests;
 #[cfg(unix)]
 mod tests;
 #[cfg(unix)]
@@ -2302,15 +2295,11 @@ mod thread_scratch_tests;
 #[cfg(unix)]
 mod thread_tests;
 #[cfg(unix)]
-mod thread_works_tests;
-#[cfg(unix)]
 mod transcript_thread_tests;
 #[cfg(unix)]
 mod trim_tests;
 #[cfg(unix)]
 mod trust_tests;
-#[cfg(unix)]
-mod unreported_tests;
 #[cfg(unix)]
 mod usage_tests;
 #[cfg(unix)]
@@ -2318,11 +2307,6 @@ mod user_setup_tests;
 #[cfg(unix)]
 mod warm_session_tests;
 #[cfg(unix)]
-mod worker_turns_tests;
-#[cfg(unix)]
 mod workspace_tests;
 #[cfg(unix)]
 mod worktree_copies_tests;
-
-#[cfg(unix)]
-mod watchdog_tests;

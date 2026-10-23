@@ -28,7 +28,6 @@ use brigadier_git::{
 };
 
 use super::conversation::Envelope;
-use super::workers::Workspace;
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{
@@ -99,19 +98,16 @@ impl SessionManager {
                 task.number, verifier.number, verifier.number
             ));
         }
-        let later = self.later_request_for(id, &task).await;
         // Checked and changed in one step: a stop, a steer or a newer report that came after
         // `task` was read wins.
-        let still = |now: &Task| now.state == task.state && super::workers::same_report(now, &task);
+        let report = |task: &Task| task.report.as_ref().map(|report| report.submitted_at_ms);
+        let still = |now: &Task| now.state == task.state && report(now) == report(&task);
         let Some(task) = self
             .update_task_if(id, &task.id, still, |t| {
                 t.state = TaskState::Landing;
                 t.blocked_reason = None;
                 t.landing = Some(t.title.clone());
                 t.landing_from = None;
-                if later.is_some() {
-                    t.request_id = later;
-                }
             })
             .await?
         else {
@@ -127,51 +123,6 @@ impl SessionManager {
                 self.hand_back(&task, TaskState::Reported, None).await;
                 Err(err)
             }
-        }
-    }
-
-    /// A merge worker sent back during its landing (its merge was refused, or the target moved
-    /// under it) reported again: its work lands now, on its own. The orchestrator hears the
-    /// outcome.
-    pub(crate) async fn land_after_rework(&self, task: &Task) {
-        let Ok(_fence) = self.enter(&task.conversation_id) else {
-            return;
-        };
-        let Ok(task) = self
-            .update_task(&task.conversation_id, &task.id, |t| {
-                t.state = TaskState::Landing;
-                t.blocked_reason = None;
-                t.landing_from = None;
-            })
-            .await
-        else {
-            return;
-        };
-        let (landed, text) = match Box::pin(self.move_commits(&task)).await {
-            Ok(moved) => Box::pin(self.settle_landing(&task, moved, true)).await,
-            Err(err) => {
-                self.landing_problem(&task, &err.to_string(), TaskState::Reported)
-                    .await;
-                return;
-            }
-        };
-        // Problems were handed to the orchestrator by `settle_landing`; a landing is news too.
-        let text = if landed {
-            format!("[landed task-{}] {text}", task.number)
-        } else {
-            text
-        };
-        if landed || text.starts_with("[nothing to land") {
-            self.deliver(
-                &task.conversation_id,
-                Envelope {
-                    kind: InjectionKind::Decision,
-                    label: format!("landed task-{}", task.number),
-                    task_id: Some(task.id.clone()),
-                    text,
-                },
-            )
-            .await;
         }
     }
 
@@ -634,7 +585,7 @@ impl SessionManager {
             }
             Moved::Outrun { tip } => {
                 let why = format!(
-                    "`{target}` moved to {} while you merged, so nothing landed. Merge it in too with `git merge {target}`, resolve any conflict and commit; then build, test and call submit_report again.",
+                    "`{target}` moved to {} while you merged, so nothing landed. Merge it in too with `git merge {target}`, resolve any conflict and commit; then build, test and say you're done.",
                     short(&tip)
                 );
                 match crate::heap(|| self.merge_again(task, why, Some(tip.clone()))).await {
@@ -667,92 +618,8 @@ impl SessionManager {
                 }
             })
             .await?;
-        self.message_worker(&task.conversation_id, &task, text, "Brigadier")
+        self.message_worker(&task.conversation_id, &task, text)
             .await
-            .map(|_| ())
-    }
-
-    /// Commits what a write task left uncommitted in its worktree (litter left out; `extra`:
-    /// paths a report not stored yet names), so a review or a verifier starts from its
-    /// committed work. A Codex worker's sandbox can't write the worktree's git directory, so
-    /// Brigadier commits for it.
-    pub(crate) async fn commit_leftovers(
-        &self,
-        task: &Task,
-        extra: &[String],
-        message: &str,
-    ) -> Result<()> {
-        if !task.kind.writes() || task.kind == crate::work::TaskKind::Merge {
-            return Ok(());
-        }
-        let Some(worktree) = task.workspace.as_ref().and_then(|w| w.worktree.clone()) else {
-            return Ok(());
-        };
-        let mut reported = self.phase_reported(task).await;
-        reported.extend(extra.iter().flat_map(|p| reported_paths(p)));
-        let (git, message) = (self.git.clone(), self.commit_message(message.to_owned()));
-        blocking(move || {
-            let worktree = git.open_worktree(Path::new(&worktree)).map_err(git_error)?;
-            let head = worktree.head().map_err(git_error)?;
-            let left = worktree.changes(&head).map_err(git_error)?;
-            let include = keep_paths(&left, &reported, &mut Vec::new());
-            if include.is_empty() {
-                return Ok(());
-            }
-            match worktree
-                .commit_candidate(&include, &message)
-                .map_err(git_error)?
-            {
-                CommitOutcome::HookFailed { output } => Err(Error::Invalid(format!(
-                    "The repository's commit hooks refused to commit the work:\n{}",
-                    clip(&output, 2_000)
-                ))),
-                _ => Ok(()),
-            }
-        })
-        .await
-    }
-
-    /// The new files in an implement task's worktree (committed, staged or untracked) that
-    /// no report of its phase names, nor `extra` (the report being submitted): the landing
-    /// would leave them out, so the worker must list or delete them first. Litter is not
-    /// among them.
-    pub(crate) async fn unreported_files(
-        &self,
-        task: &Task,
-        extra: &[String],
-    ) -> Result<Vec<String>> {
-        if task.kind != crate::work::TaskKind::Implement {
-            return Ok(Vec::new());
-        }
-        let Some(workspace) = task.workspace.as_ref() else {
-            return Ok(Vec::new());
-        };
-        let (Some(worktree), Some(base)) = (workspace.worktree.clone(), workspace.base.clone())
-        else {
-            return Ok(Vec::new());
-        };
-        let mut reported = self.phase_reported(task).await;
-        reported.extend(extra.iter().flat_map(|p| reported_paths(p)));
-        let git = self.git.clone();
-        blocking(move || {
-            let worktree = git.open_worktree(Path::new(&worktree)).map_err(git_error)?;
-            // A new file needs a report whether it is committed, staged or untracked, as at
-            // landing.
-            let changes: Vec<_> = worktree
-                .changes(&Oid(base))
-                .map_err(git_error)?
-                .into_iter()
-                .map(|mut change| {
-                    if change.kind == ChangeKind::Added {
-                        change.untracked = true;
-                    }
-                    change
-                })
-                .collect();
-            Ok(litter::unreported(&changes, &reported))
-        })
-        .await
     }
 
     /// Every file a report of `task`'s phase names: the provenance a new file needs to land.
@@ -833,7 +700,7 @@ impl SessionManager {
             )
         })
         .await;
-        let request = crate::heap(|| self.request_for(&task.conversation_id, Some(&task.id))).await;
+        let request = crate::heap(|| self.request_for(&task.conversation_id)).await;
         crate::heap(|| {
             self.record_decision(
                 &task.conversation_id,
@@ -894,169 +761,6 @@ impl SessionManager {
         self.spawn(async move {
             manager.settle_requests(&id).await;
         });
-    }
-
-    /// What a reviewer reads about the work it reviews: the task, what the worker was told
-    /// since, the worker's report, and where its commits are.
-    pub(crate) async fn review_brief(&self, subject: &Task, _scratch: &Path) -> String {
-        let mut text = format!(
-            "\n\nThe task it implements (task-{}):\n{}",
-            subject.number, subject.spec
-        );
-        if !subject.messages.is_empty() {
-            text.push_str(
-                "\n\nWhat the thread told the worker after that, oldest first (it changes the task where it differs):",
-            );
-            for message in &subject.messages {
-                text.push_str(&format!("\n---\n{message}"));
-            }
-        }
-        // The worker's whole report, its risks, open questions and artifacts included
-        // (BUILD-PLAN E2): what it claims is checked against the code, not taken on trust.
-        if let Some(report) = &subject.report {
-            text.push_str(&format!(
-                "\n\nThe worker's report (check its claims in the code; don't take them on trust):\n{}",
-                super::prompts::report_text(subject, report, "the worker")
-            ));
-        }
-        if let Some(base) = subject.workspace.as_ref().and_then(|w| w.base.clone()) {
-            text.push_str(&format!(
-                "\n\nThe work starts at {}: see it with `git log --oneline {base}..HEAD` and `git diff {base}..HEAD` (uncommitted changes, if any, with `git status` and `git diff`).",
-                short(&Oid(base.clone()))
-            ));
-        }
-        text
-    }
-
-    /// What a merge worker reads: the task whose work it merges with the target, and how
-    /// (SESSION-FIXES-PLAN.md Q2): it runs the merge with git and commits it itself.
-    pub(crate) async fn merge_brief(&self, subject: &Task, workspace: &Workspace) -> String {
-        let target = workspace.target.clone().unwrap_or_default();
-        let number = subject.number;
-        let reported = subject
-            .report
-            .as_ref()
-            .filter(|r| !r.changes.is_empty())
-            .map(|r| {
-                format!(
-                    " task-{number} reported changing: {}. List those and every file you edit in the report's `changes`.",
-                    r.changes.join(", ")
-                )
-            })
-            .unwrap_or_default();
-        format!(
-            "\n\nThis worktree's branch holds task-{number}'s work (\"{}\"), which conflicts with `{target}`. {}{reported}\n\nThe original task:\n{}",
-            subject.title,
-            merge_steps(&target, &format!("task-{number}'s")),
-            subject.spec
-        )
-    }
-
-    /// A merge task with a subject starts from the conflicting task's work, kept as a WIP
-    /// commit: the target's tip (where its merge starts) and that work, without the files the
-    /// landing's litter guard would leave out, so they reach neither the merge nor its history;
-    /// and each commit that rebuild rewrote, with its replacement.
-    pub(crate) async fn merge_start(
-        &self,
-        subject: &Task,
-        target: &str,
-    ) -> Result<(Oid, Oid, Vec<(Oid, Oid)>)> {
-        let workspace = subject
-            .workspace
-            .clone()
-            .ok_or_else(|| Error::Invalid(format!("task-{} has no workspace", subject.number)))?;
-        if workspace.on_snapshot {
-            return Err(Error::Invalid(snapshot_conflict(subject.number)));
-        }
-        let base = Oid(workspace
-            .base
-            .ok_or_else(|| Error::Invalid("no base".into()))?);
-        let path = match workspace.worktree {
-            Some(path) => PathBuf::from(path),
-            None => {
-                return Err(Error::Invalid(format!(
-                    "task-{} has no worktree",
-                    subject.number
-                )));
-            }
-        };
-        let reported: Vec<String> = subject
-            .report
-            .as_ref()
-            .map(|r| r.changes.iter().flat_map(|p| reported_paths(p)).collect())
-            .unwrap_or_default();
-        let (git, target) = (self.git.clone(), target.to_owned());
-        let wip = format!("WIP: task-{} before merging", subject.number);
-        blocking(move || {
-            let worktree = git.open_worktree(&path).map_err(git_error)?;
-            let leave_out: Vec<String> =
-                litter::classify(&worktree.changes(&base).map_err(git_error)?, &reported)
-                    .into_iter()
-                    .filter(|(_, verdict)| matches!(verdict, litter::Verdict::Exclude { .. }))
-                    .flat_map(|(change, _)| match change.kind {
-                        ChangeKind::Renamed { from } => vec![change.path, from],
-                        _ => vec![change.path],
-                    })
-                    .collect();
-            worktree.commit_wip(&wip).map_err(git_error)?;
-            let work = worktree.head().map_err(git_error)?;
-            // The subject's own checkout, so the commit uses the identity its WIP commit did.
-            let repo = git.open(&path).map_err(git_error)?;
-            let (without, rebuilt) = repo
-                .work_without(&base, &work, &leave_out)
-                .map_err(git_error)?;
-            let onto = repo
-                .branch_tip(&target)
-                .map_err(git_error)?
-                .ok_or_else(|| Error::Invalid(format!("branch {target} does not exist")))?;
-            Ok((onto, without, rebuilt))
-        })
-        .await
-    }
-
-    /// A merge task with no subject starts from the session branch `target` and merges its
-    /// base `base_branch` into it: their tips.
-    pub(crate) async fn base_merge_start(
-        &self,
-        repo: &Path,
-        target: &str,
-        base_branch: &str,
-    ) -> Result<(Oid, Oid)> {
-        let (git, repo, target, base_branch) = (
-            self.git.clone(),
-            repo.to_owned(),
-            target.to_owned(),
-            base_branch.to_owned(),
-        );
-        blocking(move || {
-            let repo = git.open(&repo).map_err(git_error)?;
-            let tip = |branch: &str| {
-                repo.branch_tip(branch)
-                    .map_err(git_error)?
-                    .ok_or_else(|| Error::Invalid(format!("branch {branch} does not exist")))
-            };
-            Ok((tip(&target)?, tip(&base_branch)?))
-        })
-        .await
-    }
-
-    /// What a merge worker with no subject reads: merge the session's base into its branch.
-    pub(crate) async fn base_merge_brief(&self, task: &Task, workspace: &Workspace) -> String {
-        let target = workspace.target.clone().unwrap_or_default();
-        let base_branch = match self.core.conversation(&task.conversation_id) {
-            Ok(conversation) => match conversation.setup {
-                Some(Setup::Session {
-                    environment: Environment::NewWorktree { base, .. },
-                    ..
-                }) => base,
-                _ => String::new(),
-            },
-            Err(_) => String::new(),
-        };
-        format!(
-            "\n\nThis worktree's branch starts at the session branch `{target}`, which conflicts with the current `{base_branch}`: merge `{base_branch}` into it, so the session can merge into `{base_branch}` cleanly. {} List every file you edit in the report's `changes`.",
-            merge_steps(&base_branch, &format!("`{target}`'s"))
-        )
     }
 
     /// Something stopped a landing: the task goes to `state` and the orchestrator hears why,
@@ -1294,7 +998,7 @@ impl SessionManager {
         let requests = board.merging_requests(None);
         // The turn that merged has its work so far in the merge too.
         let mut merged = requests.clone();
-        if let Some(current) = self.request_for(id, None).await
+        if let Some(current) = self.request_for(id).await
             && !merged.contains(&current)
         {
             merged.push(current);
@@ -1561,7 +1265,7 @@ fn land_merge(
 ) -> Result<Moved> {
     let refused = |text: String| {
         Ok(Moved::MergeRefused {
-            text: format!("{text} Then build, test and call submit_report again."),
+            text: format!("{text} Then build, test and say you're done."),
         })
     };
     let head = worktree.head().map_err(git_error)?;
@@ -1810,13 +1514,6 @@ fn landed_line(task: &Task, target: &str) -> String {
     )
 }
 
-/// How a merge worker merges `other` into its branch, whose side is `ours` (Q2).
-fn merge_steps(other: &str, ours: &str) -> String {
-    format!(
-        "Run `git merge {other}` yourself on this branch. Resolve every conflict keeping both sides' intent: in a text conflict the first side (after `<<<<<<<`) is {ours}, the second (before `>>>>>>>`) is `{other}`'s; leave no marker behind. A file one side changed and the other deleted: keep a version, or remove it and list it under `deleted` with why, as for any file you remove on purpose. Make sure it builds and its tests pass, then `git commit` the merge on this branch; a fix after it is a normal commit on top. Never rebase, reset or amend the merge away, and never move any other branch: Brigadier checks that both sides are merged and nothing of either is missing, then moves the target itself."
-    )
-}
-
 /// What the orchestrator does about a task whose work conflicts with the target.
 fn conflict_step(task: &Task, target: &str) -> String {
     match &task.workspace {
@@ -1826,14 +1523,6 @@ fn conflict_step(task: &Task, target: &str) -> String {
     format!(
         "Delegate a merge task with subject task-{}: its worker merges `{target}` into task-{}'s work with git and resolves the conflicts.",
         task.number, task.number
-    )
-}
-
-/// Why a merge task gets no merge task of its own: its worker merges, and is sent back when
-/// its target moves.
-pub(super) fn merge_of_merge(number: u32, target: &str) -> String {
-    format!(
-        "task-{number} is a merge task: its own worker merges with git, and is sent back on its own when `{target}` moves. Send it what to change with message_worker instead of delegating another merge task."
     )
 }
 

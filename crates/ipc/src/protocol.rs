@@ -23,14 +23,14 @@ use brigadier_core::{
     MessageQueue, OrchestratorPage, PendingChanges, ProbeBurst, Project, ProjectCandidate,
     ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals,
     RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion,
-    RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings,
-    SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
-    SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome,
-    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings, SettledTab,
+    Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope,
+    SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
     WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
-use brigadier_router::{Area, RegistryInfo};
+use brigadier_router::RegistryInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use ts_rs::TS;
@@ -118,14 +118,6 @@ pub enum ClientFrame {
         grant: String,
         output: HookOutput,
     },
-    /// The only frame of a Claude worker's `Stop` hook (`brigadierd hook stop`): whether its
-    /// turn may end. The daemon answers with one [`StopHookReply`] frame; a refused grant just
-    /// closes the connection.
-    StopHook {
-        grant: String,
-        /// The CLI already continued once for this hook in this stop.
-        stop_hook_active: bool,
-    },
     /// First frame of a `brigadier` command run by a session: the session's id and grant. One
     /// length-prefixed `brigadier_cli::protocol::CliCall` follows, answered by one `CliReply`;
     /// a grant that isn't the session's just closes the connection.
@@ -150,14 +142,6 @@ pub struct HookOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub touched: Option<String>,
-}
-
-/// The daemon's answer to a worker's `Stop` hook.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct StopHookReply {
-    /// Why the turn may not end yet, for the model to continue with; none: it may.
-    pub block: Option<String>,
 }
 
 /// The daemon's answer to a thread's output hook.
@@ -395,14 +379,6 @@ pub enum Request {
         title: String,
         text: String,
         selection: String,
-    },
-    /// "Open in terminal": continues a worker's own CLI session in a terminal (the task is
-    /// taken over until it ends, then the worker reports), or reattaches to the one open. Its
-    /// output then streams like [`Request::OpenTerminal`]'s.
-    OpenWorkerTerminal {
-        task_id: TaskId,
-        cols: u16,
-        rows: u16,
     },
     /// Typed input for a terminal.
     WriteTerminal {
@@ -1209,30 +1185,15 @@ pub enum Request {
         path: String,
     },
     /// The Usage page: quota windows with their estimates and history, Brigadier's own use,
-    /// routing activity, the merged model list and what outcomes taught routing in every project.
+    /// past hand-offs and waits, and the merged model list.
     GetUsage {},
     /// The Usage page's Activity: each account's windows over the last `days` (at most 31), and
     /// Brigadier's own use of it then.
     GetUsageActivity {
         days: u32,
     },
-    /// What routing would choose for each task category right now, with its explanation, for
-    /// a task in `projectId` touching `areas`. Starts nothing.
-    PreviewRoutes {
-        #[serde(default)]
-        project_id: Option<ProjectId>,
-        #[serde(default)]
-        areas: Vec<Area>,
-        /// Who wrote the change a review is about: the review goes to another vendor when one
-        /// can take it, as it does for a real review.
-        #[serde(default)]
-        author: Option<ProviderKind>,
-    },
     /// Asks the repository for a newer model registry now; answers the registry in use after.
     CheckRegistry,
-    /// Starts sourced web research after a registry check; returns the job id immediately.
-    /// If a refresh is already running, returns that job's id instead.
-    RefreshRankings,
     /// The latest refresh job, its findings and whether its saved overlay is in use.
     GetRankingsRefresh,
     /// Cancels a running refresh and removes its overlay, restoring published ratings.
@@ -1475,16 +1436,6 @@ pub enum Response {
     },
     OpenTerminal {
         terminal: TerminalInfo,
-    },
-    OpenWorkerTerminal {
-        terminal: TerminalInfo,
-        /// The worker's CLI (Claude asks whether to trust a folder it never saw).
-        provider: ProviderKind,
-        /// The task's checkout when the terminal starts elsewhere (a read-only Codex worker
-        /// starts in its scratch folder).
-        #[ts(optional)]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        checkout: Option<String>,
     },
     OpenSideChat {
         conversation: Box<Conversation>,
@@ -1896,14 +1847,8 @@ pub enum Response {
     GetUsageActivity {
         activity: UsageActivity,
     },
-    PreviewRoutes {
-        routes: Vec<RoutePreview>,
-    },
     CheckRegistry {
         registry: RegistryInfo,
-    },
-    RefreshRankings {
-        job_id: String,
     },
     GetRankingsRefresh {
         refresh: brigadier_core::routing::registry::RankingsRefresh,

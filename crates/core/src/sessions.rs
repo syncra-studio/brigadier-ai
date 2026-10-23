@@ -22,7 +22,6 @@ use crate::projection::Projection;
 use crate::work::{
     AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, MovedMessage,
     OrchestratorEntry, QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest,
-    WorkSpan,
 };
 use crate::{Error, Result, now_ms};
 
@@ -771,10 +770,7 @@ impl Core {
                         undo: None,
                         waited: Vec::new(),
                         closed: Vec::new(),
-                        worked: vec![WorkSpan {
-                            from_ms: message.created_at_ms,
-                            to_ms: None,
-                        }],
+                        worked: Vec::new(),
                         quota_wait: false,
                         waiting_for: Vec::new(),
                         from_peer: None,
@@ -1609,42 +1605,26 @@ impl Core {
         Ok(())
     }
 
-    /// Records a request's new state, unless it already has it. Returns whether it changed.
-    #[allow(clippy::too_many_arguments)]
+    /// Moves request `request_id` of conversation `id` to `state`, with how many of the CLI's
+    /// background jobs still run for it.
     pub(crate) async fn update_request(
         &self,
         id: &ConversationId,
         request_id: &str,
         state: RequestState,
-        quota_wait: bool,
-        card_wait: bool,
-        waiting_for: Vec<ConversationId>,
         background_jobs: Option<u32>,
     ) -> Result<bool> {
-        self.update_request_at(
-            id,
-            request_id,
-            state,
-            quota_wait,
-            card_wait,
-            waiting_for,
-            background_jobs,
-            now_ms(),
-        )
-        .await
+        self.update_request_at(id, request_id, state, background_jobs, now_ms())
+            .await
     }
 
     /// [`Self::update_request`], as of `at` (a turn a restart cut off ended when it was last
-    /// recorded, not when Brigadier started again).
-    #[allow(clippy::too_many_arguments)]
+    /// recorded).
     pub(crate) async fn update_request_at(
         &self,
         id: &ConversationId,
         request_id: &str,
         state: RequestState,
-        quota_wait: bool,
-        card_wait: bool,
-        waiting_for: Vec<ConversationId>,
         background_jobs: Option<u32>,
         at: i64,
     ) -> Result<bool> {
@@ -1661,8 +1641,10 @@ impl Core {
             return Ok(false);
         };
         let before = request.clone();
-        request.moved_to(state, quota_wait, card_wait, at);
-        request.waiting_for = waiting_for;
+        if request.state != state {
+            request.ended_at_ms = (state != RequestState::Working).then_some(at);
+        }
+        request.state = state;
         request.background_jobs = background_jobs;
         if request == before {
             return Ok(false);
@@ -1717,11 +1699,6 @@ impl Core {
         request.state = RequestState::Working;
         request.started_at_ms = now;
         request.ended_at_ms = None;
-        request.worked = vec![WorkSpan {
-            from_ms: now,
-            to_ms: None,
-        }];
-        request.quota_wait = false;
         let event = DomainEvent::RequestUpdated { request };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])
@@ -2299,9 +2276,8 @@ impl Core {
         Ok(board)
     }
 
-    /// Records the models an agent's list names as known; one seen after the agent's first
-    /// list gets no worker tasks until the user allows it
-    /// ([`crate::routing::availability::note_models`]).
+    /// Records the models an agent's list names as known, and turns its older ones off the first
+    /// time ([`crate::routing::availability::note_models`]).
     pub async fn note_models(
         &self,
         provider: ProviderKind,
@@ -2311,15 +2287,15 @@ impl Core {
         let _writes = self.settings_writes.lock().await;
         let settings = self.settings();
         if let Some(next) =
-            crate::routing::availability::note_models(&settings, provider, ids, older, now_ms())
+            crate::routing::availability::note_models(&settings, provider, ids, older)
         {
             self.write_settings(next).await?;
         }
         Ok(())
     }
 
-    /// Writes settings a client sent: the models recorded as known since it read its copy
-    /// stay known ([`crate::routing::availability::rebase`]).
+    /// Writes settings a client sent: the models recorded as known and the older ones turned off
+    /// since it read its copy stay so ([`crate::routing::availability::rebase`]).
     pub async fn update_settings(&self, mut settings: Settings) -> Result<Settings> {
         settings.user_name = user_name(&settings.user_name);
         if let Some(problem) = brigadier_git::branch_prefix_problem(&settings.branch_prefix) {

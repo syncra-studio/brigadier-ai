@@ -22,12 +22,6 @@ export type TerminalTab = {
   shellTitle: string | null;
   /** Where the shell started, once it has. */
   cwd: string | null;
-  /** Set for a worker's own session opened here: the worker's task. */
-  taskId?: string;
-  /** The worker's task title, its tab's name. */
-  title?: string;
-  /** The worker's session opened once: a restored tab only reattaches to it. */
-  started?: boolean;
 };
 
 export type TerminalPlace = {
@@ -205,7 +199,6 @@ export function tabNames(tabs: readonly TerminalTab[], projectPath?: string | nu
   }
   const seen = new Map<string, number>();
   return tabs.map((tab, index) => {
-    if (tab.taskId && tab.title) return tab.title;
     if (tab.shellTitle) return tab.shellTitle;
     const name = folder(tab);
     if (!name) return `Terminal ${index + 1}`;
@@ -224,35 +217,6 @@ export function addTab(place: string): string {
     open: true,
   }));
   return id;
-}
-
-/**
- * Shows a worker's session in the place's pane: its tab if it has one, else a new one. Asked
- * for again after its view went, it opens the session again rather than only reattaching.
- */
-export function openWorkerTab(place: string, taskId: string, title: string): string {
-  const existing = terminalPlace(place).tabs.find((each) => each.taskId === taskId);
-  const live = existing && [...shells.values()].some((owner) => owner.tab === existing.id);
-  const id = existing?.id ?? crypto.randomUUID();
-  update(place, (current) => ({
-    ...current,
-    tabs: existing
-      ? current.tabs.map((each) =>
-          each.id === id ? { ...each, title, ...(live ? {} : { started: false }) } : each,
-        )
-      : [...current.tabs, { id, shellTitle: null, cwd: null, taskId, title, started: false }],
-    active: id,
-    open: true,
-  }));
-  return id;
-}
-
-/** The worker's session opened in the tab. */
-export function noteWorkerStarted(place: string, tab: string): void {
-  update(place, (current) => ({
-    ...current,
-    tabs: current.tabs.map((each) => (each.id === tab ? { ...each, started: true } : each)),
-  }));
 }
 
 /** The tab, while the place has it. */
@@ -305,17 +269,12 @@ function endShell(tab: string): void {
   }
 }
 
-/**
- * Closes a tab and ends its shell; what it showed is kept for ⌘⇧T. A worker's tab hands the
- * worker back, so it isn't kept: its row opens it again.
- */
+/** Closes a tab and ends its shell; what it showed is kept for ⌘⇧T. */
 export function closeTab(place: string, tab: string): void {
   const shown = terminalPlace(place).tabs.find((each) => each.id === tab);
   if (!shown) return;
-  if (!shown.taskId) {
-    const output = readers.get(tab)?.() ?? "";
-    closed.set(place, [...(closed.get(place) ?? []), { tab: shown, output }]);
-  }
+  const output = readers.get(tab)?.() ?? "";
+  closed.set(place, [...(closed.get(place) ?? []), { tab: shown, output }]);
   notePaneClose(placeConversation(place) ?? HOME_PLACE, "terminal");
   endShell(tab);
   forgetTab(place, tab);

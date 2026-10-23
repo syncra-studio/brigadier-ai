@@ -173,27 +173,3 @@ fn unwrap_lines(text: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n\n")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_report_list_is_asked_for_as_text() {
-        let schema = input_schema::<brigadier_core::tools::SubmitReport>();
-        let properties = &schema["properties"];
-        for field in [
-            "decisions",
-            "learned",
-            "verification",
-            "done_when",
-            "open_questions",
-            "risks",
-            "needs_user",
-        ] {
-            assert_eq!(properties[field]["type"], "string", "{field}");
-            assert_eq!(properties[field]["default"], "", "{field}");
-        }
-        assert_eq!(properties["changes"]["type"], "array");
-    }
-}

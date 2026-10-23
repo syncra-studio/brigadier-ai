@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use super::SessionManager;
-use super::takeover::TerminalSnapshot;
+use super::terminal_host::TerminalSnapshot;
 use crate::accounts::AccountRef;
 use crate::app_call::{AppAnswer, AppOp, OpenPanels, WindowView};
 use crate::digest::TRIM_ABOVE;
@@ -212,8 +212,8 @@ impl SessionManager {
         }
     }
 
-    /// `read_terminal`'s answer: the terminal's whole kept output as plain text, or its digest
-    /// and an id `read_artifact` reads the rest by when it is long.
+    /// `read_terminal`'s answer: the terminal's whole kept output as plain text, or, when it is
+    /// long, its digest naming the file the rest is stored in.
     pub(crate) async fn read_terminal_text(
         &self,
         id: &ConversationId,

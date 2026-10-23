@@ -20,7 +20,6 @@ mod add_project;
 mod app_call;
 mod app_state;
 // Nothing feeds it since `run` went (S6); the module goes in S12.
-mod brain_first;
 mod brain_jobs;
 mod brains;
 mod branch_names;
@@ -45,7 +44,6 @@ mod terminal_run;
 pub use computer_host::ComputerNews;
 mod computer_use;
 mod constraints;
-mod context_pack;
 mod conversation;
 pub(crate) mod decisions;
 pub mod disk;
@@ -72,10 +70,8 @@ mod kept_live_tests;
 mod landing;
 mod lifecycle;
 mod local_files;
-mod machine;
 mod mcp_auth;
 mod memory_guard;
-mod outcomes;
 mod outputs;
 mod page_tools;
 mod past_projects;
@@ -91,9 +87,6 @@ mod quiet;
 pub(crate) mod reads;
 mod rebirth;
 mod refcheck;
-mod requests;
-mod reruns;
-mod research;
 mod review;
 mod routing;
 mod run;
@@ -104,7 +97,7 @@ mod setup_script;
 mod side_chat;
 mod sidecars;
 mod source_actions;
-mod takeover;
+mod terminal_host;
 mod thread;
 mod thread_images;
 mod thread_items;
@@ -121,8 +114,6 @@ mod usage_view;
 mod user_rebase;
 pub mod warm;
 mod watchdog;
-mod worker_handoff;
-mod worker_resume;
 mod worker_rows;
 mod workers;
 pub mod workspace;
@@ -150,12 +141,11 @@ pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;
 pub use conversation::SendOutcome;
-pub(crate) use conversation::interrupted_by_quit;
 pub use instructions::{COMMAND_PATHS_MAX, command_paths, lexical};
 pub use mcp_auth::McpSignInStatus;
 pub use side_chat::BrowserPage;
-pub use takeover::{HostedTerminal, TerminalHost, TerminalSnapshot, WorkerTerminal};
-pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
+pub use terminal_host::{HostedTerminal, TerminalHost, TerminalSnapshot};
+pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
 pub use uninstall::TearDown;
 
 use self::cards::Waiters;
@@ -235,8 +225,6 @@ pub struct SessionManager {
     /// Tasks being stopped: a landing that fails meanwhile (its worktree going away under
     /// it) is no news for the orchestrator.
     stopping: Mutex<HashSet<TaskId>>,
-    /// Held while a rerun one tier up is checked and made, so a task reruns once.
-    reruns_starting: tokio::sync::Mutex<()>,
     /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
     /// moment the stop starts: the thread may no longer message, steer or approve them.
     user_stops: Mutex<HashSet<TaskId>>,
@@ -247,12 +235,9 @@ pub struct SessionManager {
     /// Development builds: usage limits armed to exercise fallback.
     #[cfg(debug_assertions)]
     faults: fault::Faults,
-    research: research::Research,
-    /// How long a worker's question waits before its safe default may stand in, in ms (an
-    /// hour; tests shorten it).
+    /// How long a browser call that asks the user waits for the answer, in ms (an hour; tests
+    /// shorten it).
     question_timeout_ms: std::sync::atomic::AtomicU64,
-    /// Holds new work while the machine struggles, and runs heavy commands one at a time.
-    machine: Arc<crate::machine::MachineWatch>,
     /// Conversations being archived or deleted: their fences and cleanups.
     closing: closing::Closing,
     /// The computer-use helper's copy in the data folder ([`computer_use`]).
@@ -263,7 +248,7 @@ pub struct SessionManager {
     app: Arc<app_call::AppHub>,
     browser: Arc<browser_tool::BrowserHub>,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
-    terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
+    terminal_host: std::sync::OnceLock<Arc<dyn terminal_host::TerminalHost>>,
     /// The user's pages, which a thread may read and change from the page's own composer.
     pages: std::sync::OnceLock<Arc<crate::pages::Pages>>,
     /// Tabs' own chats: whether they may run yet, and what browser tabs sent them.
@@ -354,17 +339,6 @@ impl SessionManager {
             .await;
         }
         let brains = brains::Brains::new(&data_dir);
-        let machine = Arc::new(crate::machine::MachineWatch::new(
-            runtime.platform().clone(),
-        ));
-        // A test's scripted session runs on a calm machine, whatever the host's heat or memory
-        // pressure: a test that wants it strained says so.
-        #[cfg(test)]
-        if runtime.faked() {
-            machine
-                .guard
-                .fake(brigadier_sandbox::MachineLoad::default());
-        }
         let app = Arc::new(app_call::AppHub::default());
         let registry = {
             #[cfg(not(test))]
@@ -399,20 +373,13 @@ impl SessionManager {
             data_dir,
             registry: std::sync::RwLock::new(registry),
             grants: Grants::default(),
-            mcp_auth: {
-                let me = me.clone();
-                Arc::new(mcp_auth::McpAuth::new(
-                    // Tests never touch the user's Keychain.
-                    #[cfg(not(test))]
-                    mcp_auth::system_keychain(),
-                    #[cfg(test)]
-                    Arc::new(mcp_auth::Memory::default()),
-                    Arc::new(move |grant: &str| {
-                        me.upgrade()
-                            .is_some_and(|manager| manager.grants.resolve(grant).is_some())
-                    }),
-                ))
-            },
+            mcp_auth: Arc::new(mcp_auth::McpAuth::new(
+                // Tests never touch the user's Keychain.
+                #[cfg(not(test))]
+                mcp_auth::system_keychain(),
+                #[cfg(test)]
+                Arc::new(mcp_auth::Memory::default()),
+            )),
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             worker_events: Default::default(),
@@ -438,7 +405,6 @@ impl SessionManager {
             feedback_sign_in: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
-            reruns_starting: tokio::sync::Mutex::new(()),
             user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
@@ -446,11 +412,9 @@ impl SessionManager {
             brains,
             #[cfg(debug_assertions)]
             faults: fault::Faults::default(),
-            research: research::Research::default(),
             question_timeout_ms: std::sync::atomic::AtomicU64::new(
-                workers::QUESTION_TIMEOUT.as_millis() as u64,
+                browser_tool::QUESTION_TIMEOUT.as_millis() as u64,
             ),
-            machine,
             closing: closing::Closing::default(),
             computer_use: computer_use::ComputerUse::default(),
             computer_host: computer_host::ComputerHost::default(),
@@ -473,7 +437,6 @@ impl SessionManager {
         manager.install_worktree_remover();
         // Each step's future is polled from the heap: made in this frame, they took half a
         // MiB of an unoptimized build's stack at once.
-        crate::heap(|| manager.start_machine_watch()).await;
         // Cleanups a quit cut off finish before anything of those conversations resumes.
         crate::heap(|| manager.finish_cut_off_cleanups()).await;
         // The thread engine's first start deletes the earlier engine's conversations, before
@@ -486,7 +449,6 @@ impl SessionManager {
         crate::heap(|| manager.recover()).await;
         crate::heap(|| manager.open_brains()).await;
         manager.start_hibernation_timer();
-        manager.start_watchdog();
         manager.start_computer_watchdog();
         manager.retry_waiting_on_provider_checks();
         manager.start_checkpoint_timer();
@@ -517,9 +479,6 @@ impl SessionManager {
         // Archives under way finish first (bounded) while the providers and the store are up.
         self.finish_cleanups_for_quit().await;
         self.runtime.registry().cancel_refresh();
-        self.research.stop.cancel();
-        self.research.jobs.close();
-        self.research.jobs.wait().await;
         let tasks: Vec<Arc<TaskLive>> = self.tasks_lock().values().cloned().collect();
         let convs: Vec<Arc<ConvLive>> = self.convs_lock().values().cloned().collect();
         let mut closing = tokio::task::JoinSet::new();
@@ -820,16 +779,6 @@ impl SessionManager {
         self.user_stops_lock().insert(task.clone());
     }
 
-    /// Whether the user stopped `task`: being stopped by them now, or filed "Stopped by the
-    /// user" on `board` (which outlives a restart).
-    pub(crate) fn user_stopped(&self, board: &crate::board::Board, task: &TaskId) -> bool {
-        self.user_stops_lock().contains(task)
-            || board.orchestrator_steps.iter().any(|step| {
-                matches!(&step.kind, crate::work::OrchestratorStepKind::Stopped { task_id, reason }
-                    if task_id == task && reason == workers::USER_STOP_REASON)
-            })
-    }
-
     /// Whether `task` is being stopped right now.
     pub(crate) fn is_stopping(&self, task: &TaskId) -> bool {
         self.stopping_lock().contains(task)
@@ -982,9 +931,9 @@ impl ToolHost for SessionManager {
                     },
                     ToolCall::Orchestrator(call),
                 ) => {
-                    // On the heap, as the worker's and a Chat's arms: a debug build gives each
-                    // unboxed await of these big futures its own room in this frame, which a
-                    // landing flow runs through (#354).
+                    // On the heap, as the worker's arm: a debug build gives each unboxed await
+                    // of these big futures its own room in this frame, which a landing flow runs
+                    // through (#354).
                     crate::heap(|| manager.orchestrator_call(conversation_id, call)).await
                 }
                 (
@@ -1020,11 +969,6 @@ impl ToolHost for SessionManager {
                 }
                 (Role::Chat { conversation_id }, ToolCall::Chat(call)) => {
                     manager.chat_call(conversation_id, call).await
-                }
-                (Role::Chat { conversation_id }, ToolCall::Orchestrator(call))
-                    if call.in_chat() =>
-                {
-                    crate::heap(|| manager.orchestrator_call(conversation_id, call)).await
                 }
                 (Role::Chat { conversation_id }, ToolCall::Browser(call)) => {
                     crate::heap(|| manager.browser_tool(conversation_id, None, call)).await

@@ -18,7 +18,7 @@ use brigadier_providers::{ApprovalDecision, ApprovalKind, ApprovalRequest};
 use super::SessionManager;
 use super::cards::CardAnswer;
 use super::cards::OWN_APPROVAL;
-use super::takeover::{TerminalHost, TerminalSnapshot};
+use super::terminal_host::{TerminalHost, TerminalSnapshot};
 use crate::app_call::{AppAnswer, AppOp, OpenTarget};
 use crate::model::{PermissionLevel, Setup};
 use crate::tools::TerminalRun;

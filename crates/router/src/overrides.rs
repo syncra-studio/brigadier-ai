@@ -1,5 +1,6 @@
-//! The legacy task router's user preferences, retained until its last consumer leaves.
-//! Explicit worker starts use only the user's model rules file.
+//! The routing rules Brigadier kept before S16b: read once from old settings (an agent switched
+//! off the old way), and named in task explanations recorded then. Explicit worker starts use
+//! only the user's model rules file.
 
 use brigadier_providers::ProviderKind;
 use serde::{Deserialize, Serialize};

@@ -46,7 +46,7 @@ fn read(flow: &Flow, account: &AccountRef, used: f64, at_ms: i64) {
 }
 
 async fn claude(flow: &Flow) -> ProviderUsage {
-    let view = flow.manager.usage_view(None).await.unwrap();
+    let view = flow.manager.usage_view().await.unwrap();
     view.providers
         .into_iter()
         .find(|usage| usage.provider == ProviderKind::Claude)
@@ -91,7 +91,7 @@ async fn each_account_has_its_own_windows_and_the_time_they_were_read() {
     assert_eq!(usage.accounts[0].read_at_ms, Some(now - 4 * 60 * 1000));
     assert_eq!(usage.accounts[1].read_at_ms, Some(now - 60 * 1000));
     // An account never read says so.
-    let codex = flow.manager.usage_view(None).await.unwrap().providers;
+    let codex = flow.manager.usage_view().await.unwrap().providers;
     let codex = codex
         .iter()
         .find(|usage| usage.provider == ProviderKind::Codex)

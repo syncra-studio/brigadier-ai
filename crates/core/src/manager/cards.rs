@@ -178,7 +178,7 @@ impl SessionManager {
         task_id: Option<TaskId>,
         subject: ApprovalSubject,
     ) -> Result<(Approval, oneshot::Receiver<CardAnswer>)> {
-        let request_id = self.request_for(conversation_id, task_id.as_ref()).await;
+        let request_id = self.request_for(conversation_id).await;
         let approval = Approval {
             id: CardId::generate(),
             conversation_id: conversation_id.clone(),
@@ -323,34 +323,10 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Opens a question card for the user.
-    pub(crate) async fn open_question(
-        &self,
-        conversation_id: &ConversationId,
-        task_id: Option<TaskId>,
-        kind: QuestionKind,
-        text: String,
-        options: Vec<String>,
-        recommended: Option<u32>,
-    ) -> Result<(Question, oneshot::Receiver<CardAnswer>)> {
-        // Only an index that names one of the options.
-        let recommended = recommended.filter(|&index| (index as usize) < options.len());
-        self.open_card(
-            conversation_id,
-            task_id,
-            kind,
-            text,
-            options,
-            recommended,
-            Vec::new(),
-            None,
-        )
-        .await
-    }
-
     /// Opens a card that asks a round of questions, answered together.
     pub(crate) async fn open_round(
         &self,
+        id: CardId,
         conversation_id: &ConversationId,
         task_id: Option<TaskId>,
         kind: QuestionKind,
@@ -363,6 +339,7 @@ impl SessionManager {
             .collect::<Vec<_>>()
             .join("\n");
         self.open_card(
+            id,
             conversation_id,
             task_id,
             kind,
@@ -378,6 +355,7 @@ impl SessionManager {
     #[allow(clippy::too_many_arguments)]
     async fn open_card(
         &self,
+        id: CardId,
         conversation_id: &ConversationId,
         task_id: Option<TaskId>,
         kind: QuestionKind,
@@ -387,9 +365,9 @@ impl SessionManager {
         items: Vec<QuestionItem>,
         title: Option<String>,
     ) -> Result<(Question, oneshot::Receiver<CardAnswer>)> {
-        let request_id = self.request_for(conversation_id, task_id.as_ref()).await;
+        let request_id = self.request_for(conversation_id).await;
         let question = Question {
-            id: CardId::generate(),
+            id,
             conversation_id: conversation_id.clone(),
             task_id,
             request_id,

@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use brigadier_providers::ProviderKind;
-use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{Environment, GitStyle, ModelChoice, Settings, Setup};
@@ -285,102 +284,6 @@ async fn the_commit_style_reaches_the_writer() {
             .contains("Follow the user's instructions:\nStart every subject with a ticket number."),
         "{}",
         writes[1].1
-    );
-    flow.stop().await;
-}
-
-/// The thread starts with the user's styles in its instructions; switched while it runs, it
-/// hears nothing of it. Its lead's brief carries them too.
-#[tokio::test]
-async fn the_styles_reach_the_thread_and_its_workers_and_a_switch_tells_a_running_thread_nothing() {
-    let inputs = Arc::new(Mutex::new(Vec::<String>::new()));
-    let briefs = Arc::new(Mutex::new(Vec::<String>::new()));
-    let (seen, told) = (inputs.clone(), briefs.clone());
-    let flow = Flow::start(
-        "git-writing-agents",
-        Options::default(),
-        script(move |turn| {
-            let (seen, told) = (seen.clone(), told.clone());
-            async move {
-                if turn.is_orchestrator() {
-                    seen.lock().unwrap().push(turn.input.clone());
-                    if turn.input.contains("Add a greeting.") {
-                        let reply = turn
-                            .call(
-                                "delegate_task",
-                                json!({"effort": "medium", "title": "Add a greeting",
-                                       "kind": "implement", "spec": "Create hello.txt.",
-                                       "provider": "claude"}),
-                            )
-                            .await;
-                        assert!(!reply.is_error, "{}", reply.text);
-                    }
-                    return Reply::text("");
-                }
-                if turn.task_number().is_some() && turn.earlier == 0 {
-                    told.lock().unwrap().push(turn.input.clone());
-                    let reply = turn
-                        .call(
-                            "submit_report",
-                            json!({"summary": "Nothing to change.", "changes": []}),
-                        )
-                        .await;
-                    assert!(!reply.is_error, "{}", reply.text);
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    edit_settings(&flow, |settings| {
-        settings.commit_style = GitStyle::Custom;
-        settings.commit_instructions = "Prefix subjects with the area.".into();
-        settings.pr_style = GitStyle::Conventional;
-    })
-    .await;
-    flow.say("Hi.").await;
-    flow.settled().await;
-    let threads = flow.thread_specs();
-    let prompt = threads[0]
-        .1
-        .append_system_prompt
-        .clone()
-        .unwrap_or_default();
-    assert!(
-        prompt.contains("Git writing (the user's settings"),
-        "{prompt}"
-    );
-    assert!(
-        prompt.contains("Prefix subjects with the area."),
-        "{prompt}"
-    );
-    assert!(
-        prompt.contains("Give the title the Conventional Commits form"),
-        "{prompt}"
-    );
-
-    flow.say("Add a greeting.").await;
-    flow.settled().await;
-    let briefs = briefs.lock().unwrap().clone();
-    assert_eq!(briefs.len(), 1, "{briefs:#?}");
-    assert!(
-        briefs[0].contains("Prefix subjects with the area."),
-        "{}",
-        briefs[0]
-    );
-
-    // Back to the repository's way: the running thread hears nothing of it.
-    edit_settings(&flow, |settings| {
-        settings.commit_style = GitStyle::Repository;
-        settings.pr_style = GitStyle::Repository;
-    })
-    .await;
-    flow.say("And now?").await;
-    flow.settled().await;
-    let inputs = inputs.lock().unwrap().clone();
-    assert!(
-        inputs.iter().all(|input| !input.contains("[settings]")),
-        "{inputs:#?}"
     );
     flow.stop().await;
 }

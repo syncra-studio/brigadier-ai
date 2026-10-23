@@ -1249,7 +1249,7 @@ impl super::SessionManager {
             ));
         };
         let conv = self.conv(id)?;
-        let request = self.request_for(id, None).await;
+        let request = self.request_for(id).await;
         let branch = push.branch.trim().to_owned();
         let short = short_sha(&sha).to_owned();
         self.ci_row(

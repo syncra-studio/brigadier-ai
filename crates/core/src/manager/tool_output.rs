@@ -3,8 +3,8 @@
 //! A long output is stored whole in the blob store first, under a short alias (`out-<id>`)
 //! that the conversation owns ([`StoredOutput`], recorded on its stream: the event's mention of
 //! the blob keeps it stored while the conversation lives, and deleting the conversation takes
-//! it). The model gets a digest ([`crate::digest`]) and pages through the rest with
-//! `read_artifact`, which takes an alias only from the conversation that owns it.
+//! it). The model gets a digest ([`crate::digest`]) naming the stored file, which it reads with
+//! its own tools.
 //!
 //! - A Claude thread's `Bash` output reaches Brigadier through its `PostToolUse` hook
 //!   (`brigadierd hook post-tool-use`), with a grant that can only do this
@@ -20,15 +20,13 @@ use crate::digest::{BASH_WHOLE_MAX, digest, wrapped_digest};
 use crate::model::{ConversationId, DomainEvent};
 use crate::tools::Role;
 use crate::work::{OutputSource, StoredOutput};
-use crate::{Error, Result, now_ms};
+use crate::{Result, now_ms};
 
 /// Largest output stored; what a command prints beyond it is counted, not kept.
 pub const OUTPUT_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// The environment variable that holds a hook's grant (set in the CLI's environment, which its
 /// hooks inherit).
 pub const HOOK_GRANT_ENV: &str = "BRIGADIER_HOOK_GRANT";
-/// Where a worker's `Stop` hook finds its grant (BUILD-PLAN E2).
-pub const STOP_GRANT_ENV: &str = "BRIGADIER_STOP_GRANT";
 /// How long Claude lets the hook take (it reads at most one output file and stores it).
 pub(crate) const HOOK_TIMEOUT_SECS: u64 = 60;
 /// The prefix of an output's alias.
@@ -103,17 +101,27 @@ impl SessionManager {
             }
         };
         let output = self.hide_secrets(id, output).await;
+        // Stored first: the digest names the file the model reads the rest from.
+        let blobs = self.core.store().blobs().clone();
+        let (blob, output) = super::blocking(move || {
+            let blob = blobs.put_blocking(&output)?;
+            Ok((blob, output))
+        })
+        .await?;
+        let artifact = format!(
+            "{alias} in {}",
+            self.core.store().blobs().file_of(&blob).display()
+        );
         let digest = if passed {
-            crate::digest::passed(status, &output, &alias)
+            crate::digest::passed(status, &output, &artifact)
         } else if wrapped {
-            wrapped_digest(status, &output, &alias)
+            wrapped_digest(status, &output, &artifact)
         } else {
-            digest(status, &output, &alias)
+            digest(status, &output, &artifact)
         };
         let lines = output.split(|byte| *byte == b'\n').count() as u64
             - u64::from(output.ends_with(b"\n") || output.is_empty());
         let bytes = output.len() as u64;
-        let blob = self.core.store().blobs().put(output).await?;
         let stored = StoredOutput {
             alias,
             blob: blob.to_string(),
@@ -167,33 +175,5 @@ impl SessionManager {
                 .await
                 .map(|_| None),
         })
-    }
-
-    /// The blob of the conversation's output `alias`, and what to call it; an alias of another
-    /// conversation, or none, is refused.
-    pub(crate) async fn output_blob(
-        &self,
-        id: &ConversationId,
-        alias: &str,
-    ) -> Result<Option<(String, String)>> {
-        if !alias.starts_with(ALIAS_PREFIX) {
-            return Ok(None);
-        }
-        let board = self.core.board(id).await?;
-        let output = board.outputs.get(alias).ok_or_else(|| {
-            Error::Invalid(format!(
-                "{alias} is not a command output of this session. Use the out-… id a trimmed \
-                 output named."
-            ))
-        })?;
-        let name = match output.source {
-            OutputSource::BashExcerpt => "the stored excerpt of a command's output",
-            OutputSource::Bash | OutputSource::Run | OutputSource::Check | OutputSource::Shell => {
-                "a command's full output"
-            }
-            OutputSource::Preview => "a preview's log",
-            OutputSource::Terminal => "a terminal's output",
-        };
-        Ok(Some((output.blob.clone(), name.into())))
     }
 }

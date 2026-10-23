@@ -22,7 +22,7 @@ const FRAME_PX = 720;
 
 function Page({ sections }: { sections: number }) {
   return (
-    <SettingsPage title="Routing" description="Which agent and model take each kind of work.">
+    <SettingsPage title="Git" description="How Brigadier writes commits and pull requests.">
       {Array.from({ length: sections }, (_section, s) => (
         <SettingsSection key={s} title={`Section ${s + 1}`}>
           <SettingsCard>

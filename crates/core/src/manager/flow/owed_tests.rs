@@ -1,14 +1,12 @@
-//! A request isn't over while Brigadier still owes it a turn (w43 bug 2): a CI watch with no
-//! result. It works on between turns and is done once, at its real ending; a stop or a failure
-//! still ends it, and the user's Stop ends the watch.
+//! A request's turn ends it, as a plain CLI's (S16b): a failure stays a failure while a CI
+//! watch it started still runs.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::conversation::Envelope;
 use crate::model::DomainEvent;
-use crate::work::{InjectionKind, OrchestratorStepKind, RequestState, RunState};
+use crate::work::{OrchestratorStepKind, RequestState, RunState};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -109,67 +107,6 @@ async fn ci_result(flow: &Flow) -> Option<String> {
             }
             _ => None,
         })
-}
-
-/// Push, watch, a turn that ends on [quiet] (w43 B1): the request works until the watch's
-/// result turn answers, then is done once, with that answer.
-#[tokio::test]
-async fn a_ci_watch_keeps_its_request_working_until_its_result_turn() {
-    let (flow, request) = watching("owed-ci", Reply::text("")).await;
-    assert_eq!(stays(&flow, &request).await, RequestState::Working);
-    assert_eq!(times_done(&flow, &request).await, 0);
-    // The watch ends as `watch_ci`'s does: its row's result, then the message.
-    flow.manager
-        .orchestrator_step(&flow.conversation, ci_row(Some("passed")))
-        .await;
-    flow.manager
-        .deliver_for(
-            &flow.conversation,
-            Envelope {
-                kind: InjectionKind::Report,
-                label: "ci 97c298d5".into(),
-                task_id: None,
-                text: "[ci 97c298d5 · passed · 1 job]".into(),
-            },
-            Some(request.clone()),
-        )
-        .await;
-    let board = flow.settled().await;
-    assert_eq!(board.requests[&request].state, RequestState::Done);
-    assert_eq!(times_done(&flow, &request).await, 1, "done once");
-    flow.stop().await;
-}
-
-/// The user's Stop while only the CI watch keeps the request working: it ends Stopped, the
-/// watch's task ends and its row reads "stopped", and nothing wakes the thread for it later.
-#[tokio::test]
-async fn stop_during_a_ci_watch_stops_the_request_and_ends_the_watch() {
-    let (flow, request) = watching("owed-ci-stop", Reply::text("")).await;
-    assert_eq!(stays(&flow, &request).await, RequestState::Working);
-    // The watch's own task, as `watch_ci` keeps it.
-    let task = tokio::spawn(tokio::time::sleep(Duration::from_secs(600)));
-    flow.manager
-        .conv(&flow.conversation)
-        .unwrap()
-        .ci_watches
-        .lock()
-        .unwrap()
-        .push(task.abort_handle());
-    flow.manager
-        .interrupt(flow.conversation.clone())
-        .await
-        .unwrap();
-    let board = flow
-        .until("the request stopped", |board| {
-            board.requests[&request].state == RequestState::Stopped
-        })
-        .await;
-    assert!(task.await.unwrap_err().is_cancelled(), "the watch ended");
-    assert_eq!(ci_result(&flow).await.as_deref(), Some("stopped"));
-    assert_ne!(board.run, RunState::Running);
-    assert_eq!(stays(&flow, &request).await, RequestState::Stopped);
-    assert_eq!(times_done(&flow, &request).await, 0);
-    flow.stop().await;
 }
 
 /// A turn that fails while the CI watch runs: the request reads failed, not working; what

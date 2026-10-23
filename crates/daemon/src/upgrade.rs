@@ -31,7 +31,6 @@ fn role_name(role: &Role) -> &'static str {
         Role::Chat { .. } => "chat",
         Role::TabChat { .. } => "tab chat",
         Role::OutputHook { .. } => "output hook",
-        Role::StopHook { .. } => "stop hook",
     }
 }
 
@@ -70,28 +69,6 @@ pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
         Err(_) if private_logs => tracing::warn!(role = "tab chat", "MCP connection failed"),
         Err(err) => tracing::warn!(role, error = %err, "MCP connection failed"),
     }
-}
-
-/// Answers a Claude worker's `Stop` hook: why its turn may not end yet, or nothing (BUILD-PLAN
-/// E2). Any other grant closes the connection.
-pub async fn serve_stop_hook(
-    daemon: Arc<Daemon>,
-    grant: String,
-    active: bool,
-    mut stream: RawStream,
-) {
-    let Some(block) = daemon.sessions.stop_hook(&grant, active).await else {
-        tracing::warn!("refused a stop hook: not a stop hook grant");
-        return;
-    };
-    let Ok(frame) = brigadier_ipc::encode_frame(&brigadier_ipc::protocol::StopHookReply { block })
-    else {
-        return;
-    };
-    if let Err(err) = stream.write_all(&frame).await {
-        tracing::debug!(error = %err, "a stop hook left before its answer");
-    }
-    let _ = stream.flush().await;
 }
 
 /// How long a hook may take to send its output.

@@ -51,18 +51,20 @@ async fn the_thread_merges_with_git_and_the_session_reads_merged_from_git() {
     )
     .await;
     checkout.set(flow.repo.clone()).unwrap();
-    let tab = || flow.core.conversation(&flow.conversation).unwrap();
 
     flow.say("Add the notes.").await;
     flow.settled().await;
-    assert_eq!(flow.manager.tab_state(&tab()).await, Some(TabState::Ready));
+    assert_eq!(
+        flow.settled_state(&flow.conversation).await,
+        Some(TabState::Ready)
+    );
     let worktree = flow.manager.checkout_dir(&flow.conversation).unwrap();
     let head = git(std::path::Path::new(&worktree), &["rev-parse", "HEAD"]);
 
     flow.say("Merge it into main.").await;
     let board = flow.settled().await;
     assert_eq!(
-        flow.manager.tab_state(&tab()).await,
+        flow.settled_state(&flow.conversation).await,
         Some(TabState::Merged),
         "read from git"
     );

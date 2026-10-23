@@ -4,106 +4,16 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AnswerWorker, AskOrchestrator, AttachProof, CHAT_THREAD_TOOLS, ChatCall, CiPush, CodeRefs,
-    CodeSearch, DelegateTask, FinishSession, JobCall, LandPhase, MessageWorker, NoteForUser,
-    NoteProgress, OfferFeedback, OrchestratorCall, QueryBrain, ReadArtifact, ReadPage, RecordNodes,
-    Remember, ReportRef, RequestApproval, RerunTask, Role, RouteFollowUp, SaveMemory, SaveReport,
-    SearchTranscript, StopWorker, StoreOutput, SubmitReport, SuggestSetting, THREAD_TOOLS,
-    TabChatCall, TabTools, ToolCall, WorkerCall, WritePage, WriteTabFile,
+    ChatCall, CiPush, CodeRefs, CodeSearch, FinishSession, JobCall, LandPhase, NoteForUser,
+    OfferFeedback, OrchestratorCall, QueryBrain, ReadPage, RecordNodes, Remember, RequestApproval,
+    Role, SaveMemory, SaveReport, SearchTranscript, SuggestSetting, THREAD_TOOLS, TabChatCall,
+    TabTools, ToolCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::schema::{input_schema, no_arguments};
-
-/// `delegate_task`'s description, which carries the rules for briefing and routing workers
-/// (BUILD-PLAN C1): the thread does normal work itself, so they are read when it delegates,
-/// not on every call. Under [`DESCRIPTION_MAX`] characters, where Claude Code cuts a
-/// description it loads up front.
-const DELEGATE_TASK: &str = "Start a worker on one task. Returns at once with its id (\"task-3\"); \
-its report arrives later as a message. Never wait or poll: end your turn and carry on when the \
-report or the user's next message arrives.
-
-When: parts that can run at once, very long jobs, work needing tools you lack (a look at a \
-running app), or the user's ask. Independent parts (separate questions, writers on separate \
-files) start in one batch, several calls in one message, each one job with its own \"done \
-when\"; dependent parts run one after another. A long job across back end and \
-UI goes to one worker per layer, split along a data contract (the field names) in both briefs. \
-Meanwhile do your own part.
-
-The brief (`spec`) is self-contained: the worker sees nothing of this conversation. Give the \
-constraints and settled decisions, what \"done\" means and how to check each part by its own \
-checks only (never the full suite or an app build; screenshots only if the user asked), and the \
-code pointers you have. With `include_request` Brigadier adds the user's request verbatim, with \
-what was added since: don't copy it into the spec. Never tell a worker to write outside its \
-worktree and scratch folder, nor name a /tmp path: files for you or the user go in its outputs \
-folder.
-
-Kinds: `scout` looks around the repository; `research` checks current docs and the web; \
-`implement` changes code in its own worktree, commits its steps and lands only through \
-land_phase; `operate` uses apps on this Mac (over about five GUI steps) to reach `end_state` in \
-`target`, changing no code, on a fast GUI model; a job that changes code and shows in an app \
-stays one implement task. `review`, `merge` and `verify` read and report.
-
-Apps: with computer use on, every worker can open an app on this Mac, look at it and use it; \
-you can't. A visible UI change, however small, is looked at live once on the landed work: \
-once the full checks pass on it, delegate one task with `live_look`; workers use scripted UI checks, and a \
-mockup's final comparison is a live capture. A visible UI change that isn't a small fix: first ask_user \"Want a mockup \
-first?\" (Yes / Skip; say if part of it can't be faked). Yes: a task with `mockup`, then ask \
-only what its screenshots can't show; the user's marked notes go to that worker (message_worker \
-with their attachments). On their yes to the work, land the mockup, then delegate with \
-`matches_mockup`; if they drop it, stop the mockup.
-
-`subject`: a review's task; a merge task's conflicting task (none merges the session's base \
-into its branch); a fix's task: after a phase's verifier it continues that work and lands it \
-with its own.";
-
-const MESSAGE_WORKER: &str = "Send text to a worker: an instruction that steers its current \
-work, or sends a reported worker back to work. Answer a worker's question with answer_worker. \
-Returns once delivered.";
-
-const ANSWER_WORKER: &str = "Answer the question a worker asked you (it waits for the answer). \
-Answer at once and yourself: take the worker's recommendation if it fits, else what the brief, \
-the outline, the user's words or the Brain imply; never reopen a decision already settled. Ask \
-the user only what truly only they can decide. `why` is a few words the user reads next to the \
-answer.";
-
-const ROUTE_FOLLOW_UP: &str = "Sort a [follow-up …] the user sent while you work on their \
-request. route \"join\": it belongs to this work; it reaches you at once as the user's message, \
-and your final answer covers it too. \"new_session\": separate work, with a different goal that \
-leaves the files this request is changing alone (another file, feature or fix), however small; \
-it waits offering the user \"Open as a new session\" or \"Run here\" until they pick (you \
-never start sessions). \"wait\": a request of its own that has to come after this work (it \
-builds on its result or changes the same files); it waits in the user's queue and reaches you \
-once this work is done. \"session\" with `session` (another session's id): it belongs to \
-that session of this project; it goes there as the user's message and this session shows the \
-user a notice with Undo; the result says if that session already merged. Optional: one left unsorted joins this work shortly.";
-
-const STOP_WORKER: &str = "Stop a running worker, e.g. when its task is no longer needed or \
-went wrong. Nothing of it lands. `reason` is required: one plain line on why, which the user \
-reads on the thread's \"Stopped\" row (e.g. \"No longer needed: the user dropped the export\").";
-
-const RERUN_TASK: &str = "Run a scout or research task again once, one tier up, when you judge \
-that its answer lacks support: the same spec on a model a tier above the one that ran it. Its \
-report arrives later as a message; use it, ignore it or stop it. Once per task; not for a rerun \
-or other kinds of work. A report with a [not met] line reruns by itself. A missing or broken \
-citation is no reason: the report marks it [unevidenced] for you to judge. `why` is one line on \
-what falls short.";
-
-const READ_REPORT: &str = "Read a task's final report again: summary, changes, decisions, \
-verification, open questions and artifact ids. A report from another session of this project \
-is read by the task id a Brain answer names.";
-
-const STORE_OUTPUT: &str = "Keep a file you wrote, such as your corrected copy of a worker's \
-deliverable, as that task's output, in place of its output with the same file name. Link it as \
-its reply says ([name](outputs/name)): it opens and saves from there and from the task card, and \
-outlives your workspace and scratch.";
-
-const READ_ARTIFACT: &str = "Read part of an artifact named in a report or a Brain answer (full \
-transcript, diff, command output, note), from any session of this project, by its id. At most 16000 bytes per call, starting at `offset`; the \
-reply gives the total size so you can page. Read only what you need: everything you read enters \
-your context.";
 
 const QUERY_BRAIN: &str = "Ask the Project Brain what Brigadier knows about this project (modules, \
 earlier findings, decisions, conventions, contracts) and the user's preferences, each with \
@@ -126,13 +36,6 @@ messages, your answers, reports and decisions, and the commands you ran, files y
 tools you called), including what is no longer in your context. Returns the best-matching \
 passages with their dates: a message shows its number (#N), a step of your own work shows as \
 a thread step, never a message number, with where its whole output is kept.";
-
-const ATTACH_PROOF: &str = "Attach a screenshot or short recording you made of the change \
-(PNG, JPEG, GIF, WebP, MP4, MOV or WebM, at most 11 MB), or a log or test run's output (.log or \
-.txt, at most 1 MB, with `kind`), to your reply: the user sees it under the reply, the merge \
-message's proof. Always give a short `caption` of what it shows (\"Added a todo with a due \
-date\"), and `preview` when it was taken of one of your previews; a browser_screenshot \
-knows its page. Brigadier keeps a copy, so a temporary file is fine.";
 
 const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decide: spending \
 money, handling credentials yourself (a token, a password, the keychain directly), or destroying \
@@ -205,10 +108,6 @@ for it. One offer per incident: unless asked, refused while an earlier one is un
 after they dismissed one. Asked to report several separate things, offer one card each, up to 10 \
 in a request.";
 
-const LIST_TASKS: &str = "List this session's tasks (id, title, kind, status and model), then \
-where the session's full checks stand (passed, running and for how long, failed, due) and which \
-of your commands run in the background: call it before you say whether the work is ready.";
-
 const CODE_SEARCH: &str = "Search the repository's code index (instant; it is kept current \
 as files change): symbol definitions by name (functions, types, classes, methods) and files \
 by path, best matches first. Use it before grepping to find where things are.";
@@ -239,39 +138,10 @@ short sentence. Only when they state it or clearly imply it holds beyond this ch
 passwords, keys, card or account numbers (refused), health or money details, or passing details. \
 The user sees, edits and deletes it in Settings.";
 
-const ASK_THREAD: &str = "Ask the thread (which gave you this task) a question you \
-cannot settle yourself, such as an unclear requirement or a choice outside your task. One \
-question per call, with the options you see and the one you recommend. The call blocks until \
-the answer comes back. Ask only when you cannot sensibly go on without the answer; look things \
-up with query_brain and the code tools first. If none comes within the hour, an operational \
-question goes on with its `safe_default`; any other keeps waiting.";
-
-const NOTE_PROGRESS: &str = "Say where you are in your plan, in a few words on one line \
-(\"Step 3 of 5: wiring the exporter\", \"Scene 4 of 12: pricing section\"): the user sees it under \
-your name while you work, until your next note. On work of several steps or over a few minutes, \
-post one as you start each step. It returns at once and tells no one else.";
-
-const WORKER_QUERY_BRAIN: &str = "Ask the Project Brain (read-only): what Brigadier knows \
-about this project (its modules, earlier findings, decisions, conventions, contracts) and the \
-user's preferences, each with where it came from. Fast and cheap: ask it before reading widely. \
-It answers with what holds now; set `history` to also see earlier versions. When it says there \
-are more results, ask again with `page`.";
-
-const SUBMIT_REPORT: &str = "Submit your final structured report. Call it exactly once, as \
-your last action, when the task is done or cannot be done. The thread reads only this \
-report, never your messages: the summary must hold your findings (or name the artifact that \
-does), never point to text below or in a message. It is final, and the thread reads \
-about 800 tokens of it inline (a longer one reaches it shortened): keep every field short, and \
-put long material (full findings, logs, command output, notes) in \
-files in your outputs folder, listed under `artifacts`. List every file you changed, created or \
-deleted under `changes`: new files that are not listed are not kept.";
-
-/// The tools `role` may call, in a stable order. The gate role gets none, and a worker that
-/// checks a change or plan no `ask_thread`.
+/// The tools `role` may call, in a stable order. A plain worker gets none: it reaches
+/// Brigadier through `brigadier` only.
 pub fn tools_for(role: &Role) -> &'static [Tool] {
     static ORCHESTRATOR: OnceLock<Vec<Tool>> = OnceLock::new();
-    static WORKER: OnceLock<Vec<Tool>> = OnceLock::new();
-    static CHECKER: OnceLock<Vec<Tool>> = OnceLock::new();
     static JOB: OnceLock<Vec<Tool>> = OnceLock::new();
     static CHAT: OnceLock<Vec<Tool>> = OnceLock::new();
     static TAB_PAGE: OnceLock<Vec<Tool>> = OnceLock::new();
@@ -285,13 +155,6 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                     .filter(|tool| THREAD_TOOLS.contains(&tool.name.as_ref()))
                     .collect(),
             )
-        }),
-        Role::Worker { checks: false, .. } => WORKER.get_or_init(worker_tools),
-        Role::Worker { checks: true, .. } => CHECKER.get_or_init(|| {
-            worker_tools()
-                .into_iter()
-                .filter(|tool| !matches!(tool.name.as_ref(), "ask_thread" | "submit_outline"))
-                .collect()
         }),
         Role::BrainJob { .. } => JOB.get_or_init(job_tools),
         Role::Chat { .. } => CHAT.get_or_init(chat_tools),
@@ -317,37 +180,12 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                 ),
             ]
         }),
-        Role::OutputHook { .. } | Role::StopHook { .. } => &[],
+        Role::Worker { .. } | Role::OutputHook { .. } => &[],
     }
 }
 
 fn orchestrator_tools() -> Vec<Tool> {
     vec![
-        tool("delegate_task", DELEGATE_TASK, delegate_task_schema()),
-        tool(
-            "message_worker",
-            MESSAGE_WORKER,
-            input_schema::<MessageWorker>(),
-        ),
-        tool(
-            "answer_worker",
-            ANSWER_WORKER,
-            input_schema::<AnswerWorker>(),
-        ),
-        tool(
-            "route_follow_up",
-            ROUTE_FOLLOW_UP,
-            input_schema::<RouteFollowUp>(),
-        ),
-        tool("stop_worker", STOP_WORKER, input_schema::<StopWorker>()),
-        tool("rerun_task", RERUN_TASK, input_schema::<RerunTask>()),
-        tool("read_report", READ_REPORT, input_schema::<ReportRef>()),
-        tool(
-            "read_artifact",
-            READ_ARTIFACT,
-            input_schema::<ReadArtifact>(),
-        ),
-        tool("store_output", STORE_OUTPUT, input_schema::<StoreOutput>()),
         tool("query_brain", QUERY_BRAIN, input_schema::<QueryBrain>()),
         tool("remember", REMEMBER, input_schema::<Remember>()),
         tool(
@@ -355,7 +193,6 @@ fn orchestrator_tools() -> Vec<Tool> {
             SEARCH_TRANSCRIPT,
             input_schema::<SearchTranscript>(),
         ),
-        tool("attach_proof", ATTACH_PROOF, input_schema::<AttachProof>()),
         tool(
             "request_approval",
             REQUEST_APPROVAL,
@@ -379,7 +216,6 @@ fn orchestrator_tools() -> Vec<Tool> {
             OFFER_FEEDBACK,
             input_schema::<OfferFeedback>(),
         ),
-        tool("list_tasks", LIST_TASKS, no_arguments()),
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
@@ -393,30 +229,6 @@ fn orchestrator_tools() -> Vec<Tool> {
     ]
 }
 
-fn worker_tools() -> Vec<Tool> {
-    vec![
-        tool("ask_thread", ASK_THREAD, input_schema::<AskOrchestrator>()),
-        tool(
-            "note_progress",
-            NOTE_PROGRESS,
-            input_schema::<NoteProgress>(),
-        ),
-        tool(
-            "submit_report",
-            SUBMIT_REPORT,
-            input_schema::<SubmitReport>(),
-        ),
-        tool(
-            "query_brain",
-            WORKER_QUERY_BRAIN,
-            input_schema::<QueryBrain>(),
-        ),
-        tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
-        tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
-        tool("project_map", PROJECT_MAP, no_arguments()),
-    ]
-}
-
 fn job_tools() -> Vec<Tool> {
     vec![
         tool("record_nodes", RECORD_NODES, input_schema::<RecordNodes>()),
@@ -426,24 +238,12 @@ fn job_tools() -> Vec<Tool> {
     ]
 }
 
-/// A Chat's: the thread's tools for workers and cards ([`CHAT_THREAD_TOOLS`]), its memories and
-/// its reports.
+/// A Chat's: its memories and its reports. It does the job itself (the `/brigade` skill).
 fn chat_tools() -> Vec<Tool> {
-    let mut tools: Vec<Tool> = orchestrator_tools()
-        .into_iter()
-        .filter(|tool| CHAT_THREAD_TOOLS.contains(&tool.name.as_ref()))
-        .collect();
-    tools.push(tool(
-        "save_memory",
-        SAVE_MEMORY,
-        input_schema::<SaveMemory>(),
-    ));
-    tools.push(tool(
-        "save_report",
-        SAVE_REPORT,
-        input_schema::<SaveReport>(),
-    ));
-    tools
+    vec![
+        tool("save_memory", SAVE_MEMORY, input_schema::<SaveMemory>()),
+        tool("save_report", SAVE_REPORT, input_schema::<SaveReport>()),
+    ]
 }
 
 /// The thread's everyday tools, in the model's list from the start (Q40, BUILD-PLAN C2): a
@@ -459,14 +259,6 @@ pub const THREAD_ALWAYS_LOADED: &[&str] = &[
 
 /// What the tool search matches a deferred tool on besides its name and description.
 const SEARCH_HINTS: &[(&str, &str)] = &[
-    ("delegate_task", "start a worker, delegate, parallel jobs"),
-    ("message_worker", "worker"),
-    ("answer_worker", "worker question"),
-    ("read_report", "worker report"),
-    (
-        "store_output",
-        "corrected file, fixed deliverable, worker output, Save",
-    ),
     ("save_report", "full report, research, long findings, page"),
     (
         "suggest_setting",
@@ -506,98 +298,6 @@ fn loading(tools: Vec<Tool>) -> Vec<Tool> {
 /// The most characters of a tool's description Claude Code keeps for a tool loaded up front.
 #[cfg(test)]
 const DESCRIPTION_MAX: usize = 4096;
-
-/// `delegate_task`'s fields in one line each (BUILD-PLAN C1): the rules behind them are in its
-/// description, and the shared types' own docs stay as they are.
-const DELEGATE_TASK_FIELDS: &[(&str, &str)] = &[
-    (
-        "title",
-        "A plain 2–4 word job name, unique in this chat (\"Add JSON output\"); no roles, phases or ids.",
-    ),
-    (
-        "kind",
-        "What it does: scout, research, implement, review, merge, verify or operate.",
-    ),
-    (
-        "spec",
-        "The self-contained brief: goal, context, constraints, \"done when\" and how to check it.",
-    ),
-    (
-        "provider",
-        "Optional \"claude\" or \"codex\"; leave it out to let Brigadier route.",
-    ),
-    ("model", "Optional model id, from that provider's list."),
-    (
-        "effort",
-        "\"low\" for a mechanical edit, \"medium\" for small bounded work, \"high\" for cross-area, risky or unclear work.",
-    ),
-    (
-        "subject",
-        "The task it acts on (\"task-2\"): a review's, a merge's or a fix's.",
-    ),
-    (
-        "target",
-        "operate: the app, dev build path or URL, and the window.",
-    ),
-    (
-        "end_state",
-        "operate: what must be true on screen at the end.",
-    ),
-    (
-        "attachments",
-        "Ids of the user's attachments it gets as files.",
-    ),
-    (
-        "include_request",
-        "True when it takes the whole request: Brigadier adds the user's message verbatim.",
-    ),
-    (
-        "areas",
-        "Optional parts it touches (\"frontend\", \"backend\", \"infra\", \"docs\", \"tests\") when the spec's paths don't say; routing goes by them.",
-    ),
-    (
-        "quality",
-        "Optional \"high\" when it needs the best models (hard or risky work).",
-    ),
-    ("image_generation", "True when it must generate images."),
-    (
-        "design",
-        "True when it makes designs or images: design files (Pencil's .pen), mockups, generated images.",
-    ),
-    (
-        "role",
-        "lead (an implement task's default), parallel (its own files next to the lead), verifier, fix, merge or reviewer.",
-    ),
-    (
-        "mockup",
-        "True for a mockup the user asked for: screenshots from the real components with fake data; it lands only on their yes.",
-    ),
-    (
-        "matches_mockup",
-        "The mockup's task, for the real change built after it.",
-    ),
-    (
-        "live_look",
-        "True for the one task that looks at the landed visible changes live in the session tip's dev app; it changes nothing.",
-    ),
-    (
-        "integrations",
-        "Extra MCP servers it needs, by name from your list.",
-    ),
-];
-
-/// [`DelegateTask`]'s schema with [`DELEGATE_TASK_FIELDS`]' descriptions.
-fn delegate_task_schema() -> JsonObject {
-    let mut schema = input_schema::<DelegateTask>();
-    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
-        for (field, description) in DELEGATE_TASK_FIELDS {
-            if let Some(Value::Object(property)) = properties.get_mut(*field) {
-                property.insert("description".into(), (*description).into());
-            }
-        }
-    }
-    schema
-}
 
 fn tool(name: &'static str, description: &'static str, schema: JsonObject) -> Tool {
     Tool::new(name, description, Arc::new(schema))
@@ -641,22 +341,6 @@ pub fn parse_call(
             thread_call(name, arguments)
         }
         Role::Orchestrator { .. } | Role::NoteFork { .. } => Err(unknown()),
-        Role::Worker { checks, .. } => {
-            let call = match name {
-                // Its name before #66, which a worker that started on it may still call.
-                "ask_thread" | "ask_orchestrator" if !checks => {
-                    WorkerCall::AskOrchestrator(args::<AskOrchestrator>(name, arguments)?)
-                }
-                "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
-                "query_brain" => WorkerCall::QueryBrain(args::<QueryBrain>(name, arguments)?),
-                "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
-                "code_refs" => WorkerCall::CodeRefs(args::<CodeRefs>(name, arguments)?),
-                "project_map" => WorkerCall::ProjectMap,
-                "note_progress" => WorkerCall::NoteProgress(args::<NoteProgress>(name, arguments)?),
-                _ => return Err(unknown()),
-            };
-            Ok(ToolCall::Worker(call))
-        }
         Role::BrainJob { .. } => {
             let call = match name {
                 "record_nodes" => JobCall::RecordNodes(args::<RecordNodes>(name, arguments)?),
@@ -674,8 +358,6 @@ pub fn parse_call(
             "save_report" => Ok(ToolCall::Chat(ChatCall::SaveReport(args::<SaveReport>(
                 name, arguments,
             )?))),
-            // The thread's worker and card tools, read as the thread's were.
-            _ if CHAT_THREAD_TOOLS.contains(&name) => thread_call(name, arguments),
             _ => Err(unknown()),
         },
         Role::TabChat { tools, .. } => {
@@ -690,29 +372,19 @@ pub fn parse_call(
             };
             Ok(ToolCall::TabChat(call))
         }
-        Role::OutputHook { .. } | Role::StopHook { .. } => Err(unknown()),
+        Role::Worker { .. } | Role::OutputHook { .. } => Err(unknown()),
     }
 }
 
-/// A call of the thread's tool `name`, a Chat's worker and card tools included.
+/// A call of the thread's tool `name`.
 fn thread_call(name: &str, arguments: Value) -> Result<ToolCall, ParseError> {
     let unknown = || ParseError::UnknownTool(name.to_owned());
     let call = match name {
-        "delegate_task" => OrchestratorCall::DelegateTask(args(name, arguments)?),
-        "message_worker" => OrchestratorCall::MessageWorker(args(name, arguments)?),
-        "answer_worker" => OrchestratorCall::AnswerWorker(args(name, arguments)?),
-        "route_follow_up" => OrchestratorCall::RouteFollowUp(args(name, arguments)?),
-        "stop_worker" => OrchestratorCall::StopWorker(args(name, arguments)?),
-        "rerun_task" => OrchestratorCall::RerunTask(args(name, arguments)?),
-        "read_report" => OrchestratorCall::ReadReport(args(name, arguments)?),
-        "read_artifact" => OrchestratorCall::ReadArtifact(args(name, arguments)?),
-        "store_output" => OrchestratorCall::StoreOutput(args(name, arguments)?),
         "query_brain" => OrchestratorCall::QueryBrain(args(name, arguments)?),
         "remember" => OrchestratorCall::Remember(args(name, arguments)?),
         "search_transcript" => {
             OrchestratorCall::SearchTranscript(args::<SearchTranscript>(name, arguments)?)
         }
-        "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
         "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
         "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
         "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
@@ -721,7 +393,6 @@ fn thread_call(name: &str, arguments: Value) -> Result<ToolCall, ParseError> {
         "watch_ci" => OrchestratorCall::WatchCi(args(name, arguments)?),
         "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
         "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
-        "list_tasks" => OrchestratorCall::ListTasks,
         "code_search" => OrchestratorCall::CodeSearch(args(name, arguments)?),
         "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
         "project_map" => OrchestratorCall::ProjectMap,
@@ -735,37 +406,27 @@ fn thread_call(name: &str, arguments: Value) -> Result<ToolCall, ParseError> {
 fn args<T: DeserializeOwned>(tool: &str, arguments: Value) -> Result<T, ParseError> {
     serde_json::from_value(arguments).map_err(|err| ParseError::BadArguments {
         tool: tool.to_owned(),
-        reason: match example(tool) {
-            Some(call) => format!("{err}. A well-formed call: {call}"),
-            None => err.to_string(),
-        },
+        reason: err.to_string(),
     })
 }
-
-/// A well-formed call, added to an argument error where models guessed the shape: a Codex
-/// worker calling tools from code sees no schema, and spent 2–3 rejected calls a report.
-fn example(tool: &str) -> Option<&'static str> {
-    match tool {
-        "submit_report" => Some(SUBMIT_REPORT_EXAMPLE),
-        _ => None,
-    }
-}
-
-/// A complete `submit_report` call: the list fields are text, one item per line.
-pub const SUBMIT_REPORT_EXAMPLE: &str = r#"{"summary": "Set Level to 37 through the slider.", "verification": "act's expect value_equals 37 held", "done_when": "[met] Level reads 37: the expect held", "risks": ""}"#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every tool fits where Claude Code cuts a description loaded up front, and
-    /// `delegate_task` keeps one short line per field, each for a field it has (BUILD-PLAN C1).
+    /// Every tool fits where Claude Code cuts a description loaded up front.
     #[test]
-    fn descriptions_fit_and_delegate_tasks_fields_are_one_line_each() {
-        let thread = Role::Orchestrator {
-            conversation_id: brigadier_core::model::ConversationId("c1".into()),
-        };
-        for role in [thread, worker(false), worker(true)] {
+    fn descriptions_fit() {
+        let id = || brigadier_core::model::ConversationId("c1".into());
+        let roles = [
+            Role::Orchestrator {
+                conversation_id: id(),
+            },
+            Role::Chat {
+                conversation_id: id(),
+            },
+        ];
+        for role in roles {
             for tool in tools_for(&role) {
                 let description = tool.description.as_deref().unwrap_or_default();
                 assert!(
@@ -776,35 +437,11 @@ mod tests {
                 );
             }
         }
-        let schema = delegate_task_schema();
-        let properties = schema["properties"].as_object().unwrap();
-        assert_eq!(properties.len(), DELEGATE_TASK_FIELDS.len());
-        for (field, line) in DELEGATE_TASK_FIELDS {
-            assert_eq!(properties[*field]["description"], *line, "{field}");
-            assert!(line.len() <= 140, "{field}: {}", line.len());
-        }
-        assert_eq!(
-            properties["kind"]["enum"],
-            serde_json::json!([
-                "scout",
-                "research",
-                "implement",
-                "review",
-                "merge",
-                "verify",
-                "operate"
-            ])
-        );
-        // #229: a job across back end and UI splits along a written data contract.
-        assert!(DELEGATE_TASK.contains("A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) in both briefs."));
-        let bytes =
-            serde_json::to_string(&Value::Object(schema)).unwrap().len() + DELEGATE_TASK.len();
-        assert!(bytes < 6_100, "delegate_task is {bytes} bytes");
     }
 
     /// A thread's everyday tools load up front and the rest wait behind Claude Code's tool
-    /// search, the same marks on every listing (the cached prefix stays the same); a worker's
-    /// tools carry no mark (BUILD-PLAN C2).
+    /// search, the same marks on every listing (the cached prefix stays the same) (BUILD-PLAN
+    /// C2).
     #[test]
     fn a_threads_everyday_tools_load_up_front_and_the_rest_wait_for_the_search() {
         {
@@ -844,66 +481,20 @@ mod tests {
                 "{listed}"
             );
         }
-        for tool in tools_for(&worker(false)) {
-            assert!(tool.meta.is_none(), "{}", tool.name);
-        }
     }
 
     /// What the thread's instructions no longer say is in the tool it applies to, read when
     /// the thread uses it (BUILD-PLAN C1).
     #[test]
     fn the_rules_left_out_of_the_threads_instructions_are_in_their_tools() {
-        for said in [
-            "start in one batch, several calls in one message, each one job with its own",
-            "dependent parts run one after another",
-            "how to check each part by its own checks only (never the full suite or an app build; screenshots only if the user asked)",
-            "With `include_request` Brigadier adds the user's request verbatim",
-            "nor name a /tmp path",
-            "`operate` uses apps on this Mac (over about five GUI steps)",
-            "a job that changes code and shows in an app stays one implement task",
-            "once the full checks pass on it, delegate one task with `live_look`",
-            "first ask_user \"Want a mockup first?\" (Yes / Skip",
-            "message_worker with their attachments",
-            "land the mockup, then delegate with `matches_mockup`",
-        ] {
-            assert!(DELEGATE_TASK.contains(said), "{said}");
-        }
-        let effort = &delegate_task_schema()["properties"]["effort"]["description"];
-        assert!(
-            effort
-                .as_str()
-                .unwrap()
-                .starts_with("\"low\" for a mechanical edit")
-        );
         assert!(CI_STATUS.contains("(`main` only through the usual merge into it here), push it and call watch_ci again without asking"));
     }
 
-    fn worker(checks: bool) -> Role {
+    fn worker() -> Role {
         Role::Worker {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
             task_id: brigadier_core::model::TaskId("t1".into()),
-            checks,
         }
-    }
-
-    #[test]
-    fn a_report_argument_error_shows_a_call_that_parses() {
-        let bad = serde_json::json!({"done_when": "[met] it works"});
-        let Err(err) = parse_call(&worker(false), "submit_report", bad.as_object().cloned()) else {
-            panic!("a report without a summary was taken");
-        };
-        let text = err.to_string();
-        let shown = text.split("A well-formed call: ").nth(1).expect(&text);
-        let example: Value = serde_json::from_str(shown).unwrap();
-        assert!(
-            parse_call(
-                &worker(false),
-                "submit_report",
-                example.as_object().cloned()
-            )
-            .is_ok(),
-            "{shown}"
-        );
     }
 
     #[test]
@@ -938,42 +529,6 @@ mod tests {
         assert!(matches!(
             parse_call(&thread, "project_map", None),
             Ok(ToolCall::Orchestrator(OrchestratorCall::ProjectMap))
-        ));
-    }
-
-    /// The lead names a worker's effort for every task (THREAD-UX-PLAN.md §4.1 b): the schema
-    /// requires it, and a call without it is refused.
-    #[test]
-    fn delegate_task_needs_an_effort() {
-        // A Chat's, until S16b: the thread's went in S15.
-        let thread = Role::Chat {
-            conversation_id: brigadier_core::model::ConversationId("c1".into()),
-        };
-        let delegate = tools_for(&thread)
-            .iter()
-            .find(|tool| tool.name == "delegate_task")
-            .unwrap();
-        let required = delegate.input_schema.get("required").unwrap();
-        assert!(
-            required
-                .as_array()
-                .unwrap()
-                .contains(&Value::from("effort"))
-        );
-        let call = |effort: Option<&str>| {
-            let mut arguments = JsonObject::new();
-            arguments.insert("title".into(), Value::from("Add a flag"));
-            arguments.insert("kind".into(), Value::from("implement"));
-            arguments.insert("spec".into(), Value::from("Add the flag."));
-            if let Some(effort) = effort {
-                arguments.insert("effort".into(), Value::from(effort));
-            }
-            parse_call(&thread, "delegate_task", Some(arguments))
-        };
-        assert!(call(None).is_err());
-        assert!(matches!(
-            call(Some("medium")),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::DelegateTask(_)))
         ));
     }
 
@@ -1121,8 +676,7 @@ mod tests {
             Role::Chat {
                 conversation_id: id(),
             },
-            worker(false),
-            worker(true),
+            worker(),
         ];
         for role in &roles {
             for name in GONE {
@@ -1150,10 +704,10 @@ mod tests {
         assert_eq!(names, ["read_page", "write_page"]);
     }
 
-    /// A Chat lists the thread's worker and card tools besides its own, and nothing of git,
-    /// checks, landing or other sessions (Q76); it calls them as the thread does.
+    /// A Chat lists its memories and reports only, and nothing of git, checks, landing or
+    /// other sessions (Q76): it does the job itself.
     #[test]
-    fn a_chat_has_the_threads_worker_and_card_tools() {
+    fn a_chat_has_its_memories_and_reports_only() {
         let chat = Role::Chat {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
         };
@@ -1161,12 +715,7 @@ mod tests {
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect();
-        // `ask_user` stays a Chat's call, now made with `brigadier ask`.
-        let over_mcp = CHAT_THREAD_TOOLS.iter().filter(|name| **name != "ask_user");
-        for name in over_mcp.clone().chain(&["save_memory", "save_report"]) {
-            assert!(names.contains(name), "{name}");
-        }
-        assert_eq!(names.len(), over_mcp.count() + 2, "{names:?}");
+        assert_eq!(names, ["save_memory", "save_report"]);
         let report = serde_json::json!({ "title": "Nozzles", "markdown": "# Nozzles" });
         assert!(matches!(
             parse_call(&chat, "save_report", report.as_object().cloned()),
@@ -1180,24 +729,53 @@ mod tests {
         }
     }
 
-    /// Every worker, checkers too, may say where it is in its plan; the thread has no such tool.
+    /// Workers are plain CLIs run with `brigadier` (S16b): no role lists or calls a worker,
+    /// routing or task tool, and a plain worker gets no tools at all.
     #[test]
-    fn workers_note_their_progress() {
-        for checks in [false, true] {
-            assert!(
-                tools_for(&worker(checks))
-                    .iter()
-                    .any(|tool| tool.name == "note_progress"),
-                "{checks}"
-            );
-            let arguments = serde_json::json!({ "note": "Step 3 of 5: wiring the exporter" });
-            assert!(matches!(
-                parse_call(&worker(checks), "note_progress", arguments.as_object().cloned()),
-                Ok(ToolCall::Worker(WorkerCall::NoteProgress(args)))
-                    if args.note.starts_with("Step 3 of 5")
-            ));
-            assert!(parse_call(&worker(checks), "note_progress", None).is_err());
+    fn no_role_has_a_worker_or_task_tool() {
+        const GONE: &[&str] = &[
+            "delegate_task",
+            "message_worker",
+            "answer_worker",
+            "stop_worker",
+            "rerun_task",
+            "route_follow_up",
+            "list_tasks",
+            "read_report",
+            "read_artifact",
+            "store_output",
+            "ask_thread",
+            "ask_orchestrator",
+            "note_progress",
+            "submit_report",
+            "attach_proof",
+        ];
+        let id = || brigadier_core::model::ConversationId("c1".into());
+        let roles = [
+            Role::Orchestrator {
+                conversation_id: id(),
+            },
+            Role::Chat {
+                conversation_id: id(),
+            },
+            worker(),
+        ];
+        for role in &roles {
+            for name in GONE {
+                assert!(
+                    !tools_for(role).iter().any(|tool| tool.name == *name),
+                    "{role:?} lists {name}"
+                );
+                assert!(
+                    matches!(
+                        parse_call(role, name, Some(JsonObject::new())),
+                        Err(ParseError::UnknownTool(_))
+                    ),
+                    "{role:?} calls {name}"
+                );
+            }
         }
+        assert!(tools_for(&worker()).is_empty());
     }
 
     /// Reviews are plain commands (strip-down S5): no role has a review, findings or merge-hold
@@ -1216,7 +794,7 @@ mod tests {
             let thread = Role::Orchestrator {
                 conversation_id: brigadier_core::model::ConversationId("c1".into()),
             };
-            for role in [thread.clone(), worker(false), worker(true)] {
+            for role in [thread.clone(), worker()] {
                 for name in gone {
                     assert!(
                         tools_for(&role).iter().all(|tool| tool.name != name),
@@ -1258,7 +836,7 @@ mod tests {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
         };
-        for role in [thread.clone(), worker(false), worker(true)] {
+        for role in [thread.clone(), worker()] {
             assert!(
                 tools_for(&role)
                     .iter()
@@ -1268,67 +846,6 @@ mod tests {
         }
         let late = serde_json::json!({ "note": "Adds NOTES.md." });
         assert!(parse_call(&thread, "propose_merge", late.as_object().cloned()).is_err());
-    }
-
-    #[test]
-    fn a_gate_member_cannot_ask_the_orchestrator() {
-        let names = |role: &Role| -> Vec<String> {
-            tools_for(role)
-                .iter()
-                .map(|tool| tool.name.to_string())
-                .collect()
-        };
-        assert!(names(&worker(false)).contains(&"ask_thread".to_owned()));
-        assert!(!names(&worker(false)).contains(&"ask_orchestrator".to_owned()));
-        let checker = names(&worker(true));
-        assert!(!checker.contains(&"ask_thread".to_owned()));
-        assert!(checker.contains(&"submit_report".to_owned()));
-        let question = || {
-            let mut arguments = JsonObject::new();
-            arguments.insert("question".into(), Value::String("Which file?".into()));
-            Some(arguments)
-        };
-        // #66: its old name still works for a worker that started on it.
-        assert!(parse_call(&worker(false), "ask_thread", question()).is_ok());
-        assert!(parse_call(&worker(false), "ask_orchestrator", question()).is_ok());
-        assert!(matches!(
-            parse_call(&worker(true), "ask_thread", question()),
-            Err(ParseError::UnknownTool(_))
-        ));
-    }
-
-    /// `stop_worker` takes a required one-line reason, which the thread's "Stopped" row shows.
-    #[test]
-    fn stop_worker_needs_a_reason() {
-        // A Chat's, until S16b: the thread's went in S15.
-        let thread = Role::Chat {
-            conversation_id: brigadier_core::model::ConversationId("c1".into()),
-        };
-        let tool = tools_for(&thread)
-            .iter()
-            .find(|tool| tool.name == "stop_worker")
-            .unwrap();
-        let required = tool.input_schema.get("required").unwrap();
-        assert!(
-            required
-                .as_array()
-                .unwrap()
-                .contains(&Value::String("reason".into())),
-            "{required}"
-        );
-        let mut arguments = JsonObject::new();
-        arguments.insert("task".into(), Value::String("task-2".into()));
-        let err = parse_call(&thread, "stop_worker", Some(arguments.clone())).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Invalid arguments for stop_worker: missing field `reason`"
-        );
-        arguments.insert("reason".into(), Value::String("No longer needed".into()));
-        assert!(matches!(
-            parse_call(&thread, "stop_worker", Some(arguments)),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::StopWorker(args)))
-                if args.task == "task-2" && args.reason == "No longer needed"
-        ));
     }
 
     /// A full-access thread's tool list as the CLI gets it, written to

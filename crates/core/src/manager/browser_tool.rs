@@ -30,6 +30,8 @@ pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// How long a request's end waits for the app to close its agents' tabs.
 const END_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a browser call that asks the user waits for the answer.
+pub(crate) const QUESTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// How long a call on a tab the user took over waits for their Continue before the agent
 /// hears it is still paused.
@@ -454,6 +456,16 @@ fn failed(message: &str) -> BrowserResult {
 }
 
 impl SessionManager {
+    /// Shortens how long a browser call that asks the user waits for the answer (for the flow
+    /// tests).
+    #[cfg(test)]
+    pub(crate) fn set_question_timeout(&self, timeout: Duration) {
+        self.question_timeout_ms.store(
+            timeout.as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
     /// Whether the thread and its workers may use the browser: the built-in browser is on,
     /// and agents can drive it on this platform (macOS for now).
     pub(crate) fn browser_tools_on(&self) -> bool {
@@ -486,7 +498,7 @@ impl SessionManager {
             );
         }
         let request = match &call {
-            BrowserToolCall::Open(_) => self.request_for(&conversation_id, task_id.as_ref()).await,
+            BrowserToolCall::Open(_) => self.request_for(&conversation_id).await,
             _ => None,
         };
         let op = match browser_op(call, request) {
@@ -702,7 +714,7 @@ impl SessionManager {
                     return;
                 }
                 if let Err(err) = self
-                    .tell_worker(&approval.conversation_id, &task, text, "the user")
+                    .message_worker(&approval.conversation_id, &task, text)
                     .await
                 {
                     tracing::warn!(task = %task.id, error = %err, "a worker didn't hear the user's browser decision");

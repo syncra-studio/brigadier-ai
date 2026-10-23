@@ -891,19 +891,6 @@ impl SessionManager {
         Ok(reply)
     }
 
-    /// How long no conversation or worker has been at work on `kind` (as of the last tick).
-    pub(super) fn provider_idle_ms(&self, kind: ProviderKind, now: i64) -> i64 {
-        now - self
-            .brains
-            .jobs
-            .idle_since
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&kind)
-            .copied()
-            .unwrap_or(now)
-    }
-
     /// Each minute: starts enrichment when a provider has quota to spare and is idle, and
     /// makes a running enrichment yield when that stops being true.
     pub(super) async fn brain_job_tick(&self) {

@@ -59,8 +59,6 @@ async fn a_failed_turn_needs_the_user_through_a_reconnect_and_a_restart_until_th
         failed_in(&flow, &flow.manager.activity().await),
         "a reconnect reads it"
     );
-    let tab = flow.core.conversation(&flow.conversation).unwrap();
-    assert_eq!(flow.manager.tab_state(&tab).await, Some(TabState::NeedsYou));
 
     flow.restart().await;
     assert!(
@@ -198,13 +196,13 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
     flow.say("Thanks.").await;
     flow.settled().await;
     let tab = flow.core.conversation(&flow.conversation).unwrap();
-    assert_eq!(flow.manager.tab_state(&tab).await, Some(TabState::Merged));
+    assert_eq!(flow.settled_state(&tab.id).await, Some(TabState::Merged));
     assert_eq!(git(&flow.repo, &["rev-parse", "main"]), squash);
 
     let undo = || async { flow.manager.merge_undo(&id, &squash).await.unwrap() };
     assert_eq!(undo().await, None, "never reverted");
     git(&flow.repo, &["revert", "--no-edit", &squash]);
-    assert_eq!(flow.manager.tab_state(&tab).await, Some(TabState::Reverted));
+    assert_eq!(flow.settled_state(&tab.id).await, Some(TabState::Reverted));
     assert_eq!(
         mine(flow.manager.settled_tabs().await).state,
         TabState::Reverted
@@ -221,7 +219,7 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
     assert_eq!(reverted.reverted_at_ms, committed * 1000, "when, on main");
     git(&flow.repo, &["revert", "--no-edit", "HEAD"]);
     assert_eq!(
-        flow.manager.tab_state(&tab).await,
+        flow.settled_state(&tab.id).await,
         Some(TabState::Merged),
         "the revert reverted"
     );
@@ -288,7 +286,7 @@ async fn a_session_that_changed_nothing_never_reads_ready_or_merged() {
     let id = flow.conversation.clone();
     let state = || async {
         let tab = flow.core.conversation(&id).unwrap();
-        flow.manager.tab_state(&tab).await
+        flow.settled_state(&tab.id).await
     };
     assert_eq!(state().await, None, "nothing to merge");
     // The local main catches up with its remote: still nothing merged.

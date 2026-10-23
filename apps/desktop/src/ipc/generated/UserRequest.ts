@@ -39,27 +39,23 @@ steeredAfter: string | null,
  */
 undo: RequestUndo | null, 
 /**
- * When it worked, oldest first; the last is open while it works. Waiting for quota is
- * work; waits for the user are not. Absent on requests stored before it was kept.
+ * When it worked, as recorded before S16b; no longer kept.
  */
 worked: Array<WorkSpan>, 
 /**
- * When it waited for the user's answer to its own question card, oldest first; the last is
- * open while a card waits (BUILD-PLAN A9). Its header shows this time apart from the work.
+ * When it waited for its own question card, as recorded before S16b; no longer kept.
  */
 waited?: Array<WorkSpan>, 
 /**
- * When Brigadier quit mid-turn and it stood interrupted, oldest first: each from its last
- * record before the quit to its Continue. The Inspector's times leave these out.
+ * When it stood interrupted after a quit, as recorded before S16b; no longer kept.
  */
 closed?: Array<WorkSpan>, 
 /**
- * It is `Waiting` only for quota (a worker paused until a model is free), not for the
- * user.
+ * It waited only for quota, as recorded before S16b; no longer kept.
  */
 quotaWait: boolean, 
 /**
- * The sessions whose replies it waits for: it rests "Waiting for ‹title›".
+ * The sessions whose replies it waited for, as recorded before S16b; no longer kept.
  */
 waitingFor?: Array<ConversationId>, 
 /**

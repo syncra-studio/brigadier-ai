@@ -236,8 +236,10 @@ async fn squash_merged(name: &str, single_branch: bool) {
     flow.settled().await;
     // Local main is GitHub's, and the session branch sits on it.
     assert_eq!(git(&flow.repo, &["rev-parse", "main"]), squash);
-    let tab = flow.core.conversation(&flow.conversation).unwrap();
-    assert_eq!(flow.manager.tab_state(&tab).await, Some(TabState::Merged));
+    assert_eq!(
+        flow.settled_state(&flow.conversation).await,
+        Some(TabState::Merged)
+    );
 
     flow.say("Add more.").await;
     flow.settled().await;
@@ -486,144 +488,6 @@ fn merges(board: &crate::board::Board) -> Vec<Option<String>> {
             _ => None,
         })
         .collect()
-}
-
-/// The thread attaches a screenshot it made of the change: Brigadier keeps a copy, records it
-/// for the merge message, and serves it by its id. Not an image or recording, or over 11 MB:
-/// the call says so and nothing is attached; nor is anything from Brigadier's private folder.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
-    let log: Log = Arc::default();
-    let said = log.clone();
-    let private: Arc<OnceLock<PathBuf>> = Arc::default();
-    let run_dir = private.clone();
-    let flow = Flow::start(
-        "auto-merge-proof",
-        Options::default(),
-        script(move |turn| {
-            let said = said.clone();
-            let run_dir = run_dir.get().cloned();
-            async move {
-                if !turn.is_orchestrator() || !turn.input.contains("Show it.") {
-                    return Reply::text("Done.");
-                }
-                let workspace = &turn.cwd;
-                std::fs::write(workspace.join("shot.png"), b"\x89PNG proof").unwrap();
-                std::fs::write(workspace.join("notes.md"), "notes").unwrap();
-                std::fs::write(workspace.join("tests.txt"), "test result: ok").unwrap();
-                let big = std::fs::File::create(workspace.join("big.png")).unwrap();
-                big.set_len(12 * 1024 * 1024).unwrap();
-                let long = std::fs::File::create(workspace.join("long.log")).unwrap();
-                long.set_len(2 * 1024 * 1024).unwrap();
-                // A link into Brigadier's private folder, named like a screenshot.
-                std::os::unix::fs::symlink(run_dir.unwrap(), workspace.join("token.png")).unwrap();
-                for (path, extra) in [
-                    (
-                        "shot.png",
-                        json!({"caption": "The new switch", "taken_on": "iPhone 16 simulator"}),
-                    ),
-                    ("notes.md", json!({})),
-                    ("big.png", json!({})),
-                    ("token.png", json!({})),
-                    (
-                        "tests.txt",
-                        json!({"caption": "The settings tests pass", "kind": "test"}),
-                    ),
-                    ("long.log", json!({"kind": "log"})),
-                    ("shot.png", json!({"preview": "preview-9"})),
-                ] {
-                    let mut args = extra;
-                    args["path"] = json!(path);
-                    let reply = turn.call("attach_proof", args).await;
-                    said.lock()
-                        .unwrap()
-                        .push(format!("{path}: {} {}", reply.is_error, reply.text));
-                }
-                Reply::text("Merged.")
-            }
-        }),
-    )
-    .await;
-    let run_dir = flow.manager.runtime.platform().paths().run_dir.clone();
-    std::fs::create_dir_all(&run_dir).unwrap();
-    private.set(run_dir).unwrap();
-    flow.say("Show it.").await;
-    let board = flow.settled().await;
-    let log = log.lock().unwrap().clone();
-    assert!(
-        log[0].starts_with("shot.png: false Attached shot.png"),
-        "{log:?}"
-    );
-    assert!(log[1].starts_with("notes.md: true "), "{log:?}");
-    assert!(log[2].contains("over 11 MB"), "{log:?}");
-    assert!(log[3].contains("private folder"), "{log:?}");
-    assert!(
-        log[4].starts_with("tests.txt: false Attached tests.txt"),
-        "{log:?}"
-    );
-    assert!(log[5].contains("over 1 MB"), "{log:?}");
-    assert!(
-        log[6].contains("preview-9 isn't one of your previews"),
-        "{log:?}"
-    );
-    let proofs: Vec<_> = board
-        .orchestrator_steps
-        .iter()
-        .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::Proof {
-                id,
-                name,
-                mime,
-                caption,
-                kind,
-                taken_on,
-                preview,
-                taken_at_ms,
-                ..
-            } => Some((
-                (id.clone(), name.clone(), mime.clone(), caption.clone()),
-                (*kind, taken_on.clone(), preview.clone(), *taken_at_ms),
-            )),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(proofs.len(), 2, "{proofs:?}");
-    let ((id, name, mime, caption), (kind, taken_on, preview, taken_at)) = proofs[0].clone();
-    assert_eq!(
-        (name.as_str(), mime.as_str(), caption.as_deref()),
-        ("shot.png", "image/png", Some("The new switch"))
-    );
-    assert_eq!(
-        (kind, taken_on.as_deref(), preview),
-        (
-            Some(crate::work::ProofKind::Screenshot),
-            Some("iPhone 16 simulator"),
-            None
-        )
-    );
-    assert!(taken_at.is_some_and(|at| at > 0), "the file's time");
-    let ((_, name, mime, caption), (kind, ..)) = proofs[1].clone();
-    assert_eq!(
-        (name.as_str(), mime.as_str(), caption.as_deref(), kind),
-        (
-            "tests.txt",
-            "text/plain",
-            Some("The settings tests pass"),
-            Some(crate::work::ProofKind::Test)
-        )
-    );
-    // Served from Brigadier's copy, even once the thread's own file is gone.
-    let checkout = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
-    std::fs::remove_file(checkout.join("shot.png")).ok();
-    let (data, served) = flow
-        .manager
-        .read_thread_image(&flow.conversation, &id)
-        .await
-        .unwrap();
-    assert_eq!(served, "image/png");
-    assert_eq!(data, brigadier_providers::image_base64(b"\x89PNG proof"));
-    flow.stop().await;
 }
 
 /// Revert on the merge message sends the thread "Revert merge ‹sha› on ‹base› the way it went

@@ -1,6 +1,6 @@
-//! Quota estimates: where each usage window is heading, how hot a provider runs, and what that
-//! costs a model's routing score. Pure: the daemon's quota monitor keeps the samples and calls
-//! these with the time.
+//! Quota estimates: where each usage window is heading, how hot a provider runs, and whether a
+//! model can run now. Pure: the daemon's quota monitor keeps the samples and calls these with
+//! the time.
 //!
 //! - **Rate:** the use over the time it took, over the last hour for windows of 5 hours or less,
 //!   the last day for longer ones (a window of unknown length counts as short), each interval
@@ -20,12 +20,10 @@
 //!   or 85% used; Warm when projected at 70%; else Cool. A provider's heat is its hottest
 //!   provider-wide window (Limited while a limit is set); a window scoped to one model counts only
 //!   for that model ([`window_applies`]).
-//! - **Penalty:** 0 below a projected 70%, rising smoothly (smoothstep) to [`MAX_QUOTA_PENALTY`]
-//!   at 100%. A confirmed limit is never a penalty: routing excludes the model outright.
 
 use brigadier_providers::{LimitHit, LimitKind, QuotaSnapshot, QuotaWindow};
 
-use crate::quota::{Forecast, Heat, ProviderQuota, QuotaSample, WindowState};
+use crate::quota::{Forecast, Heat, ProviderQuota, ProviderState, QuotaSample, WindowState};
 use crate::registry::{MergedModel, ModelStatus, Registry};
 use crate::table;
 
@@ -47,8 +45,6 @@ pub const LIMITED_USED: f64 = 97.0;
 pub const HOT_USED: f64 = 85.0;
 pub const HOT_PROJECTED: f64 = 90.0;
 pub const WARM_PROJECTED: f64 = 70.0;
-/// The largest quota penalty, at a projected 100% or more.
-pub const MAX_QUOTA_PENALTY: f64 = 6.0;
 
 /// One window's state from its samples (any order; the monitor's history for this window) and
 /// its current reading, taken at `observed_at_ms`. `limited`: a provider limit names it.
@@ -125,6 +121,34 @@ pub fn active_limit(limit: Option<&LimitHit>, now_ms: i64) -> Option<&LimitHit> 
     })
 }
 
+/// Whether `model` can run now as far as login and quota go: its provider is logged in, no
+/// limit of the provider is in force, and no window that limits it is used up (its own weekly
+/// window included).
+pub fn available(
+    model: &MergedModel,
+    providers: &[ProviderState],
+    registry: &Registry,
+    now_ms: i64,
+) -> bool {
+    let Some(state) = providers.iter().find(|s| s.provider == model.provider) else {
+        return false;
+    };
+    if !state.logged_in {
+        return false;
+    }
+    let Some(quota) = state.quota.as_ref() else {
+        return true;
+    };
+    if active_limit(quota.limit.as_ref(), now_ms).is_some() {
+        return false;
+    }
+    !quota.windows.iter().any(|w| {
+        window_applies(&w.window, model, registry)
+            && !w.window.resets_at_ms.is_some_and(|reset| reset <= now_ms)
+            && (w.heat == Heat::Limited || w.window.used_percent >= LIMITED_USED)
+    })
+}
+
 /// How hot a window runs, from its used and projected shares.
 pub fn heat(used: f64, projected: f64, limited: bool) -> Heat {
     if limited || used >= LIMITED_USED {
@@ -136,15 +160,6 @@ pub fn heat(used: f64, projected: f64, limited: bool) -> Heat {
     } else {
         Heat::Cool
     }
-}
-
-/// The score penalty for a window projected at `projected` percent at its reset.
-pub fn quota_penalty(projected: f64) -> f64 {
-    if projected < WARM_PROJECTED {
-        return 0.0;
-    }
-    let t = ((projected - WARM_PROJECTED) / (100.0 - WARM_PROJECTED)).min(1.0);
-    MAX_QUOTA_PENALTY * t * t * (3.0 - 2.0 * t)
 }
 
 /// Whether a window limits this model: provider-wide windows limit every model; a scoped one

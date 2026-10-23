@@ -158,13 +158,6 @@ export function sentByCaption(name: PeerName): string {
   return `Sent by ${name.title} from another session`;
 }
 
-/** "Waiting for API work to reply", "Waiting for API work and Docs to reply". */
-export function waitingWords(names: readonly string[]): string {
-  if (names.length === 0) return "Waiting for a reply";
-  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-  return `Waiting for ${list} to reply`;
-}
-
 /** The reply that answers `message`, if one came: an incoming record naming it. */
 export function replyOf(message: PeerMessage, records: Readonly<Record<string, PeerMessage>>): PeerMessage | null {
   return Object.values(records).find((record) => !record.outgoing && record.replyTo === message.messageId) ?? null;

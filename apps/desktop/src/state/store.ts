@@ -30,7 +30,6 @@ export type SettingsPageId =
   | "memory"
   | "plugins"
   | "providers"
-  | "routing"
   | "git"
   | "computerUse"
   | "storage"
@@ -134,8 +133,7 @@ export type InspectorTab =
   | "brain"
   | "processes"
   | "performance"
-  | "providers"
-  | "routing";
+  | "providers";
 
 /** Newest inspector events kept in memory. */
 export const INSPECTOR_EVENTS = 500;
@@ -188,8 +186,6 @@ export type AppState = {
   providers: ProvidersState;
   /** Settings → Accounts, once read (`getAccounts`), kept current by `accountsChecked`. */
   accounts: AccountsView | null;
-  /** Counts `rankingsChanged` events: views showing model ratings read them again on a change. */
-  rankingsRevision: number;
 };
 
 export const useApp = create<AppState>()(() => ({
@@ -217,8 +213,6 @@ export const useApp = create<AppState>()(() => ({
     followUp: "queue",
     notifyFinished: "background",
     notifyNeedsYou: true,
-    routingOverrides: [],
-    routingRankings: [],
     disabledProviders: [],
     agentPaths: [],
     hiddenModels: [],
@@ -233,7 +227,6 @@ export const useApp = create<AppState>()(() => ({
     branchPrefix: "brigadier/",
     accounts: [],
     manualAccounts: [],
-    switchProviders: true,
     dictationLanguage: "",
     dictationWords: [],
     dictationMicrophone: "",
@@ -268,7 +261,6 @@ export const useApp = create<AppState>()(() => ({
   },
   providers: { view: null, selected: null, transcripts: {} },
   accounts: null,
-  rankingsRevision: 0,
 }));
 
 export const emptyThread: Thread = {
@@ -367,10 +359,9 @@ export function mergeMessages(
 export function applyEvents(envelopes: readonly EventEnvelope[]): void {
   if (envelopes.length === 0) return;
   useApp.setState((state) => {
-    let { projects, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
-      state;
+    let { projects, conversations, threads, pending, settings, providers, accounts } = state;
     for (const envelope of envelopes) {
-      ({ projects, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
+      ({ projects, conversations, threads, pending, settings, providers, accounts } =
         applyEvent(envelope, {
           projects,
           conversations,
@@ -379,7 +370,6 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
           settings,
           providers,
           accounts,
-          rankingsRevision,
         }));
     }
     const newest = envelopes.toReversed();
@@ -395,7 +385,6 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
       settings,
       providers,
       accounts,
-      rankingsRevision,
       inspector: { ...state.inspector, events },
     };
   });
@@ -410,7 +399,6 @@ type Slice = Pick<
   | "settings"
   | "providers"
   | "accounts"
-  | "rankingsRevision"
 >;
 
 /** Adds or replaces a raw session in the list, newest first. */
@@ -629,10 +617,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
       return { ...slice, providers: applyProviderEvent(envelope, slice.providers) };
     case "accountsChecked":
       return { ...slice, accounts: event.accounts };
-    // A refresh ended, the rankings were reset or a newer registry was installed: the ratings,
-    // route previews and refresh state are read again (getUsage in state/usage).
-    case "rankingsChanged":
-      return { ...slice, rankingsRevision: slice.rankingsRevision + 1 };
     case "requestFinished": {
       // A request of it finished: its sidebar row's unread dot, if it wasn't open.
       const conversation = slice.conversations[event.conversationId];
@@ -713,6 +697,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "updatesChanged":
     // Connect's progress (state/connect).
     case "agentConnectChanged":
+    // The models' ratings are read again (getUsage in state/usage).
+    case "rankingsChanged":
     // Its desktop notification is the shell's; the Usage menu reads `accounts.warnings`.
     case "quotaWillBeLost":
     // Only in old stored events: the checks, reviews and merge refusals they told of are gone.

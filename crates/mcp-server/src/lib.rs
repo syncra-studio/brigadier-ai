@@ -1,12 +1,11 @@
-//! The Brigadier MCP server: the orchestrator's and the workers' tools.
+//! The Brigadier MCP server: the thread's and a Chat's tools.
 //!
 //! Every CLI session Brigadier starts gets this server through `brigadierd mcp`, a stdio bridge
 //! that hands the connection to the daemon, which calls [`serve`] with the session's grant.
 //!
 //! - The grant's role decides the tool list, once, when the connection opens: an orchestrator
-//!   gets the orchestrator tools, a worker `ask_orchestrator` (unless it checks a change or
-//!   plan in a gate) and `submit_report`. A gate grant or an unknown grant is refused at
-//!   `initialize`, so the CLI gets no tools at all.
+//!   gets the orchestrator tools; a plain worker gets none (it has `brigadier`). An unknown
+//!   grant is refused at `initialize`, so the CLI gets no tools at all.
 //! - Every `tools/call` goes through [`ToolHost::call`], which checks the grant again, so a
 //!   revoked grant stops working on an open connection too.
 //! - A call cancelled by the client, or cut off by the connection closing, drops the host's
@@ -242,28 +241,28 @@ mod tests {
         let thread = Role::Chat {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
         };
-        let bad = serde_json::json!({"task": "task-2"}).as_object().cloned();
-        let err = parse(&host, "g1", &thread, "stop_worker", bad).unwrap_err();
+        let bad = serde_json::json!({"title": "Nozzles"}).as_object().cloned();
+        let err = parse(&host, "g1", &thread, "save_report", bad).unwrap_err();
         assert!(
-            err.starts_with("Invalid arguments for stop_worker"),
+            err.starts_with("Invalid arguments for save_report"),
             "{err}"
         );
         // Not one of its tools: no schema was missed.
         assert!(parse(&host, "g1", &thread, "no_such_tool", None).is_err());
-        let good = serde_json::json!({"task": "task-2", "reason": "Done."});
+        let good = serde_json::json!({"title": "Nozzles", "markdown": "# Nozzles"});
         assert!(
             parse(
                 &host,
                 "g1",
                 &thread,
-                "stop_worker",
+                "save_report",
                 good.as_object().cloned()
             )
             .is_ok()
         );
         assert_eq!(
             *host.0.lock().unwrap(),
-            [("g1".to_owned(), "stop_worker".to_owned())]
+            [("g1".to_owned(), "save_report".to_owned())]
         );
     }
 

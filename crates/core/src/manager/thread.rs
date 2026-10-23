@@ -241,10 +241,6 @@ impl SessionManager {
             provider,
             self.core.settings().start_workers_on_own,
         );
-        // Without computer use nothing can look at an app live, so nothing is routed there.
-        if !self.core.settings().computer_use {
-            prompt = prompt.replacen(super::prompts::COMPUTER_ROUTING, "", 1);
-        }
         prompt.push_str(&super::prompts::git_writing_section(&self.core.settings()));
         prompt.push_str(&super::prompts::browser_section(
             self.core.settings().browser_enabled,

@@ -1,4 +1,3 @@
-import { waitingWords } from "@/app/conversation/activity/peerWords";
 import { isPlumbing } from "@/app/conversation/activity/words";
 import { type BlockState, isFinal } from "@/app/conversation/blocks";
 import { activelyWorking } from "@/app/conversation/taskActivity";
@@ -35,8 +34,6 @@ export type StatusInput = {
   compacting: boolean;
   /** The conversation's messages wait for quota. */
   quotaWait: QuotaWait | null;
-  /** The sessions whose replies the turn rests waiting for, by title. */
-  waitingFor?: readonly string[];
 };
 
 function quotaWords(resetsAtMs: number | null): string {
@@ -59,14 +56,12 @@ export function commandWords(command: string): string {
 }
 
 /**
- * The line under an answer whose request still waits: what waits on the user first, else the
- * sessions whose replies it waits for (also while the answer streams), else what it waits on,
- * or does once a late result reopened it.
+ * The line under an answer whose request still waits: what waits on the user first, else what
+ * it waits on, or does once a late result reopened it.
  */
-export function answeredHead(head: StatusHead | null, { waitingFor, waiting, reopened }:
-  { waitingFor: readonly string[]; waiting: boolean; reopened: boolean }): StatusHead | null {
+export function answeredHead(head: StatusHead | null, { waiting, reopened }:
+  { waiting: boolean; reopened: boolean }): StatusHead | null {
   if (head?.tone === "needsYou") return head;
-  if (waitingFor.length > 0) return { text: waitingWords(waitingFor), tone: "still" };
   // Reopened by a late result: it works again under its answer, so it says so (#107).
   return waiting || reopened ? head : null;
 }
@@ -150,8 +145,6 @@ export function threadStatus(input: StatusInput): ThreadStatusView {
     const text = jobs === 1 ? "Waiting for a command" : `Waiting for ${jobs} commands`;
     return { head: { text, tone: "still" } };
   }
-  // It rests until other sessions reply: "Waiting for API work to reply".
-  if (state === "waiting" && input.waitingFor?.length) return { head: { text: waitingWords(input.waitingFor), tone: "still" } };
   // Waiting with nothing above to show (an overnight run's list): no line. A question in the
   // lead's text waits for nothing; the user is asked on cards.
   if (state === "waiting") return none;

@@ -12,7 +12,7 @@ export type McpServerView = {
  */
 id: string, 
 /**
- * The name its tools are called by, which `delegate_task` takes.
+ * The name its tools are called by.
  */
 name: string, 
 /**

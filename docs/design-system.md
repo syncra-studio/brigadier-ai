@@ -94,7 +94,7 @@ imported only inside `src/components`; the style check fails them anywhere else.
 `apps/desktop/src/app/` holds the screens, one folder per surface as the boards group them:
 `shell/` (App shell: window, sidebar, top bar and session tabs, app dialogs), `conversation/`,
 `side-panel/`, `setup/` (onboarding, computer-use setup) in `app.pen`; `settings/` (its pages,
-Providers and Routing among them) and `inspector/` in `settings.pen`. App-wide wiring (`App.tsx`,
+Providers among them) and `inspector/` in `settings.pen`. App-wide wiring (`App.tsx`,
 shortcuts, smoke) stays at the top of `app/`.
 
 ## Pen component → code
@@ -398,18 +398,6 @@ table is the current one.
 | Settings (settings.pen) | `#758 AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
 | Settings (settings.pen) | `#763 AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
 | Settings (settings.pen) | `#738 RankingView` | `app/conversation/cards/RankingView.tsx` | `RankingView` | |
-| Settings (settings.pen) | `#773 More › kind of work row` | `app/settings/routing/KindOfWorkRow.tsx` | `KindOfWorkRow` | |
-| Settings (settings.pen) | `#774 More › loading line` | `app/settings/routing/LoadingLine.tsx` | `LoadingLine` | |
-| Settings (settings.pen) | `#775 More › strength row` | `app/settings/routing/StrengthRow.tsx` | `StrengthRow` | |
-| Settings (settings.pen) | `#776 More › ratings footer` | `app/settings/routing/RatingsFooter.tsx` | `RatingsFooter` | |
-| Settings (settings.pen) | `#777 More › steps list` | `app/settings/routing/StepsList.tsx` | `StepsList` | |
-| Settings (settings.pen) | `#778 MoreRowHead` | `app/settings/routing/MoreRowHead.tsx` | `MoreRowHead` | |
-| Settings (settings.pen) | `#785 KindRow` | `app/settings/routing/KindRow.tsx` | `KindRow` | |
-| Settings (settings.pen) | `#786 NowPick` | `app/settings/routing/NowPick.tsx` | `NowPick` | |
-| Settings (settings.pen) | `#787 WhoPicks` | `app/settings/routing/WhoPicks.tsx` | `WhoPicks` | |
-| Settings (settings.pen) | `#788 AutoPicks` | `app/settings/routing/AutoPicks.tsx` | `AutoPicks` | |
-| Settings (settings.pen) | `#790 OrderList` | `app/settings/routing/OrderList.tsx` | `OrderList` | |
-| Settings (settings.pen) | `#791 OrderPlace` | `app/settings/routing/OrderPlace.tsx` | `OrderPlace` | |
 | Setup (app.pen) | `#823 SetupWindow › step rail item` | `app/setup/computerSetup/StepRailItem.tsx` | `StepRailItem` | |
 | Setup (app.pen) | `#824 Panel` | `app/setup/computerSetup/SetupPanel.tsx` | `SetupPanel` | |
 | Setup (app.pen) | `#825 PermissionStep` | `app/setup/computerSetup/PermissionStep.tsx` | `PermissionStep` | |

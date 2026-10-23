@@ -1,8 +1,8 @@
 //! The digest a long command output reaches the thread's model as (THREAD-PLAN.md Q4).
 //!
-//! The full output is stored first (an `out-<id>` artifact the model pages through with
-//! `read_artifact`); the model gets at most [`DIGEST_MAX`] bytes, built in this order and cut at
-//! line boundaries:
+//! The full output is stored first (an `out-<id>` artifact in a file the model reads with its
+//! own tools); the model gets at most [`DIGEST_MAX`] bytes, built in this order and cut at line
+//! boundaries:
 //!
 //! 1. a header (at most [`HEADER_MAX`] bytes): the exit status and where the full output is;
 //! 2. the lines that look like trouble (`error`, `warning`, `panic` in any case, `FAIL` in
@@ -25,8 +25,8 @@ pub const TRIM_ABOVE: usize = 8192;
 /// own limit: what it prints with a command is mostly source it asked to read (`cat` of a few
 /// files), and every digest of one cost a call that read the files again (BUILD-PLAN C10).
 pub const BASH_WHOLE_MAX: usize = 30_000;
-/// Most bytes the header takes.
-const HEADER_MAX: usize = 200;
+/// Most bytes the header takes (the stored file's path is most of it).
+const HEADER_MAX: usize = 400;
 /// Most bytes the matching lines take, their label included.
 const MATCHES_MAX: usize = 2048;
 /// Most bytes one matching line, or one head or tail line, shows (unless it has the room to
@@ -49,7 +49,7 @@ const OUTPUT_LABEL: &str = "[start and end of the output]";
 /// time and a script that labels what it prints.
 pub const JSON_WRAPPER: usize = 160;
 
-/// The digest of `output`, a command's full output stored as `artifact` (`out-<id>`), which
+/// The digest of `output`, a command's full output stored as `artifact` (`out-<id> in <file>`), which
 /// ended with `status` ("exit 0", "exit 101", "No matches found", "timed out after 600 s"):
 /// at most [`DIGEST_MAX`] bytes.
 pub fn digest(status: &str, output: &[u8], artifact: &str) -> String {
@@ -67,7 +67,7 @@ const PASS_TAIL_MAX: usize = 768;
 /// What a check that passed (`status` "exit 0") reaches the model as when its output is over
 /// [`PASS_WHOLE_MAX`] bytes: the header, the lines with a warning, and the last lines (the
 /// runner's summary). Nothing in a passing output needs acting on but its warnings, and the
-/// whole of it stays one `read_artifact` away: a 6 kB test log read back on every later call
+/// whole of it stays one file read away: a 6 kB test log read back on every later call
 /// costs more than the check (BUILD-PLAN C1).
 pub fn passed(status: &str, output: &[u8], artifact: &str) -> String {
     let text = String::from_utf8_lossy(output);
@@ -266,11 +266,16 @@ pub(crate) fn whole_reply(reply: &str, whole: &str) -> String {
     text
 }
 
-/// The alias of the full output a digest points to (`read_artifact out-…`), if it names one.
+/// The alias of the full output a digest points to (`[full output: out-…`), if it names one.
 pub(crate) fn digest_alias(output: &str) -> Option<&str> {
-    const MARK: &str = "read_artifact ";
-    let at = output.find(&format!("{MARK}out-"))? + MARK.len();
+    const MARK: &str = "[full output: ";
+    let at = output.find(MARK)? + MARK.len();
     let rest = &output[at..];
+    // Digests from before S16b named it as `read_artifact out-…`.
+    let rest = rest.strip_prefix("read_artifact ").unwrap_or(rest);
+    if !rest.starts_with("out-") {
+        return None;
+    }
     let end = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
         .unwrap_or(rest.len());
@@ -379,7 +384,7 @@ fn matches(line: &str) -> bool {
 /// The header: the status and where the full output is, at most [`HEADER_MAX`] bytes (a long
 /// status is cut).
 fn header(status: &str, artifact: &str, lines: usize, bytes: usize) -> String {
-    let location = format!("[full output: read_artifact {artifact}, {lines} lines, {bytes} bytes]");
+    let location = format!("[full output: {artifact}, {lines} lines, {bytes} bytes]");
     let status = status.trim();
     let status = status.lines().next().unwrap_or_default();
     let room = HEADER_MAX.saturating_sub(location.len() + 1);
@@ -428,22 +433,21 @@ mod tests {
     /// the output: the commit it made, a review it started.
     #[test]
     fn a_digested_check_reply_keeps_its_header_and_notes_around_the_whole_output() {
-        let reply = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background.";
+        let reply = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background.";
         assert_eq!(
             whole_reply(reply, "one\ntwo\npassed\n"),
-            "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background."
+            "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.\n\n[review running] Codex reviews your change for this request in the background."
         );
-        let plain =
-            "exit 1 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\nFAIL a.test.js\n";
+        let plain = "exit 1 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\nFAIL a.test.js\n";
         assert_eq!(
             whole_reply(plain, "one\nFAIL a.test.js"),
-            "exit 1 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\nFAIL a.test.js"
+            "exit 1 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\nFAIL a.test.js"
         );
         // A review note alone keeps the blank line before it.
-        let review = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\n\n[review running] Claude Code reviews your change for this request in the background.";
+        let review = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\n\n[review running] Claude Code reviews your change for this request in the background.";
         assert_eq!(
             whole_reply(review, "one\ntwo\npassed\n"),
-            "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\n\n[review running] Claude Code reviews your change for this request in the background."
+            "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\n\n[review running] Claude Code reviews your change for this request in the background."
         );
         assert!(own_run("mcp__brigadier__run") && own_run("run") && !own_run("Bash"));
     }
@@ -453,8 +457,8 @@ mod tests {
     /// and its exit code is read. JSON that holds no text blocks stays as it is.
     #[test]
     fn a_json_content_array_reply_reads_as_its_text() {
-        let reply = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
-        let whole = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
+        let reply = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
+        let whole = "exit 0 [full output: out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
         let array = serde_json::json!([{ "type": "text", "text": reply }]).to_string();
         assert_eq!(whole_reply(&array, "one\ntwo\npassed\n"), whole);
         let result =
@@ -491,7 +495,7 @@ mod tests {
         let reply = passed("exit 0", log.as_bytes(), "out-1a2b3c4d");
         assert!(reply.len() < 2_000, "{}", reply.len());
         assert!(reply.starts_with(&format!(
-            "exit 0 [full output: read_artifact out-1a2b3c4d, 183 lines, {} bytes]\n[lines with a warning]\nwarning: unused variable `x`\n[the last ",
+            "exit 0 [full output: out-1a2b3c4d, 183 lines, {} bytes]\n[lines with a warning]\nwarning: unused variable `x`\n[the last ",
             log.len()
         )), "{reply}");
         assert!(reply.ends_with("      Tests  213 passed (213)"), "{reply}");
@@ -517,7 +521,7 @@ mod tests {
         assert_eq!(
             first,
             format!(
-                "exit 0 [full output: read_artifact out-1a2b3c4d, 1700 lines, {} bytes]",
+                "exit 0 [full output: out-1a2b3c4d, 1700 lines, {} bytes]",
                 log.len()
             )
         );
@@ -561,7 +565,7 @@ mod tests {
             parts
                 .next()
                 .unwrap()
-                .starts_with("exit 101 [full output: read_artifact out-ffff0000, 2000 lines,")
+                .starts_with("exit 101 [full output: out-ffff0000, 2000 lines,")
         );
         assert_eq!(parts.next(), Some(MATCHES_LABEL));
         // In output order: the warning, then the errors.
@@ -646,7 +650,7 @@ mod tests {
         let digest = digest(&status, b"one\ntwo\n", "out-00000003");
         let header = digest.lines().next().unwrap();
         assert!(header.len() <= HEADER_MAX, "{}", header.len());
-        assert!(header.ends_with("[full output: read_artifact out-00000003, 2 lines, 8 bytes]"));
+        assert!(header.ends_with("[full output: out-00000003, 2 lines, 8 bytes]"));
         // A short output shows every line, with nothing omitted.
         assert!(digest.ends_with("\none\ntwo"));
         assert!(!digest.contains("omitted"));
@@ -696,7 +700,7 @@ mod tests {
         assert!(read.len() <= DIGEST_MAX, "{}", read.len());
         assert!(json_len(&wrapped) + JSON_WRAPPER <= DIGEST_MAX);
         // Still a whole digest: the header, the error lines first, the last line last.
-        assert!(wrapped.starts_with("exit 1 [full output: read_artifact out-0000000a"));
+        assert!(wrapped.starts_with("exit 1 [full output: out-0000000a"));
         assert!(
             wrapped
                 .split_once('\n')

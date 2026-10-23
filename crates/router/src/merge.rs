@@ -20,7 +20,6 @@ use std::collections::BTreeMap;
 use brigadier_providers::{ModelInfo, ProviderKind};
 
 use crate::load::{MAX_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW};
-use crate::outcome::{Outcome, OutcomeResult};
 use crate::registry::{
     MergedModel, Modalities, Modality, ModelStatus, QualityTier, RatingProvenance, Registry,
     RegistryModel, ResearchNote, TrialState,
@@ -43,34 +42,6 @@ pub struct OutcomeCount {
     /// The model as outcomes record it (the concrete model), or its listed id.
     pub model: String,
     pub outcomes: u32,
-}
-
-/// Counts outcomes per model the way trials count them: stopped tasks and hand-offs say nothing
-/// about the model, so they don't count.
-pub fn outcome_counts(outcomes: &[Outcome]) -> Vec<OutcomeCount> {
-    let mut counts: Vec<OutcomeCount> = Vec::new();
-    for outcome in outcomes
-        .iter()
-        .filter(|outcome| counts_for_quality(outcome.result))
-    {
-        match counts
-            .iter_mut()
-            .find(|count| count.provider == outcome.provider && count.model == outcome.model)
-        {
-            Some(count) => count.outcomes += 1,
-            None => counts.push(OutcomeCount {
-                provider: outcome.provider,
-                model: outcome.model.clone(),
-                outcomes: 1,
-            }),
-        }
-    }
-    counts
-}
-
-/// Whether an outcome says something about the model's quality.
-pub(crate) fn counts_for_quality(result: OutcomeResult) -> bool {
-    !matches!(result, OutcomeResult::Stopped | OutcomeResult::HandedOff)
 }
 
 /// Merges each provider's live model list (in the CLI's order) with the registry, research
@@ -349,33 +320,23 @@ fn unrated_strengths() -> BTreeMap<TaskCategory, f64> {
         .collect()
 }
 
-/// A registry entry as a model to route to when its CLI's list isn't loaded yet: the entry's
-/// first id is one the CLI accepts.
-pub(crate) fn from_entry(entry: &RegistryModel, provider: ProviderKind) -> Option<MergedModel> {
-    let id = entry.matches.ids.first()?.clone();
-    let mut model = MergedModel {
-        provider,
-        resolved: None,
-        display_name: id.clone(),
-        id,
-        status: ModelStatus::Curated,
-        rating_provenance: RatingProvenance::Unrated,
-        default_effort: BTreeMap::new(),
-        registry_key: None,
-        family: entry.matches.family.clone(),
-        tier: QualityTier::Unrated,
-        only: None,
-        strengths: unrated_strengths(),
-        area_strengths: BTreeMap::new(),
-        efforts: entry.efforts.clone(),
-        context_window: None,
-        knowledge_cutoff: None,
-        modalities: Modalities::default(),
-        legacy: false,
-        excluded: false,
-        trial: None,
-        research: None,
-    };
-    apply_entry(&mut model, entry, ModelStatus::Curated, &[]);
-    Some(model)
+/// Whether `name` (an id or the concrete model an alias resolves to) is this model.
+pub fn is_model(model: &MergedModel, registry: &Registry, name: &str) -> bool {
+    model.id.eq_ignore_ascii_case(name)
+        || model
+            .resolved
+            .as_deref()
+            .is_some_and(|resolved| resolved.eq_ignore_ascii_case(name))
+        || model
+            .registry_key
+            .as_deref()
+            .filter(|_| model.status == crate::ModelStatus::Curated)
+            .and_then(|key| registry.entry(key))
+            .is_some_and(|entry| {
+                entry
+                    .matches
+                    .ids
+                    .iter()
+                    .any(|id| id.eq_ignore_ascii_case(name))
+            })
 }

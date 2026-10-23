@@ -1,6 +1,6 @@
 //! Accepts IPC connections and serves requests and the live event feed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -192,11 +192,6 @@ pub async fn accept_loop(
                     output,
                     stream,
                 }) => upgrade::serve_hook(daemon_for_task, grant, output, stream).await,
-                Ok(Accepted::StopHook {
-                    grant,
-                    active,
-                    stream,
-                }) => upgrade::serve_stop_hook(daemon_for_task, grant, active, stream).await,
                 Ok(Accepted::Cli {
                     session,
                     grant,
@@ -235,7 +230,6 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         metrics: None,
         terminal_feed: None,
         terminals: HashSet::new(),
-        worker_terminals: HashMap::new(),
         dictation_feed: None,
         dictations: Started::new(daemon.dictation.clone()),
         page_feed: None,
@@ -280,8 +274,6 @@ struct Session {
     terminal_feed: Option<broadcast::Receiver<TerminalOutput>>,
     /// The terminals this connection opened: only their output is forwarded.
     terminals: HashSet<String>,
-    /// Worker terminals being opened, by request id: the size to attach them at.
-    worker_terminals: HashMap<u32, (u16, u16)>,
     /// Dictation updates, once this connection dictated or downloaded the speech model.
     dictation_feed: Option<broadcast::Receiver<DictationUpdate>>,
     /// The dictations this connection started: only their text is forwarded, and the ones
@@ -387,7 +379,6 @@ impl Session {
                     Err(RecvError::Closed) => self.feed = None,
                 },
                 Some((id, outcome)) = self.late.recv() => {
-                    let outcome = self.attach_worker_terminal(id, outcome).await?;
                     self.respond(id, outcome).await?;
                 }
                 sample = next_metrics(&mut self.metrics) => {
@@ -542,39 +533,6 @@ impl Session {
                 .open_account_terminal(&id, cols, rows)
                 .await?
                 .map(|terminal| Response::SignInAccount { terminal }),
-            // Long (the worker's turn ends and its CLI closes first): opened beside the
-            // connection's other requests, then attached here (`attach_worker_terminal`).
-            Request::OpenWorkerTerminal {
-                task_id,
-                cols,
-                rows,
-            } => {
-                // Subscribed first, so none of a new terminal's output is missed.
-                if self.terminal_feed.is_none() {
-                    self.terminal_feed = Some(self.daemon.terminals.subscribe());
-                }
-                self.worker_terminals.insert(id, (cols, rows));
-                let sessions = self.daemon.sessions.clone();
-                let late = self.late_tx.clone();
-                self.daemon.supervisor.spawn(async move {
-                    let outcome = sessions
-                        .open_worker_terminal(task_id, cols, rows)
-                        .await
-                        .map(|opened| Response::OpenWorkerTerminal {
-                            terminal: TerminalInfo {
-                                id: opened.terminal_id,
-                                shell: String::new(),
-                                cwd: String::new(),
-                                scrollback: String::new(),
-                            },
-                            provider: opened.provider,
-                            checkout: opened.checkout.map(|path| path.display().to_string()),
-                        })
-                        .map_err(IpcError::from);
-                    let _ = late.send((id, outcome)).await;
-                });
-                return Ok(Flow::Continue);
-            }
             Request::WatchWorkspace { target } => {
                 // The old watch stops first, and a failed new one leaves none.
                 self.workspace_watch = None;
@@ -719,21 +677,6 @@ impl Session {
                 });
                 return Ok(Flow::Continue);
             }
-            Request::RefreshRankings => {
-                let daemon = self.daemon.clone();
-                let admitted = self.daemon.sessions.refresh_rankings(async move {
-                    crate::registry::check(&daemon).await;
-                });
-                let (response, start) = match admitted {
-                    Ok((job_id, start)) => (Ok(Response::RefreshRankings { job_id }), start),
-                    Err(error) => (Err(IpcError::from(error)), None),
-                };
-                self.respond(id, response).await?;
-                if let Some(start) = start {
-                    let _ = start.send(());
-                }
-                return Ok(Flow::Continue);
-            }
             Request::Shutdown => {
                 // Stop admission and drain first; acknowledge only once writes are committed.
                 let _ = self.daemon.quit.try_send("quit requested by a client");
@@ -865,55 +808,6 @@ impl Session {
             .ok_or_else(|| IpcError::from(brigadier_core::Error::Invalid("no home folder".into())))?
             .display()
             .to_string())
-    }
-
-    /// A worker terminal just opened (or found open) for request `id`: its output comes to this
-    /// connection from now on, and the answer carries everything it showed so far. Output
-    /// already queued for it is dropped (the snapshot holds it); other terminals' is sent.
-    async fn attach_worker_terminal(
-        &mut self,
-        id: u32,
-        outcome: Result<Response, IpcError>,
-    ) -> anyhow::Result<Result<Response, IpcError>> {
-        let Some((cols, rows)) = self.worker_terminals.remove(&id) else {
-            return Ok(outcome);
-        };
-        let Ok(Response::OpenWorkerTerminal {
-            terminal,
-            provider,
-            checkout,
-        }) = outcome
-        else {
-            return Ok(outcome);
-        };
-        let Some(feed) = self.terminal_feed.as_mut() else {
-            return Ok(Err(IpcError::from(brigadier_core::Error::Invalid(
-                "the terminal feed is closed".into(),
-            ))));
-        };
-        let (terminal, others) = match self.daemon.terminals.attach(&terminal.id, feed, cols, rows)
-        {
-            Ok(attached) => attached,
-            Err(err) => return Ok(Err(IpcError::from(err))),
-        };
-        for output in others {
-            let id = match &output {
-                TerminalOutput::Data { terminal_id, .. }
-                | TerminalOutput::Exited { terminal_id, .. } => terminal_id,
-            };
-            if self.terminals.contains(id) {
-                if matches!(output, TerminalOutput::Exited { .. }) {
-                    self.terminals.remove(id);
-                }
-                self.writer.write(&ServerFrame::Terminal { output }).await?;
-            }
-        }
-        self.terminals.insert(terminal.id.clone());
-        Ok(Ok(Response::OpenWorkerTerminal {
-            terminal,
-            provider,
-            checkout,
-        }))
     }
 
     /// Opens (or shows again) the terminal that signs extra account `id` in: its CLI's own
@@ -1765,8 +1659,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::OpenTerminal { .. }
         | Request::AddAccount { .. }
-        | Request::SignInAccount { .. }
-        | Request::OpenWorkerTerminal { .. } => {
+        | Request::SignInAccount { .. } => {
             return Err(IpcError::from(brigadier_core::Error::Invalid(
                 "a terminal opens on the connection that shows it".into(),
             )));
@@ -2440,8 +2333,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     crate::updates::check(&checking).await
                 });
             }
-            // New rules or rankings, or an agent or model turned back on, may let work waiting
-            // for quota run now.
+            // An account change, or an agent or model turned back on, may let work waiting for
+            // quota run now.
             if before.accounts != settings.accounts
                 || before.manual_accounts != settings.manual_accounts
             {
@@ -2591,17 +2484,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             }
         }
         Request::GetUsage {} => Response::GetUsage {
-            usage: Box::new(heap(|| daemon.sessions.usage_view(None)).await?),
+            usage: Box::new(heap(|| daemon.sessions.usage_view()).await?),
         },
         Request::GetUsageActivity { days } => Response::GetUsageActivity {
             activity: daemon.sessions.usage_activity(days).await,
-        },
-        Request::PreviewRoutes {
-            project_id,
-            areas,
-            author,
-        } => Response::PreviewRoutes {
-            routes: heap(|| daemon.sessions.preview_routes(project_id, areas, author)).await,
         },
         Request::GetRankingsRefresh => Response::GetRankingsRefresh {
             refresh: daemon.runtime.registry().rankings_refresh(),
@@ -2818,7 +2704,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         | Request::WatchWorkspace { .. }
         | Request::StartSearch { .. }
         | Request::CancelSearch { .. }
-        | Request::RefreshRankings
         | Request::Shutdown => {
             return Err(IpcError {
                 code: ErrorCode::Invalid,
