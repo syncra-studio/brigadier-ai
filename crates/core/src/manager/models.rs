@@ -1,6 +1,7 @@
 //! Model advice and the user's editable policy. Only directives in the user's file gate a start.
 use super::SessionManager;
 use crate::{Error, Result, now_ms};
+use crate::{GuidanceRow, ModelRule, ModelRules};
 use brigadier_cli::models::{Account, Guidance, Model, ModelsOutput, Rule, Usage};
 use brigadier_cli::protocol::Agent;
 use brigadier_providers::{AllowedModels, ProviderKind};
@@ -13,6 +14,13 @@ fn agent(provider: ProviderKind) -> Agent {
     match provider {
         ProviderKind::Claude => Agent::Claude,
         ProviderKind::Codex => Agent::Codex,
+    }
+}
+/// An agent as the rules file names it.
+fn word(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Claude => "claude",
+        ProviderKind::Codex => "codex",
     }
 }
 fn rank(effort: &str) -> Option<usize> {
@@ -29,7 +37,7 @@ fn matches(pattern: &str, model: &str) -> bool {
             .split(|c: char| !c.is_alphanumeric())
             .any(|word| word.eq_ignore_ascii_case(pattern))
 }
-fn rows(text: &str, source: &str) -> Vec<Guidance> {
+fn rows(text: &str) -> Vec<GuidanceRow> {
     text.lines()
         .filter_map(|line| {
             let cells: Vec<_> = line
@@ -42,24 +50,35 @@ fn rows(text: &str, source: &str) -> Vec<Guidance> {
                 return None;
             }
             let agent = match cells[1] {
-                "claude" => Agent::Claude,
-                "codex" => Agent::Codex,
+                "claude" => ProviderKind::Claude,
+                "codex" => ProviderKind::Codex,
                 _ => return None,
             };
-            Some(Guidance {
+            Some(GuidanceRow {
                 work: cells[0].into(),
                 agent,
                 model: cells[2].into(),
                 effort: (!cells[3].is_empty()).then(|| cells[3].into()),
                 reason: cells[4].into(),
-                source: source.into(),
             })
         })
         .collect()
 }
 fn guidance(shipped: &str, user: &str) -> Vec<Guidance> {
-    let mut merged = rows(shipped, "shipped");
-    for row in rows(user, "user") {
+    let shown = |row: GuidanceRow, source: &str| Guidance {
+        work: row.work,
+        agent: agent(row.agent),
+        model: row.model,
+        effort: row.effort,
+        reason: row.reason,
+        source: source.into(),
+    };
+    let mut merged: Vec<_> = rows(shipped)
+        .into_iter()
+        .map(|r| shown(r, "shipped"))
+        .collect();
+    for row in rows(user) {
+        let row = shown(row, "user");
         if let Some(old) = merged.iter_mut().find(|old| old.work == row.work) {
             *old = row;
         } else {
@@ -68,44 +87,53 @@ fn guidance(shipped: &str, user: &str) -> Vec<Guidance> {
     }
     merged
 }
-#[derive(Clone)]
-enum Directive {
-    Forbid(Vec<String>),
-    Allow(Option<ProviderKind>, Vec<String>),
-    Ceiling(usize),
+/// The directive a rules-file line holds, with the line as the user wrote it; `None` for prose.
+fn directive(line: &str) -> Result<Option<(String, ModelRule)>> {
+    let rule = line.trim().strip_prefix("- ").unwrap_or(line.trim());
+    let Some((key, value)) = rule.split_once(':') else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    let names = || {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let parsed = match key.trim() {
+        "forbid" => ModelRule::Forbid { names: names() },
+        "allow" => ModelRule::Allow {
+            agent: None,
+            names: names(),
+        },
+        "allow claude" => ModelRule::Allow {
+            agent: Some(ProviderKind::Claude),
+            names: names(),
+        },
+        "allow codex" => ModelRule::Allow {
+            agent: Some(ProviderKind::Codex),
+            names: names(),
+        },
+        "effort-ceiling" => {
+            rank(value).ok_or_else(|| Error::Invalid(format!("invalid model rule: {rule}")))?;
+            ModelRule::EffortCeiling {
+                effort: value.to_ascii_lowercase(),
+            }
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some((rule.into(), parsed)))
 }
 pub(super) struct Policy {
-    entries: Vec<(String, Directive)>,
+    entries: Vec<(String, ModelRule)>,
 }
 impl Policy {
     fn parse(text: &str) -> Result<Self> {
         let mut entries = Vec::new();
         for line in text.lines() {
-            let rule = line.trim().strip_prefix("- ").unwrap_or(line.trim());
-            let Some((key, value)) = rule.split_once(':') else {
-                continue;
-            };
-            let value = value.trim();
-            let names = || {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            };
-            let directive = match key.trim() {
-                "forbid" => Directive::Forbid(names()),
-                "allow" => Directive::Allow(None, names()),
-                "allow claude" => Directive::Allow(Some(ProviderKind::Claude), names()),
-                "allow codex" => Directive::Allow(Some(ProviderKind::Codex), names()),
-                "effort-ceiling" => Directive::Ceiling(
-                    rank(value)
-                        .ok_or_else(|| Error::Invalid(format!("invalid model rule: {rule}")))?,
-                ),
-                _ => continue,
-            };
-            entries.push((rule.into(), directive));
+            entries.extend(directive(line)?);
         }
         Ok(Self { entries })
     }
@@ -117,28 +145,138 @@ impl Policy {
     ) -> Option<String> {
         self.entries.iter().find_map(|(rule, directive)| {
             let violates = match directive {
-                Directive::Forbid(names) => {
+                ModelRule::Forbid { names } => {
                     models.iter().any(|m| names.iter().any(|p| matches(p, m)))
                 }
-                Directive::Allow(scope, names) => {
-                    scope.is_none_or(|p| p == provider)
+                ModelRule::Allow { agent, names } => {
+                    agent.is_none_or(|p| p == provider)
                         && !models.is_empty()
                         && !models.iter().any(|m| names.iter().any(|p| matches(p, m)))
                 }
-                Directive::Ceiling(ceiling) => {
-                    effort.is_some_and(|e| rank(e).is_none_or(|r| r > *ceiling))
-                }
+                ModelRule::EffortCeiling { effort: ceiling } => effort
+                    .is_some_and(|e| rank(e).is_none_or(|r| rank(ceiling).is_some_and(|c| r > c))),
             };
             violates.then(|| format!("refused by your model rule: \"{rule}\""))
         })
     }
     fn restricts_models(&self, provider: ProviderKind) -> bool {
         self.entries.iter().any(|(_, d)| match d {
-            Directive::Forbid(names) => !names.is_empty(),
-            Directive::Allow(scope, _) => scope.is_none_or(|p| p == provider),
-            Directive::Ceiling(_) => false,
+            ModelRule::Forbid { names } => !names.is_empty(),
+            ModelRule::Allow { agent, .. } => agent.is_none_or(|p| p == provider),
+            ModelRule::EffortCeiling { .. } => false,
         })
     }
+}
+/// A rule as the file writes it: `forbid: fable`, `allow claude: opus, sonnet`.
+fn rule_text(rule: &ModelRule) -> String {
+    match rule {
+        ModelRule::Forbid { names } => format!("forbid: {}", names.join(", ")),
+        ModelRule::Allow { agent, names } => format!(
+            "allow{}: {}",
+            agent.map_or(String::new(), |p| format!(" {}", word(p))),
+            names.join(", ")
+        ),
+        ModelRule::EffortCeiling { effort } => format!("effort-ceiling: {effort}"),
+    }
+}
+const TABLE_HEAD: &str =
+    "| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |";
+/// Checks what Settings › Routing sends before it reaches the file: every cell fits the file's
+/// one-line table, names fit a rule, efforts are levels, and no work has two rows.
+fn check_rules(rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<()> {
+    let bad = |what: &str| Err(Error::Invalid(format!("invalid model rules: {what}")));
+    let cell = |text: &str| text.contains(['|', '\n', '\r']);
+    for (i, row) in rows.iter().enumerate() {
+        if row.work.trim().is_empty() || row.model.trim().is_empty() {
+            return bad("a row needs a work and a model");
+        }
+        if [&row.work, &row.model, &row.reason]
+            .into_iter()
+            .chain(&row.effort)
+            .any(|text| cell(text))
+        {
+            return bad("a row's cells cannot hold | or a line break");
+        }
+        if row.effort.as_deref().is_some_and(|e| rank(e).is_none()) {
+            return bad("unknown effort level");
+        }
+        if rows[..i].iter().any(|other| other.work == row.work) {
+            return bad(&format!("two rows for \"{}\"", row.work));
+        }
+    }
+    for rule in rules {
+        match rule {
+            ModelRule::Forbid { names } | ModelRule::Allow { names, .. } => {
+                if names.is_empty()
+                    || names
+                        .iter()
+                        .any(|n| n.trim().is_empty() || n.contains([',', ':', '\n', '\r']))
+                {
+                    return bad("a rule names models without commas, colons or line breaks");
+                }
+            }
+            ModelRule::EffortCeiling { effort } => {
+                if rank(effort).is_none() {
+                    return bad("unknown effort level");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+/// The rules file with its rows and rules replaced, in the same text format: prose and comments
+/// stay where they are, the rules take the place of the first rule line and the table the place
+/// of the first table line (else each goes at the end).
+fn rewrite(text: &str, rows: &[GuidanceRow], rules: &[ModelRule]) -> String {
+    let rules_block: Vec<String> = rules
+        .iter()
+        .map(|r| format!("- {}", rule_text(r)))
+        .collect();
+    let mut table = vec![TABLE_HEAD.to_owned()];
+    table.extend(rows.iter().map(|r| {
+        format!(
+            "| {} | {} | {} | {} | {} |",
+            r.work.trim(),
+            word(r.agent),
+            r.model.trim(),
+            r.effort.as_deref().unwrap_or("").trim(),
+            r.reason.trim()
+        )
+    }));
+    let (mut rules_done, mut table_done) = (false, false);
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with('|') {
+            if !table_done && !rows.is_empty() {
+                out.extend(table.iter().cloned());
+            }
+            table_done = true;
+        } else if directive(line).ok().flatten().is_some() {
+            if !rules_done {
+                out.extend(rules_block.iter().cloned());
+            }
+            rules_done = true;
+        } else {
+            out.push(line.to_owned());
+        }
+    }
+    for (done, block, wanted) in [
+        (rules_done, rules_block, !rules.is_empty()),
+        (table_done, table, !rows.is_empty()),
+    ] {
+        if !done && wanted {
+            while out.last().is_some_and(|l| l.trim().is_empty()) {
+                out.pop();
+            }
+            if !out.is_empty() {
+                out.push(String::new());
+            }
+            out.extend(block);
+        }
+    }
+    let mut written = out.join("\n");
+    written.push('\n');
+    written
 }
 /// Creates the shipped copy once, preserving an existing file, including an empty one.
 fn editable(path: &std::path::Path, default: &str) -> Result<String> {
@@ -174,6 +312,33 @@ impl SessionManager {
                     .unwrap_or_else(|| self.data_dir.clone())
                     .join(".brigadier/models.md")
             })
+    }
+    /// Settings › Routing's read of the rules file, as it is on disk now (S32).
+    pub fn model_rules(&self) -> Result<ModelRules> {
+        let path = self.models_rules_path();
+        let text = editable(&path, DEFAULT_RULES)?;
+        Ok(ModelRules {
+            path: path.display().to_string(),
+            shipped: rows(GUIDANCE),
+            rows: rows(&text),
+            rules: Policy::parse(&text)?
+                .entries
+                .into_iter()
+                .map(|(_, rule)| rule)
+                .collect(),
+        })
+    }
+    /// Settings › Routing's save: the file's rows and rules become these, in the file's own text
+    /// format, its prose kept (S32).
+    pub fn set_model_rules(&self, rows: &[GuidanceRow], rules: &[ModelRule]) -> Result<ModelRules> {
+        check_rules(rows, rules)?;
+        let path = self.models_rules_path();
+        let text = rewrite(&editable(&path, DEFAULT_RULES)?, rows, rules);
+        let io = |e: std::io::Error| Error::Invalid(format!("{}: {e}", path.display()));
+        let staged = path.with_extension("md.saving");
+        std::fs::write(&staged, text).map_err(io)?;
+        std::fs::rename(&staged, &path).map_err(io)?;
+        self.model_rules()
     }
     pub(super) fn model_policy(&self) -> Result<Policy> {
         Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?)
@@ -233,7 +398,7 @@ impl SessionManager {
         }
         // A deny rule that matches none of this CLI's models adds no allowlist. In particular,
         // a rule for a different provider cannot disable this CLI's native subagents.
-        if !allowed.ids.is_empty() && allowed.outside.is_empty() && !policy.entries.iter().any(|(_, d)| matches!(d, Directive::Allow(scope, _) if scope.is_none_or(|p| p == provider))) {
+        if !allowed.ids.is_empty() && allowed.outside.is_empty() && !policy.entries.iter().any(|(_, d)| matches!(d, ModelRule::Allow { agent, .. } if agent.is_none_or(|p| p == provider))) {
             return Ok(None);
         }
         Ok(Some(allowed))
@@ -435,6 +600,74 @@ mod tests {
                 .unwrap()
                 .refusal(ProviderKind::Claude, &["opus", "claude-fable-5-1"], None)
                 .is_some()
+        );
+    }
+    #[test]
+    fn the_page_writes_the_files_own_format_and_keeps_its_prose() {
+        let row = GuidanceRow {
+            work: "Bounded implementation".into(),
+            agent: ProviderKind::Claude,
+            model: "sonnet".into(),
+            effort: Some("medium".into()),
+            reason: "My preference.".into(),
+        };
+        let rules = vec![
+            ModelRule::Forbid {
+                names: vec!["fable".into()],
+            },
+            ModelRule::Allow {
+                agent: Some(ProviderKind::Codex),
+                names: vec!["gpt-6".into(), "default".into()],
+            },
+            ModelRule::EffortCeiling {
+                effort: "high".into(),
+            },
+        ];
+        check_rules(std::slice::from_ref(&row), &rules).unwrap();
+        // The shipped file has prose only: rules and the table go after it.
+        let written = rewrite(DEFAULT_RULES, std::slice::from_ref(&row), &rules);
+        assert!(written.starts_with(DEFAULT_RULES.trim_end()));
+        assert!(written.contains(
+            "- forbid: fable\n- allow codex: gpt-6, default\n- effort-ceiling: high\n\n| Work |"
+        ));
+        assert!(
+            written.ends_with(
+                "| Bounded implementation | claude | sonnet | medium | My preference. |\n"
+            )
+        );
+        // Read back, it is what was written; written again, it is the same text.
+        let policy = Policy::parse(&written).unwrap();
+        assert_eq!(
+            policy
+                .entries
+                .into_iter()
+                .map(|(_, r)| r)
+                .collect::<Vec<_>>(),
+            rules
+        );
+        assert_eq!(rows(&written), vec![row.clone()]);
+        assert_eq!(
+            rewrite(&written, std::slice::from_ref(&row), &rules),
+            written
+        );
+        // A hand edit in place: a rule between notes keeps its place; one removed leaves the rest.
+        let hand = "# Mine\nnote one\n- forbid: mythos\nnote two\n| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Review | codex | default | high | Mine. |\n";
+        let edited = rewrite(hand, &[], &rules[..1]);
+        assert_eq!(edited, "# Mine\nnote one\n- forbid: fable\nnote two\n");
+        // The page never writes what the file cannot hold.
+        let mut bad = row.clone();
+        bad.reason = "a | b".into();
+        assert!(check_rules(&[bad], &[]).is_err());
+        assert!(check_rules(&[row.clone(), row], &[]).is_err());
+        assert!(check_rules(&[], &[ModelRule::Forbid { names: vec![] }]).is_err());
+        assert!(
+            check_rules(
+                &[],
+                &[ModelRule::EffortCeiling {
+                    effort: "huge".into()
+                }]
+            )
+            .is_err()
         );
     }
     #[test]

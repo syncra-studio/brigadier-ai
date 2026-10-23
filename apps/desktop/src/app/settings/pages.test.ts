@@ -101,26 +101,30 @@ test("the merged pages' ids open Configuration at their setting", async () => {
   }
 });
 
-// Providers holds what the Providers, Accounts and Usage pages did: search finds every row of it
-// there, a row whose place moved brings its replacement into view, and the old pages' names find
-// the page that took them.
-test("search finds every row of Providers on its page", async () => {
+// Providers holds what the Providers, Accounts and Usage pages did, and Routing has a page of
+// its own under Agents: search finds every row of each there, a row whose place moved brings
+// its replacement into view, and the old pages' names find the page that took them.
+test("search finds every row of Providers and Routing on its page", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { searchSettings } = await server.ssrLoadModule("/src/app/settings/pages.ts");
     const { PROVIDERS_ROWS } = await server.ssrLoadModule("/src/app/settings/providers/ProvidersPage.tsx");
+    const { ROUTING_PAGE_ROWS } = await server.ssrLoadModule("/src/app/settings/routing/RoutingPage.tsx");
     type Row = { label: string; target?: string };
     type Result = { page: { id: string }; row: Row | null };
     const found = (query: string): Result[] => searchSettings(query);
     const on = (page: string, label: string) =>
       found(label).find((result) => result.page.id === page && result.row?.label === label);
-    for (const { label } of Object.values(PROVIDERS_ROWS) as Row[]) {
-      assert.ok(on("providers", label), `"${label}" finds a row on providers`);
+    for (const [page, rows] of [["providers", PROVIDERS_ROWS], ["routing", ROUTING_PAGE_ROWS]] as const) {
+      for (const { label } of Object.values(rows) as Row[]) {
+        assert.ok(on(page, label), `"${label}" finds a row on ${page}`);
+      }
     }
     // Rows that moved bring their replacement into view.
     assert.equal(on("providers", "Usage")?.row?.target, "Accounts");
     assert.equal(on("providers", "Add account")?.row?.target, "Accounts");
-    for (const [name, page] of [["Providers", "providers"], ["Accounts", "providers"], ["Usage", "providers"]] as const) {
+    assert.equal(on("routing", "Refresh models")?.row?.target, "Model strength");
+    for (const [name, page] of [["Providers", "providers"], ["Accounts", "providers"], ["Usage", "providers"], ["Routing", "routing"], ["Who does what", "routing"]] as const) {
       assert.ok(found(name).some((result) => result.page.id === page && result.row === null), name);
     }
     assert.ok(!found("Usage").some((result) => result.page.id === ("usage" as string)));
@@ -129,7 +133,7 @@ test("search finds every row of Providers on its page", async () => {
   }
 });
 
-// Links to Accounts and Usage open Providers at the accounts.
+// Links to Accounts and Usage open Providers at the accounts; Routing is a page again.
 test("the old Accounts and Usage ids open Providers at the accounts", async () => {
   const globals = globalThis as Record<string, unknown>;
   const saved = { requestAnimationFrame: globals.requestAnimationFrame };
@@ -144,6 +148,8 @@ test("the old Accounts and Usage ids open Providers at the accounts", async () =
       assert.deepEqual(useApp.getState().selection, { type: "settings", page: "providers" });
       assert.equal(useReveal.getState().label, "Accounts");
     }
+    openSettings("routing");
+    assert.deepEqual(useApp.getState().selection, { type: "settings", page: "routing" });
   } finally {
     await server.close();
     Object.assign(globals, saved);
@@ -204,6 +210,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       "Personal: Keyboard shortcuts",
       "Agents: Providers",
       "Agents: Plugins",
+      "Agents: Routing",
       "Agents: Git",
       "Agents: Computer use",
       "Browser & Data: Browser",
@@ -219,7 +226,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
     }));
     assert.deepEqual(sections, [
       { title: "Personal", pages: ["General", "Voice", "Configuration", "Keyboard shortcuts"] },
-      { title: "Agents", pages: ["Providers", "Plugins", "Git", "Computer use"] },
+      { title: "Agents", pages: ["Providers", "Plugins", "Routing", "Git", "Computer use"] },
       { title: "Browser &amp; Data", pages: ["Browser", "Import Browser Data"] },
       { title: "System", pages: ["Storage", "Inspector"] },
       { title: null, pages: ["Archived chats"] },
@@ -234,6 +241,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
     for (const [query, id, group] of [
       ["configurations", "configuration", "Personal"],
       ["configuration", "configuration", "Personal"],
+      ["routing", "routing", "Agents"],
       ["plugins", "plugins", "Agents"],
       ["usage", "providers", "Agents"],
       ["storage", "storage", "System"],

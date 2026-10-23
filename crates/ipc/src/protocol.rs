@@ -18,15 +18,16 @@ use brigadier_core::{
     CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConflictFile, ConnectView,
     ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
     ConversationStatus, ConversationView, DiffStat, FeedbackFiled, FeedbackFiling, FeedbackWriteUp,
-    FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitHubSignIn, GitState, Mention,
-    MergeUndo, Message, MessageMatches, MessagePage, MessageQueue, OrchestratorPage,
-    PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView,
-    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
-    ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
-    SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest, SourceAction,
-    SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy, TaskId,
-    ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView,
-    WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitHubSignIn, GitState, GuidanceRow,
+    Mention, MergeUndo, Message, MessageMatches, MessagePage, MessageQueue, ModelRule, ModelRules,
+    OrchestratorPage, PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId,
+    ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage,
+    RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion,
+    RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings, SettledTab,
+    Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope,
+    SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -681,6 +682,15 @@ pub enum Request {
     GetBrigadeSkill,
     /// Settings' Reset to shipped: the user's copy goes; new sessions get the shipped skill.
     ResetBrigadeSkill,
+    /// Settings › Routing: the user's rules file (`~/.brigadier/models.md`) as it is on disk
+    /// now, beside the shipped guidance (S32).
+    GetModelRules,
+    /// Settings › Routing's save: the rules file's rows and rules become these, written in the
+    /// file's own text format (S32).
+    SetModelRules {
+        rows: Vec<GuidanceRow>,
+        rules: Vec<ModelRule>,
+    },
     /// A worker's thread as its CLI keeps it (S14): its CLI session files' items and turns,
     /// read-only (G19.Q6).
     WorkerThread {
@@ -1528,6 +1538,12 @@ pub enum Response {
     ResetBrigadeSkill {
         custom: bool,
         path: String,
+    },
+    GetModelRules {
+        rules: ModelRules,
+    },
+    SetModelRules {
+        rules: ModelRules,
     },
     StopBackgroundTask,
     ReadBackgroundTaskOutput {

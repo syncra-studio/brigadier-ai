@@ -109,7 +109,7 @@ bar & tabs, App dialogs), `conversation/` (parts on the Thread, Steps & tool row
 and Composer boards), `side-panel/` (Summary pane, Files, search & source, Changes, review &
 conflicts, Terminal, Workers, Page, Job, mockup & new tab, Output, plan & side chat, Browser),
 `setup/` (onboarding, computer-use setup; Onboarding & setup), with their screens in `app.pen`;
-`settings/` (its pages, Providers among them) and `inspector/`, parts on the "Settings · …"
+`settings/` (its pages, Providers and Routing among them) and `inspector/`, parts on the "Settings · …"
 boards, screens in `settings.pen`. App-wide wiring (`App.tsx`, shortcuts, smoke) stays at the
 top of `app/`.
 
@@ -355,6 +355,17 @@ components" issues track moving them. Cards in Pen carry no code paths: this tab
 | Settings · Providers | `AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
 | Settings · Providers | `AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
 | Settings · Routing | `RankingView` | `app/conversation/cards/RankingView.tsx` | `RankingView` | |
+| Settings · Routing | `More › kind of work row` | `app/settings/routing/KindOfWorkRow.tsx` | `KindOfWorkRow` | |
+| Settings · Routing | `More › loading line` | `app/settings/routing/LoadingLine.tsx` | `LoadingLine` | |
+| Settings · Routing | `More › strength row` | `app/settings/routing/StrengthRow.tsx` | `StrengthRow` | |
+| Settings · Routing | `More › ratings footer` | `app/settings/routing/RatingsFooter.tsx` | `RatingsFooter` | |
+| Settings · Routing | `More › steps list` | `app/settings/routing/StepsList.tsx` | `StepsList` | |
+| Settings · Routing | `MoreRowHead` | `app/settings/routing/MoreRowHead.tsx` | `MoreRowHead` | |
+| Settings · Routing | `KindRow` | `app/settings/routing/KindRow.tsx` | `KindRow` | |
+| Settings · Routing | `NowPick` | `app/settings/routing/NowPick.tsx` | `NowPick` | |
+| Settings · Routing | `WhoPicks` | `app/settings/routing/WhoPicks.tsx` | `WhoPicks` | |
+| Settings · Routing | `AutoPicks` | `app/settings/routing/AutoPicks.tsx` | `AutoPicks` | |
+| Settings · Routing | `OrderPlace` | `app/settings/routing/OrderPlace.tsx` | `OrderPlace` | |
 | Settings · Browser | `DownloadRow` | `app/settings/DownloadRow.tsx` | `DownloadRow` | |
 | Settings · Browser | `HistoryDay` | `app/settings/DayGroup.tsx` | `DayGroup` | |
 | Settings · Browser | `VisitRow` | `app/settings/VisitRow.tsx` | `VisitRow` | |

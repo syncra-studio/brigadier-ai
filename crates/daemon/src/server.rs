@@ -1961,6 +1961,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 path: skill.path.display().to_string(),
             }
         }
+        Request::GetModelRules => Response::GetModelRules {
+            rules: sessions.model_rules()?,
+        },
+        Request::SetModelRules { rows, rules } => Response::SetModelRules {
+            rules: sessions.set_model_rules(&rows, &rules)?,
+        },
         Request::DontResume { conversation_id } => {
             heap(|| sessions.dont_resume(&conversation_id)).await?;
             Response::DontResume

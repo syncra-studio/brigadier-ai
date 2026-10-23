@@ -1497,6 +1497,78 @@ async fn models_rules_are_the_only_gate_on_start() {
     flow.stop().await;
 }
 
+/// A rule and a row saved through Settings › Routing (S32) land in the rules file in its own
+/// format: `brigadier models` lists them and `brigadier start` refuses by the rule.
+#[tokio::test]
+async fn models_page_rules_show_in_models_and_refuse_start() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if turn.input.contains("Try the model.") {
+                let models = brigadier(&turn, CliRequest::Models).await;
+                let request = StartRequest {
+                    model: Some("claude-fable-5-1".into()),
+                    local: true,
+                    ..start("Reply once.")
+                };
+                let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                seen.lock().unwrap().insert("models".into(), models);
+                seen.lock().unwrap().insert("start".into(), result);
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-model-page", Options::default(), script).await;
+    let row = crate::GuidanceRow {
+        work: "Bounded implementation".into(),
+        agent: ProviderKind::Claude,
+        model: "sonnet".into(),
+        effort: Some("medium".into()),
+        reason: "My preference.".into(),
+    };
+    let page = flow
+        .manager
+        .set_model_rules(
+            std::slice::from_ref(&row),
+            &[crate::ModelRule::Forbid {
+                names: vec!["fable".into()],
+            }],
+        )
+        .unwrap();
+    assert_eq!(page.rows, vec![row]);
+    let text = std::fs::read_to_string(flow.manager.models_rules_path()).unwrap();
+    assert!(text.starts_with(super::super::models::DEFAULT_RULES.trim_end()));
+    assert!(text.contains("\n- forbid: fable\n"), "{text}");
+    assert!(
+        text.contains("| Bounded implementation | claude | sonnet | medium | My preference. |")
+    );
+    flow.say("Try the model.").await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    assert_eq!(seen["start"]["error"]["code"], "refused", "{seen:#?}");
+    assert!(
+        seen["start"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("\"forbid: fable\"")
+    );
+    assert_eq!(
+        seen["models"]["rules"],
+        json!([{ "rule": "forbid: fable" }])
+    );
+    let guidance = seen["models"]["guidance"].as_array().unwrap();
+    let mine = guidance
+        .iter()
+        .find(|g| g["work"] == "Bounded implementation")
+        .unwrap();
+    assert_eq!(mine["model"], "sonnet");
+    assert_eq!(mine["source"], "user");
+    assert!(flow.board().await.tasks.is_empty());
+    flow.stop().await;
+}
+
 /// The session's thread starts two workers: one asks permission, one commits a file.
 fn rows_script(answers: Answers) -> Script {
     Arc::new(move |turn| {

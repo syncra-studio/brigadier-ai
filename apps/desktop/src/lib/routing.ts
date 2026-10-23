@@ -42,6 +42,21 @@ export const CATEGORIES: readonly TaskCategory[] = [
   "orchestrate",
 ];
 
+/** A kind of work in a few words, as Settings › Routing's Model strength names it. */
+export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
+  scout: "Explore the code",
+  research: "Research",
+  implement: "Write code",
+  review: "Review changes",
+  merge: "Resolve conflicts",
+  verify: "Run checks",
+  operate: "Use apps",
+  design: "Make designs and images",
+  chat: "Take over a chat",
+  orchestrate: "Coordinate work",
+  gitText: "Write commit messages",
+};
+
 /** A kind of work as "best for …" reads it: "Best for writing code and reviewing changes". */
 export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   scout: "exploring code",

@@ -13,6 +13,7 @@ import { STORAGE_ROWS, StoragePage } from "@/app/settings/storage/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/settings/providers/ProvidersPage";
+import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/settings/routing/RoutingPage";
 import {
   Archive,
   Branch,
@@ -26,10 +27,12 @@ import {
   Plugin,
   SettingsCog,
   SettingsSlider,
+  Shuffle,
   Storage,
 } from "@/components/icons";
 import { preloadable } from "@/lib/preloadable";
 import { prefetchImportSources } from "@/state/browserImport";
+import { prefetchModelRules } from "@/state/modelRules";
 import { type SettingsPageId, useApp } from "@/state/store";
 import { prefetchUsage } from "@/state/usage";
 
@@ -145,6 +148,19 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Agents",
     component: PluginsPage,
     get rows() { return integrationSearchRows(); },
+  },
+  {
+    id: "routing",
+    label: "Routing",
+    formerly: ["Who does what"],
+    icon: Shuffle,
+    group: "Agents",
+    component: RoutingPage,
+    rows: Object.values(ROUTING_PAGE_ROWS),
+    prefetch: () => {
+      prefetchUsage();
+      prefetchModelRules();
+    },
   },
   {
     id: "git",

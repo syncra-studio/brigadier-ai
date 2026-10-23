@@ -2787,6 +2787,47 @@ pub mod streams {
     }
 }
 
+/// A row of model guidance: which agent, model and effort suit a kind of work (S13b). `work`
+/// is the key a user row replaces a shipped row by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GuidanceRow {
+    pub work: String,
+    pub agent: ProviderKind,
+    /// A model id, a family word (`opus`) or `default`, the CLI's own default.
+    pub model: String,
+    pub effort: Option<String>,
+    pub reason: String,
+}
+
+/// A directive of the user's rules file (S13b): what restricts model choice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ModelRule {
+    /// `forbid: fable`: no matching model.
+    Forbid { names: Vec<String> },
+    /// `allow claude: opus, sonnet`: only matching models, for one agent or (`None`) every agent.
+    Allow {
+        agent: Option<ProviderKind>,
+        names: Vec<String>,
+    },
+    /// `effort-ceiling: high`: no effort above it.
+    EffortCeiling { effort: String },
+}
+
+/// Settings › Routing (S32): the user's rules file, `~/.brigadier/models.md`, read as rows and
+/// rules, beside the shipped guidance it overrides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRules {
+    pub path: String,
+    /// The shipped guidance, read only.
+    pub shipped: Vec<GuidanceRow>,
+    /// The user's rows.
+    pub rows: Vec<GuidanceRow>,
+    pub rules: Vec<ModelRule>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

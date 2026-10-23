@@ -29,6 +29,7 @@ export type SettingsPageId =
   | "configuration"
   | "plugins"
   | "providers"
+  | "routing"
   | "git"
   | "computerUse"
   | "storage"
