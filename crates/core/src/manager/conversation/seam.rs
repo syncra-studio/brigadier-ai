@@ -384,9 +384,9 @@ impl SessionManager {
 
     /// The agent another one goes on with when every account of `from`'s is at its limit,
     /// with "Switch to another agent automatically" on (S38, D23): another agent that is on
-    /// and has an account that can take work, on the model and effort of the rules file's
-    /// `Fallback` row when it names that agent, else its CLI's own. `None`: the session waits
-    /// for the reset (Q11).
+    /// and has an account that can take work, on the first model the user's rules allow: the
+    /// rules file's `Fallback` row's when it names that agent, else its CLI's own, else another
+    /// it lists. `None`: the session waits for the reset (Q11).
     pub(super) fn fallback_agent(
         &self,
         conv: &ConvLive,
@@ -397,27 +397,46 @@ impl SessionManager {
             return None;
         }
         let now = now_ms();
-        let provider = ProviderKind::ALL.into_iter().find(|provider| {
-            *provider != from.provider
-                && crate::routing::availability::provider_on(&settings, *provider)
-                && crate::accounts::ready(
-                    &settings,
-                    *provider,
-                    None,
-                    &self.runtime.account_candidates(*provider),
-                    &[],
-                    now,
-                )
-                .is_some()
-        })?;
-        let (model, effort) = self.fallback_row(provider);
-        Some(ModelChoice {
-            provider,
-            model,
-            effort,
-            fast: None,
-            account: None,
-        })
+        ProviderKind::ALL
+            .into_iter()
+            .filter(|provider| {
+                *provider != from.provider
+                    && crate::routing::availability::provider_on(&settings, *provider)
+                    && crate::accounts::ready(
+                        &settings,
+                        *provider,
+                        None,
+                        &self.runtime.account_candidates(*provider),
+                        &[],
+                        now,
+                    )
+                    .is_some()
+            })
+            .find_map(|provider| {
+                // The rules file's `Fallback` row first, then the CLI's own default, then each
+                // model it lists: the first the user's rules allow, through the same refusal
+                // `brigadier start` uses. None allowed: the next agent, else the wait.
+                let listed = self
+                    .runtime
+                    .overview(provider)
+                    .and_then(|overview| overview.models)
+                    .map(|catalog| catalog.models)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|model| !model.legacy)
+                    .map(|model| (Some(model.id), None));
+                std::iter::once(self.fallback_row(provider))
+                    .chain(std::iter::once((None, None)))
+                    .chain(listed)
+                    .map(|(model, effort)| ModelChoice {
+                        provider,
+                        model,
+                        effort,
+                        fast: None,
+                        account: None,
+                    })
+                    .find(|choice| self.check_choice(choice).is_ok())
+            })
     }
 
     /// Every account of the session's agent (`from`) is at its limit: the generation ends
@@ -455,15 +474,26 @@ impl SessionManager {
             Phase::Nudged { at_ms, .. } => Some(*at_ms),
             _ => None,
         };
+        // A Stop during the hand-over leaves the successor to the user's next message, after a
+        // restart too.
+        let stopped = conv
+            .state
+            .lock()
+            .await
+            .hand_over
+            .as_ref()
+            .is_some_and(|over| over.stopped);
         if matches!(file.phase, Phase::Live | Phase::Nudged { .. }) {
-            self.close_seam(conv, file, nudged, Some(death), false)
+            self.close_seam(conv, file, nudged, Some(death), stopped)
                 .await;
         }
         let stopped = {
             let mut state = conv.state.lock().await;
             // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
             let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
-            if !stopped {
+            if stopped {
+                state.seam.carry_on = false;
+            } else {
                 let mut pending = carried;
                 pending.append(&mut state.pending);
                 state.pending = pending;

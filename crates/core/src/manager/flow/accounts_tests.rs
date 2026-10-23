@@ -2112,6 +2112,89 @@ async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_a
     flow.stop().await;
 }
 
+/// S38: the user's rules bind the fallback: with no model of the other agent allowed, the
+/// session waits for its reset instead.
+#[tokio::test]
+async fn the_users_rules_bind_the_agent_fallback() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agent-fallback-rules",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "# My rules\n\n- allow codex: gpt-7\n",
+    )
+    .unwrap();
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+
+    flow.say("Do the thing.").await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !moments(&flow)
+        .await
+        .iter()
+        .any(|text| text.contains("Your message waits"))
+    {
+        assert!(tokio::time::Instant::now() < deadline, "no wait");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        seen(&log)
+            .iter()
+            .all(|turn| turn.provider == ProviderKind::Claude),
+        "{:?}",
+        seen(&log)
+    );
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Claude);
+    flow.stop().await;
+}
+
+/// S38: the fallback takes the first choice of the other agent the user's rules allow: its
+/// `Fallback` row's effort is over their ceiling, so the CLI's own default goes on.
+#[tokio::test]
+async fn the_agent_fallback_takes_the_first_choice_the_rules_allow() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agent-fallback-allowed",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "# My rules\n\n- effort-ceiling: high\n\n\
+         | Work | Agent | Model | Effort | Reason |\n|---|---|---|---|---|\n\
+         | Fallback | codex | default | xhigh | Mine. |\n",
+    )
+    .unwrap();
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+
+    flow.say("Do the thing.").await;
+    flow.until("a turn on Codex", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let on = orchestrator(&flow);
+    assert_eq!(on.provider, ProviderKind::Codex);
+    assert_eq!(on.effort, None, "{on:?}");
+    flow.stop().await;
+}
+
 /// S38: a session waiting for its agent's reset goes on with another agent once the switch is
 /// turned on.
 #[tokio::test]
