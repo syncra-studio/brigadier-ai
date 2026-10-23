@@ -8,6 +8,9 @@ type Rendering = {
   sections: string[];
   rows: Row[];
   version: string;
+  build: string;
+  updatesBefore: string;
+  updatesAfter: string;
   followUpHelper: string;
   followUp: string[];
   loginBefore: string;
@@ -46,6 +49,8 @@ test("General: its sections and rows, and every new setting saved for real", { t
       "Hibernate after",
       "Open at login",
       "Version",
+      "Build",
+      "Updates",
       "Open source licenses",
       "Run setup again",
     ],
@@ -61,6 +66,9 @@ test("General: its sections and rows, and every new setting saved for real", { t
     ["Notify when a session finishes", "When something needs you"],
   );
   assert.equal(seen.version, "Brigadier 0.9.0");
+  assert.equal(seen.build, "2026-10-16 · a1b2c3d4e");
+  assert.equal(seen.updatesBefore, "Nightly channel");
+  assert.equal(seen.updatesAfter, "Up to date.");
   // Enter always sends (no Send shortcut row); ⌥Enter sends the other way.
   assert.equal(seen.followUpHelper, "What a message sent while an agent works does; ⌥Enter does the other for one message");
   assert.deepEqual(seen.followUp, ["Steer"]);
@@ -76,6 +84,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
     "setLoginItem true",
     "setLoginItem false",
     "askNotifications",
+    "checkForUpdates",
   ]);
 });
 

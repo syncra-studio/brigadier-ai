@@ -48,6 +48,14 @@ export const GENERAL_ROWS = {
     label: "Version",
     description: "The Brigadier you're running",
   },
+  build: {
+    label: "Build",
+    description: "The commit and date this build was made from",
+  },
+  updates: {
+    label: "Updates",
+    description: "The feed this build checks, and a check right now",
+  },
   licenses: {
     label: "Open source licenses",
     description: "Open source code Brigadier adapts or uses",

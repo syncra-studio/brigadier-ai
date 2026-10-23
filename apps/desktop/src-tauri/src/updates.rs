@@ -45,6 +45,32 @@ pub fn version(config: &tauri::Config) -> String {
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned())
 }
 
+/// This build's own commit and date, where the build env carried them: the commit from
+/// `GITHUB_SHA` (every Actions job has it), the date from the nightly workflow's own stamp on
+/// `version` ("…-nightly.202610161908" -> "2026-10-16"). `None` for a build neither set (a
+/// local build, a release tag with no `GITHUB_SHA` at hand).
+pub fn build(config: &tauri::Config) -> Option<brigadier_ipc::app::BuildInfo> {
+    let sha = option_env!("GITHUB_SHA").map(|sha| sha[..sha.len().min(9)].to_owned());
+    let date = version(config)
+        .rsplit_once("-nightly.")
+        .and_then(|(_, stamp)| {
+            (stamp.len() >= 8 && stamp.as_bytes().iter().all(u8::is_ascii_digit))
+                .then(|| format!("{}-{}-{}", &stamp[0..4], &stamp[4..6], &stamp[6..8]))
+        });
+    (sha.is_some() || date.is_some()).then_some(brigadier_ipc::app::BuildInfo { sha, date })
+}
+
+/// The feed this build checks, in words ("Nightly", "Release"), where it checks at all.
+pub fn channel(config: &tauri::Config) -> Option<&'static str> {
+    configured(config).then(|| {
+        if version(config).contains("-nightly.") {
+            "Nightly"
+        } else {
+            "Release"
+        }
+    })
+}
+
 /// Checks now and then, for as long as the app runs.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -305,6 +331,14 @@ pub fn app_update() -> Option<Shown> {
     UPDATES.shown()
 }
 
+/// Settings › About's "Check now": checks right away instead of waiting for the next scheduled
+/// check, and answers with what the window now shows (an offer, or none for "up to date").
+#[tauri::command]
+pub async fn check_for_updates(app: AppHandle) -> Result<Option<Shown>, String> {
+    check(&app).await.map_err(|err| err.to_string())?;
+    Ok(UPDATES.shown())
+}
+
 /// The user clicked the update: downloads it in the background, the window following along.
 #[tauri::command]
 pub fn take_app_update(app: AppHandle) {
@@ -370,6 +404,51 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "identifier": "ai.brigadier.test" }))
                 .unwrap();
         assert_eq!(version(&plain), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn the_build_is_the_nightlys_date_stamp_without_a_sha_in_tests() {
+        let nightly: tauri::Config = serde_json::from_value(serde_json::json!({
+            "identifier": "ai.brigadier.test",
+            "version": "0.1.0-nightly.202610161908",
+        }))
+        .unwrap();
+        // `cargo test` carries no `GITHUB_SHA`, so only the date comes through.
+        let info = build(&nightly).expect("a nightly stamps a date");
+        assert_eq!(info.sha, None);
+        assert_eq!(info.date.as_deref(), Some("2026-10-16"));
+        let plain: tauri::Config =
+            serde_json::from_value(serde_json::json!({ "identifier": "ai.brigadier.test" }))
+                .unwrap();
+        assert_eq!(build(&plain), None);
+    }
+
+    #[test]
+    fn the_channel_is_nightly_or_release_only_where_the_updater_is_configured() {
+        let nightly: tauri::Config = serde_json::from_value(serde_json::json!({
+            "identifier": "ai.brigadier.test",
+            "version": "0.1.0-nightly.202610161908",
+            "plugins": { "updater": {
+                "pubkey": "key",
+                "endpoints": ["https://github.com/syncra-studio/brigadier-ai/releases/download/nightly/latest.json"]
+            } }
+        }))
+        .unwrap();
+        assert_eq!(channel(&nightly), Some("Nightly"));
+        let release: tauri::Config = serde_json::from_value(serde_json::json!({
+            "identifier": "ai.brigadier.test",
+            "version": "0.1.0",
+            "plugins": { "updater": {
+                "pubkey": "key",
+                "endpoints": ["https://github.com/syncra-studio/brigadier-ai/releases/latest/download/latest.json"]
+            } }
+        }))
+        .unwrap();
+        assert_eq!(channel(&release), Some("Release"));
+        let plain: tauri::Config =
+            serde_json::from_value(serde_json::json!({ "identifier": "ai.brigadier.test" }))
+                .unwrap();
+        assert_eq!(channel(&plain), None);
     }
 
     #[test]

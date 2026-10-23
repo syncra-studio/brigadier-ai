@@ -666,6 +666,8 @@ fn main() {
         version: updates::version(context.config()),
         platform: platform.name().into(),
         process_start_ms,
+        build: updates::build(context.config()),
+        update_channel: updates::channel(context.config()).map(str::to_owned),
         smoke,
         first_launch,
         budget_tolerance,
@@ -895,6 +897,7 @@ fn main() {
             browser_import::browser_import,
             browser_import::browser_import_open_access,
             updates::app_update,
+            updates::check_for_updates,
             updates::take_app_update,
             updates::restart_to_update
         ])

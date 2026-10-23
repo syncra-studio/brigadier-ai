@@ -65,6 +65,7 @@ export type { Budget } from "./Budget";
 export type { BudgetCheck } from "./BudgetCheck";
 export type { BudgetId } from "./BudgetId";
 export type { BudgetUnit } from "./BudgetUnit";
+export type { BuildInfo } from "./BuildInfo";
 export type { CacheCauses } from "./CacheCauses";
 export type { CallCache } from "./CallCache";
 export type { Candidate } from "./Candidate";

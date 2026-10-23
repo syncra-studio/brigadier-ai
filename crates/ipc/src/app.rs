@@ -427,6 +427,24 @@ pub struct AppInfo {
     pub first_launch: bool,
     /// Multiplier applied to timing budgets (1 locally, higher on shared CI runners).
     pub budget_tolerance: f64,
+    /// The build this process is, where the build env (the nightly workflow) stamped one.
+    #[serde(default)]
+    #[ts(optional)]
+    pub build: Option<BuildInfo>,
+    /// Which updater feed this build checks, where it checks at all ("Nightly", "Release").
+    #[serde(default)]
+    #[ts(optional)]
+    pub update_channel: Option<String>,
+}
+
+/// A build's own commit and date, from the env a CI build runs in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildInfo {
+    /// The commit's short id, where the build ran with `GITHUB_SHA` set.
+    pub sha: Option<String>,
+    /// `YYYY-MM-DD`, from the nightly version's own date stamp.
+    pub date: Option<String>,
 }
 
 /// What the webview measured during the smoke check.

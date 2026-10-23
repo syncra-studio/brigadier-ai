@@ -89,6 +89,11 @@ export function appUpdate(): Promise<AppUpdate | null> {
   return invoke<AppUpdate | null>("app_update");
 }
 
+/** Settings › About's "Check now": checks the feed right away instead of waiting. */
+export function checkForUpdates(): Promise<AppUpdate | null> {
+  return invoke<AppUpdate | null>("check_for_updates");
+}
+
 /** Downloads the offered nightly update; its progress comes as `app-update` events. */
 export function takeAppUpdate(): Promise<void> {
   return invoke("take_app_update");

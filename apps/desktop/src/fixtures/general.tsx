@@ -30,7 +30,13 @@ if (params.has("drive")) {
 }
 
 useApp.setState((state) => ({
-  info: { ...state.info, platform: "macos", version: "0.9.0" } as typeof state.info,
+  info: {
+    ...state.info,
+    platform: "macos",
+    version: "0.9.0",
+    build: { sha: "a1b2c3d4e", date: "2026-10-16" },
+    updateChannel: "Nightly",
+  } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
   windowVisible: true,
 }));
@@ -63,6 +69,9 @@ mockIPC((command, payload) => {
     }
     case "open_login_items":
       calls.push("openLoginItems");
+      return null;
+    case "check_for_updates":
+      calls.push("checkForUpdates");
       return null;
     case "ipc_request": {
       const req = (payload as { request: Request }).request;
@@ -119,6 +128,8 @@ function Fixture() {
           dimmed: item.classList.contains("opacity-50"),
         }));
         seen.version = text(row("Version")?.querySelector("span.tabular-nums"));
+        seen.build = text(row("Build")?.querySelector("span.tabular-nums"));
+        seen.updatesBefore = text(row("Updates")?.querySelector(".text-xs"));
         seen.loginBefore = control("Open at login")?.getAttribute("aria-checked");
       },
       () => {
@@ -135,6 +146,10 @@ function Fixture() {
       () => {
         seen.loginOff = control("Open at login")?.getAttribute("aria-checked");
         (button("Allow") ?? button("Open System Settings"))?.click();
+      },
+      () => button("Check now")?.click(),
+      () => {
+        seen.updatesAfter = text(row("Updates")?.querySelector(".text-xs"));
       },
       () => button("View")?.click(),
       () => {
