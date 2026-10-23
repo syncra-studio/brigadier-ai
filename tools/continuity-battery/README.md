@@ -48,6 +48,25 @@ Remaining folder trust keeps that root for cleanup through its daemon records an
 is reported explicitly. No credentials are entered. A CLI that is missing or signed
 out produces an incomplete report, with no attempt to authenticate.
 
+## Decision survival (S22b)
+
+```sh
+tools/continuity-battery/run.sh decisions --tokens 60000
+```
+
+`decisions.py` measures `research/CONTINUITY.md` §3.7 with the same harness and writes
+`reports/<date>-claude-decisions.md`. It plants ten items the way a user gives them, with no word
+about the ledger: three rules (one later corrected), a principle with its defining sentence and
+two examples, two decisions with reasons, one decision the thread takes itself, an open question,
+an open promise and a false worker claim. It forces two seams by size and one death with no note,
+then, restating nothing: T4 "where are we?" (both open items raised?), T1 a coding request the
+rules and decisions bear on (scored from the file and by running its functions with `node`), T2 a
+new case only the principle decides, T3 a worker brief scored by `claude -p --model sonnet` on a
+fixed rubric (cited, stated, missing, contradicted, and additions not marked "proposed"), T5 the
+thread's own decision told and marked "I decided", and T6 recall when asked. It is a report, never
+a gate. The plain-CLI arm and Codex belong to S25 (L9). `decisions.rescore(evidence, report)` scores a
+saved run again with no model calls (it reuses the T3 judge's answer).
+
 This is a small Claude baseline for S21, not the nightly battery, both-provider A/B,
 400k-token comparison, or weekly sample of real lineages (S25/L4). Shared-session
 faults measure cumulative survival; they don't isolate each seam's causal effect.

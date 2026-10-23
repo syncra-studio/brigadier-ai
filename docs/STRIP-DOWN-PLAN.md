@@ -1202,6 +1202,27 @@ who decided them, lost their defining sentence in a summary, or waited with no m
   - S17's byte test still passes (≤ 2,000 bytes, ≤ 15 lines); the provider test asserts the new text.
   - One battery run with the decision-survival block (Claude, 60k debug seam) exists as the baseline. It is a
     report, never a gate.
+- **As landed (w112, 2026-10-23):**
+  - `ledger add` and `close` print the new entry's id. `close` refuses an id the ledger doesn't have; it
+    rewrites nothing either way.
+  - An entry's kind is read from its first words: "Rule", "Decision" (or "user decided", "I decided"),
+    "Open", "Closed L<n>". "supersedes L<n>" ends the entry it names. `--open` and `--rules` read
+    `ledger-archive.md` too and leave out what was closed or superseded.
+  - `ledger check` also lists ids the file cites that the ledger doesn't have: a mistyped id reads as
+    cited otherwise. It reads the file on the caller's side; `--json` carries the four lists.
+  - The rest of the ledger gets about 8k tokens; what it leaves out is the ledger's oldest part, and its read
+    command is `sed -n '1,<line>p' <ledger>`. The user's messages include those sent mid-turn; a successor's
+    bare "carry on" is not one of them. Those left out for length are named by position.
+  - The battery block is `tools/continuity-battery/decisions.py` (`run.sh decisions`). T1 is scored from
+    the file and by running its functions; T3's judge is `claude -p --model sonnet` on a fixed rubric.
+  - Baseline (Claude `opus`, 60k debug seam, two seams by size and one death with no note;
+    `tools/continuity-battery/reports/2026-10-23-claude-decisions.md`): 9 of 9 applied or raised unprompted
+    where they apply, 10 of 10 recalled when asked, every hand-off carried the 2 open items and 8 rules and
+    decisions whole, and each successor wrote its "Took over" entry. The brief missed its bar: it cited all seven
+    decisions with ids and contradicted none, but the judge counted 9 lines of the thread's own not marked
+    "proposed" (some are the brief's framing, so the count is high). Two later choices of the thread's own (a
+    `RangeError`, the README section) were ledgered "I decided" but not told to the user, because the request
+    asked for a one-word reply.
 
 **S23. Seam on; delete rebirth (Q6).** Opus. It runs in the same run as S22, once the battery shows the seam no
 worse than today's rebirth.

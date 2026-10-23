@@ -492,9 +492,9 @@ def report(result):
     if rows:
         passed = sum(row["verdict"] == "pass" for row in rows.values())
         lines.insert(4, f"{passed}/{len(ITEMS)} planted items passed. The final probe was allowed to search existing records.\n")
-    # The successor's verbatim part: the first message, the latest exchange and the tail.
+    # The successor's verbatim part: the user's own messages, the latest exchange and the tail.
     last = (result.get("handoffs") or [{}])[-1].get("start", "")
-    recent = last.partition("## The session's first message")[2].partition("## Left out")[0]
+    recent = last.partition("## The user's messages, oldest first")[2].partition("## Left out")[0]
     markers = {"rule": "Since 0.5:", "exception": "Exporter since 0.5:", "decision": "accounting import rejects",
                "hash": "4e1d9b7c2a03", "path": "src/invoice.ts:57", "units": "4500 ms",
                "failed": "B-2291", "ruled_out": "module-level Map", "false_worker": "writes atomically through"}

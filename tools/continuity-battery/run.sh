@@ -7,4 +7,10 @@ df -h .
 cargo build --locked -q -p brigadier-daemon --bin brigadierd -p brigadier-cli --bin brigadier
 target_dir=$(cargo metadata --locked --format-version 1 --no-deps |
   python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-exec python3 tools/continuity-battery/battery.py --daemon "$target_dir/debug/brigadierd" "$@"
+# `run.sh decisions …` runs S22b's decision-survival block; anything else, the recall battery.
+script=battery.py
+if [ "${1:-}" = decisions ]; then
+  script=decisions.py
+  shift
+fi
+exec python3 "tools/continuity-battery/$script" --daemon "$target_dir/debug/brigadierd" "$@"
