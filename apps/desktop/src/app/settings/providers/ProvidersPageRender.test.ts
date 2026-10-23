@@ -38,6 +38,9 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   assert.deepEqual(seen.claudeMark, { provider: "claude", glyph: true, size: [44, 44], beforeTitle: true, tile: rowMark });
   // One text node, so VoiceOver reads "Max" whole, not "M", "ax" (#580).
   assert.equal(seen.planChipNodes, 1);
+  // The meter's name fits beside the percent, not cut to "Weekly · in u…" (#579).
+  assert.equal(seen.meterOverflow, false);
+  assert.equal(seen.rowOverflow, false);
   assert.equal(seen.cli, "Claude Code CLIv2.1.0 · v2.1.4 is outUpdate");
   assert.equal(seen.updateEnabled, true);
   assert.equal(seen.location, "Location/usr/local/bin/claudeChange");

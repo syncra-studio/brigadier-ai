@@ -303,6 +303,11 @@ function Fixture() {
         seen.rowMark = surface(document.querySelector('[data-slot="agent-row"] [data-slot="agent-mark"]'));
         // One text node, so a screen reader reads "Max" whole, not "M", "ax" (#580).
         seen.planChipNodes = document.querySelector('[data-slot="plan-chip"]')?.childNodes.length;
+        // The meter's name isn't cut off ("Weekly · in u…") beside the percent (#579).
+        const meterName = document.querySelector('[data-slot="agent-row"][data-setting="Claude"] [data-slot="account-usage"] span.truncate');
+        seen.meterOverflow = meterName ? meterName.scrollWidth > meterName.clientWidth : null;
+        const claudeRow = document.querySelector('[data-slot="agent-row"][data-setting="Claude"]');
+        seen.rowOverflow = claudeRow ? claudeRow.scrollWidth > claudeRow.clientWidth : null;
         seen.notSetUp = all('[data-slot="agent-not-set-up"]').length;
         seen.addAgent = Boolean(button("Add another agent"));
         // The fallback switch (S38): off by default, and its click turns it on.

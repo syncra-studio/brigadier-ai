@@ -106,7 +106,7 @@ export function ProviderAgentRow({
         </span>
         <ErrorLine error={toggle.error} />
       </div>
-      <div className="flex w-37.5 shrink-0 items-center justify-end">
+      <div className="flex w-45 shrink-0 items-center justify-end">
         {busiest ? (
           <UsageMeter window={busiest} now={now} compact label={`${windowTitle(busiest)} · in use`} />
         ) : (

@@ -58,7 +58,7 @@ export function UsageMeter({
   return (
     <div
       data-slot="account-usage"
-      className={cn("flex min-w-0 flex-col", compact ? "w-37.5 gap-1.5" : "w-35 gap-1.75")}
+      className={cn("flex min-w-0 flex-col", compact ? "w-45 gap-1.5" : "w-35 gap-1.75")}
       title={`${window.label}: ${percent}% used${resets ? `, resets in ${resets}` : ""}`}
     >
       <span className="flex items-baseline justify-between gap-2 text-xs whitespace-nowrap tabular-nums">
