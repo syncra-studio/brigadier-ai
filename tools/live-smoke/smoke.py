@@ -358,7 +358,6 @@ class Smoke:
         time.sleep(5)
         _, steer_id = self.send("C1", f"And put the code {steer_code} in your answer too.", steer=True, codes=[steer_code])
         steer_at = now_ms()
-        deciding_since, deciding_max = {}, 0
         deferred, deferred_after, cmd_end = {}, None, None
         follow_deciding = False
         deadline = time.time() + long + 150
@@ -368,11 +367,6 @@ class Smoke:
             for item in v["queue"]["items"]:
                 if item.get("deciding") and follow_code in item["text"]:
                     follow_deciding = True
-                if item.get("deciding"):
-                    deciding_since.setdefault(item["id"], time.time())
-                    deciding_max = max(deciding_max, time.time() - deciding_since[item["id"]])
-                else:
-                    deciding_since.pop(item["id"], None)
             running = any(s["status"] == "inProgress" and self.runs("C1", s, f"hold.sh {long}") for s in tool_steps(v))
             if not running and cmd_end is None:
                 cmd_end = now_ms()
@@ -393,36 +387,28 @@ class Smoke:
         v = self.view("C1")
         if t1:
             self.expected[self.convs["C1"]].setdefault(root, []).append(t1)
-        check(sc, "the follow-up isn't left Deciding (30 s at most)", deciding_max <= 30,
-              f"Deciding for {deciding_max:.0f} s" + (" (still at the end)" if deciding_since else ""))
         reqs = {r["id"]: r for r in v["requests"]}
-        # A message sent while the session works waits in the queue, Deciding, while the thread
-        # judges it (#437); leaving the queue it becomes a message with a request of its own.
-        check(sc, "the follow-up waits in the queue, Deciding", follow_out.get("type") == "queued" and follow_deciding,
-              f"sent as {follow_out.get('type')}" + ("" if follow_deciding else ", never seen Deciding"))
+        # A message sent while the session works waits in the queue for a turn of its own, as in
+        # the plain CLI (nothing judges or routes it); leaving the queue it becomes a message with
+        # a request of its own.
+        check(sc, "the follow-up waits in the queue, never Deciding", follow_out.get("type") == "queued" and not follow_deciding,
+              f"sent as {follow_out.get('type')}" + (", seen Deciding" if follow_deciding else ""))
         follow_msg = next((m for m in messages(v) if m["role"] == "user" and follow_code in m["text"]), {})
         follow_id = follow_msg.get("requestId") or follow_msg.get("id")
         if follow_id:
             self.expected[self.convs["C1"]].setdefault(follow_id, []).append(follow_code)
-        routes = []
-        for step in tool_steps(v, "route_follow_up"):
-            routes.append(self.call_input("C1", step["itemId"]))
 
         def joined(rid):
-            # A thread inside a long command can't judge it, so after 20 s it joins the working
-            # answer: steered into it, and a later message into the one before, so the chain
-            # leads back to the running request. A thread that judged it to wait gives it its own.
+            # The requests `rid` was steered into, in order: a steer's chain leads back to the
+            # running request.
             chain, seen = [], set()
             while rid in reqs and reqs[rid].get("steeredInto") and rid not in seen:
                 seen.add(rid)
                 rid = reqs[rid]["steeredInto"]
                 chain.append(rid)
             return chain
-        waited = any("wait" in str(r).lower() for r in routes)
-        check(sc, "the follow-up joins the running request (or the thread judged it to wait)",
-              root in joined(follow_id) or (waited and follow_id),
-              f"steeredInto chain {joined(follow_id) or 'none'}" + ("" if follow_id else ", no message for it"),
-              info="the thread judged it to wait" if waited and root not in joined(follow_id) else "")
+        check(sc, "the follow-up gets a request of its own", follow_id and root not in joined(follow_id),
+              "no message for it" if not follow_id else f"steeredInto chain {joined(follow_id)}")
         check(sc, "the steer goes into the running request", root in joined(steer_id),
               f"steeredInto chain {joined(steer_id) or 'none'}")
         check(sc, "while the command runs, the steer says it is read when the command ends", deferred,

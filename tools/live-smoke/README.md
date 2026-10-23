@@ -31,7 +31,8 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
 
 1. **Long command** (C1). A foreground `sh .smoke/hold.sh 70 && …` command (Claude Code refuses a bare
    foreground `sleep`); once its step runs, a follow-up
-   and then a steer. The follow-up isn't Deciding for more than 30 s; the steer goes into the
+   and then a steer. The follow-up waits in the queue for a request of its own (never
+   Deciding); the steer goes into the
    running request, its state says it is read when the command ends (`heldBy` on the steered
    request or its queued message, naming the command, then cleared), and it is
    answered; the follow-up is answered; the command's real output reaches the user; every
