@@ -1651,7 +1651,7 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
     let flow = Flow::start("cli-start-by-work", Options::default(), script).await;
     std::fs::write(
         flow.manager.models_rules_path(),
-        "- effort-ceiling: high\n\n| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Review | codex | gpt-6-astra | medium | Mine. |\n",
+        "- effort-ceiling: high\n\n| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Review | codex | astra | medium | Mine. |\n",
     )
     .unwrap();
     flow.say("Start by work.").await;
@@ -1668,7 +1668,8 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
         let w = &seen[name]["worker"];
         (w["agent"].clone(), w["model"].clone(), w["effort"].clone())
     };
-    // The user's row, for the other provider than the Claude session's: a Codex worker.
+    // The user's row, for the other provider than the Claude session's: a Codex worker, its
+    // family word ("Newest Codex astra") the newest model listed of it.
     assert_eq!(
         worker("row"),
         (json!("codex"), json!("gpt-6-astra"), json!("medium")),
@@ -1681,7 +1682,7 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
     // No row of the user's: the shipped one.
     assert_eq!(
         worker("shipped"),
-        (json!("claude"), json!("opus"), json!("high"))
+        (json!("claude"), json!("claude-opus-5-5"), json!("high"))
     );
     assert_eq!(seen["shipped"]["row"]["source"], "shipped");
     // A flag wins over its field only.

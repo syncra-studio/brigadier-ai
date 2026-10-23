@@ -183,7 +183,7 @@ impl SessionManager {
             // A row's model is its agent's: another agent keeps its own default.
             (None, Some(row)) if agent == Some(row.agent) => {
                 picked.push("model".to_owned());
-                (row.model != "default").then(|| row.model.clone())
+                (row.model != "default").then(|| self.listed_model(provider, &row.model))
             }
             (None, _) => None,
         };

@@ -356,11 +356,44 @@ impl SessionManager {
         match self.work_row(FALLBACK_WORK) {
             Ok(Some(row)) if row.agent == agent(provider) => (
                 (!row.model.is_empty() && !row.model.eq_ignore_ascii_case("default"))
-                    .then_some(row.model),
+                    .then(|| self.listed_model(provider, &row.model)),
                 row.effort,
             ),
             _ => (None, None),
         }
+    }
+    /// A row's model as its CLI takes it: a listed id as it is; a family word (`sol`, what the
+    /// page's "Newest … sol" saves) the newest listed model it names, so it follows releases;
+    /// anything else as written.
+    pub(super) fn listed_model(&self, provider: ProviderKind, model: &str) -> String {
+        let Some(catalog) = self.runtime.overview(provider).and_then(|o| o.models) else {
+            return model.to_owned();
+        };
+        let listed = |id: &str| id.eq_ignore_ascii_case(model);
+        if catalog
+            .models
+            .iter()
+            .any(|m| listed(&m.id) || m.resolved.as_deref().is_some_and(listed))
+        {
+            return model.to_owned();
+        }
+        let word = model.to_ascii_lowercase();
+        let version = |id: &str| -> Vec<u32> {
+            id.split(|c: char| !c.is_ascii_digit())
+                .filter_map(|part| part.parse().ok())
+                .filter(|number| *number < 1000)
+                .collect()
+        };
+        catalog
+            .models
+            .iter()
+            .filter(|m| !m.legacy)
+            .filter(|m| {
+                m.id.split(['-', '_', ' '])
+                    .any(|part| part.eq_ignore_ascii_case(&word))
+            })
+            .max_by_key(|m| version(&m.id))
+            .map_or_else(|| model.to_owned(), |m| m.id.clone())
     }
     pub(super) fn model_policy(&self) -> Result<Policy> {
         Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?)
