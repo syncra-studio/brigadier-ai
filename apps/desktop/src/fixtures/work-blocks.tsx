@@ -120,7 +120,7 @@ function view(): View {
     queue: { items: drive === "queue" ? [queued] : [], paused: false },
     run: daemon.run, runRequest: daemon.run === "running" ? "r1" : null,
     head: daemon.messages.at(-1)?.id ?? null, ratings: {}, streaming: null,
-    notices: [], memories: [], previews: [],
+    notices: [], previews: [],
   } as unknown as View;
 }
 

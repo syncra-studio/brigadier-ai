@@ -42,7 +42,6 @@ import {
 } from "@/app/conversation/blocks";
 import { AnsweredStatus, type ThreadStatusProps } from "@/app/conversation/ThreadStatus";
 import { useTurnChanged } from "@/app/conversation/ChangesCard";
-import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import type { AttachmentRef, ModelChoice, ThinkingSegment, WorkSpan } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -317,7 +316,6 @@ export const RequestBlock: FC = () => {
       </StoppedBy.Provider>
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
       {!live && <TurnEnd meta={meta} />}
-      {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <BlockError meta={meta} live={live} />
       {answer !== null && (
         <AnswerAnnouncer answering={live} finished={!live} index={answer} />

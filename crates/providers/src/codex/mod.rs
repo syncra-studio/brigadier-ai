@@ -115,9 +115,14 @@ const NO_SKILLS_CATALOG: &str = "skills.include_instructions=false";
 /// session whose models are limited ([`SessionSpec::allowed_models`]) runs without them.
 const NO_SUB_AGENTS: &str = "agents.enabled=false";
 
-/// Desktop integrations and Codex's own memory, off for every session (Brigadier's Brain is
-/// its memory, its browser and computer tools are Brigadier's own).
-const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use", "memories"];
+/// Desktop integrations, off for every session (its browser and computer tools are Brigadier's
+/// own).
+const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use"];
+
+/// Codex's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
+/// memory should grow: a lean worker (G23), a side chat, which leaves nothing, Brigadier's own
+/// one-shots and a control connection.
+const MEMORIES: &str = "memories";
 
 /// The user's personal Codex setup, off for a session without it ([`ToolSet::user_setup`]).
 const USER_SETUP_FEATURES: &[&str] = &["plugins", "hooks"];
@@ -384,7 +389,20 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     };
     let user_setup = tools.user_setup();
     let sealed: &[&str] = if user_setup { &[] } else { USER_SETUP_FEATURES };
-    for feature in DISABLED_FEATURES.iter().chain(sealed).chain(role_features) {
+    let memory_off = session.is_none_or(|session| {
+        session.lean_worker
+            || matches!(
+                tools,
+                ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat
+            )
+    });
+    let memories: &[&str] = if memory_off { &[MEMORIES] } else { &[] };
+    for feature in DISABLED_FEATURES
+        .iter()
+        .chain(sealed)
+        .chain(role_features)
+        .chain(memories)
+    {
         args.push("--disable".into());
         args.push((*feature).into());
     }
@@ -2764,13 +2782,15 @@ mod tests {
             (ToolSet::TabChat, ToolSet::Review, Some("disabled")),
         ] {
             let args = app_server_args(Some(&spec(tools, None)));
-            let off = disabled(&args);
+            let mut off = disabled(&args);
             assert!(!off.iter().any(|f| f == "image_generation"), "{args:?}");
+            // Codex's memory follows the user's setting in a Chat (S19).
+            off.retain(|f| f != MEMORIES);
             let mut before = disabled(&app_server_args(Some(&spec(locked_like, None))));
             before.retain(|f| {
                 !matches!(
                     f.as_str(),
-                    "image_generation" | "shell_tool" | "unified_exec"
+                    "image_generation" | "shell_tool" | "unified_exec" | MEMORIES
                 )
             });
             assert_eq!(off, before, "{tools:?}");
@@ -3061,6 +3081,46 @@ mod tests {
         let restricted = spec(ToolSet::None, Some(AllowedModels::default()));
         let args = app_server_args(Some(&restricted));
         assert_eq!(args.iter().filter(|arg| *arg == NO_SUB_AGENTS).count(), 1);
+    }
+
+    /// STRIP-DOWN-PLAN S19: Codex's own memory follows the user's setting. Every session reads
+    /// the user's `config.toml`, so a thread, a worker and a Chat are given nothing about memory
+    /// and start with the user's `features.memories`, on or off. Only a lean worker (G23), a side
+    /// chat, Brigadier's own one-shots and a control connection go without it.
+    #[test]
+    fn codexs_memory_follows_the_users_setting() {
+        let about_memory = |args: &[String]| -> Vec<String> {
+            args.iter()
+                .filter(|arg| arg.contains("memor"))
+                .cloned()
+                .collect()
+        };
+        let off = |args: &[String]| {
+            args.windows(2)
+                .any(|pair| pair[0] == "--disable" && pair[1] == MEMORIES)
+        };
+        for tools in [
+            ToolSet::Thread,
+            ToolSet::Lean,
+            ToolSet::Default,
+            ToolSet::Chat,
+        ] {
+            let args = app_server_args(Some(&spec(tools, None)));
+            assert!(about_memory(&args).is_empty(), "{tools:?}: {args:?}");
+        }
+        let mut lean = spec(ToolSet::Lean, None);
+        lean.lean_worker = true;
+        assert!(off(&app_server_args(Some(&lean))), "a lean worker");
+        for tools in [
+            ToolSet::TabChat,
+            ToolSet::Review,
+            ToolSet::Web,
+            ToolSet::None,
+        ] {
+            let args = app_server_args(Some(&spec(tools, None)));
+            assert!(off(&args), "{tools:?}: {args:?}");
+        }
+        assert!(off(&app_server_args(None)), "a control connection");
     }
 
     #[test]

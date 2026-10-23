@@ -508,7 +508,6 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["code", "search", "--kind", "symbol", "--json", "ToolHost"],
         &["code", "refs", "cli_call", "--json"],
         &["code", "map", "--json"],
-        &["memory", "save", "--json", "Lives", "in", "Lisbon."],
         &[
             "report", "save", "--title", "Printers", "--json", "Bambu", "A1.",
         ],

@@ -40,7 +40,7 @@ mockIPC((command, payload) => {
           messages: { messages: [], hasMore: false }, tasks: [], approvals: [], questions: [],
           requests: [], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [],
           compactions: [], decisions: [], queue: { items: [], paused: false }, run: "idle",
-          runRequest: null, head: null, ratings: {}, streaming: null, notices: [], memories: [],
+          runRequest: null, head: null, ratings: {}, streaming: null, notices: [],
           previews: [],
         } as unknown as View,
       };

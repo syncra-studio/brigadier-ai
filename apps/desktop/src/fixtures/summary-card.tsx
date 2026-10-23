@@ -73,7 +73,7 @@ function view(id: string): View {
     machineSteps: [], thinking: [], compactions: [], decisions: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: stored.at(-1)?.id ?? null, ratings: {}, streaming: null,
-    notices: [], memories: [], previews: [],
+    notices: [], previews: [],
   } as unknown as View;
 }
 

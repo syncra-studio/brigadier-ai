@@ -8,7 +8,7 @@ use brigadier_providers::{
 };
 use brigadier_router::{MergedModel, OverrideRule, ProviderQuota, QuotaSample, RegistryInfo};
 
-use crate::knowledge::{MemoryChange, RebirthThresholds};
+use crate::knowledge::RebirthThresholds;
 use crate::work::{
     Approval, AttachmentRef, Compaction, MessageQueue, OrchestratorEntry, OrchestratorStep,
     Question, RunState, Task, UserRequest, WorkerStep,
@@ -930,10 +930,6 @@ pub struct Settings {
     pub plain_text_composer: bool,
     /// A notice above the composer while a conversation is in Full access.
     pub show_full_access_notice: bool,
-    /// The old Short replies setting, no longer read: the voice is fixed (BUILD-PLAN §1.4). A
-    /// stored `false` is copied once into the personal preference for longer answers, and then
-    /// saved as `true`.
-    pub short_replies: bool,
     /// Co-authored-by trailers that name an AI are left out of commit messages: the user's
     /// own commits, what the agents write, and the commits Brigadier lands or keeps.
     #[serde(default = "default_true")]
@@ -1192,7 +1188,6 @@ impl Default for Settings {
             show_context_usage: true,
             plain_text_composer: false,
             show_full_access_notice: true,
-            short_replies: true,
             omit_ai_coauthors: true,
             git_writer: None,
             commit_style: GitStyle::default(),
@@ -1421,9 +1416,6 @@ pub struct ConversationView {
     pub streaming: Option<StreamingMessage>,
     /// The latest notices (environment problems, fallbacks), newest last.
     pub notices: Vec<Notice>,
-    /// What a Chat's model saved to the Personal Brain (its Memory chips): the latest change
-    /// per memory, in the order they were saved; one the user removed is `forgotten`.
-    pub memories: Vec<crate::knowledge::MemoryChange>,
     /// Its previews, oldest first.
     #[serde(default)]
     pub previews: Vec<crate::work::Preview>,
@@ -2541,12 +2533,6 @@ pub enum DomainEvent {
         scope: String,
         attachments: Vec<AttachmentRef>,
     },
-    /// A Chat's model saved a memory to the Personal Brain, or the user removed it (a Memory
-    /// chip in the thread).
-    MemoryUpdated {
-        conversation_id: ConversationId,
-        memory: MemoryChange,
-    },
     /// Something was decided on the user's behalf ("Decided for you").
     DecidedForYou {
         decision: crate::work::Decision,
@@ -2717,7 +2703,6 @@ impl DomainEvent {
             Self::OutputKept { .. } => "output.kept",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",
             Self::DraftPinned { .. } => "draft.pinned",
-            Self::MemoryUpdated { .. } => "memory.updated",
             Self::DecidedForYou { .. } => "decision.made",
             Self::PeerMessageSent { .. } => "peer.sent",
             Self::PeerMessageReceived { .. } => "peer.received",
@@ -2963,23 +2948,9 @@ mod tests {
     }
 
     #[test]
-    fn short_replies_are_on_by_default_and_for_settings_saved_before_them() {
-        assert!(Settings::default().short_replies);
-        // The old hidden `conciseReplies` switch doesn't carry over: the user's choice is
-        // the Settings switch alone.
+    fn settings_saved_with_the_old_review_merge_and_short_replies_switches_still_load() {
         let settings: Settings = serde_json::from_str(
-            r#"{"usage":{"conciseReplies":false},"hibernateAfterMinutes":12}"#,
-        )
-        .unwrap();
-        assert!(settings.short_replies);
-        let settings: Settings = serde_json::from_str(r#"{"shortReplies":false}"#).unwrap();
-        assert!(!settings.short_replies);
-    }
-
-    #[test]
-    fn settings_saved_with_the_old_review_and_merge_switches_still_load() {
-        let settings: Settings = serde_json::from_str(
-            r#"{"reviewWork":false,"autoMerge":true,"hibernateAfterMinutes":12}"#,
+            r#"{"reviewWork":false,"autoMerge":true,"shortReplies":false,"hibernateAfterMinutes":12}"#,
         )
         .unwrap();
         assert_eq!(settings.hibernate_after_minutes, 12);

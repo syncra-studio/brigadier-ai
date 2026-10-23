@@ -85,7 +85,7 @@ export function usageParts(report: StorageReport): Part[] {
     {
       key: "brains",
       label: "Brains",
-      bytes: projects((p) => p.brainBytes) + shared(report, "personalBrain"),
+      bytes: projects((p) => p.brainBytes),
       color: PART_COLOR.brains,
     },
     { key: "models", label: "Models", bytes: shared(report, "models"), color: PART_COLOR.models },

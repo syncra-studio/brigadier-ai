@@ -11,7 +11,9 @@
 use super::SessionManager;
 use crate::model::{ConversationId, Mention, MessageRole, TabChat, TabTarget};
 use crate::pages::{PageContent, PageWriteOutcome, Pages};
-use crate::tools::{ReadPage, SaveReport, TabChatCall, ToolReply, WritePage, WriteTabFile};
+use crate::tools::{
+    ChatCall, ReadPage, SaveReport, TabChatCall, ToolReply, WritePage, WriteTabFile,
+};
 use crate::work::WorkspaceTarget;
 use crate::{Error, Result};
 use std::sync::Arc;
@@ -154,6 +156,17 @@ impl SessionManager {
 }
 
 impl SessionManager {
+    /// A Chat's tool call.
+    pub(super) async fn chat_call(&self, call: ChatCall) -> ToolReply {
+        let result = match call {
+            ChatCall::SaveReport(args) => self.save_report(args).await,
+        };
+        match result {
+            Ok(text) => ToolReply::ok(text),
+            Err(err) => ToolReply::error(err.to_string()),
+        }
+    }
+
     /// `save_report`: a research answer's full report as a new page of the user's, and the link
     /// its answer gives (Q79). Any thread or Chat may make one; it reads and changes no other page.
     pub(super) async fn save_report(&self, args: SaveReport) -> Result<String> {

@@ -5,14 +5,10 @@ import type { IndexStatus } from "./IndexStatus";
 import type { ProjectId } from "./ProjectId";
 
 /**
- * A project's Brain at a glance (or the Personal Brain's), for the Inspector.
+ * A project's Brain at a glance, for the Inspector.
  */
-export type BrainOverview = { 
+export type BrainOverview = { projectId: ProjectId, stats: BrainStats, 
 /**
- * `None` for the Personal Brain.
- */
-projectId: ProjectId | null, stats: BrainStats, 
-/**
- * The project's code index (none for the Personal Brain or a project without a repo).
+ * The project's code index (none for a project without a repo).
  */
 index: IndexStatus | null, embedder: EmbedderStatus, };

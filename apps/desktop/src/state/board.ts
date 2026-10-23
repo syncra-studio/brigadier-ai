@@ -17,7 +17,6 @@ import type {
   DiffStat,
   EventEnvelope,
   MachineStep,
-  MemoryChange,
   MessageQueue,
   Notice,
   OrchestratorLogEntry,
@@ -123,8 +122,6 @@ export type Board = {
   diffs: Record<string, DiffStat>;
   /** Transcripts of the worker cards opened so far, by task id. */
   transcripts: Record<string, WorkerTranscript>;
-  /** A Chat's Memory chips: the latest change per memory, in the order they were saved. */
-  memories: MemoryChange[];
   /** Its messages to and from other sessions, by message id (SESSION-MESSAGING-PLAN.md §6). */
   peerMessages: Record<string, PeerMessage>;
 };
@@ -360,7 +357,6 @@ export function emptyBoard(conversationId: string): Board {
     edits: {},
     diffs: {},
     transcripts: {},
-    memories: [],
     peerMessages: {},
   };
 }
@@ -398,7 +394,6 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "compactionUpdated",
   "messageRated",
   "ratingCleared",
-  "memoryUpdated",
   "decidedForYou",
   "peerMessageSent",
   "peerMessageReceived",
@@ -467,7 +462,6 @@ export function boardFromView(
     edits: keep?.edits ?? {},
     diffs: keep?.diffs ?? {},
     transcripts: keep?.transcripts ?? {},
-    memories: view.memories,
     // A daemon from before messages between sessions sends none.
     peerMessages: Object.fromEntries((view.peerMessages ?? []).map((message) => [message.messageId, message])),
   };
@@ -705,17 +699,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
     }
     case "queueChanged":
       return { ...board, queue: event.queue };
-    case "memoryUpdated": {
-      // A change to a memory already shown (the user removed it) updates it in place.
-      const { memory } = event;
-      const known = board.memories.some((entry) => entry.nodeId === memory.nodeId);
-      return {
-        ...board,
-        memories: known
-          ? board.memories.map((entry) => (entry.nodeId === memory.nodeId ? memory : entry))
-          : [...board.memories, memory],
-      };
-    }
     case "workerEvent": {
       const { taskId } = event;
       let next = board;

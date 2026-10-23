@@ -2528,14 +2528,6 @@ impl Scanner<'_> {
         .sum();
         let blobs = size(self.data("blobs"));
         let project_blob_total: u64 = projects.iter().map(|p| p.blobs_bytes).sum();
-        let personal = [
-            "personal.sqlite",
-            "personal.sqlite-wal",
-            "personal.sqlite-shm",
-        ]
-        .iter()
-        .map(|name| size(self.data("brains").join(name)))
-        .sum();
         let mut shared = vec![
             SharedUsage {
                 part: SharedPart::Database,
@@ -2560,10 +2552,6 @@ impl Scanner<'_> {
             SharedUsage {
                 part: SharedPart::Recordings,
                 bytes: size(self.data("recordings")),
-            },
-            SharedUsage {
-                part: SharedPart::PersonalBrain,
-                bytes: personal,
             },
         ];
         let counted: u64 = shared.iter().map(|part| part.bytes).sum::<u64>()

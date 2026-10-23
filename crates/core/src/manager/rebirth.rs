@@ -1027,7 +1027,7 @@ impl SessionManager {
     }
 
     /// What the Brain knows that frames the work: the project's stack, recipe, modules and
-    /// conventions, the user's preferences, and the nodes matching the latest messages.
+    /// conventions, and the nodes matching the latest messages.
     async fn brain_part(&self, id: &ConversationId, carried: &[Message]) -> Part {
         let Some(project) = self.core.conversation(id).ok().and_then(|c| c.project_id) else {
             return Part::new("brain", String::new(), 0);
@@ -1153,14 +1153,6 @@ impl SessionManager {
                 } else {
                     text.push_str(&format!("- {}{outdated}\n", node.title));
                 }
-            }
-        }
-        let preferences = self.memory_lines(1_500).await;
-        if !preferences.is_empty() {
-            text.push_str("The user's preferences:\n");
-            for preference in &preferences {
-                items += 1;
-                text.push_str(&format!("- {preference}\n"));
             }
         }
         if let Some(related) = related.filter(|answer| !answer.hits.is_empty()) {

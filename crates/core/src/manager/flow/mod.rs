@@ -252,9 +252,6 @@ impl Turn {
     /// Calls a Brigadier tool as the session's model would.
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
         let call = match name {
-            "save_memory" => ToolCall::Chat(crate::tools::ChatCall::SaveMemory(
-                serde_json::from_value(args).expect("save_memory arguments"),
-            )),
             "save_report" if self.chat().is_some() => {
                 ToolCall::Chat(crate::tools::ChatCall::SaveReport(
                     serde_json::from_value(args).expect("save_report arguments"),
@@ -2198,7 +2195,6 @@ mod engine_tests;
 #[cfg(unix)]
 mod open_in_app_tests;
 #[cfg(unix)]
-mod personal_memory_tests;
 #[cfg(unix)]
 mod records_tests;
 #[cfg(unix)]

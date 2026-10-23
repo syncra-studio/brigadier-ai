@@ -9,9 +9,8 @@ import { WorkersSection } from "@/app/inspector/brain/WorkersSection";
 import { useNow } from "@/hooks/use-now";
 import type { BrainOverview } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
-import { projectOf } from "@/state/brain";
 
-/** A project's Brain (or the Personal Brain) at a glance, kept live by the tab. */
+/** A project's Brain at a glance, kept live by the tab. */
 export function BrainOverviewView({
   brainKey,
   overview,
@@ -23,7 +22,6 @@ export function BrainOverviewView({
 }) {
   const now = useNow(moving ? 1000 : 30_000);
   const { stats } = overview;
-  const projectId = projectOf(brainKey);
   return (
     <>
       <BrainSection title="Knowledge">
@@ -39,12 +37,10 @@ export function BrainOverviewView({
         </dl>
         <NodesByKindList stats={stats} />
       </BrainSection>
-      {projectId !== null && (
-        <IndexSection index={overview.index} now={now} />
-      )}
-      {projectId !== null && <WorkersSection projectId={projectId} />}
+      <IndexSection index={overview.index} now={now} />
+      <WorkersSection projectId={brainKey} />
       <EmbedderSection overview={overview} />
-      {projectId !== null && <DeveloperActions brainKey={brainKey} projectId={projectId} hasIndex={overview.index !== null} />}
+      <DeveloperActions brainKey={brainKey} projectId={brainKey} hasIndex={overview.index !== null} />
     </>
   );
 }

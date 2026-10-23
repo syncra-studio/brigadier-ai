@@ -47,12 +47,6 @@ plainTextComposer: boolean,
  */
 showFullAccessNotice: boolean, 
 /**
- * The old Short replies setting, no longer read: the voice is fixed (BUILD-PLAN §1.4). A
- * stored `false` is copied once into the personal preference for longer answers, and then
- * saved as `true`.
- */
-shortReplies: boolean, 
-/**
  * Co-authored-by trailers that name an AI are left out of commit messages: the user's
  * own commits, what the agents write, and the commits Brigadier lands or keeps.
  */

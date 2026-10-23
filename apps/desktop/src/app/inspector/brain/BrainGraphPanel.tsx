@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import type { BrainGraph, BrainOverview, NodeFilter, NodeKind } from "@/ipc/generated";
-import { getBrainGraph, projectOf } from "@/state/brain";
+import { getBrainGraph } from "@/state/brain";
 import { useApp } from "@/state/store";
 
 // sigma and graphology load only once the Brain tab is open (see `preloadGraphCanvas`).
@@ -70,7 +70,7 @@ function KindFilter({ kinds, onChange }: { kinds: NodeKind[]; onChange: (kinds: 
 
 /** The Brain's nodes and edges, filtered, with the one clicked shown in full below. */
 export function BrainGraphPanel({ brainKey, overview }: { brainKey: string; overview: BrainOverview | null }) {
-  const projectId = projectOf(brainKey);
+  const projectId = brainKey;
   const conversations = useApp((s) => s.conversations);
   const [kinds, setKinds] = useState<NodeKind[]>([]);
   const [session, setSession] = useState(ALL_CONVERSATIONS);

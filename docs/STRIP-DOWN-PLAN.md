@@ -1017,7 +1017,10 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     exported or migrated (user, 10-22).
   - Stop forcing `autoMemoryEnabled:false` (`P/claude/mod.rs:827`) and drop `memories` from Codex's
     `DISABLED_FEATURES` (`P/codex/mod.rs:148`). Each CLI's memory then follows the user's own setting.
-  - Chats follow the same rule.
+  - Chats follow the same rule. A Claude Chat loads no user settings, so it is given the user's own
+    `autoMemoryEnabled` as set (nothing when unset).
+  - Memory stays off only where nobody's memory should grow: a lean worker (G23), a side chat (it leaves
+    nothing), Brigadier's own one-shots (reviews, research, hand-off notes) and control connections.
 - **Done when:**
   - Provider tests: with the user's memory setting on and off, on each CLI, the session starts with that same
     setting (Brigadier sets nothing).

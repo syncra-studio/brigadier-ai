@@ -7,24 +7,15 @@ import type {
   BrainOverview,
   BrainQuery,
   EventEnvelope,
-  Node,
   NodeFilter,
   Task,
 } from "@/ipc/generated";
 import { toast } from "@/state/toasts";
 
-/** The Personal Brain's key in the Brain tab's picker; a project's Brain uses the project id. */
-export const PERSONAL = "personal";
-
-/** The daemon's `projectId` for a picker key. */
-export function projectOf(key: string): string | null {
-  return key === PERSONAL ? null : key;
-}
-
 type BrainState = {
-  /** The Brain the Inspector's Brain tab shows; `null` until the user picks one. */
+  /** The project whose Brain the Inspector's Brain tab shows; `null` until the user picks one. */
   selected: string | null;
-  /** Overviews read so far, by picker key. */
+  /** Overviews read so far, by project id. */
   overviews: Record<string, BrainOverview>;
   /**
    * The tasks of the session the Brain tab lists workers for: one snapshot, then kept current
@@ -40,7 +31,7 @@ export function selectBrain(key: string): void {
 }
 
 export async function loadBrain(key: string): Promise<BrainOverview> {
-  const { overview } = await request({ method: "getBrain", projectId: projectOf(key) });
+  const { overview } = await request({ method: "getBrain", projectId: key });
   useBrain.setState((state) => ({ overviews: { ...state.overviews, [key]: overview } }));
   return overview;
 }
@@ -124,33 +115,17 @@ export function applyBrainEvents(envelopes: readonly EventEnvelope[]): void {
 }
 
 export async function queryBrain(key: string, query: BrainQuery): Promise<BrainAnswer> {
-  const { answer } = await request({ method: "queryBrain", projectId: projectOf(key), query });
+  const { answer } = await request({ method: "queryBrain", projectId: key, query });
   return answer;
 }
 
 export async function getBrainGraph(key: string, filter: NodeFilter): Promise<BrainGraph> {
-  const { graph } = await request({ method: "getBrainGraph", projectId: projectOf(key), filter });
+  const { graph } = await request({ method: "getBrainGraph", projectId: key, filter });
   return graph;
 }
 
 export async function rebuildIndex(projectId: string): Promise<void> {
   await request({ method: "rebuildIndex", projectId });
-}
-
-/** The Personal Brain's memories (preferences), newest first. */
-export async function listMemories(): Promise<Node[]> {
-  const { memories } = await request({ method: "listMemories" });
-  return memories;
-}
-
-export async function forgetMemory(nodeId: string): Promise<void> {
-  await request({ method: "forgetMemory", nodeId });
-}
-
-/** The user's correction of a memory; the daemon refuses a password, key, card or account number. */
-export async function editMemory(nodeId: string, text: string): Promise<Node> {
-  const { memory } = await request({ method: "editMemory", nodeId, text });
-  return memory;
 }
 
 /**

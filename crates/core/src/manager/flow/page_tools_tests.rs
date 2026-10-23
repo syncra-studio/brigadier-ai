@@ -361,10 +361,10 @@ async fn a_thread_and_a_chat_save_a_research_report_as_a_page_the_answer_links()
     assert!(page.content.body.starts_with("## Figurines"));
     let chat = flow
         .manager
-        .chat_call(
-            flow.conversation.clone(),
-            ChatCall::SaveReport(report("Printers under 500 euros", "Bambu A1 [1].")),
-        )
+        .chat_call(ChatCall::SaveReport(report(
+            "Printers under 500 euros",
+            "Bambu A1 [1].",
+        )))
         .await;
     assert!(!chat.is_error, "{}", chat.text);
     let page = pages.read(&linked_page(&chat.text)).unwrap();
@@ -372,10 +372,7 @@ async fn a_thread_and_a_chat_save_a_research_report_as_a_page_the_answer_links()
     // Nothing to save is refused, and makes no page.
     let empty = flow
         .manager
-        .chat_call(
-            flow.conversation.clone(),
-            ChatCall::SaveReport(report(" ", "Text.")),
-        )
+        .chat_call(ChatCall::SaveReport(report(" ", "Text.")))
         .await;
     assert!(empty.is_error, "{}", empty.text);
     assert_eq!(pages.list().unwrap().len(), 2);

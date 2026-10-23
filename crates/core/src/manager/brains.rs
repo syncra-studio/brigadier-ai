@@ -1,5 +1,4 @@
-//! The Project Brains, the Personal Brain and the code indexes the manager keeps open, and
-//! what feeds them.
+//! The Project Brains and the code indexes the manager keeps open, and what feeds them.
 //!
 //! - Each project gets a [`ProjectBrain`]: its Brain (`<data>/brains/<project>/brain.sqlite`)
 //!   and, for a project with a repository, its code index (`index.sqlite` beside it), scanned
@@ -32,14 +31,11 @@ use brigadier_sandbox::removal;
 
 use super::{SessionManager, blocking};
 use crate::knowledge::{BrainOverview, ConventionsExport};
-use crate::model::{ConversationId, DomainEvent, MessageRole, Project, ProjectId, Setup};
+use crate::model::{ConversationId, MessageRole, Project, ProjectId, Setup};
 use crate::tools::{CodeRefs, CodeSearch};
 use crate::{Error, Result, now_ms};
 
 /// Removing a project waits at most this long for its code index scan to end.
-/// The personal preference a user's old Short replies off becomes.
-pub(crate) const LONGER_ANSWERS: &str = "Longer answers";
-
 const REMOVE_SCAN_WAIT: Duration = Duration::from_secs(120);
 /// The embedding model is freed after this long unused.
 const EMBEDDER_IDLE: Duration = Duration::from_secs(10 * 60);
@@ -121,7 +117,6 @@ pub struct BrainCounters {
 pub(crate) struct Brains {
     root: PathBuf,
     embedder: Arc<Embedder>,
-    personal: Mutex<Option<Brain>>,
     projects: Mutex<HashMap<ProjectId, Arc<ProjectBrain>>>,
     query_ms: Mutex<VecDeque<f64>>,
     largest_run: Mutex<Option<IndexRunStats>>,
@@ -138,7 +133,6 @@ impl Brains {
         Self {
             embedder: Embedder::new(data_dir.join("models").join("embeddings")),
             root,
-            personal: Mutex::new(None),
             projects: Mutex::new(HashMap::new()),
             query_ms: Mutex::new(VecDeque::new()),
             largest_run: Mutex::new(None),
@@ -406,33 +400,6 @@ impl SessionManager {
         Ok(opened)
     }
 
-    /// The Personal Brain, opened on first use.
-    pub(crate) async fn personal_brain(&self) -> Result<Brain> {
-        if let Some(brain) = self
-            .brains
-            .personal
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-        {
-            return Ok(brain);
-        }
-        let (dir, embedder) = (self.brains.root.clone(), self.brains.embedder.clone());
-        let brain = blocking(move || {
-            std::fs::create_dir_all(&dir)
-                .map_err(|err| Error::Invalid(format!("creating {}: {err}", dir.display())))?;
-            Brain::open(&dir.join("personal.sqlite"), Scope::Personal, embedder)
-                .map_err(brain_error)
-        })
-        .await?;
-        let mut personal = self
-            .brains
-            .personal
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        Ok(personal.get_or_insert(brain).clone())
-    }
-
     /// Watches the project's repository and scans it (from scratch with `rebuild`) on a thread
     /// of its own, then records its structure. Returns false when indexing already runs.
     ///
@@ -550,13 +517,6 @@ impl SessionManager {
             .projects()
             .values()
             .map(|project| project.brain.clone())
-            .chain(
-                self.brains
-                    .personal
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .clone(),
-            )
             .collect();
         let embedder = self.brains.embedder.clone();
         let _ = blocking(move || {
@@ -930,18 +890,9 @@ impl SessionManager {
 
     // ----- the Inspector and Settings --------------------------------------------------------
 
-    async fn brain_for(&self, project: Option<&ProjectId>) -> Result<(Brain, Option<CodeIndex>)> {
-        match project {
-            Some(id) => {
-                let project = self.project_brain(id).await?;
-                Ok((project.brain.clone(), project.index.clone()))
-            }
-            None => Ok((self.personal_brain().await?, None)),
-        }
-    }
-
-    pub async fn brain_overview(&self, project: Option<ProjectId>) -> Result<BrainOverview> {
-        let (brain, index) = self.brain_for(project.as_ref()).await?;
+    pub async fn brain_overview(&self, project: ProjectId) -> Result<BrainOverview> {
+        let opened = self.project_brain(&project).await?;
+        let (brain, index) = (opened.brain.clone(), opened.index.clone());
         let stats = blocking(move || brain.stats().map_err(brain_error)).await?;
         Ok(BrainOverview {
             project_id: project,
@@ -951,172 +902,14 @@ impl SessionManager {
         })
     }
 
-    pub async fn query_brain(
-        &self,
-        project: Option<ProjectId>,
-        query: BrainQuery,
-    ) -> Result<BrainAnswer> {
-        let (brain, _) = self.brain_for(project.as_ref()).await?;
+    pub async fn query_brain(&self, project: ProjectId, query: BrainQuery) -> Result<BrainAnswer> {
+        let brain = self.project_brain(&project).await?.brain.clone();
         blocking(move || brain.query(&query).map_err(brain_error)).await
     }
 
-    pub async fn brain_graph(
-        &self,
-        project: Option<ProjectId>,
-        filter: NodeFilter,
-    ) -> Result<BrainGraph> {
-        let (brain, _) = self.brain_for(project.as_ref()).await?;
+    pub async fn brain_graph(&self, project: ProjectId, filter: NodeFilter) -> Result<BrainGraph> {
+        let brain = self.project_brain(&project).await?.brain.clone();
         blocking(move || brain.graph(&filter).map_err(brain_error)).await
-    }
-
-    /// Brigadier no longer has a Short replies setting (BUILD-PLAN §1.4): a user who had it off
-    /// keeps their choice as a personal preference for longer answers, copied once, and the
-    /// setting is then saved as on, so it isn't copied again.
-    pub(super) async fn carry_short_replies(&self) {
-        let settings = self.core.settings();
-        if settings.short_replies {
-            return;
-        }
-        let kept = async {
-            let brain = self.personal_brain().await?;
-            let node = NewNode {
-                kind: NodeKind::Preference,
-                key: None,
-                title: LONGER_ANSWERS.into(),
-                body: "The user had turned Short replies off: write fuller answers than the \
-                       short default, with full detail where it helps."
-                    .into(),
-                provenance: Provenance {
-                    origin: Origin::User,
-                    session_id: None,
-                    task_id: None,
-                    job_id: None,
-                    worker: None,
-                    commit: None,
-                    recorded_at_ms: now_ms(),
-                    claim: None,
-                },
-                files: Vec::new(),
-                expires_at_ms: None,
-            };
-            blocking(move || brain.record(node).map_err(brain_error)).await?;
-            self.core
-                .update_settings(crate::model::Settings {
-                    short_replies: true,
-                    ..settings
-                })
-                .await
-        };
-        match kept.await {
-            Ok(_) => tracing::info!("kept Short replies off as the preference for longer answers"),
-            Err(err) => {
-                tracing::warn!(error = %err, "could not keep Short replies off as a preference")
-            }
-        }
-    }
-
-    /// The Personal Brain's memories, newest first.
-    pub async fn list_memories(&self) -> Result<Vec<Node>> {
-        let brain = self.personal_brain().await?;
-        blocking(move || {
-            brain
-                .nodes(&NodeFilter {
-                    kinds: vec![NodeKind::Preference],
-                    session_id: None,
-                    current_only: true,
-                    text: None,
-                    limit: Some(1_000),
-                })
-                .map_err(brain_error)
-        })
-        .await
-    }
-
-    /// The user's correction of a memory, in place: the same memory (where it came from too),
-    /// with no earlier text kept; a Chat that saved it shows the new text.
-    pub async fn edit_memory(&self, node_id: String, text: String) -> Result<Node> {
-        let text = one_line(&text, 240);
-        if text.is_empty() {
-            return Err(Error::Invalid(
-                "a memory can't be empty; forget it instead".into(),
-            ));
-        }
-        if let Some(reason) = super::memory_guard::not_for_memory(&text) {
-            return Err(Error::Invalid(format!(
-                "Brigadier doesn't keep that: {reason}"
-            )));
-        }
-        let brain = self.personal_brain().await?;
-        let id = node_id.clone();
-        let title = text.clone();
-        let node = blocking(move || {
-            let current = brain.node(&id).map_err(brain_error)?;
-            if current
-                .as_ref()
-                .is_none_or(|node| node.kind != NodeKind::Preference)
-            {
-                return Ok(None);
-            }
-            brain.edit(&id, title, String::new()).map_err(brain_error)?;
-            brain.node(&id).map_err(brain_error)
-        })
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("memory {node_id}")))?;
-        if let Some(session) = node.provenance.session_id.clone() {
-            let conversation = ConversationId(session);
-            if self.core.conversation(&conversation).is_ok() {
-                self.core
-                    .record_conversation(
-                        &conversation,
-                        vec![DomainEvent::MemoryUpdated {
-                            conversation_id: conversation.clone(),
-                            memory: crate::knowledge::MemoryChange {
-                                node_id,
-                                text,
-                                forgotten: false,
-                                request_id: None,
-                                at_ms: now_ms(),
-                            },
-                        }],
-                    )
-                    .await?;
-            }
-        }
-        Ok(node)
-    }
-
-    /// Removes a memory; a Chat that saved it shows it as removed.
-    pub async fn forget_memory(&self, node_id: String) -> Result<()> {
-        let brain = self.personal_brain().await?;
-        let id = node_id.clone();
-        let node = blocking(move || {
-            let node = brain.node(&id).map_err(brain_error)?;
-            brain.delete(&id).map_err(brain_error)?;
-            Ok(node)
-        })
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("memory {node_id}")))?;
-        if let Some(session) = node.provenance.session_id {
-            let conversation = ConversationId(session);
-            if self.core.conversation(&conversation).is_ok() {
-                self.core
-                    .record_conversation(
-                        &conversation,
-                        vec![DomainEvent::MemoryUpdated {
-                            conversation_id: conversation.clone(),
-                            memory: crate::knowledge::MemoryChange {
-                                node_id,
-                                text: node.title,
-                                forgotten: true,
-                                request_id: None,
-                                at_ms: now_ms(),
-                            },
-                        }],
-                    )
-                    .await?;
-            }
-        }
-        Ok(())
     }
 
     /// Writes the project's conventions into the Brigadier section of an AGENTS.md at `path`.

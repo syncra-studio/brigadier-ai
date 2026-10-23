@@ -4,8 +4,8 @@ import { BrainGraphPanel, preloadGraphCanvas } from "@/app/inspector/brain/Brain
 import { BrainOverviewView } from "@/app/inspector/brain/BrainOverview";
 import { BrainSearch } from "@/app/inspector/brain/BrainSearch";
 import { type BrainView, BrainToolbar } from "@/app/inspector/brain/BrainToolbar";
-import type { BrainOverview } from "@/ipc/generated";
-import { loadBrain, PERSONAL, selectBrain, useBrain } from "@/state/brain";
+import type { BrainOverview, Project } from "@/ipc/generated";
+import { loadBrain, selectBrain, useBrain } from "@/state/brain";
 import { inspectedConversation } from "@/state/actions";
 import { useApp } from "@/state/store";
 
@@ -27,24 +27,38 @@ function busy(overview: BrainOverview | undefined): boolean {
   );
 }
 
-/**
- * The Brain the tab shows: the one picked, else the inspected conversation's project's (the one
- * Settings was opened from), else the Personal Brain.
- */
-function useBrainKey(): string {
-  const picked = useBrain((s) => s.selected);
-  const openProject = useApp((s) => inspectedConversation(s)?.projectId ?? null);
-  const exists = useApp((s) => (picked === null ? false : picked === PERSONAL || !!s.projects[picked]));
-  if (picked !== null && exists) return picked;
-  return openProject ?? PERSONAL;
+/** The projects in the picker's order: by name. */
+function byName(projects: Record<string, Project>): Project[] {
+  return Object.values(projects).toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
- * The Inspector's Brain tab: a project's Brain (or the Personal Brain) at a glance, a search
- * through the real retrieval, and the graph of what it knows.
+ * The project whose Brain the tab shows: the one picked, else the inspected conversation's
+ * project (the one Settings was opened from), else the first in the picker; none without a
+ * project.
+ */
+function useBrainKey(): string | null {
+  const picked = useBrain((s) => s.selected);
+  const openProject = useApp((s) => inspectedConversation(s)?.projectId ?? null);
+  const exists = useApp((s) => picked !== null && !!s.projects[picked]);
+  const first = useApp((s) => byName(s.projects)[0]?.id ?? null);
+  if (picked !== null && exists) return picked;
+  return openProject ?? first;
+}
+
+/**
+ * The Inspector's Brain tab: a project's Brain at a glance, a search through the real
+ * retrieval, and the graph of what it knows.
  */
 export function BrainTab() {
   const key = useBrainKey();
+  if (key === null) {
+    return <p className="text-muted-foreground p-4 text-xs">No projects yet: each project has a Brain of its own.</p>;
+  }
+  return <ProjectBrainView brainKey={key} />;
+}
+
+function ProjectBrainView({ brainKey: key }: { brainKey: string }) {
   const projects = useApp((s) => s.projects);
   const overview = useBrain((s) => s.overviews[key]);
   const [view, setView] = useState<BrainView>("overview");
@@ -52,15 +66,11 @@ export function BrainTab() {
   const moving = busy(overview);
 
   const options = useMemo(
-    () => [
-      { value: PERSONAL, label: "Personal Brain", hint: "Your preferences, across projects" },
-      ...Object.values(projects)
-        .toSorted((a, b) => a.name.localeCompare(b.name))
-        .map((project) => {
-          const repo = project.repos[0]?.path;
-          return { value: project.id, label: project.name, ...(repo ? { hint: repo } : {}) };
-        }),
-    ],
+    () =>
+      byName(projects).map((project) => {
+        const repo = project.repos[0]?.path;
+        return { value: project.id, label: project.name, ...(repo ? { hint: repo } : {}) };
+      }),
     [projects],
   );
 

@@ -1,10 +1,9 @@
 //! Project Brain: the knowledge graph, its retrieval (SQLite FTS5 plus local embeddings),
-//! staleness by file content hashes, the Personal Brain, and the records index `brigadier brain
-//! search` reads (STRIP-DOWN-PLAN S18).
+//! staleness by file content hashes, and the records index `brigadier brain search` reads
+//! (STRIP-DOWN-PLAN S18).
 //!
-//! One [`Brain`] per project (`<data>/brains/<project>/brain.sqlite`) and one Personal Brain
-//! (`<data>/brains/personal.sqlite`), never in a repository. Every node records its
-//! [`Provenance`].
+//! One [`Brain`] per project (`<data>/brains/<project>/brain.sqlite`), never in a repository.
+//! Every node records its [`Provenance`].
 //!
 //! Retrieval merges FTS5 (bm25) with embedding similarity by reciprocal-rank fusion, then adds
 //! the decisions and conventions linked to what matched. Embeddings come from a local static
@@ -65,8 +64,6 @@ pub enum Error {
 #[serde(rename_all = "camelCase")]
 pub enum Scope {
     Project,
-    /// The user's global preferences (the Personal Brain).
-    Personal,
 }
 
 /// The node types of PLAN.md §6 Phase 4.
@@ -755,7 +752,6 @@ const EMBED_BATCH: usize = 64;
 fn scope_str(scope: Scope) -> &'static str {
     match scope {
         Scope::Project => "project",
-        Scope::Personal => "personal",
     }
 }
 
@@ -784,7 +780,7 @@ fn embed_text(title: &str, body: &str) -> String {
 
 impl Brain {
     /// Opens (creating and migrating) the Brain database at `path` and starts its writer
-    /// thread. A database made for the other scope is refused. Open each file once and share
+    /// thread. A database made for another scope is refused. Open each file once and share
     /// clones of the handle: its writer and vector cache belong to the handle.
     pub fn open(path: &Path, scope: Scope, embedder: Arc<Embedder>) -> Result<Self> {
         if let Some(dir) = path.parent() {

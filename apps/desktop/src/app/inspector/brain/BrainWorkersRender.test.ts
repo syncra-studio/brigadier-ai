@@ -51,16 +51,17 @@ test("the Brain tab opened from a session lists its workers and keeps them curre
 });
 
 test("the Brain tab lists no workers for a chat, another project's session or another Brain picked", { timeout: 60000 }, async (t) => {
+  // A chat has no project: the tab shows the first project in the picker.
   const chat = await render(t, "from=chat");
-  assert.deepEqual(chat.first, { picker: "Personal Brain", rows: [] });
-  assert.deepEqual(chat.calls, ["getBrain personal"]);
+  assert.deepEqual(chat.first, { picker: "calc", rows: [] });
+  assert.deepEqual(chat.calls, ["getBrain calc"]);
 
   const other = await render(t, "from=other&pick=calc");
   assert.deepEqual(other.first, { picker: "calc", rows: [] });
   assert.deepEqual(other.calls, ["getBrain calc"]);
 
   // A Brain picked before is kept over the session's own.
-  const picked = await render(t, "from=session&pick=personal");
-  assert.deepEqual(picked.first, { picker: "Personal Brain", rows: [] });
-  assert.deepEqual(picked.calls, ["getBrain personal"]);
+  const picked = await render(t, "from=session&pick=other");
+  assert.deepEqual(picked.first, { picker: "other", rows: [] });
+  assert.deepEqual(picked.calls, ["getBrain other"]);
 });

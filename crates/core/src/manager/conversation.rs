@@ -2489,8 +2489,6 @@ impl SessionManager {
                     Some(Setup::Chat { model }) => model.clone(),
                     _ => self.default_chat_choice(),
                 };
-                // A Chat may save what it learns about the user to the Personal Brain.
-                let memories = self.memory_lines(super::memories::MEMORY_BYTES).await;
                 let grant = self.grants.issue(
                     &owner,
                     Role::Chat {
@@ -2499,7 +2497,7 @@ impl SessionManager {
                 );
                 grant_values.push(grant.clone());
                 cli_env = self.cli_env(&conv.id.0, &grant);
-                (fallback.unwrap_or(model), prompts::chat(&memories))
+                (fallback.unwrap_or(model), prompts::chat())
             }
             (Some(Setup::Chat { .. }), ConversationKind::Session) => {
                 return Err(Error::Invalid(

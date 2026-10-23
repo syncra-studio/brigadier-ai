@@ -16,7 +16,7 @@ import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { TooltipProvider } from "@/components/overlays";
 import { OVERVIEWS } from "@/fixtures/agents";
-import type { Node, Request } from "@/ipc/generated";
+import type { Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 
@@ -35,18 +35,12 @@ useApp.setState((state) => ({
   providers: { ...state.providers, view: { providers: OVERVIEWS, sessions: [], fixtures: [] } },
 }));
 
-const memory = (id: string, title: string) =>
-  ({ id, title, body: "", updatedAtMs: Date.now(), provenance: { origin: "user", sessionId: null } }) as unknown as Node;
-const memories = [memory("m1", "Lives in Lisbon"), memory("m2", "Works as an electrician")];
-
 const calls: string[] = [];
 
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
-    case "listMemories":
-      return { method: req.method, memories };
     case "getBrigadeSkill":
       return { method: req.method, custom: true, path: "~/.brigadier/brigade/SKILL.md" };
     case "resetBrigadeSkill":
@@ -141,9 +135,9 @@ function Fixture() {
         openSettings("git");
       },
       // A page since merged into Configuration opens it at its row.
-      () => openSettings("personalization"),
+      () => openSettings("conversations"),
       () => {
-        const row = document.querySelector('[data-setting="Memories"]');
+        const row = document.querySelector('[data-setting="Model for sessions"]');
         seen.oldLink = { page: useApp.getState().selection, inView: inView(row) };
         openSettings("git");
       },

@@ -232,7 +232,7 @@ mockIPC(
       conversation: useApp.getState().conversations[req.id], messages: { messages: [], hasMore: false },
       tasks: [], approvals: [], questions: [], requests: [], workerSteps: [], orchestratorSteps: [],
       machineSteps: [], decisions: [], compactions: [], ratings: {}, queue: emptyBoard(req.id).queue,
-      run: "idle", runRequest: null, head: null, context: null, streaming: null, thinking: [], notices: [], memories: [], previews: [],
+      run: "idle", runRequest: null, head: null, context: null, streaming: null, thinking: [], notices: [], previews: [],
     } };
     if (req.method === "readFile") return { method: req.method, file: { text: "# Fixture file\n", size: 15, truncated: false } };
     if (req.method === "openSideChat") return { method: req.method, conversation: { ...conversation, id: req.sideChatId, kind: "chat", title: "Side chat", sideOf: req.conversationId } };

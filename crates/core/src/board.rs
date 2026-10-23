@@ -5,7 +5,6 @@ use std::collections::{HashMap, HashSet};
 
 use brigadier_providers::{McpServerState, McpStatus};
 
-use crate::knowledge::MemoryChange;
 use crate::model::ConversationId;
 use crate::model::{
     DomainEvent, MessageRole, Notice, PeerState, Rating, ReplyHold, StreamingMessage,
@@ -46,7 +45,6 @@ pub(crate) const KINDS: &[&str] = &[
     "message.rated",
     "rating.cleared",
     "conversation.branch",
-    "memory.updated",
     "decision.made",
     "peer.sent",
     "peer.received",
@@ -155,8 +153,6 @@ pub(crate) struct Board {
     pub(crate) streaming: Option<StreamingMessage>,
     pub(crate) thinking: Vec<crate::model::ThinkingSegment>,
     pub(crate) notices: Vec<Notice>,
-    /// A Chat's saved memories, the latest change per node, in the order first saved.
-    pub(crate) memories: Vec<MemoryChange>,
     /// What was decided on the user's behalf, in stream order.
     pub(crate) decisions: Vec<Decision>,
     /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
@@ -672,20 +668,6 @@ impl Board {
                 let mut step = step.clone();
                 step.position = stream_seq;
                 self.machine_steps.push(step);
-            }
-            DomainEvent::MemoryUpdated { memory, .. } => {
-                match self
-                    .memories
-                    .iter_mut()
-                    .find(|known| known.node_id == memory.node_id)
-                {
-                    // A removal keeps the chip where the turn saved it.
-                    Some(known) => {
-                        known.forgotten = memory.forgotten;
-                        known.text.clone_from(&memory.text);
-                    }
-                    None => self.memories.push(memory.clone()),
-                }
             }
             DomainEvent::DecidedForYou { decision } => {
                 let mut decision = decision.clone();

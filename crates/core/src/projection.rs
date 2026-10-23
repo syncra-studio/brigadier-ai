@@ -188,7 +188,6 @@ impl Projection {
             | DomainEvent::UpdatesChanged { .. }
             | DomainEvent::AgentConnectChanged { .. }
             | DomainEvent::DraftPinned { .. }
-            | DomainEvent::MemoryUpdated { .. }
             | DomainEvent::DecidedForYou { .. }
             | DomainEvent::PeerMessageSent { .. }
             | DomainEvent::PeerMessageReceived { .. }

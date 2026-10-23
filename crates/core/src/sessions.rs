@@ -1341,7 +1341,6 @@ impl Core {
             ratings: board.ratings.clone(),
             streaming: board.streaming.clone(),
             notices: board.notices.clone(),
-            memories: board.memories.clone(),
             previews: board.sorted_previews(),
             background_cleared: board.sorted_background_cleared(),
             mcp_servers: board.current_mcp_servers(),
@@ -3227,8 +3226,8 @@ mod tests {
     }
 
     /// Events of a feature Brigadier no longer has (computer use's action log and its
-    /// permission item, the thread's own background runs) still load: read back as retired,
-    /// and never listed.
+    /// permission item, the thread's own background runs, a Chat's Memory chips) still load:
+    /// read back as retired, and never listed.
     #[tokio::test]
     async fn stored_events_of_a_removed_feature_still_load() {
         let dir =
@@ -3273,11 +3272,20 @@ mod tests {
                 "state": { "type": "running" }
             }
         });
+        // A Chat's Memory chip, from the Personal Brain (S19).
+        let memory = serde_json::json!({
+            "type": "memoryUpdated", "conversationId": id.0,
+            "memory": {
+                "nodeId": "n1", "text": "Lives in Lisbon", "forgotten": false,
+                "requestId": "r1", "atMs": 1
+            }
+        });
         store
             .append(vec![
                 NewEvent::new(stream.clone(), "computer.acted", 1, &acted).unwrap(),
                 NewEvent::new(stream.clone(), "waiting.updated", 2, &waiting).unwrap(),
                 NewEvent::new(stream.clone(), "background_run.updated", 3, &run).unwrap(),
+                NewEvent::new(stream.clone(), "memory.updated", 4, &memory).unwrap(),
             ])
             .await
             .unwrap();
@@ -3301,6 +3309,7 @@ mod tests {
                     "computer.acted",
                     "waiting.updated",
                     "background_run.updated",
+                    "memory.updated",
                 ]
                 .contains(&&*event.kind)
             })
@@ -3309,6 +3318,7 @@ mod tests {
         assert_eq!(
             retired,
             [
+                DomainEvent::Retired,
                 DomainEvent::Retired,
                 DomainEvent::Retired,
                 DomainEvent::Retired

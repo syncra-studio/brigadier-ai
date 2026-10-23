@@ -189,8 +189,6 @@ function answer(method: string, req: Request | null): unknown {
       return { method: req.method, usage: USAGE };
     case "getUsageActivity":
       return { method: req.method, activity: { sinceMs: NOW - 7 * DAY, accounts: [] } };
-    case "listMemories":
-      return { method: req.method, memories: [{ id: "m1" }, { id: "m2" }] };
     case "getComputerUse":
       return { method: req.method, computerUse: COMPUTER_USE };
     case "scanStorage":

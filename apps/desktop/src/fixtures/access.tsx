@@ -60,8 +60,6 @@ mockIPC((command, payload) => {
     case "updateSetup":
       calls.push(`session ${req.setup.type === "session" ? req.setup.permission : "chat"}`);
       return { method: req.method, conversation: { ...useApp.getState().conversations[id], setup: req.setup } };
-    case "listMemories":
-      return { method: req.method, memories: [] };
     default:
       return { method: req.method };
   }

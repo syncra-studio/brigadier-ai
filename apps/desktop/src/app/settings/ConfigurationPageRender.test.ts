@@ -67,7 +67,7 @@ test("Configuration shows its defaults in one card and explains the choices in i
   assert.match(seen.permissionMenu[0][1], /safest/i);
   assert.match(seen.permissionMenu[1][1], /files can change/);
   assert.match(seen.permissionMenu[2][1], /delete or leak/);
-  // The memories have a page of their own now (Memory, under Personal).
-  assert.deepEqual(seen.oldLink, { page: { type: "settings", page: "memory" }, inView: true });
+  // A page since merged into Configuration opens it at its row.
+  assert.deepEqual(seen.oldLink, { page: { type: "settings", page: "configuration" }, inView: true });
   assert.deepEqual(seen.search, { page: { type: "settings", page: "configuration" }, inView: true });
 });

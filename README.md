@@ -247,12 +247,11 @@ your answers on cards are recorded without being asked.
 - **Spare quota.** After a project's first scan, the cheapest model maps its modules, stack,
   conventions and build recipe. Quota that would expire unused refreshes stale nodes and fills
   gaps, and it stops as soon as your own work starts.
-- **Personal memory.** Stable facts about you (where you live, your work, your tools, what you
-  prefer) are given to new threads and Chats; you see, edit and delete them in Settings › Memory.
-  Passwords, keys, card and account numbers are never kept.
+- **Memory about you.** Brigadier keeps none of its own: each CLI's own memory works as your
+  settings for that CLI say.
 
-Everything stays in the data folder: `brains/<project>/brain.sqlite`, `index.sqlite`,
-`brains/personal.sqlite`, and the embedding model under `models/embeddings/`.
+Everything stays in the data folder: `brains/<project>/brain.sqlite`, `index.sqlite`, and the
+embedding model under `models/embeddings/`.
 
 ### Models and quota
 
@@ -279,7 +278,7 @@ and effort itself, for every session it starts.
 
 ### Settings
 
-Settings is grouped into Personal (General, Voice, Configuration, Memory, Keyboard shortcuts),
+Settings is grouped into Personal (General, Voice, Configuration, Keyboard shortcuts),
 Agents (Providers, Plugins, Git, Computer use), Browser & Data (Browser, Import Browser Data) and
 System (Storage, Inspector), with Archived chats at the end. Settings › Computer use (macOS) turns it
 on or off and walks through its Accessibility and Screen Recording permissions. Accounts:

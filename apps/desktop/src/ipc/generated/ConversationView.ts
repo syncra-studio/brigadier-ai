@@ -6,7 +6,6 @@ import type { ContextUsage } from "./ContextUsage";
 import type { Conversation } from "./Conversation";
 import type { Decision } from "./Decision";
 import type { MachineStep } from "./MachineStep";
-import type { MemoryChange } from "./MemoryChange";
 import type { MessagePage } from "./MessagePage";
 import type { MessageQueue } from "./MessageQueue";
 import type { Notice } from "./Notice";
@@ -77,11 +76,6 @@ ratings: { [key in string]: Rating }, streaming: StreamingMessage | null,
  * The latest notices (environment problems, fallbacks), newest last.
  */
 notices: Array<Notice>, 
-/**
- * What a Chat's model saved to the Personal Brain (its Memory chips): the latest change
- * per memory, in the order they were saved; one the user removed is `forgotten`.
- */
-memories: Array<MemoryChange>, 
 /**
  * Its previews, oldest first.
  */

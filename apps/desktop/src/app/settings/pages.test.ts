@@ -56,8 +56,6 @@ test("search finds every merged setting on Configuration, and no Recent activity
         `"${query}" finds a row on Configuration`,
       );
     }
-    // The memories have a page of their own, under Personal.
-    assert.ok(found("Memories").some((result) => result.page.id === "memory" && result.row?.label === "Memories"));
     // A level's row brings the default level's row into view.
     const level = found("Accept edits").find((result) => result.row?.label === "Accept edits");
     assert.equal(level?.row?.target, "Default permission level");
@@ -92,7 +90,6 @@ test("the merged pages' ids open Configuration at their setting", async () => {
     const { useReveal } = await server.ssrLoadModule("/src/app/settings/reveal.ts");
     for (const [id, label, page] of [
       ["conversations", "Model for sessions", "configuration"],
-      ["personalization", "Memories", "memory"],
     ]) {
       openSettings(id);
       assert.deepEqual(useApp.getState().selection, { type: "settings", page });
@@ -204,7 +201,6 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       "Personal: General",
       "Personal: Voice",
       "Personal: Configuration",
-      "Personal: Memory",
       "Personal: Keyboard shortcuts",
       "Agents: Providers",
       "Agents: Plugins",
@@ -222,7 +218,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       pages: [...(match[1] ?? "").matchAll(/<span class="truncate">([^<]*)<\/span>/g)].map((page) => page[1]),
     }));
     assert.deepEqual(sections, [
-      { title: "Personal", pages: ["General", "Voice", "Configuration", "Memory", "Keyboard shortcuts"] },
+      { title: "Personal", pages: ["General", "Voice", "Configuration", "Keyboard shortcuts"] },
       { title: "Agents", pages: ["Providers", "Plugins", "Git", "Computer use"] },
       { title: "Browser &amp; Data", pages: ["Browser", "Import Browser Data"] },
       { title: "System", pages: ["Storage", "Inspector"] },

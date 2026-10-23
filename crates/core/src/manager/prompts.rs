@@ -99,13 +99,6 @@ macro_rules! grilling_rule {
     };
 }
 
-/// What a Chat keeps about the user across Chats and sessions (Q78).
-macro_rules! personal_memory {
-    () => {
-        "When the user states a stable fact about themselves that will matter in later conversations (where they live, their trade, the tools or devices they use, a preference), keep it with `brigadier memory save`, one short sentence, without announcing it; the user sees, edits and deletes what you keep in Settings. Never keep passwords, keys, card or account numbers, health or money details, nor a passing detail of this chat."
-    };
-}
-
 /// Asking before researching, only what changes the answer (Q78).
 macro_rules! clarify_rule {
     () => {
@@ -221,9 +214,6 @@ pub(crate) const THREAD_TRAILER: &str = "Brigadier-Author: thread";
 
 /// How the log names role instructions.
 pub(crate) const ROLE_INSTRUCTIONS: &str = "role instructions";
-
-/// What a Chat keeps about the user (Q78).
-const PERSONAL_MEMORY: &str = personal_memory!();
 
 /// A Chat's interview on cards (Q78): it looks facts up itself.
 const CHAT_GRILLING: &str = grilling_rule!("read and search");
@@ -370,22 +360,12 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
     )
 }
 
-pub(crate) fn chat(memories: &[String]) -> String {
-    let mut text = format!(
-        "{}\n\nYou are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\n- {CHAT_GRILLING}\n{PERSONAL_MEMORY}{CHAT_VOICE}",
+pub(crate) fn chat() -> String {
+    format!(
+        "{}\n\nYou are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\n- {CHAT_GRILLING}{CHAT_VOICE}",
         STANDING_INSTRUCTIONS.trim_end(),
         today()
-    );
-    if !memories.is_empty() {
-        text.push_str(
-            "\n\nWhat you know about the user from earlier conversations (their memories):",
-        );
-        for memory in memories {
-            text.push_str("\n- ");
-            text.push_str(memory);
-        }
-    }
-    text
+    )
 }
 
 #[cfg(test)]
@@ -450,7 +430,7 @@ mod tests {
     fn chats_and_side_chats_start_with_the_standing_instructions() {
         use crate::model::TabTarget;
         let head = format!("{}\n\n", STANDING_INSTRUCTIONS.trim_end());
-        let chat = chat(&[]);
+        let chat = chat();
         assert!(chat.starts_with(&head));
         assert!(!chat.contains("runs no workers"));
         assert!(chat.contains("This Chat is a thread without a project"));

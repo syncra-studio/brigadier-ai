@@ -31,7 +31,7 @@ pub enum Role {
         conversation_id: ConversationId,
         task_id: TaskId,
     },
-    /// A Chat's model: it may save memories to the Personal Brain.
+    /// A Chat's model: it may save reports as pages.
     Chat { conversation_id: ConversationId },
     /// A tab's own chat: it may read and change its tab's page or file, and nothing else.
     TabChat {
@@ -381,19 +381,9 @@ impl WorkerCall {
     }
 }
 
-/// `save_memory`: a Chat keeps something about the user for later conversations.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SaveMemory {
-    /// What to remember, as one short sentence about the user ("Prefers answers in British
-    /// English").
-    pub memory: String,
-}
-
 /// A tool call from a Chat's model.
 #[derive(Debug, Clone)]
 pub enum ChatCall {
-    SaveMemory(SaveMemory),
     SaveReport(SaveReport),
 }
 

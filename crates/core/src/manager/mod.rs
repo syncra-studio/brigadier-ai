@@ -64,8 +64,6 @@ mod kept_live_tests;
 mod lifecycle;
 mod local_files;
 mod mcp_auth;
-mod memories;
-mod memory_guard;
 mod outputs;
 mod page_tools;
 mod past_projects;
@@ -427,8 +425,6 @@ impl SessionManager {
         crate::heap(|| manager.switch_engine()).await?;
         // Sessions open at the strip-down's first start are archived, not carried over.
         crate::heap(|| manager.archive_open_at_upgrade()).await;
-        // Before any session's instructions are written, which carry the preference.
-        crate::heap(|| manager.carry_short_replies()).await;
         crate::heap(|| manager.recover()).await;
         crate::heap(|| manager.open_brains()).await;
         manager.start_hibernation_timer();
@@ -941,9 +937,7 @@ impl ToolHost for SessionManager {
                 ) => {
                     crate::heap(|| manager.browser_tool(conversation_id, Some(task_id), call)).await
                 }
-                (Role::Chat { conversation_id }, ToolCall::Chat(call)) => {
-                    manager.chat_call(conversation_id, call).await
-                }
+                (Role::Chat { .. }, ToolCall::Chat(call)) => manager.chat_call(call).await,
                 (Role::Chat { conversation_id }, ToolCall::Browser(call)) => {
                     crate::heap(|| manager.browser_tool(conversation_id, None, call)).await
                 }

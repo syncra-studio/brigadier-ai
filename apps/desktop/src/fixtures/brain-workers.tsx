@@ -3,8 +3,8 @@
  * the IPC mock. No daemon.
  *
  * ?from=session (the default) | chat | other: Settings opened from a session of the project, a
- * chat, or a session of another project. ?pick=<key>: a Brain picked before (calc, other or
- * personal).
+ * chat, or a session of another project. ?pick=<project>: a Brain picked before (calc or
+ * other).
  * ?drive=1 records what the tab shows, sends task updates, reads the tasks again twice as the
  * bridge's resync does (first bringing back an update the feed missed, at the same moment as one
  * it delivered; then with an update arriving during the read; then two overlapping reads, the
@@ -73,7 +73,7 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "getBrain":
-      calls.push(`getBrain ${req.projectId ?? "personal"}`);
+      calls.push(`getBrain ${req.projectId}`);
       return { method: req.method, overview: { ...overview, projectId: req.projectId } };
     case "getConversation": {
       calls.push(`getConversation ${req.id}`);

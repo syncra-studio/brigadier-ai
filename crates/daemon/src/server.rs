@@ -1590,16 +1590,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetBrainGraph { project_id, filter } => Response::GetBrainGraph {
             graph: Box::new(heap(|| sessions.brain_graph(project_id, filter)).await?),
         },
-        Request::ListMemories => Response::ListMemories {
-            memories: heap(|| sessions.list_memories()).await?,
-        },
-        Request::ForgetMemory { node_id } => {
-            heap(|| sessions.forget_memory(node_id)).await?;
-            Response::ForgetMemory
-        }
-        Request::EditMemory { node_id, text } => Response::EditMemory {
-            memory: Box::new(heap(|| sessions.edit_memory(node_id, text)).await?),
-        },
         Request::ExportConventions { project_id, path } => Response::ExportConventions {
             export: heap(|| sessions.export_conventions(project_id, path)).await?,
         },

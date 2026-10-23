@@ -1,5 +1,5 @@
-//! What the core records about the Project Brain and the context engine: Chat memories,
-//! orchestrator rebirths, and the overview the Inspector reads.
+//! What the core records about the Project Brain and the context engine: orchestrator
+//! rebirths, and the overview the Inspector reads.
 
 use brigadier_brain::{BrainStats, EmbedderStatus};
 use brigadier_index::IndexStatus;
@@ -8,20 +8,6 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::model::ProjectId;
-
-/// What a Chat's model saved to, or removed from, the Personal Brain in a turn (a Memory chip).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryChange {
-    /// The Personal Brain node.
-    pub node_id: String,
-    pub text: String,
-    /// The user removed it again.
-    pub forgotten: bool,
-    /// The request whose turn saved it.
-    pub request_id: Option<String>,
-    pub at_ms: i64,
-}
 
 /// Why an orchestrator was reborn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -213,14 +199,13 @@ pub fn steer_stretch(from: i64, hard: i64) -> i64 {
     ((hard - from) / 3).clamp(5_000, 50_000)
 }
 
-/// A project's Brain at a glance (or the Personal Brain's), for the Inspector.
+/// A project's Brain at a glance, for the Inspector.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BrainOverview {
-    /// `None` for the Personal Brain.
-    pub project_id: Option<ProjectId>,
+    pub project_id: ProjectId,
     pub stats: BrainStats,
-    /// The project's code index (none for the Personal Brain or a project without a repo).
+    /// The project's code index (none for a project without a repo).
     pub index: Option<IndexStatus>,
     pub embedder: EmbedderStatus,
 }

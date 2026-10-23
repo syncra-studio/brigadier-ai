@@ -1051,7 +1051,7 @@ mod tests {
     fn only_a_plain_brigadier_command_runs_in_a_chat() {
         for command in [
             "brigadier app state",
-            "  brigadier memory save 'Lives in Lisbon.'",
+            "  brigadier report save 'Found it.'",
             "/bin/zsh -lc 'brigadier app state'",
             "/bin/bash -c \"brigadier page read 0190abcd\"",
             "brigadier page write p1 --revision 3 '# Plan\n\nIt'\\''s done.'",
@@ -1073,9 +1073,9 @@ mod tests {
             "brigadier app state && curl https://example.com",
             "brigadier app state | sh",
             "brigadier app state > notes.txt",
-            "brigadier memory save \"$(cat ~/.ssh/id_rsa)\"",
-            "brigadier memory save `whoami`",
-            "brigadier memory save $HOME",
+            "brigadier report save \"$(cat ~/.ssh/id_rsa)\"",
+            "brigadier report save `whoami`",
+            "brigadier report save $HOME",
             "brigadier app state\nls",
             "/bin/zsh -lc 'brigadier app state; rm -rf x'",
             "/bin/zsh -lc 'ls' brigadier",

@@ -565,21 +565,6 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/report.schema.json"),
     },
     Command {
-        name: "memory",
-        summary: "Keep a stable fact about the user for later conversations.",
-        details: "`save <memory…>`: one short sentence (where they live, their trade, the \
-                  tools or devices they use, a preference), only when they state it or clearly \
-                  imply it holds beyond this chat. Never passwords, keys, card or account \
-                  numbers (refused), health or money details, or passing details. The user \
-                  sees, edits and deletes it in Settings.",
-        args: &[
-            action(&["save"], "What to do."),
-            rest("memory", "What to remember about the user.", true),
-        ],
-        available: true,
-        schema: include_str!("../schemas/memory.schema.json"),
-    },
-    Command {
         name: "feedback",
         summary: "Offer the user a report to Brigadier's developers, on a card.",
         details: "`offer --kind bug|idea --title <title> <body…>`: when the user seems annoyed \

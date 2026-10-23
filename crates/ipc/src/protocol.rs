@@ -6,7 +6,7 @@
 //! Requests carry a client-chosen id echoed on the response. Responses reuse the request's
 //! `method` tag, so TypeScript can pair them with `Extract<Response, { method: M }>`.
 
-use brigadier_brain::{BrainAnswer, BrainGraph, BrainQuery, Node, NodeFilter};
+use brigadier_brain::{BrainAnswer, BrainGraph, BrainQuery, NodeFilter};
 use brigadier_core::pages::{Page, PageContent, PageError, PageSummary, PageWriteOutcome};
 use brigadier_core::storage::{
     BranchChoice, CleanProgress, CleanReport, FreeUpProjectsReport, ProjectRemoval,
@@ -176,31 +176,19 @@ pub enum Request {
         path: Option<String>,
         trusted: bool,
     },
-    /// A project's Brain at a glance, or the Personal Brain's without `projectId`.
+    /// A project's Brain at a glance.
     GetBrain {
-        project_id: Option<ProjectId>,
+        project_id: ProjectId,
     },
     /// Runs a Brain query as the orchestrator's `query_brain` does (the Inspector's search).
     QueryBrain {
-        project_id: Option<ProjectId>,
+        project_id: ProjectId,
         query: BrainQuery,
     },
     /// Nodes and their edges, for the Inspector's graph viewer.
     GetBrainGraph {
-        project_id: Option<ProjectId>,
+        project_id: ProjectId,
         filter: NodeFilter,
-    },
-    /// The Personal Brain's memories (preferences), newest first.
-    ListMemories,
-    /// Removes a memory from the Personal Brain.
-    ForgetMemory {
-        node_id: String,
-    },
-    /// The user's correction of a memory's text, in place; refused for a password, key, card
-    /// or account number.
-    EditMemory {
-        node_id: String,
-        text: String,
     },
     /// Writes the project's conventions into the marked Brigadier section of an AGENTS.md
     /// (the native save panel's choice, or a typed path), creating the file if needed.
@@ -968,8 +956,8 @@ pub enum Request {
     PreviewRemoveProject {
         id: ProjectId,
     },
-    /// Removes a project from Brigadier: its conversations are deleted (as `Delete` does,
-    /// without forgetting the Personal Brain), then the picked branches, then its Brain and
+    /// Removes a project from Brigadier: its conversations are deleted (as `Delete` does),
+    /// then the picked branches, then its Brain and
     /// code index go to the Trash. Its repository's files and the user's own branches are
     /// never touched. Refused while one of its conversations works.
     RemoveProject {
@@ -1359,13 +1347,6 @@ pub enum Response {
     },
     GetBrainGraph {
         graph: Box<BrainGraph>,
-    },
-    ListMemories {
-        memories: Vec<Node>,
-    },
-    ForgetMemory,
-    EditMemory {
-        memory: Box<Node>,
     },
     ExportConventions {
         export: ConventionsExport,

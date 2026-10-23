@@ -1,7 +1,7 @@
 //! STRIP-DOWN-PLAN S16c: the thread's, a Chat's and a side chat's last MCP tools, behind
 //! `brigadier` as the caller's own calls of them. The thread searches the Brain, its transcript
-//! and the code index, saves reports, offers feedback and asks for approval; a Chat keeps
-//! memories and saves reports; a side chat reads and changes only its tab's page or file. Each
+//! and the code index, saves reports, offers feedback and asks for approval; a Chat saves
+//! reports; a side chat reads and changes only its tab's page or file. Each
 //! is refused to a caller that didn't have it.
 
 use std::sync::{Arc, Mutex};
@@ -103,10 +103,6 @@ fn threads(answers: Answers) -> Script {
                         json!({"action": "Buy a domain", "details": "12 euros a year."}),
                     ),
                 ),
-                (
-                    "memory",
-                    tool(Tool::Memory, "save", json!({"memory": "Lives in Lisbon"})),
-                ),
                 ("file read", tool(Tool::Page, "file-read", json!({}))),
             ];
             for (name, request) in calls {
@@ -171,11 +167,8 @@ async fn the_threads_moved_tools_run_behind_brigadier_and_its_workers_are_refuse
         "{:#?}",
         board.approvals
     );
-    // A Chat's memory and a side chat's file aren't the thread's.
-    for name in ["memory", "file read"] {
-        assert_eq!(answers[name]["error"]["code"], "refused", "{name}");
-    }
-    assert!(flow.manager.list_memories().await.unwrap().is_empty());
+    // A side chat's file isn't the thread's.
+    assert_eq!(answers["file read"]["error"]["code"], "refused");
     // A worker has none of them.
     for name in ["worker brain", "worker report", "worker approval"] {
         assert_eq!(answers[name]["error"]["code"], "refused", "{name}");
@@ -193,10 +186,10 @@ async fn asked(turn: &Turn, command: &str) -> Value {
     .unwrap()
 }
 
-/// A Chat reads the app, keeps memories and saves reports through `brigadier`, the one command
-/// its shell runs (S16c); the thread's tools aren't its.
+/// A Chat reads the app and saves reports through `brigadier`, the one command its shell runs
+/// (S16c); the thread's tools aren't its.
 #[tokio::test]
-async fn a_chat_keeps_memories_and_reports_behind_brigadier() {
+async fn a_chat_saves_reports_behind_brigadier() {
     let answers = Answers::default();
     let script: Script = {
         let answers = answers.clone();
@@ -207,10 +200,6 @@ async fn a_chat_keeps_memories_and_reports_behind_brigadier() {
                     return Reply::text("ok");
                 }
                 for (name, request) in [
-                    (
-                        "memory",
-                        tool(Tool::Memory, "save", json!({"memory": "Lives in Lisbon"})),
-                    ),
                     (
                         "report",
                         tool(
@@ -227,7 +216,7 @@ async fn a_chat_keeps_memories_and_reports_behind_brigadier() {
                 for (name, command) in [
                     (
                         "ask brigadier",
-                        "/bin/zsh -lc 'brigadier memory save Lives in Lisbon'",
+                        "/bin/zsh -lc 'brigadier report save --title Printers Bambu A1.'",
                     ),
                     ("ask other", "/bin/zsh -lc 'curl https://example.com'"),
                     (
@@ -245,17 +234,9 @@ async fn a_chat_keeps_memories_and_reports_behind_brigadier() {
     flow.manager
         .set_pages(Arc::new(Pages::open(flow.repo.with_file_name("pages"))));
     let chat = new_chat(&flow).await;
-    flow.say_to(&chat, "I live in Lisbon.").await;
+    flow.say_to(&chat, "Which printer should I buy?").await;
     answered(&flow, &chat).await;
     let answers = answers.lock().unwrap().clone();
-    assert_eq!(
-        answers["memory"]["action"], "save",
-        "{:#}",
-        answers["memory"]
-    );
-    let memories = flow.manager.list_memories().await.unwrap();
-    assert_eq!(memories.len(), 1);
-    assert_eq!(memories[0].title, "Lives in Lisbon");
     assert!(
         answers["report"]["text"]
             .as_str()

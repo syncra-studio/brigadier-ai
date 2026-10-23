@@ -24,7 +24,6 @@ export * from "./elements/image-generation";
 export * from "./elements/image-viewer";
 export * from "./elements/inline-image";
 export * from "./elements/mcp-server-panel";
-export * from "./elements/memory-chips";
 export * from "./elements/menuMatch";
 export * from "./elements/message-attachment";
 export * from "./elements/message-queue";

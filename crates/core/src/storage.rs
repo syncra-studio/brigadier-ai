@@ -90,12 +90,11 @@ pub enum SharedPart {
     Database,
     /// The folders of Chats (which belong to no project).
     ChatFolders,
-    /// Stored content no project's conversations reference (Chats, the Personal Brain's, …).
+    /// Stored content no project's conversations reference (Chats', …).
     OtherBlobs,
     Models,
     Logs,
     Recordings,
-    PersonalBrain,
     Other,
 }
 

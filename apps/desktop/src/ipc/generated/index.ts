@@ -218,7 +218,6 @@ export type { McpServerState } from "./McpServerState";
 export type { McpServerView } from "./McpServerView";
 export type { McpSignInStatus } from "./McpSignInStatus";
 export type { McpStatus } from "./McpStatus";
-export type { MemoryChange } from "./MemoryChange";
 export type { Mention } from "./Mention";
 export type { MergeCondition } from "./MergeCondition";
 export type { MergeUndo } from "./MergeUndo";

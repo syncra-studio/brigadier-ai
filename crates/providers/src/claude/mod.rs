@@ -374,8 +374,17 @@ impl Claude {
                 args.push(format!("{REVIEW_ALLOWED} {BRIGADIER_ALLOWED}"));
             }
         }
+        let mut layer = settings(spec, &sub_agents, home_login);
+        // A Chat or a raw session loads no user settings, so it is given the user's own memory
+        // setting, as set.
+        if !user_setup
+            && !memory_off(spec)
+            && let Some(on) = user_config.and_then(|dir| auto_memory(&dir.join("settings.json")))
+        {
+            layer["autoMemoryEnabled"] = json!(on);
+        }
         args.push("--settings".into());
-        args.push(settings(spec, &sub_agents, home_login).to_string());
+        args.push(layer.to_string());
         args.push("--permission-mode".into());
         args.push(permission_mode(spec).into());
         // The session's own folders. Both spellings of a folder behind a symlink (`/tmp` →
@@ -649,8 +658,6 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         permissions["deny"] = json!(deny);
     }
     let mut settings = json!({
-        // The Project Brain is Brigadier's memory; workers do not write Claude's.
-        "autoMemoryEnabled": false,
         // At a usage limit the session reports it and stops, so Brigadier can hand the work to
         // another model, instead of waiting for the reset on its own.
         "autoContinueAtUsageLimit": false,
@@ -673,6 +680,12 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
             },
         },
     });
+    // Claude's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
+    // memory should grow: a lean worker (G23), a side chat, which leaves nothing, and Brigadier's
+    // own one-shots.
+    if memory_off(spec) {
+        settings["autoMemoryEnabled"] = json!(false);
+    }
     // claude.ai's connectors can't work in a Brigadier tab (STRIP-DOWN-PLAN S17): nothing
     // else of what ships with Claude Code is switched off.
     if spec.tools.user_setup() {
@@ -744,6 +757,24 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         settings["env"] = Value::Object(env);
     }
     settings
+}
+
+/// Whether a session goes without Claude's memory whatever the user's setting ([`settings`]).
+fn memory_off(spec: &SessionSpec) -> bool {
+    match spec.tools {
+        ToolSet::Default | ToolSet::Lean | ToolSet::Thread => spec.lean_worker,
+        ToolSet::Chat => false,
+        ToolSet::None | ToolSet::Web | ToolSet::Review | ToolSet::TabChat => true,
+    }
+}
+
+/// The `autoMemoryEnabled` a settings file sets, if it sets one.
+fn auto_memory(file: &Path) -> Option<bool> {
+    let text = std::fs::read_to_string(file).ok()?;
+    serde_json::from_str::<Value>(&text)
+        .ok()?
+        .get("autoMemoryEnabled")?
+        .as_bool()
 }
 
 /// The daemon's socket, for a session given `brigadier` (its environment names its session): in
@@ -2922,6 +2953,71 @@ for line in sys.stdin:
     /// STRIP-DOWN-PLAN S17: Brigadier's instructions reach Claude word for word as its one
     /// `--append-system-prompt`, and the CLI gets the session's folder and ledger in its
     /// environment.
+    /// STRIP-DOWN-PLAN S19: Claude's own memory follows the user's setting. A thread or a
+    /// worker loads the user's settings and Brigadier sets nothing; a Chat or a raw session, which
+    /// loads none, is given the user's value as set, and nothing when they set none. Only a lean worker (G23), a
+    /// side chat and Brigadier's own one-shots go without it.
+    #[test]
+    fn claudes_memory_follows_the_users_setting() {
+        let cwd = Temp::new();
+        let config = cwd.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let flag = |args: &[String], name: &str| {
+            args.iter()
+                .position(|arg| arg == name)
+                .map(|at| args[at + 1].clone())
+        };
+        let memory = |tools: ToolSet, lean_worker: bool| {
+            let session = SessionSpec {
+                tools,
+                lean_worker,
+                project: Some(cwd.path().to_owned()),
+                ..spec(cwd.path(), &[])
+            };
+            let args =
+                Claude::session_args(&session, cwd.path(), "n", false, Some(&config)).unwrap();
+            let layer: Value = serde_json::from_str(&flag(&args, "--settings").unwrap()).unwrap();
+            (
+                layer.get("autoMemoryEnabled").cloned(),
+                flag(&args, "--setting-sources"),
+            )
+        };
+        for user in [Some(true), Some(false), None] {
+            let file = match user {
+                Some(on) => json!({"autoMemoryEnabled": on, "model": "opus"}),
+                None => json!({"model": "opus"}),
+            };
+            std::fs::write(config.join("settings.json"), file.to_string()).unwrap();
+            for tools in [ToolSet::Thread, ToolSet::Lean] {
+                assert_eq!(
+                    memory(tools, false),
+                    (None, Some("user,project,local".into())),
+                    "{tools:?} loads the user's settings and is given none ({user:?})"
+                );
+            }
+            for tools in [ToolSet::Chat, ToolSet::Default] {
+                assert_eq!(
+                    memory(tools, false).0,
+                    user.map(|on| json!(on)),
+                    "{tools:?} starts with the user's own setting"
+                );
+            }
+            assert_eq!(
+                memory(ToolSet::Lean, true).0,
+                Some(json!(false)),
+                "a lean worker"
+            );
+            for tools in [
+                ToolSet::TabChat,
+                ToolSet::Review,
+                ToolSet::Web,
+                ToolSet::None,
+            ] {
+                assert_eq!(memory(tools, false).0, Some(json!(false)), "{tools:?}");
+            }
+        }
+    }
+
     #[test]
     fn the_standing_instructions_and_their_env_reach_claude_as_given() {
         let cwd = Temp::new();
@@ -3052,6 +3148,12 @@ for line in sys.stdin:
                         "--tools" | "--allowedTools" | "--permission-mode"
                     ) {
                         flags.next();
+                    } else if flag == "--settings" {
+                        // Claude's memory follows the user's setting in a Chat (S19).
+                        let mut layer: Value =
+                            serde_json::from_str(&flags.next().unwrap()).unwrap();
+                        layer.as_object_mut().unwrap().remove("autoMemoryEnabled");
+                        kept.push(layer.to_string());
                     } else {
                         kept.push(flag);
                     }

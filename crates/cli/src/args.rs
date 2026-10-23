@@ -617,10 +617,6 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             put("markdown", Some(json!(args.text("markdown"))));
             Tool::Report
         }
-        "memory" => {
-            put("memory", Some(json!(args.text("memory"))));
-            Tool::Memory
-        }
         "feedback" => {
             let (Some(kind), Some(title)) = (args.flag("kind"), args.flag("title")) else {
                 return Err(error("--kind (bug or idea) and --title name the report"));
@@ -995,14 +991,6 @@ mod tests {
             json!({"base_revision": "r2", "text": "fn main()"})
         );
         assert_eq!(
-            tool(&["memory", "save", "Lives", "in", "Lisbon."]),
-            (
-                Tool::Memory,
-                "save".into(),
-                json!({"memory": "Lives in Lisbon."})
-            )
-        );
-        assert_eq!(
             tool(&["report", "save", "--title", "Printers", "Bambu", "A1."]),
             (
                 Tool::Report,
@@ -1058,7 +1046,6 @@ mod tests {
         assert!(fails(&["code", "search", "--kind", "type", "x"]).contains("one of: symbol"));
         assert!(fails(&["page", "file-write", "text"]).contains("--revision"));
         assert!(fails(&["page", "file-read", "x"]).contains("unexpected argument"));
-        assert!(fails(&["memory", "save"]).contains("missing <memory>"));
         assert!(fails(&["report", "save", "text"]).contains("--title"));
         assert!(fails(&["feedback", "offer", "--title", "T", "b"]).contains("--kind"));
         assert!(fails(&["feedback", "offer", "--kind", "rant", "b"]).contains("one of: bug"));

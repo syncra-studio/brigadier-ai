@@ -33,7 +33,7 @@ function view(id: string): ConversationView {
     conversation: conversation(id), context: null, messages: { messages: [message(id, 1), message(id, 2)], hasMore: false },
     tasks: [], approvals: [], questions: [], requests: [], queue: { items: [], paused: false }, run: runs[id] ?? "idle",
     runRequest: null, head: null, workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [],
-    decisions: [], ratings: {}, streaming: null, notices: [], memories: [],
+    decisions: [], ratings: {}, streaming: null, notices: [],
   } as unknown as ConversationView;
 }
 
