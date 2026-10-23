@@ -476,7 +476,9 @@ pub enum Request {
         conversation_id: ConversationId,
         text: String,
         attachments: Vec<AttachmentRef>,
+        #[serde(default)]
         mentions: Vec<Mention>,
+        #[serde(default)]
         steer: bool,
         /// Queue it at this slot whenever it would wait (a turn runs, an answer works, or the
         /// queue is paused): a queued message pulled into the composer to edit, or a deleted
@@ -2367,5 +2369,31 @@ mod cli_tests {
             matches!(&frame, ClientFrame::Cli { session, grant } if session == "s" && grant == "g")
         );
         assert_eq!(serde_json::to_value(frame).unwrap(), written);
+    }
+}
+
+#[cfg(test)]
+mod send_defaults_tests {
+    use super::*;
+
+    #[test]
+    fn send_message_defaults_optional_mentions_and_steer() {
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({"mentions": []}),
+            serde_json::json!({"steer": false}),
+        ] {
+            let mut value = serde_json::json!({
+                "method": "sendMessage", "conversationId": "c1", "text": "hello", "attachments": []
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let request: Request = serde_json::from_value(value).unwrap();
+            assert!(
+                matches!(request, Request::SendMessage { mentions, steer: false, queue_index: None, .. } if mentions.is_empty())
+            );
+        }
     }
 }

@@ -18,6 +18,7 @@ use brigadier_core::{
     AppCall, Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId,
     SearchUpdate, Setup, WorkspaceTarget, streams,
 };
+use brigadier_ipc::frame::ClientRead;
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
     ArtifactText, ClientFrame, ClientInfo, DaemonActivity, DaemonInfo, DictationStatus,
@@ -321,7 +322,7 @@ impl Session {
         let reader_task = self.daemon.supervisor.spawn(async move {
             let mut reader = reader;
             loop {
-                match reader.read::<ClientFrame>().await {
+                match reader.read_client().await {
                     Ok(Some(frame)) => {
                         if frames_tx.send(Ok(frame)).await.is_err() {
                             return;
@@ -345,13 +346,16 @@ impl Session {
                     break Ok(());
                 }
                 frame = frames.recv() => match frame {
-                    Some(Ok(ClientFrame::Request { id, request })) => {
+                    Some(Ok(ClientRead::Frame(ClientFrame::Request { id, request }))) => {
                         match self.handle(id, request).await? {
                             Flow::Continue => {}
                             Flow::Close => break Ok(()),
                         }
                     }
-                    Some(Ok(_)) => {
+                    Some(Ok(ClientRead::Rejected(response))) => {
+                        self.writer.write(&response).await?;
+                    }
+                    Some(Ok(ClientRead::Frame(_))) => {
                         break Err(anyhow::anyhow!("handshake frame after the handshake"));
                     }
                     Some(Err(err)) => break Err(err.into()),
