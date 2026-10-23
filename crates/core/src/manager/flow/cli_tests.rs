@@ -794,16 +794,20 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         assert_eq!(seen["first on path"], json!(bin));
         let prompt = &answers[&format!("worker prompt {}", task.id.0)];
         assert_eq!(prompt["input"], task.spec.as_str(), "{prompt:#}");
-        // Brigadier's instructions are the standing ones alone (S17).
+        // Brigadier's instructions are the standing ones alone, with its own paths (S17).
         let given = prompt["prompt"].as_str().unwrap_or_default();
+        let own = flow.manager.session_dir(&flow.conversation).worker(task);
         assert!(
             [ProviderKind::Claude, ProviderKind::Codex]
                 .iter()
                 .any(|provider| {
                     given
-                        == crate::manager::prompts::session_instructions(
-                            &flow.core.settings(),
-                            *provider,
+                        == crate::manager::prompts::with_session_paths(
+                            &crate::manager::prompts::session_instructions(
+                                &flow.core.settings(),
+                                *provider,
+                            ),
+                            &own,
                         )
                 }),
             "only the standing instructions: {prompt:#}"
@@ -826,9 +830,12 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     assert!(spec.mcp_servers.is_empty(), "no Brigadier server: {spec:?}");
     assert_eq!(
         spec.append_system_prompt,
-        Some(crate::manager::prompts::session_instructions(
-            &flow.core.settings(),
-            ProviderKind::Codex
+        Some(crate::manager::prompts::with_session_paths(
+            &crate::manager::prompts::session_instructions(
+                &flow.core.settings(),
+                ProviderKind::Codex
+            ),
+            &flow.manager.session_dir(&flow.conversation).worker(&b),
         ))
     );
     assert!(spec.stop_hook.is_none());

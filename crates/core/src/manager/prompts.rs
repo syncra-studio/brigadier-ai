@@ -6,15 +6,27 @@ use brigadier_providers::ProviderKind;
 
 use crate::model::{GitStyle, Settings};
 
-/// All Brigadier adds to a session (G17): `standing_instructions.md`, word for word. Claude gets
-/// it with `--append-system-prompt`, Codex as the thread's developer instructions; per-session
-/// values come as the environment variables it names ([`SESSION_DIR_ENV`], [`LEDGER_ENV`]).
+/// All Brigadier adds to a session (G17): `standing_instructions.md`, one template for every
+/// session. Claude gets it with `--append-system-prompt`, Codex as the thread's developer
+/// instructions, with only the two paths it names filled in ([`with_session_paths`]).
 pub(crate) const STANDING_INSTRUCTIONS: &str = include_str!("standing_instructions.md");
 
 /// The variable that holds the session's folder.
 pub(crate) const SESSION_DIR_ENV: &str = "BRIGADIER_SESSION_DIR";
 /// The variable that holds the session's ledger, `record/ledger.md` in its folder.
 pub(crate) const LEDGER_ENV: &str = "BRIGADIER_LEDGER";
+
+/// `text` with the session folder and ledger it names ([`SESSION_DIR_ENV`], [`LEDGER_ENV`])
+/// written out as the paths of the session or worker at `root`, as its environment holds
+/// them. Claude asks before any command with a variable it can't check, so in Accept edits
+/// a ledger named only by its variable cost the user a card per entry.
+pub(crate) fn with_session_paths(text: &str, root: &std::path::Path) -> String {
+    super::session_dir::standing_env(root)
+        .into_iter()
+        .fold(text.to_owned(), |text, (name, value)| {
+            text.replace(&format!("${name}"), &value)
+        })
+}
 
 /// A session's or worker's instructions: the standing instructions, then only what the user's
 /// own settings ask (their Git writing rules, the browser off, and for Codex no AI co-authors,

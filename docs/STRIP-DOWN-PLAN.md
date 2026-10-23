@@ -966,7 +966,10 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   every session.
   - It reaches both CLIs explicitly, never by discovery: Claude gets it with `--append-system-prompt`, Codex
     as the thread's `developer_instructions` (`P/codex/mod.rs:1151/1288`).
-  - Per-session values arrive as env vars: `BRIGADIER_SESSION_DIR`, `BRIGADIER_LEDGER`.
+  - The file is one template; only the two paths it names differ per session. Brigadier writes the session's
+    folder and ledger out in the text it hands each CLI, and the env vars `BRIGADIER_SESSION_DIR` and
+    `BRIGADIER_LEDGER` hold the same paths for scripts. (Claude asks before any command with a variable it
+    can't check, so in Accept edits a ledger named only by its variable cost the user a card per entry.)
   - One line says the session may run workers through `brigadier` and that the `/brigade` skill holds the
     guidance (G20). It is the same for every session and chat; nothing has to be invoked.
   - It replaces the thread prompt (`M/prompts.rs` `thread()` and macros) and `M/instructions.rs`. That file

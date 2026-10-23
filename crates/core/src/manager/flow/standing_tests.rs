@@ -9,7 +9,7 @@ use brigadier_providers::{ProviderKind, SessionSpec, ToolSet};
 use super::chat_thread_tests::new_chat;
 use super::{Flow, Options, Reply, Script};
 use crate::manager::prompts::{
-    LEDGER_ENV, NO_AI_COAUTHORS, SESSION_DIR_ENV, STANDING_INSTRUCTIONS,
+    LEDGER_ENV, NO_AI_COAUTHORS, SESSION_DIR_ENV, STANDING_INSTRUCTIONS, with_session_paths,
 };
 
 /// A thread that starts one worker, and a worker that answers.
@@ -65,17 +65,23 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         flow.say_to(&chat, "Which nozzle?").await;
         flow.settled_in(&chat).await;
         let specs = flow.specs();
-        // Exactly the file, and for Codex the user's default "no AI co-authors" (Claude's
-        // settings hold it to that instead).
-        let expected = match provider {
+        // Exactly the file with its two paths written out, and for Codex the user's default
+        // "no AI co-authors" (Claude's settings hold it to that instead).
+        let template = match provider {
             ProviderKind::Claude => STANDING_INSTRUCTIONS.trim_end().to_owned(),
             ProviderKind::Codex => {
                 format!("{}\n\n{NO_AI_COAUTHORS}", STANDING_INSTRUCTIONS.trim_end())
             }
         };
         let thread = of(&specs, ToolSet::Thread);
-        assert_eq!(thread.append_system_prompt.as_deref(), Some(&*expected));
         let folder = flow.manager.session_dir(&flow.conversation);
+        let expected = with_session_paths(&template, folder.root());
+        assert!(!expected.contains("$BRIGADIER_"), "{expected}");
+        assert!(expected.contains(&format!(
+            "Keep a ledger at {} as you work.",
+            folder.record().join("ledger.md").display()
+        )));
+        assert_eq!(thread.append_system_prompt.as_deref(), Some(&*expected));
         assert_eq!(
             env(&thread, SESSION_DIR_ENV),
             Some(&*folder.root().display().to_string())
@@ -86,8 +92,11 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         );
         // A worker gets the same file, with its own folder and ledger.
         let worker = of(&specs, ToolSet::Lean);
-        assert_eq!(worker.append_system_prompt.as_deref(), Some(&*expected));
         let own = env(&worker, SESSION_DIR_ENV).expect("its folder");
+        assert_eq!(
+            worker.append_system_prompt.as_deref(),
+            Some(&*with_session_paths(&template, std::path::Path::new(own)))
+        );
         assert!(
             own.starts_with(&*folder.root().join("workers").display().to_string()),
             "{own}"
@@ -100,12 +109,15 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
         // workers (G20).
         let chat_spec = of(&specs, ToolSet::Chat);
         let chat_prompt = chat_spec.append_system_prompt.as_deref().unwrap();
+        let chat_folder = flow.manager.session_dir(&chat);
         assert!(
-            chat_prompt.starts_with(&format!("{}\n\n", STANDING_INSTRUCTIONS.trim_end())),
+            chat_prompt.starts_with(&format!(
+                "{}\n\n",
+                with_session_paths(STANDING_INSTRUCTIONS.trim_end(), chat_folder.root())
+            )),
             "{chat_prompt}"
         );
         assert!(!chat_prompt.contains("runs no workers"));
-        let chat_folder = flow.manager.session_dir(&chat);
         assert_eq!(
             env(&chat_spec, LEDGER_ENV),
             Some(&*chat_folder.record().join("ledger.md").display().to_string())

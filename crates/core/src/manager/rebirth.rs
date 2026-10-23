@@ -464,7 +464,10 @@ impl SessionManager {
                     tracing::info!(conversation = %id, "no thread start to copy: the note fork starts on its own");
                 }
                 // The thread's own instructions.
-                let prompt = self.thread_prompt(provider);
+                let prompt = prompts::with_session_paths(
+                    &self.thread_prompt(provider),
+                    self.session_dir(id).root(),
+                );
                 plain_fork_spec(self.thread_cwd(id), &choice, native_id, prompt)
             }
         };

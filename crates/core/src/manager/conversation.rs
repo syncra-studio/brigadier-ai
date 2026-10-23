@@ -2553,7 +2553,10 @@ impl SessionManager {
             access: launch
                 .as_ref()
                 .map_or(Access::ReadOnly, |launch| launch.access),
-            append_system_prompt: Some(prompt.clone()),
+            append_system_prompt: Some(prompts::with_session_paths(
+                &prompt,
+                self.session_dir(&conv.id).root(),
+            )),
             // Brigadier gives no MCP server: the user's own load from their setup.
             mcp_servers: Vec::new(),
             tools: match conv.kind {

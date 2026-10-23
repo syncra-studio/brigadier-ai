@@ -3028,7 +3028,7 @@ for line in sys.stdin:
     #[test]
     fn the_standing_instructions_and_their_env_reach_claude_as_given() {
         let cwd = Temp::new();
-        let text = "This is a plain Claude Code / Codex session inside Brigadier.\nKeep a ledger at $BRIGADIER_LEDGER as you work.";
+        let text = "This is a plain Claude Code / Codex session inside Brigadier.\nKeep a ledger at /tmp/s/record/ledger.md as you work.";
         let env = vec![
             ("BRIGADIER_SESSION_DIR".to_owned(), "/s/abc".to_owned()),
             (

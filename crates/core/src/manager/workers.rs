@@ -675,9 +675,9 @@ impl SessionManager {
             ephemeral: false,
             access,
             // The standing instructions, as every session gets them (S17).
-            append_system_prompt: Some(super::prompts::session_instructions(
-                &self.core.settings(),
-                provider,
+            append_system_prompt: Some(super::prompts::with_session_paths(
+                &super::prompts::session_instructions(&self.core.settings(), provider),
+                &worker_dir,
             )),
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
