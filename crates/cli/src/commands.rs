@@ -471,15 +471,27 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "ledger",
-        summary: "Add to or show your own session's ledger.",
+        summary: "Add to, close, show or check against your own session's ledger.",
         details: "`add <text…>` appends one Markdown list entry, keeping the existing list \
-                  marker. With no text, or `-`, reads standard input. Give the entry's kind \
-                  and source as the standing instructions say. Prints nothing on success. \
-                  `show` prints the ledger verbatim. Threads, workers and Chats use their \
+                  marker, stamped `L<n> · <MM-DD HH:MM> · gen <g> ·`, and prints its id. Ids \
+                  count up and are never reused, `ledger-archive.md` included. With no text, \
+                  or `-`, reads standard input. Give the entry's kind and source as the \
+                  standing instructions say. `close <id> \"<how>\"` appends a closing entry; \
+                  nothing is rewritten. `show` prints the ledger verbatim; `--open` only the \
+                  open items not closed, `--rules` only the rules and decisions still standing \
+                  (the archive's too). `check <file>` lists the rule and decision ids the file \
+                  never cites, the ids it cites that are closed, superseded or unknown, and the \
+                  entries with no id; it judges nothing. Threads, workers and Chats use their \
                   own record/ledger.md; chats beside a tab cannot keep a ledger.",
         args: &[
-            action(&["add", "show"], "What to do."),
-            rest("args", "add: the entry's text.", false),
+            action(&["add", "close", "show", "check"], "What to do."),
+            switch("open", "show: the open items not closed."),
+            switch("rules", "show: the rules and decisions still standing."),
+            rest(
+                "args",
+                "add: the entry's text; close: the id and how; check: the file.",
+                false,
+            ),
         ],
         available: true,
         schema: include_str!("../schemas/ledger.schema.json"),

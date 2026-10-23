@@ -121,7 +121,7 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
         "wait" => present(output, json, render::wait),
         "close" => present(output, json, render::close),
         "ask" => present(output, json, render::ask),
-        "ledger" => present(output, json, |output: &protocol::ToolOutput| {
+        "ledger" => present(output, json, |output: &protocol::LedgerOutput| {
             output.text.clone()
         }),
         name if json && protocol::Tool::of_command(name).is_some() => {

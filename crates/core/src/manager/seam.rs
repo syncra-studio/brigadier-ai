@@ -3,8 +3,10 @@
 //! message it ever pushes into a thread: finish the step you are on, update the ledger, write
 //! the hand-off note. Once that turn ends the CLI closes, the thread shows a divider and the
 //! successor starts at once (user, 10-23); its first lines are the hand-off (the bootstrap): the
-//! map, the whole ledger, the note, the session's first message, the latest exchange and a
-//! newest-first verbatim tail, with the exact read command of every span left out (§9.5 L2).
+//! map; the open items, rules and decisions, verbatim and whole, never cut; the rest of the
+//! ledger newest first within its budget; the note; every user message of the lineage; the
+//! latest exchange and a newest-first verbatim tail, with the exact read command of everything
+//! left out (§9.5 L2, S22b, `research/CONTINUITY.md` §3.3).
 //!
 //! `record/seam.json` is the seam's truth across restarts: the CLI generation, where the seam
 //! stands ([`Phase`]) and every completed seam. Each phase is written before what it leads to
@@ -18,6 +20,7 @@ use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, ProviderKind, Role};
 use serde::{Deserialize, Serialize};
 
+use super::cli_ledger::{Ledger, LedgerFile};
 use super::records::{READ_MAX, entry_text};
 use super::session_dir::{LineageEntry, write_atomic};
 use crate::thread_view::{HANDOFF_END, HANDOFF_MARK, NUDGE_MARK, SeamMark};
@@ -38,6 +41,11 @@ const TAIL_BYTES: usize = 60_000;
 const ITEM_BYTES: usize = 6_000;
 /// One tool item's most in the latest exchange (its messages go whole).
 const LATEST_TOOL_BYTES: usize = 4_000;
+/// The rest of the ledger's budget, after its open items, rules and decisions (which are never
+/// cut), ≈8k tokens.
+const LEDGER_BYTES: usize = 32_000;
+/// The user's own messages' budget, ≈8k tokens; the first and the latest go whole regardless.
+const USER_BYTES: usize = 32_000;
 
 /// What the seam runs with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,10 +210,12 @@ pub(crate) fn start_path(record: &Path, n: u32) -> PathBuf {
 pub(crate) fn nudge(note: &Path) -> String {
     format!(
         "{NUDGE_MARK} Finish the step you are on, at a boundary you choose; don't start new \
-         work.\nUpdate the ledger, then write the hand-off note at {}: doing now, waiting for, \
-         next, \"read A,B,C; next D,E\", stale ledger entries. Then stop.\nIf this is your \
-         second hand-off in a row that is still reading, say so in the note and propose \
-         splitting the work.",
+         work.\nUpdate the ledger. Run `brigadier ledger show --open --rules`: close or carry \
+         each open item by id, and check your last steps kept each rule; write any slip as a \
+         Failed check.\nThen write the hand-off note at {}: doing now, waiting for, next, \
+         \"read A,B,C; next D,E\", stale ledger entries. Don't restate rules or decisions; they \
+         travel verbatim. Absolute paths only. Then stop.\nIf this is your second hand-off in a \
+         row that is still reading, say so in the note and propose splitting the work.",
         note.display()
     )
 }
@@ -216,11 +226,17 @@ pub(crate) fn handoff_line(n: u32, key: &str) -> String {
     format!("{HANDOFF_MARK}{n} · {key}]")
 }
 
-/// §6's successor lines.
-const SUCCESSOR: &str = "You continue an earlier session. The ledger, note and last exchanges \
-below are authoritative. For anything else from before, search the record (`brigadier brain \
-search`, `brigadier brain read`) and quote what you find; if it isn't there, say so rather than \
-guess.";
+/// §6's successor lines, for the successor that starts generation `generation`.
+fn successor_lines(generation: u32) -> String {
+    format!(
+        "You continue an earlier session. The open items, rules and decisions below are verbatim \
+         and authoritative; so are the note and last exchanges.\nFirst add one ledger entry: \
+         \"Took over gen {generation} · open <ids> · applies next: <id> (how), …\". If a question \
+         waits on the user, raise the oldest one in this reply.\nFor anything else from before, \
+         search the record (`brigadier brain search`, `brigadier brain read`) and quote what you \
+         find; if it isn't there, say so rather than guess."
+    )
+}
 
 /// What a successor is told when its predecessor wrote no note.
 fn death_line(why: &str) -> String {
@@ -239,6 +255,8 @@ pub(crate) struct Boot<'a> {
     pub folder: &'a Path,
     pub ledger_path: &'a Path,
     pub ledger: Option<&'a str>,
+    pub archive_path: &'a Path,
+    pub archive: Option<&'a str>,
     pub lineage: &'a [LineageEntry],
     pub note_path: &'a Path,
     pub note: Option<&'a str>,
@@ -249,9 +267,10 @@ pub(crate) struct Boot<'a> {
     pub blobs: &'a Path,
 }
 
-/// Seam `n`'s hand-off, as the successor's first lines (§9.5 L2): the successor lines, the
-/// map, the whole ledger, the note, the session's first user message, the latest exchange in
-/// full, the tail newest first, and one read command per span left out.
+/// Seam `n`'s hand-off, as the successor's first lines (S22b, §9.5 L2): the successor lines,
+/// the map, the open items, rules and decisions whole, the rest of the ledger newest first,
+/// the note, the user's own messages, the latest exchange, the tail newest first, and one read
+/// command for everything left out.
 pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     let readable: Vec<Option<(&'static str, String)>> = boot
         .entries
@@ -295,18 +314,34 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         .map(|(at, _)| at)
         .collect();
 
-    let mut out = format!("{}\n{SUCCESSOR}\n", handoff_line(boot.n, boot.key));
+    let mut out = format!(
+        "{}\n{}\n",
+        handoff_line(boot.n, boot.key),
+        successor_lines(boot.n + 1)
+    );
     if let Some(why) = boot.death {
         out.push_str(&death_line(why));
         out.push('\n');
     }
 
+    let ledger = Ledger::parse(boot.archive.unwrap_or(""), boot.ledger.unwrap_or(""));
     out.push_str("\n## Map\n");
     out.push_str(&format!("- Session folder: {}\n", boot.folder.display()));
     out.push_str(&format!(
-        "- Ledger: {} (whole below)\n",
+        "- Ledger: {} (its open items, rules and decisions whole below; the rest newest first)\n",
         boot.ledger_path.display()
     ));
+    if ledger
+        .entries
+        .iter()
+        .any(|entry| entry.file == LedgerFile::Archive)
+    {
+        out.push_str(&format!(
+            "- Ledger archive: {} (its open items, rules and decisions below too; \
+             `brigadier brain search` finds the rest)\n",
+            boot.archive_path.display()
+        ));
+    }
     match (boot.note, boot.death) {
         (Some(_), _) => out.push_str(&format!(
             "- Hand-off note: {} (below)\n",
@@ -338,12 +373,7 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         ));
     }
 
-    out.push_str("\n## Ledger\n");
-    match boot.ledger.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(ledger) => out.push_str(ledger),
-        None => out.push_str("(no ledger yet)"),
-    }
-    out.push('\n');
+    out.push_str(&ledger_sections(&ledger, boot.ledger_path));
 
     if let Some(note) = boot.note {
         out.push_str("\n## Hand-off note\n");
@@ -351,21 +381,68 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
         out.push('\n');
     }
 
-    // The session's first user message, always.
-    if let Some(&first) = users.first()
-        && let Some(text) = item(first, usize::MAX)
-    {
-        out.push_str("\n## The session's first message\n");
-        out.push_str(&text);
-        out.push('\n');
-        shown[first] = true;
+    // Every message of the user's, verbatim: the first and the latest always, the rest
+    // newest first within the budget, shown oldest first.
+    let said: Vec<usize> = boot
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| said_by_user(entry))
+        .map(|(at, _)| at)
+        .collect();
+    if !said.is_empty() {
+        let mut kept = vec![false; said.len()];
+        let mut budget = USER_BYTES;
+        for at in [0, said.len() - 1] {
+            if !kept[at]
+                && let Some(text) = item(said[at], usize::MAX)
+            {
+                budget = budget.saturating_sub(text.len());
+                kept[at] = true;
+            }
+        }
+        for at in (0..said.len()).rev() {
+            if kept[at] {
+                continue;
+            }
+            let Some(text) = item(said[at], usize::MAX) else {
+                continue;
+            };
+            if text.len() > budget {
+                break;
+            }
+            budget -= text.len();
+            kept[at] = true;
+        }
+        out.push_str("\n## The user's messages, oldest first\n");
+        for (at, _) in kept.iter().enumerate().filter(|(_, kept)| **kept) {
+            if let Some(text) = item(said[at], usize::MAX) {
+                out.push_str(&text);
+                out.push_str("\n\n");
+                shown[said[at]] = true;
+            }
+        }
+        // The fill stops at the first that doesn't fit, so those left out run together.
+        let left: Vec<usize> = said
+            .iter()
+            .zip(&kept)
+            .filter(|(_, kept)| !**kept)
+            .map(|(at, _)| *at)
+            .collect();
+        if let (Some(first), Some(last)) = (left.first(), left.last()) {
+            out.push_str(&format!(
+                "Left out here, for length: {} older messages, #{first}–#{last}; the reads under \
+                 \"Left out\" below return them.\n",
+                left.len()
+            ));
+        }
     }
 
     // The latest exchange, in order: its messages whole, its tool items cut.
-    let latest = users.last().copied().filter(|at| !shown[*at]);
+    let latest = users.last().copied();
     let mut budget = TAIL_BYTES;
     if let Some(from) = latest {
-        out.push_str("\n## The latest exchange\n");
+        let mut exchange = String::new();
         for (at, entry) in boot.entries.iter().enumerate().skip(from) {
             let message = matches!(entry.event, ProviderEvent::Message { .. });
             if entry.parent.is_some() || shown[at] {
@@ -381,10 +458,17 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
             }
             if let Some(text) = item(at, max) {
                 budget = budget.saturating_sub(text.len());
-                out.push_str(&text);
-                out.push_str("\n\n");
+                exchange.push_str(&text);
+                exchange.push_str("\n\n");
                 shown[at] = true;
             }
+        }
+        if !exchange.is_empty() {
+            out.push_str(&format!(
+                "\n## The latest exchange, after #{from}{}\n",
+                if shown[from] { " (above)" } else { "" }
+            ));
+            out.push_str(&exchange);
         }
     }
 
@@ -423,6 +507,58 @@ pub(crate) fn bootstrap(boot: &Boot<'_>) -> String {
     out
 }
 
+/// The ledger's part of a hand-off: its open items, rules and decisions verbatim and whole,
+/// never cut; then the rest of `ledger.md` newest first within [`LEDGER_BYTES`], with the read
+/// command for the older entries left out.
+fn ledger_sections(ledger: &Ledger, path: &Path) -> String {
+    if ledger.entries.is_empty() {
+        return "\n## Ledger\n(no ledger yet)\n".to_owned();
+    }
+    let mut out = String::new();
+    for (title, entries) in [
+        ("Open items", ledger.open()),
+        ("Rules and decisions", ledger.rules()),
+    ] {
+        out.push_str(&format!("\n## {title}, verbatim and whole\n"));
+        if entries.is_empty() {
+            out.push_str("(none)\n");
+        }
+        for entry in entries {
+            out.push_str(&entry.text);
+            out.push('\n');
+        }
+    }
+    let rest: Vec<_> = ledger
+        .entries
+        .iter()
+        .filter(|entry| entry.file == LedgerFile::Ledger && !ledger.pinned(entry))
+        .collect();
+    if rest.is_empty() {
+        return out;
+    }
+    out.push_str("\n## The rest of the ledger, newest first\n");
+    let mut budget = LEDGER_BYTES;
+    let mut left = None;
+    for (at, entry) in rest.iter().enumerate().rev() {
+        if entry.text.len() + 1 > budget {
+            left = Some(at);
+            break;
+        }
+        budget -= entry.text.len() + 1;
+        out.push_str(&entry.text);
+        out.push('\n');
+    }
+    if let Some(at) = left {
+        out.push_str(&format!(
+            "[{} older entries left out, for length: `sed -n '1,{}p' '{}'` reads them]\n",
+            at + 1,
+            rest[at].last_line,
+            path.display()
+        ));
+    }
+    out
+}
+
 /// The spans of readable items not shown, each at most [`READ_MAX`] positions long so its
 /// read returns all of it.
 fn left_out(readable: &[Option<(&'static str, String)>], shown: &[bool]) -> Vec<(usize, usize)> {
@@ -458,6 +594,22 @@ fn user_text(entry: &FileEntry) -> Option<&str> {
             ..
         } if entry.parent.is_none() && !entry.steer => Some(text),
         _ => None,
+    }
+}
+
+/// Whether `entry` is a message the user wrote, in the thread or mid-turn: never Brigadier's
+/// nudge, nor a successor's start with no message of the user's in it.
+fn said_by_user(entry: &FileEntry) -> bool {
+    match &entry.event {
+        ProviderEvent::Message {
+            role: Role::User,
+            text,
+            ..
+        } if entry.parent.is_none() && !text.starts_with(NUDGE_MARK) => {
+            let own = without_handoff(text).trim();
+            !own.is_empty() && own != CARRY_ON && !own.starts_with(HANDOFF_MARK)
+        }
+        _ => false,
     }
 }
 

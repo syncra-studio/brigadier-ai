@@ -737,6 +737,60 @@ pub struct ToolOutput {
     pub saved: Vec<String>,
 }
 
+/// `brigadier ledger`: what it printed, and for `check` the lists behind that text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerOutput {
+    pub action: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<LedgerCheck>,
+}
+
+/// `brigadier ledger check <file>`: what the file leaves out. Plumbing, never a verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerCheck {
+    pub file: String,
+    /// Rules and decisions with an id that the file never cites.
+    pub uncited: Vec<LedgerEntry>,
+    /// Ids the file cites that are closed or superseded.
+    pub ended: Vec<LedgerEnded>,
+    /// Ids the file cites that the ledger doesn't have.
+    pub unknown: Vec<String>,
+    /// The ledger's entries with no id.
+    pub no_id: Vec<LedgerNoId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerEntry {
+    pub id: String,
+    /// Verbatim.
+    pub entry: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerEnded {
+    pub id: String,
+    /// `closed` or `superseded`.
+    pub how: String,
+    /// The entry that ended it, when that has an id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerNoId {
+    /// `ledger.md` or `ledger-archive.md`.
+    pub file: String,
+    /// From 1.
+    pub line: u32,
+    pub entry: String,
+}
+
 /// `brigadier ask`: the user's answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

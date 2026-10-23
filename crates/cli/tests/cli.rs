@@ -375,6 +375,32 @@ fn sample(request: &CliRequest) -> CliReply {
             images: vec!["data:image/png;base64,AA==".into()],
             saved: Vec::new(),
         }),
+        CliRequest::Tool {
+            tool: Tool::Ledger,
+            action,
+            args,
+        } => CliReply::ok(&LedgerOutput {
+            action: action.clone(),
+            text: format!("Ledger {action}: {args}"),
+            check: (action == "check").then(|| LedgerCheck {
+                file: args["file"].as_str().unwrap().to_owned(),
+                uncited: vec![LedgerEntry {
+                    id: "L3".into(),
+                    entry: "- L3 · 10-23 08:10 · gen 1 · Decision: keep tabs".into(),
+                }],
+                ended: vec![LedgerEnded {
+                    id: "L2".into(),
+                    how: "superseded".into(),
+                    by: Some("L5".into()),
+                }],
+                unknown: vec!["L99".into()],
+                no_id: vec![LedgerNoId {
+                    file: "ledger.md".into(),
+                    line: 10,
+                    entry: "- Decision: by hand".into(),
+                }],
+            }),
+        }),
         CliRequest::Tool { tool, action, args } => CliReply::ok(&ToolOutput {
             action: action.clone(),
             text: format!("{tool:?} {action}: {args}"),
@@ -520,6 +546,14 @@ fn every_subcommands_json_output_fits_its_schema() {
             "--json",
         ],
         &["ledger", "show", "--json"],
+        &["ledger", "show", "--open", "--rules", "--json"],
+        &["ledger", "close", "L3", "asked", "again", "--json"],
+        &[
+            "ledger",
+            "check",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"),
+            "--json",
+        ],
         &[
             "page",
             "write",
@@ -739,7 +773,7 @@ fn wrong_arguments_exit_2_with_the_usage() {
 }
 
 #[test]
-fn ledger_add_is_silent_reads_stdin_and_show_is_verbatim() {
+fn ledger_add_prints_its_id_reads_stdin_and_show_close_and_check_pass_their_words() {
     fn ledger(request: &CliRequest) -> CliReply {
         let CliRequest::Tool {
             tool: Tool::Ledger,
@@ -752,9 +786,22 @@ fn ledger_add_is_silent_reads_stdin_and_show_is_verbatim() {
         let text = match action.as_str() {
             "add" => {
                 assert_eq!(args["text"], "Decision: keep tabs\n(source: message 1)\n");
-                ""
+                "L1\n"
+            }
+            "show" if args.get("open").is_some() => {
+                assert_eq!(args, &serde_json::json!({"open": true}));
+                "Open items (0):\n"
             }
             "show" => "- Decision: keep tabs (source: message 1)\n\n",
+            "close" => {
+                assert_eq!(args, &serde_json::json!({"id": "L1", "how": "asked again"}));
+                "L2\n"
+            }
+            "check" => {
+                assert!(args["file"].as_str().unwrap().ends_with("Cargo.toml"));
+                assert!(args["text"].as_str().unwrap().contains("[package]"));
+                "Cargo.toml against the ledger:\n"
+            }
             _ => panic!("unexpected action"),
         };
         CliReply::ok(&ToolOutput {
@@ -765,7 +812,7 @@ fn ledger_add_is_silent_reads_stdin_and_show_is_verbatim() {
         })
     }
     let dir = DataDir::new("ledger");
-    let daemon = stand_in_daemon(&dir.0, 3, ledger);
+    let daemon = stand_in_daemon(&dir.0, 6, ledger);
     for words in [vec!["ledger", "add"], vec!["ledger", "add", "-"]] {
         let mut child = Command::new(env!("CARGO_BIN_EXE_brigadier"))
             .args(words)
@@ -785,18 +832,30 @@ fn ledger_add_is_silent_reads_stdin_and_show_is_verbatim() {
             .unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert!(
-            output.stdout.is_empty() && output.stderr.is_empty(),
-            "{output:?}"
-        );
+        assert_eq!(stdout(&output), "L1\n");
+        assert!(output.stderr.is_empty(), "{output:?}");
     }
-    let output = brigadier(Some(&dir.0), Some(GRANT), &["ledger", "show"]);
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(
-        stdout(&output),
-        "- Decision: keep tabs (source: message 1)\n\n"
-    );
-    assert!(output.stderr.is_empty());
+    for (words, printed) in [
+        (
+            &["ledger", "show"][..],
+            "- Decision: keep tabs (source: message 1)\n\n",
+        ),
+        (&["ledger", "show", "--open"][..], "Open items (0):\n"),
+        (&["ledger", "close", "L1", "asked", "again"][..], "L2\n"),
+        (
+            &[
+                "ledger",
+                "check",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"),
+            ][..],
+            "Cargo.toml against the ledger:\n",
+        ),
+    ] {
+        let output = brigadier(Some(&dir.0), Some(GRANT), words);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(stdout(&output), printed);
+        assert!(output.stderr.is_empty());
+    }
     daemon.join().unwrap();
 
     for words in [
@@ -804,6 +863,9 @@ fn ledger_add_is_silent_reads_stdin_and_show_is_verbatim() {
         vec!["ledger", "show", "extra"],
         vec!["ledger", "add", "  "],
         vec!["ledger", "unknown"],
+        vec!["ledger", "close", "L1"],
+        vec!["ledger", "check"],
+        vec!["ledger", "check", "/nowhere/plan.md"],
     ] {
         let output = brigadier(None, None, &words);
         assert!(!output.status.success(), "{words:?}");

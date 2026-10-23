@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use base64::Engine as _;
-use brigadier_cli::protocol::{AskOutput, CliReply, ErrorCode, Tool, ToolOutput};
+use brigadier_cli::protocol::{AskOutput, CliReply, ErrorCode, LedgerOutput, Tool, ToolOutput};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -195,7 +195,11 @@ impl SessionManager {
         let role = self.grants.resolve(&caller.grant);
         if tool == Tool::Ledger {
             return match self.cli_ledger(caller, action, given).await {
-                Ok(text) => tool_reply(action, ToolReply::ok(text)),
+                Ok((text, check)) => CliReply::ok(&LedgerOutput {
+                    action: action.to_owned(),
+                    text,
+                    check,
+                }),
                 Err(err) => CliReply::error(ErrorCode::Failed, err.to_string()),
             };
         }

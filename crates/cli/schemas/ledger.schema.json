@@ -5,7 +5,55 @@
   "required": ["action", "text"],
   "additionalProperties": false,
   "properties": {
-    "action": {"enum": ["add", "show"]},
-    "text": {"type": "string", "description": "Empty for add; the ledger verbatim for show."}
+    "action": {"enum": ["add", "close", "show", "check"]},
+    "text": {"type": "string", "description": "The new entry's id for add and close; the ledger, or the entries asked for, for show; the lists as text for check."},
+    "check": {
+      "type": "object",
+      "description": "check only: what the file leaves out. It judges nothing.",
+      "required": ["file", "uncited", "ended", "unknown", "noId"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {"type": "string"},
+        "uncited": {
+          "type": "array",
+          "description": "Rules and decisions with an id that the file never cites.",
+          "items": {
+            "type": "object",
+            "required": ["id", "entry"],
+            "additionalProperties": false,
+            "properties": {"id": {"type": "string"}, "entry": {"type": "string"}}
+          }
+        },
+        "ended": {
+          "type": "array",
+          "description": "Ids the file cites that are closed or superseded.",
+          "items": {
+            "type": "object",
+            "required": ["id", "how"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string"},
+              "how": {"enum": ["closed", "superseded"]},
+              "by": {"type": "string"}
+            }
+          }
+        },
+        "unknown": {"type": "array", "description": "Ids the file cites that the ledger doesn't have.", "items": {"type": "string"}},
+        "noId": {
+          "type": "array",
+          "description": "The ledger's entries with no id.",
+          "items": {
+            "type": "object",
+            "required": ["file", "line", "entry"],
+            "additionalProperties": false,
+            "properties": {
+              "file": {"type": "string"},
+              "line": {"type": "integer", "minimum": 1},
+              "entry": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
   }
 }

@@ -16,6 +16,24 @@ use crate::model::{ConversationId, TabTarget};
 const HAND: &str = "- Rule from the user: \"tabs never\" (message 1; scope: session)\n";
 const ENTRY: &str = "Decision: keep spaces (I decided; source: message 1)";
 
+/// `text` with each stamp's time written as `<time>`: `add` stamps the time itself.
+fn unstamped(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| match line.split_once(" · ") {
+            Some((head, rest))
+                if head
+                    .trim_start_matches(['-', '*', '+', ' '])
+                    .starts_with('L') =>
+            {
+                let (time, rest) = rest.split_once(" · ").expect("a stamp's time");
+                assert_eq!(time.len(), 11, "MM-DD HH:MM: {time}");
+                format!("{head} · <time> · {rest}")
+            }
+            _ => line.to_owned(),
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn threads_workers_and_chats_add_and_show_their_own_ledger() {
     for provider in [ProviderKind::Claude, ProviderKind::Codex] {
@@ -38,20 +56,23 @@ async fn threads_workers_and_chats_add_and_show_their_own_ledger() {
                     assert!(!path.exists(), "show creates no ledger");
                     let created =
                         brigadier(&turn, tool(Tool::Ledger, "add", json!({"text": ENTRY}))).await;
-                    assert_eq!(created, json!({"action": "add", "text": ""}));
+                    assert_eq!(created, json!({"action": "add", "text": "L1\n"}));
                     assert_eq!(
-                        std::fs::read_to_string(&path).unwrap(),
-                        format!("- {ENTRY}\n")
+                        unstamped(&std::fs::read_to_string(&path).unwrap()),
+                        format!("- L1 · <time> · gen 1 · {ENTRY}\n")
                     );
                     // The hand-written format in the standing instructions is also the CLI's.
                     std::fs::write(&path, HAND).unwrap();
                     let added =
                         brigadier(&turn, tool(Tool::Ledger, "add", json!({"text": ENTRY}))).await;
-                    assert_eq!(added, json!({"action": "add", "text": ""}));
+                    assert_eq!(added, json!({"action": "add", "text": "L1\n"}));
                     let shown = brigadier(&turn, tool(Tool::Ledger, "show", json!({}))).await;
-                    let expected = format!("{HAND}- {ENTRY}\n");
+                    let expected = std::fs::read_to_string(&path).unwrap();
                     assert_eq!(shown["text"], expected);
-                    assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+                    assert_eq!(
+                        unstamped(&expected),
+                        format!("{HAND}- L1 · <time> · gen 1 · {ENTRY}\n")
+                    );
                     seen.lock()
                         .unwrap()
                         .insert(path.display().to_string(), expected);
@@ -174,24 +195,27 @@ async fn ledger_append_keeps_old_bytes_and_list_format_and_surfaces_io_errors() 
                 (
                     "# Ledger\n\n* Decision: old (message 1)",
                     "Decision: new\n(source: message 2)\n",
-                    "# Ledger\n\n* Decision: old (message 1)\n* Decision: new (source: message 2)\n",
+                    "# Ledger\n\n* Decision: old (message 1)\n* L1 · <time> · gen 1 · Decision: new (source: message 2)\n",
                 ),
                 (
                     "+ Rule: old\r\n",
                     "- Learned from reading: README.md:1 says hello",
-                    "+ Rule: old\r\n+ Learned from reading: README.md:1 says hello\r\n",
+                    "+ Rule: old\r\n+ L1 · <time> · gen 1 · Learned from reading: README.md:1 says hello\r\n",
                 ),
                 (
                     HAND,
                     "Decision: next",
-                    "- Rule from the user: \"tabs never\" (message 1; scope: session)\n- Decision: next\n",
+                    "- Rule from the user: \"tabs never\" (message 1; scope: session)\n- L1 · <time> · gen 1 · Decision: next\n",
                 ),
             ] {
                 std::fs::write(&path, old).unwrap();
                 let answer =
                     brigadier(&turn, tool(Tool::Ledger, "add", json!({"text": text}))).await;
-                assert_eq!(answer["text"], "", "{answer}");
-                assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+                assert_eq!(answer["text"], "L1\n", "{answer}");
+                assert_eq!(
+                    unstamped(&std::fs::read_to_string(&path).unwrap()),
+                    expected
+                );
             }
             let old = std::fs::read_to_string(&path).unwrap();
             let refused =

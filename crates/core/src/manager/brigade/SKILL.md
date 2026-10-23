@@ -45,6 +45,9 @@ Every brief has these, in plain words:
 
 Add "Ask me (your parent) if something blocks you; don't guess on scope." The worker sees no Brigadier protocol; it is a plain session.
 
+- The brief carries the rules that bear on its job, verbatim, with their ledger ids (`brigadier ledger show --rules`). The worker sees only its brief.
+- A plan or brief built from decisions cites their ids. Lines of your own say "proposed", and a gap the decisions don't cover goes to `brigadier ask`, never a silent fill.
+
 ## Waves
 
 1. Start the wave (≤ 3 workers unless the user said more).
@@ -69,6 +72,7 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope." The wo
 
 - Adversarial review: `codex review` (or the other vendor's CLI) once per step on the integrated tree, never mid-run. Fix what you agree with. One review, one fix pass, then report what is left; never loop.
 - Before you approve a plan or outline, or take an irreversible step (a delete, a merge into the user's branch, a publish), get a critique from the other vendor's CLI. Take what you agree with. Not for every small decision.
+- Before you hand a derived document on (a plan, a brief, a report), run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question "what is missing, changed or added?".
 
 ## Gotchas
 
@@ -80,3 +84,5 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope." The wo
 ## Report to the user
 
 When the job is done: what landed where (commits, branch), what each check showed, what a review found and what you fixed, and what only the user can do. Keep it short.
+
+When the user writes after a gap, raise the oldest open question first (`brigadier ledger show --open`) and say how many more wait.

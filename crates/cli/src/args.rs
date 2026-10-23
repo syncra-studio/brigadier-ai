@@ -591,13 +591,45 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             Tool::Page
         }
         "ledger" => {
-            if action == "add" {
-                if text.trim().is_empty() {
-                    return Err(error("give a ledger entry, with its kind and source"));
+            match action.as_str() {
+                "add" => {
+                    if text.trim().is_empty() {
+                        return Err(error("give a ledger entry, with its kind and source"));
+                    }
+                    put("text", Some(json!(text)));
                 }
-                put("text", Some(json!(text)));
-            } else if let Some(extra) = words.first() {
-                return Err(error(&format!("unexpected argument {extra:?}")));
+                "close" => {
+                    let Some((id, how)) = words.split_first() else {
+                        return Err(error("close takes <id> \"<how>\""));
+                    };
+                    let how = how.join(" ");
+                    if how.trim().is_empty() {
+                        return Err(error("say how it was closed: close <id> \"<how>\""));
+                    }
+                    put("id", Some(json!(id)));
+                    put("how", Some(json!(how)));
+                }
+                "check" => {
+                    let [file] = words.as_slice() else {
+                        return Err(error("check takes one <file>"));
+                    };
+                    // Read here: the file is the caller's, relative to its own folder.
+                    let read = std::fs::read_to_string(file)
+                        .map_err(|err| error(&format!("couldn't read {file}: {err}")))?;
+                    put("file", Some(json!(file)));
+                    put("text", Some(json!(read)));
+                }
+                _ => {
+                    if let Some(extra) = words.first() {
+                        return Err(error(&format!("unexpected argument {extra:?}")));
+                    }
+                    if args.switch("open") {
+                        put("open", Some(json!(true)));
+                    }
+                    if args.switch("rules") {
+                        put("rules", Some(json!(true)));
+                    }
+                }
             }
             Tool::Ledger
         }

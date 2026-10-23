@@ -123,5 +123,14 @@ mod tests {
         // A Chat runs workers too (S28).
         assert!(!SKILL.contains("needs a project"));
         assert!(SKILL.contains("--repo"));
+        // S22b's four lines: decisions travel to workers, derived documents and the user.
+        for line in [
+            "The brief carries the rules that bear on its job, verbatim, with their ledger ids",
+            "A plan or brief built from decisions cites their ids. Lines of your own say \"proposed\", and a gap the decisions don't cover goes to `brigadier ask`, never a silent fill.",
+            "run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question \"what is missing, changed or added?\"",
+            "When the user writes after a gap, raise the oldest open question first",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
     }
 }
