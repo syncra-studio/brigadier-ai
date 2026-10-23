@@ -17,24 +17,15 @@ export function latestRequest(board: Board): UserRequest | null {
 }
 
 /**
- * The session request the user may still edit or have answered again: the latest, until
- * anything it started has landed, is landing with their approval, or was merged at their
- * word (the daemon's `branches::landed` reads the same).
+ * The session request the user may still edit or have answered again: the latest, until it
+ * was merged at their word (the daemon's `branches::landed` reads the same).
  */
 export function reworkableRequest(board: Board): string | null {
   const latest = latestRequest(board);
   if (!latest) return null;
   const id = latest.id;
-  const landed =
-    Object.values(board.tasks).some((task) => task.requestId === id && task.state === "landed") ||
-    board.orchestratorSteps.some(
-      (step) => step.kind.type === "merged" && (step.kind.askedIn === id || step.requestId === id),
-    ) ||
-    Object.values(board.approvals).some(
-      (approval) =>
-        approval.requestId === id &&
-        approval.state.type === "allowed" &&
-        approval.subject.type === "landing",
-    );
-  return landed ? null : id;
+  const merged = board.orchestratorSteps.some(
+    (step) => step.kind.type === "merged" && (step.kind.askedIn === id || step.requestId === id),
+  );
+  return merged ? null : id;
 }

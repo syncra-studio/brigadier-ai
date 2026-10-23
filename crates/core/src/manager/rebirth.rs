@@ -35,7 +35,6 @@ use crate::model::{
 };
 use crate::now_ms;
 use crate::routing::TokenMeter;
-use crate::tools::Role;
 use crate::work::{ApprovalSubject, CardState, OrchestratorEntry, TaskState};
 
 /// About four bytes per token.
@@ -278,30 +277,16 @@ pub(crate) struct ForkBase {
     pub spec: SessionSpec,
 }
 
-/// What a note fork is told when it calls any tool: the deny hook's reason and Brigadier's
-/// tool server's answer to its grant.
+/// What a note fork is told when it calls any tool: the deny hook's reason.
 pub(crate) const NOTE_FORK_REFUSAL: &str = "This is the read-only note fork of the thread: no \
 tool runs here. Write the note from what you already know, in text.";
 
 /// A Claude thread's note fork: the thread's own start (tools, MCP servers, model, effort,
 /// instructions and settings), so its first call reads the thread's prefix from the cache.
 /// Only its origin, its life (ephemeral, unrecorded) and its folders' ownership change. It
-/// stays read-only, every tool call is refused before it runs by a client-side hook that leaves
-/// the tool list as it is, and Brigadier's server answers it under the fork's own `grant`.
-pub(crate) fn note_fork_spec(thread: &SessionSpec, native_id: String, grant: &str) -> SessionSpec {
-    let mcp_servers = thread
-        .mcp_servers
-        .iter()
-        .cloned()
-        .map(|mut server| {
-            for (name, value) in &mut server.env {
-                if name == super::conversation::MCP_GRANT_ENV {
-                    *value = grant.to_owned();
-                }
-            }
-            server
-        })
-        .collect();
+/// stays read-only: every tool call is refused before it runs by a client-side hook that leaves
+/// the tool list as it is.
+pub(crate) fn note_fork_spec(thread: &SessionSpec, native_id: String) -> SessionSpec {
     // It runs no command, so it has no use for the thread's `brigadier` grant.
     let env = thread
         .env
@@ -316,10 +301,8 @@ pub(crate) fn note_fork_spec(thread: &SessionSpec, native_id: String, grant: &st
         origin: Origin::Fork { native_id },
         ephemeral: true,
         access: Access::ReadOnly,
-        mcp_servers,
         env,
         record_to: None,
-        redactor: super::secrets::redactor(vec![grant.to_owned()]),
         // The thread's live CLI works in the same folder (a fork finds its session by folder):
         // sweeping the folder when the fork ends would end that CLI too, mid-turn. The fork's
         // own process tree still ends with it.
@@ -470,21 +453,10 @@ impl SessionManager {
             Some(conv) => conv.fork_base().await,
             None => None,
         };
-        let mut grant = None;
         let spec = match base.as_deref() {
             // A Claude fork starts as the thread did, so it reads the thread's whole start from
-            // the cache; Brigadier's tools answer it under a grant of its own, which refuses them.
-            Some(base) if provider == ProviderKind::Claude => {
-                let issued = self.grants.issue(
-                    &owner,
-                    Role::NoteFork {
-                        conversation_id: id.clone(),
-                    },
-                );
-                let spec = note_fork_spec(&base.spec, native_id, &issued);
-                grant = Some(issued);
-                spec
-            }
+            // the cache.
+            Some(base) if provider == ProviderKind::Claude => note_fork_spec(&base.spec, native_id),
             // Codex is unchanged until its hooks can be shown to hold (BUILD-PLAN B5), and a
             // thread whose CLI hasn't started since the daemon did has nothing to copy.
             _ => {
@@ -492,7 +464,7 @@ impl SessionManager {
                     tracing::info!(conversation = %id, "no thread start to copy: the note fork starts on its own");
                 }
                 let conversation = self.core.conversation(id).ok()?;
-                let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
+                let preferences = self.memory_lines(super::memories::MEMORY_BYTES).await;
                 // The thread's own instructions.
                 let prompt = self
                     .thread_prompt(
@@ -506,18 +478,12 @@ impl SessionManager {
             }
         };
         let account = self.runtime.account_for(&choice);
-        let revoke = |grants: &crate::tools::Grants| {
-            if let Some(grant) = &grant {
-                grants.revoke(std::slice::from_ref(grant));
-            }
-        };
         let Started {
             session,
             mut events,
         } = match self.runtime.start_hosted(&owner, &account, spec).await {
             Ok(started) => started,
             Err(err) => {
-                revoke(&self.grants);
                 tracing::warn!(conversation = %id, error = %err, "could not fork the orchestrator for its handoff note");
                 return None;
             }
@@ -589,7 +555,6 @@ impl SessionManager {
             .ok()
             .flatten();
         session.close().await;
-        revoke(&self.grants);
         note
     }
 

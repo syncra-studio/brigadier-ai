@@ -163,16 +163,6 @@ impl TaskLive {
         self.state.lock().await.cli.is_some()
     }
 
-    /// The provider of the worker's CLI while it works (a Brain job yields to it).
-    pub(super) async fn busy_provider(&self) -> Option<ProviderKind> {
-        let state = self.state.lock().await;
-        state
-            .cli
-            .as_ref()
-            .filter(|_| state.busy)
-            .map(|cli| cli.provider)
-    }
-
     /// Ends the worker's CLI session (interrupting first; Codex keeps running its current
     /// command after an interrupt, so the session is closed, which ends its process tree).
     pub async fn close_cli(&self) {
@@ -247,25 +237,6 @@ impl SessionManager {
 
     pub(crate) fn existing_task_live(&self, id: &TaskId) -> Option<Arc<TaskLive>> {
         self.tasks_lock().get(id).cloned()
-    }
-
-    /// A task of the conversation by its reference: `task-3`, `3`, or its id.
-    pub(crate) async fn find_task(
-        &self,
-        conversation_id: &ConversationId,
-        reference: &str,
-    ) -> Result<Task> {
-        let reference = reference.trim();
-        let number = reference
-            .trim_start_matches("task-")
-            .trim_start_matches('#')
-            .parse::<u32>()
-            .ok();
-        let tasks = self.core.tasks(conversation_id).await?;
-        tasks
-            .into_iter()
-            .find(|task| Some(task.number) == number || task.id.0 == reference)
-            .ok_or_else(|| Error::NotFound(format!("{reference} (not a task of this session)")))
     }
 
     pub(crate) async fn task_by_id(

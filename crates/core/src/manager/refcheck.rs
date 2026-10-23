@@ -30,14 +30,12 @@ pub(crate) struct Recorded {
 /// Who asked for a check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Caller {
-    Task(TaskId),
     Thread(ConversationId),
 }
 
 impl Caller {
     fn owns(&self, recorded: &Recorded) -> bool {
         match self {
-            Self::Task(id) => recorded.task.as_ref() == Some(id),
             Self::Thread(conversation) => {
                 recorded.task.is_none() && recorded.conversation == *conversation
             }
@@ -320,22 +318,6 @@ impl SessionManager {
         });
     }
 
-    /// The engine moved `branch` (a rewrite of a task branch as it lands): its tip now is
-    /// the recorded one.
-    pub(crate) fn moved_branch(&self, checkout: &Path, branch: &str) {
-        let Ok(repo) = self.git.open(checkout) else {
-            return;
-        };
-        let Ok(Some(tip)) = repo.branch_tip(branch) else {
-            return;
-        };
-        self.ref_records.with(repo.common_dir(), |records| {
-            if let Some(recorded) = records.branches.get_mut(branch) {
-                recorded.tip = tip;
-            }
-        });
-    }
-
     /// Records `base` as the branch the session of `conversation` merges into.
     pub(crate) fn record_base(&self, checkout: &Path, base: &str, conversation: &ConversationId) {
         let Ok(repo) = self.git.open(checkout) else {
@@ -574,7 +556,7 @@ mod tests {
         let thread = s.commit_on("brigadier/aa/session");
         let other = s.commit_on("brigadier/aa/task-2");
         // Before task-1 lands (its own amend), and after the thread's turn.
-        assert!(check_repo(&s.repo, &mut records, &Caller::Task(task("t1")), &live).is_empty());
+        assert!(check_repo(&s.repo, &mut records, &Caller::Thread(conv("c")), &live).is_empty());
         assert!(check_repo(&s.repo, &mut records, &Caller::Thread(conv("c")), &live).is_empty());
         assert_eq!(s.tip("brigadier/aa/task-1"), Some(amended.clone()));
         assert_eq!(s.tip("brigadier/aa/session"), Some(thread));
@@ -604,10 +586,11 @@ mod tests {
         let mut records = s.records();
         let landed = records.branches["brigadier/aa/session"].tip.clone();
         let live: HashSet<TaskId> = [task("t1")].into();
-        // task-1's worker forces the session branch back; the user resets main.
+        // task-1's worker forces the session branch back; the user resets main. Another
+        // session's check finds it.
         s.git(&["update-ref", "refs/heads/brigadier/aa/session", &start.0]);
         s.git(&["update-ref", "refs/heads/main", &start.0]);
-        let told = check_repo(&s.repo, &mut records, &Caller::Task(task("t1")), &live);
+        let told = check_repo(&s.repo, &mut records, &Caller::Thread(conv("d")), &live);
         assert_eq!(s.tip("brigadier/aa/session"), Some(landed));
         assert_eq!(
             s.tip("main"),
@@ -653,7 +636,7 @@ mod tests {
         let told = check_busy(
             &s.repo,
             &mut records,
-            &Caller::Task(task("t1")),
+            &Caller::Thread(conv("c")),
             &live,
             &busy,
         );
@@ -671,7 +654,7 @@ mod tests {
         check_busy(
             &s.repo,
             &mut records,
-            &Caller::Task(task("t1")),
+            &Caller::Thread(conv("c")),
             &live,
             &busy,
         );
@@ -695,7 +678,7 @@ mod tests {
         s.git(&["update-ref", "refs/heads/brigadier/aa/task-2", &amended.0]);
         // During task-1's landing check, task-2's worker is live: its amend survives.
         let live: HashSet<TaskId> = [task("t1"), task("t2")].into();
-        let told = check_repo(&s.repo, &mut records, &Caller::Task(task("t1")), &live);
+        let told = check_repo(&s.repo, &mut records, &Caller::Thread(conv("c")), &live);
         assert_eq!(s.tip("brigadier/aa/task-2"), Some(amended.clone()));
         assert!(
             told[0]
@@ -705,7 +688,7 @@ mod tests {
         // With its worker gone, a rewrite is damage.
         s.git(&["update-ref", "refs/heads/brigadier/aa/task-2", &before.0]);
         let live: HashSet<TaskId> = [task("t1")].into();
-        check_repo(&s.repo, &mut records, &Caller::Task(task("t1")), &live);
+        check_repo(&s.repo, &mut records, &Caller::Thread(conv("c")), &live);
         assert_eq!(s.tip("brigadier/aa/task-2"), Some(amended));
     }
 
@@ -750,7 +733,7 @@ mod tests {
                     check_repo(
                         &repo,
                         &mut records,
-                        &Caller::Task(task("t2")),
+                        &Caller::Thread(conv("c")),
                         &HashSet::new(),
                     );
                 }
@@ -778,7 +761,7 @@ mod tests {
         check_repo(
             &repo,
             &mut records,
-            &Caller::Task(task("t2")),
+            &Caller::Thread(conv("c")),
             &HashSet::new(),
         );
         assert_eq!(s.tip("brigadier/aa/session"), Some(last));
@@ -833,15 +816,10 @@ mod tests {
             conversation: conv("c"),
             task: None,
         };
-        let me = Caller::Task(task("t1"));
-        let other = Caller::Task(task("t2"));
+        // Another session's thread, which owns neither.
+        let other = Caller::Thread(conv("d"));
         let thread = Caller::Thread(conv("c"));
         let b = oid('b');
-        // Its own amend, before another landing or after the thread's turn.
-        assert_eq!(
-            judge(&worker, Some(&b), false, &me, true),
-            Verdict::Record(b.clone())
-        );
         // A concurrent worker's commits, seen at a check made for the thread.
         assert_eq!(
             judge(&worker, Some(&b), true, &thread, true),
@@ -855,12 +833,12 @@ mod tests {
         // A worker, or another session, forcing the session branch back while its thread is
         // in no turn.
         assert_eq!(
-            judge(&session, Some(&b), false, &me, false),
+            judge(&session, Some(&b), false, &other, false),
             Verdict::Restore
         );
-        // The thread's own rebase, seen at a landing's check during its turn.
+        // The thread's own rebase, seen at another session's check during its turn.
         assert_eq!(
-            judge(&session, Some(&b), false, &me, true),
+            judge(&session, Some(&b), false, &other, true),
             Verdict::Record(b.clone())
         );
         // Another branch rewritten while its worker runs: may be its own amend.
@@ -872,8 +850,8 @@ mod tests {
             judge(&worker, Some(&b), false, &other, false),
             Verdict::Restore
         );
-        // Deleted, even by its own worker (bug 5).
-        assert_eq!(judge(&worker, None, false, &me, true), Verdict::Restore);
+        // Deleted, whoever looks (bug 5).
+        assert_eq!(judge(&worker, None, false, &thread, true), Verdict::Restore);
         assert_eq!(
             judge(&worker, Some(&oid('a')), false, &other, false),
             Verdict::Unchanged

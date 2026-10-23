@@ -26,9 +26,8 @@ use std::time::Duration;
 
 use brigadier_providers::{
     Access, ApprovalDecision, Artifact, Decider, ErrorKind, InputFile, InputPart, ItemStatus,
-    LimitHit, McpServer, McpTransport, Origin, OutputHook, ProviderEvent, ProviderKind,
-    ProviderSession, Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput,
-    TurnStatus,
+    LimitHit, Origin, OutputHook, ProviderEvent, ProviderKind, ProviderSession,
+    Role as ProviderRole, SessionSpec, Started, TextPhase, ToolSet, TurnInput, TurnStatus,
 };
 use brigadier_store::StreamPage;
 use tokio::sync::mpsc;
@@ -54,7 +53,7 @@ use crate::tools::Role;
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
     OrchestratorEntry, OrchestratorStepKind, QueuedMessage, QuotaWait, RequestState, RunState,
-    Task, TaskId,
+    TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -86,11 +85,6 @@ fn cut_jobs_envelope(words: &[String], count: u32) -> Envelope {
         ),
     }
 }
-/// How long a blocking MCP call may take for the thread (a wait for other sessions' replies):
-/// half an hour and a minute.
-pub(super) const RUNNER_TOOL_TIMEOUT_SECS: u64 = 1860;
-/// A Chat's Brigadier tools (saving a memory) answer within this.
-const CHAT_TOOL_TIMEOUT_SECS: u64 = 60;
 /// Messages carried verbatim when a conversation's CLI session is started over.
 const RESEED_MESSAGES: usize = 40;
 /// Bytes of transcript carried when a conversation's CLI session is started over.
@@ -123,7 +117,7 @@ pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
         if error == INTERRUPTED_BY_QUIT || error == INTERRUPTED_BEFORE_START)
 }
 /// Sent with every turn while the session is in plan mode.
-const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. The plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then. Merging, landing and finish_session are refused until then.";
+const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. The plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then.";
 
 /// Where a sent message went.
 #[derive(Debug, Clone)]
@@ -144,9 +138,6 @@ pub(crate) struct Envelope {
     /// The text the orchestrator reads.
     pub text: String,
 }
-
-/// Where Brigadier's MCP server finds its grant, in its environment.
-pub(crate) const MCP_GRANT_ENV: &str = "BRIGADIER_MCP_GRANT";
 
 mod overflow;
 mod watchdog;
@@ -487,14 +478,10 @@ pub(crate) struct ConvLive {
     /// How many times the user wrote: a message or a queue item stored (sent, edited, moved
     /// from the queue). Held while each is stored, so two are stored one after the other.
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
-    /// Serializes the full-access notice check and write, including persisted notices.
-    pub(super) full_access_notice: tokio::sync::Mutex<()>,
     /// Serializes the feedback offer's checks and writes (`offer_feedback` and its answer).
     pub(super) feedback_offer: tokio::sync::Mutex<()>,
-    /// Serializes the starts of its session offers (`offer_session`'s Start as session).
-    pub(super) session_offer: tokio::sync::Mutex<()>,
-    /// The landing lock of the session's merge: `finish_session` holds it from its look at the
-    /// branch to the move of the base, so two merges never interleave.
+    /// The landing lock of the session's checkout: held around Brigadier's own writes to its
+    /// branch, so two never interleave.
     pub(super) merge_lock: tokio::sync::Mutex<()>,
     /// Held while a merged pull request is looked up and recorded, so two request ends
     /// settling at once record it once.
@@ -513,18 +500,12 @@ pub(crate) struct ConvLive {
     /// A turn ran since the thread's scratch was last swept: the next time its requests are
     /// all over, it is swept ([`super::thread_scratch`]).
     pub(super) scratch_used: std::sync::atomic::AtomicBool,
-    /// The CI watches it runs (`watch_ci`), ended when it closes.
-    pub(super) ci_watches: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
     /// last found it in the log, kept up to date as sessions start and reset.
     native_ids: std::sync::Mutex<NativeIds>,
     /// The running turn and the output of the thread's running commands
     /// ([`super::thread_items`]).
     items: std::sync::Mutex<super::thread_items::ThreadItems>,
-    /// Tests: what a merge waits for once prepared, before it moves the base.
-    #[cfg(test)]
-    pub(super) merge_pause:
-        std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// Tests: what a limited turn's end waits for before its hand-over is chosen.
     #[cfg(test)]
     pub(super) hand_over_pause:
@@ -557,9 +538,7 @@ impl ConvLive {
             }),
             retry: tokio::sync::Mutex::new(()),
             user_wrote: tokio::sync::Mutex::new(0),
-            full_access_notice: tokio::sync::Mutex::new(()),
             feedback_offer: tokio::sync::Mutex::new(()),
-            session_offer: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
             pr_merge: tokio::sync::Mutex::new(()),
             pr_watch: std::sync::atomic::AtomicBool::new(false),
@@ -568,11 +547,8 @@ impl ConvLive {
             user_rebase: std::sync::Mutex::new(None),
             user_rebase_looked: std::sync::atomic::AtomicBool::new(false),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
-            ci_watches: std::sync::Mutex::new(Vec::new()),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             items: std::sync::Mutex::default(),
-            #[cfg(test)]
-            merge_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             hand_over_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -912,16 +888,6 @@ impl ConvLive {
     /// A note for the next turn that carries user messages, starting no turn of its own.
     pub(super) async fn note(&self, note: String) {
         self.state.lock().await.notes.push(note);
-    }
-
-    /// The provider of the running turn's CLI, while a turn runs (a Brain job yields to it).
-    pub(super) async fn busy_provider(&self) -> Option<ProviderKind> {
-        let state = self.state.lock().await;
-        state
-            .cli
-            .as_ref()
-            .filter(|_| state.busy)
-            .map(|cli| cli.provider)
     }
 
     /// The context the CLI last said it holds.
@@ -1685,11 +1651,6 @@ impl SessionManager {
             tracing::warn!(conversation = %id, error = %err, "could not remove user-stopped previews");
         }
         self.stop_session_work(&id);
-        // What Brigadier still owed the stopped answers ends with them, so nothing wakes the
-        // thread for them later: the CI watches (the composer's Stop stops the workers too). A
-        // failed turn ends none of it: what it started may still come, and works its request
-        // again then, as a late event does.
-        self.stop_ci_watches(&id).await;
         // With no turn to interrupt, the thread shows stopped now.
         self.idle_without_turn(&conv).await;
         self.settle_requests(&id).await;
@@ -2018,21 +1979,6 @@ impl SessionManager {
         Some(conv)
     }
 
-    /// Marks `task` as having news for the orchestrator on its way: call it before the task's
-    /// state changes, when an envelope about that change follows ([`Self::deliver`]). A turn
-    /// that starts in between then does not tell the orchestrator that nothing else runs.
-    pub(crate) async fn announcing(&self, task: &Task) {
-        let Ok(conv) = self.conv(&task.conversation_id) else {
-            return;
-        };
-        let request = self.request_for(&task.conversation_id).await;
-        conv.state
-            .lock()
-            .await
-            .announcing
-            .insert(task.id.clone(), request);
-    }
-
     /// Marks the answer to `card` as on its way to the orchestrator for `request`: call it
     /// before the answer is recorded, and [`Self::answer_delivered`] once it is in the inbox
     /// (or dropped). A settle in between then finds the request working, not ended by a card
@@ -2237,7 +2183,6 @@ impl SessionManager {
                 return;
             }
         };
-        self.brains.jobs.user_work(cli.provider);
         if session {
             // Where the branch stands before the turn: what came since the last turn is the
             // thread's only if marked so.
@@ -2481,7 +2426,7 @@ impl SessionManager {
         let mut launch = None;
         let mut output_hook = None;
         let mut thread = false;
-        let (mut choice, prompt, mcp) = match (&conversation.setup, conv.kind) {
+        let (mut choice, prompt) = match (&conversation.setup, conv.kind) {
             (Some(Setup::Session { orchestrator, .. }), _) => {
                 let choice = fallback.unwrap_or_else(|| orchestrator.clone());
                 // Its workspace exists before its CLI starts.
@@ -2491,7 +2436,7 @@ impl SessionManager {
                     self.record_session_refs(&conv.id, &workspace.path);
                 }
                 launch = Some(started_for);
-                let preferences = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
+                let preferences = self.memory_lines(super::memories::MEMORY_BYTES).await;
                 let prompt = self
                     .thread_prompt(
                         &conversation,
@@ -2509,7 +2454,6 @@ impl SessionManager {
                 );
                 grant_values.push(grant.clone());
                 cli_env = self.cli_env(&conv.id.0, &grant);
-                let server = self.brigadier_server(grant, RUNNER_TOOL_TIMEOUT_SECS, false);
                 if self.thread_hooked(choice.provider) {
                     let hook_grant = self.grants.issue(
                         &owner,
@@ -2523,7 +2467,7 @@ impl SessionManager {
                     }
                     output_hook = Some(self.output_hook(hook_grant, choice.provider));
                 }
-                (choice, prompt, vec![server])
+                (choice, prompt)
             }
             (Some(Setup::Chat { model }), ConversationKind::Chat)
                 if let (Some(tab), Some(session)) =
@@ -2537,22 +2481,18 @@ impl SessionManager {
                     crate::model::TabTarget::File { .. } => Some(crate::tools::TabTools::File),
                     crate::model::TabTarget::Browser => None,
                 };
-                let servers = match tools {
-                    Some(tools) => {
-                        let grant = self.grants.issue(
-                            &owner,
-                            Role::TabChat {
-                                conversation_id: conv.id.clone(),
-                                tools,
-                            },
-                        );
-                        grant_values.push(grant.clone());
-                        cli_env = self.cli_env(&conv.id.0, &grant);
-                        vec![self.brigadier_server(grant, CHAT_TOOL_TIMEOUT_SECS, false)]
-                    }
-                    None => Vec::new(),
-                };
-                (fallback.unwrap_or_else(|| model.clone()), prompt, servers)
+                if let Some(tools) = tools {
+                    let grant = self.grants.issue(
+                        &owner,
+                        Role::TabChat {
+                            conversation_id: conv.id.clone(),
+                            tools,
+                        },
+                    );
+                    grant_values.push(grant.clone());
+                    cli_env = self.cli_env(&conv.id.0, &grant);
+                }
+                (fallback.unwrap_or_else(|| model.clone()), prompt)
             }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
                 let model = match &conversation.setup {
@@ -2560,7 +2500,7 @@ impl SessionManager {
                     _ => self.default_chat_choice(),
                 };
                 // A Chat may save what it learns about the user to the Personal Brain.
-                let memories = self.memory_lines(super::brain_jobs::MEMORY_BYTES).await;
+                let memories = self.memory_lines(super::memories::MEMORY_BYTES).await;
                 let grant = self.grants.issue(
                     &owner,
                     Role::Chat {
@@ -2569,11 +2509,7 @@ impl SessionManager {
                 );
                 grant_values.push(grant.clone());
                 cli_env = self.cli_env(&conv.id.0, &grant);
-                (
-                    fallback.unwrap_or(model),
-                    prompts::chat(&memories),
-                    vec![self.brigadier_server(grant, CHAT_TOOL_TIMEOUT_SECS, false)],
-                )
+                (fallback.unwrap_or(model), prompts::chat(&memories))
             }
             (Some(Setup::Chat { .. }), ConversationKind::Session) => {
                 return Err(Error::Invalid(
@@ -2630,7 +2566,8 @@ impl SessionManager {
                 .as_ref()
                 .map_or(Access::ReadOnly, |launch| launch.access),
             append_system_prompt: Some(prompt.clone()),
-            mcp_servers: mcp,
+            // Brigadier gives no MCP server: the user's own load from their setup.
+            mcp_servers: Vec::new(),
             tools: match conv.kind {
                 ConversationKind::Session => ToolSet::Thread,
                 // A tab chat reads its session's files. A Chat makes images (Q24).
@@ -2834,32 +2771,6 @@ impl SessionManager {
                 crate::logging::private_trace!(owner.starts_with(crate::ledger::TAB_CHAT_OWNER), warn, "some leftovers of a cut-off start will be retried at the next launch"; owner,
                     ?leftovers);
             }
-        }
-    }
-
-    /// The Brigadier MCP server entry a CLI session gets; `always_load` for a session that
-    /// should use its tools without looking them up first (see [`McpServer::always_load`]).
-    pub(crate) fn brigadier_server(
-        &self,
-        grant: String,
-        timeout_secs: u64,
-        always_load: bool,
-    ) -> McpServer {
-        McpServer {
-            name: "brigadier".into(),
-            transport: McpTransport::Stdio {
-                command: self.config.daemon_exe.clone(),
-                args: vec![
-                    "mcp".into(),
-                    "--data-dir".into(),
-                    self.data_dir.to_string_lossy().into_owned(),
-                ],
-                cwd: None,
-            },
-            env: vec![(MCP_GRANT_ENV.into(), grant)],
-            tool_timeout_secs: Some(timeout_secs),
-            trusted: true,
-            always_load,
         }
     }
 

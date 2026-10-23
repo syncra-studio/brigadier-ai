@@ -1,12 +1,9 @@
 //! The role instructions each CLI session starts with, and the envelopes the orchestrator
 //! reads.
 
-use brigadier_providers::ProviderKind;
-
 use crate::model::{
     Conversation, Environment, GitStyle, PermissionLevel, Project, Settings, Setup,
 };
-use crate::tools::THREAD_TOOLS;
 
 /// How every thread, Chat and tab chat writes (PLAN.md §7): brief, plain and lossless. The 10-04
 /// voice, restored whole (Q79): terse without slang, with the rules against over-compression. A
@@ -224,14 +221,12 @@ pub(crate) fn date_of(at_ms: i64) -> String {
 pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why; if the choice is theirs, `brigadier ask` with options.";
 
 /// The session thread's role (THREAD-PLAN.md Q1), with the user's preferences from the Personal
-/// Brain. `provider`: the thread's CLI, which picks how it runs long commands; `start_workers`:
-/// the user's "Start workers on its own" setting (BUILD-PLAN §1.4).
+/// Brain. `start_workers`: the user's "Start workers on its own" setting (BUILD-PLAN §1.4).
 pub(crate) fn thread(
     conversation: &Conversation,
     project: Option<&Project>,
     preferences: &[String],
     workspace: Option<&str>,
-    provider: ProviderKind,
     start_workers: bool,
 ) -> String {
     let repo = match &conversation.setup {
@@ -254,11 +249,7 @@ pub(crate) fn thread(
     let own_commits = own_commits(local);
     let project = project.map_or("(no project)", |p| p.name.as_str());
     let workspace = workspace.map_or_else(|| "(none yet)".to_owned(), workspace_text);
-    let commands = match provider {
-        ProviderKind::Claude => CLAUDE_NATIVE_COMMANDS,
-        ProviderKind::Codex => NATIVE_COMMANDS,
-    };
-    let text = format!(
+    format!(
         r#"{THREAD_OPENING}. Today is {today}.
 Project: {project}. Repository: {repo}.
 {environment}
@@ -275,16 +266,16 @@ How to work:
 - Run your change's checks (tests, lint, typecheck, build) in your shell before your final answer. Before a merge, run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output. Never background a command with `&` or nohup. Run dev servers and apps with `brigadier preview start`.
 - {own_commits}
 - For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none.
-- Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
-- Ask the Brain (`brigadier brain search`) before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. The user's answers on cards are kept for you. Never reopen a settled decision.
-- Ask the user only what only they can decide, only with `brigadier ask` (never a question in your text). Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
-- Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. After your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need `brigadier approval request` first.
+- Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{NATIVE_COMMANDS}
+- Ask the Brain (`brigadier brain search`) before you ask the user or start a worker, and check an unverified Brain line before relying on it. The user's answers on cards are kept for you. Never reopen a settled decision.
+- Ask the user only what only they can decide, only with `brigadier ask` (never a question in your text). Checking it in the app by hand is your job or a worker's, never the user's.
+- Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need `brigadier approval request` first.
 - Brigadier's commands (previews, its browser, cards for the user, the app, pages, Brain, transcript and code search, reports, other sessions to read): `brigadier --help`.
 - {APP_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), run `brigadier feedback offer` once; when they ask you to report something to its developers, add `--asked`.
 - Brigadier's tools return at once: what they start reports back later as a message from Brigadier. Your workers don't report: you wait on them with `brigadier wait` (the brigade skill says how).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
-- Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
+- Never delete branches, worktrees or temp folders by hand: Brigadier cleans up, and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
 - A user message and everything it sets in motion is one request, shown as one answer. Messages from Brigadier are not the user. The user sees each line you write as you write it, a short one before or between tool calls too: speak when it helps them.
@@ -302,43 +293,7 @@ How to talk to the user:
         workers = workers_rule(start_workers),
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
-    );
-    callable(&text, provider)
-}
-
-/// A Brigadier tool's name as `provider`'s CLI calls it (bug 7): Claude prefixes an MCP
-/// server's tools with `mcp__<server>__`, Codex names them bare.
-pub(crate) fn tool(name: &str, provider: ProviderKind) -> String {
-    match provider {
-        ProviderKind::Claude => format!("mcp__brigadier__{name}"),
-        ProviderKind::Codex => name.to_owned(),
-    }
-}
-
-/// `text` with each Brigadier tool it names written as `provider` calls it: a name with an
-/// underscore wherever it stands alone, `@run` and `@remember` where marked.
-fn callable(text: &str, provider: ProviderKind) -> String {
-    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let mut out = String::with_capacity(text.len() + 1024);
-    let mut rest = text;
-    while let Some(start) = rest.find(|c: char| c == '@' || c.is_ascii_lowercase()) {
-        let (before, from) = rest.split_at(start);
-        out.push_str(before);
-        let marked = from.starts_with('@');
-        let body = if marked { &from[1..] } else { from };
-        let end = body.find(|c: char| !word(c)).unwrap_or(body.len());
-        let name = &body[..end];
-        let stands_alone = !out.ends_with(word);
-        let is_tool = THREAD_TOOLS.contains(&name) && (marked || name.contains('_'));
-        if is_tool && stands_alone {
-            out.push_str(&tool(name, provider));
-        } else {
-            out.push_str(&from[..end + usize::from(marked)]);
-        }
-        rest = &body[end..];
-    }
-    out.push_str(rest);
-    out
+    )
 }
 
 macro_rules! late_event {
@@ -377,7 +332,6 @@ pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
 /// How the thread runs commands: in its CLI's own shell.
 const NATIVE_COMMANDS: &str =
     "\n- Use your own CLI shell for builds, tests, logs and listings, in your workspace.";
-const CLAUDE_NATIVE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Use your own CLI shell for builds, tests, logs and listings, in your workspace.";
 
 /// The trailer that marks a commit the thread made itself (THREAD-PLAN.md Q4): its self-edit
 /// metric counts it as the thread's.
@@ -433,7 +387,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout. They carry the user's git name: call them the workers', never the user's own."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merge it into `{base}` when the user asks (their words, or [merge]: their click on Merge into main): run `git merge` yourself in the repository's checkout of `{base}`, or call finish_session. Never on silence, or a \"no\", \"wait\" or condition aimed at the merge. You may say once that the work is ready to merge. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
+            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merge it into `{base}` when the user asks (their words, or [merge]: their click on Merge into main): run `git merge` yourself in the repository's checkout of `{base}`. Never on silence, or a \"no\", \"wait\" or condition aimed at the merge. You may say once that the work is ready to merge. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
         ),
     }
 }
@@ -690,7 +644,6 @@ mod tests {
                 "starts with the English word \"Update:\" whatever language you write in"
             )
         );
-        assert!(crate::manager::ci::AFTER_THE_ANSWER.contains("one `Update:` line"));
     }
 }
 
@@ -698,19 +651,13 @@ mod tests {
 mod environment_tests {
 
     use super::*;
+    use brigadier_providers::ProviderKind;
 
     /// The thread starts workers only when they help, fans them out in one batch and picks a
     /// lower effort for small work (THREAD-UX-PLAN.md §4.1 b–d, BUILD-PLAN B1).
     #[test]
     fn the_thread_starts_workers_only_when_they_help_in_batches_at_the_effort_the_work_needs() {
-        let text = thread(
-            &session("acceptEdits"),
-            None,
-            &[],
-            None,
-            ProviderKind::Codex,
-            false,
-        );
+        let text = thread(&session("acceptEdits"), None, &[], None, false);
         assert!(text.contains("Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one."));
         assert!(!text.contains("Delegate early"));
         // How workers run is the brigade skill's to say, read when the thread runs one (S15).
@@ -725,60 +672,37 @@ mod environment_tests {
         assert!(text.contains("you wait on them with `brigadier wait`"));
     }
 
-    /// Bug 7: a Claude thread's instructions name each Brigadier tool as Claude calls it, and
-    /// say so; a Codex thread's name them bare.
+    /// Brigadier has no MCP tools any more (S16c): the thread's instructions name none, and
+    /// none of the tools that went.
     #[test]
-    fn a_claude_thread_names_brigadiers_tools_as_it_calls_them() {
+    fn the_thread_names_no_brigadier_mcp_tool() {
         for permission in ["ask", "acceptEdits", "full"] {
-            let prompt = |provider| {
-                thread(
-                    &session(permission),
-                    None,
-                    &[],
-                    Some("/work/session @ brigadier/flow"),
-                    provider,
-                    true,
-                )
-            };
-            let claude = prompt(ProviderKind::Claude);
-            let codex = prompt(ProviderKind::Codex);
-            assert!(claude.contains(
-                "with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch"
-            ));
-            // Both run commands in their CLI's own shell, at every level.
-            assert!(claude.contains("Use your own CLI shell"));
-            assert!(codex.contains("Use your own CLI shell"));
-            for text in [&claude, &codex] {
-                assert!(!text.contains("run_unsandboxed"), "{permission}");
-                assert!(!text.contains("suggest_full_access"), "{permission}");
-                assert!(!text.contains("sandbox"), "{permission}");
-            }
-            assert!(claude.contains("keep it with mcp__brigadier__remember citing"));
-            assert!(!codex.contains("mcp__brigadier__"));
-            assert!(!claude.contains("@run") && !claude.contains("@remember"));
-            // No tool with an underscore is named bare in Claude's.
-            for name in THREAD_TOOLS.iter().filter(|name| name.contains('_')) {
-                let bare = claude.match_indices(name).filter(|(at, _)| {
-                    let before = claude[..*at].chars().next_back();
-                    let after = claude[at + name.len()..].chars().next();
-                    let word =
-                        |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
-                    !word(before) && !word(after)
-                });
-                assert_eq!(bare.count(), 0, "{name} named bare for Claude");
+            let text = thread(
+                &session(permission),
+                None,
+                &[],
+                Some("/work/session @ brigadier/flow"),
+                true,
+            );
+            // It runs commands in its CLI's own shell, at every level.
+            assert!(text.contains("Use your own CLI shell"));
+            assert!(!text.contains("mcp__brigadier__"), "{permission}");
+            assert!(!text.contains("ToolSearch"), "{permission}");
+            for gone in [
+                "run_unsandboxed",
+                "suggest_full_access",
+                "sandbox",
+                "remember",
+                "note_for_user",
+                "ci_status",
+                "watch_ci",
+                "clean_up",
+                "finish_session",
+                "suggest_setting",
+            ] {
+                assert!(!text.contains(gone), "{permission}: {gone}");
             }
         }
-        assert_eq!(
-            callable(
-                "a@run, @remember: run and remember; x_query_brain, @gmail",
-                ProviderKind::Claude
-            ),
-            "a@run, mcp__brigadier__remember: run and remember; x_query_brain, @gmail"
-        );
-        assert_eq!(
-            callable("@remember query_brain", ProviderKind::Codex),
-            "remember query_brain"
-        );
     }
 
     /// UI audit M6: a session's own worktree keeps the thread's commits with the trailer; the
@@ -786,9 +710,7 @@ mod environment_tests {
     #[test]
     fn the_thread_commits_on_its_worktree_but_not_on_the_users_checkout() {
         let worktree = worktree_session("full");
-        let prompt = |conversation: &Conversation| {
-            thread(conversation, None, &[], None, ProviderKind::Claude, true)
-        };
+        let prompt = |conversation: &Conversation| thread(conversation, None, &[], None, true);
         let own = prompt(&worktree);
         assert!(own.contains(&format!("git commit --trailer \"{THREAD_TRAILER}\"")));
         assert!(!own.contains("not committed"));
@@ -806,7 +728,6 @@ mod environment_tests {
                     None,
                     &[],
                     Some("/work/session @ brigadier/flow"),
-                    provider,
                     true,
                 );
                 assert!(prompt.starts_with(THREAD_OPENING));
@@ -831,7 +752,7 @@ mod environment_tests {
                 assert!(!prompt.contains("How you handle workers"));
                 assert!(!prompt.contains("land_phase"));
                 assert!(!prompt.contains("2 to 4 research workers"));
-                assert!(prompt.contains(&callable(MOCKUPS, provider)));
+                assert!(prompt.contains(MOCKUPS));
                 assert!(prompt.contains("Never answer \"I can't\""));
                 assert!(
                     prompt.contains("read the code, make the change, run its checks and commit")
@@ -851,9 +772,6 @@ mod environment_tests {
                 assert!(!prompt.contains("risky mark"));
                 assert!(!prompt.contains("start_verifier"));
                 assert!(!prompt.contains("Each landing and commit of yours queues"));
-                for name in ["remember", "note_for_user", "ci_status"] {
-                    assert!(prompt.contains(&tool(name, provider)), "{name}");
-                }
                 // The tools that moved to `brigadier` (S16c) are named as its commands.
                 for command in [
                     "`brigadier brain search`",
@@ -905,9 +823,9 @@ mod environment_tests {
                 }
             }
         }
-        let codex = thread(&session("ask"), None, &[], None, ProviderKind::Codex, true);
+        let codex = thread(&session("ask"), None, &[], None, true);
         assert!(codex.contains("Use your own CLI shell for builds, tests, logs and listings"));
-        let claude = thread(&session("ask"), None, &[], None, ProviderKind::Claude, true);
+        let claude = thread(&session("ask"), None, &[], None, true);
         assert!(claude.contains("Use your own CLI shell for builds, tests, logs and listings"));
         // The CLI's own shell timeouts and background tasks hold: no word of a ceiling.
         assert!(!claude.contains("two minutes"));
@@ -928,22 +846,20 @@ mod environment_tests {
             // Q87: a site the user can try comes with its local URL, which the app makes a card.
             assert!(text.contains("with its local URL in your final answer"));
             assert!(text.contains(LATE_EVENT));
-            // A merge said while workers write is held, then due (SESSION-FIXES-PLAN.md Q3):
-            // finish_session says so (BUILD-PLAN C1).
+            // No held merge (SESSION-FIXES-PLAN.md Q3 is gone with the landing engine).
             assert!(!text.contains("\"Merge it when done\" while workers write is consent"));
-            // The [merge …] messages and finish_session say how a merge goes (BUILD-PLAN O2).
+            // The [merge …] messages say how a merge goes (BUILD-PLAN O2).
             assert!(!text.contains("[merge waiting]: record the findings it names"));
             // Failures in the same turn and a sentence before unrequested work (Q9).
             assert!(text.contains("While work runs, write one line only for: a failure"));
             assert!(text.contains("and work the user didn't ask for, before it starts."));
             assert!(!text.contains("[status due]"));
             assert!(text.contains("Say code compiles, works or runs only after a check"));
-            // It cleans up only through clean_up, when asked (bug 6).
-            assert!(text.contains("clean_up only if the user asks"));
+            // Brigadier cleans up; the thread never does by hand (bug 6), and has no clean_up.
+            assert!(!text.contains("clean_up"));
             assert!(text.contains("Never delete branches, worktrees or temp folders by hand"));
-            // After its own push, the thread looks at CI (Q1).
-            assert!(text.contains("After your own `git push`, call "));
-            // How a CI failure is fixed is ci_status's to say (BUILD-PLAN C1).
+            // CI is the thread's to watch with its own commands (`gh`): no CI tool (S16c).
+            assert!(!text.contains("After your own `git push`, call "));
             assert!(!text.contains("(`main` only through the usual merge into it here)"));
             // Its workers are plain CLIs: nothing says they have computer tools (S16b).
             assert!(!text.contains("computer tools"));
@@ -1019,7 +935,6 @@ mod environment_tests {
             None,
             &[],
             Some("/work/session @ brigadier/flow"),
-            ProviderKind::Claude,
             true,
         );
         assert!(
@@ -1069,14 +984,7 @@ mod environment_tests {
     /// thread writes itself is asked about and linked.
     #[test]
     fn a_thread_hands_over_no_throwaway_file_and_asks_where_a_document_goes() {
-        let prompt = thread(
-            &session("full"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let prompt = thread(&session("full"), None, &[], None, true);
         assert!(prompt.contains(
             "Never give the user a scratch path or a throwaway file (a one-off script, a log), nor"
         ));
@@ -1087,14 +995,7 @@ mod environment_tests {
     /// offers to copy it somewhere unasked (issue #43).
     #[test]
     fn a_thread_hands_a_workers_file_over_with_its_save_and_offers_no_copy() {
-        let prompt = thread(
-            &session("full"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let prompt = thread(&session("full"), None, &[], None, true);
         assert!(!prompt.contains("or an ask_user card asking where it goes"));
         assert!(prompt.contains("Save picks where it goes, so never offer to copy it."));
         assert!(prompt.contains(
@@ -1106,7 +1007,7 @@ mod environment_tests {
     #[test]
     fn start_workers_on_its_own_picks_the_rule_before_workers_start() {
         let conversation = session("full");
-        let prompt = |on| thread(&conversation, None, &[], None, ProviderKind::Claude, on);
+        let prompt = |on| thread(&conversation, None, &[], None, on);
         assert!(prompt(true).contains("say so in one line first"));
         assert!(!prompt(true).contains("ask first with"));
         let off = prompt(false);
@@ -1124,10 +1025,8 @@ mod environment_tests {
                 .iter()
                 .any(|phrase| text.contains(phrase))
         };
-        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, provider, true);
-            assert!(!mentions(&prompt), "{prompt}");
-        }
+        let prompt = thread(&session("full"), None, &[], None, true);
+        assert!(!mentions(&prompt), "{prompt}");
         assert!(browser_section(true).is_empty());
         assert!(mentions(&browser_section(false)));
     }
@@ -1175,7 +1074,7 @@ mod environment_tests {
     #[test]
     fn a_threads_instructions_point_at_the_brigadier_commands() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, provider, true);
+            let prompt = thread(&session("full"), None, &[], None, true);
             assert!(prompt.contains("`brigadier --help`"), "{provider:?}");
             assert!(prompt.contains("only with `brigadier ask`"), "{provider:?}");
             for gone in ["message_session", "offer_session", "ask_user", "app_state"] {
@@ -1227,15 +1126,8 @@ mod environment_tests {
     #[test]
     fn every_thread_and_chat_writes_in_the_restored_voice_and_shapes_its_final_answer() {
         let threads = [
-            thread(&session("full"), None, &[], None, ProviderKind::Codex, true),
-            thread(
-                &session("full"),
-                None,
-                &[],
-                None,
-                ProviderKind::Claude,
-                true,
-            ),
+            thread(&session("full"), None, &[], None, true),
+            thread(&session("full"), None, &[], None, true),
         ];
         let page = tab_chat(
             &crate::model::TabTarget::Page {
@@ -1346,14 +1238,7 @@ mod environment_tests {
     /// the answer.
     #[test]
     fn a_thread_asks_one_clarifying_card_before_research() {
-        let rule = thread(
-            &session("acceptEdits"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let rule = thread(&session("acceptEdits"), None, &[], None, true);
         assert!(rule.contains(CHAT_THREAD_RULES[0]));
     }
 
@@ -1373,14 +1258,7 @@ mod environment_tests {
     /// Q78: Chats' and threads' instructions say how they interview on cards.
     #[test]
     fn chats_and_threads_interview_on_cards() {
-        let rule = thread(
-            &session("acceptEdits"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let rule = thread(&session("acceptEdits"), None, &[], None, true);
         for words in GRILLING_RULES {
             assert!(rule.contains(words), "{words}");
             // A Chat runs no workers: it looks facts up itself (S16b).
@@ -1412,14 +1290,7 @@ mod environment_tests {
     /// all, the old words nowhere.
     #[test]
     fn threads_and_chats_say_how_a_final_answer_looks() {
-        let session = thread(
-            &session("full"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let session = thread(&session("full"), None, &[], None, true);
         for prompt in [chat(&[]), session.clone()] {
             for words in ANSWER_RULES {
                 assert_eq!(prompt.matches(words).count(), 1, "{words}");
@@ -1441,14 +1312,7 @@ mod environment_tests {
             "Never list files at the end (\"the full findings are in …\")",
             "never tell the user to save one under your answer",
         ];
-        let session = thread(
-            &session("full"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let session = thread(&session("full"), None, &[], None, true);
         for words in words {
             assert!(session.contains(words), "{words}");
         }
@@ -1484,7 +1348,7 @@ mod environment_tests {
         ];
         assert!(rule.contains(words[0]));
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, provider, true);
+            let prompt = thread(&session("full"), None, &[], None, true);
             let how = &prompt[prompt.find("How to work:").unwrap()
                 ..prompt.find("How to talk to the user:").unwrap()];
             for words in words {
@@ -1492,14 +1356,7 @@ mod environment_tests {
             }
             assert_eq!(prompt.matches(words[0]).count(), 1);
         }
-        let claude = thread(
-            &session("full"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let claude = thread(&session("full"), None, &[], None, true);
         assert!(
             claude.contains("with `brigadier app open`"),
             "named as the shell runs it"
@@ -1521,14 +1378,7 @@ mod environment_tests {
             "(a name on a cover page, which focus to take, what an attached file is for) is no reason to ask",
             "start the work at once, and say your assumptions in one line",
         ];
-        let rule = thread(
-            &session("acceptEdits"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let rule = thread(&session("acceptEdits"), None, &[], None, true);
         for words in words {
             assert_eq!(chat(&[]).matches(words).count(), 1, "{words}");
             assert_eq!(rule.matches(words).count(), 1, "{words}");
@@ -1555,30 +1405,20 @@ mod environment_tests {
         "Never give the user a folder or file path",
     ];
 
-    /// A thread's prompt says how to keep the user from guessing, with the tools named as its
-    /// CLI calls them.
+    /// A thread's prompt says how to keep the user from guessing.
     #[test]
     fn a_threads_prompt_keeps_the_user_from_guessing() {
-        let prompt = |provider| thread(&session("full"), None, &[], None, provider, true);
-        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = prompt(provider);
-            assert!(
-                prompt.contains("Never leave the user guessing whether to wait"),
-                "{provider:?}"
-            );
-            assert!(!prompt.contains("never a card's answer"), "{provider:?}");
-            assert!(
-                prompt.contains("Never background a command with `&` or nohup."),
-                "{provider:?}"
-            );
-            assert!(!prompt.contains("answer it alone with"), "{provider:?}");
-        }
+        let prompt = thread(&session("full"), None, &[], None, true);
+        assert!(prompt.contains("Never leave the user guessing whether to wait"));
+        assert!(!prompt.contains("never a card's answer"));
+        assert!(prompt.contains("Never background a command with `&` or nohup."));
+        assert!(!prompt.contains("answer it alone with"));
     }
     /// The thread's scratch goes in its temp folder: the thread's instructions say so.
     #[test]
     fn the_threads_scratch_stays_in_its_temp_folder() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, provider, true);
+            let prompt = thread(&session("full"), None, &[], None, true);
             assert!(
                 prompt.contains("Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp"),
                 "{provider:?}"
@@ -1591,7 +1431,7 @@ mod environment_tests {
     #[test]
     fn no_prompt_routes_a_look_to_computer_tools() {
         for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&session("full"), None, &[], None, provider, false);
+            let prompt = thread(&session("full"), None, &[], None, false);
             assert!(!prompt.contains("you and every worker"), "{provider:?}");
             assert!(!prompt.contains("quick look only"), "{provider:?}");
             assert!(!prompt.contains("computer tools"), "{provider:?}");
@@ -1602,44 +1442,40 @@ mod environment_tests {
     /// instruction names a Brigadier check tool, a checks verdict or a cache.
     #[test]
     fn the_thread_runs_the_full_checks_itself() {
-        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&worktree_session("full"), None, &[], None, provider, true);
-            assert!(
-                prompt.contains("run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output."),
-                "{prompt}"
-            );
-            for gone in ["run_check", "from the cache", "needs run_checks"] {
-                assert!(!prompt.contains(gone), "{gone}: {prompt}");
-            }
+        let prompt = thread(&worktree_session("full"), None, &[], None, true);
+        assert!(
+            prompt.contains("run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output."),
+            "{prompt}"
+        );
+        for gone in ["run_check", "from the cache", "needs run_checks"] {
+            assert!(!prompt.contains(gone), "{gone}: {prompt}");
         }
     }
 
     /// S5: reviews and merges are plain commands. The thread gets a second look with `codex
-    /// review` or a subagent when a change is large or risky, and merges with git or
-    /// finish_session on the user's word; no instruction names a Brigadier review, a finding,
+    /// review` or a subagent when a change is large or risky, and merges with git on the
+    /// user's word; no instruction names a Brigadier review, a finding,
     /// a consent, a held merge or a way past a gate.
     #[test]
     fn the_thread_reviews_and_merges_with_plain_commands() {
-        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
-            let prompt = thread(&worktree_session("full"), None, &[], None, provider, true);
-            assert!(
-                prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none."),
-                "{prompt}"
-            );
-            assert!(prompt.contains("run `git merge` yourself"), "{prompt}");
-            for gone in [
-                "request_review",
-                "record_findings",
-                "review_plan",
-                "stop_merge",
-                "Brigadier-Fixes",
-                "consent",
-                "[merge held]",
-                "anyway",
-                "fuse",
-            ] {
-                assert!(!prompt.contains(gone), "{gone}: {prompt}");
-            }
+        let prompt = thread(&worktree_session("full"), None, &[], None, true);
+        assert!(
+            prompt.contains("For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("run `git merge` yourself"), "{prompt}");
+        for gone in [
+            "request_review",
+            "record_findings",
+            "review_plan",
+            "stop_merge",
+            "Brigadier-Fixes",
+            "consent",
+            "[merge held]",
+            "anyway",
+            "fuse",
+        ] {
+            assert!(!prompt.contains(gone), "{gone}: {prompt}");
         }
     }
 
@@ -1647,14 +1483,7 @@ mod environment_tests {
     /// instructions.
     #[test]
     fn a_gui_only_job_is_an_operate_task_and_code_checked_in_the_app_is_not() {
-        let prompt = thread(
-            &session("full"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let prompt = thread(&session("full"), None, &[], None, true);
         // Which kind a job is, is the brigade skill's to say (BUILD-PLAN C1).
         assert!(!prompt.contains("is an operate task"));
     }
@@ -1674,7 +1503,6 @@ mod environment_tests {
             None,
             &[],
             Some("/data/worktrees/s-1 (on branch `brigadier/abc/session`)"),
-            ProviderKind::Codex,
             true,
         );
         assert!(
@@ -1692,14 +1520,7 @@ mod environment_tests {
         let Ok(path) = std::env::var("BRIGADIER_DUMP_INSTRUCTIONS") else {
             return;
         };
-        let text = thread(
-            &worktree_session("full"),
-            None,
-            &[],
-            None,
-            ProviderKind::Claude,
-            true,
-        );
+        let text = thread(&worktree_session("full"), None, &[], None, true);
         std::fs::write(path, text).unwrap();
     }
 }

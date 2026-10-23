@@ -363,8 +363,7 @@ pub(super) fn sharing(inputs: Inputs) -> Script {
                 .unwrap()
                 .push((turn.cwd.clone(), turn.input.clone()));
             if turn.input.contains("[merge] The user clicked") {
-                let reply = turn.call("finish_session", serde_json::json!({})).await;
-                assert!(!reply.is_error, "{}", reply.text);
+                super::thread_tests::merge_with_git(&turn);
                 return Reply::text("Merged.");
             }
             if said(&turn, "Unshare.") {
@@ -492,8 +491,8 @@ fn last_queue(flow: &Flow, id: &ConversationId) -> crate::work::MessageQueue {
 }
 
 /// A request that settles with the tab's branch ahead of base records one RequestReady with
-/// the head; the tab reads ready, then merged after its merge (whose request records none),
-/// and the board names those states.
+/// the head; the tab reads ready, then merged after its merge with git (whose request records
+/// none), and the board names those states.
 #[tokio::test]
 async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     let inputs: Inputs = Arc::default();
@@ -560,13 +559,6 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
         .merge_session(&a, super::click())
         .await
         .unwrap();
-    flow.until_in(&a, "a's merge", |board| {
-        board
-            .orchestrator_steps
-            .iter()
-            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
-    })
-    .await;
     flow.settled_in(&a).await;
     super::eventually_async("the tab to read merged", || async {
         state(&a).await == Some(crate::work::TabState::Merged)

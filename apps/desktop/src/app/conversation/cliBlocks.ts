@@ -33,14 +33,11 @@ import type { PendingMessage } from "@/state/store";
  * the request it belongs to, among the CLI's items by time.
  */
 
-/** A tool's own name, without its MCP server's prefix (`mcp__brigadier__run` → `run`). */
+/** A tool's own name, without its MCP server's prefix (`mcp__linear__search_issues` → `search_issues`). */
 const bare = toolName;
 
-/** Shell tools: their call is a command (`digest::is_shell_tool`, `own_run`). */
-const SHELL_TOOLS = new Set(["Bash", "run", "run_unsandboxed"]);
-
-/** Calls whose trace is a card or a row of their own, which the session file doesn't hold. */
-const WITHOUT_ROW = new Set(["wait_for_replies"]);
+/** Shell tools: their call is a command (`digest::is_shell_tool`). */
+const SHELL_TOOLS = new Set(["Bash"]);
 
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|bmp|tiff|heic)$/i;
 
@@ -164,7 +161,7 @@ function endedAt(entry: FileEntry, status: ToolStep["status"], durationMs?: numb
 /**
  * A call as its row, in the words the engine gives a call of the live stream
  * (`conversation.rs`'s tool, command and file change rows, `thread_images::image_row`); `null`
- * for what is no row: Brigadier's plumbing, whose trace is elsewhere.
+ * for what is no row: the CLIs' plumbing, whose trace is elsewhere.
  */
 export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
   const { event } = entry;
@@ -172,7 +169,7 @@ export function toolStep(entry: FileEntry, stopped: boolean): ToolStep | null {
   switch (event.type) {
     case "toolCall": {
       const name = bare(event.name);
-      if (isPlumbing(name) || WITHOUT_ROW.has(name)) return null;
+      if (isPlumbing(name)) return null;
       const endedAtMs = endedAt(entry, event.status);
       const exit = SHELL_TOOLS.has(name) && endedAtMs !== undefined && event.output !== null ? exitOf(event.output) : undefined;
       return {

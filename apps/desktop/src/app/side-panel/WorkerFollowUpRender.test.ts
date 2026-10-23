@@ -5,12 +5,12 @@ import ReactDOMServer from "react-dom/server";
 import { createServer } from "vite";
 import type { RawEntry, ThreadView, WorkerRow } from "@/ipc/generated";
 
-/** A worker that reported, was messaged with changes and works again (issue #208). */
+/** A worker that answered, was messaged with changes and works again (issue #208). */
 const OLD = "Done, following the change of direction: the rows are cards now.";
 const SENT = "Make the rows compact instead.";
 const entries: RawEntry[] = [
   { type: "message", itemId: "u1", role: "user", text: "Build the rows." },
-  { type: "toolCall", itemId: "r1", name: "mcp__brigadier__submit_report", input: JSON.stringify({ summary: OLD }), status: "completed", output: "ok" },
+  { type: "message", itemId: "r1", role: "assistant", text: OLD },
   { type: "turnCompleted", status: "completed", durationMs: 10, usage: null },
   { type: "message", itemId: "u2", role: "user", text: `Message from the orchestrator:\n[settings] Reviews are on.\n\n${SENT}` },
   { type: "turnStarted" },
@@ -54,7 +54,7 @@ test("a worker messaged after its answer keeps that answer in history, then the 
     // When the new turn reports, its answer is the final one at the bottom; the old one stays above.
     const NEW = "Done: the rows are compact.";
     const reported: WorkerRow = { ...row, working: false, lastEnd: "done" };
-    entries.push({ streamSeq: 99, atMs: 3000, event: { type: "toolCall", itemId: "r2", name: "mcp__brigadier__submit_report", input: JSON.stringify({ summary: NEW }), status: "completed", output: "ok" } } as unknown as RawEntry);
+    entries.push({ streamSeq: 99, atMs: 3000, event: { type: "message", itemId: "r2", role: "assistant", text: NEW } } as unknown as RawEntry);
     const after = render(reported);
     // History past the last three rows folds under previous messages, the old answer with it.
     assert.match(after, /1 previous message</);

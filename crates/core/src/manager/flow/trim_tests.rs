@@ -22,10 +22,10 @@ where
 fn thread(flow: &Flow) -> (SessionSpec, String, Option<String>) {
     let specs = flow.thread_specs();
     let (_, spec) = specs.first().expect("the thread started").clone();
-    let grant = spec.mcp_servers[0]
+    let grant = spec
         .env
         .iter()
-        .find(|(key, _)| key == "BRIGADIER_MCP_GRANT")
+        .find(|(key, _)| key == brigadier_cli::protocol::GRANT_ENV)
         .map(|(_, value)| value.clone())
         .expect("a tools grant");
     let hook = spec.output_hook.as_ref().map(|hook| {

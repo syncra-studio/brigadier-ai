@@ -28,7 +28,7 @@ use crate::model::{ConversationId, ProjectId, Settings};
 use crate::{Error, Result};
 
 /// Brigadier's own servers' names, which no shared server may take.
-const RESERVED: &[&str] = &["brigadier", super::computer_use::SERVER_NAME];
+const RESERVED: &[&str] = &[super::computer_use::SERVER_NAME];
 
 /// The servers and skills on this machine, for Settings. Only names of environment variables
 /// and headers, never their values. A switch takes effect at each session's next start or

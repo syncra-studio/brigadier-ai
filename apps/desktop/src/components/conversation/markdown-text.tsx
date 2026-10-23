@@ -723,7 +723,7 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
 };
 
 /**
- * The link to a research answer's full report (`brigadier-page:<id>`, a page `save_report` made):
+ * The link to a research answer's full report (`brigadier-page:<id>`, a page `brigadier report save` made):
  * a session opens it as a page tab beside the thread; a Chat, which has no tabs, shows it over the
  * thread.
  */

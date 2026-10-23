@@ -236,7 +236,7 @@ impl SessionManager {
                     branch: group.branch,
                     tip: group.tip.0,
                     merge_commit: group.merge_commit.0,
-                    stat: super::landing::diff_stat_of(&group.stat),
+                    stat: super::diff_stat_of(&group.stat),
                 })
                 .collect();
             self.core
@@ -244,7 +244,7 @@ impl SessionManager {
                     id,
                     request,
                     RequestChanges {
-                        stat: super::landing::diff_stat_of(&diff.stat),
+                        stat: super::diff_stat_of(&diff.stat),
                         held: Vec::new(),
                         settled: true,
                         merged,

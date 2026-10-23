@@ -12,7 +12,7 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Runs the real retrieval the orchestrator's `query_brain` uses and shows what came back: the
+ * Runs the real retrieval `brigadier brain search` uses and shows what came back: the
  * hits with their scores, the time it took, whether embeddings took part, and the text the
  * orchestrator would read.
  */
@@ -77,7 +77,7 @@ export function BrainSearch({ brainKey }: { brainKey: string }) {
           </>
         ) : (
           <p className="text-muted-foreground p-4">
-            Search runs the same retrieval as the orchestrator&apos;s query_brain tool.
+            Search runs the same retrieval as brigadier brain search.
           </p>
         )}
       </div>

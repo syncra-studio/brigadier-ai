@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn, git};
-use crate::manager::ci::Gh;
+use crate::manager::gh::Gh;
 use crate::work::{OrchestratorStepKind, TabState};
 
 pub(super) fn script<F, Fut>(f: F) -> Script
@@ -488,99 +488,4 @@ fn merges(board: &crate::board::Board) -> Vec<Option<String>> {
             _ => None,
         })
         .collect()
-}
-
-/// Revert on the merge message sends the thread "Revert merge ‹sha› on ‹base› the way it went
-/// in" as the user's message: one message, and the thread's revert lands on the base the way
-/// the merge went in (here, merged on this Mac).
-#[tokio::test]
-async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_lands() {
-    let flow = Flow::start(
-        "auto-merge-revert",
-        Options::default(),
-        script(|turn| async move {
-            if !turn.is_orchestrator() {
-                return Reply::text("Done.");
-            }
-            let workspace = &turn.cwd;
-            if turn.input.contains("Ship it.") {
-                std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
-                git(workspace, &["add", "NOTES.md"]);
-                git(workspace, &["commit", "-q", "-m", "Add notes"]);
-            } else if let Some(rest) = turn.input.split("Revert merge ").nth(1) {
-                let sha = rest.split_whitespace().next().unwrap();
-                git(workspace, &["revert", "--no-edit", sha]);
-            } else if let Some(rest) = turn.input.split("revert its revert ").nth(1) {
-                let sha = rest.split_whitespace().next().unwrap();
-                git(workspace, &["revert", "--no-edit", sha]);
-            } else {
-                return Reply::text("Noted.");
-            }
-            let reply = turn.call("finish_session", json!({})).await;
-            assert!(!reply.is_error, "{}", reply.text);
-            Reply::text("Merged.")
-        }),
-    )
-    .await;
-    flow.say("Ship it.").await;
-    let board = flow.settled().await;
-    assert!(super::thread_tests::on_main(&flow, "NOTES.md"));
-    let merged = merges(&board)[0].clone().unwrap();
-    // The request the merge message's Revert sends.
-    let revert = format!("Revert merge {} on main the way it went in", &merged[..7]);
-    flow.say(&revert).await;
-    let board = flow.settled().await;
-    assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));
-    assert_eq!(merges(&board).len(), 2, "{:?}", merges(&board));
-    let messages = flow
-        .core
-        .list_messages(flow.conversation.clone(), None, 50)
-        .await
-        .unwrap()
-        .messages;
-    let asked = messages
-        .iter()
-        .filter(|message| message.role == crate::model::MessageRole::User && message.text == revert)
-        .count();
-    assert_eq!(asked, 1);
-
-    // The merge reads reverted, by the thread's revert; Redo's request puts it back the same
-    // way, as a merge of its own, and the merge reads redone.
-    let undo = flow
-        .manager
-        .merge_undo(&flow.conversation, &merged)
-        .await
-        .unwrap()
-        .expect("reverted");
-    assert_eq!(undo.redone_by, None);
-    let revert_commit = &undo.reverted_by;
-    assert!(
-        git(&flow.repo, &["log", "-1", "--format=%B", revert_commit])
-            .contains(&format!("This reverts commit {merged}")),
-        "the thread's revert"
-    );
-    let redo = format!(
-        "Redo merge {} on main: revert its revert {} the way it went in",
-        &merged[..7],
-        &revert_commit[..7]
-    );
-    flow.say(&redo).await;
-    let board = flow.settled().await;
-    assert!(
-        super::thread_tests::on_main(&flow, "NOTES.md"),
-        "back on main"
-    );
-    assert_eq!(merges(&board).len(), 3, "{:?}", merges(&board));
-    let undo = flow
-        .manager
-        .merge_undo(&flow.conversation, &merged)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(&undo.reverted_by, revert_commit);
-    assert!(
-        undo.redone_by.is_some() && undo.redone_at_ms.is_some(),
-        "{undo:?}"
-    );
-    flow.stop().await;
 }

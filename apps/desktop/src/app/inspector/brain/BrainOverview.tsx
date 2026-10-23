@@ -3,7 +3,6 @@ import { BrainSection } from "@/app/inspector/brain/BrainSection";
 import { DeveloperActions } from "@/app/inspector/brain/DeveloperActions";
 import { EmbedderSection } from "@/app/inspector/brain/EmbedderSection";
 import { IndexSection } from "@/app/inspector/brain/IndexSection";
-import { JobsSection } from "@/app/inspector/brain/JobsSection";
 import { NodesByKindList } from "@/app/inspector/brain/NodesByKindList";
 import { count } from "@/app/inspector/brain/overviewText";
 import { WorkersSection } from "@/app/inspector/brain/WorkersSection";
@@ -45,7 +44,6 @@ export function BrainOverviewView({
       )}
       {projectId !== null && <WorkersSection projectId={projectId} />}
       <EmbedderSection overview={overview} />
-      {projectId !== null && <JobsSection jobs={overview.jobs} now={now} />}
       {projectId !== null && <DeveloperActions brainKey={brainKey} projectId={projectId} hasIndex={overview.index !== null} />}
     </>
   );

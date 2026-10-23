@@ -25,7 +25,7 @@
 //!
 //! The grant (in [`HOOK_GRANT_ENV`], from the CLI's environment) can only store this thread's
 //! output. Whatever goes wrong, the hook prints nothing and exits 0: the tool call never
-//! breaks. Like `brigadierd mcp`, no async runtime and no logging, so it starts at once.
+//! breaks. No async runtime and no logging, so it starts at once.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};

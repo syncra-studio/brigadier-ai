@@ -432,39 +432,25 @@ test("the lead managing its team shows: a message, an answer, a stop with its re
   assert.deepEqual(shown, ["row:started", "messaged", "answered", "stopped", "landed"]);
 });
 
-test("the lead's suggested setting shows as its card, and its tool call doesn't", () => {
-  const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
-  const change = { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser." } as const;
-  const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [],
-    orchestratorSteps: [
-      teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__suggest_setting", detail: null, status: "completed", throughPosition: 0 }),
-      teamStep(3, change),
-    ] };
-  const entries = sequence(blocksOf([user], replay)[0]!);
-  const shown = entries.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
-  assert.deepEqual(shown, [change]);
-  const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
-  assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), shown, "never folded away");
-});
-
-test("an old record's suggestion of Full access and its tool call show nothing", () => {
+test("old records of a Full access suggestion, a suggested setting, a session offer and a CI watch show nothing", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
-      teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__suggest_full_access", detail: null, status: "completed", throughPosition: 0 }),
-      teamStep(3, { type: "fullAccessSuggested", reason: "Installing Homebrew writes outside the project." }),
+      teamStep(2, { type: "fullAccessSuggested", reason: "Installing Homebrew writes outside the project." }),
+      teamStep(3, { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser." }),
+      teamStep(4, { type: "sessionOffered", id: "o1", title: "Fix uploads", task: "Find why uploads stall at 99%." }),
+      teamStep(5, { type: "ciWatch", repo: "acme/app", branch: "main", sha: "97c298d", waiting: false, runs: [] }),
     ] };
   const shown = sequence(blocksOf([user], replay)[0]!).flatMap((entry) =>
     entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
   assert.deepEqual(shown, []);
 });
 
-test("the lead's feedback offer stays in view as its card; its tool call and the user's answer show no row", () => {
+test("the lead's feedback offer stays in view as its card; the user's answer shows no row", () => {
   const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
   const offer = { type: "feedbackOffered", id: "f1", kind: "bug", title: "Stop leaves the tab spinning", body: "After Stop the tab spins." } as const;
   const replay: BoardDigest = { ...board, decisions: [], tasks: {}, workerSteps: [],
     orchestratorSteps: [
-      teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__offer_feedback", detail: null, status: "completed", throughPosition: 0 }),
       teamStep(3, offer),
       teamStep(4, { type: "feedbackAnswered", id: "f1", sent: false }),
     ] };

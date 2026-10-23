@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import { createStore, type StoreApi, useStore } from "zustand";
 
-import { liveActivity, toolName } from "@/app/conversation/activity/words";
+import { liveActivity } from "@/app/conversation/activity/words";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { showConversationNotice, shownNotice } from "@/state/notices";
 import { type Stop, stopsOf, useStopping } from "@/state/stopping";
@@ -117,8 +117,6 @@ export type Board = {
   activity: Record<string, string>;
   /** Each worker's latest reply, its first line, and when it came (from its live events). */
   summaries: Record<string, WorkerSummary>;
-  /** Each worker's latest progress note (note_progress), where it is in its plan, and when it came. */
-  notes?: Record<string, WorkerSummary>;
   /** How many times each worker changed files or ran a command (from its live events). */
   edits: Record<string, number>;
   /** What each worker at work on a change changed in its worktree so far, as last read. */
@@ -466,7 +464,6 @@ export function boardFromView(
     notices: view.notices.filter(showConversationNotice).slice(-NOTICES).map(shownNotice),
     activity: keep?.activity ?? {},
     summaries: keep?.summaries ?? {},
-    ...(keep?.notes && { notes: keep.notes }),
     edits: keep?.edits ?? {},
     diffs: keep?.diffs ?? {},
     transcripts: keep?.transcripts ?? {},
@@ -492,8 +489,7 @@ function activityOf(event: ProviderEvent): string | null | undefined {
     case "command":
       return event.command ? firstLine(liveActivity({ command: event.command })) : undefined;
     case "toolCall":
-      // A progress note shows on a line of its own; the live line keeps what the worker does.
-      return toolName(event.name) === "note_progress" ? undefined : liveActivity(event);
+      return liveActivity(event);
     case "fileChanges":
       return `Editing ${event.changes.length} file${event.changes.length === 1 ? "" : "s"}`;
     case "approvalRequested":
@@ -506,23 +502,6 @@ function activityOf(event: ProviderEvent): string | null | undefined {
     default:
       return undefined;
   }
-}
-
-/** A note_progress call's note, from its input once complete. */
-function progressNote(input: string | null): string | null {
-  try {
-    const note = (JSON.parse(input ?? "") as { note?: unknown }).note;
-    return typeof note === "string" ? firstLine(note.trim()) || null : null;
-  } catch {
-    return null;
-  }
-}
-
-/** A worker's progress note from its current attempt, if it posted one. */
-export function workerNote(board: Board | null | undefined, taskId: string): string | undefined {
-  const note = board?.notes?.[taskId];
-  const task = board?.tasks[taskId];
-  return note && note.atMs >= (task?.attempts.at(-1)?.startedAtMs ?? task?.createdAtMs ?? 0) ? note.text : undefined;
 }
 
 function firstLine(text: string): string {
@@ -752,10 +731,6 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       if (reply.type === "message" && reply.role === "assistant") {
         const text = firstLine(reply.text);
         if (text) next = { ...next, summaries: { ...next.summaries, [taskId]: { text, atMs } } };
-      } else if (reply.type === "toolCall" && toolName(reply.name) === "note_progress") {
-        const text = progressNote(reply.input);
-        // Kept with when it came, so the same words posted again in a new attempt show too.
-        if (text) next = { ...next, notes: { ...next.notes, [taskId]: { text, atMs } } };
       } else if (
         (reply.type === "fileChanges" || reply.type === "command") &&
         reply.status !== "inProgress"
@@ -777,30 +752,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
   }
 }
 
-/** What a Brigadier tool call or CLI tool of the orchestrator is doing, by tool name. */
+/** What a CLI tool of the orchestrator is doing, by tool name. */
 const TOOL_DOING: Readonly<Record<string, string>> = {
-  delegate_task: "Delegating to a worker",
-  message_worker: "Messaging a worker",
-  answer_worker: "Answering a worker",
-  stop_worker: "Stopping a worker",
-  ask_user: "Asking you",
-  read_report: "Reading a report",
-  read_artifact: "Reading a report",
-  query_brain: "Checking the project notes",
-  search_transcript: "Looking back through the conversation",
-  store_output: "Keeping a file for you",
-  // Remembering is silent by design.
-  remember: "Thinking",
-  request_approval: "Asking for your approval",
-  land_phase: "Landing a worker's commits",
-  finish_session: "Merging the session",
-  list_tasks: "Checking on the workers",
-  route_follow_up: "Sorting your follow-up",
-  note_for_user: "Noting it for you",
-  suggest_setting: "Suggesting a setting",
-  offer_feedback: "Writing up feedback",
-  // Until the message's record names where it goes ("Sending message to API work").
-  message_session: "Sending a message",
   WebSearch: "Searching the web",
   WebFetch: "Reading a web page",
 };
@@ -827,9 +780,7 @@ export function doingOf(event: ProviderEvent, current: string | null): string | 
         : `Reconnecting${attemptOf(event.error.message)}`;
     case "toolCall": {
       if (event.status !== "inProgress") return null;
-      // MCP tools arrive namespaced (`mcp__brigadier__delegate_task`, `brigadier.delegate_task`,
-      // `brigadier/delegate_task`).
-      return TOOL_DOING[toolName(event.name)] ?? "Using a tool";
+      return TOOL_DOING[event.name] ?? "Using a tool";
     }
     case "reasoning":
     case "message":

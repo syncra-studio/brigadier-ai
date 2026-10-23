@@ -111,12 +111,12 @@ function evaluate(
       const query = metrics?.brain.query;
       if (!query) return judge(null, "");
       if (query.samples === 0) {
-        return { measured: "—", status: "na", detail: "no query_brain calls yet" };
+        return { measured: "—", status: "na", detail: "no Brain searches yet" };
       }
       return judge(
         query.p95Ms,
         formatMs(query.p95Ms),
-        `${query.samples} query_brain calls, max ${formatMs(query.maxMs)}`,
+        `${query.samples} Brain searches, max ${formatMs(query.maxMs)}`,
       );
     }
     case "staticIndex": {

@@ -40,7 +40,7 @@ import {
 const QUIET = "text-muted-foreground";
 
 /**
- * The thread's offer of reports to Brigadier's developers (its `offer_feedback`, when the user
+ * The thread's offer of reports to Brigadier's developers (`brigadier feedback offer`, when the user
  * seemed annoyed with Brigadier or asked to report something), written up from the
  * conversation as Send feedback writes a note up: one report per bug or idea, each opening to
  * what will be posted, a repeat marked "Already reported". Send files them as the user (signed

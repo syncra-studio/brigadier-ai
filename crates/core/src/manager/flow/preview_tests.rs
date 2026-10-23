@@ -93,8 +93,6 @@ fn thread(replies: Replies) -> Script {
                 )
             } else if input.contains("Please stop it.") {
                 ("stop_preview", json!({}))
-            } else if input.contains("Please merge.") {
-                ("finish_session", json!({}))
             } else if input.contains("Show me the log.") {
                 ("preview_log", json!({}))
             } else {
@@ -439,12 +437,9 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     flow.stop().await;
 }
 
-/// The user's Stop, a change of the thread's workspace and the merge of the session's work each
-/// stop the running previews: the merge's because they showed the work it took (#289), though
-/// the workspace stays; its result tells the thread. One the user asked for runs on past the
-/// merge (#335).
+/// The user's Stop and a change of the thread's workspace each stop the running previews.
 #[tokio::test]
-async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
+async fn the_users_stop_and_a_workspace_change_stop_previews() {
     let replies: Replies = Arc::default();
     let flow = Flow::start("preview-stops", Options::default(), thread(replies.clone())).await;
     let tmp = scratch("stops");
@@ -523,54 +518,6 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
         .await
         .unwrap();
 
-    // The merge: the thread committed in the worktree, and the user asked for the merge. The
-    // thread started one preview to show its change and another the user asked for.
-    let (preview, child) = start(&flow, &pids).await;
-    flow.settled().await;
-    let user_pids = tmp.join("user-child.pid");
-    let (asked, asked_child) = start_as(&flow, "start-for-user", &user_pids).await;
-    flow.settled().await;
-    let worktree = workspace(&flow);
-    std::fs::write(worktree.join("page.html"), "<h1>Hi</h1>\n").unwrap();
-    super::git(&worktree, &["add", "page.html"]);
-    super::git(&worktree, &["commit", "-q", "-m", "Add the page"]);
-    flow.say("Please merge.").await;
-    flow.until("the merge", |board| {
-        board
-            .orchestrator_steps
-            .iter()
-            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
-    })
-    .await;
-    let board = flow.settled().await;
-    gone(&flow, preview.pid.unwrap()).await;
-    gone(&flow, child).await;
-    assert_eq!(
-        board.previews[&preview.id].state,
-        PreviewState::Stopped {
-            reason: "the work it showed is merged".into()
-        }
-    );
-    let (tool, reply) = replies.lock().unwrap().last().cloned().unwrap();
-    assert_eq!(tool, "finish_session");
-    assert!(
-        reply.contains(&format!(
-            "Your preview {} stopped, as the work it showed is merged.",
-            preview.id
-        )),
-        "{reply}"
-    );
-    assert!(board.previews[&asked.id].state.is_running());
-    assert!(
-        alive(&flow, asked_child),
-        "the asked-for preview's child still runs"
-    );
-    assert!(!reply.contains(&asked.id), "{reply}");
-    flow.manager
-        .stop_preview(flow.conversation.clone(), Some(asked.id.clone()))
-        .await
-        .unwrap();
-    gone(&flow, asked_child).await;
     flow.stop().await;
 }
 

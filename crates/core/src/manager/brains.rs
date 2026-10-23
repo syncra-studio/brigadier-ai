@@ -7,8 +7,8 @@
 //!   to the Brain, which marks what it knew about the file stale.
 //! - The index's modules and services become Brain nodes (origin `index`), so a question about
 //!   the project's structure is answered without a scout.
-//! - Worker reports, the user's answers and plan decisions, and the orchestrator's `remember`
-//!   become nodes with their provenance (worker, session, commit).
+//! - The user's answers and plan decisions become nodes with their provenance (session,
+//!   commit); worker reports and the orchestrator's `remember` did in older versions.
 //! - One local embedding model serves every Brain. It is downloaded once a project exists,
 //!   loaded on first use, and unloaded after [`EMBEDDER_IDLE`].
 //!
@@ -16,30 +16,27 @@
 //! blocking pool or, for scans and downloads, a thread of its own; never on the async runtime.
 
 use std::collections::{HashMap, VecDeque};
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use brigadier_brain::{
     Brain, BrainAnswer, BrainCaps, BrainGraph, BrainQuery, Claim, Edge, EdgeKind, Embedder,
     EmbedderState, FileRef, NewNode, Node, NodeFilter, NodeKind, NodeState, Origin, Provenance,
-    Route, Scope, TranscriptEntry, TranscriptStream, WorkerRef,
+    Route, Scope, TranscriptEntry, TranscriptStream,
 };
 use brigadier_index::{
     CodeHit, CodeIndex, CodeQuery, FileChange, IndexConfig, ScanHelper, SearchKind,
 };
 use brigadier_providers::{ItemStatus, ProviderEvent};
 use brigadier_sandbox::removal;
-use brigadier_store::StreamPage;
 
-use super::brain_jobs::BrainJobs;
 use super::{SessionManager, blocking};
-use crate::knowledge::{BrainJob, BrainOverview, ConventionsExport};
+use crate::knowledge::{BrainOverview, ConventionsExport};
 use crate::model::{ConversationId, DomainEvent, MessageRole, Project, ProjectId, Setup, streams};
-use crate::tools::{CodeRefs, CodeSearch, MemoryKind, Remember, SearchTranscript};
-use crate::work::{ArtifactKind, ArtifactRef, Report, Task, TaskKind};
+use crate::tools::{CodeRefs, CodeSearch, SearchTranscript};
+use crate::work::{Report, Task};
 use crate::{Error, Result, now_ms};
 
 /// Removing a project waits at most this long for its code index scan to end.
@@ -58,15 +55,6 @@ const EMBED_BATCH: u32 = 256;
 const QUERY_TOKENS: u32 = 1_000;
 /// Definitions and references `query_brain` shows per name it finds in the code index.
 const CODE_LOOKUP: u32 = 10;
-/// Research nodes go stale after this (PLAN.md §6 Phase 6: a TTL of about 7 days).
-pub(crate) const RESEARCH_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
-/// A report's findings files come into the Brain in parts of at most this many bytes, each a
-/// node of its own, so a part fits whole in an answer (see the Brain's per-body cap).
-const FINDINGS_PART_BYTES: usize = 1_400;
-/// At most this much of one report's findings files goes into the Brain...
-const FINDINGS_MAX_BYTES: usize = 24_000;
-/// ...in at most this many parts.
-const FINDINGS_MAX_PARTS: usize = 32;
 /// Transcript events read per page while indexing a conversation's transcript.
 const TRANSCRIPT_PAGE: u32 = 500;
 /// Most of a thread step's command or call shown in its entry's first line, which leads its
@@ -126,30 +114,6 @@ impl Drop for Learning {
     }
 }
 
-/// Versions are assigned before spawning a report's Brain write. A later version may run
-/// first, but an older one must never replace it or delete its findings parts.
-#[derive(Default)]
-pub(crate) struct ReportLearning {
-    next: AtomicU64,
-    stored: tokio::sync::Mutex<u64>,
-}
-
-impl ReportLearning {
-    pub(super) fn next(&self) -> u64 {
-        self.next.fetch_add(1, Ordering::Relaxed) + 1
-    }
-
-    async fn keep(&self, version: u64, write: impl Future<Output = Result<()>>) -> Result<()> {
-        let mut stored = self.stored.lock().await;
-        if version <= *stored {
-            return Ok(());
-        }
-        write.await?;
-        *stored = version;
-        Ok(())
-    }
-}
-
 /// A full scan's size and time, for the static index budget.
 #[derive(Debug, Clone)]
 pub struct IndexRunStats {
@@ -178,7 +142,6 @@ pub(crate) struct Brains {
     largest_run: Mutex<Option<IndexRunStats>>,
     downloading: AtomicBool,
     cancel_download: Arc<AtomicBool>,
-    pub(super) jobs: BrainJobs,
     /// Per conversation: Brain writes still running (reports, the user's decisions).
     learning: Mutex<HashMap<ConversationId, usize>>,
     learned: tokio::sync::Notify,
@@ -196,7 +159,6 @@ impl Brains {
             largest_run: Mutex::new(None),
             downloading: AtomicBool::new(false),
             cancel_download: Arc::new(AtomicBool::new(false)),
-            jobs: BrainJobs::new(),
             learning: Mutex::new(HashMap::new()),
             learned: tokio::sync::Notify::new(),
         }
@@ -208,19 +170,6 @@ impl Brains {
 
     fn projects(&self) -> MutexGuard<'_, HashMap<ProjectId, Arc<ProjectBrain>>> {
         self.projects.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
-    /// The project's Brain, if it is open.
-    pub(super) fn open_project(&self, id: &ProjectId) -> Option<Arc<ProjectBrain>> {
-        self.projects().get(id).cloned()
-    }
-
-    /// The projects whose Brains are open.
-    pub(super) fn open_projects(&self) -> Vec<(ProjectId, Arc<ProjectBrain>)> {
-        self.projects()
-            .iter()
-            .map(|(id, project)| (id.clone(), project.clone()))
-            .collect()
     }
 
     fn note_query(&self, ms: f64) {
@@ -241,12 +190,11 @@ impl Brains {
         }
     }
 
-    /// Stops what runs on the Brains' own threads: a download, a Brain job, and the watchers,
+    /// Stops what runs on the Brains' own threads: a download and the watchers,
     /// which the caller drops off the async runtime (stopping one joins its thread, which may
     /// be in the middle of a rescan).
     pub(crate) fn shutdown(&self) -> Vec<brigadier_index::Watcher> {
         self.cancel_download.store(true, Ordering::Release);
-        self.jobs.stop("Brigadier is shutting down");
         self.projects()
             .values()
             .filter_map(|project| project.take_watcher())
@@ -277,7 +225,6 @@ pub(super) async fn stop_watchers(watchers: Vec<brigadier_index::Watcher>) {
 impl SessionManager {
     /// Opens every project's Brain and starts indexing its repository.
     pub(super) async fn open_brains(&self) {
-        self.start_skeleton_queue();
         let projects = self.core.catalog().projects;
         for project in projects {
             // A freed-up project's Brain is built again when the project is used.
@@ -305,16 +252,10 @@ impl SessionManager {
             None
         };
         if let Some(old) = old {
-            // A running job keeps the old repository's root and commit: it ends here, and
-            // anything it still sends is refused (see `brain_job_call`).
-            self.brains
-                .jobs
-                .stop_for(&project.id, "the project's repository changed");
-            self.brains.jobs.forget_tries(&project.id);
             stop_watchers(old.take_watcher().into_iter().collect()).await;
-            // What the index, the skeleton pass and enrichment learned describes the old
-            // repository: it goes before the new one is scanned, and the skeleton pass maps
-            // the new one. Sessions' decisions and reports stay.
+            // What the index (and the skeleton passes and enrichment of older Brigadiers)
+            // learned describes the old repository: it goes before the new one is scanned.
+            // Sessions' decisions and reports stay.
             if old.root.is_some() {
                 let brain = old.brain.clone();
                 let forgotten = blocking(move || {
@@ -336,13 +277,11 @@ impl SessionManager {
         }
     }
 
-    /// A project is being removed: its Brain job and watcher stop, and a scan in progress (it
+    /// A project is being removed: its watcher stops, and a scan in progress (it
     /// can't be cancelled, and it holds the Brain and index open) is waited for, all within
     /// [`REMOVE_SCAN_WAIT`]; then its Brain and index close. Past that, removal goes on: the
     /// scan starts nothing when it ends, and its files are deleted by the cleanup ledger.
     pub(crate) async fn close_project_brain(&self, id: &ProjectId) {
-        self.brains.jobs.stop_for(id, "the project was removed");
-        self.brains.jobs.forget_tries(id);
         let Some(open) = self.brains.projects().get(id).cloned() else {
             return;
         };
@@ -571,7 +510,6 @@ impl SessionManager {
                         });
                         tracing::info!(project = %id, files = stats.files, parsed = stats.parsed, ms = stats.duration_ms, "code index scanned");
                         learn_structure(&project.brain, &index);
-                        manager.brains.jobs.want_skeleton(id.clone());
                     }
                     Err(err) => {
                         tracing::warn!(project = %id, error = %err, "code index scan failed");
@@ -660,17 +598,13 @@ impl SessionManager {
             Ok(())
         })
         .await;
-        self.brain_job_tick().await;
     }
 
     /// The Brains' counters for the daemon's metrics.
-    /// The Brains' work in progress, said plainly: a Brain job, an index scan, the embedding
-    /// model's download. Empty when none runs.
+    /// The Brains' work in progress, said plainly: an index scan, the embedding model's
+    /// download. Empty when none runs.
     pub fn brain_work(&self) -> Vec<String> {
         let mut work = Vec::new();
-        if self.brains.jobs.running() {
-            work.push("a Brain job".to_owned());
-        }
         if self
             .brains
             .projects()
@@ -842,276 +776,6 @@ impl SessionManager {
         self.brains
             .note_query(started.elapsed().as_secs_f64() * 1000.0);
         Ok(reply)
-    }
-
-    /// `remember`: a decision, convention, preference or contract (BUILD-PLAN A11), or a
-    /// standing constraint ([`super::constraints`], D1.1). What
-    /// cites the user's message, checked here, is the user's decision; a preference needs
-    /// that. Anything else is the thread's claim, unverified, with the evidence it names.
-    pub(crate) async fn remember_tool(
-        &self,
-        id: &ConversationId,
-        args: Remember,
-    ) -> Result<String> {
-        let title = one_line(&args.title, 240);
-        if title.is_empty() {
-            return Err(Error::Invalid("say what to remember in `title`".into()));
-        }
-        if args.kind == MemoryKind::Constraint {
-            return crate::heap(|| self.remember_constraint(id, args, title)).await;
-        }
-        let personal = args.personal || args.kind == MemoryKind::Preference;
-        if personal && let Some(reason) = super::memory_guard::not_for_memory(&title) {
-            return Err(Error::Invalid(format!(
-                "not kept: {reason}. Never keep passwords, keys, card or account numbers."
-            )));
-        }
-        let kind = match args.kind {
-            MemoryKind::Decision => NodeKind::Decision,
-            MemoryKind::Convention => NodeKind::Convention,
-            MemoryKind::Preference => NodeKind::Preference,
-            MemoryKind::Contract => NodeKind::Contract,
-            MemoryKind::Constraint => NodeKind::Constraint,
-        };
-        let cited = match args.user_message.as_deref() {
-            Some(reference) => Some(
-                self.user_words(id, reference, args.quote.as_deref())
-                    .await
-                    .map_err(|reason| Error::Invalid(format!("not kept: {reason}")))?,
-            ),
-            None if personal => {
-                return Err(Error::Invalid(
-                    "not kept: a preference of the user's needs `user_message`, the message where they said it (`latest`, or the #N search_transcript shows), with their words in `quote`".into(),
-                ));
-            }
-            None => None,
-        };
-        let (brain, index) = if personal {
-            (self.personal_brain().await?, None)
-        } else {
-            let project = self.project_of(id).ok_or_else(|| {
-                Error::Invalid(
-                    "this conversation has no project; set `personal` to keep it for the user"
-                        .into(),
-                )
-            })?;
-            let project = self.project_brain(&project).await?;
-            (project.brain.clone(), project.index.clone())
-        };
-        // `path:12-30` names the lines; the file itself is what goes stale.
-        let paths: Vec<String> = args
-            .files
-            .iter()
-            .map(|file| without_lines(file).to_owned())
-            .collect();
-        let files = if personal {
-            Vec::new()
-        } else {
-            file_refs(index.as_ref(), &paths).await
-        };
-        let commit = if personal {
-            None
-        } else {
-            self.head_commit(id).await
-        };
-        // The claim's evidence, with the words it shows (BUILD-PLAN E1): the cited lines or a
-        // check's output.
-        let evidence: Vec<String> = args
-            .files
-            .iter()
-            .map(|file| file.trim().to_owned())
-            .filter(|file| super::evidence::lines_cite(file).is_some())
-            .chain(args.check.iter().map(|check| check.trim().to_owned()))
-            .collect();
-        let words = match &cited {
-            None => args
-                .quote
-                .as_deref()
-                .map(str::trim)
-                .filter(|quote| !quote.is_empty()),
-            Some(_) => None,
-        };
-        let sources = match (words, personal) {
-            (Some(words), false) => {
-                self.claim_sources(
-                    id,
-                    evidence
-                        .iter()
-                        .map(|cite| (cite.clone(), words.to_owned()))
-                        .collect(),
-                )
-                .await
-            }
-            _ => Vec::new(),
-        };
-        let mut body = args.detail.unwrap_or_default();
-        let claim = match &cited {
-            Some(said) => {
-                if !body.is_empty() {
-                    body.push('\n');
-                }
-                body.push_str(&said.source());
-                None
-            }
-            None => Some(Claim {
-                cites: args
-                    .files
-                    .iter()
-                    .map(|file| file.trim().to_owned())
-                    .filter(|file| file.len() > without_lines(file).len())
-                    .chain(
-                        args.check
-                            .iter()
-                            .map(|check| format!("check {}", check.trim())),
-                    )
-                    .collect(),
-                sources: sources.clone(),
-                ..Claim::unverified()
-            }),
-        };
-        let node = NewNode {
-            kind: if personal { NodeKind::Preference } else { kind },
-            key: None,
-            title,
-            body,
-            provenance: Provenance {
-                origin: if cited.is_some() {
-                    Origin::User
-                } else {
-                    Origin::Orchestrator
-                },
-                session_id: Some(id.0.clone()),
-                task_id: None,
-                job_id: None,
-                worker: None,
-                commit,
-                recorded_at_ms: now_ms(),
-                claim,
-            },
-            files,
-            expires_at_ms: None,
-        };
-        let replaces = args.replaces;
-        // One write: nothing is kept from a call that failed.
-        let node_id = blocking(move || {
-            match replaces {
-                Some(old) => brain.record_replacing(node, &old, "replaced by the thread"),
-                None => brain.record(node),
-            }
-            .map_err(brain_error)
-        })
-        .await?;
-        // What its source shows now, so a wrong cite or quote is fixed at once.
-        let source = if sources.is_empty() {
-            match (personal || cited.is_some(), evidence.is_empty()) {
-                (true, _) | (false, true) => String::new(),
-                (false, false) => {
-                    "; no words to check its evidence by: give them in `quote`".into()
-                }
-            }
-        } else {
-            let reader = self.sources_for(id, None);
-            let checked = blocking(move || {
-                let checked: Vec<_> = sources
-                    .iter()
-                    .filter_map(|source| reader.check(source))
-                    .collect();
-                Ok(checked)
-            })
-            .await
-            .unwrap_or_default();
-            match checked.iter().find(|checked| checked.holds) {
-                Some(held) => format!("; its source {} shows your words", held.cite),
-                None => format!(
-                    "; its source doesn't show your words ({}): correct it with replaces",
-                    checked
-                        .iter()
-                        .filter_map(|checked| checked.why.clone())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            }
-        };
-        Ok(format!(
-            "Remembered as {node_id}{}{source}.",
-            match (personal, cited.is_some()) {
-                (true, _) => " (the user's preferences)",
-                (false, true) => " (a user decision)",
-                (false, false) => " (your claim, unverified)",
-            },
-        ))
-    }
-
-    /// The user's message `reference` names in this conversation (`latest`, `#12`, `12`), if
-    /// it is the user's and says `quote`; otherwise why not.
-    pub(crate) async fn user_words(
-        &self,
-        id: &ConversationId,
-        reference: &str,
-        quote: Option<&str>,
-    ) -> std::result::Result<UserWords, String> {
-        let reference = reference.trim();
-        let latest = matches!(reference.to_lowercase().as_str(), "latest" | "last");
-        let seq = if latest {
-            None
-        } else {
-            Some(reference.trim_start_matches('#').parse::<i64>().map_err(|_| {
-                format!(
-                    "`user_message` is `latest` or a message number (#N, as search_transcript shows), not \"{reference}\""
-                )
-            })?)
-        };
-        let page = self
-            .core
-            .list_messages(
-                id.clone(),
-                seq.map(|seq| seq + 1),
-                if latest { 50 } else { 1 },
-            )
-            .await
-            .map_err(|err| format!("this conversation's messages can't be read: {err}"))?;
-        let message = match seq {
-            Some(seq) => page
-                .messages
-                .into_iter()
-                .rev()
-                .find(|message| message.seq == seq)
-                .ok_or_else(|| format!("this conversation has no message #{seq}"))?,
-            None => page
-                .messages
-                .into_iter()
-                .rev()
-                .find(|message| message.role == MessageRole::User)
-                .ok_or_else(|| "this conversation has no message from the user yet".to_owned())?,
-        };
-        if message.role != MessageRole::User {
-            let whose = match message.role {
-                MessageRole::Assistant => "yours",
-                MessageRole::Peer => "another session's",
-                MessageRole::System => "Brigadier's",
-                MessageRole::User => "the user's",
-            };
-            return Err(format!(
-                "message #{} isn't the user's: it is {whose}",
-                message.seq
-            ));
-        }
-        let words = self.full_words(&message).await;
-        let quote = quote.map(str::trim).filter(|quote| !quote.is_empty());
-        if let Some(quote) = quote
-            && !says(&words, quote)
-        {
-            return Err(format!(
-                "the user's message #{} doesn't say \"{quote}\"",
-                message.seq
-            ));
-        }
-        Ok(UserWords {
-            seq: message.seq,
-            id: message.id.clone(),
-            quote: quote.map(str::to_owned),
-            words,
-        })
     }
 
     /// `search_transcript`: passages of this conversation's full transcript.
@@ -1436,313 +1100,8 @@ impl SessionManager {
 
     // ----- what the Brain learns ------------------------------------------------------------
 
-    /// A read-only task reported, or a write task landed: its report becomes a node (the
-    /// task's question with its answer), each of its decisions another, linked to the report
-    /// and to the modules it touched. `order`, when given, assigns a version before spawning
-    /// the write, so an older report cannot replace a newer one even if it runs later.
-    pub(crate) fn learn_report(
-        &self,
-        task: &Task,
-        report: &Report,
-        order: Option<Arc<ReportLearning>>,
-    ) {
-        let manager = self.arc();
-        let learning = Learning::start(self.arc(), &task.conversation_id);
-        let (task, report) = (task.clone(), report.clone());
-        let version = order.as_ref().map(|order| order.next());
-        self.spawn(async move {
-            let _learning = learning;
-            // Kept before its claims are, so a report after a restart never reuses it.
-            if let Some(version) = version
-                && let Err(err) = manager
-                    .update_task(&task.conversation_id, &task.id, |task| {
-                        task.report_version = task.report_version.max(Some(version));
-                    })
-                    .await
-            {
-                tracing::warn!(task = %task.id, error = %err, "could not keep a report's version");
-            }
-            let write = manager.record_report(&task, &report, version);
-            let result = match (order, version) {
-                (Some(order), Some(version)) => order.keep(version, write).await,
-                _ => write.await,
-            };
-            if let Err(err) = result {
-                tracing::warn!(task = %task.id, error = %err, "the Brain could not keep a report");
-            }
-        });
-    }
-
-    /// A landed task's files with the hashes of their content in the commit that landed. The
-    /// index may not have seen that commit yet: with the hashes from before it, the report
-    /// would go stale as soon as the watcher caught up with the task's own change. Files the
-    /// index doesn't track stay untracked; one the commit lacks or git can't read is left out
-    /// of staleness rather than guessed, and so is every file when the repository can't be
-    /// read.
-    async fn as_landed(&self, task: &Task, landed: &str, files: Vec<FileRef>) -> Vec<FileRef> {
-        let unhashed: Vec<FileRef> = files
-            .iter()
-            .map(|file| FileRef {
-                path: file.path.clone(),
-                hash: None,
-            })
-            .collect();
-        let Ok(repo) = self.task_repo(task) else {
-            return unhashed;
-        };
-        let (git, commit) = (self.git.clone(), brigadier_git::Oid(landed.to_owned()));
-        blocking(move || {
-            let repo = git.open(&repo).map_err(super::git_error)?;
-            Ok(files
-                .into_iter()
-                .map(|file| {
-                    let hash = file.hash.as_ref().and_then(|_| {
-                        repo.file_at(&commit, &file.path)
-                            .ok()
-                            .flatten()
-                            .and_then(|content| brigadier_index::content_hash(&file.path, &content))
-                    });
-                    FileRef { hash, ..file }
-                })
-                .collect())
-        })
-        .await
-        .unwrap_or(unhashed)
-    }
-
-    /// `version` is the report's place among the task's reports, when it is known.
-    async fn record_report(
-        &self,
-        task: &Task,
-        report: &Report,
-        version: Option<u64>,
-    ) -> Result<()> {
-        if task.kind == TaskKind::Review {
-            return Ok(());
-        }
-        let Some(project) = self.project_of(&task.conversation_id) else {
-            return Ok(());
-        };
-        let project = self.project_brain(&project).await?;
-        let mut paths: Vec<String> = report.changes.clone();
-        paths.extend(mentioned_paths(&report.summary));
-        paths.sort();
-        paths.dedup();
-        let mut files = file_refs(project.index.as_ref(), &paths).await;
-        if let Some(landed) = &task.landed {
-            files = self.as_landed(task, landed, files).await;
-        }
-        let provenance = Provenance {
-            origin: Origin::Report,
-            session_id: Some(task.conversation_id.0.clone()),
-            task_id: Some(task.id.0.clone()),
-            job_id: None,
-            worker: Some(WorkerRef {
-                provider: task.route.choice.provider.binary().into(),
-                model: task.route.choice.model.clone(),
-            }),
-            // A landed write task's commit; what a read-only task looked at.
-            commit: task
-                .landed
-                .clone()
-                .or_else(|| task.workspace.as_ref().and_then(|w| w.base.clone())),
-            recorded_at_ms: now_ms(),
-            claim: None,
-        };
-        let kind = match task.kind {
-            TaskKind::Research => NodeKind::Research,
-            TaskKind::Implement | TaskKind::Merge => NodeKind::Task,
-            _ => NodeKind::Report,
-        };
-        let expires_at_ms = (kind == NodeKind::Research).then(|| now_ms() + RESEARCH_TTL_MS);
-        let node = NewNode {
-            kind,
-            key: Some(format!("task:{}", task.id.0)),
-            title: format!("task-{} {}", task.number, task.title),
-            body: report_body(task, report),
-            provenance: provenance.clone(),
-            files: files.clone(),
-            expires_at_ms,
-        };
-        // What it left in files rather than in its summary, with the report's provenance.
-        let parts: Vec<NewNode> = self
-            .findings_parts(task, report)
-            .await
-            .into_iter()
-            .enumerate()
-            .map(|(index, part)| NewNode {
-                kind,
-                key: Some(part_key(&task.id.0, index)),
-                title: part.title,
-                body: part.body,
-                provenance: provenance.clone(),
-                files: files.clone(),
-                expires_at_ms,
-            })
-            .collect();
-        let task_id = task.id.0.clone();
-        // Its decisions and what it learned are its claims (BUILD-PLAN A11): unverified, with
-        // the task and the report they came from, until evidence for each is checked.
-        let claimed = Provenance {
-            claim: Some(Claim {
-                report_version: version,
-                ..Claim::unverified()
-            }),
-            ..provenance.clone()
-        };
-        // Each line's own evidence, `[evidence: path:12-14 `words`]` (BUILD-PLAN E1): kept as
-        // its claim's sources, re-read whenever the claim is used.
-        let evidenced = |line: &str| {
-            let (text, cites) = super::evidence::evidence_tags(line);
-            (line.to_owned(), text, cites)
-        };
-        let decision_lines: Vec<_> = report
-            .decisions
-            .iter()
-            .filter(|decision| !decision.trim().is_empty())
-            .map(|decision| evidenced(decision))
-            .collect();
-        let learned_lines: Vec<_> = report
-            .learned
-            .iter()
-            .filter(|item| !item.trim().is_empty())
-            .map(|item| evidenced(item))
-            .collect();
-        let sourced = |cites: Vec<(String, String)>| {
-            let mut claim = claimed.clone();
-            let conversation = task.conversation_id.clone();
-            async move {
-                if let Some(claim) = claim.claim.as_mut() {
-                    claim.cites = cites.iter().map(|(cite, _)| cite.clone()).collect();
-                    claim.sources = self.claim_sources(&conversation, cites).await;
-                }
-                claim
-            }
-        };
-        let mut decisions = Vec::new();
-        for (decision, text, cites) in decision_lines {
-            decisions.push(NewNode {
-                kind: NodeKind::Decision,
-                key: Some(format!("task:{}:{}", task.id.0, blake_key(&decision))),
-                title: one_line(&text, 240),
-                body: format!(
-                    "{decision}\n(task-{}'s claim, unverified: {})",
-                    task.number, task.title
-                ),
-                provenance: crate::heap(|| sourced(cites)).await,
-                files: files.clone(),
-                expires_at_ms: None,
-            });
-        }
-        // What it says the next worker here should know (SESSION-FIXES-PLAN.md Q6.6), linked
-        // like its decisions to the report and the modules it touched.
-        let mut learned = Vec::new();
-        for (item, text, cites) in learned_lines {
-            learned.push(NewNode {
-                kind: NodeKind::Convention,
-                key: Some(format!("task:{}:learned:{}", task.id.0, blake_key(&item))),
-                title: one_line(&text, 240),
-                body: format!(
-                    "{item}\n(task-{}'s claim, unverified: {})",
-                    task.number, task.title
-                ),
-                provenance: crate::heap(|| sourced(cites)).await,
-                files: files.clone(),
-                expires_at_ms: None,
-            });
-        }
-        let facts: Vec<NewNode> = decisions.into_iter().chain(learned).collect();
-        let kept = facts.len() as u32;
-        let modules = modules_of(&project, &paths).await;
-        let brain = project.brain.clone();
-        blocking(move || record_report_nodes(&brain, &task_id, node, parts, facts, modules))
-            .await?;
-        self.update_task(&task.conversation_id, &task.id, |task| {
-            task.brain.facts_out = kept;
-        })
-        .await
-        .ok();
-        Ok(())
-    }
-
-    /// A report's findings files as Brain parts: the text a worker left in artifacts rather
-    /// than in its summary (research notes, markdown or plain-text findings; never a diff, a
-    /// transcript, command output or a binary), redacted with the task's secrets like
-    /// everything it recorded, at most [`FINDINGS_MAX_BYTES`] in all.
-    async fn findings_parts(&self, task: &Task, report: &Report) -> Vec<FindingsPart> {
-        let mut findings: Vec<&ArtifactRef> = Vec::new();
-        for artifact in report.artifacts.iter().chain(&task.outputs) {
-            if is_findings(artifact) && !findings.iter().any(|seen| seen.id == artifact.id) {
-                findings.push(artifact);
-            }
-        }
-        if findings.is_empty() {
-            return Vec::new();
-        }
-        let redactor = self.task_redactor(task).await;
-        let mut room = FINDINGS_MAX_BYTES;
-        let mut parts = Vec::new();
-        for artifact in findings {
-            if room < FINDINGS_PART_BYTES / 4 {
-                break;
-            }
-            let Ok(hash) = artifact.id.parse() else {
-                continue;
-            };
-            let Some(text) = self
-                .core
-                .store()
-                .blobs()
-                .get(hash)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-            else {
-                continue;
-            };
-            let text = match &redactor {
-                Some(redactor) => redactor.redact(&text).into_owned(),
-                None => text,
-            };
-            let kept = &text[..floor_boundary(&text, room)];
-            room -= kept.len();
-            let pieces = split_findings(kept);
-            let count = pieces.len();
-            for (index, piece) in pieces.into_iter().enumerate() {
-                let mut title = format!(
-                    "task-{} {} · {}",
-                    task.number,
-                    task.title,
-                    one_line(&artifact.title, 120)
-                );
-                if let Some(heading) = &piece.heading {
-                    title.push_str(&format!(" › {heading}"));
-                }
-                if count > 1 {
-                    title.push_str(&format!(" (part {} of {count})", index + 1));
-                }
-                let body = format!(
-                    "{}\n(from artifact {}, bytes {}–{} of {})",
-                    piece.text.trim_end(),
-                    artifact.id,
-                    piece.start,
-                    piece.end,
-                    text.len()
-                );
-                parts.push(FindingsPart {
-                    title: one_line(&title, 240),
-                    body,
-                });
-            }
-        }
-        parts.truncate(FINDINGS_MAX_PARTS);
-        parts
-    }
-
     /// Something the user settled on a card (an answer, a plan or outline go-ahead): a user
-    /// decision node. The user's own words the thread keeps with `remember` are checked
-    /// against their message and kept with the same origin (`remember_tool`).
+    /// decision node.
     pub(crate) fn learn_user_decision(
         &self,
         id: &ConversationId,
@@ -2011,46 +1370,12 @@ impl SessionManager {
     pub async fn brain_overview(&self, project: Option<ProjectId>) -> Result<BrainOverview> {
         let (brain, index) = self.brain_for(project.as_ref()).await?;
         let stats = blocking(move || brain.stats().map_err(brain_error)).await?;
-        let jobs = match &project {
-            Some(id) => self.brain_jobs(id).await,
-            None => Vec::new(),
-        };
         Ok(BrainOverview {
             project_id: project,
             stats,
             index: index.map(|index| index.status()),
             embedder: self.brains.embedder.status(),
-            jobs,
         })
-    }
-
-    /// A project's Brain jobs, newest first.
-    pub(crate) async fn brain_jobs(&self, id: &ProjectId) -> Vec<BrainJob> {
-        let Ok(page) = self
-            .core
-            .store()
-            .read_stream(
-                streams::brain(id),
-                StreamPage {
-                    before: None,
-                    kinds: vec!["brain.job".into()],
-                    limit: 200,
-                },
-            )
-            .await
-        else {
-            return Vec::new();
-        };
-        let mut jobs: Vec<BrainJob> = Vec::new();
-        for stored in page {
-            if let Ok(DomainEvent::BrainJobUpdated { job }) =
-                serde_json::from_str::<DomainEvent>(stored.payload.get())
-                && !jobs.iter().any(|known| known.id == job.id)
-            {
-                jobs.push(job);
-            }
-        }
-        jobs
     }
 
     pub async fn query_brain(
@@ -2515,80 +1840,6 @@ fn learn_structure(brain: &Brain, index: &CodeIndex) {
     }
 }
 
-/// The node keys of the modules that hold `paths` (the deepest module per path).
-async fn modules_of(project: &ProjectBrain, paths: &[String]) -> Vec<String> {
-    let Some(index) = project.index.clone() else {
-        return Vec::new();
-    };
-    let paths = paths.to_vec();
-    blocking(move || {
-        let map = index.project_map().map_err(index_error)?;
-        let mut keys: Vec<String> = paths
-            .iter()
-            .filter_map(|path| {
-                map.modules
-                    .iter()
-                    .filter(|module| {
-                        module.path.is_empty()
-                            || module.path == "."
-                            || path.starts_with(&format!("{}/", module.path.trim_end_matches('/')))
-                    })
-                    .max_by_key(|module| module.path.len())
-                    .map(|module| format!("module:{}", module.path))
-            })
-            .collect();
-        keys.sort();
-        keys.dedup();
-        Ok(keys)
-    })
-    .await
-    .unwrap_or_default()
-}
-
-/// Repository-relative `paths` with their indexed content hashes.
-pub(super) async fn file_refs(index: Option<&CodeIndex>, paths: &[String]) -> Vec<FileRef> {
-    let paths: Vec<String> = paths
-        .iter()
-        .map(|path| path.trim().trim_start_matches("./").to_owned())
-        .filter(|path| !path.is_empty() && !path.starts_with('/'))
-        .collect();
-    if paths.is_empty() {
-        return Vec::new();
-    }
-    let Some(index) = index.cloned() else {
-        return paths
-            .into_iter()
-            .map(|path| FileRef { path, hash: None })
-            .collect();
-    };
-    blocking(move || index.file_hashes(&paths).map_err(index_error))
-        .await
-        .map(|hashes| {
-            hashes
-                .into_iter()
-                .map(|(path, hash)| FileRef { path, hash })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Repository-relative paths a text mentions (`crates/core/src/lib.rs`, `src/app.tsx`).
-fn mentioned_paths(text: &str) -> Vec<String> {
-    text.split(|c: char| c.is_whitespace() || matches!(c, '`' | '(' | ')' | ',' | ';' | '"' | '\''))
-        .map(|word| word.trim_end_matches(['.', ':']))
-        .filter(|word| {
-            word.contains('/')
-                && !word.starts_with('/')
-                && !word.contains("://")
-                && word
-                    .rsplit('/')
-                    .next()
-                    .is_some_and(|name| name.contains('.') && !name.ends_with('.'))
-        })
-        .map(|word| word.split(':').next().unwrap_or(word).to_owned())
-        .collect()
-}
-
 /// A report as the Brain keeps it: the question it answered, then the answer.
 pub(crate) fn report_text(task: &Task, report: &Report) -> String {
     let mut text = format!(
@@ -2613,211 +1864,6 @@ pub(crate) fn report_text(task: &Task, report: &Report) -> String {
         }
     }
     text
-}
-
-/// A report as the Brain keeps it: [`report_text`], then its artifacts.
-fn report_body(task: &Task, report: &Report) -> String {
-    let mut text = report_text(task, report);
-    let artifacts: Vec<&ArtifactRef> = report.artifacts.iter().chain(&task.outputs).collect();
-    if !artifacts.is_empty() {
-        text.push_str("\nArtifacts:");
-        for artifact in artifacts {
-            text.push_str(&format!(
-                "\n- {} (artifact {})",
-                one_line(&artifact.title, 120),
-                artifact.id
-            ));
-        }
-    }
-    text
-}
-
-/// The cleanup-ledger owner of a project's Brain files.
-/// A part of a report's findings files, as a Brain node's title and body.
-struct FindingsPart {
-    title: String,
-    body: String,
-}
-
-/// The key of the `index`th findings part of a task's report.
-fn part_key(task_id: &str, index: usize) -> String {
-    format!("task:{task_id}:part:{}", index + 1)
-}
-
-/// Whether an artifact holds findings worth keeping in the Brain: a note or a markdown or
-/// plain-text file, not a diff, transcript, command output, log or binary.
-fn is_findings(artifact: &ArtifactRef) -> bool {
-    let log = artifact
-        .file_name
-        .as_deref()
-        .is_some_and(|name| name.ends_with(".log") || name.ends_with(".out"));
-    matches!(artifact.kind, ArtifactKind::Note | ArtifactKind::File)
-        && (artifact.mime == "text/markdown" || (artifact.mime == "text/plain" && !log))
-}
-
-/// Records a report, its findings parts and its decisions in one write. What an earlier
-/// version of the report recorded and this one doesn't (surplus parts, dropped decisions)
-/// loses the task's support, and goes unless something else supports it.
-fn record_report_nodes(
-    brain: &Brain,
-    task_id: &str,
-    node: NewNode,
-    parts: Vec<NewNode>,
-    decisions: Vec<NewNode>,
-    modules: Vec<String>,
-) -> Result<()> {
-    let count = parts.len();
-    let nodes: Vec<NewNode> = std::iter::once(node)
-        .chain(parts)
-        .chain(decisions)
-        .collect();
-    brain
-        .refresh_task(task_id, nodes, move |ids| {
-            let Some((report_id, rest)) = ids.split_first() else {
-                return Vec::new();
-            };
-            let (parts, decisions) = rest.split_at(count.min(rest.len()));
-            let mut edges = Vec::new();
-            for module in &modules {
-                edges.push(Edge {
-                    from: report_id.clone(),
-                    to: format!("key:{module}"),
-                    kind: EdgeKind::About,
-                });
-            }
-            for part_id in parts {
-                edges.push(Edge {
-                    from: report_id.clone(),
-                    to: part_id.clone(),
-                    kind: EdgeKind::Contains,
-                });
-            }
-            for decision_id in decisions {
-                edges.push(Edge {
-                    from: decision_id.clone(),
-                    to: report_id.clone(),
-                    kind: EdgeKind::DecidedIn,
-                });
-                for module in &modules {
-                    edges.push(Edge {
-                        from: decision_id.clone(),
-                        to: format!("key:{module}"),
-                        kind: EdgeKind::About,
-                    });
-                }
-            }
-            edges
-        })
-        .map_err(brain_error)?;
-    Ok(())
-}
-
-/// One part of a findings file: its text, where it sits in the file, and the heading it is
-/// under.
-#[derive(Debug, PartialEq)]
-struct FindingsPiece {
-    text: String,
-    start: usize,
-    end: usize,
-    heading: Option<String>,
-}
-
-/// A findings file in parts of at most [`FINDINGS_PART_BYTES`], whole lines where it can: a
-/// new part starts at a heading once the one before is half full, and a line longer than a
-/// part is split between words. Each part knows the last heading before it.
-fn split_findings(text: &str) -> Vec<FindingsPiece> {
-    let mut pieces = Vec::new();
-    let mut heading: Option<String> = None;
-    let mut part_heading: Option<String> = None;
-    let mut start = 0;
-    let mut end = 0;
-    let mut at = 0;
-    let flush =
-        |pieces: &mut Vec<FindingsPiece>, start: usize, end: usize, heading: &Option<String>| {
-            if !text[start..end].trim().is_empty() {
-                pieces.push(FindingsPiece {
-                    text: text[start..end].to_owned(),
-                    start,
-                    end,
-                    heading: heading.clone(),
-                });
-            }
-        };
-    for line in text.split_inclusive('\n') {
-        let line_start = at;
-        at += line.len();
-        let title = line
-            .trim_start()
-            .strip_prefix('#')
-            .map(|rest| one_line(rest.trim_start_matches('#'), 120));
-        let full = end - start + line.len() > FINDINGS_PART_BYTES;
-        let at_heading = title.is_some() && end - start >= FINDINGS_PART_BYTES / 2;
-        if end > start && (full || at_heading) {
-            flush(&mut pieces, start, end, &part_heading);
-            start = line_start;
-            end = line_start;
-            part_heading.clone_from(&heading);
-        }
-        if let Some(title) = title.filter(|title| !title.is_empty()) {
-            heading = Some(title);
-            if end == start {
-                part_heading.clone_from(&heading);
-            }
-        }
-        if line.len() <= FINDINGS_PART_BYTES {
-            end = at;
-            continue;
-        }
-        // A line longer than a part: whole parts of it, split between words.
-        let mut from = line_start;
-        while at - from > FINDINGS_PART_BYTES {
-            let limit = floor_boundary(&text[from..], FINDINGS_PART_BYTES);
-            let cut = text[from..from + limit]
-                .rfind([' ', '\t'])
-                .filter(|cut| *cut >= limit / 2)
-                .map_or(limit, |cut| cut + 1);
-            flush(&mut pieces, from, from + cut, &part_heading);
-            from += cut;
-        }
-        start = from;
-        end = at;
-    }
-    flush(&mut pieces, start, end, &part_heading);
-    pieces
-}
-
-/// The largest length of at most `max` bytes that ends on a character boundary of `text`.
-fn floor_boundary(text: &str, max: usize) -> usize {
-    if text.len() <= max {
-        return text.len();
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
-}
-
-/// A stable key part for a piece of text.
-/// A user's message a Brain write cites, checked: its number and the words it quotes.
-#[derive(Debug, Clone)]
-pub(crate) struct UserWords {
-    pub seq: i64,
-    /// The message's id: the id of the request it started, when it started one.
-    pub id: String,
-    pub quote: Option<String>,
-    /// The whole message, as the user wrote it.
-    pub words: String,
-}
-
-impl UserWords {
-    /// Where the node came from, for its body.
-    fn source(&self) -> String {
-        match &self.quote {
-            Some(quote) => format!("(the user's words in message #{}: \"{quote}\")", self.seq),
-            None => format!("(the user's message #{})", self.seq),
-        }
-    }
 }
 
 /// The user's messages a handoff note's decisions are checked against, at most.
@@ -2860,21 +1906,6 @@ pub(crate) fn says(text: &str, quote: &str) -> bool {
     };
     let quote = plain(quote.trim_matches(['"', '\'', '\u{201c}', '\u{201d}', ' ']));
     !quote.is_empty() && plain(text).contains(&quote)
-}
-
-/// A file named for a Brain write without its line range (`src/a.rs:12-30` is `src/a.rs`).
-fn without_lines(file: &str) -> &str {
-    let file = file.trim();
-    match file.rsplit_once(':') {
-        Some((path, lines))
-            if !path.is_empty()
-                && !lines.is_empty()
-                && lines.chars().all(|c| c.is_ascii_digit() || c == '-') =>
-        {
-            path
-        }
-        _ => file,
-    }
 }
 
 pub(super) fn blake_key(text: &str) -> String {
@@ -2934,11 +1965,6 @@ pub(crate) fn index_error(err: brigadier_index::Error) -> Error {
     Error::Invalid(err.to_string())
 }
 
-/// `code_search`, answered from `index`.
-pub(crate) async fn code_search(index: CodeIndex, args: CodeSearch) -> Result<String> {
-    Ok(code_search_found(index, args).await?.0)
-}
-
 /// [`code_search`], with the files its answer names, each once.
 async fn code_search_found(index: CodeIndex, args: CodeSearch) -> Result<(String, Vec<String>)> {
     let kind = match args.kind.as_deref() {
@@ -2987,11 +2013,6 @@ async fn code_search_found(index: CodeIndex, args: CodeSearch) -> Result<(String
         }
     }
     Ok((text.trim_end().to_owned(), files))
-}
-
-/// `code_refs`, answered from `index`.
-pub(crate) async fn code_refs(index: CodeIndex, args: CodeRefs) -> Result<String> {
-    Ok(code_refs_found(index, args).await?.0)
 }
 
 /// [`code_refs`], with the files its answer names, each once.
@@ -3057,124 +2078,5 @@ mod tests {
         );
         assert_eq!(command_role("rg -n thread_items crates"), "read");
         assert_eq!(command_role("/bin/zsh -lc 'cargo test -p core'"), "command");
-    }
-
-    struct TestDir(PathBuf);
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn report_node(key: String, body: &str) -> NewNode {
-        NewNode {
-            kind: NodeKind::Report,
-            key: Some(key),
-            title: "Worker findings".into(),
-            body: body.into(),
-            provenance: Provenance {
-                origin: Origin::Report,
-                session_id: None,
-                task_id: Some("test".into()),
-                job_id: None,
-                worker: None,
-                commit: None,
-                recorded_at_ms: 1,
-                claim: None,
-            },
-            files: Vec::new(),
-            expires_at_ms: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn findings_survive_when_the_addendum_runs_before_the_original() {
-        let dir = TestDir(
-            std::env::temp_dir().join(format!("brigadier-report-order-{}", uuid::Uuid::new_v4())),
-        );
-        let brain = Brain::open(
-            &dir.0.join("brain.sqlite"),
-            Scope::Project,
-            Embedder::new(dir.0.join("embeddings")),
-        )
-        .unwrap();
-        let order = ReportLearning::default();
-        // Like learn_report, reserve both versions before either future is polled.
-        let original_version = order.next();
-        let addendum_version = order.next();
-        let original = async {
-            record_report_nodes(
-                &brain,
-                "test",
-                report_node("task:test".into(), "The findings are below."),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            )
-        };
-        let addendum = || async {
-            record_report_nodes(
-                &brain,
-                "test",
-                report_node("task:test".into(), "The findings are in the addendum."),
-                vec![report_node(part_key("test", 0), "The late findings.")],
-                Vec::new(),
-                Vec::new(),
-            )
-        };
-        order.keep(addendum_version, addendum()).await.unwrap();
-        let part = brain
-            .node_by_key(NodeKind::Report, &part_key("test", 0))
-            .unwrap()
-            .unwrap();
-        order.keep(original_version, original).await.unwrap();
-        assert_eq!(
-            brain
-                .node_by_key(NodeKind::Report, "task:test")
-                .unwrap()
-                .unwrap()
-                .body,
-            "The findings are in the addendum."
-        );
-        assert_eq!(
-            brain
-                .node_by_key(NodeKind::Report, &part_key("test", 0))
-                .unwrap()
-                .unwrap(),
-            part
-        );
-        // Learning the same augmented report again updates its existing nodes.
-        order.keep(order.next(), addendum()).await.unwrap();
-        let kept = brain
-            .node_by_key(NodeKind::Report, &part_key("test", 0))
-            .unwrap()
-            .unwrap();
-        assert_eq!(kept.id, part.id);
-        assert_eq!(kept.body, "The late findings.");
-        assert_eq!(brain.nodes(&NodeFilter::default()).unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn a_failed_report_write_can_be_retried() {
-        let order = ReportLearning::default();
-        let version = order.next();
-        assert!(
-            order
-                .keep(version, async {
-                    Err(Error::Invalid("write failed".into()))
-                })
-                .await
-                .is_err()
-        );
-        let mut retried = false;
-        order
-            .keep(version, async {
-                retried = true;
-                Ok(())
-            })
-            .await
-            .unwrap();
-        assert!(retried);
     }
 }

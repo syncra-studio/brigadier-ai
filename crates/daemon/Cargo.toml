@@ -18,7 +18,6 @@ brigadier-cli.workspace = true
 brigadier-core.workspace = true
 brigadier-index.workspace = true
 brigadier-ipc.workspace = true
-brigadier-mcp-server.workspace = true
 brigadier-providers.workspace = true
 brigadier-sandbox.workspace = true
 brigadier-store.workspace = true

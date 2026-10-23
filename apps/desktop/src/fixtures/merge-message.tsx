@@ -1,7 +1,7 @@
 /**
  * A finished turn's end in a production ConversationView (the finished phase flow): the first
  * request merged its pull request, and its reply carries the thread's proof, a
- * screenshot and a recording (`attach_proof`), as thumbnails, then the merge in its Changes card
+ * screenshot and a recording, as thumbnails, then the merge in its Changes card
  * with Revert and View changes: the merge's own (the turn edited nothing it counted), its files'
  * (?edited=1), or, merged by the next request (?later=1), the first one's files' while the second
  * shows the merge's own. ?drive=1 writes what the turn shows to #merge-message-result,

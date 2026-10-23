@@ -1,7 +1,7 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a finished research
  * answer in the app's own conversation view (Q87). The answer links its sources where it uses them,
- * links its full report (a page `save_report` made) and ends with a `### Details` section.
+ * links its full report (a page `brigadier report save` made) and ends with a `### Details` section.
  * `kind=session` shows it in a session (else a Chat); `changed=1` has the request change code.
  * `bold=1` writes its breakdown in bold-led lines, as models still sometimes do (#319), with one
  * bold run mid-sentence; `details=0` drops its Details. `old=1` is an answer written before Q87:

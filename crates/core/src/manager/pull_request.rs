@@ -125,7 +125,7 @@ async fn lookup_pushed(
     git: brigadier_git::Git,
     checkout: PathBuf,
     name: String,
-    gh: super::ci::Gh,
+    gh: super::gh::Gh,
 ) -> Option<std::result::Result<Option<FoundPr>, String>> {
     blocking(move || {
         let repo = git.open(&checkout).map_err(git_error)?;
@@ -215,6 +215,54 @@ const PR_WATCH: [Duration; 3] = [
     Duration::from_secs(120),
     Duration::from_secs(24 * 60 * 60),
 ];
+/// How long fetching the base's remote may take before git is stopped.
+const FETCH_PATIENCE: Duration = Duration::from_secs(20);
+
+impl SessionManager {
+    /// Brings the base up to date with its upstream before a merge (#224): fetches its remote
+    /// (git is stopped after [`FETCH_PATIENCE`]) and fast-forwards local `base` when it is only
+    /// behind. A checkout of it that is busy, or has changes the fast-forward would touch,
+    /// keeps it as it is: the merge result says how far it is behind. Returns why the fetch
+    /// failed.
+    async fn sync_base(&self, repo: &str, base: &str) -> Option<String> {
+        let (git, path, branch) = (self.git.clone(), PathBuf::from(repo), base.to_owned());
+        let failed = blocking(move || {
+            git.open(&path)
+                .map_err(git_error)?
+                .fetch_remote_of(&branch, FETCH_PATIENCE)
+                .map_err(git_error)
+        })
+        .await
+        .err()
+        .map(|err| err.to_string());
+        let (git, path, branch) = (self.git.clone(), PathBuf::from(repo), base.to_owned());
+        let forwarded = blocking(move || {
+            let repo = git.open(&path).map_err(git_error)?;
+            let Some(gap) = repo.upstream_gap(&branch).map_err(git_error)? else {
+                return Ok(());
+            };
+            if gap.ahead > 0 || gap.behind == 0 {
+                return Ok(());
+            }
+            let Some(tip) = repo.branch_tip(&branch).map_err(git_error)? else {
+                return Ok(());
+            };
+            repo.land(&brigadier_git::LandRequest {
+                branch,
+                expected_tip: tip,
+                commit: gap.tip,
+            })
+            .map(drop)
+            .map_err(git_error)
+        })
+        .await;
+        if let Err(err) = forwarded {
+            tracing::warn!(%err, "the base couldn't be brought up to date with its upstream");
+        }
+        failed
+    }
+}
+
 #[cfg(test)]
 const PR_WATCH: [Duration; 3] = [
     Duration::from_millis(100),

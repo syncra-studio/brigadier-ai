@@ -52,8 +52,8 @@ export function webUse(entries: readonly FileEntry[]): { pages: string[]; search
 export function mcpServerOf(name: string): string | null {
   const claude = /^mcp__(.+?)__/.exec(name)?.[1];
   const server = claude ?? /^([^/\s]+)\/[^/\s]+$/.exec(name)?.[1] ?? null;
-  // Brigadier's own tools, and Codex's subagent calls (`agents/spawn`), are no source.
-  if (!server || server === "brigadier" || (!claude && server === "agents")) return null;
+  // Codex's subagent calls (`agents/spawn`) are no source.
+  if (!server || (!claude && server === "agents")) return null;
   return server;
 }
 
@@ -74,7 +74,7 @@ export function usedMcpServers(entries: readonly FileEntry[]): string[] {
 }
 
 /** Shell tools whose call carries its command as `command`. */
-const SHELL_TOOLS = new Set(["Bash", "run", "run_unsandboxed"]);
+const SHELL_TOOLS = new Set(["Bash"]);
 
 /** The thread's commands that finished, by item id: a Codex command, a Claude shell call. */
 export function finishedCommands(entries: readonly FileEntry[]): { itemId: string; command: string }[] {

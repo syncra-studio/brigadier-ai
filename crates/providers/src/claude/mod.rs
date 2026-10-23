@@ -33,9 +33,8 @@
 //! (permission prompt tool, the switched-off servers and skills, the model allowlist). A hook
 //! of the user's that answers a permission request answers it before the user is asked: their
 //! own rule, as in their terminal. Every other session
-//! (reviewers, Brain jobs, Chats, one-shot runs) loads only the project's settings plus
-//! Brigadier's own (`--setting-sources project`), and only Brigadier's MCP servers
-//! (`--strict-mcp-config`).
+//! (reviewers, Chats, one-shot runs) loads only the project's settings plus Brigadier's own
+//! (`--setting-sources project`), and only the MCP servers it is given (`--strict-mcp-config`).
 //!
 //! A worker's sub-agents run only on the models its task may use ([`SessionSpec::allowed_models`]):
 //! `availableModels` in its settings lists their exact ids, and when Claude's prefix matching
@@ -99,8 +98,6 @@ const THREAD_TOOLS: &str =
     "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop,Skill";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
-/// A Brain job's built-in tools ([`ToolSet::Reader`]).
-const READER_TOOLS: &str = "Read,Grep,Glob";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
 /// everything else is denied, and nothing prompts.
 const REVIEW_ALLOWED: &str = "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)";
@@ -322,7 +319,7 @@ impl Claude {
         user_config: Option<&Path>,
     ) -> Vec<String> {
         // A thread or a worker loads the user's settings, the project's and their local ones,
-        // with their MCP servers beside Brigadier's; `--settings` wins over all of them. Every
+        // with their MCP servers beside any it is given; `--settings` wins over all of them. Every
         // other session loads only the project's, and only Brigadier's servers. The project's
         // and local settings (their hooks among them) load only for a folder the user trusts
         // ([`SessionSpec::project`]): a thread works in the checkout itself (S2), where Claude
@@ -387,13 +384,6 @@ impl Claude {
                 args.push(REVIEW_TOOLS.into());
                 args.push("--allowedTools".into());
                 args.push(format!("{REVIEW_ALLOWED} {BRIGADIER_ALLOWED}"));
-            }
-            ToolSet::Reader => {
-                args.push("--tools".into());
-                args.push(READER_TOOLS.into());
-                // The working folder, git status and the like go in the first message, so
-                // the system prompt is the same for every job and their start is cached once.
-                args.push("--exclude-dynamic-system-prompt-sections".into());
             }
         }
         args.push("--settings".into());
@@ -730,15 +720,12 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
             },
         },
     });
-    // A worker, a thread or a Brain job needs none of what ships with Claude Code for a person at the
+    // A worker or a thread needs none of what ships with Claude Code for a person at the
     // keyboard, and each of it is in every request or connects at start: bundled skills and
     // workflows, claude.ai's MCP connectors, the Artifact tool, Remote Control
     // (SESSION-FIXES-PLAN.md Q6.5). Each key is in 2.1.296's settings schema; `enableArtifact:
     // false` replaces the deprecated `disableArtifact`, and set in `--settings` it wins.
-    if matches!(
-        spec.tools,
-        ToolSet::Lean | ToolSet::Thread | ToolSet::Reader
-    ) {
+    if matches!(spec.tools, ToolSet::Lean | ToolSet::Thread) {
         settings["disableBundledSkills"] = json!(true);
         settings["disableClaudeAiConnectors"] = json!(true);
         settings["enableArtifact"] = json!(false);
@@ -2566,7 +2553,6 @@ for line in sys.stdin:
                 ToolSet::Web,
                 ToolSet::Thread,
                 ToolSet::Review,
-                ToolSet::Reader,
             ] {
                 spec.tools = tools;
                 let args = Claude::session_args(&spec, dir.path(), native_id, false, None).unwrap();
@@ -2993,44 +2979,13 @@ for line in sys.stdin:
         assert!(hooks.get("PreToolUse").is_none());
     }
 
-    /// BUILD-PLAN C5: a Brain job reads and searches only, and its system prompt has no
-    /// per-session sections, so every job of a batch starts on the same cached prefix.
-    #[test]
-    fn a_brain_job_reads_only_on_a_system_prompt_every_job_shares() {
-        let cwd = Temp::new();
-        let session = SessionSpec {
-            tools: ToolSet::Reader,
-            ..spec(cwd.path(), &[])
-        };
-        let args = Claude::session_args(&session, cwd.path(), "n", false, None).unwrap();
-        let tools = args
-            .iter()
-            .position(|arg| arg == "--tools")
-            .expect("--tools");
-        assert_eq!(args[tools + 1], "Read,Grep,Glob");
-        assert!(
-            args.iter()
-                .any(|arg| arg == "--exclude-dynamic-system-prompt-sections")
-        );
-        let worker = SessionSpec {
-            tools: ToolSet::Lean,
-            ..spec(cwd.path(), &[])
-        };
-        let args = Claude::session_args(&worker, cwd.path(), "n", false, None).unwrap();
-        assert!(
-            !args
-                .iter()
-                .any(|arg| arg == "--exclude-dynamic-system-prompt-sections")
-        );
-    }
-
     /// SESSION-FIXES-PLAN.md Q6.5: workers and threads start without what ships for a person
     /// at the keyboard, and workers can't open Claude's own questions or plan mode.
     #[test]
     fn workers_and_threads_start_without_bundled_extras_and_workers_without_questions() {
         let cwd = Temp::new();
         let cwd = cwd.path();
-        for tools in [ToolSet::Lean, ToolSet::Thread, ToolSet::Reader] {
+        for tools in [ToolSet::Lean, ToolSet::Thread] {
             let session = SessionSpec {
                 tools,
                 ..spec(cwd, &[])
@@ -3106,7 +3061,6 @@ for line in sys.stdin:
             ToolSet::Web,
             ToolSet::Thread,
             ToolSet::Review,
-            ToolSet::Reader,
         ] {
             let session = SessionSpec {
                 tools,
@@ -3255,7 +3209,7 @@ for line in sys.stdin:
     }
 
     /// A thread and a worker load the user's settings, the project's and their local ones, and
-    /// their MCP servers beside Brigadier's; every other role keeps the sealed setup.
+    /// their MCP servers, with none of Brigadier's; every other role keeps the sealed setup.
     #[test]
     fn threads_and_workers_run_with_the_users_own_setup() {
         let cwd = Temp::new();
@@ -3292,9 +3246,11 @@ for line in sys.stdin:
                 !args.contains(&"--strict-mcp-config".to_owned()),
                 "{tools:?}"
             );
-            assert!(
-                flag(&args, "--mcp-config").is_some(),
-                "Brigadier's servers too"
+            // The user's own servers load from their settings; Brigadier adds none (S16c).
+            assert_eq!(
+                flag(&args, "--mcp-config").as_deref(),
+                Some(r#"{"mcpServers":{}}"#),
+                "{tools:?}"
             );
         }
         for tools in [
@@ -3302,7 +3258,6 @@ for line in sys.stdin:
             ToolSet::None,
             ToolSet::Web,
             ToolSet::Review,
-            ToolSet::Reader,
         ] {
             let session = SessionSpec {
                 tools,

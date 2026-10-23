@@ -11,7 +11,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use super::SessionManager;
-use super::ci::{Gh, RunError};
+use super::gh::{Gh, RunError};
 use crate::feedback::{
     FEEDBACK_REPO, FeedbackFiled, FeedbackFiling, FeedbackWriteUp, GitHubSignIn, JUDGE_PROMPT,
     KnownIssue, device_code, device_page, judge_turn, mark_duplicates, reports_of, write_prompt,

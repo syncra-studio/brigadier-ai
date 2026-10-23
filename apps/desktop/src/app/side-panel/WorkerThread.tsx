@@ -10,7 +10,6 @@ import {
 import { ActionRow, exitOf } from "@/app/side-panel/ActionRow";
 import { EntryView } from "@/app/side-panel/EntryView";
 import { WorkerBrief } from "@/app/side-panel/WorkerBrief";
-import { WorkerMarkdown } from "@/app/side-panel/WorkerMarkdown";
 import { rowFinished, workerStateOf } from "@/app/conversation/activity/workerState";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
@@ -34,15 +33,6 @@ import { loadWorkerThread, useWorkerThreads } from "@/state/cliThread";
 
 /** How often a working worker's thread is read again while its panel is open. */
 export const WORKER_THREAD_EVERY_MS = 1_500;
-
-/** An earlier report, where the worker sent it: its answer of that turn. */
-function EarlierAnswer({ text }: { text: string }) {
-  return (
-    <div data-slot="worker-earlier-report" className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
-      <WorkerMarkdown text={text} />
-    </div>
-  );
-}
 
 /** What the worker does right now, as the thread's last line, when no row of its says it. */
 function liveLabel(entries: readonly ThreadEntry[]): string | null {
@@ -140,8 +130,6 @@ export function WorkerThread({ conversationId, row }: { conversationId: string; 
         }}
         renderStep={(step, key) => <ActionRow key={key} item={step} />}
       />
-    ) : item.entry.kind === "report" ? (
-      item.entry.summary && <EarlierAnswer key={item.entry.key} text={item.entry.summary} />
     ) : (
       <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} sent={[]} />
     );

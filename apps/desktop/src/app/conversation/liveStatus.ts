@@ -91,7 +91,7 @@ function leadHead({ board, requestIds, thinkingLive, compacting }: StatusInput):
   // A retry stalls whatever streamed so far: say so over it.
   if (board.doing && RETRYING.has(board.doing)) return { text: board.doing, tone: "busy" };
   const runRequest = board.runRequest;
-  // A plumbing call (one to a worker) has no row of its own: its "Delegating to a worker" shows here.
+  // A plumbing call (a tool search) has no row of its own: what the lead does shows here.
   const toolRunning = board.orchestratorSteps.some((step) => step.requestId === runRequest
     && step.kind.type === "tool" && step.kind.status === "inProgress" && !isPlumbing(step.kind.name));
   const streaming = !!board.streaming?.text && (board.streaming.requestId === null || requestIds.includes(board.streaming.requestId));

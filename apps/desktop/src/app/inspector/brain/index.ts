@@ -12,8 +12,6 @@ export * from "./EmbedderState";
 export * from "./HitRow";
 export * from "./IndexSection";
 export * from "./IndexState";
-export * from "./JobRow";
-export * from "./JobsSection";
 export * from "./NodeLink";
 export * from "./NodesByKindList";
 export * from "./OrchestratorReadsDisclosure";

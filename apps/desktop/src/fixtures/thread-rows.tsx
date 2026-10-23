@@ -148,9 +148,9 @@ const group: { key: string; described: Described }[] = [
   { key: "read-running", described: { words: stepWords({ name: "Read", detail: "/repo/src/round.js", status: "inProgress" }), status: "inProgress" } },
 ];
 
-/** A finished group whose first step is project memory: its icon is its summary's first segment's. */
+/** A finished group whose first step is a web search: its icon is its summary's first segment's. */
 const doneGroup: { key: string; described: Described }[] = [
-  { key: "memory", described: { words: stepWords({ name: "query_brain", detail: "rounding", status: "completed" }), status: "completed" } },
+  { key: "web", described: { words: stepWords({ name: "WebSearch", detail: "rounding", status: "completed" }), status: "completed" } },
   { key: "ran", described: command("npm test", "completed", { startedAtMs: now - 41000, endedAtMs: now }) },
   { key: "read", described: { words: stepWords({ name: "Read", detail: "/repo/src/math.js", status: "completed" }), status: "completed" } },
 ];

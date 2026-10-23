@@ -1,13 +1,9 @@
 //! Connections from CLI sessions, which carry a grant instead of the UI token.
 //!
-//! [`serve_mcp`]: after `ClientFrame::Mcp`, the connection is raw MCP, served in-process by
-//! `brigadier_mcp_server` against the session manager. It runs as a tracked connection, so an
-//! orderly quit closes it. [`serve_hook`]: after `ClientFrame::Hook`, a Claude thread's output
-//! hook sends one command output, which is stored for the thread, and gets one answer.
+//! [`serve_hook`]: after `ClientFrame::Hook`, a Claude thread's output hook sends one command
+//! output, which is stored for the thread, and gets one answer.
 //! [`serve_cli`]: after `ClientFrame::Cli`, a session's `brigadier` command sends one call and
 //! gets one answer. Grants are never logged.
-
-use tracing::Instrument;
 
 use std::sync::Arc;
 
@@ -21,55 +17,6 @@ use brigadier_ipc::{Connection, RawStream};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use crate::server::Daemon;
-
-fn role_name(role: &Role) -> &'static str {
-    match role {
-        Role::Orchestrator { .. } => "orchestrator",
-        Role::NoteFork { .. } => "note fork",
-        Role::Worker { .. } => "worker",
-        Role::BrainJob { .. } => "brain job",
-        Role::Chat { .. } => "chat",
-        Role::TabChat { .. } => "tab chat",
-        Role::OutputHook { .. } => "output hook",
-    }
-}
-
-/// Serves the Brigadier MCP tools on `stream` for an orchestrator, worker, Brain job or Chat
-/// grant; any other grant closes the connection at once.
-pub async fn serve_mcp(daemon: Arc<Daemon>, grant: String, stream: RawStream) {
-    let host: Arc<dyn ToolHost> = daemon.sessions.clone();
-    let role = match host.role(&grant) {
-        Some(
-            role @ (Role::Orchestrator { .. }
-            | Role::NoteFork { .. }
-            | Role::Worker { .. }
-            | Role::BrainJob { .. }
-            | Role::Chat { .. }
-            | Role::TabChat { .. }),
-        ) => role,
-        other => {
-            let role = other.as_ref().map_or("unknown", role_name);
-            tracing::warn!(role, "refused an MCP connection: not a tool grant");
-            return;
-        }
-    };
-    let private_logs = matches!(role, Role::TabChat { .. });
-    let role = role_name(&role);
-    tracing::debug!(role, "MCP connection opened");
-    let span = if private_logs {
-        tracing::info_span!("tab_chat_private")
-    } else {
-        tracing::Span::none()
-    };
-    match brigadier_mcp_server::serve(host, grant, stream, daemon.closing.child_token())
-        .instrument(span)
-        .await
-    {
-        Ok(()) => tracing::debug!(role, "MCP connection closed"),
-        Err(_) if private_logs => tracing::warn!(role = "tab chat", "MCP connection failed"),
-        Err(err) => tracing::warn!(role, error = %err, "MCP connection failed"),
-    }
-}
 
 /// How long a hook may take to send its output.
 const HOOK_READ_TIMEOUT: Duration = Duration::from_secs(30);

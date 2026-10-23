@@ -296,7 +296,7 @@ test("a reply the file calls the final answer is the turn's answer from its time
 });
 
 test("a call's kind, detail and exit read as the engine's", () => {
-  assert.equal(toolItem("mcp__brigadier__run", null), "command");
+  assert.equal(toolItem("Bash", null), "command");
   assert.equal(toolItem("Read", '{"file_path":"shot.PNG"}'), "image");
   assert.equal(toolItem("WebFetch", null), "web");
   assert.equal(toolItem("Write", null), "files");

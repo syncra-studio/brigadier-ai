@@ -60,7 +60,7 @@ useApp.setState((s) => ({ providers: { ...s.providers, view: { providers: [{ pro
 const events: ProviderEvent[] = done ? [
   ...["I’ll inspect the project files and its Git metadata.", "I’ll read the Python functions first.", "Next I’ll inspect the JavaScript and text files.", "I’ll include the Git metadata in the inventory.", "The inspection remains read only."].map((text, index) => ({ type: "message" as const, itemId: `early-${index}`, role: "assistant" as const, text })),
   ...["ls -la", "cat m1.py", "cat m2.py", "git status", "git log --oneline"].map((command, index) => ({ type: "command" as const, itemId: `cmd-${index}`, command, cwd: null, status: "completed" as const, exitCode: 0, output: "Clean", durationMs: null })),
-  { type: "toolCall", itemId: "report", name: "mcp__brigadier__submit_report", input: "{}", status: "completed", output: null },
+  { type: "message", itemId: "report", role: "assistant", text: "The inventory is ready." },
   { type: "command", itemId: "recent", command: "python3 -B - <<'PY'\nfrom pathlib import Path\nprint(list(Path('.').rglob('*')))\nPY", cwd: null, status: "completed", exitCode: 0, output: "43 files", durationMs: null },
 ] : [{ type: "command", itemId: "listing", command: "ls .", cwd: null, status: "inProgress", exitCode: null, output: null, durationMs: null }];
 if (stress) events.push(

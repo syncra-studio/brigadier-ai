@@ -1,6 +1,5 @@
-//! What the core records about the Project Brain and the context engine: Brain jobs (the
-//! skeleton pass, idle-quota enrichment), Chat memories, orchestrator rebirths, and the
-//! overview the Inspector reads.
+//! What the core records about the Project Brain and the context engine: Chat memories,
+//! orchestrator rebirths, and the overview the Inspector reads.
 
 use brigadier_brain::{BrainStats, EmbedderStatus};
 use brigadier_index::IndexStatus;
@@ -9,54 +8,6 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::model::ProjectId;
-
-/// A background job that deepens a project's Brain with a cheap model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum BrainJobKind {
-    /// On project add: each module's purpose, the stack, conventions, the run/build/verify
-    /// recipe.
-    Skeleton,
-    /// Spare quota before a usage window resets: stale nodes first, then gaps.
-    Enrichment,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum BrainJobState {
-    Running,
-    Done,
-    /// It yielded: the user started work on its provider, the window reset or ran hot, or the
-    /// user stopped it.
-    Stopped {
-        reason: String,
-    },
-    Failed {
-        error: String,
-    },
-}
-
-/// A Brain job (full snapshot on each change).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BrainJob {
-    pub id: String,
-    pub project_id: ProjectId,
-    pub kind: BrainJobKind,
-    pub state: BrainJobState,
-    pub provider: ProviderKind,
-    pub model: Option<String>,
-    pub started_at_ms: i64,
-    pub ended_at_ms: Option<i64>,
-    /// Nodes it recorded so far.
-    pub nodes: u32,
-    /// What it worked on, in a few words.
-    pub note: String,
-}
 
 /// What a Chat's model saved to, or removed from, the Personal Brain in a turn (a Memory chip).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -318,8 +269,6 @@ pub struct BrainOverview {
     /// The project's code index (none for the Personal Brain or a project without a repo).
     pub index: Option<IndexStatus>,
     pub embedder: EmbedderStatus,
-    /// Its Brain jobs, newest first.
-    pub jobs: Vec<BrainJob>,
 }
 
 /// What an AGENTS.md export wrote.

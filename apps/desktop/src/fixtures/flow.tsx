@@ -6,8 +6,8 @@
  * Query: `view=running` (default: the second request works, three approvals wait) or
  * `view=done` (it finished, with a final answer and what waits on the user); `approvals=0`
  * (none wait); `worker=1` (the lead's own thread open in the Workers panel); `sidebar=0`.
- * Composer slot (SESSION-FIXES-PLAN.md phase 5): `slot=1` (a second worker and a CI watch over
- * the composer); `update=1` (with `view=done`: a late event's update line under the answer). `window.flow`
+ * Composer slot (SESSION-FIXES-PLAN.md phase 5): `slot=1` (a second worker over the composer);
+ * `update=1` (with `view=done`: a late event's update line under the answer). `window.flow`
  * holds the stores for probes.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -340,26 +340,9 @@ export const leadTranscript: RawEntry[] = [
   entry({ type: "command", itemId: "x8", command: "/bin/zsh -lc 'pnpm test settings'", cwd: "/tmp/flow-fixture", status: "inProgress", exitCode: null, output: null, durationMs: null }, ago(3)),
 ];
 
-// The composer's slot: a second worker and a push's CI watch.
-// `ci=failed` fails its CI run; `ci=passed` passes it, while the watch still looks for late runs.
+// The composer's slot: a second worker.
 if (query.get("slot") === "1") {
-  const ci = query.get("ci");
   tasks["t5"] = task({ id: "t5", number: 5, title: "Theme icons", state: "running", requestId: "r2", position: 17, role: null, createdAtMs: ago(50), updatedAtMs: ago(1) });
-  orchestratorSteps.push(
-    step(18, "r2", {
-      type: "ciWatch",
-      repo: "acme/settings-app",
-      branch: BRANCH,
-      sha: "97c298d5aa11bb22",
-      waiting: false,
-      runs: [
-        ci === "failed" || ci === "passed"
-          ? { workflow: "CI", status: "completed", conclusion: ci === "failed" ? "failure" : "success", url: "https://github.com/acme/settings-app/actions/runs/1", jobsDone: 4, jobsTotal: 4 }
-          : { workflow: "CI", status: "in_progress", conclusion: "", url: "https://github.com/acme/settings-app/actions/runs/1", jobsDone: 2, jobsTotal: 4 },
-        { workflow: "Lint", status: "completed", conclusion: "success", url: "https://github.com/acme/settings-app/actions/runs/2", jobsDone: 1, jobsTotal: 1 },
-      ],
-    }, ago(40)),
-  );
 }
 
 useBoard.setState({

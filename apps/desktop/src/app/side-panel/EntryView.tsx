@@ -27,7 +27,7 @@ const ERROR_TITLES: Record<ErrorKind, string> = {
 const row = ROW;
 
 /** One entry of a worker's thread: its actions, a message, a pending approval, an error or a notice. */
-export function EntryView({ entry, sent }: { entry: Exclude<ThreadEntry, { kind: "report" }>; sent: readonly string[] }) {
+export function EntryView({ entry, sent }: { entry: ThreadEntry; sent: readonly string[] }) {
   if (entry.kind === "actions") return <>{entry.items.map((item) => <ActionRow key={item.key} item={item} />)}</>;
   const { item } = entry;
   switch (item.kind) {

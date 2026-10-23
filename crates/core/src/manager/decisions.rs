@@ -5,126 +5,9 @@
 //!   takes in the user's place is logged with why: a plan approved, sent back for revision or
 //!   turned down; a change landed after its checks, sent back with their findings, held
 //!   because it couldn't be verified, or handed to the orchestrator; a permission a worker
-//!   asked for declined. The orchestrator notes its own judgement calls (`note_for_user`).
+//!   asked for declined. Nothing records new ones any more (S16c): the ones stored still read.
 
-use super::SessionManager;
-use crate::board::Board;
-use crate::model::{ConversationId, DomainEvent};
-use crate::now_ms;
-use crate::sessions::one_line;
-use crate::work::{Decision, DecisionKind, DecisionSource, DecisionWords, Task};
-
-/// The longest line a decision or a waiting item keeps.
-const LINE_CHARS: usize = 300;
-/// The longest reason a decision keeps.
-const WHY_CHARS: usize = 600;
-
-impl SessionManager {
-    /// Records a decision, whatever the permission level (the orchestrator's own notes).
-    pub(crate) async fn record_decision(
-        &self,
-        conversation_id: &ConversationId,
-        request_id: Option<String>,
-        source: DecisionSource,
-        kind: DecisionKind,
-        what: String,
-        why: String,
-    ) {
-        let what = self.core.display_quote(conversation_id, &what).await;
-        let why = self.core.display_quote(conversation_id, &why).await;
-        // What the user reads names a worker as the app shows it, never as "task-N".
-        let (what, why) = match self.core.board(conversation_id).await {
-            Ok(board) => (named(&what, &board), named(&why, &board)),
-            Err(_) => (what, why),
-        };
-        let decision = Decision {
-            id: uuid::Uuid::now_v7().to_string(),
-            request_id,
-            source,
-            kind,
-            what: one_line(&what, LINE_CHARS),
-            why: one_line(&why, WHY_CHARS),
-            at_ms: now_ms(),
-            position: 0,
-            short: None,
-        };
-        if let Err(err) = self
-            .core
-            .record_conversation(
-                conversation_id,
-                vec![DomainEvent::DecidedForYou { decision }],
-            )
-            .await
-        {
-            tracing::warn!(conversation = %conversation_id, error = %err, "could not record a decision");
-        }
-    }
-}
-
-/// The longest worker name in a line the user reads, in characters.
-const NAME_CHARS: usize = 40;
-
-/// A worker as the user knows it: its title, as on its row, in quotes and cut short at a word
-/// ("“Fix the A/B breakdown note after…”").
-pub(crate) fn worker_name(task: &Task) -> String {
-    let title = task.title.split_whitespace().collect::<Vec<_>>().join(" ");
-    if title.chars().count() <= NAME_CHARS {
-        return format!("\u{201c}{title}\u{201d}");
-    }
-    let cut: String = title.chars().take(NAME_CHARS).collect();
-    let cut = match cut.rfind(' ') {
-        Some(at) if at > NAME_CHARS / 2 => &cut[..at],
-        _ => cut.as_str(),
-    };
-    format!(
-        "\u{201c}{}\u{2026}\u{201d}",
-        cut.trim_end_matches([' ', ',', ':', ';', '-', '·'])
-    )
-}
-
-/// `text` with each "task-N" of the conversation's tasks as the worker's name. A title quoted
-/// right after it ("task-3 “Add the flag”") becomes that name; "task-N" inside a branch, path,
-/// file name or longer word stays as it is.
-pub(crate) fn named(text: &str, board: &Board) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find("task-") {
-        let before = rest[..at].chars().next_back();
-        let digits: String = rest[at + 5..]
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        let mut tail = rest[at + 5 + digits.len()..].chars();
-        let after = tail.next();
-        // A file name's extension ("task-3.diff") makes it a longer word too.
-        let extension = after == Some('.') && tail.next().is_some_and(char::is_alphanumeric);
-        let word = before.is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '/' | '-' | '_')))
-            && !digits.is_empty()
-            && !extension
-            && after.is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '/')));
-        let task = word
-            .then(|| digits.parse::<u32>().ok())
-            .flatten()
-            .and_then(|number| board.tasks.values().find(|task| task.number == number));
-        let Some(task) = task else {
-            let end = at + 5;
-            out.push_str(&rest[..end]);
-            rest = &rest[end..];
-            continue;
-        };
-        out.push_str(&rest[..at]);
-        out.push_str(&worker_name(task));
-        rest = &rest[at + 5 + digits.len()..];
-        // Its title quoted after it is the name already.
-        if let Some(quoted) = rest.strip_prefix(" \u{201c}")
-            && let Some(close) = quoted.find('\u{201d}')
-        {
-            rest = &quoted[close + '\u{201d}'.len_utf8()..];
-        }
-    }
-    out.push_str(rest);
-    out
-}
+use crate::work::DecisionWords;
 
 /// A decision as the app and the morning report show it. A decision recorded in an earlier
 /// version's words (which carried the checks' findings) says the same in the current short
@@ -304,29 +187,9 @@ fn reason_head(why: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::work::TaskState;
-
-    fn task(id: &str, state: TaskState) -> Task {
-        let mut task: Task = serde_json::from_value(serde_json::json!({
-            "id": id,
-            "conversationId": "c1",
-            "number": 1,
-            "position": 0,
-            "title": "Add the flag",
-            "kind": "implement",
-            "spec": "Add the flag.",
-            "access": { "repo": "write", "network": false, "unsandboxed": false },
-            "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
-            "state": "reported",
-            "requestId": "r1",
-            "attachments": [],
-            "createdAtMs": 0,
-            "updatedAtMs": 0
-        }))
-        .expect("a task");
-        task.state = state;
-        task
-    }
+    use crate::board::Board;
+    use crate::model::DomainEvent;
+    use crate::work::{Decision, DecisionKind, DecisionSource};
 
     #[test]
     fn a_decision_in_old_words_reads_as_one_recorded_now() {
@@ -417,42 +280,6 @@ mod tests {
             );
             // The current words read as they are.
             assert_eq!(short_words(&short.what, &short.why), short);
-        }
-    }
-
-    #[test]
-    fn a_worker_is_named_as_the_app_shows_it() {
-        let mut board = Board::default();
-        let mut short = task("t1", TaskState::Landed);
-        short.number = 3;
-        let mut long = task("t2", TaskState::Stopped);
-        long.number = 37;
-        long.title = "Gate members take run slots in a fixed priority order".into();
-        board.tasks.insert(short.id.clone(), short);
-        board.tasks.insert(long.id.clone(), long);
-        assert_eq!(
-            named(
-                "Landed task-3 \u{201c}Add the flag\u{201d} on `main`",
-                &board
-            ),
-            "Landed \u{201c}Add the flag\u{201d} on `main`"
-        );
-        assert_eq!(
-            named("Landed task-3.", &board),
-            "Landed \u{201c}Add the flag\u{201d}."
-        );
-        assert_eq!(
-            named("Sent task-37 back (task-37's fix 1 of 2).", &board),
-            "Sent \u{201c}Gate members take run slots in a fixed\u{2026}\u{201d} back (\u{201c}Gate members take run slots in a fixed\u{2026}\u{201d}'s fix 1 of 2)."
-        );
-        // Branches, paths and unknown numbers stay as they are.
-        for kept in [
-            "on `brigadier/4158464b/task-3-add-the-flag`",
-            "see task-30 and subtask-3 and task-3x",
-            "read task-3.diff and docs/task-3.md",
-            "task-",
-        ] {
-            assert_eq!(named(kept, &board), kept);
         }
     }
 

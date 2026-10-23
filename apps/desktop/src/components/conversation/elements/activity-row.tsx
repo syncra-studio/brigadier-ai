@@ -8,8 +8,6 @@ import {
   Folder,
   Globe,
   MagnifyingGlassSmSearch,
-  PlayCircle,
-  Sparkle,
   Terminal,
   Tools,
 } from "@/components/icons";
@@ -51,8 +49,6 @@ export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {
   run: Terminal,
   code: MagnifyingGlassSmSearch,
   web: Globe,
-  memory: Sparkle,
-  preview: PlayCircle,
   message: Chat,
   other: Tools,
 };

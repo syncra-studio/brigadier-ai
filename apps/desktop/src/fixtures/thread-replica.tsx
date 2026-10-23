@@ -64,37 +64,24 @@ useBoard.setState(({ board }) => {
   );
   leadTranscript.splice(0, leadTranscript.length, ...entries);
   const extra = [
-    step(11.2, "functions.query_brain", "failed", null),
+    step(11.2, "functions.web_search", "failed", null),
     step(
       11.4,
-      "mcp__brigadier__query_brain",
+      "mcp__linear__search_issues",
       "completed",
       "theme settings and first paint",
     ),
-    step(11.6, "brigadier/project_map", "completed", "apps/desktop/src"),
+    step(11.6, "Glob", "completed", "apps/desktop/src"),
     step(11.65, "functions.read_file", "completed", "apps/desktop/src/state/settings.ts"),
     step(11.7, "functions.exec_command", "completed", "pnpm typecheck"),
-    // Each successful call gives way to its authored result; no duplicate generic row.
-    step(
-      11.8,
-      "mcp__brigadier__delegate_task",
-      "completed",
-      "Map settings storage",
-    ),
-    step(15.2, "functions.read_report", "failed", "task-2"),
-    step(
-      15.4,
-      "mcp__brigadier__remember",
-      "completed",
-      "Keep the theme in the settings store",
-    ),
+    step(15.2, "functions.read_file", "failed", "apps/desktop/src/state/theme.ts"),
     { requestId: "r2", atMs: now - 90000, position: 15.6, kind: { type: "searchedWeb", query: "prefers-color-scheme theme initialization" } } satisfies OrchestratorStep,
     ...(done
       ? []
       : [
           step(
             25,
-            "mcp__brigadier__code_search",
+            "Grep",
             "inProgress",
             "prefers-color-scheme",
           ),

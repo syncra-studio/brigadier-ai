@@ -8,7 +8,7 @@ use brigadier_providers::{
 };
 use brigadier_router::{MergedModel, OverrideRule, ProviderQuota, QuotaSample, RegistryInfo};
 
-use crate::knowledge::{BrainJob, MemoryChange, RebirthThresholds};
+use crate::knowledge::{MemoryChange, RebirthThresholds};
 use crate::work::{
     Approval, AttachmentRef, Compaction, MessageQueue, OrchestratorEntry, OrchestratorStep,
     Question, RunState, Task, UserRequest, WorkerStep,
@@ -930,8 +930,6 @@ pub struct Settings {
     pub plain_text_composer: bool,
     /// A notice above the composer while a conversation is in Full access.
     pub show_full_access_notice: bool,
-    /// Spend quota left over before a usage window resets on deepening the Project Brains.
-    pub enrich_brain: bool,
     /// The old Short replies setting, no longer read: the voice is fixed (BUILD-PLAN §1.4). A
     /// stored `false` is copied once into the personal preference for longer answers, and then
     /// saved as `true`.
@@ -1198,7 +1196,6 @@ impl Default for Settings {
             show_context_usage: true,
             plain_text_composer: false,
             show_full_access_notice: true,
-            enrich_brain: true,
             short_replies: true,
             start_workers_on_own: true,
             omit_ai_coauthors: true,
@@ -2549,10 +2546,6 @@ pub enum DomainEvent {
         scope: String,
         attachments: Vec<AttachmentRef>,
     },
-    /// A Brain job started or changed (full snapshot), on the project's `brain:` stream.
-    BrainJobUpdated {
-        job: BrainJob,
-    },
     /// A Chat's model saved a memory to the Personal Brain, or the user removed it (a Memory
     /// chip in the thread).
     MemoryUpdated {
@@ -2729,7 +2722,6 @@ impl DomainEvent {
             Self::OutputKept { .. } => "output.kept",
             Self::OrchestratorLogged { .. } => "orchestrator.logged",
             Self::DraftPinned { .. } => "draft.pinned",
-            Self::BrainJobUpdated { .. } => "brain.job",
             Self::MemoryUpdated { .. } => "memory.updated",
             Self::DecidedForYou { .. } => "decision.made",
             Self::PeerMessageSent { .. } => "peer.sent",
@@ -2798,11 +2790,6 @@ pub mod streams {
     /// What was queued for a thread's next turn: its inbox lives in memory (#210).
     pub fn inbox(id: &ConversationId) -> String {
         format!("inbox:{id}")
-    }
-
-    /// A project's Brain jobs.
-    pub fn brain(id: &super::ProjectId) -> String {
-        format!("brain:{id}")
     }
 
     /// A composer draft's pinned attachments: a conversation id, or `new` for a new chat.

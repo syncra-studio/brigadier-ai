@@ -16,15 +16,14 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Something in the overview moves on its own (a scan, a download, a job), so read it often. */
+/** Something in the overview moves on its own (a scan, a download), so read it often. */
 function busy(overview: BrainOverview | undefined): boolean {
   if (!overview) return false;
   const embedder = overview.embedder.state.type;
   return (
     overview.index?.state.type === "scanning" ||
     embedder === "downloading" ||
-    embedder === "loading" ||
-    overview.jobs.some((job) => job.state.type === "running")
+    embedder === "loading"
   );
 }
 

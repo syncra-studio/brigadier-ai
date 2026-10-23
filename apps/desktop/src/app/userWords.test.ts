@@ -20,7 +20,6 @@ const FILES = [
   "app/side-panel/NewTabTools.tsx",
   "app/side-panel/TaskDetails.tsx",
   "app/conversation/ActionCards.tsx",
-  "app/conversation/SessionOffer.tsx",
   "app/inspector/providers/ProvidersTab.tsx",
   "app/inspector/providers/StartSessionForm.tsx",
   "app/inspector/providers/SessionHeader.tsx",

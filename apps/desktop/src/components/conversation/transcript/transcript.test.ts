@@ -21,7 +21,7 @@ test("a worker streams reasoning, settles it before an action, then streams the 
     entry(4, 7000, { type: "reasoning", itemId: "r1", text: "Read settings before changing the theme." }),
     entry(5, 8000, { type: "reasoningDelta", itemId: "r2", text: "Use the existing store." }),
   ]).items;
-  assert.deepEqual(threadEntries(items).map((item) => item.kind === "item" ? item.item.kind : item.kind === "actions" ? "action" : item.kind),
+  assert.deepEqual(threadEntries(items).map((item) => item.kind === "item" ? item.item.kind : "action"),
     ["reasoning", "action", "reasoning"]);
   assert.equal(items[0]!.kind === "reasoning" && items[0].streaming, false);
   assert.equal(items[0]!.kind === "reasoning" && items[0].startedAtMs, 1000);

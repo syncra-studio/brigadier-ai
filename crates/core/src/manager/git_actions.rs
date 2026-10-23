@@ -20,7 +20,7 @@ use brigadier_providers::{
 
 use brigadier_router::{MergedModel, QualityTier};
 
-use super::landing::diff_stat_of;
+use super::diff_stat_of;
 use super::source_actions::MergedPr;
 use super::{SessionManager, blocking, git_error};
 use crate::accounts::AccountRef;
@@ -826,6 +826,74 @@ fn clean_message(reply: &str) -> String {
         .trim_matches(|c| c == '"' || c == '`')
         .trim()
         .to_owned()
+}
+
+impl SessionManager {
+    /// The user clicked "Merge into main" (BUILD-PLAN A4): the click is recorded with where it
+    /// came from, and the thread is told to merge.
+    pub async fn merge_session(
+        &self,
+        id: &ConversationId,
+        origin: crate::work::AnswerOrigin,
+    ) -> Result<String> {
+        let Some(Setup::Session {
+            repo,
+            environment: Environment::NewWorktree { base, branch, .. },
+            ..
+        }) = self.core.conversation(id)?.setup
+        else {
+            return Err(Error::Invalid(
+                "This session works in your checkout: its commits are already on the branch."
+                    .into(),
+            ));
+        };
+        let (git, repo_path, base_name, branch_name) = (
+            self.git.clone(),
+            PathBuf::from(&repo),
+            base.clone(),
+            branch.clone(),
+        );
+        let ahead = blocking(move || {
+            let repo = git.open(&repo_path).map_err(git_error)?;
+            let (Some(tip), Some(base_tip)) = (
+                repo.branch_tip(&branch_name).map_err(git_error)?,
+                repo.branch_tip(&base_name).map_err(git_error)?,
+            ) else {
+                return Ok(0);
+            };
+            repo.count_commits(&base_tip, &tip).map_err(git_error)
+        })
+        .await?;
+        if ahead == 0 {
+            return Err(Error::Invalid(format!(
+                "Nothing to merge: `{branch}` has no commits that `{base}` lacks."
+            )));
+        }
+        let asked = format!("merge-click:{}", crate::model::CardId::generate());
+        self.orchestrator_step(
+            id,
+            crate::work::OrchestratorStepKind::MergeRequested {
+                id: asked,
+                branch: branch.clone(),
+                base: base.clone(),
+                origin,
+            },
+        )
+        .await;
+        self.deliver(
+            id,
+            super::conversation::Envelope {
+                kind: crate::work::InjectionKind::Decision,
+                label: "merge".into(),
+                task_id: None,
+                text: format!(
+                    "[merge] The user clicked \"Merge into main\" for `{branch}` into `{base}`. Merge it now."
+                ),
+            },
+        )
+        .await;
+        Ok(format!("Merging `{branch}` into `{base}`."))
+    }
 }
 
 #[cfg(test)]

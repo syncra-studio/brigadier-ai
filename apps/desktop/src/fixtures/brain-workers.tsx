@@ -44,7 +44,6 @@ const overview: BrainOverview = {
   stats: { nodes: 10, edges: 2, stale: 0, updatedMs: null, unembedded: 0, kinds: [], transcriptEntries: 0, bytesOnDisk: 1024 },
   index: null,
   embedder: { model: "fixture-model", modelBytes: 0, dimensions: 512, state: { type: "loaded" } },
-  jobs: [],
 };
 
 useApp.setState({

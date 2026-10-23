@@ -1012,32 +1012,6 @@ impl Core {
         }
     }
 
-    /// A derived snippet may quote a user message; match images against its conversation.
-    pub(crate) async fn display_quote(&self, id: &ConversationId, text: &str) -> String {
-        if !text.contains("[image:") && !text.contains("[Image #") {
-            return text.to_owned();
-        }
-        let mut attachments = Vec::new();
-        for message in self.all_messages(id).await.unwrap_or_default() {
-            if message.role != MessageRole::User {
-                continue;
-            }
-            let original = match &message.blob {
-                Some(hash) => self
-                    .read_blob_text(hash.clone())
-                    .await
-                    .unwrap_or_else(|_| message.text.clone()),
-                None => message.text.clone(),
-            };
-            attachments.extend(
-                inline_image_tokens(&original, &message.attachments)
-                    .into_iter()
-                    .map(|(_, attachment)| attachment.clone()),
-            );
-        }
-        display_text(text, &attachments)
-    }
-
     /// Keeps a composer draft's attachments stored until it is sent or discarded (see
     /// [`DomainEvent::DraftPinned`]); an empty list lets the previous ones go. `scope` is a
     /// conversation id, or `new` for a new chat.
@@ -3484,10 +3458,6 @@ mod tests {
                 preview(&display_text(&text, &message.attachments))
             );
             assert!(!board.requests[&message.id].preview.contains(&attachment.id));
-            assert_eq!(
-                core.display_quote(&conversation.id, &text).await,
-                display_text(&text, &message.attachments)
-            );
             assert_eq!(message.text, text);
             assert_eq!(
                 core.list_messages(conversation.id.clone(), None, 10)
@@ -3531,27 +3501,7 @@ mod tests {
                 .unwrap();
             assert_eq!(core.conversation(&conversation.id).unwrap().title, token);
         }
-        let conversation = core
-            .create_conversation(
-                ConversationId::generate(),
-                ConversationKind::Chat,
-                None,
-                None,
-                None,
-                Origin::default(),
-            )
-            .await
-            .unwrap();
-        core.append_user_message(
-            conversation.id.clone(),
-            "No inline image here".into(),
-            vec![attachment.clone()],
-            vec![],
-        )
-        .await
-        .unwrap();
         let token = format!("Literal [image:{}]", attachment.id);
-        assert_eq!(core.display_quote(&conversation.id, &token).await, token);
         let mut row = attachment.clone();
         row.inline = None;
         let conversation = core

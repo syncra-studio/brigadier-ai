@@ -188,38 +188,6 @@ impl SessionManager {
                         crate::heap(|| self.dispose_task(&task, TaskState::Done)).await;
                         continue;
                     }
-                    // The landing was interrupted (older stores: its checks, or its card):
-                    // nothing landed, and the orchestrator lands it again.
-                    TaskState::Landing if task.kind.writes() => {
-                        // Unless its commits reached the target before the restart: then it
-                        // landed (BUILD-PLAN D1.4).
-                        if crate::heap(|| self.landed_before_restart(&task)).await {
-                            continue;
-                        }
-                        let _ = self
-                            .update_task(&conversation.id, &task.id, |t| {
-                                t.state = TaskState::Reported;
-                                t.candidate = None;
-                                t.landing = None;
-                                t.landing_from = None;
-                            })
-                            .await;
-                        // The orchestrator was promised the landing's outcome as a message.
-                        self.deliver(
-                            &conversation.id,
-                            Envelope {
-                                kind: InjectionKind::Decision,
-                                label: format!("landing task-{}", task.number),
-                                task_id: Some(task.id.clone()),
-                                text: format!(
-                                    "[not landed task-{} \"{}\"] Brigadier restarted before the landing finished; nothing landed. Call land_phase for task-{} again.",
-                                    task.number, task.title, task.number,
-                                ),
-                            },
-                        )
-                        .await;
-                        continue;
-                    }
                     _ => {}
                 }
                 let _ = self
@@ -237,8 +205,6 @@ impl SessionManager {
             }
             // So are its previews (the sweep above ended any a crash left running).
             crate::heap(|| self.recover_previews(&conversation.id)).await;
-            // And its CI watches (SESSION-FIXES-PLAN.md Q1): the user can ask to watch again.
-            self.stop_ci_watches(&conversation.id).await;
             // Not its pull request's: the one its ready work waits on is watched again.
             if conversation.lifecycle != Lifecycle::Archived {
                 self.rewatch_pr(&conversation.id).await;
@@ -925,7 +891,6 @@ impl SessionManager {
         if !self.runtime.ledger().artifacts(&previews).is_empty() {
             owners.push(previews);
         }
-        self.stop_ci_watches(id).await;
         let session_worktree_goes = self.keep_session_changes(conversation).await;
         if session_worktree_goes {
             owners.push(format!("session:{id}"));
@@ -1469,6 +1434,42 @@ fn changed_since(path: &Path, cutoff: SystemTime) -> bool {
     entries
         .into_iter()
         .any(|entry| entry.map_or(true, |entry| changed_since(&entry.path(), cutoff)))
+}
+
+impl SessionManager {
+    /// Merge cards are retired (BUILD-PLAN A4). After an upgrade, a session's open merge card
+    /// is withdrawn and the thread hears of it in one line.
+    async fn retire_merge_cards(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let open: Vec<_> = board
+            .questions
+            .values()
+            .filter(|question| {
+                matches!(question.kind, crate::work::QuestionKind::Merge { .. })
+                    && question.is_open()
+            })
+            .cloned()
+            .collect();
+        if open.is_empty() {
+            return;
+        }
+        for question in &open {
+            self.withdraw_question(question).await;
+        }
+        self.queue_envelope(
+            id,
+            Envelope {
+                kind: InjectionKind::Decision,
+                label: "merge cards retired".into(),
+                task_id: None,
+                text: "[merge cards retired] Brigadier no longer asks about merges on cards, so the open merge card is closed. Merge when the user's words ask for it.".into(),
+            },
+            None,
+        )
+        .await;
+    }
 }
 
 #[cfg(test)]

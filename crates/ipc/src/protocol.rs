@@ -2,7 +2,7 @@
 //!
 //! Frames are length-prefixed JSON (see [`crate::frame`]). The first client frame must be a
 //! [`ClientFrame::Hello`] carrying the per-launch token, or the grant-scoped frame CLI sessions
-//! use ([`ClientFrame::Mcp`], [`ClientFrame::Hook`]); anything else closes the connection.
+//! use ([`ClientFrame::Hook`], [`ClientFrame::Cli`]); anything else closes the connection.
 //! Requests carry a client-chosen id echoed on the response. Responses reuse the request's
 //! `method` tag, so TypeScript can pair them with `Extract<Response, { method: M }>`.
 
@@ -14,20 +14,19 @@ use brigadier_core::storage::{
     UnlandedBranch,
 };
 use brigadier_core::{
-    AccountEntry, AccountsView, AppAnswer, AppCall, AttachmentRef, BrainJobKind, BrainOverview,
-    CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus,
-    ConflictFile, ConnectView, ConventionsExport, Conversation, ConversationActivity,
-    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
-    FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
-    ForkPlace, GitHubSignIn, GitState, Mention, MergeUndo, Message, MessageMatches, MessagePage,
-    MessageQueue, OrchestratorPage, PendingChanges, ProbeBurst, Project, ProjectCandidate,
-    ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals,
-    RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion,
-    RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings, SettledTab,
-    Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope,
-    SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    AccountEntry, AccountsView, AppAnswer, AppCall, AttachmentRef, BrainOverview, CardId, Catalog,
+    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConflictFile, ConnectView,
+    ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
+    ConversationStatus, ConversationView, DiffStat, FeedbackFiled, FeedbackFiling, FeedbackWriteUp,
+    FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitHubSignIn, GitState, Mention,
+    MergeUndo, Message, MessageMatches, MessagePage, MessageQueue, OrchestratorPage,
+    PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView,
+    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
+    ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
+    SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest, SourceAction,
+    SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy, TaskId,
+    ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity, UsageView,
+    WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::RegistryInfo;
@@ -103,13 +102,6 @@ pub enum ClientFrame {
     Request {
         id: u32,
         request: Request,
-    },
-    /// First frame of a Brigadier MCP connection (`brigadierd mcp`, spawned by a CLI session).
-    /// After it the connection carries raw MCP (newline-delimited JSON-RPC) in both directions.
-    /// The grant must belong to an orchestrator or a worker; there is no token and no reply
-    /// frame, a refused grant just closes the connection.
-    Mcp {
-        grant: String,
     },
     /// First frame of a Claude thread's output hook (`brigadierd hook post-tool-use`): the
     /// hook's grant and the output that follows the frame, `output.bytes` raw bytes. The daemon
@@ -225,12 +217,6 @@ pub enum Request {
     ExportConventions {
         project_id: ProjectId,
         path: String,
-    },
-    /// Starts a Brain job now (the Inspector's developer actions); it reports on the project's
-    /// `brain:` stream.
-    RunBrainJob {
-        project_id: ProjectId,
-        kind: BrainJobKind,
     },
     /// Rebuilds a project's code index from scratch.
     RebuildIndex {
@@ -478,12 +464,6 @@ pub enum Request {
         text: String,
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
-    },
-    /// "Start as session" on the thread's offer (`offer_session`): its task starts as a new
-    /// session of the project in the background, as ⌘⏎ starts one; once only.
-    StartOfferedSession {
-        conversation_id: ConversationId,
-        offer_id: String,
     },
     /// "Fork chat from here": a new conversation with the thread up to the answer
     /// `message_id`; a session's fork works from the commit current then, in `place`.
@@ -1400,9 +1380,6 @@ pub enum Response {
     ExportConventions {
         export: ConventionsExport,
     },
-    RunBrainJob {
-        job_id: String,
-    },
     RebuildIndex,
     GetRepoInfo {
         repo: RepoInfo,
@@ -1489,10 +1466,6 @@ pub enum Response {
         conversation: Box<Conversation>,
     },
     StartSession {
-        conversation: Box<Conversation>,
-        outcome: SendOutcome,
-    },
-    StartOfferedSession {
         conversation: Box<Conversation>,
         outcome: SendOutcome,
     },

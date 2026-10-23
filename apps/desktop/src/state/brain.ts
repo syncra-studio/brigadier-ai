@@ -4,8 +4,6 @@ import { exportConventions, request, revealPath } from "@/ipc/client";
 import type {
   BrainAnswer,
   BrainGraph,
-  BrainJob,
-  BrainJobKind,
   BrainOverview,
   BrainQuery,
   EventEnvelope,
@@ -26,7 +24,7 @@ export function projectOf(key: string): string | null {
 type BrainState = {
   /** The Brain the Inspector's Brain tab shows; `null` until the user picks one. */
   selected: string | null;
-  /** Overviews read so far, by picker key, kept live by Brain job events. */
+  /** Overviews read so far, by picker key. */
   overviews: Record<string, BrainOverview>;
   /**
    * The tasks of the session the Brain tab lists workers for: one snapshot, then kept current
@@ -45,11 +43,6 @@ export async function loadBrain(key: string): Promise<BrainOverview> {
   const { overview } = await request({ method: "getBrain", projectId: projectOf(key) });
   useBrain.setState((state) => ({ overviews: { ...state.overviews, [key]: overview } }));
   return overview;
-}
-
-function upsertJob(jobs: readonly BrainJob[], job: BrainJob): BrainJob[] {
-  const others = jobs.filter((existing) => existing.id !== job.id);
-  return [job, ...others].toSorted((a, b) => b.startedAtMs - a.startedAtMs);
 }
 
 /** Keeps the newer copy of each task; events arrive in order, so the later one wins a tie. */
@@ -125,21 +118,9 @@ function applyTaskEvents(envelopes: readonly EventEnvelope[]): void {
   );
 }
 
-/** Folds Brain job updates into the overviews read so far, and task updates into the watched
- * session's tasks (one update each per batch). */
+/** Folds the watched session's task updates into its tasks (one update per batch). */
 export function applyBrainEvents(envelopes: readonly EventEnvelope[]): void {
   applyTaskEvents(envelopes);
-  const jobs = envelopes.flatMap(({ event }) => (event.type === "brainJobUpdated" ? [event.job] : []));
-  if (jobs.length === 0) return;
-  useBrain.setState((state) => {
-    let overviews = state.overviews;
-    for (const job of jobs) {
-      const overview = overviews[job.projectId];
-      if (!overview) continue;
-      overviews = { ...overviews, [job.projectId]: { ...overview, jobs: upsertJob(overview.jobs, job) } };
-    }
-    return overviews === state.overviews ? state : { overviews };
-  });
 }
 
 export async function queryBrain(key: string, query: BrainQuery): Promise<BrainAnswer> {
@@ -150,11 +131,6 @@ export async function queryBrain(key: string, query: BrainQuery): Promise<BrainA
 export async function getBrainGraph(key: string, filter: NodeFilter): Promise<BrainGraph> {
   const { graph } = await request({ method: "getBrainGraph", projectId: projectOf(key), filter });
   return graph;
-}
-
-export async function runBrainJob(projectId: string, kind: BrainJobKind): Promise<string> {
-  const { jobId } = await request({ method: "runBrainJob", projectId, kind });
-  return jobId;
 }
 
 export async function rebuildIndex(projectId: string): Promise<void> {

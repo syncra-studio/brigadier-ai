@@ -85,9 +85,9 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.match(seen.children[1] ?? "", /^Running command for [3-9]s$/);
   // A finished group sums up in the fixed order, with the icon of its first segment's first step,
   // not of its first step; opened, the command says how long it took; a row on its own doesn't.
-  assert.deepEqual(seen.doneGroup, { row: "Read files, ran a command, checked project memory", icon: "read" });
+  assert.deepEqual(seen.doneGroup, { row: "Read files, ran a command, searched the web", icon: "read" });
   // (The time is its own span after the words.)
-  assert.deepEqual(seen.doneChildren, ["Checked project memory for “rounding”", "Ran npm testin 41s", "Read math.js"]);
+  assert.deepEqual(seen.doneChildren, ["Searched the web for rounding", "Ran npm testin 41s", "Read math.js"]);
   // A Shell box opened inside a group is never squeezed by the group's 224px: the list scrolls.
   assert.deepEqual(seen.groupShell, { card: true, whole: true, commandClear: true, scrolls: true });
   assert.equal(seen.loneRan, "Ran npm test");

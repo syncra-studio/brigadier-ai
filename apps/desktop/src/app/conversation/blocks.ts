@@ -93,7 +93,7 @@ export type BlockRow = { type: "task"; taskId: string; taskIds?: string[]; kind?
  */
 export type DecidedStep = { type: "decided"; what: string; why: string };
 
-/** A wait of the thread for the replies to its messages (`wait_for_replies`), as its call stands. */
+/** A wait of the thread for the replies to its messages, as its call stands. */
 export type PeerWaitCall = { itemId: string; status: ItemStatus; requestId: string | null };
 
 /**
@@ -303,6 +303,15 @@ export function isFinal(task: Task): boolean {
  */
 const ON_TASK_ROW: ReadonlySet<OrchestratorStepKind["type"]> = new Set(["created", "accepted", "readReport"]);
 
+/** Steps of old records whose cards and rows are gone. */
+const OLD_RECORDS: ReadonlySet<OrchestratorStepKind["type"]> = new Set([
+  "fullAccessSuggested",
+  "settingSuggested",
+  "sessionOffered",
+  "sessionOfferTaken",
+  "ciWatch",
+]);
+
 /** What a worker's lifecycle event is called; adjacent events that share a word merge into one sentence. */
 export function lifecycleWord(kind: WorkerStepKind | undefined): "started" | "waiting" | "stopped" | "failed" | "finished" {
   switch (kind) {
@@ -379,10 +388,12 @@ export function boardItems(board: BoardDigest): BoardItem[] {
   for (const step of board.orchestratorSteps) {
     // The CLI's calls are in its file.
     if (step.kind.type === "tool") continue;
-    // The user's answer to a feedback or session offer shows on the offer itself.
-    if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken") continue;
-    // An old record's suggestion of Full access, from when Brigadier had a sandbox of its own: not shown.
-    if (step.kind.type === "fullAccessSuggested") continue;
+    // The user's answer to a feedback offer shows on the offer itself.
+    if (step.kind.type === "feedbackAnswered") continue;
+    // Old records of what Brigadier no longer does: not shown. A suggestion of Full access (from
+    // when it had a sandbox of its own), a suggested setting, an offer to start a session and its
+    // answer, a CI watch.
+    if (OLD_RECORDS.has(step.kind.type)) continue;
     // A run's own steps show as its phases, but a refused message, a usage limit's reset or
     // switch and a proof the thread attached have no other trace.
     if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
@@ -694,13 +705,13 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
 
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
- * and the cards, suggested settings and feedback offers that stay in view (decisions, failures, what
+ * and the cards and feedback offers that stay in view (decisions, failures, what
  * needs the user), and the dividers of its limits and switches (#506).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => (step.kind.type === "settingSuggested" && step.kind.change.setting !== "mergeOnOwn") || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "moment")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

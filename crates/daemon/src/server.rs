@@ -184,9 +184,6 @@ pub async fn accept_loop(
                 Ok(Accepted::Client { connection, client }) => {
                     serve(daemon_for_task, connection, client).await
                 }
-                Ok(Accepted::Mcp { grant, stream }) => {
-                    upgrade::serve_mcp(daemon_for_task, grant, stream).await
-                }
                 Ok(Accepted::Hook {
                     grant,
                     output,
@@ -1269,18 +1266,6 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 outcome: send_outcome(outcome),
             }
         }
-        Request::StartOfferedSession {
-            conversation_id,
-            offer_id,
-        } => {
-            let (conversation, outcome) = sessions
-                .start_offered_session(&conversation_id, &offer_id)
-                .await?;
-            Response::StartOfferedSession {
-                conversation: Box::new(conversation),
-                outcome: send_outcome(outcome),
-            }
-        }
         Request::SettleMoved {
             conversation_id,
             item_id,
@@ -1432,7 +1417,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             ),
         },
         request @ (Request::StartSession { .. }
-        | Request::StartOfferedSession { .. }
         | Request::SettleMoved { .. }
         | Request::RunQueuedHere { .. }
         | Request::GetSettledTabs
@@ -1618,9 +1602,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::ExportConventions { project_id, path } => Response::ExportConventions {
             export: heap(|| sessions.export_conventions(project_id, path)).await?,
-        },
-        Request::RunBrainJob { project_id, kind } => Response::RunBrainJob {
-            job_id: heap(|| sessions.run_brain_job(project_id, kind)).await?,
         },
         Request::RebuildIndex { project_id } => {
             heap(|| sessions.rebuild_index(project_id)).await?;

@@ -1211,18 +1211,13 @@ pub enum ToolSet {
     /// and the web, with no sub-agents and nothing that runs in the background. Codex: its
     /// usual tools less sub-agents.
     Thread,
-    /// A Brain job's (BUILD-PLAN C5): reading and searching files only, with the lean start's
-    /// settings and a system prompt with no per-session sections, so the jobs of a batch share
-    /// one cached start. Codex: as `Default` (it reads through its shell), less image
-    /// generation.
-    Reader,
 }
 
 impl ToolSet {
     /// A thread or a worker: it runs with the user's own CLI setup (their settings, hooks,
     /// plugins, skills, MCP servers and instructions; Claude also the project's, through
     /// [`SessionSpec::project`]), Brigadier's own rules on top. Every other role (reviewers,
-    /// Brain jobs, Chats, one-shot runs, control connections) keeps a sealed setup.
+    /// Chats, one-shot runs, control connections) keeps a sealed setup.
     #[must_use]
     pub fn user_setup(self) -> bool {
         matches!(self, Self::Thread | Self::Lean)

@@ -202,7 +202,6 @@ export const useApp = create<AppState>()(() => ({
     showContextUsage: true,
     plainTextComposer: false,
     showFullAccessNotice: true,
-    enrichBrain: true,
     shortReplies: true,
     startWorkersOnOwn: true,
     onboarded: false,
@@ -688,9 +687,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "workerEvent":
     case "outputKept":
     case "orchestratorLogged":
-    // A Chat's Memory chips live on its board; Brain jobs in the Inspector's Brain tab.
+    // A Chat's Memory chips live on its board.
     case "memoryUpdated":
-    case "brainJobUpdated":
     // "Decided for you" lives on the board.
     case "decidedForYou":
     // The rail's update button reads these (state/updates).

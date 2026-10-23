@@ -47,7 +47,6 @@ test("search finds every merged setting on Configuration, and no Recent activity
       "Model for sessions",
       "Start workers on its own",
       "Show the Full access notice",
-      "Use spare quota to deepen the Brain",
       "Default permission level",
       "Ask",
       "Accept edits",

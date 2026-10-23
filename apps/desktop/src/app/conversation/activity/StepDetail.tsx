@@ -2,7 +2,7 @@ import { type ReactNode, useContext, useState } from "react";
 
 import { Diffs } from "@/app/conversation/activity/Diffs";
 import { Output } from "@/app/conversation/activity/Output";
-import { cliRunOutput, OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
+import { cliRunOutput } from "@/app/conversation/activity/ownRun";
 import { RawToolCallDialog } from "@/app/conversation/activity/RawToolCallDialog";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { EDITS, SHELLS } from "@/app/conversation/activity/toolSets";
@@ -204,10 +204,6 @@ export function callDetail(name: string, status: ItemStatus, call: { input: stri
   if (SHELLS.has(short)) {
     const given = parsedInput(call.input)?.["command"];
     const command = call.command ?? (typeof given === "string" ? given : "");
-    if (command && OWN_RUNS.has(short)) {
-      const own = ownRunOutput(call.output);
-      return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} stopped={call.stopped} notes={own.notes} />;
-    }
     if (command) return <ShellBox command={command} output={call.output} status={status} exit={call.exit} stopped={call.stopped} />;
   }
   if (EDITS.has(short)) {

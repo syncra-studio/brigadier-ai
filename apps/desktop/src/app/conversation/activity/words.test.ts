@@ -41,29 +41,26 @@ const worker = (item: ActionItem) => {
 };
 
 test("a tool keeps its words across provider namespaces and never shows them", () => {
-  for (const action of ["query_brain", "code_search", "Read", "Edit", "exec_command", "apply_patch", "run", "WebSearch", "start_preview", "review_code", "request_review"]) {
-    for (const name of [action, `mcp__brigadier__${action}`, `functions.${action}`, `brigadier/${action}`]) {
+  for (const action of ["Grep", "Read", "Edit", "exec_command", "apply_patch", "WebSearch", "imagegen"]) {
+    for (const name of [action, `functions.${action}`, `custom_server/${action}`]) {
       assert.equal(toolName(name), action);
       for (const status of ["completed", "inProgress", "failed", "declined"] as const) {
         assert.equal(lead(name, status), lead(action, status));
-        assert.doesNotMatch(lead(name, status), /mcp__|functions\.|brigadier\//);
+        assert.doesNotMatch(lead(name, status), /functions\.|custom_server\//);
       }
     }
   }
   assert.equal(lead("custom_server/export_document"), "Used export document");
-  assert.equal(lead("query_brain", "failed"), "Checked project memory — failed");
+  assert.equal(lead("imagegen", "failed"), "Created an image — failed");
 });
 
-test("Brigadier's plumbing is never a row", () => {
-  for (const name of ["read_report", "read_artifact", "finish_session", "note_for_user", "remember", "delegate_task", "message_worker", "answer_worker", "stop_worker", "land_phase", "ask_user", "mcp__brigadier__propose_merge", "mcp__brigadier__submit_report", "ToolSearch"]) {
-    assert.ok(isPlumbing(name), name);
-  }
-  for (const name of ["Read", "run", "query_brain", "review_code", "request_review"]) assert.ok(!isPlumbing(name), name);
+test("the CLIs' plumbing is never a row", () => {
+  for (const name of ["ToolSearch", "tool_search", "spawn_agent", "functions.spawn_agent"]) assert.ok(isPlumbing(name), name);
+  for (const name of ["Read", "Bash", "WebSearch", "imagegen"]) assert.ok(!isPlumbing(name), name);
 });
 
 test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("Bash", "inProgress", "cargo test -p core"), "Running cargo test -p core");
-  assert.equal(lead("mcp__brigadier__run", "completed", "pnpm test"), "Ran pnpm test");
   assert.equal(lead("shell", "failed", "cargo build"), "Ran cargo build");
   // Moving into the worktree first is no part of what it runs.
   assert.equal(lead("shell", "completed", "cd /tmp/w/session-1 && python3 -m pytest -q"), "Ran python3 -m pytest -q");
@@ -72,9 +69,7 @@ test("a step names what it acts on, by the file's name", () => {
   assert.equal(lead("Read", "inProgress", "/repo/src/main.rs"), "Reading main.rs");
   assert.equal(lead("apply_patch", "completed", "src/a.rs and 2 more"), "Edited a.rs and 2 more");
   assert.equal(lead("Grep", "completed", "sidebar"), "Searched for “sidebar”");
-  assert.equal(lead("query_brain", "completed", "sidebar modes"), "Checked project memory for “sidebar modes”");
   assert.equal(lead("WebFetch", "completed", "https://tauri.app/start/"), "Read tauri.app");
-  assert.equal(lead("mcp__brigadier__preview_log"), "Read the preview’s output");
   // A command that reads, lists or searches is told as that.
   assert.equal(lead("Bash", "completed", "sed -n 1,80p src/app/Sidebar.tsx"), "Read Sidebar.tsx");
   assert.equal(lead("Bash", "completed", "rg -n sidebar src"), "Searched for “sidebar” in src");
@@ -92,8 +87,6 @@ test("the main thread and a worker's thread say the same step the same way", () 
       { kind: "tool", key: "c", name: "Grep", input: JSON.stringify({ pattern: "Worked for", path: "src" }), status: "completed", output: null }],
     [call("apply_patch", "completed", "apps/desktop/src/app/Sidebar.tsx and 1 more"),
       { kind: "files", key: "d", changes: [{ path: "apps/desktop/src/app/Sidebar.tsx", kind: "update" }, { path: "apps/desktop/src/app/sidebar.css", kind: "update" }] as never, status: "completed" }],
-    [call("mcp__brigadier__query_brain", "inProgress", "sidebar"),
-      { kind: "tool", key: "e", name: "mcp__brigadier__query_brain", input: JSON.stringify({ query: "sidebar" }), status: "inProgress", output: null }],
     [call("WebSearch", "completed", "tauri window decorations"),
       { kind: "tool", key: "f", name: "WebSearch", input: JSON.stringify({ query: "tauri window decorations" }), status: "completed", output: null }],
   ];
@@ -102,7 +95,7 @@ test("the main thread and a worker's thread say the same step the same way", () 
   const mainRun = pairs.map(([main]) => toolStepWords(main));
   const workerRun = pairs.map(([, other]) => stepWords(itemCall(other)));
   assert.equal(summarize(mainRun), summarize(workerRun));
-  assert.equal(summarize(mainRun), "Edited a file, read files, ran a command, searched the web, checked project memory");
+  assert.equal(summarize(mainRun), "Edited a file, read files, ran a command, searched the web");
 });
 
 const words = (name: string, detail: string | null = null) => toolStepWords(call(name, "completed", detail));
@@ -113,23 +106,7 @@ test("a run sums up its kinds comma-joined, edits, reading, commands and the web
   // Searching and listing are reading too.
   assert.equal(summarize([words("Read", "a.ts"), words("Bash", "ls src"), words("Grep", "add"), words("Bash", "sleep 4")]), "Read files, ran a command");
   assert.equal(summarize([words("Bash", "node math.js"), words("apply_patch", "math.js")]), "Edited a file, ran a command");
-  assert.equal(summarize([words("request_review"), words("Read", "a.ts")]), "Read files, asked for a review");
-  assert.equal(summarize([words("Bash", "pnpm test"), words("start_preview", "web")]), "Ran a command, started a preview");
-});
-
-test("deduplication needs the matching authored result in this call's window", () => {
-  const raw = call("mcp__brigadier__delegate_task");
-  const result = { requestId: "request", position: 13, kind: { type: "created" } };
-  assert.equal(toolHasOwnResult(raw, [], "request", 10), false);
-  assert.equal(toolHasOwnResult(raw, [result], "request", 10), true);
-  assert.equal(toolHasOwnResult(raw, [result], "other", 10), false);
-  assert.equal(toolHasOwnResult({ ...raw, status: "failed" }, [result], "request", 10), false);
-  assert.equal(toolHasOwnResult(raw, [{ ...result, position: 9 }], "request", 10), false);
-  assert.equal(
-    toolHasOwnResult(raw, [{ ...result, position: 11, kind: { type: "tool" } }, result], "request", 10),
-    false,
-    "an overlapping call's result cannot hide the earlier action",
-  );
+  assert.equal(summarize([words("imagegen"), words("Read", "a.ts")]), "Read files, created an image");
 });
 
 /** A page read the board has: the result of the call that read `page`. */
@@ -161,11 +138,7 @@ test("a command reads as the call it was however it ended; another tool that fai
   assert.equal(stepLabel(ran, "completed", 2), "Ran pnpm test");
   // A declined call shows as the call it was: the header counts the declined ones.
   assert.equal(stepLabel(ran, "declined", 130), "Ran pnpm test");
-  assert.equal(stepLabel(toolStepWords(call("request_review", "failed")), "failed"), "Asked for a review — failed");
-  // A worker's question to the thread, by its name since #66 and its older one.
-  for (const name of ["mcp__brigadier__ask_thread", "mcp__brigadier__ask_orchestrator"]) {
-    assert.equal(stepLabel(toolStepWords(call(name, "completed")), "completed"), "Asked a question");
-  }
+  assert.equal(stepLabel(toolStepWords(call("imagegen", "failed")), "failed"), "Created an image — failed");
 });
 
 test("a listing has the folder, `date` and a public page's GET read as what they are", () => {
@@ -186,8 +159,8 @@ test("a listing has the folder, `date` and a public page's GET read as what they
 });
 
 test("a summary row's icon is its first segment's first step", () => {
-  const steps = [words("query_brain", "x"), words("Bash", "pnpm test"), words("Read", "a.ts")];
-  assert.equal(summarize(steps), "Read files, ran a command, checked project memory");
+  const steps = [words("imagegen", "x"), words("Bash", "pnpm test"), words("Read", "a.ts")];
+  assert.equal(summarize(steps), "Read files, ran a command, created an image");
   assert.equal(summaryLead(steps)?.kind, "read");
   assert.equal(summaryLead([words("Bash", "a"), words("apply_patch", "b.ts")])?.kind, "edit");
 });
@@ -258,15 +231,7 @@ test("a lead's call its denied approval stopped reads as declined, other failure
   assert.equal(denies([]), false);
 });
 
-const doneWords = (name: string) => stepWords({ name: `mcp__brigadier__${name}`, detail: null, status: "completed" }).done;
-
-test("Brigadier's own tools read in plain words, never as their internal names", () => {
-  const done = doneWords;
-  assert.equal(done("record_findings"), "Wrote down its findings");
-  assert.equal(done("request_review"), "Asked for a review");
-  assert.equal(done("watch_ci"), "Watched CI");
-  assert.equal(done("store_output"), "Kept a file for you");
-  // A web search's site operator reads after a bar.
+test("a web search's site operator reads after a bar", () => {
   assert.equal(stepWords({ name: "WebSearch", detail: "node lts site:nodejs.org", status: "completed" }).done, "Searched the web for node lts | nodejs.org");
 });
 
@@ -298,7 +263,7 @@ test("three or more back-to-back calls of a tool with no words of its own fold; 
   assert.equal(search.given, "search issues · x");
   assert.equal(said("mcp__claude_ai_Gmail__search_threads").done, "Used Gmail");
   // A tool Brigadier has words for keeps them: no fold, no count.
-  const searched = said("search_transcript");
-  assert.deepEqual(foldRepeats([searched, searched, searched]), [[0], [1], [2]]);
-  assert.equal(summarize([searched, searched]), "Searched earlier messages");
+  const created = said("imagegen");
+  assert.deepEqual(foldRepeats([created, created, created]), [[0], [1], [2]]);
+  assert.equal(summarize([created, created]), "Created an image");
 });

@@ -36,7 +36,6 @@ test("the MCP servers used are the ones its tool calls named: Claude's mcp__serv
   const entries = [
     tool("1", "mcp__claude_ai_Linear__search_issues", {}),
     tool("2", "postgres/query", { sql: "select 1" }),
-    tool("3", "mcp__brigadier__start", {}),
     tool("4", "agents/spawn", {}),
     tool("5", "mcp__claude_ai_Linear__get_issue", {}),
     tool("6", "Read", { file_path: "a.ts" }),

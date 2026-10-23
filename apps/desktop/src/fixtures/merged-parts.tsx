@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { LabeledDivider, TitlebarTips, Banner, EmptyState } from "@/components/shared";
 import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
 import { ToolBox } from "@/components/conversation";
-import { Branch, Download, Folder, Globe, Info, Plus, Settings, X } from "@/components/icons";
+import { Branch, Download, FeedbackGlyph, Folder, Info, Plus, Settings, X } from "@/components/icons";
 import { TooltipIconButton } from "@/components/controls";
 import { DropdownMenuLabel, itemBase, MenuRow } from "@/components/overlays";
 import { cn } from "@/lib/utils";
@@ -205,10 +205,10 @@ function Fixture() {
         </DropdownMenuLabel>
       </section>
       <section data-group="offer" className="flex flex-col">
-        <OfferCard label="Start as session?" kind="sessionOffered" icon={<Branch />} title="Start this as its own session?" line="Its own branch and worktree, in this project">
-          <OfferBody title="Fix uploads" text="Find why uploads stall at 99%." />
+        <OfferCard label="Send this to Brigadier’s developers?" kind="feedbackOffered" icon={<FeedbackGlyph />} title="Send this to Brigadier’s developers?" line="A report of what went wrong">
+          <OfferBody title="Uploads stall at 99%" text="The progress bar stops just before the end." />
         </OfferCard>
-        <OfferCard label="Turn on the browser" kind="settingSuggested" icon={<Globe />} title="Turn on the browser" line="It needs to check the docs page." />
+        <OfferCard label="Send these to Brigadier’s developers?" kind="feedbackOffered" icon={<FeedbackGlyph />} title="Send these to Brigadier’s developers?" line="2 reports" />
       </section>
       <section data-group="box" className="flex flex-col gap-2">
         <ToolBox title="Output">{"Compiling brigadier v0.1.0\nFinished in 2.3s"}</ToolBox>

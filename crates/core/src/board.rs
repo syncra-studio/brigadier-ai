@@ -326,22 +326,6 @@ impl Board {
             .collect()
     }
 
-    /// The requests whose work a merge now takes: those that settled ready since the last
-    /// merge, and `current`, the one whose turn merged it.
-    pub(crate) fn merging_requests(&self, current: Option<&str>) -> Vec<String> {
-        let mut requests: Vec<String> = self
-            .unmerged_ready()
-            .into_iter()
-            .map(|(request, _)| request)
-            .collect();
-        if let Some(current) = current
-            && !requests.iter().any(|request| request == current)
-        {
-            requests.push(current.to_owned());
-        }
-        requests
-    }
-
     /// Applies an event stored at `stream_seq` in the conversation's stream. An object's
     /// position is the stream sequence of the event that first recorded it.
     pub(crate) fn apply(&mut self, event: &DomainEvent, stream_seq: i64) {

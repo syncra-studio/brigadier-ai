@@ -3,10 +3,8 @@
 //! It turns the conversation log into running CLI sessions and back:
 //!
 //! - one thread per Brigadier session ([`conversation`], [`thread`]): a CLI session that
-//!   reads, runs and makes tiny edits in the session's workspace and calls the Brigadier MCP
-//!   tools ([`tools`]);
-//! - workers, one CLI session per task, in their own worktrees ([`workers`]), whose accepted
-//!   work lands on the session's branch ([`landing`]);
+//!   reads, runs and edits in the session's workspace and calls `brigadier` ([`tools`]);
+//! - workers, one CLI session per task, in their own worktrees ([`workers`]);
 //! - one CLI session per Chat, with no orchestrator and no workers;
 //! - the cards the user answers ([`cards`]), the grants the sessions hold, and the lifecycle
 //!   (hibernate, archive, restore, delete) with the cleanup of everything they create
@@ -19,8 +17,6 @@ mod accounts;
 mod add_project;
 mod app_call;
 mod app_state;
-// Nothing feeds it since `run` went (S6); the module goes in S12.
-mod brain_jobs;
 mod brains;
 mod branch_names;
 mod branches;
@@ -28,8 +24,6 @@ mod branches;
 mod brigade;
 pub(crate) mod browser_tool;
 mod cards;
-mod ci;
-mod clean_up;
 mod cli;
 mod cli_thread;
 mod cli_tools;
@@ -60,6 +54,7 @@ mod find_repos;
 mod flow;
 mod fork;
 mod fresh_base;
+mod gh;
 mod git_actions;
 mod inbox_store;
 mod instructions;
@@ -67,10 +62,10 @@ pub mod integrations;
 mod kept;
 #[cfg(all(test, unix))]
 mod kept_live_tests;
-mod landing;
 mod lifecycle;
 mod local_files;
 mod mcp_auth;
+mod memories;
 mod memory_guard;
 mod outputs;
 mod page_tools;
@@ -155,7 +150,8 @@ use self::workers::TaskLive;
 /// Where the session manager finds what it hands to CLI sessions.
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
-    /// The running `brigadierd`: CLIs start `brigadierd mcp` as their Brigadier MCP server.
+    /// The running `brigadierd`: CLIs run its hooks, and `brigadier` and the computer-use
+    /// helper are found beside it.
     pub daemon_exe: PathBuf,
 }
 
@@ -211,7 +207,7 @@ pub struct SessionManager {
     feedback_sign_in: Mutex<Option<feedback::GhSignIn>>,
     /// A stand-in `gh` for tests.
     #[cfg(test)]
-    pub(crate) gh_override: Mutex<Option<ci::Gh>>,
+    pub(crate) gh_override: Mutex<Option<gh::Gh>>,
     /// A stand-in `curl` for tests (Send feedback's reads of GitHub's public API).
     #[cfg(test)]
     pub(crate) curl_override: Mutex<Option<PathBuf>>,
@@ -265,10 +261,6 @@ pub struct SessionManager {
     /// none (never the real `~/.claude.json` or `~/.codex/config.toml`).
     #[cfg(test)]
     pub(crate) trust_home: std::sync::OnceLock<PathBuf>,
-    /// Tests: what a landing runs once it has rewritten the task branch, before it moves
-    /// the target.
-    #[cfg(test)]
-    pub(crate) landing_rewritten: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
     /// The subfolder rules each thread's CLI session was given by its output hook, by its
@@ -429,8 +421,6 @@ impl SessionManager {
             session_files: crate::thread_view::FileCache::default(),
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
-            #[cfg(test)]
-            landing_rewritten: std::sync::Mutex::new(None),
             activity: Arc::default(),
             rules_given: std::sync::Mutex::default(),
         });
@@ -605,7 +595,7 @@ impl SessionManager {
             }
             let stat = repo.diff_stat(&fork, &tip).map_err(git_error)?;
             let commits = repo.count_commits(&from, &tip).map_err(git_error)?;
-            Ok(Some((landing::diff_stat_of(&stat), commits)))
+            Ok(Some((diff_stat_of(&stat), commits)))
         })
         .await
     }
@@ -641,7 +631,7 @@ impl SessionManager {
                     let stat = repo.worker_diff(&base).ok()?;
                     Some(WorkerDiff {
                         task_id,
-                        stat: landing::diff_stat_of(&stat),
+                        stat: diff_stat_of(&stat),
                     })
                 })
                 .collect())
@@ -877,12 +867,6 @@ impl SessionManager {
         self.core.set_setup(id, setup).await
     }
 
-    /// Switched on, logged in and not refusing work (see [`Self::provider_ready`]).
-    fn provider_usable(&self, kind: ProviderKind) -> bool {
-        crate::routing::availability::provider_on(&self.core.settings(), kind)
-            && self.provider_ready(kind)
-    }
-
     /// Logged in and not refusing work: no limit, or one whose reset has passed (the quota
     /// monitor's view). Whether the user switched it off is not asked: a conversation already
     /// running on it goes on.
@@ -964,9 +948,6 @@ impl ToolHost for SessionManager {
                 ) => {
                     crate::heap(|| manager.browser_tool(conversation_id, Some(task_id), call)).await
                 }
-                (Role::BrainJob { project_id, job_id }, ToolCall::Job(call)) => {
-                    manager.job_call(project_id, job_id, call).await
-                }
                 (Role::Chat { conversation_id }, ToolCall::Chat(call)) => {
                     manager.chat_call(conversation_id, call).await
                 }
@@ -988,42 +969,9 @@ impl ToolHost for SessionManager {
                     },
                     ToolCall::TabChat(call),
                 ) => manager.tab_chat_call(conversation_id, call).await,
-                (Role::NoteFork { .. }, _) => ToolReply::error(rebirth::NOTE_FORK_REFUSAL),
                 _ => ToolReply::error("This tool is not available to this session."),
             }
         })
-    }
-
-    fn bad_call(&self, grant: &str, tool: &str) {
-        let Some(store) = self.runtime.routing_store().cloned() else {
-            return;
-        };
-        let (conversation, task) = match self.grants.resolve(grant) {
-            Some(Role::Worker {
-                conversation_id,
-                task_id,
-                ..
-            }) => (Some(conversation_id.0), Some(task_id.0)),
-            Some(
-                Role::Orchestrator {
-                    conversation_id, ..
-                }
-                | Role::Chat { conversation_id }
-                | Role::TabChat {
-                    conversation_id, ..
-                },
-            ) => (Some(conversation_id.0), None),
-            _ => (None, None),
-        };
-        let tool = tool.to_owned();
-        tokio::spawn(async move {
-            if let Err(err) = store
-                .add_bad_tool_call(crate::now_ms(), conversation, task, tool)
-                .await
-            {
-                tracing::warn!(error = %err, "could not count a bad tool call");
-            }
-        });
     }
 }
 
@@ -1045,5 +993,44 @@ fn git_error(err: brigadier_git::Error) -> Error {
             Error::Invalid(format!("{} is not a git repository", path.display()))
         }
         other => Error::Invalid(other.to_string()),
+    }
+}
+
+/// A git diff stat as the board keeps it.
+fn diff_stat_of(stat: &brigadier_git::DiffStat) -> crate::work::DiffStat {
+    crate::work::DiffStat {
+        files: stat
+            .files
+            .iter()
+            .map(|file| crate::work::FileStat {
+                path: file.path.clone(),
+                insertions: file.insertions,
+                deletions: file.deletions,
+                binary: file.binary,
+                change: None,
+                from: None,
+            })
+            .collect(),
+        insertions: stat.insertions,
+        deletions: stat.deletions,
+    }
+}
+
+impl SessionManager {
+    /// A commit message Brigadier writes, without AI co-authors while the user leaves them out.
+    fn commit_message(&self, message: String) -> String {
+        if self.core.settings().omit_ai_coauthors {
+            brigadier_git::strip_ai_coauthors(&message)
+        } else {
+            message
+        }
+    }
+
+    /// The repository of a task's session.
+    fn task_repo(&self, task: &crate::work::Task) -> Result<std::path::PathBuf> {
+        match self.core.conversation(&task.conversation_id)?.setup {
+            Some(crate::model::Setup::Session { repo, .. }) => Ok(std::path::PathBuf::from(repo)),
+            _ => Err(Error::Invalid("tasks belong to a session".into())),
+        }
     }
 }

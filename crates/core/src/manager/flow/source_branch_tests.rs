@@ -6,7 +6,7 @@
 
 use super::{Flow, Options, Reply, git};
 use crate::manager::refcheck::Caller;
-use crate::model::{Environment, Setup, TaskId};
+use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{OrchestratorStepKind, SourceAction, WorkspaceTarget};
 
 #[tokio::test]
@@ -215,7 +215,7 @@ async fn a_sessions_branch_stays_its_own_and_its_rebase_is_kept() {
     manager.record_session_refs(&flow.conversation, &checkout);
     // The check records the forward move: the branch's tip is Work now.
     manager
-        .ref_check(&checkout, Caller::Task(TaskId("other".into())))
+        .ref_check(&checkout, Caller::Thread(ConversationId("other".into())))
         .await;
     let repo = &flow.repo;
     std::fs::write(repo.join("main.txt"), "main\n").unwrap();
@@ -232,7 +232,7 @@ async fn a_sessions_branch_stays_its_own_and_its_rebase_is_kept() {
         .unwrap();
     let rebased = git(&checkout, &["rev-parse", "HEAD"]);
     manager
-        .ref_check(&checkout, Caller::Task(TaskId("other".into())))
+        .ref_check(&checkout, Caller::Thread(ConversationId("other".into())))
         .await;
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), rebased);
     assert_eq!(
@@ -281,7 +281,7 @@ async fn a_sessions_rebase_that_conflicts_is_resolved_commit_by_commit() {
     }
     manager.record_session_refs(&flow.conversation, &checkout);
     manager
-        .ref_check(&checkout, Caller::Task(TaskId("other".into())))
+        .ref_check(&checkout, Caller::Thread(ConversationId("other".into())))
         .await;
     let repo = &flow.repo;
     for file in ["a.txt", "b.txt"] {
@@ -364,7 +364,7 @@ async fn a_sessions_rebase_that_conflicts_is_resolved_commit_by_commit() {
     assert_eq!(state.branch.as_deref(), Some(branch.as_str()));
     let rebased = git(&checkout, &["rev-parse", "HEAD"]);
     manager
-        .ref_check(&checkout, Caller::Task(TaskId("other".into())))
+        .ref_check(&checkout, Caller::Thread(ConversationId("other".into())))
         .await;
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), rebased);
     assert_eq!(

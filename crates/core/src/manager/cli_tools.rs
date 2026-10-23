@@ -1,5 +1,5 @@
 //! The tools a session keeps, behind `brigadier` (STRIP-DOWN-PLAN S13, S16c): `preview`,
-//! `browser`, `app`, `page`, `ask`, and the thread's, Chat's and side chat's last MCP tools
+//! `browser`, `app`, `page`, `ask`, and what the thread, Chats and side chats had as MCP tools
 //! (`brain`, `transcript`, `code`, `report`, `memory`, `feedback`, `approval`). Each runs as the
 //! session's own call of the tool it was, with the grant it called with, so what a session or
 //! worker may do is what it could do before.

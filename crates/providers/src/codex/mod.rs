@@ -108,9 +108,6 @@ const CHAT_FEATURES: &[&str] = &[
     "sleep_tool",
 ];
 
-/// Built-ins switched off for a Brain job ([`ToolSet::Reader`]), which only reads.
-const READER_FEATURES: &[&str] = &["image_generation"];
-
 /// Per-process overrides for the same sessions. The sub-agent tools (`collaboration.*`) come
 /// with the model, whatever the feature flags say; only `agents.enabled` removes them. The
 /// user's personal skills catalog stays out of their context.
@@ -425,7 +422,6 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         // A thread keeps Codex's own sub-agents, goals and sleep tool, as in a plain CLI
         // (STRIP-DOWN-PLAN S3).
         ToolSet::Default | ToolSet::Lean | ToolSet::Thread => (&[], false),
-        ToolSet::Reader => (READER_FEATURES, false),
         ToolSet::None | ToolSet::Web | ToolSet::Review => (RESTRICTED_FEATURES, true),
         ToolSet::Chat | ToolSet::TabChat => (CHAT_FEATURES, true),
     };
@@ -1425,14 +1421,14 @@ async fn remove_project_trust(rpc: &Rpc, path: &str) -> Result<()> {
 /// The session's `web_search` setting; `None`: Codex's own default.
 fn web_search(tools: ToolSet) -> Option<&'static str> {
     match tools {
-        ToolSet::Default | ToolSet::Lean | ToolSet::Reader => None,
+        ToolSet::Default | ToolSet::Lean => None,
         ToolSet::None | ToolSet::Review | ToolSet::TabChat => Some("disabled"),
         ToolSet::Web | ToolSet::Chat | ToolSet::Thread => Some("live"),
     }
 }
 
-/// Per-thread config: Brigadier's MCP servers on, the user's off but in a session with their
-/// setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
+/// Per-thread config: the servers the session is given on, the user's off but in a session with
+/// their setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
 /// session's permission profile.
 async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<String, Value>> {
     let effective: Value = rpc
@@ -1633,8 +1629,9 @@ fn project_servers(read: &Value) -> Map<String, Value> {
     servers
 }
 
-/// MCP overrides leave the user's servers inherited in sessions with their setup, and add
-/// Brigadier's servers beside them. Other sessions explicitly disable the user's servers.
+/// MCP overrides leave the user's servers inherited in sessions with their setup, and add the
+/// servers the session is given beside them. Other sessions explicitly disable the user's
+/// servers.
 fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
     let mut servers: Map<String, Value> = effective
         .pointer("/config/mcp_servers")
@@ -2748,27 +2745,13 @@ mod tests {
                 !args.iter().any(|arg| arg == NO_SKILLS_CATALOG),
                 "{tools:?}: {args:?}"
             );
-            // No override disables an inherited server. Brigadier's own server is added
-            // beside it, rather than replacing the user's setup.
+            // No override disables the user's inherited server, and Brigadier adds none of its
+            // own (S16c): the session's MCP servers are the user's.
             let effective = json!({ "config": { "mcp_servers": {
                 "personal": { "command": "personal-mcp", "enabled": true }
             }}});
-            let mut session = spec(tools, None);
-            session.mcp_servers.push(McpServer {
-                name: "brigadier".into(),
-                transport: McpTransport::Stdio {
-                    command: "brigadier-mcp".into(),
-                    args: Vec::new(),
-                    cwd: None,
-                },
-                env: Vec::new(),
-                tool_timeout_secs: None,
-                trusted: true,
-                always_load: false,
-            });
-            let servers = mcp_config(&effective, &session);
-            assert!(!servers.contains_key("personal"), "{tools:?}: {servers:?}");
-            assert_eq!(servers["brigadier"]["command"], "brigadier-mcp");
+            let servers = mcp_config(&effective, &spec(tools, None));
+            assert!(servers.is_empty(), "{tools:?}: {servers:?}");
         }
         for args in [
             ToolSet::Default,
@@ -2777,7 +2760,6 @@ mod tests {
             ToolSet::Chat,
             ToolSet::Review,
             ToolSet::TabChat,
-            ToolSet::Reader,
         ]
         .map(|tools| app_server_args(Some(&spec(tools, None))))
         .into_iter()
@@ -2830,12 +2812,6 @@ mod tests {
                 assert!(off.iter().any(|f| f == feature), "{tools:?}: {off:?}");
             }
         }
-        // A Brain job reads through its shell and keeps its other tools.
-        let brain = app_server_args(Some(&spec(ToolSet::Reader, None)));
-        let off = disabled(&brain);
-        assert!(off.iter().any(|f| f == "image_generation"), "{brain:?}");
-        assert!(!off.iter().any(|f| f == "shell_tool"), "{brain:?}");
-        assert!(!without_sub_agents(&brain), "{brain:?}");
         // A worker and a thread make images.
         for tools in [ToolSet::Lean, ToolSet::Default, ToolSet::Thread] {
             let off = disabled(&app_server_args(Some(&spec(tools, None))));
@@ -2845,7 +2821,7 @@ mod tests {
 
     /// S16c: a Chat's and a side chat's commands run in Codex's read-only sandbox with network
     /// on, so `brigadier` reaches the daemon's socket; Codex asks about every command not on
-    /// its own safe list (`untrusted`). A Brain job's read-only sandbox stays offline.
+    /// its own safe list (`untrusted`). A reviewer's read-only sandbox stays offline.
     #[test]
     fn a_chats_shell_runs_read_only_with_network_for_brigadiers_socket() {
         for tools in [ToolSet::Chat, ToolSet::TabChat] {
@@ -2871,7 +2847,7 @@ mod tests {
                 "{tools:?}: {policy:?}"
             );
         }
-        for tools in [ToolSet::Reader, ToolSet::Review, ToolSet::Web] {
+        for tools in [ToolSet::Review, ToolSet::Web] {
             let policy = sandbox_policy(Access::ReadOnly, tools, &[]);
             assert!(
                 matches!(

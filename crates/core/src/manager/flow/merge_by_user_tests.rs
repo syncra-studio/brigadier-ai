@@ -6,9 +6,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
-
-use super::thread_tests::{commit_in_workspace, on_main};
+use super::thread_tests::{commit_in_workspace, merge_with_git, on_main};
 use super::{Flow, Options, Reply, Script, Turn, click, git};
 use crate::model::{CardId, DomainEvent, Environment, Lifecycle, Setup};
 use crate::now_ms;
@@ -24,9 +22,8 @@ where
 
 type Log = Arc<Mutex<Vec<String>>>;
 
-/// A session whose thread commits NOTES.md on "Add notes.", says once that it is ready, merges
-/// on [merge] without words and on "just merge it" with them. Every thread input and every
-/// reply it got are logged.
+/// A session whose thread commits NOTES.md on "Add notes.", says once that it is ready, and
+/// merges with plain git on [merge]. Every thread input and what it did are logged.
 async fn session(name: &str) -> (Flow, Log) {
     let log: Log = Arc::default();
     let said = log.clone();
@@ -45,13 +42,7 @@ async fn session(name: &str) -> (Flow, Log) {
                     return Reply::text("Ready to merge when you are.");
                 }
                 if turn.input.contains("[merge] The user clicked") {
-                    let reply = turn.call("finish_session", json!({})).await;
-                    log(format!("finish_session: {} {}", reply.is_error, reply.text));
-                    return Reply::text("Merged.");
-                }
-                if turn.input.contains("just merge it") {
-                    let reply = turn.call("finish_session", json!({})).await;
-                    log(format!("finish_session: {} {}", reply.is_error, reply.text));
+                    log(format!("merged {}", merge_with_git(&turn)));
                     return Reply::text("Merged.");
                 }
                 if turn.input.contains("Add more notes.") {
@@ -149,14 +140,6 @@ async fn quiet(flow: &Flow) -> crate::board::Board {
     board
 }
 
-fn merged(board: &crate::board::Board) -> usize {
-    board
-        .orchestrator_steps
-        .iter()
-        .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-        .count()
-}
-
 /// "Merge into main" reads the branch's commits, not its diff: commits that change nothing in
 /// sum (a file added, then removed) are still work to merge, and none is none.
 #[tokio::test]
@@ -236,219 +219,29 @@ async fn the_session_diff_counts_from_the_upstream_it_merged() {
     flow.stop().await;
 }
 
-/// The merge's upstream as its Merged row records it.
-fn merged_upstream(board: &crate::board::Board) -> Vec<Option<crate::work::MergedUpstream>> {
-    board
-        .orchestrator_steps
-        .iter()
-        .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::Merged { upstream, .. } => Some(upstream.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Another clone of `origin` pushes a commit adding `file` to its `main`.
-fn push_upstream(flow: &Flow, origin: &std::path::Path, file: &str) -> String {
-    let other = flow.repo.with_file_name(format!("merge-upstream-{file}"));
-    git(
-        &flow.repo,
-        &[
-            "clone",
-            "-q",
-            origin.to_str().unwrap(),
-            other.to_str().unwrap(),
-        ],
-    );
-    std::fs::write(other.join(file), "upstream\n").unwrap();
-    git(&other, &["add", "-A"]);
-    git(&other, &["commit", "-q", "-m", "Upstream work"]);
-    git(&other, &["push", "-q", "origin", "HEAD:main"]);
-    git(&other, &["rev-parse", "HEAD"])
-}
-
-/// The merge fetches the base's upstream first and fast-forwards a local `main` that is only
-/// behind, so it merges onto what others pushed; its result and its Merged row say it is on
-/// this Mac only, not pushed, and say so when local `main` has diverged from it (#224).
+/// The click is recorded with where it came from and the thread merges on its [merge], with
+/// plain git; with nothing left to merge, the button is refused. Nothing was ever put on a
+/// card, and the workspace stays.
 #[tokio::test]
-async fn a_merge_brings_main_up_to_date_and_says_it_isnt_pushed() {
-    let (flow, log) = session("merge-upstream").await;
-    let origin = flow.repo.with_file_name("merge-upstream-origin.git");
-    git(
-        &flow.repo,
-        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
-    );
-    git(
-        &flow.repo,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    git(&flow.repo, &["fetch", "-q", "origin"]);
-    git(
-        &flow.repo,
-        &["branch", "--set-upstream-to=origin/main", "main"],
-    );
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    // Someone pushes to origin's main: the local main is behind, and doesn't know it yet.
-    let pushed = push_upstream(&flow, &origin, "UPSTREAM.md");
-    flow.say("Yes, just merge it.").await;
-    flow.until("the merge", |board| merged(board) == 1).await;
-    let board = flow.settled().await;
-    assert!(on_main(&flow, "NOTES.md") && on_main(&flow, "UPSTREAM.md"));
-    assert!(
-        crate::test_git_command()
-            .args(["merge-base", "--is-ancestor", &pushed, "main"])
-            .current_dir(&flow.repo)
-            .status()
-            .unwrap()
-            .success(),
-        "merged onto origin's main"
-    );
-    let replies = logged(&log, "finish_session: false");
-    assert_eq!(replies.len(), 1, "{replies:?}");
-    assert!(
-        replies[0].contains("It is merged on this Mac only, not pushed to `origin/main`."),
-        "{}",
-        replies[0]
-    );
-    assert!(!replies[0].contains("diverged"), "{}", replies[0]);
-    let only_here = crate::work::MergedUpstream {
-        name: "origin/main".into(),
-        behind: 0,
-    };
-    assert_eq!(merged_upstream(&board), [Some(only_here.clone())]);
-    // Another push while local main holds the unpushed merge: they have diverged.
-    flow.say("Add more notes.").await;
-    flow.settled().await;
-    push_upstream(&flow, &origin, "UPSTREAM-2.md");
-    flow.say("Now just merge it again.").await;
-    flow.until("the second merge", |board| merged(board) == 2)
-        .await;
-    let board = flow.settled().await;
-    let replies = logged(&log, "finish_session: false");
-    assert_eq!(replies.len(), 2, "{replies:?}");
-    assert!(
-        replies[1].contains(
-            "Local `main` has diverged from `origin/main`: 1 commit there is not in it, so pushing needs them merged in first."
-        ),
-        "{}",
-        replies[1]
-    );
-    assert!(
-        !on_main(&flow, "UPSTREAM-2.md"),
-        "diverged: no fast-forward"
-    );
-    assert_eq!(
-        merged_upstream(&board),
-        [
-            Some(only_here),
-            Some(crate::work::MergedUpstream {
-                name: "origin/main".into(),
-                behind: 1,
-            })
-        ]
-    );
-    flow.stop().await;
-}
-
-/// A merge made on this Mac reads not pushed until its base's upstream has it: once the merged
-/// `main` is pushed, it reads pushed (#496).
-#[tokio::test]
-async fn a_merge_reads_pushed_once_its_base_is_pushed() {
-    let (flow, _log) = session("merge-pushed").await;
-    let origin = flow.repo.with_file_name("merge-pushed-origin.git");
-    git(
-        &flow.repo,
-        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
-    );
-    git(
-        &flow.repo,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    git(&flow.repo, &["fetch", "-q", "origin"]);
-    git(
-        &flow.repo,
-        &["branch", "--set-upstream-to=origin/main", "main"],
-    );
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    flow.say("Yes, just merge it.").await;
-    flow.until("the merge", |board| merged(board) == 1).await;
-    let board = flow.settled().await;
-    assert!(merged_upstream(&board)[0].is_some(), "merged on this Mac");
-    let commit = board
-        .orchestrator_steps
-        .iter()
-        .find_map(|step| match &step.kind {
-            OrchestratorStepKind::Merged { merge_commit, .. } => merge_commit.clone(),
-            _ => None,
-        })
-        .unwrap();
-    let pushed = || async {
-        flow.manager
-            .merge_pushed(&flow.conversation, &commit)
-            .await
-            .unwrap()
-    };
-    assert!(!pushed().await, "not pushed yet");
-    git(&flow.repo, &["push", "-q", "origin", "main"]);
-    assert!(pushed().await, "pushed");
-    assert!(
-        !flow
-            .manager
-            .merge_pushed(&flow.conversation, "0123456")
-            .await
-            .unwrap(),
-        "not a merge of this session's"
-    );
-    flow.stop().await;
-}
-
-/// The click merges: it is recorded with where it came from, the thread merges on its [merge],
-/// and a second finish_session finds nothing left to merge. Nothing was ever put on a card, and
-/// the workspace stays with its branch at the merge.
-#[tokio::test]
-async fn a_click_merges_once_and_keeps_the_workspace() {
+async fn a_click_asks_the_thread_to_merge_and_keeps_the_workspace() {
     let (flow, log) = session("merge-click").await;
     flow.say("Add notes.").await;
     flow.settled().await;
     let (_, branch) = workspace(&flow);
-    let tip = git(&flow.repo, &["rev-parse", &branch]);
-    let request = flow.board().await.latest_request().unwrap().id.clone();
     let reply = flow
         .manager
         .merge_session(&flow.conversation, click())
         .await
         .unwrap();
     assert!(reply.contains("Merging"), "{reply}");
-    flow.until("the merge", |board| merged(board) == 1).await;
+    let heard = log.clone();
+    flow.until("the thread's merge", move |_| {
+        !logged(&heard, "merged ").is_empty()
+    })
+    .await;
     let board = flow.settled().await;
     assert!(on_main(&flow, "NOTES.md"));
-    // The merge on this Mac records the head it merged, its merge commit and the request whose
-    // work it took; no PR.
-    let record = board
-        .orchestrator_steps
-        .iter()
-        .find_map(|step| match &step.kind {
-            OrchestratorStepKind::Merged {
-                head,
-                merge_commit,
-                pr,
-                requests,
-                ..
-            } => Some((head.clone(), merge_commit.clone(), *pr, requests.clone())),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(
-        record,
-        (
-            Some(tip),
-            Some(git(&flow.repo, &["rev-parse", "main"])),
-            None,
-            vec![request]
-        )
-    );
+    assert_eq!(logged(&log, "merged "), [format!("merged {branch}")]);
     assert!(
         board.questions.is_empty(),
         "no card: {:#?}",
@@ -464,15 +257,7 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
         .unwrap();
     assert_eq!(origin.input, Some(AnswerInput::Click));
     assert_eq!(origin.client, "Brigadier");
-    assert_eq!(logged(&log, "finish_session: false [finished]").len(), 1);
-    // Nothing is left to merge: no second merge.
-    assert!(
-        flow.manager
-            .finish_session(&flow.conversation, None)
-            .await
-            .is_err()
-    );
-    // And with nothing left to merge, the button's request is refused.
+    // With nothing left to merge, the button's request is refused.
     let nothing = flow
         .manager
         .merge_session(&flow.conversation, click())
@@ -480,12 +265,10 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
         .unwrap_err()
         .to_string();
     assert!(nothing.contains("Nothing to merge"), "{nothing}");
-    // The workspace stays, its branch at the merge, and the next request works in it.
-    let (path, branch) = workspace(&flow);
+    // The workspace stays, and the next request works in it.
+    let (path, _) = workspace(&flow);
     let path = path.expect("the worktree stays");
     assert!(path.join(".git").exists());
-    let main = git(&flow.repo, &["rev-parse", "main"]);
-    assert_eq!(git(&flow.repo, &["rev-parse", &branch]), main);
     flow.say("Add more notes.").await;
     flow.settled().await;
     assert_eq!(
@@ -493,22 +276,6 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
         [format!("worked in: {}", path.display())]
     );
     assert!(path.join("MORE.md").exists());
-    flow.stop().await;
-}
-
-/// The user's own words still merge, and close a merge card left open.
-#[tokio::test]
-async fn words_still_merge_and_close_an_old_open_card() {
-    let (flow, log) = session("merge-words").await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let card = plant_merge_card(&flow, None).await;
-    flow.say("Yes, just merge it.").await;
-    flow.until("the merge", |board| merged(board) == 1).await;
-    let board = flow.settled().await;
-    assert!(on_main(&flow, "NOTES.md"));
-    assert_eq!(logged(&log, "finish_session: false").len(), 1);
-    assert!(!board.questions[&card.id].is_open());
     flow.stop().await;
 }
 
@@ -636,41 +403,6 @@ async fn an_archived_sessions_unfinished_removal_still_goes() {
         .unwrap();
     flow.restart().await;
     super::eventually("the archived session's worktree removed", || !path.exists()).await;
-    flow.stop().await;
-}
-
-/// A Close workspace whose removal failed leaves the `session:` owner disposing while the
-/// session still works in its folder: the thread's clean_up never takes that folder (phase A
-/// verify).
-#[tokio::test]
-async fn clean_up_keeps_a_workspace_whose_close_failed() {
-    let (flow, _) = session("merge-close-failed-clean-up").await;
-    flow.say("Add notes.").await;
-    quiet(&flow).await;
-    let (path, _) = workspace(&flow);
-    let path = path.unwrap();
-    // The folder can't be removed (a locked file, say), so the Close fails.
-    flow.manager
-        .runtime
-        .ledger()
-        .set_worktree_remover(std::sync::Arc::new(|_, _| {
-            Box::pin(async { Err("a file in it is locked".to_owned()) })
-        }));
-    assert!(
-        flow.manager
-            .close_workspace(&flow.conversation)
-            .await
-            .is_err()
-    );
-    let owner = format!("session:{}", flow.conversation);
-    assert!(flow.manager.runtime.ledger().disposing().contains(&owner));
-    assert_eq!(workspace(&flow).0.as_deref(), Some(path.as_path()));
-    flow.manager.install_worktree_remover();
-    // The user keeps working there, then asks the thread to clean up.
-    std::fs::write(path.join("DRAFT.md"), "draft\n").unwrap();
-    let text = flow.manager.clean_up(&flow.conversation).await.unwrap();
-    assert!(path.join(".git").exists(), "{text}");
-    assert!(path.join("DRAFT.md").exists(), "{text}");
     flow.stop().await;
 }
 
@@ -863,9 +595,16 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
     let (flow, log) = session("merge-close-fresh").await;
     flow.say("Add notes.").await;
     flow.settled().await;
-    flow.say("Now just merge it.").await;
-    let board = quiet(&flow).await;
-    assert_eq!(merged(&board), 1, "{:#?}", log.lock().unwrap());
+    flow.manager
+        .merge_session(&flow.conversation, click())
+        .await
+        .unwrap();
+    let heard = log.clone();
+    flow.until("the thread's merge", move |_| {
+        !logged(&heard, "merged ").is_empty()
+    })
+    .await;
+    quiet(&flow).await;
     let (path, branch) = workspace(&flow);
     let path = path.unwrap();
     let reply = flow

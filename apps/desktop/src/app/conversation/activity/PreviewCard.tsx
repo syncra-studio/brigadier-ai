@@ -20,7 +20,7 @@ import { useBoard } from "@/state/board";
 /**
  * The Preview card, under a finished turn's answer and above its Changes card (the user's design,
  * `K53xQ`): a round badge, what the turn left to look at ("Web preview"), its state ("Running",
- * "Stopped") and address, and the proofs the thread took of it (`attach_proof`) inside the card,
+ * "Stopped") and address, and the proofs the thread took of it inside the card,
  * captioned thumbnails cropped to the top of the page. Running: Open, a split pill whose ▾ picks
  * where. Paused: Start again. The chevron folds the proofs away; folded, the header counts them.
  * Proofs with no page left running are the card's alone ("Screenshots").

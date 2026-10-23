@@ -338,8 +338,7 @@ async fn the_thread_has_no_computer_tools() {
     flow.settled().await;
     let specs = flow.thread_specs();
     let (_, spec) = specs.first().expect("the thread started");
-    let servers: Vec<&str> = spec.mcp_servers.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(servers, ["brigadier"]);
+    assert!(spec.mcp_servers.is_empty(), "{:?}", spec.mcp_servers);
     assert!(spec.skill_plugins.is_empty());
     let prompt = spec.append_system_prompt.as_deref().unwrap();
     assert!(!prompt.contains("computer tools"), "{prompt}");

@@ -20,7 +20,7 @@ use crate::token::Token;
 /// Time a new connection has to present a valid first frame.
 pub const AUTH_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Largest first frame: a hello or an MCP grant.
+/// Largest first frame: a hello, or a hook's or a command's grant.
 const MAX_FIRST_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 /// A connection's raw byte stream, after its first frame.
@@ -106,9 +106,6 @@ pub enum Accepted {
         connection: Connection,
         client: ClientInfo,
     },
-    /// A CLI session's Brigadier MCP bridge (`brigadierd mcp`). The stream carries raw MCP from
-    /// here on, starting with the first byte after the frame.
-    Mcp { grant: String, stream: RawStream },
     /// A Claude thread's output hook (`brigadierd hook post-tool-use`): `output.bytes` raw
     /// bytes follow on the stream, and the daemon answers with one length-prefixed
     /// [`crate::protocol::HookReply`] ([`encode_frame`]).
@@ -128,11 +125,11 @@ pub enum Accepted {
 
 impl Pending {
     /// Reads the first frame within [`AUTH_TIMEOUT`]. A hello must carry the token and the
-    /// protocol version; an MCP frame carries a grant the caller checks. Any failure
-    /// drops the connection without a reply.
+    /// protocol version; a hook's or a command's frame carries a grant the caller checks. Any
+    /// failure drops the connection without a reply.
     ///
-    /// The first frame is read unbuffered, so nothing the peer sent after it is lost when the
-    /// connection switches to raw MCP.
+    /// The first frame is read unbuffered, so nothing the peer sent after it is lost when a
+    /// hook's raw output follows it.
     pub async fn handshake(self, token: &Token) -> Result<Accepted, Error> {
         let mut stream = self.stream;
         let first = tokio::time::timeout(AUTH_TIMEOUT, read_first_frame(&mut stream))
@@ -160,7 +157,6 @@ impl Pending {
                     client,
                 })
             }
-            Ok(Some(ClientFrame::Mcp { grant })) => Ok(Accepted::Mcp { grant, stream }),
             Ok(Some(ClientFrame::Hook { grant, output })) => Ok(Accepted::Hook {
                 grant,
                 output,
@@ -228,8 +224,8 @@ pub fn encode_frame<T: Serialize>(frame: &T) -> Result<Vec<u8>, Error> {
 }
 
 /// Connects to the daemon for `paths` without an async runtime and sends `first`, a
-/// [`ClientFrame::Mcp`] or [`ClientFrame::Hook`]. For the short-lived helper processes CLI
-/// sessions start (`brigadierd mcp`, `brigadierd hook`), which never read the token.
+/// [`ClientFrame::Hook`]. For the short-lived hook processes CLI sessions start (`brigadierd
+/// hook`), which never read the token.
 pub fn connect_blocking(
     paths: &AppPaths,
     first: &ClientFrame,
@@ -241,24 +237,6 @@ pub fn connect_blocking(
     stream.write_all(&encode_frame(first)?)?;
     stream.flush()?;
     Ok(stream)
-}
-
-/// [`connect_blocking`], tried again until `wait` has passed. A daemon that starts resumes the
-/// sessions a restart cut off before it listens, and their CLIs start `brigadierd mcp` at
-/// once: the bridge waits for it rather than leave the session without its tools.
-pub fn connect_blocking_within(
-    paths: &AppPaths,
-    first: &ClientFrame,
-    wait: Duration,
-) -> Result<interprocess::local_socket::Stream, Error> {
-    let deadline = std::time::Instant::now() + wait;
-    loop {
-        match connect_blocking(paths, first) {
-            Ok(stream) => return Ok(stream),
-            Err(err) if std::time::Instant::now() >= deadline => return Err(err),
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
-        }
-    }
 }
 
 /// Reads one length-prefixed frame from a blocking reader; `None` when the peer closed the
@@ -347,44 +325,5 @@ fn remove_stale_socket(path: &std::path::Path) -> io::Result<()> {
         )),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
-    }
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    /// The bridge started while the daemon is still starting reaches it once it listens.
-    #[test]
-    fn a_connect_waits_for_a_daemon_that_starts_listening_late() {
-        let dir = std::env::temp_dir().join(format!("brig-ipc-{}", std::process::id()));
-        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(dir.clone()),
-        })
-        .unwrap();
-        let first = ClientFrame::Mcp {
-            grant: "grant".into(),
-        };
-        assert!(
-            connect_blocking(platform.paths(), &first).is_err(),
-            "nothing listens yet"
-        );
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let late = {
-            let platform = platform.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(700));
-                let _guard = runtime.enter();
-                let listener = Listener::bind(&*platform).unwrap();
-                std::thread::sleep(Duration::from_secs(3));
-                drop(listener);
-            })
-        };
-        assert!(connect_blocking_within(platform.paths(), &first, Duration::from_secs(5)).is_ok());
-        late.join().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

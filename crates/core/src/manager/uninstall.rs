@@ -80,7 +80,6 @@ impl SessionManager {
     pub async fn tear_down(&self) -> TearDown {
         let mut outcome = TearDown::default();
         self.admitting.store(false, Ordering::Release);
-        self.brains.jobs.stop("Brigadier is being uninstalled");
         brains::stop_watchers(self.brains.shutdown()).await;
         for conversation in self.core.catalog().conversations {
             if conversation.lifecycle != Lifecycle::Archived {

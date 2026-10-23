@@ -170,8 +170,6 @@ function summary(event: DomainEvent): string {
           return `stopped for a rebirth at ${event.entry.atTokens} tokens: ${event.entry.reason}`;
       }
       break;
-    case "brainJobUpdated":
-      return `${event.job.kind} ${event.job.state.type}`;
     case "memoryUpdated":
       return `${event.memory.forgotten ? "forgot" : "saved"} “${event.memory.text.slice(0, 80)}”`;
     case "decidedForYou":

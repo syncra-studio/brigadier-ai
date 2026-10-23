@@ -65,18 +65,12 @@ export const CONFIGURATION_ROWS = {
     label: "How sessions run workers",
     description: "Brigadier’s brigade skill. Your own copy at ~/.brigadier/brigade/SKILL.md replaces it",
   },
-  enrichBrain: {
-    label: "Use spare quota to deepen the Brain",
-    description:
-      "Before a usage window resets with quota left, a cheap model studies your projects further",
-  },
 } as const;
 
 /**
  * How Brigadier works for the user: one card of the defaults new sessions and chats start with
- * (models, permission level, starting workers), what the composer
- * shows, and the Brain's spare quota. Each row says in a line what it chooses; its menu explains the
- * choices.
+ * (models, permission level, starting workers), and what the composer shows. Each row says in a
+ * line what it chooses; its menu explains the choices.
  */
 export function ConfigurationPage() {
   const groups = useAvailableModelGroups();
@@ -122,11 +116,6 @@ export function ConfigurationPage() {
             setting="showFullAccessNotice"
             row={CONFIGURATION_ROWS.fullAccessNotice}
           />
-        </SettingsCard>
-      </SettingsSection>
-      <SettingsSection title="Brain">
-        <SettingsCard>
-          <SwitchSetting setting="enrichBrain" row={CONFIGURATION_ROWS.enrichBrain} />
         </SettingsCard>
       </SettingsSection>
     </SettingsPage>

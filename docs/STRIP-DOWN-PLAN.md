@@ -942,6 +942,15 @@ and `run`.
 - **S16c.** The landing engine, the CI-watch engine and the Brigadier MCP server (§3.6, §3.9).
   - Done when `M/landing.rs` and `crates/mcp-server` are gone, sessions start with no Brigadier entry in their
     MCP config (the user's own servers still load), and the PR row still works.
+  - What the thread, Chats and side chats still needed over MCP moved to `brigadier` as thin wrappers, with
+    unchanged behaviour: `brain search` (was `query_brain`), `transcript search`, `code search|refs|map`,
+    `page read|write` and `page file-read|file-write` (side chats), `memory save` and `report save` (Chats),
+    `feedback offer` and `approval request`. S18 re-points `brain search` and `transcript search`; S19 deletes
+    `memory save`. `remember`, `record_nodes` and the enrichment jobs went early, as S18's last MCP users.
+  - Chats and side chats had no shell, so they run `brigadier` through one limited to it: on Claude, `Bash` with
+    `dontAsk` and only `Bash(brigadier:*)` allowed (Claude's own read-only commands still run in the session's
+    folder); on Codex, a read-only sandboxed shell with network on for the daemon's socket, where Brigadier
+    approves only a plain `brigadier` command (Codex's rules can't forbid everything else).
 - Each sub-step closes the §3.6 issues it obsoletes, and re-checks #382 and #296.
 
 ### Stage 4: long sessions (G12) and Brain (G14)
@@ -990,6 +999,7 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     `brain_jobs.rs` enrichment. `constraints.rs`, `keep_note_decisions` and the event-store sync stay for
     `rebirth.rs` until S23 (§4 table).
   - The code index stays as optional commands: `brigadier code search|refs|map`.
+  - These commands, and `brigadier transcript search`, already exist as thin wrappers since S16c.
 - **Done when:**
   - Fixture tests: a phrase in a predecessor's JSONL, in a large tool output under `tool-results/`, and in a
     ledger is found.

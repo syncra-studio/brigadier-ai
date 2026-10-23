@@ -136,7 +136,8 @@ fn migrations() -> Migrations<'static> {
             ALTER TABLE turn_usage ADD COLUMN session_key TEXT;",
         ),
         // WORKSPACES-PLAN phase 4 (token doc item 3): each Brigadier tool call whose arguments
-        // didn't match its schema, which the bench's tripwire report counts.
+        // didn't match its schema, which the bench's tripwire report counts (nothing writes it
+        // since the MCP server went, S16c).
         M::up(
             "CREATE TABLE bad_tool_calls (
                 at_ms            INTEGER NOT NULL,
@@ -588,46 +589,6 @@ impl RoutingStore {
 
     pub async fn add_turn(self: &Arc<Self>, turn: TurnUsage) -> Result<()> {
         self.run(move |conn| insert_turn(conn, &turn)).await
-    }
-
-    /// A call to `tool` whose arguments didn't match its schema, by a conversation's thread or
-    /// one of its tasks (neither: a Brain job or a Chat).
-    pub async fn add_bad_tool_call(
-        self: &Arc<Self>,
-        at_ms: i64,
-        conversation_id: Option<String>,
-        task_id: Option<String>,
-        tool: String,
-    ) -> Result<()> {
-        self.run(move |conn| {
-            conn.prepare_cached(
-                "INSERT INTO bad_tool_calls (at_ms, conversation_id, task_id, tool)
-                 VALUES (?1, ?2, ?3, ?4)",
-            )?
-            .execute(params![at_ms, conversation_id, task_id, tool])?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// The bad tool calls since `since_ms`, oldest first: whose, and which tool.
-    pub async fn bad_tool_call_rows(
-        self: &Arc<Self>,
-        since_ms: i64,
-    ) -> Result<Vec<(Option<String>, Option<String>, String)>> {
-        self.run(move |conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT conversation_id, task_id, tool FROM bad_tool_calls WHERE at_ms >= ?1
-                 ORDER BY at_ms, rowid",
-            )?;
-            let rows = stmt
-                .query_map([since_ms], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                })?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok(rows)
-        })
-        .await
     }
 
     /// The last session of an owner (a conversation's `step`, or a task's), from its newest

@@ -1,8 +1,8 @@
 //! The daemon's side of the `brigadier` command (STRIP-DOWN-PLAN S13): who calls, and the
 //! answers to its read commands.
 //!
-//! A call names its session (`BRIGADIER_SESSION`) and carries that session's grant: the same
-//! grants the MCP tools are checked by, so a session that ended can't call any more. A thread,
+//! A call names its session (`BRIGADIER_SESSION`) and carries that session's grant, checked on
+//! every call, so a session that ended can't call any more. A thread,
 //! a Chat or a side chat is its conversation's id, a worker its task's id. Everything it reads
 //! is in its own project: the project's sidebar sessions and their workers. A side chat calls
 //! only `brigadier page`, for its tab's page or file.

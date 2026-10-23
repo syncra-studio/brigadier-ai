@@ -10,7 +10,7 @@ import type { Approval, ItemStatus, OrchestratorStepKind, Task } from "@/ipc/gen
  */
 
 /** The kinds of work a group sums up, in the order of the plan's table. */
-export type WorkKind = "read" | "edit" | "run" | "code" | "web" | "memory" | "preview" | "message" | "other";
+export type WorkKind = "read" | "edit" | "run" | "code" | "web" | "message" | "other";
 
 /** A call as both threads know it: the tool's name, its one-line detail and how it stands. */
 export type StepCall = { name: string; detail: string | null; status: ItemStatus };
@@ -52,42 +52,10 @@ export function toolName(name: string): string {
 }
 
 /**
- * Calls on Brigadier's own plumbing, never a row: what came of them shows elsewhere (a worker's
- * team sentence, a card, the Brain, the merge the user asked for).
+ * Calls of the CLIs' own plumbing, never a row: what came of them shows elsewhere (the tools a
+ * search loaded, the worker an agent became).
  */
-const PLUMBING = new Set([
-  "ToolSearch",
-  "tool_search",
-  "read_report",
-  // Its authored step says what was read ("Read notes.md"), or the team sentence covers a diff.
-  "read_artifact",
-  "finish_session",
-  "note_for_user",
-  "remember",
-  // request_review.s name before, on older rows: its review shows as the review's own row.
-  "review_candidate",
-  // Its proof shows under the reply.
-  "attach_proof",
-  "route_follow_up",
-  "list_tasks",
-  "land_phase",
-  "delegate_task",
-  "spawn_agent",
-  "message_worker",
-  "answer_worker",
-  "stop_worker",
-  "rerun_task",
-  "start_verifier",
-  "ask_user",
-  "propose_merge",
-  "suggest_full_access",
-  "suggest_setting",
-  "offer_feedback",
-  "submit_report",
-  // Its row comes from the message's record, or says why it was refused.
-  "message_session",
-  "settle_wait",
-]);
+const PLUMBING = new Set(["ToolSearch", "tool_search", "spawn_agent"]);
 
 /** Whether a call is plumbing, shown by what came of it rather than as a row. */
 export function isPlumbing(name: string): boolean {
@@ -96,42 +64,16 @@ export function isPlumbing(name: string): boolean {
 
 /** What `other` calls Brigadier knows are called; anything else is "Used {name}". */
 const OTHER: Record<string, [doing: string, done: string]> = {
-  search_transcript: ["Searching earlier messages", "Searched earlier messages"],
-  store_output: ["Keeping a file for you", "Kept a file for you"],
-  request_review: ["Asking for a review", "Asked for a review"],
-  // Its name before request_review, on older rows.
-  review_code: ["Asking for a review", "Asked for a review"],
-  review_plan: ["Asking for a review", "Asked for a review"],
-  request_approval: ["Asking for approval", "Asked for approval"],
-  ask_thread: ["Asking a question", "Asked a question"],
-  // Its name before #66, in older transcripts.
-  ask_orchestrator: ["Asking a question", "Asked a question"],
-  note_progress: ["Noting its progress", "Noted its progress"],
-  list_sessions: ["Looking for sessions", "Looked for sessions"],
-  read_session: ["Reading another session", "Read another session"],
   imagegen: ["Creating an image", "Created an image"],
-  record_findings: ["Writing down its findings", "Wrote down its findings"],
-  record_nodes: ["Saving to project memory", "Saved to project memory"],
-  ci_status: ["Checking CI", "Checked CI"],
-  watch_ci: ["Watching CI", "Watched CI"],
-  clean_up: ["Cleaning up", "Cleaned up"],
-  read_page: ["Reading a page", "Read a page"],
-  write_page: ["Writing a page", "Wrote a page"],
-  wait_for_replies: ["Waiting for replies", "Waited for replies"],
 };
 
-const READS = new Set(["Read", "read", "read_file", "read_artifact"]);
+const READS = new Set(["Read", "read", "read_file"]);
 const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]);
-const COMMANDS = new Set(["Bash", "run", "run_unsandboxed", "exec_command", "shell"]);
-const CODE_SEARCH = new Set(["Grep", "code_search", "code_refs"]);
-const LISTINGS = new Set(["Glob", "LS", "project_map"]);
+const COMMANDS = new Set(["Bash", "exec_command", "shell"]);
+const CODE_SEARCH = new Set(["Grep"]);
+const LISTINGS = new Set(["Glob", "LS"]);
 const WEB_SEARCH = new Set(["WebSearch", "web_search"]);
 const WEB_FETCH = new Set(["WebFetch", "web_fetch"]);
-const PREVIEWS: Record<string, [doing: string, done: string]> = {
-  start_preview: ["Starting a preview", "Started a preview"],
-  stop_preview: ["Stopping a preview", "Stopped a preview"],
-  preview_log: ["Reading the preview’s output", "Read the preview’s output"],
-};
 
 const READERS = new Set(["cat", "head", "tail", "nl", "less", "more", "bat", "wc", "sed"]);
 const LISTERS = new Set(["ls", "find", "tree", "fd"]);
@@ -251,11 +193,11 @@ function actionWords(short: string): string {
 
 /**
  * The integration (MCP server) a tool comes from, as the user knows it: `mcp__linear__search_issues`
- * is "Linear", `mcp__claude_ai_Gmail__…` "Gmail". Brigadier's own tools and plain tools have none.
+ * is "Linear", `mcp__claude_ai_Gmail__…` "Gmail". Plain tools have none.
  */
 export function connectorName(name: string): string | null {
   const server = /^mcp__(.+?)__/.exec(name)?.[1]?.replace(/^claude_ai_/i, "");
-  if (!server || server === "brigadier") return null;
+  if (!server) return null;
   const words = server.replace(/[_-]+/g, " ").trim();
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : "an integration";
 }
@@ -299,19 +241,12 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   }
   if (CODE_SEARCH.has(short)) return searchedCode(detail);
   if (LISTINGS.has(short)) return listed(detail ? basename(detail) : null);
-  if (short === "query_brain") {
-    if (!detail) return { kind: "memory", doing: "Checking project memory", done: "Checked project memory" };
-    const object = `“${detail}”`;
-    return { kind: "memory", doing: `Checking project memory for ${object}`, done: `Checked project memory for ${object}`, object };
-  }
   if (WEB_SEARCH.has(short)) return webSearchWords(detail);
   if (WEB_FETCH.has(short)) {
     if (!detail) return { kind: "web", doing: "Reading a web page", done: "Read a web page", web: true };
     const page = hostOf(detail);
     return { kind: "web", doing: `Reading ${page}`, done: `Read ${page}`, object: page, web: true };
   }
-  const preview = PREVIEWS[short];
-  if (preview) return { kind: "preview", doing: preview[0], done: preview[1] };
   return otherWords(short, detail, connectorName(call.name));
 }
 
@@ -394,21 +329,8 @@ export function changesDetail(paths: readonly string[]): string | null {
   return paths.length === 1 ? first : `${first} and ${paths.length - 1} more`;
 }
 
-/** Only suppress a raw call when its authored result actually exists in this turn. */
-const OWN_RESULT: Record<string, string> = {
-  delegate_task: "created",
-  start_verifier: "created",
-  message_worker: "messaged",
-  answer_worker: "answered",
-  read_report: "readReport",
-  read_artifact: "readArtifact",
-  note_for_user: "decided",
-  land_phase: "landed",
-  WebSearch: "searchedWeb",
-  web_search: "searchedWeb",
-  WebFetch: "readPage",
-  web_fetch: "readPage",
-};
+/** The web calls whose own result (a page read, a search) takes their row, once it exists in this turn. */
+const WEB_CALLS = new Set(["WebSearch", "web_search", "WebFetch", "web_fetch"]);
 
 /**
  * What a web call's own result read or looked for, as its row's detail says it (the daemon cuts
@@ -430,31 +352,16 @@ export function toolHasOwnResult(
   requestId?: string | null,
   position = 0,
 ): boolean {
-  const result = OWN_RESULT[toolName(kind.name)];
-  if (kind.status !== "completed" || !result) return false;
+  if (kind.status !== "completed" || !WEB_CALLS.has(toolName(kind.name))) return false;
   // A web call's result names its page or query: it is that call's, however many calls ran
   // alongside it (several pages read at once each end apart, after the others started).
   // A Codex search's call can open a page: its result is then a page read.
-  if (result === "readPage" || result === "searchedWeb") {
-    return !!kind.detail && !!results?.some(
-      (step) =>
-        step.requestId === requestId &&
-        (step.kind.type === "readPage" || step.kind.type === "searchedWeb") &&
-        step.position >= position &&
-        webTarget(step.kind) === kind.detail,
-    );
-  }
-  // The board may be replayed one event at a time. Keep the call until its result arrives.
-  const nextCall =
-    results?.find(
-      (step) => step.kind.type === "tool" && step.position > position,
-    )?.position ?? Number.POSITIVE_INFINITY;
-  return !!results?.some(
+  return !!kind.detail && !!results?.some(
     (step) =>
       step.requestId === requestId &&
-      step.kind.type === result &&
+      (step.kind.type === "readPage" || step.kind.type === "searchedWeb") &&
       step.position >= position &&
-      step.position < nextCall,
+      webTarget(step.kind) === kind.detail,
   );
 }
 
@@ -522,8 +429,6 @@ const LEADING: Record<Exclude<WorkKind, "other" | "code">, [one: string, many: s
   edit: ["Edited a file", "Edited files"],
   run: ["Ran a command", "Ran commands"],
   web: ["Searched the web", "Searched the web"],
-  memory: ["Checked project memory", "Checked project memory"],
-  preview: ["Started a preview", "Started a preview"],
   message: ["Messaged a session", "Messaged sessions"],
 };
 

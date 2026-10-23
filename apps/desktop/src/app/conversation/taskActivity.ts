@@ -44,8 +44,6 @@ export type ActivitySource = {
   activity?: string | undefined;
   summary?: string | undefined;
   diff?: DiffStat | undefined;
-  /** The worker's latest progress note, where it is in its plan ("Step 3 of 5: wiring the exporter"). */
-  note?: string | undefined;
 };
 
 export type ActivityLines = {
@@ -106,5 +104,5 @@ export function taskActivityLines(source: ActivitySource, now: number, withTime 
   const task = source.task;
   if (!task || !hasTaskActivity(task)) return empty;
   const text = semantic(source);
-  return { ...empty, first: withTime ? timed(source, text, now) : text, second: source.note?.trim() ?? "", firstWorking: activelyWorking(source) };
+  return { ...empty, first: withTime ? timed(source, text, now) : text, firstWorking: activelyWorking(source) };
 }

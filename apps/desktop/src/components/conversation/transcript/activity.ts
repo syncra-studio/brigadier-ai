@@ -1,4 +1,4 @@
-import { type ActionItem, toolName, unwrapCommand } from "@/app/conversation/activity/words";
+import { type ActionItem, unwrapCommand } from "@/app/conversation/activity/words";
 import type { TranscriptItem } from "@/components/conversation/transcript/transcript";
 
 export { unwrapCommand };
@@ -8,11 +8,10 @@ export { unwrapCommand };
  * of actions between two replies together. What the actions are called is `activity/words.ts`.
  */
 
-/** One entry of a worker's thread: a reply or row as it is, a run of actions, or a report it sent. */
+/** One entry of a worker's thread: a reply or row as it is, or a run of actions. */
 export type ThreadEntry =
   | { kind: "item"; item: TranscriptItem }
-  | { kind: "actions"; key: string; items: ActionItem[] }
-  | { kind: "report"; key: string; summary: string | null };
+  | { kind: "actions"; key: string; items: ActionItem[] };
 
 /** Brigadier's own folder of tool shims, before a tool's name: `/…/gate/bin/git` → `git`. */
 const GATE_PATH = /(^|[\s'"(;&|])(?:\/[\w.@+-]+(?: [\w.@+-]+)*)*?\/gate\/bin\//g;
@@ -48,33 +47,18 @@ function hidden(item: TranscriptItem): boolean {
   return item.kind === "tool" && item.name === "ToolSearch";
 }
 
-/** A report's summary, from its call's input. */
-function reportSummary(input: string | null): string | null {
-  try {
-    const summary = (JSON.parse(input ?? "") as { summary?: unknown }).summary;
-    return typeof summary === "string" && summary.trim() ? summary : null;
-  } catch {
-    return null;
-  }
-}
-
 function isAction(item: TranscriptItem): item is ActionItem {
   return item.kind === "command" || item.kind === "tool" || item.kind === "files" || item.kind === "image";
 }
 
 /**
- * A worker's transcript as its thread shows it: replies and reasoning stay, adjacent actions become one run, a report is an entry of its own, turn markers go. A failed or stopped turn stays.
+ * A worker's transcript as its thread shows it: replies and reasoning stay, adjacent actions become one run, turn markers go. A failed or stopped turn stays.
  */
 export function threadEntries(items: readonly TranscriptItem[]): ThreadEntry[] {
   const entries: ThreadEntry[] = [];
   for (const item of items) {
     if (hidden(item) || item.kind === "turnStarted") continue;
     if (item.kind === "turnCompleted" && item.status === "completed") continue;
-    // A report it sent is its answer of that turn, where it sent it; one refused leaves none.
-    if (item.kind === "tool" && toolName(item.name) === "submit_report") {
-      if (item.status === "completed") entries.push({ kind: "report", key: item.key, summary: reportSummary(item.input) });
-      continue;
-    }
     if (isAction(item)) {
       const last = entries.at(-1);
       if (last?.kind === "actions") last.items.push(item);

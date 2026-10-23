@@ -18,8 +18,6 @@ const merged = (askedIn: string | null, requestId: string | null): OrchestratorS
 const board = (orchestratorSteps: OrchestratorStep[]) =>
   ({
     requests: { r1: request("r1", 1), r2: request("r2", 2) },
-    tasks: {},
-    approvals: {},
     orchestratorSteps,
   }) as unknown as Board;
 

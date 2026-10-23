@@ -8,9 +8,6 @@ import { QuotaResumed } from "@/app/conversation/activity/QuotaResumed";
 import { isTeamStep, TeamStep } from "@/app/conversation/activity/TeamSentence";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
-import { SettingSuggestedCard } from "@/app/conversation/SettingSuggestedCard";
-import { shownChange } from "@/app/conversation/settingCard";
-import { SessionOffer } from "@/app/conversation/SessionOffer";
 
 /**
  * The thread's notices among its work (THREAD-UX-PLAN.md §3.1): a judgement call the lead made,
@@ -28,9 +25,7 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (kind.type === "moment") return <Moment text={kind.text} />;
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
   if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
-  if (kind.type === "settingSuggested") return shownChange(kind.change) ? <SettingSuggestedCard change={kind.change} reason={kind.reason} /> : null;
   if (kind.type === "feedbackOffered") return <FeedbackOffer id={kind.id} kind={kind.kind} title={kind.title} body={kind.body} />;
-  if (kind.type === "sessionOffered") return <SessionOffer id={kind.id} title={kind.title} task={kind.task} />;
   if (kind.type === "merged") return <MergedRow kind={kind} />;
   return null;
 };

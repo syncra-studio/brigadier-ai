@@ -445,8 +445,8 @@ impl Turn {
     }
 }
 
-/// The tool call `name` with `args`, as the MCP server would build it for the orchestrator or
-/// a worker.
+/// The tool call `name` with `args`, as `brigadier`'s subcommand builds it for the
+/// orchestrator or a worker.
 fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     fn arg<T: serde::de::DeserializeOwned>(name: &str, args: Value) -> T {
         serde_json::from_value(args).unwrap_or_else(|err| panic!("{name} arguments: {err}"))
@@ -456,13 +456,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     use WorkerCall as W;
     match name {
         "query_brain" => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
-        "remember" => ToolCall::Orchestrator(O::Remember(arg(name, args))),
         "search_transcript" => ToolCall::Orchestrator(O::SearchTranscript(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
-        "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
-        "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
-        "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
-        "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
@@ -474,7 +469,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "stop_preview" => ToolCall::Worker(W::StopPreview(arg(name, args))),
         "preview_log" => ToolCall::Worker(W::PreviewLog(arg(name, args))),
         "project_map" => ToolCall::Orchestrator(O::ProjectMap),
-        "clean_up" => ToolCall::Orchestrator(O::CleanUp),
         "app_state" => ToolCall::App(crate::tools::AppToolCall::State),
         "read_terminal" => ToolCall::App(crate::tools::AppToolCall::ReadTerminal(arg(name, args))),
         "open_in_app" => ToolCall::App(crate::tools::AppToolCall::Open(arg(name, args))),
@@ -781,15 +775,13 @@ impl Provider for FakeCli {
             }
             self.specs.lock().unwrap().push((self.kind, spec.clone()));
             let (tx, events) = mpsc::channel(256);
-            let env = |name: &str| {
-                spec.mcp_servers
-                    .iter()
-                    .flat_map(|server| &server.env)
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.clone())
-                    .unwrap_or_default()
-            };
-            let grant = env("BRIGADIER_MCP_GRANT");
+            // The grant its `brigadier` calls carry.
+            let grant = spec
+                .env
+                .iter()
+                .find(|(key, _)| key == brigadier_cli::protocol::GRANT_ENV)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default();
             let native_id = match &spec.origin {
                 brigadier_providers::model::Origin::Resume { native_id } => native_id.clone(),
                 _ => uuid::Uuid::new_v4().to_string(),
@@ -937,7 +929,7 @@ impl Provider for FakeCli {
         Box::new(NoRecordings)
     }
 
-    /// `<cli> --resume <id>` in `cwd`, with the session's MCP variables (its grant).
+    /// `<cli> --resume <id>` in `cwd`, with the session's variables (its grant).
     fn terminal(
         &self,
         spec: SessionSpec,
@@ -964,9 +956,8 @@ impl Provider for FakeCli {
                 cwd,
                 // What the CLI would be started with, for tests to read.
                 env: spec
-                    .mcp_servers
+                    .env
                     .iter()
-                    .flat_map(|server| server.env.iter())
                     .map(|(name, value)| (name.into(), value.into()))
                     .chain([
                         ("FAKE_ACCESS".into(), format!("{:?}", spec.access).into()),
@@ -2234,7 +2225,6 @@ mod local_commit_tests;
 #[cfg(unix)]
 mod mcp_servers_tests;
 #[cfg(unix)]
-mod memory_claims_tests;
 #[cfg(unix)]
 mod mention_tests;
 #[cfg(unix)]
@@ -2245,7 +2235,6 @@ mod merge_queue_tests;
 mod no_push_tests;
 #[cfg(unix)]
 #[cfg(unix)]
-mod owed_tests;
 #[cfg(unix)]
 mod page_tools_tests;
 #[cfg(unix)]

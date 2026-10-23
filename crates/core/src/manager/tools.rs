@@ -1,6 +1,5 @@
-//! The Brigadier MCP tools, answered. Orchestrator tools return at once; their outcomes
-//! arrive later as envelopes. Every reply the orchestrator reads is logged as a context
-//! injection.
+//! The tools behind `brigadier`, answered. Every reply the orchestrator reads is logged as a
+//! context injection.
 
 use std::collections::HashSet;
 
@@ -8,11 +7,11 @@ use brigadier_providers::{FileSearch, SearchKind};
 
 use super::SessionManager;
 
-use crate::model::{ConversationId, DomainEvent, MessageRole, PermissionLevel};
-use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
+use crate::model::{ConversationId, DomainEvent, MessageRole};
+use crate::tools::{OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
-    ApprovalSubject, DecisionSource, InjectionKind, OrchestratorStep, OrchestratorStepKind,
-    QuestionItem, QuestionOption, TaskId,
+    ApprovalSubject, InjectionKind, OrchestratorStep, OrchestratorStepKind, QuestionItem,
+    QuestionOption, TaskId,
 };
 use crate::{Error, Result, now_ms};
 
@@ -59,7 +58,6 @@ impl SessionManager {
                 })
                 .await
             }
-            OrchestratorCall::Remember(args) => crate::heap(|| self.remember_tool(id, args)).await,
             OrchestratorCall::SearchTranscript(args) => {
                 crate::heap(|| self.search_transcript_tool(id, args)).await
             }
@@ -76,23 +74,6 @@ impl SessionManager {
                 })
                 .await?;
                 Ok("Asked the user. The decision arrives later as a message.".into())
-            }
-            OrchestratorCall::LandPhase(args) => {
-                crate::heap(|| self.check_plan_mode(id)).await?;
-                let task = crate::heap(|| self.find_task(id, &args.task)).await?;
-                crate::heap(|| self.land_phase(id, task)).await
-            }
-            OrchestratorCall::FinishSession(args) => {
-                crate::heap(|| self.check_plan_mode(id)).await?;
-                crate::heap(|| self.finish_session(id, args.message)).await
-            }
-            OrchestratorCall::NoteForUser(args) => {
-                crate::heap(|| self.note_for_user(id, args)).await
-            }
-            OrchestratorCall::CiStatus(args) => crate::heap(|| self.ci_status(id, args)).await,
-            OrchestratorCall::WatchCi(args) => crate::heap(|| self.watch_ci(id, args)).await,
-            OrchestratorCall::SuggestSetting(args) => {
-                crate::heap(|| self.suggest_setting(id, args)).await
             }
             OrchestratorCall::OfferFeedback(args) => {
                 crate::heap(|| self.offer_feedback(id, args)).await
@@ -130,7 +111,6 @@ impl SessionManager {
                 Ok(text)
             }
             OrchestratorCall::ProjectMap => crate::heap(|| self.project_map_tool(id)).await,
-            OrchestratorCall::CleanUp => crate::heap(|| self.clean_up(id)).await,
             OrchestratorCall::ReadPage(args) => crate::heap(|| self.read_page(id, args)).await,
             OrchestratorCall::WritePage(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
@@ -223,135 +203,15 @@ impl SessionManager {
         }
     }
 
-    /// In plan mode nothing changes until the user turns it off: landing, merging and
-    /// finishing are refused, whatever the permission level.
+    /// In plan mode nothing changes until the user turns it off: a page write is refused,
+    /// whatever the permission level.
     async fn check_plan_mode(&self, id: &ConversationId) -> Result<()> {
         if self.plan_mode(id) {
             return Err(Error::Invalid(
-                "Plan mode is on: change nothing yet. Scouts and research may look around, and a lead may write its outline (it stops there). Merge tasks, landing and finish_session work again once the user turns plan mode off.".into(),
+                "Plan mode is on: change nothing yet. Writing works again once the user turns plan mode off.".into(),
             ));
         }
         Ok(())
-    }
-
-    /// `note_for_user`: a judgement call for "Decided for you", under the request the
-    /// orchestrator serves; something only the user can do is said in the answer instead.
-    pub(crate) async fn note_for_user(
-        &self,
-        id: &ConversationId,
-        args: crate::tools::NoteForUser,
-    ) -> Result<String> {
-        let what = args.what.trim();
-        if what.is_empty() {
-            return Err(Error::Invalid("`what` is empty".into()));
-        }
-        let request = self.request_for(id).await;
-        match args.kind {
-            NoteKind::Decided => {
-                self.record_decision(
-                    id,
-                    request,
-                    DecisionSource::Orchestrator,
-                    crate::work::DecisionKind::Routine,
-                    what.to_owned(),
-                    args.why.unwrap_or_default(),
-                )
-                .await;
-                Ok("Noted under Decided for you.".into())
-            }
-            NoteKind::Waiting => Err(Error::Invalid(
-                "Say it in your answer instead: nothing is listed for the user. Write what only they can do as one line, \"You'll need to: …\", and ask a decision on a card (ask_user).".into(),
-            )),
-        }
-    }
-
-    /// `suggest_setting`: a card in the thread with one settings change and a button that makes
-    /// it; nothing changes until the user presses it. Once per change and request, and only
-    /// where the change would change something.
-    pub(crate) async fn suggest_setting(
-        &self,
-        id: &ConversationId,
-        args: crate::tools::SuggestSetting,
-    ) -> Result<String> {
-        use crate::tools::SuggestedSetting;
-        use crate::work::SettingChange;
-        let reason = args.reason.trim();
-        if reason.is_empty() {
-            return Err(Error::Invalid("`reason` is empty".into()));
-        }
-        let value = args
-            .value
-            .trim()
-            .to_ascii_lowercase()
-            .replace([' ', '-'], "_");
-        let switch = || match value.as_str() {
-            "on" | "true" => Ok(true),
-            "off" | "false" => Ok(false),
-            _ => Err(Error::Invalid(
-                "`value` is \"on\" or \"off\" for this setting".into(),
-            )),
-        };
-        let settings = self.core.settings();
-        let (change, already) = match args.setting {
-            SuggestedSetting::Permission => {
-                let level = match value.as_str() {
-                    "ask" => PermissionLevel::Ask,
-                    "accept_edits" => PermissionLevel::AcceptEdits,
-                    "full_access" | "full" => PermissionLevel::Full,
-                    _ => {
-                        return Err(Error::Invalid(
-                            "`value` for permission is \"ask\", \"accept_edits\" or \"full_access\"".into(),
-                        ));
-                    }
-                };
-                if !matches!(
-                    self.core.conversation(id)?.setup,
-                    Some(crate::model::Setup::Session { .. })
-                ) {
-                    return Err(Error::Invalid(
-                        "only a session has a permission level".into(),
-                    ));
-                }
-                (
-                    SettingChange::Permission { level },
-                    self.permission(id) == level,
-                )
-            }
-            SuggestedSetting::Browser => {
-                let on = switch()?;
-                (
-                    SettingChange::Browser { on },
-                    settings.browser_enabled == on,
-                )
-            }
-        };
-        if already {
-            return Err(Error::Invalid(
-                "The setting is that way already: nothing to suggest.".into(),
-            ));
-        }
-        let request = self.request_for(id).await;
-        let conv = self.conv(id)?;
-        let _notice = conv.full_access_notice.lock().await;
-        let board = self.core.board(id).await?;
-        if board.orchestrator_steps.iter().any(|step| {
-            step.request_id == request
-                && matches!(&step.kind, OrchestratorStepKind::SettingSuggested { change: shown, .. } if *shown == change)
-        }) {
-            return Err(Error::Invalid(
-                "The card is already shown for this request: don't show it again.".into(),
-            ));
-        }
-        self.orchestrator_step_in(
-            id,
-            request,
-            OrchestratorStepKind::SettingSuggested {
-                change,
-                reason: reason.to_owned(),
-            },
-        )
-        .await;
-        Ok("Showed the user a card with the change and a button that makes it; nothing changes unless they press it. Say in a line what waits on it, and carry on with what doesn't; if they change it, a [settings] note tells you.".into())
     }
 
     /// `offer_feedback`: a card in the thread with a report to Brigadier's developers, which

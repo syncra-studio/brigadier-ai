@@ -55,9 +55,7 @@ fn read_inline_image<'de, D: serde::Deserializer<'de>>(
 // ----- tasks and workers ------------------------------------------------------------------
 
 /// What a task does (PLAN.md §5).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskKind {
     /// Looks around the repository and answers a question.
@@ -100,9 +98,7 @@ pub enum MockupPart {
 }
 
 /// What a worker does in the request's flow, for its name in the thread ("Lead · Phase 1").
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkerRole {
     /// Leads a phase: outlines it when it is big, builds it and checks its own work.
@@ -444,14 +440,14 @@ pub struct Report {
 
 /// What a report to Brigadier's developers is: something wrong, or an idea. Each opens its own
 /// form in Brigadier's repository (the bug report, the proposal).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum FeedbackKind {
     Bug,
     Idea,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewVerdict {
     Approve,
@@ -459,7 +455,7 @@ pub enum ReviewVerdict {
 }
 
 /// What a verify task found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ChecksResult {
     /// Every check it ran passed. Any it could not run fail the same way on the parent
@@ -661,7 +657,7 @@ pub struct Preview {
 }
 
 /// What a proof is, which decides how it shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ProofKind {
     /// A picture of a page, a window or a device's screen.
@@ -675,9 +671,7 @@ pub enum ProofKind {
 }
 
 /// What a preview shows the user, which decides when it is ready and whether it has a URL.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum PreviewKind {
     /// A web page (a dev server, a docs site): ready once its URL or a port it listens on

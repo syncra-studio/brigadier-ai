@@ -110,3 +110,33 @@ async fn the_lead_s_mcp_servers_show_while_its_cli_runs() {
     .await;
     flow.stop().await;
 }
+
+/// S16c: Brigadier gives no session an MCP server of its own: a thread starts with nothing in
+/// its MCP config from Brigadier, and with the user's own setup (where their servers are), and
+/// it reaches Brigadier through `brigadier`.
+#[tokio::test]
+async fn a_session_starts_with_no_brigadier_mcp_server_and_the_users_setup() {
+    let flow = Flow::start(
+        "mcp-servers-none",
+        Options::default(),
+        script(|_| async move { Reply::text("Hi.") }),
+    )
+    .await;
+    flow.say("Hello.").await;
+    flow.settled().await;
+    let specs = flow.specs();
+    assert!(!specs.is_empty());
+    for (_, spec) in &specs {
+        assert!(spec.mcp_servers.is_empty(), "{:?}", spec.mcp_servers);
+    }
+    let (_, thread) = flow.thread_specs().into_iter().next().expect("the thread");
+    assert!(thread.tools.user_setup(), "the user's own servers load");
+    assert!(
+        thread
+            .env
+            .iter()
+            .any(|(key, _)| key == brigadier_cli::protocol::GRANT_ENV),
+        "it calls Brigadier through `brigadier`"
+    );
+    flow.stop().await;
+}

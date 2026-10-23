@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::feedback::{FEEDBACK_REPO, FeedbackFiled, FeedbackFiling, GitHubSignIn};
-use crate::manager::ci::Gh;
+use crate::manager::gh::Gh;
 use crate::work::FeedbackKind;
 
 /// Marks the report writer's turns, and the duplicate check's.

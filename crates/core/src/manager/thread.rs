@@ -238,7 +238,6 @@ impl SessionManager {
             project.as_ref(),
             preferences,
             workspace.map(ThreadWorkspace::told).as_deref(),
-            provider,
             self.core.settings().start_workers_on_own,
         );
         prompt.push_str(&super::prompts::git_writing_section(&self.core.settings()));
@@ -382,14 +381,6 @@ impl SessionManager {
 }
 
 impl SessionManager {
-    /// Whether the conversation's thread runs a turn now.
-    pub(crate) async fn thread_turn_running(&self, id: &ConversationId) -> bool {
-        match self.conv(id) {
-            Ok(conv) => conv.turn_running().await,
-            Err(_) => false,
-        }
-    }
-
     /// Looks for the thread's new commits on its workspace's branch and records them: its
     /// self-edit metric reads them; nothing starts. `in_turn`: a turn runs
     /// (or just ended), so every new commit is the thread's; otherwise only a range with a
@@ -401,24 +392,6 @@ impl SessionManager {
         let _scan = self.thread_scans.lock().await;
         self.scan_branch(id, &workspace.repo, &workspace.branch, None, in_turn)
             .await;
-    }
-
-    /// A landing moved `branch` from `from` to `tip`. What the thread committed before it, up
-    /// to `from`, is recorded first (a turn that commits and then lands a worker); then the
-    /// record moves past the landing.
-    pub(crate) async fn thread_branch_landed(
-        &self,
-        id: &ConversationId,
-        repo: &Path,
-        branch: &str,
-        from: &Oid,
-        tip: &Oid,
-    ) {
-        let _scan = self.thread_scans.lock().await;
-        let in_turn = self.thread_turn_running(id).await;
-        self.scan_branch(id, repo, branch, Some(from.clone()), in_turn)
-            .await;
-        self.record_thread_tip(id, branch, tip, None).await;
     }
 
     /// Looks at `branch` from its recorded tip to `upto` (its tip now by default), with

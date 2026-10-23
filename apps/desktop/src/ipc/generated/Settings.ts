@@ -47,10 +47,6 @@ plainTextComposer: boolean,
  */
 showFullAccessNotice: boolean, 
 /**
- * Spend quota left over before a usage window resets on deepening the Project Brains.
- */
-enrichBrain: boolean, 
-/**
  * The old Short replies setting, no longer read: the voice is fixed (BUILD-PLAN §1.4). A
  * stored `false` is copied once into the personal preference for longer answers, and then
  * saved as `true`.

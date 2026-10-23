@@ -11,9 +11,8 @@
 //!   unverified and says what its source shows (the LLM judges, the engine plumbs).
 //! - **Independent of reviews.** Nothing here depends on "Review the work".
 //!
-//! A worker's `learned` and `decisions` lines carry theirs inline, as
-//! `[evidence: path:12-14 `the words`]` or `[evidence: out-… `the words`]`; the thread's
-//! `remember` names them in `files`, `check` or `finding`, with the words in `quote`.
+//! Claims stored by older versions name theirs as `path:12-14` or `out-…`, with the words they
+//! cite.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -164,37 +163,6 @@ pub(crate) fn lines_cite(cite: &str) -> Option<(String, usize, usize)> {
     Some((path.to_owned(), from, to))
 }
 
-/// A line of a worker's report without its `[evidence: …]` tags, and what they cite with
-/// their words.
-pub(crate) fn evidence_tags(line: &str) -> (String, Vec<(String, String)>) {
-    const OPEN: &str = "[evidence:";
-    let mut rest = line;
-    let mut text = String::new();
-    let mut found = Vec::new();
-    while let Some(at) = rest.find(OPEN) {
-        text.push_str(&rest[..at]);
-        let after = rest[at + OPEN.len()..].trim_start();
-        let cite_end = after
-            .find(|c: char| c.is_whitespace() || c == ']')
-            .unwrap_or(after.len());
-        let cite = &after[..cite_end];
-        let tail = after[cite_end..].trim_start();
-        let (quote, next) = match tail.strip_prefix('`').and_then(|q| q.split_once("`]")) {
-            Some((quote, next)) => (Some(quote), next),
-            None => match tail.split_once(']') {
-                Some((_, next)) => (None, next),
-                None => (None, ""),
-            },
-        };
-        if let (false, Some(quote)) = (cite.is_empty(), quote) {
-            found.push((cite.to_owned(), quote.to_owned()));
-        }
-        rest = next;
-    }
-    text.push_str(rest);
-    (normal(&text), found)
-}
-
 impl SessionManager {
     /// What claims are re-read from for a use in conversation `id`: `worktree` (a worker's) or
     /// the thread's workspace first, then the project's repositories.
@@ -244,30 +212,6 @@ impl SessionManager {
         .await
         .unwrap_or(unread)
     }
-
-    /// `cites` with their words as a claim's sources, each check output's `out-…` id taken
-    /// with its content from conversation `id`'s outputs.
-    pub(crate) async fn claim_sources(
-        &self,
-        id: &ConversationId,
-        cites: Vec<(String, String)>,
-    ) -> Vec<Source> {
-        let board = self.core.board(id).await.ok();
-        cites
-            .into_iter()
-            .filter(|(_, quote)| !quote.trim().is_empty())
-            .map(|(cite, quote)| {
-                let blob = output_alias(&cite).and_then(|alias| {
-                    board
-                        .as_ref()
-                        .and_then(|board| board.outputs.get(alias))
-                        .map(|output| output.blob.clone())
-                });
-                let cite = output_alias(&cite).map_or(cite.trim().to_owned(), str::to_owned);
-                Source { cite, quote, blob }
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -312,28 +256,6 @@ mod tests {
         assert_eq!(lines_cite("src/a.rs:0"), None);
         assert_eq!(output_alias("check out-1a2b3c4d"), Some("out-1a2b3c4d"));
         assert_eq!(output_alias("run-3"), None);
-    }
-
-    #[test]
-    fn a_report_line_gives_up_its_evidence_tags() {
-        let (text, cites) = evidence_tags(
-            "Retries stop at 3 [evidence: src/retry.rs:14 `const MAX_RETRIES: u32 = 3;`] and the test shows it [evidence: out-1a2b3c4d `retry_stops ... ok`].",
-        );
-        assert_eq!(text, "Retries stop at 3 and the test shows it .");
-        assert_eq!(
-            cites,
-            [
-                (
-                    "src/retry.rs:14".to_owned(),
-                    "const MAX_RETRIES: u32 = 3;".to_owned()
-                ),
-                ("out-1a2b3c4d".to_owned(), "retry_stops ... ok".to_owned()),
-            ]
-        );
-        // A tag without words is no evidence.
-        let (text, cites) = evidence_tags("Fast [evidence: src/a.rs:1]");
-        assert_eq!(text, "Fast");
-        assert!(cites.is_empty());
     }
 
     #[test]

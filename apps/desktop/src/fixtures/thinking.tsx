@@ -34,7 +34,7 @@ const tool = (itemId: string, position: number, name: string, status: "inProgres
   kind: { type: "tool" as const, itemId, name, status, detail, throughPosition: position },
 });
 
-// Tool-only opening moments, including a failed unqualified call and a streaming delegation.
+// Tool-only opening moments, including a failed unqualified call and a streaming search.
 if (query.get("tools") === "1") {
   useBoard.setState(({ board }) => {
     if (!board) return {};
@@ -42,9 +42,9 @@ if (query.get("tools") === "1") {
       tasks: Object.fromEntries(Object.entries(board.tasks).filter(([, task]) => task.requestId !== "r2")),
       orchestratorSteps: [
         ...board.orchestratorSteps.filter((step) => step.requestId !== "r2"),
-        tool("first-brain", 11.2, "query_brain", "failed", null),
-        tool("brain", 11.4, "query_brain", "completed", "composer attachments and paste handling"),
-        tool("delegate", 11.6, "delegate_task", "inProgress", null),
+        tool("first-search", 11.2, "Grep", "failed", null),
+        tool("search", 11.4, "Grep", "completed", "composer attachments and paste handling"),
+        tool("listing", 11.6, "Glob", "inProgress", null),
       ],
     } };
   });

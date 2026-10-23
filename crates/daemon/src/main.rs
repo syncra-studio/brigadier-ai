@@ -12,15 +12,12 @@
 //!
 //! A critical task or the store writer dying is logged and exits with code 70 instead.
 //!
-//! The same binary has two more jobs, chosen before any of the above runs:
+//! The same binary has more jobs, chosen before any of the above runs:
 //!
-//! - `brigadierd mcp`: the stdio bridge CLI sessions start for the Brigadier MCP tools
-//!   ([`bridge`]);
 //! - `brigadierd hook post-tool-use`: a Claude thread's output hook ([`hook`]);
 //! - `brigadierd quit`: asks a data directory's daemon to quit ([`quit`]).
 
 mod awake;
-mod bridge;
 mod connect;
 mod dictation;
 mod hook;
@@ -105,10 +102,6 @@ fn main() -> ExitCode {
     if let Some(exit) = connect::catch_browser_link() {
         return exit;
     }
-    // `brigadierd mcp`: the stdio MCP bridge a CLI session starts.
-    if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
-        return bridge::run(std::env::args_os().skip(2));
-    }
     // `brigadierd hook post-tool-use [--data-dir PATH]`: a Claude thread's output hook; `hook
     // stop`: a Claude worker's Stop hook.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "hook") {
@@ -146,7 +139,7 @@ fn main() -> ExitCode {
         Ok(args) => args,
         Err(err) => {
             eprintln!(
-                "brigadierd: {err}\nusage: brigadierd [--data-dir PATH] [--foreground]\n       brigadierd mcp [--data-dir PATH]\n       brigadierd quit [--data-dir PATH]"
+                "brigadierd: {err}\nusage: brigadierd [--data-dir PATH] [--foreground]\n       brigadierd quit [--data-dir PATH]"
             );
             return ExitCode::from(2);
         }

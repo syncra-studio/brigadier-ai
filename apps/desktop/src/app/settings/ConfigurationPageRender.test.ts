@@ -31,20 +31,6 @@ test("Configuration saves the default, and the session's picker switches it to F
   assert.deepEqual(rendering.calls, ["default acceptEdits", "session full"]);
 });
 
-test("a finished reply keeps its offer cards outside its collapsed work, and an old Full access suggestion isn't shown", { timeout: 60000 }, async (t) => {
-  const dump = await renderFixturePage(t, "access-thread.html", "access-thread-result", 8000);
-  const rendering = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&"));
-  assert.deepEqual(rendering, {
-    state: "done",
-    outsideWork: true,
-    count: 0,
-    // The session offer and the suggested setting both round to --radius-question; the setting
-    // is the offer card: its icon in a tile, its buttons not indented.
-    corners: [true, true],
-    setting: { buttons: ["Turn on", "Open Settings"], tiled: true, indented: false },
-  });
-});
-
 // The real page in Chromium over a faked daemon: one headless card of the defaults with a line
 // each, every section shown, the explanations in the menus (Automatic first, each level's allowance and risk), and
 // an old page's link and a search landing on their rows.
@@ -62,7 +48,7 @@ test("Configuration shows its defaults in one card and explains the choices in i
   ]);
   assert.equal(seen.firstCardHeading, false, "the first card has no heading");
   // Every section shows.
-  assert.deepEqual(seen.sections, ["Workers", "Composer", "Brain"]);
+  assert.deepEqual(seen.sections, ["Workers", "Composer"]);
   // The user's copy of the brigade skill is in use until Reset to shipped (S15).
   assert.deepEqual(seen.skill, { helper: "Your copy at ~/.brigadier/brigade/SKILL.md is in use", button: "Reset to shipped" });
   assert.deepEqual(seen.skillReset, {

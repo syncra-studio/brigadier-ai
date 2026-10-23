@@ -103,7 +103,7 @@ if $cross; then
   crates=(
     -p brigadier-core -p brigadier-store -p brigadier-ipc -p brigadier-providers
     -p brigadier-brain -p brigadier-index -p brigadier-router
-    -p brigadier-git -p brigadier-registry -p brigadier-sandbox -p brigadier-mcp-server
+    -p brigadier-git -p brigadier-registry -p brigadier-sandbox
     -p brigadier-browser-data
   )
   run cargo-zigbuild clippy --locked --target x86_64-unknown-linux-gnu "${crates[@]}" \

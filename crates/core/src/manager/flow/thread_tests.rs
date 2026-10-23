@@ -530,134 +530,20 @@ pub(super) fn commit_in_workspace(turn: &Turn, file: &str, text: &str, message: 
     git(workspace, &["rev-parse", "HEAD"])
 }
 
-/// The script of the merge tests below: commits NOTES.md on "Add notes.", merges on "yes,
-/// merge it", and logs every input with its folders and finish_session's answer.
-fn merging_thread(seen: Arc<Mutex<Vec<Seen>>>) -> Script {
-    script(move |turn| {
-        let log = seen.clone();
-        async move {
-            log.lock()
-                .unwrap()
-                .push((turn.input.clone(), vec![turn.cwd.clone()]));
-            if turn.input.contains("Add notes.") {
-                commit_in_workspace(
-                    &turn,
-                    "NOTES.md",
-                    "notes\n",
-                    "Add notes\n\nBrigadier-Author: thread",
-                );
-                return Reply::text("Notes added, ready to merge.");
-            }
-            if turn.input.contains("yes, merge it") {
-                let reply = turn.call("finish_session", json!({})).await;
-                assert!(!reply.is_error, "{}", reply.text);
-                log.lock().unwrap().push((reply.text.clone(), Vec::new()));
-                return Reply::text("Merged.");
-            }
-            Reply::text("Done.")
-        }
-    })
-}
-
-/// finish_session's answer, once the thread has it.
-async fn finished(flow: &Flow, seen: &Arc<Mutex<Vec<Seen>>>) -> String {
-    flow.until("the [finished] answer", |_| {
-        seen.lock()
-            .unwrap()
-            .iter()
-            .any(|(input, _)| input.contains("[finished]"))
-    })
-    .await;
-    flow.settled().await;
-    seen.lock()
-        .unwrap()
-        .iter()
-        .find(|(input, _)| input.contains("[finished]"))
-        .unwrap()
-        .0
-        .clone()
-}
-
-/// After the merge the user asked for, the session keeps its worktree and branch (BUILD-PLAN
-/// A3): the branch is at the merge, and the user's next message goes on in the same folder, in
-/// the same CLI session, with nothing made again.
-#[tokio::test]
-async fn a_merge_keeps_the_session_worktree_and_its_branch_moves_to_the_merge() {
-    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
-    let flow = Flow::start(
-        "thread-merge-kept",
-        Options::default(),
-        merging_thread(seen.clone()),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let worktree = session_worktree(&flow);
-    let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    flow.say("yes, merge it").await;
-    let finished = finished(&flow, &seen).await;
-    assert!(
-        finished.contains("The session keeps its worktree and branch"),
-        "{finished}"
+/// The thread's merge of its branch into `main`, with plain git in the repository's checkout
+/// (there is no merge tool, S16c); the branch merged.
+pub(super) fn merge_with_git(turn: &Turn) -> String {
+    let branch = git(&turn.cwd, &["branch", "--show-current"]);
+    let common = git(
+        &turn.cwd,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     );
-    assert!(git(&flow.repo, &["cat-file", "-e", "main:NOTES.md"]).is_empty());
-    assert!(worktree.join(".git").exists(), "{}", worktree.display());
-    let main_tip = git(&flow.repo, &["rev-parse", "main"]);
-    assert_eq!(git(&flow.repo, &["rev-parse", &branch]), main_tip);
-    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), main_tip);
-    assert_eq!(session_worktree(&flow), worktree);
-    let specs = flow.thread_specs().len();
-    flow.say("Next.").await;
-    flow.settled().await;
-    assert_eq!(session_worktree(&flow), worktree, "the same path");
-    assert_eq!(
-        git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        branch
+    let repo = std::path::Path::new(&common).parent().unwrap();
+    git(
+        repo,
+        &["merge", "-q", "--no-ff", "-m", "Merge the work", &branch],
     );
-    let (input, dirs) = seen.lock().unwrap().last().unwrap().clone();
-    assert!(input.contains("Next."), "{input}");
-    assert!(!input.contains("[workspace] A fresh branch"), "{input}");
-    assert_eq!(dirs[0], worktree);
-    assert_eq!(
-        flow.thread_specs().len(),
-        specs,
-        "the same CLI session goes on: no restart, no rebirth"
-    );
-    flow.stop().await;
-}
-
-/// Uncommitted changes in the session's worktree stay through a merge, with the branch at the
-/// merge.
-#[tokio::test]
-async fn a_merge_keeps_uncommitted_changes_in_the_session_worktree() {
-    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
-    let flow = Flow::start(
-        "thread-merge-dirty",
-        Options::default(),
-        merging_thread(seen.clone()),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    let worktree = session_worktree(&flow);
-    std::fs::write(worktree.join("DRAFT.md"), "draft\n").unwrap();
-    let branch = git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    flow.say("yes, merge it").await;
-    let finished = finished(&flow, &seen).await;
-    assert!(
-        finished.contains("The session keeps its worktree and branch"),
-        "{finished}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(worktree.join("DRAFT.md")).unwrap(),
-        "draft\n"
-    );
-    assert_eq!(
-        git(&flow.repo, &["rev-parse", &branch]),
-        git(&flow.repo, &["rev-parse", "main"])
-    );
-    assert_eq!(session_worktree(&flow), worktree);
-    flow.stop().await;
+    branch
 }
 
 /// The user's Stop while the thread runs a command closes its CLI when the turn ends, so the
@@ -971,94 +857,12 @@ async fn a_running_preview_leaves_the_answer_done() {
     flow.stop().await;
 }
 
-/// What the thread was told by its finish_session calls, in order.
-type MergeReplies = Arc<Mutex<Vec<(String, bool)>>>;
-
-async fn finish(turn: &Turn, replies: &MergeReplies) -> bool {
-    let reply = turn.call("finish_session", json!({})).await;
-    replies
-        .lock()
-        .unwrap()
-        .push((reply.text.clone(), reply.is_error));
-    !reply.is_error
-}
-
 pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
     crate::test_git_command()
         .args(["cat-file", "-e", &format!("main:{path}")])
         .current_dir(&flow.repo)
         .status()
         .is_ok_and(|status| status.success())
-}
-
-/// Merging is asked for in words, with no card: the thread proposes it in its reply, judges
-/// the user's answers ("No, not yet." and "don't merge it" aren't a yes), and merges on their
-/// "yes, merge it", once: Brigadier checks no consent, and a second call finds nothing left to
-/// merge.
-#[tokio::test]
-async fn the_merge_is_asked_in_words_and_happens_on_the_users_yes() {
-    let replies: MergeReplies = Arc::default();
-    let log = replies.clone();
-    let flow = Flow::start(
-        "thread-merge-words",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                let input = turn.input.clone();
-                if input.contains("Add notes.") {
-                    commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    return Reply::text("Notes added. Merge them into `main`?");
-                }
-                if input.contains("No, not yet.") {
-                    return Reply::text("OK, it stays on its branch. Merge it into `main` now?");
-                }
-                if input.contains("don't merge it") {
-                    return Reply::text("Left unmerged.");
-                }
-                if input.contains("yes, merge it") {
-                    assert!(finish(&turn, &log).await);
-                    // One merge: nothing is left to merge.
-                    assert!(!finish(&turn, &log).await);
-                    return Reply::text("Merged.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    flow.say("No, not yet.").await;
-    flow.settled().await;
-    flow.say("Hmm, don't merge it").await;
-    flow.settled().await;
-    assert!(
-        !on_main(&flow, "NOTES.md"),
-        "nothing merged on silence or a no"
-    );
-    flow.say("OK, yes, merge it").await;
-    flow.settled().await;
-    assert!(on_main(&flow, "NOTES.md"), "merged on the yes");
-    let replies = replies.lock().unwrap().clone();
-    assert_eq!(replies.len(), 2, "{replies:#?}");
-    assert!(
-        replies[0].0.starts_with("[finished] `") && !replies[0].1,
-        "{replies:#?}"
-    );
-    assert!(
-        replies[1].1 && replies[1].0.contains("has no commits that `main` lacks"),
-        "{replies:#?}"
-    );
-    let board = flow.board().await;
-    assert!(board.approvals.is_empty(), "no merge card");
-    let merged: Vec<_> = board
-        .orchestrator_steps
-        .iter()
-        .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-        .collect();
-    assert_eq!(merged.len(), 1, "{merged:#?}");
-    flow.stop().await;
 }
 
 /// The thread offers a drafted report to Brigadier's developers once per incident: once in a
@@ -1798,18 +1602,10 @@ async fn note_fork(name: &str, thread: ProviderKind) -> (Flow, SessionSpec, Sess
     (flow, fork, thread, answered.join("\n"))
 }
 
-fn grant_of(spec: &SessionSpec) -> Option<String> {
-    spec.mcp_servers
-        .iter()
-        .flat_map(|server| &server.env)
-        .find(|(name, _)| name == "BRIGADIER_MCP_GRANT")
-        .map(|(_, grant)| grant.clone())
-}
-
-/// B5: a Claude thread's note fork starts as the thread did (tools, MCP server, model,
-/// instructions and the rest), so it reads the thread's prefix from the cache; only its
-/// origin, its life and its folders' ownership change. It stays read-only, a hook denies every
-/// tool, and Brigadier's server refuses its calls under a grant of its own, revoked when it ends.
+/// B5: a Claude thread's note fork starts as the thread did (tools, model, instructions and the
+/// rest), so it reads the thread's prefix from the cache; only its origin, its life and its
+/// folders' ownership change. It stays read-only, a hook denies every tool, and it holds no
+/// grant, so a Brigadier tool refuses it too.
 #[tokio::test]
 async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
     let (flow, fork, thread, answered) = note_fork("note-fork-claude", ProviderKind::Claude).await;
@@ -1817,25 +1613,7 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
         fork.deny_tools.as_deref(),
         Some(crate::manager::rebirth::NOTE_FORK_REFUSAL)
     );
-    assert_eq!(answered, crate::manager::rebirth::NOTE_FORK_REFUSAL);
-    // The same server, under another grant.
-    assert_eq!(fork.mcp_servers.len(), thread.mcp_servers.len());
-    for (forked, own) in fork.mcp_servers.iter().zip(&thread.mcp_servers) {
-        assert_eq!(
-            (&forked.name, &forked.transport, forked.always_load),
-            (&own.name, &own.transport, own.always_load)
-        );
-        assert_eq!(
-            (forked.tool_timeout_secs, forked.trusted),
-            (own.tool_timeout_secs, own.trusted)
-        );
-    }
-    let grant = grant_of(&fork).expect("the fork's grant");
-    assert_ne!(Some(&grant), grant_of(&thread).as_ref());
-    assert!(
-        flow.manager.grants().resolve(&grant).is_none(),
-        "revoked once the fork ended"
-    );
+    assert!(answered.contains("not valid"), "{answered}");
     // It runs no command: it has no `brigadier` session or grant, and keeps the rest.
     let calls = |spec: &SessionSpec| {
         spec.env
@@ -1853,7 +1631,6 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
         origin: thread.origin.clone(),
         ephemeral: thread.ephemeral,
         access: thread.access,
-        mcp_servers: thread.mcp_servers.clone(),
         record_to: thread.record_to.clone(),
         redactor: thread.redactor.clone(),
         owned_cwd: thread.owned_cwd,
@@ -1881,99 +1658,5 @@ async fn a_codex_note_fork_is_unchanged() {
         answered.contains("not available") || answered.contains("not valid"),
         "{answered}"
     );
-    flow.stop().await;
-}
-
-/// `suggest_setting` (Q90): a card per change, Full access included, which changes nothing on
-/// its own; a setting that is that way already, or a value it doesn't take, is
-/// refused, and a setting outside the few it may suggest doesn't parse.
-#[tokio::test]
-async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pressed() {
-    let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
-    let log = replies.clone();
-    let flow = Flow::start(
-        "thread-suggest-setting",
-        Options {
-            permission: PermissionLevel::Ask,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if turn.is_orchestrator() {
-                    for (setting, value) in [
-                        ("browser", "off"),
-                        ("browser", "off"),
-                        ("browser", "on"),
-                        ("permission", "accept_edits"),
-                        ("permission", "ask"),
-                        ("permission", "full_access"),
-                        ("browser", "maybe"),
-                    ] {
-                        let reply = turn
-                            .call(
-                                "suggest_setting",
-                                json!({"setting": setting, "value": value, "reason": "It helps."}),
-                            )
-                            .await;
-                        log.lock().unwrap().push((reply.is_error, reply.text));
-                    }
-                }
-                Reply::text("Asked.")
-            }
-        }),
-    )
-    .await;
-    let before = flow.core.settings();
-    assert!(before.browser_enabled);
-    flow.say("Turn the browser off.").await;
-    let board = flow.settled().await;
-    let replies = replies.lock().unwrap().clone();
-    let errors: Vec<bool> = replies.iter().map(|reply| reply.0).collect();
-    assert_eq!(
-        errors,
-        [false, true, true, false, true, false, true],
-        "{replies:#?}"
-    );
-    assert!(replies[1].1.contains("already shown"), "{}", replies[1].1);
-    assert!(
-        replies[2].1.contains("that way already"),
-        "{}",
-        replies[2].1
-    );
-    assert!(
-        replies[6].1.contains("\"on\" or \"off\""),
-        "{}",
-        replies[6].1
-    );
-    let cards: Vec<_> = board
-        .orchestrator_steps
-        .iter()
-        .filter_map(|step| match &step.kind {
-            OrchestratorStepKind::SettingSuggested { change, .. } => Some(change.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        cards,
-        [
-            crate::work::SettingChange::Browser { on: false },
-            crate::work::SettingChange::Permission {
-                level: PermissionLevel::AcceptEdits
-            },
-            crate::work::SettingChange::Permission {
-                level: PermissionLevel::Full
-            },
-        ]
-    );
-    // Nothing changed: only the user's press does that.
-    let after = flow.core.settings();
-    assert_eq!(after.browser_enabled, before.browser_enabled);
-    let Some(Setup::Session { permission, .. }) =
-        flow.core.conversation(&flow.conversation).unwrap().setup
-    else {
-        panic!("a session");
-    };
-    assert_eq!(permission, PermissionLevel::Ask);
     flow.stop().await;
 }

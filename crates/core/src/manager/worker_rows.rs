@@ -368,7 +368,7 @@ impl SessionManager {
                     let diff = repo
                         .worker_diff(&parent)
                         .ok()
-                        .map(|stat| super::landing::diff_stat_of(&stat));
+                        .map(|stat| super::diff_stat_of(&stat));
                     let (ahead, merged) = branch
                         .as_deref()
                         .and_then(|branch| {

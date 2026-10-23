@@ -6,7 +6,7 @@ use brigadier_providers::{CallCache, ProviderKind, TokenUsage};
 
 use super::SessionManager;
 use super::conversation::Cli;
-use crate::model::{ConversationId, ConversationKind, ProjectId};
+use crate::model::{ConversationId, ConversationKind};
 use crate::now_ms;
 use crate::routing::{CacheTrace, LastSession, StepKind, TokenMeter, TurnUsage};
 use crate::work::TaskId;
@@ -19,8 +19,6 @@ pub(crate) enum TokenOwner<'a> {
     Handoff(&'a ConversationId),
     /// A task's worker, or a review (counted under `review:<id>`).
     Task(&'a ConversationId, &'a TaskId),
-    /// A Brain job of a project.
-    Project(&'a ProjectId),
 }
 
 /// Rollouts written this long before the last look for child threads are looked at again: a
@@ -116,7 +114,6 @@ impl SessionManager {
                 TokenOwner::Task(id, task) => {
                     Some((id.0.clone(), StepKind::Worker, Some(task.0.clone())))
                 }
-                TokenOwner::Project(_) => None,
             };
             if let Some((conversation, step, task)) = carried {
                 last = store
@@ -184,9 +181,6 @@ impl SessionManager {
                             .and_then(|task| task.request_id)
                     },
                 )
-            }
-            TokenOwner::Project(project) => {
-                (None, Some(project.0.clone()), None, StepKind::Brain, None)
             }
         };
         TurnUsage {

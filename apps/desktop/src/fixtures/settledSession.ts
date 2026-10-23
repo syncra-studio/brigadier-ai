@@ -10,7 +10,7 @@
  */
 import type { EventEnvelope, Question } from "@/ipc/generated";
 
-/** The merge card the thread opens with `propose_merge`, as the daemon builds it. */
+/** The merge card the thread opened, as the daemon built it. */
 function mergeCard(conversationId: string, requestId: string, branch: string, base: string, atMs: number): Question {
   return {
     id: "fixture-merge-card",
