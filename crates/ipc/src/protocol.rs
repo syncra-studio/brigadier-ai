@@ -942,9 +942,10 @@ pub enum Request {
     Hibernate {
         id: ConversationId,
     },
-    /// Stops workers, removes everything each conversation created (worktrees, CLI session
-    /// files, processes, scratch folders) and hides it in the Archived view. Answered once each
-    /// is stored as archived; the cleanup goes on in the background.
+    /// Stops its workers and processes, removes its scratch, logs, build output and merged
+    /// worktrees, and hides it in the Archived view; its record, CLI transcripts, Brain entries
+    /// and snapshot refs stay, so it can be restored (G15). Answered once each is stored as
+    /// archived; the cleanup goes on in the background.
     Archive {
         ids: Vec<ConversationId>,
     },
@@ -966,10 +967,10 @@ pub enum Request {
         delete_branches: Vec<BranchChoice>,
         keep_brain: bool,
     },
-    /// Permanently removes conversations: their transcripts, what they created and the
-    /// branches Brigadier created for them, unmerged ones too (what the Brain learned stays).
-    /// Answered once each is marked as being deleted, which hides it; the rest goes on in the
-    /// background.
+    /// Permanently removes conversations and their workers: their folders, CLI transcripts,
+    /// Brain entries, snapshot refs, worktrees and the branches Brigadier created for them,
+    /// unmerged ones too (the app asks first) (G15). Answered once each is marked as being
+    /// deleted, which hides it; the rest goes on in the background.
     Delete {
         ids: Vec<ConversationId>,
     },
