@@ -244,8 +244,6 @@
   --spacing-picker: min(34rem, calc(100dvh - 6rem));
   --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
-  /* The Plugins page in settings.pen is 1000px wide, including its 20px gutters. */
-  --container-plugins: 62.5rem;
   --leading-integration: 1.4;
   --leading-integration-value: 1.45;
   --container-setup: min(68rem, calc(100vw - 2rem));
