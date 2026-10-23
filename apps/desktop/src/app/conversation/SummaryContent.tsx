@@ -143,7 +143,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
         return { key: `mcp:${name}`, icon: <Plugin />, label, title: label, meta: state?.status === "needs-auth" ? "Needs sign-in" : undefined };
       }),
     ];
-  }, [conversationId, messages, entries, servers]);
+  }, [messages, entries, servers]);
 }
 
 /** Sources shown before "View all". */
