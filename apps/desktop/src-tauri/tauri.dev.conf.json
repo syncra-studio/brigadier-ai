@@ -5,5 +5,24 @@
   "build": {
     "beforeDevCommand": "pnpm stage-sidecar --helper-id ai.brigadier.dev.computer-use && pnpm dev",
     "beforeBuildCommand": "pnpm stage-sidecar --helper-id ai.brigadier.dev.computer-use && pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Brigadier",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 560,
+        "theme": "Dark",
+        "backgroundThrottling": "disabled",
+        "transparent": true,
+        "windowEffects": { "effects": ["menu"], "state": "active" },
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 24 }
+      }
+    ]
   }
 }
