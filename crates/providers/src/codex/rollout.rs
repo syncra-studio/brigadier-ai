@@ -18,14 +18,22 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
     let mut entries = Vec::new();
     // A turn runs, and whether its user message came yet.
     let mut turn: Option<bool> = None;
+    // Codex can write both its native marker and a finished ContextCompaction item for
+    // the same compaction. The marker alone is enough; the following item is no new divider.
+    let mut compacted = false;
     for line in text.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        let at_ms = str_of(&value, "timestamp").and_then(crate::time::parse_rfc3339_ms);
+        if str_of(&value, "type") == Some("compacted") {
+            entries.push(FileEntry::new(compaction(), at_ms));
+            compacted = true;
+            continue;
+        }
         if str_of(&value, "type") != Some("event_msg") {
             continue;
         }
-        let at_ms = str_of(&value, "timestamp").and_then(crate::time::parse_rfc3339_ms);
         let Some(payload) = value.get("payload") else {
             continue;
         };
@@ -33,6 +41,7 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
         let event = match str_of(payload, "type") {
             Some("task_started") => {
                 turn = Some(false);
+                compacted = false;
                 continue;
             }
             Some("task_complete") => {
@@ -60,6 +69,11 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
                 let Some(item) = payload.get("item") else {
                     continue;
                 };
+                if str_of(item, "type") == Some("ContextCompaction")
+                    && std::mem::take(&mut compacted)
+                {
+                    continue;
+                }
                 let Some(event) = item_event(item) else {
                     continue;
                 };
@@ -210,15 +224,19 @@ fn item_event(item: &Value) -> Option<ProviderEvent> {
             output: str_of(item, "text").map(str::to_owned),
             kept: None,
         },
-        "ContextCompaction" => ProviderEvent::CompactionEnded {
-            automatic: true,
-            tokens_before: None,
-            tokens_after: None,
-            error: None,
-        },
+        "ContextCompaction" => compaction(),
         _ => return None,
     };
     Some(event)
+}
+
+fn compaction() -> ProviderEvent {
+    ProviderEvent::CompactionEnded {
+        automatic: true,
+        tokens_before: None,
+        tokens_after: None,
+        error: None,
+    }
 }
 
 fn str_of<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -284,5 +302,59 @@ fn file_change(path: &str, change: &Value) -> FileChange {
     FileChange {
         moved_to,
         ..FileChange::counted(path.to_owned(), kind, diff, crate::DIFF_RAW_CLIP)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_compaction_and_its_finished_item_make_one_divider_in_rollout_order() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/session-files/codex-compacted.jsonl");
+        let entries = read(&path).unwrap();
+        let compacted: Vec<_> = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches!(entry.event, ProviderEvent::CompactionEnded { .. }))
+            .collect();
+        // Native marker + item, native marker alone, and item alone; none is lost or doubled.
+        assert_eq!(
+            compacted.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            [1, 3, 5]
+        );
+        assert_eq!(
+            compacted[0].1.at_ms,
+            crate::time::parse_rfc3339_ms("2026-10-23T08:11:27.390Z")
+        );
+        assert!(matches!(
+            &entries[0].event,
+            ProviderEvent::Message {
+                role: Role::User,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &entries[2].event,
+            ProviderEvent::Message {
+                role: Role::Assistant,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &entries[6].event,
+            ProviderEvent::TurnCompleted { .. }
+        ));
+        for (_, entry) in compacted {
+            assert!(matches!(
+                entry.event,
+                ProviderEvent::CompactionEnded {
+                    automatic: true,
+                    error: None,
+                    ..
+                }
+            ));
+        }
     }
 }

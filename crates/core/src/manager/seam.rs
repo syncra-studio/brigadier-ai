@@ -61,7 +61,8 @@ impl SeamConfig {
     /// The context the seam comes at for a model of `window` tokens: the setting, or four
     /// fifths of a smaller window, so the note turn still fits. A generation that started at
     /// `base` grows a quarter of the setting first, so a successor whose hand-off alone comes
-    /// near the setting isn't asked for its own at once (never past nine tenths of the window).
+    /// near the setting isn't asked for its own at once. Stay below Codex's forced compaction
+    /// at nine tenths, even when its reported window has no reserved portion (S26).
     pub(crate) fn threshold(&self, window: Option<i64>, base: Option<i64>) -> i64 {
         let window = window.filter(|window| *window > 0);
         let mut at = match window {
@@ -71,7 +72,7 @@ impl SeamConfig {
         if let Some(base) = base {
             at = at.max(base + self.tokens / 4);
             if let Some(window) = window {
-                at = at.min(window / 10 * 9);
+                at = at.min(window / 100 * 85);
             }
         }
         at

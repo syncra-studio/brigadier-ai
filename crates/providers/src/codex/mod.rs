@@ -31,6 +31,7 @@
 //! ([`SessionSpec::owned_cwd`]), it is recorded and removed with the session through Codex's
 //! config API, only while it is still exactly `trusted`.
 
+mod context;
 pub(crate) mod files;
 pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
@@ -66,9 +67,6 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const EXIT_GRACE: Duration = Duration::from_secs(3);
-/// `model_auto_compact_token_limit` for a session that must not compact: far above any window,
-/// so Codex uses its own ceiling.
-const NO_AUTO_COMPACT_TOKENS: i64 = 1_000_000_000;
 /// The first version seen to serve `thread/compact/start`.
 const COMPACT_SINCE: &str = "0.156.1";
 /// Built-ins switched off for sessions that must not act on their own (a handoff note, a
@@ -1014,7 +1012,7 @@ impl Provider for Codex {
             let config = self
                 .control(async |rpc: &Rpc| {
                     unarchive_thread(rpc, &native_id).await?;
-                    thread_config(rpc, &spec, &cwd).await
+                    thread_config(rpc, &spec, &cwd, self.codex_home().as_deref()).await
                 })
                 .await?;
             Ok(terminal_command(
@@ -1158,7 +1156,7 @@ async fn open_thread(
             tracing::warn!(%error, "Codex didn't take Brigadier's skills");
         }
     }
-    let config = thread_config(rpc, spec, cwd).await?;
+    let config = thread_config(rpc, spec, cwd, codex.codex_home().as_deref()).await?;
     // Only a folder Brigadier created may have its trust entry recorded and undone. Codex keys
     // trust on the main checkout for a worktree, which is the user's: watched, never touched.
     let watched: Vec<String> = if spec.owned_cwd {
@@ -1365,7 +1363,12 @@ fn web_search(tools: ToolSet) -> Option<&'static str> {
 /// Per-thread config: the servers the session is given on, the user's off but in a session with
 /// their setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
 /// session's permission profile.
-async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<String, Value>> {
+async fn thread_config(
+    rpc: &Rpc,
+    spec: &SessionSpec,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Result<Map<String, Value>> {
     let effective: Value = rpc
         .call(
             "config/read",
@@ -1401,13 +1404,15 @@ async fn thread_config(rpc: &Rpc, spec: &SessionSpec, cwd: &Path) -> Result<Map<
     }
     config.insert("mcp_servers".into(), Value::Object(servers));
     shell_sees_brigadier(&mut config, &effective, spec);
-    if !spec.auto_compact {
-        // Codex clamps the limit to 90% of the model's window.
-        config.insert(
-            "model_auto_compact_token_limit".into(),
-            json!(NO_AUTO_COMPACT_TOKENS),
-        );
-    }
+    context::configure(
+        rpc,
+        spec.model.as_deref(),
+        &effective,
+        home,
+        cwd,
+        &mut config,
+    )
+    .await?;
     if let Some(mode) = web_search(spec.tools) {
         config.insert("web_search".into(), json!(mode));
     }

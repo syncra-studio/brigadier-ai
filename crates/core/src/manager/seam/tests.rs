@@ -244,7 +244,22 @@ fn the_threshold_leaves_room_in_a_small_window() {
     // A generation that started near it grows a quarter of it first, within the window.
     assert_eq!(config.threshold(Some(1_000_000), Some(40_000)), 200_000);
     assert_eq!(config.threshold(Some(1_000_000), Some(190_000)), 240_000);
-    assert_eq!(config.threshold(Some(250_000), Some(190_000)), 225_000);
+    assert_eq!(config.threshold(Some(250_000), Some(190_000)), 212_500);
+}
+
+#[test]
+fn the_seam_stays_below_codex_compaction_even_with_a_large_bootstrap() {
+    for maximum in [128_000, 272_000, 872_000, 1_000_000] {
+        let compact = maximum / 10 * 9;
+        for window in [maximum, maximum / 100 * 95] {
+            for tokens in [60_000, 200_000, 2_000_000] {
+                let config = SeamConfig { tokens, hold: HOLD };
+                for base in [None, Some(maximum / 5 * 4), Some(maximum)] {
+                    assert!(config.threshold(Some(window), base) < compact);
+                }
+            }
+        }
+    }
 }
 
 #[test]

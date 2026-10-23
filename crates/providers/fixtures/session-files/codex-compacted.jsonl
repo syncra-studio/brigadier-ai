@@ -1,0 +1,11 @@
+{"timestamp":"2026-10-23T08:11:13.167Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":"2026-10-23T08:11:13.170Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"user-1","content":[{"type":"text","text":"Carry on."}]}}}
+{"timestamp":"2026-10-23T08:11:27.390Z","type":"compacted","payload":{"message":"","replacement_history":[],"window_number":2}}
+{"timestamp":"2026-10-23T08:11:27.390Z","type":"world_state","payload":{}}
+{"timestamp":"2026-10-23T08:11:27.396Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"ContextCompaction","id":"compact-1"}}}
+{"timestamp":"2026-10-23T08:11:28.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"reply-1","content":[{"type":"Text","text":"Continuing."}]}}}
+{"timestamp":"2026-10-23T08:12:00.000Z","type":"compacted","payload":{"message":"","replacement_history":[],"window_number":3}}
+{"timestamp":"2026-10-23T08:12:01.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+{"timestamp":"2026-10-23T08:13:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}
+{"timestamp":"2026-10-23T08:13:01.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"ContextCompaction","id":"compact-3"}}}
+{"timestamp":"2026-10-23T08:13:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2"}}
