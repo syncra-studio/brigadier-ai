@@ -4,14 +4,10 @@
 //! - **Hibernate** (automatic when idle, or on request): the conversation's CLI sessions
 //!   stop and their temp files go. The CLI session files stay, so the next message resumes
 //!   it; if they are gone, it starts over from Brigadier's transcript.
-//! - **Archive**: workers stop (unfinished work kept as a WIP commit on its task branch),
-//!   every CLI session ends, and everything recorded in the cleanup ledger for the
-//!   conversation is removed: worktrees, scratch folders, CLI session files, processes.
-//!   Transcript, tasks, artifacts and branches stay; restoring starts a new CLI session from
-//!   the transcript.
-//! - **Delete**: answered at once like an archive; in the background it is wound down like on
-//!   archive, the branches Brigadier created for it go, then its streams and the blobs nothing
-//!   else references, and last its catalog entry.
+//! - **Archive**: stops the session and its workers, removes transient and build output and
+//!   clean merged worktrees, and keeps records, lineage transcripts, Brain entries and refs.
+//! - **Delete**: removes those records too, including every worker, its branch (after the
+//!   existing unmerged confirmation), transcript files, Brain entries and snapshot refs.
 //! - **Recovery**: after a restart, work that was running has lost its CLI: tasks end (their
 //!   work kept), cards nobody waits for expire, and the ledger finishes every cleanup.
 
@@ -426,8 +422,8 @@ impl SessionManager {
         outcomes
     }
 
-    /// Archives a conversation: everything it created goes, except its transcript, tasks,
-    /// artifacts and branches. Answers once nothing new of it can start and it is stored as
+    /// Archives a conversation: stops its processes and workers, removes transient output
+    /// and clean merged worktrees, and keeps the record, transcripts, Brain and snapshot refs. Answers once nothing new of it can start and it is stored as
     /// archived; the rest of the cleanup goes on in the background ([`Self::finish_archive`]).
     pub async fn archive(&self, id: ConversationId) -> Result<Conversation> {
         self.admit()?;
@@ -463,7 +459,7 @@ impl SessionManager {
     }
 
     /// The cleanup of an archive: once the work that passed the fence has finished, its side
-    /// chats go, everything it runs stops, and what it created is removed. The cleanup mark
+    /// chats go, everything it runs stops, and its disposable output goes. The cleanup mark
     /// goes last, so a restart finishes a cleanup cut off at any step.
     pub(super) async fn finish_archive(&self, id: &ConversationId) {
         let drained = self.drain(id).await;
@@ -830,6 +826,10 @@ impl SessionManager {
 
     /// Stops everything a conversation runs and removes what it created.
     pub(super) async fn wind_down(&self, conversation: &Conversation) {
+        self.wind_down_for(conversation, false).await;
+    }
+
+    async fn wind_down_for(&self, conversation: &Conversation, deleting: bool) {
         let id = &conversation.id;
         // Its previews run in the workspace that goes next: they stop first.
         let _ = self.stop_previews(id, "the session closed").await;
@@ -852,6 +852,16 @@ impl SessionManager {
             }
             closing.join_all().await;
         }
+        // Also stop detached commands in the session folder, including retained worktrees.
+        let folder_owner = super::session_dir::folder_owner(id);
+        let process = Artifact::ProcessesIn {
+            dir: self.session_dir(id).root().to_string_lossy().into_owned(),
+        };
+        let ledger = self.runtime.ledger();
+        if let Err(err) = ledger.record(&folder_owner, process).await {
+            tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
+        }
+        let _ = ledger.stop_processes(&folder_owner).await;
         let _lane = self.closing.lane.lock().await;
         // What an older Brigadier kept of landed workers for their reviews goes too.
         let mut held = Vec::new();
@@ -863,13 +873,11 @@ impl SessionManager {
                     self.keep_saved_files(&task.id).await;
                     held.push(owner);
                 }
-                if task.state.is_final() {
-                    continue;
+                if deleting {
+                    self.dispose_task(&task, TaskState::Stopped).await;
+                } else {
+                    self.archive_worker(&task).await;
                 }
-                if let Some(live) = self.existing_task_live(&task.id) {
-                    live.close_cli().await;
-                }
-                self.dispose_task(&task, TaskState::Stopped).await;
             }
         }
         // Its thread's setup script stops.
@@ -891,7 +899,26 @@ impl SessionManager {
         if !self.runtime.ledger().artifacts(&previews).is_empty() {
             owners.push(previews);
         }
-        let session_worktree_goes = self.keep_session_changes(conversation).await;
+        let session_worktree_goes = if deleting {
+            self.keep_session_changes(conversation).await
+        } else {
+            match &conversation.setup {
+                Some(Setup::Session {
+                    environment:
+                        Environment::NewWorktree {
+                            path: Some(path),
+                            branch,
+                            base,
+                            ..
+                        },
+                    ..
+                }) => {
+                    self.archivable_worktree(Path::new(path), branch, base)
+                        .await
+                }
+                _ => true,
+            }
+        };
         if session_worktree_goes {
             owners.push(format!("session:{id}"));
         }
@@ -902,12 +929,127 @@ impl SessionManager {
                     ?leftovers);
             }
         }
+        self.remove_transient_parts(id).await;
         // Its CLI session files stay (S8): Restore resumes the same CLI session.
         self.expire_stale_cards(id).await;
         self.set_run(id, crate::work::RunState::Idle, None).await;
         if session_worktree_goes {
             self.forget_session_worktree(conversation).await;
         }
+    }
+
+    /// Archive retains unmerged or dirty worktrees, without making a WIP commit.
+    async fn archivable_worktree(&self, path: &Path, branch: &str, base: &str) -> bool {
+        if !path.exists() {
+            return true;
+        }
+        let sessions = self.runtime.platform().paths().sessions_dir.clone();
+        let root = if path.starts_with(&sessions) {
+            sessions
+        } else {
+            self.data_dir.clone()
+        };
+        let (git, path, branch, base) = (
+            self.git.clone(),
+            path.to_owned(),
+            branch.to_owned(),
+            base.to_owned(),
+        );
+        blocking(move || {
+            let folder = brigadier_sandbox::removal::bind(&root, &path)
+                .map_err(|err| Error::Invalid(err.to_string()))?;
+            let repo = git.open(&path).map_err(git_error)?;
+            let state = repo.state().map_err(git_error)?;
+            let clean =
+                state.dirty_files.is_empty() && state.current_branch.as_deref() == Some(&branch);
+            let merged = super::disk::worktree_state::merged_into(&repo, &branch, &base);
+            super::disk::archive_output(&git, &folder)?;
+            Ok(clean && merged)
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    /// G19: a worker keeps its record and transcript just like its parent.
+    async fn archive_worker(&self, task: &Task) {
+        if let Some(live) = self.existing_task_live(&task.id) {
+            live.close_cli().await;
+        }
+        self.stop_task_previews(&task.conversation_id, &task.id)
+            .await;
+        let owner = format!("task:{}", task.id);
+        let ledger = self.runtime.ledger();
+        let _ = ledger.stop_processes(&owner).await;
+        let remove_worktree = match &task.workspace {
+            Some(workspace) => match (&workspace.worktree, &workspace.branch, &workspace.target) {
+                (Some(path), Some(branch), Some(base)) => {
+                    self.archivable_worktree(Path::new(path), branch, base)
+                        .await
+                }
+                _ => false,
+            },
+            None => false,
+        };
+        let lineage = crate::ledger::lineage_owner(&task.conversation_id.0);
+        if let Err(err) = ledger.hand_over_session_files(&owner, &lineage).await {
+            tracing::warn!(task = %task.id, error = %err, "could not keep the worker's lineage");
+            return;
+        }
+        let outputs = self.final_outputs(task).await;
+        self.keep_saved_files(&task.id).await;
+        let _ = self
+            .update_task(&task.conversation_id, &task.id, |current| {
+                if !current.state.is_final() {
+                    current.state = TaskState::Stopped;
+                }
+                if let Some(plain) = &mut current.plain {
+                    plain.closed = true;
+                }
+                current.quota_wait = None;
+                if let Some(outputs) = outputs {
+                    current.outputs = outputs;
+                }
+            })
+            .await;
+        if remove_worktree {
+            // Disposal records a durable retry if a merged worktree cannot go yet.
+            let _ = ledger.dispose(&owner).await;
+        } else {
+            let artifacts = ledger
+                .artifacts(&owner)
+                .into_iter()
+                .filter(|artifact| !matches!(artifact, Artifact::Worktree { .. }))
+                .collect();
+            let _ = ledger.release(&owner, artifacts).await;
+        }
+        self.grants.revoke_owner(&owner);
+        self.tasks_lock().remove(&task.id);
+    }
+
+    async fn remove_transient_parts(&self, id: &ConversationId) {
+        let dir = self.session_dir(id);
+        let mut folders = vec![dir.root().to_owned()];
+        if let Ok(tasks) = self.core.tasks(id).await {
+            folders.extend(tasks.iter().map(|task| dir.worker(task)));
+        }
+        let owner = format!("archive-parts:{id}");
+        let ledger = self.runtime.ledger();
+        for folder in folders {
+            for part in ["tmp", "dev", "logs"] {
+                let path = folder.join(part);
+                if path.exists() {
+                    let _ = ledger
+                        .record(
+                            &owner,
+                            Artifact::ScratchDir {
+                                path: path.to_string_lossy().into_owned(),
+                            },
+                        )
+                        .await;
+                }
+            }
+        }
+        let _ = ledger.dispose(&owner).await;
     }
 
     /// A new-worktree session's worktree is gone: its branch goes too while the base has all
@@ -1078,8 +1220,7 @@ impl SessionManager {
 
     /// Deletes a conversation for good: its transcript, everything it created, and the branches
     /// Brigadier created for it (its session, task and overnight-run branches, unmerged ones
-    /// too; the user's own branches never). What the Brain learned in it stays; its transcript
-    /// index goes. Answers once nothing new of it can start and it is durably marked as being
+    /// too; the user's own branches never). Its Brain entries and transcript index go. Answers once nothing new of it can start and it is durably marked as being
     /// deleted, which hides it from the app; the rest goes on in the background
     /// ([`Self::finish_delete`]), after an archive's cleanup still under way.
     pub async fn delete(&self, id: ConversationId) -> Result<()> {
@@ -1219,7 +1360,7 @@ impl SessionManager {
         self.tab_chats.forget_page(&id);
         let drained = self.drain(&id).await;
         self.delete_side_chats(&id).await;
-        self.wind_down(&conversation).await;
+        self.wind_down_for(&conversation, true).await;
         if !drained {
             crate::logging::private_trace!(self.tab_chat_logs(&id), warn, "work of a deleted conversation is still going; deleting it once that ends"; conversation = %id);
             return Ok(false);
@@ -1289,6 +1430,15 @@ impl SessionManager {
         let leftovers = self.runtime.ledger().dispose(&lineage).await;
         if !leftovers.is_clean() {
             crate::logging::private_trace!(private_logs, warn, "some of its CLI session files will be retried at the next launch"; conversation = %id, ?leftovers);
+        }
+        for task in &tasks {
+            self.forget_brain_conversation(
+                &ConversationId(task.id.0.clone()),
+                conversation.project_id.clone(),
+            )
+            .await;
+            self.delete_turn_snapshots(&ConversationId(task.id.0.clone()))
+                .await?;
         }
         self.remove_session_dir(&id).await;
         let store = self.core.store().clone();

@@ -1325,8 +1325,7 @@ impl SessionManager {
         Ok(nodes)
     }
 
-    /// A conversation was deleted: its transcript index goes; what the Brains learned in it
-    /// stays.
+    /// Delete forgets the session’s entries and transcript index (G15).
     pub(crate) async fn forget_brain_conversation(
         &self,
         id: &ConversationId,
@@ -1343,8 +1342,13 @@ impl SessionManager {
             return;
         };
         let (brain, session) = (project.brain.clone(), id.0.clone());
-        let forgotten =
-            blocking(move || brain.forget_transcript(&session).map_err(brain_error)).await;
+        let forgotten = blocking(move || {
+            brain
+                .forget_session(&session)
+                .map(|_| ())
+                .map_err(brain_error)
+        })
+        .await;
         match forgotten {
             Ok(()) => {
                 crate::logging::private_trace!(self.tab_chat_logs(id), info, "the Brain let go of a deleted conversation's transcript"; conversation = %id)

@@ -2301,3 +2301,6 @@ mod warm_session_tests;
 mod workspace_tests;
 #[cfg(unix)]
 mod worktree_copies_tests;
+
+#[cfg(unix)]
+mod archive_delete_tests;

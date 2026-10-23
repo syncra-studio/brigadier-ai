@@ -138,7 +138,7 @@ fn age(path: &Path, by: Duration) {
     std::fs::File::open(path).unwrap().set_modified(at).unwrap();
 }
 
-/// An open session's work folder is never offered: it is counted as kept.
+/// An open session's empty worktree is suggested, with removal left to its lifecycle ask.
 #[tokio::test]
 async fn an_open_sessions_work_folder_is_kept_and_counted() {
     let (flow, worktree, _) = session("disk-open").await;
@@ -146,7 +146,10 @@ async fn an_open_sessions_work_folder_is_kept_and_counted() {
     assert!(
         items
             .iter()
-            .all(|item| item.item.path.as_deref() != Some(worktree.to_str().unwrap())),
+            .filter(|item| item.item.path.as_deref() == Some(worktree.to_str().unwrap()))
+            .all(
+                |item| !item.item.selectable && item.item.reason.contains("No commits beyond main")
+            ),
         "{:?}",
         labels(&items)
     );

@@ -119,7 +119,7 @@ fn in_use(records: &Records) -> Vec<InUse> {
 }
 
 /// Whether `conversation` hasn't been used for `idle`: no turn, task change or running work.
-fn idle_for(records: &Records, conversation: &ConversationId, idle: Duration) -> bool {
+pub(super) fn idle_for(records: &Records, conversation: &ConversationId, idle: Duration) -> bool {
     if records.running.contains(conversation) {
         return false;
     }
@@ -345,4 +345,22 @@ impl SessionManager {
         })
         .await
     }
+}
+
+/// Archive removes rebuildable output even when unmerged work keeps the worktree.
+pub(in crate::manager) fn archive_output(git: &brigadier_git::Git, folder: &Bound) -> Result<()> {
+    removal::recheck(folder).map_err(|err| crate::Error::Invalid(err.to_string()))?;
+    let path = folder.path();
+    let repo = git.open(path).map_err(git_error)?;
+    for candidate in candidates(path) {
+        let Some(rel) = relative(path, &candidate) else {
+            continue;
+        };
+        if only_ignored(&repo, &rel).is_ok() {
+            let bound = removal::bind(folder.root(), &candidate)
+                .map_err(|err| crate::Error::Invalid(err.to_string()))?;
+            removal::delete(&bound).map_err(|err| crate::Error::Invalid(err.to_string()))?;
+        }
+    }
+    Ok(())
 }

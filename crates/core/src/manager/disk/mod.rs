@@ -17,6 +17,8 @@
 
 mod agent_files;
 mod build_files;
+pub(super) mod worktree_state;
+pub(super) use build_files::archive_output;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -500,10 +502,12 @@ impl SessionManager {
                         // A session's thread temporary folder, setup script, full checks and
                         // previews with their data folders go with the session, as its own
                         // folders do.
+                        Some(("session-snapshots", id)) => {
+                            records.conversation(id).is_some() || records.task(id).is_some()
+                        }
                         Some((
                             "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
-                            | "checks" | "preview" | "preview-data" | "session-folder" | "lineage"
-                            | "session-snapshots",
+                            | "checks" | "preview" | "preview-data" | "session-folder" | "lineage",
                             id,
                         )) => records.conversation(id).is_some(),
                         Some(("task", id)) => records.task(id).is_some(),
@@ -1010,11 +1014,7 @@ pub(super) fn delete_branch_checked(
             branch.name
         )));
     }
-    if merged
-        && !repo
-            .is_merged(&branch.name, &branch.target)
-            .map_err(git_error)?
-    {
+    if merged && !worktree_state::merged_into(&repo, &branch.name, &branch.target) {
         return Err(Error::Invalid(format!(
             "{} is no longer merged into {}",
             branch.name, branch.target
@@ -1043,21 +1043,11 @@ pub(super) fn branch_standing(
     let checked_out = repo.worktrees().ok()?.iter().any(|worktree| {
         worktree.branch.as_deref() == Some(name) && !same_path_in(&worktree.path, leaving)
     });
-    // A worker's branch targets its session's branch; once that is gone, its work would land
-    // on the repository's default branch.
-    let (target, target_tip) = match repo.branch_tip(target).ok().flatten() {
-        Some(tip) => (target.to_owned(), Some(tip)),
-        None => match repo.default_branch().ok().flatten() {
-            Some(fallback) => {
-                let tip = repo.branch_tip(&fallback).ok().flatten();
-                (fallback, tip)
-            }
-            None => (target.to_owned(), None),
-        },
-    };
+    // The target is recorded at creation; an unavailable base is never guessed.
+    let target_tip = repo.branch_tip(target).ok().flatten();
     let (merged, ahead) = match &target_tip {
         Some(target_tip) => (
-            repo.is_merged(name, &target).unwrap_or(false),
+            worktree_state::merged_into(repo, name, target),
             repo.count_commits(target_tip, &tip).unwrap_or(0),
         ),
         None => (false, 0),
@@ -1065,7 +1055,7 @@ pub(super) fn branch_standing(
     Some(crate::storage::RemovalBranch {
         repo: repo.root().display().to_string(),
         name: name.to_owned(),
-        target,
+        target: target.to_owned(),
         tip: tip.0,
         merged,
         ahead,
@@ -1420,6 +1410,7 @@ impl Scanner<'_> {
     /// (with unsaved changes, only by hand), those of open sessions are counted as kept, and a
     /// folder no record names is left alone.
     fn worktrees(&mut self) {
+        self.worktree_advice();
         let held = self.held(|_| true);
         let live = self.held(|state| state == OwnerState::Live);
         let mut open = Vec::new();
@@ -1587,6 +1578,87 @@ impl Scanner<'_> {
                 bytes,
                 reason: "Their sessions are still open.".into(),
             });
+        }
+    }
+
+    /// Guidance for still-owned worktrees. Removal stays in the session's existing
+    /// confirmed lifecycle flow, so a scan can never bypass the unmerged/dirty ask.
+    fn worktree_advice(&mut self) {
+        let mut candidates = Vec::new();
+        for conversation in &self.records.conversations {
+            let idle = build_files::idle_for(self.records, &conversation.id, build_files::IDLE);
+            if self.records.running.contains(&conversation.id) {
+                continue;
+            }
+            if let Some(Setup::Session {
+                environment:
+                    Environment::NewWorktree {
+                        path: Some(path),
+                        branch,
+                        base,
+                        ..
+                    },
+                ..
+            }) = &conversation.setup
+            {
+                candidates.push((
+                    PathBuf::from(path),
+                    branch.clone(),
+                    base.clone(),
+                    conversation.title.clone(),
+                    idle,
+                ));
+            }
+            for task in self
+                .records
+                .tasks
+                .get(&conversation.id)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(workspace) = &task.workspace
+                    && let (Some(path), Some(branch), Some(base)) =
+                        (&workspace.worktree, &workspace.branch, &workspace.target)
+                {
+                    candidates.push((
+                        PathBuf::from(path),
+                        branch.clone(),
+                        base.clone(),
+                        task.title.clone(),
+                        idle,
+                    ));
+                }
+            }
+        }
+        for (path, branch, base, title, idle) in candidates {
+            if !path.join(".git").is_file() || self.busy(&path) {
+                continue;
+            }
+            let Ok(repo) = self.git.open(&path) else {
+                continue;
+            };
+            let Ok(state) = repo.state() else { continue };
+            let dirty = !state.dirty_files.is_empty();
+            let Some(advice) = worktree_state::advice(&repo, &branch, &base, dirty, idle) else {
+                continue;
+            };
+            let reason = match advice {
+                worktree_state::Advice::Merged => format!("Merged into {base}, including equivalent squash changes. Archive the session to remove its worktree."),
+                worktree_state::Advice::Empty => format!("No commits beyond {base}. Archive the session to remove its worktree."),
+                worktree_state::Advice::Idle => "Idle for at least 3 days. Remove its worktree from the session after the not merged confirmation; its branch stays.".into(),
+                worktree_state::Advice::NeedsAsk => "Has unsaved changes. The worktree stays until the session's not merged confirmation; Delete names the work that will be lost.".into(),
+            };
+            self.keep(
+                CleanCategory::FinishedWork,
+                format!("Worktree cleanup for “{title}”"),
+                &path,
+                &reason,
+                if dirty {
+                    vec![CleanBadge::HasChanges]
+                } else {
+                    Vec::new()
+                },
+            );
         }
     }
 

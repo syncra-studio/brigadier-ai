@@ -786,6 +786,18 @@ impl CleanupLedger {
         self.remove(owner, artifacts).await
     }
 
+    /// Stops recorded processes while retaining files and the owner's record for Restore.
+    pub async fn stop_processes(&self, owner: &str) -> Leftovers {
+        self.release(
+            owner,
+            self.artifacts(owner)
+                .into_iter()
+                .filter(is_process)
+                .collect(),
+        )
+        .await
+    }
+
     /// Moves `from`'s CLI session files to `to`, which holds them from then on: nothing is
     /// touched on disk.
     pub async fn hand_over_session_files(&self, from: &str, to: &str) -> Result<()> {
