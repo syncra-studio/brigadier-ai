@@ -647,7 +647,7 @@ impl SessionManager {
             .any(|constraint| constraint.words.len() > super::constraints::WORDS_MAX);
         let search = Part::new(
             "search",
-            "[Older context] Not all of this conversation is carried here: before you answer that something from it is unknown or ask the user again, look it up. search_transcript searches its whole transcript, your earlier commands, reads and tool calls too; query_brain finds decisions (by id or words), reports and findings; read_report gives a task's report in full.".into(),
+            "[Older context] Not all of this conversation is carried here: before you answer that something from it is unknown or ask the user again, look it up. `brigadier transcript search` searches its whole transcript, your earlier commands, reads and tool calls too; `brigadier brain search` finds decisions (by id or words), reports and findings; read_report gives a task's report in full.".into(),
             0,
         );
         let mut brain = self.brain_part(id, carried).await;
@@ -710,7 +710,7 @@ impl SessionManager {
                 String::new()
             } else {
                 format!(
-                    "[The user's earlier messages, verbatim; the replies between them aren't carried, search_transcript finds them by number]\n{}",
+                    "[The user's earlier messages, verbatim; the replies between them aren't carried, `brigadier transcript search` finds them by number]\n{}",
                     said.join("\n")
                 )
             },
@@ -734,7 +734,7 @@ impl SessionManager {
                         .first()
                         .filter(|oldest| oldest.first > 1)
                         .map(|oldest| format!(
-                            "\n[Messages #1–#{} aren't carried here; search_transcript finds them{}]",
+                            "\n[Messages #1–#{} aren't carried here; `brigadier transcript search` finds them{}]",
                             oldest.first - 1,
                             if said.is_empty() {
                                 ""
@@ -1347,7 +1347,7 @@ fn carried_text(text: &str, max: usize, seq: i64) -> String {
         end -= 1;
     }
     format!(
-        "{}…\n[cut here: message #{seq}, bytes {end}–{} not shown; search_transcript finds the rest]",
+        "{}…\n[cut here: message #{seq}, bytes {end}–{} not shown; `brigadier transcript search` finds the rest]",
         &text[..end],
         text.len()
     )

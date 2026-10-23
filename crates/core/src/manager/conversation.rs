@@ -2476,7 +2476,7 @@ impl SessionManager {
             .clone()
             .map(|fallback| fallback.choice);
         let mut grant_values = Vec::new();
-        // What its CLI gets for `brigadier`: a thread's and a Chat's, never a tab chat's.
+        // What its CLI gets for `brigadier`: a thread's, a Chat's and a side chat's.
         let mut cli_env = Vec::new();
         let mut launch = None;
         let mut output_hook = None;
@@ -2547,6 +2547,7 @@ impl SessionManager {
                             },
                         );
                         grant_values.push(grant.clone());
+                        cli_env = self.cli_env(&conv.id.0, &grant);
                         vec![self.brigadier_server(grant, CHAT_TOOL_TIMEOUT_SECS, false)]
                     }
                     None => Vec::new(),

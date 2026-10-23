@@ -55,23 +55,21 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
         }
     };
     let mut args = args;
-    // `page write <page>` with no text, or `-`: the text comes from standard input.
-    if command.name == "page"
-        && args
-            .positionals
-            .get("action")
-            .and_then(|a| a.first())
-            .map(String::as_str)
-            == Some("write")
-    {
-        let words = args.positionals.entry("args").or_default();
-        if words.len() == 1 || words.get(1..) == Some(&["-".to_owned()][..]) {
+    // A long text given as none, or `-`: it comes from standard input.
+    let action = args
+        .positionals
+        .get("action")
+        .and_then(|a| a.first())
+        .map(String::as_str);
+    if let Some((name, before)) = text_from_stdin(command.name, action) {
+        let words = args.positionals.entry(name).or_default();
+        if words.len() == before || words.get(before..) == Some(&["-".to_owned()][..]) {
             let mut text = String::new();
             if let Err(err) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text) {
-                let message = format!("could not read the page's text from standard input: {err}");
+                let message = format!("could not read the text from standard input: {err}");
                 return fail(ErrorCode::Usage, &message, json, stdout, stderr);
             }
-            words.truncate(1);
+            words.truncate(before);
             words.push(text);
         }
     }
@@ -111,8 +109,10 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
         "wait" => present(output, json, render::wait),
         "close" => present(output, json, render::close),
         "ask" => present(output, json, render::ask),
-        "preview" | "browser" | "app" | "page" if json => present(output, json, render::tool),
-        "preview" | "browser" | "app" | "page" => {
+        name if json && protocol::Tool::of_command(name).is_some() => {
+            present(output, json, render::tool)
+        }
+        name if protocol::Tool::of_command(name).is_some() => {
             let out = args.flag("out").map(std::path::PathBuf::from);
             serde_json::from_value::<protocol::ToolOutput>(output)
                 .map_err(|err| err.to_string())
@@ -133,6 +133,18 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             stdout,
             stderr,
         ),
+    }
+}
+
+/// The positional whose text may come from standard input for `command`'s `action`, and how
+/// many of its words come before that text (`page write`'s page id).
+fn text_from_stdin(command: &str, action: Option<&str>) -> Option<(&'static str, usize)> {
+    match (command, action?) {
+        ("page", "write") => Some(("args", 1)),
+        ("page", "file-write") => Some(("args", 0)),
+        ("report", "save") => Some(("markdown", 0)),
+        ("feedback", "offer") => Some(("body", 0)),
+        _ => None,
     }
 }
 

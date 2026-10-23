@@ -2,9 +2,10 @@
 //! answers to its read commands.
 //!
 //! A call names its session (`BRIGADIER_SESSION`) and carries that session's grant: the same
-//! grants the MCP tools are checked by, so a session that ended can't call any more. A thread
-//! or a Chat is its conversation's id, a worker its task's id. Everything it reads is in its
-//! own project: the project's sidebar sessions and their workers.
+//! grants the MCP tools are checked by, so a session that ended can't call any more. A thread,
+//! a Chat or a side chat is its conversation's id, a worker its task's id. Everything it reads
+//! is in its own project: the project's sidebar sessions and their workers. A side chat calls
+//! only `brigadier page`, for its tab's page or file.
 //!
 //! Ids shown are the last 8 characters of the full id (random in a v7 uuid); an id given is the
 //! full id, or the start of a shown one.
@@ -269,7 +270,7 @@ pub(super) fn failed(err: impl std::fmt::Display) -> CliReply {
 }
 
 impl SessionManager {
-    /// What a thread's, Chat's or worker's CLI gets so `brigadier` (and every command it runs)
+    /// What a thread's, Chat's, side chat's or worker's CLI gets so `brigadier` (and every command it runs)
     /// knows who calls and finds the daemon: the session's id and live `grant`, the data folder
     /// when it isn't the installed app's, and the folder `brigadier` ships in first on `PATH`.
     /// The grant stays in the environment, never on a command line.
@@ -296,22 +297,21 @@ impl SessionManager {
     }
 
     /// Who a `brigadier` call comes from, when `grant` is the live grant of the session it
-    /// names: a thread's or Chat's (`session` is its conversation's id) or a worker's
-    /// (`session` is its task's id). `None` refuses the call.
+    /// names: a thread's, Chat's or side chat's (`session` is its conversation's id) or a
+    /// worker's (`session` is its task's id). `None` refuses the call.
     pub fn cli_caller(&self, session: &str, grant: &str) -> Option<CliCaller> {
         match self.grants.resolve(grant)? {
             Role::Orchestrator {
                 conversation_id, ..
             }
             | Role::Chat { conversation_id }
-                if conversation_id.0 == session =>
-            {
-                Some(CliCaller {
-                    conversation_id,
-                    task_id: None,
-                    grant: grant.to_owned(),
-                })
-            }
+            | Role::TabChat {
+                conversation_id, ..
+            } if conversation_id.0 == session => Some(CliCaller {
+                conversation_id,
+                task_id: None,
+                grant: grant.to_owned(),
+            }),
             Role::Worker {
                 conversation_id,
                 task_id,
@@ -336,6 +336,23 @@ impl SessionManager {
                     call.protocol,
                     cli::PROTOCOL
                 ),
+            );
+        }
+        // A side chat has its tab's page or file (`brigadier page`), and nothing else.
+        if matches!(
+            self.grants.resolve(&caller.grant),
+            Some(Role::TabChat { .. })
+        ) && !matches!(
+            call.request,
+            CliRequest::Tool {
+                tool: cli::Tool::Page,
+                ..
+            }
+        ) {
+            return CliReply::error(
+                ErrorCode::Refused,
+                "refused: a chat beside a tab reads and changes only what is beside it, with \
+                 `brigadier page`",
             );
         }
         let reply = match call.request {

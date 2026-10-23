@@ -350,8 +350,8 @@ async fn a_reborn_codex_thread_is_told_to_look_up_before_it_answers_unknown() {
     assert!(
         older.contains("before you answer that something from it is unknown")
             && older.contains("look it up")
-            && older.contains("search_transcript")
-            && older.contains("query_brain"),
+            && older.contains("`brigadier transcript search`")
+            && older.contains("`brigadier brain search`"),
         "{briefing}"
     );
     flow.stop().await;

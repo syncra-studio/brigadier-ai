@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier code --json",
+  "type": "object",
+  "required": [
+    "action",
+    "text"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "search",
+        "refs",
+        "map"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "description": "What the tool answered."
+    }
+  }
+}

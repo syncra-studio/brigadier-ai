@@ -11,7 +11,9 @@
     "action": {
       "enum": [
         "read",
-        "write"
+        "write",
+        "file-read",
+        "file-write"
       ]
     },
     "text": {

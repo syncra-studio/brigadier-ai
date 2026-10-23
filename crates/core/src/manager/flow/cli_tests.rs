@@ -28,7 +28,7 @@ fn with_session_files() -> Options {
 }
 
 /// What the sessions' `brigadier` calls answered, by name.
-type Answers = Arc<Mutex<HashMap<String, Value>>>;
+pub(super) type Answers = Arc<Mutex<HashMap<String, Value>>>;
 
 /// The id `brigadier` shows for a full id.
 fn short(id: &str) -> String {
@@ -38,7 +38,7 @@ fn short(id: &str) -> String {
 /// Runs `brigadier <request>` as a command of the turn would: as the session and with the grant
 /// its CLI's environment names. Checks the answer against the command's schema; an error answer
 /// comes back as `{"error": …}`.
-async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
+pub(super) async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
     let session = turn.env(SESSION_ENV).expect("the CLI knows its session");
     let grant = turn
         .env(GRANT_ENV)
@@ -53,12 +53,7 @@ async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         CliRequest::Send { .. } => "send",
         CliRequest::Wait { .. } => "wait",
         CliRequest::Close { .. } => "close",
-        CliRequest::Tool { tool, .. } => match tool {
-            brigadier_cli::protocol::Tool::Preview => "preview",
-            brigadier_cli::protocol::Tool::Browser => "browser",
-            brigadier_cli::protocol::Tool::App => "app",
-            brigadier_cli::protocol::Tool::Page => "page",
-        },
+        CliRequest::Tool { tool, .. } => tool.command(),
         CliRequest::Ask { .. } => "ask",
     };
     let caller = turn
@@ -528,7 +523,7 @@ async fn read_shows_commands_and_reads_back_as_far_as_asked() {
 }
 
 /// `brigadier start`'s request for `prompt`, with nothing else given.
-fn start(prompt: &str) -> StartRequest {
+pub(super) fn start(prompt: &str) -> StartRequest {
     StartRequest {
         title: None,
         agent: None,
@@ -559,7 +554,7 @@ fn wait(ids: &[&str], timeout_secs: Option<u32>) -> CliRequest {
 }
 
 /// Waits through `brigadier wait` until `wanted` events came, keeping them all.
-async fn wait_for(turn: &Turn, ids: &[&str], wanted: usize) -> Vec<Value> {
+pub(super) async fn wait_for(turn: &Turn, ids: &[&str], wanted: usize) -> Vec<Value> {
     let mut events = Vec::new();
     while events.len() < wanted {
         let got = brigadier(turn, wait(ids, Some(60))).await;
@@ -571,7 +566,7 @@ async fn wait_for(turn: &Turn, ids: &[&str], wanted: usize) -> Vec<Value> {
     events
 }
 
-fn id_of(started: &Value) -> String {
+pub(super) fn id_of(started: &Value) -> String {
     started["worker"]["id"].as_str().unwrap().to_owned()
 }
 
@@ -1016,7 +1011,7 @@ async fn wait_hears_a_worker_gone_and_its_usage_limit() {
     flow.stop().await;
 }
 
-fn tool(tool: brigadier_cli::protocol::Tool, action: &str, args: Value) -> CliRequest {
+pub(super) fn tool(tool: brigadier_cli::protocol::Tool, action: &str, args: Value) -> CliRequest {
     CliRequest::Tool {
         tool,
         action: action.into(),

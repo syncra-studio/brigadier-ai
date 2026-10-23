@@ -2193,6 +2193,8 @@ mod chat_images_tests;
 #[cfg(unix)]
 mod chat_thread_tests;
 #[cfg(unix)]
+mod cli_moved_tools_tests;
+#[cfg(unix)]
 mod cli_tests;
 mod cli_thread_tests;
 #[cfg(all(test, target_os = "macos"))]

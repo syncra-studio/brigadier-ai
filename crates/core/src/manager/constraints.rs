@@ -144,7 +144,7 @@ fn carried(words: &str, seq: i64, id: &str) -> String {
         end -= 1;
     }
     format!(
-        "{}\n[cut here: message #{seq}, bytes {end}–{} not shown; query_brain {id} gives it whole]",
+        "{}\n[cut here: message #{seq}, bytes {end}–{} not shown; `brigadier brain search {id}` gives it whole]",
         &words[..end],
         words.len()
     )

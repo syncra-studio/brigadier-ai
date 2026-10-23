@@ -33,7 +33,7 @@ pub(crate) fn page_note(id: &str, title: &str) -> String {
         title.trim()
     };
     format!(
-        "\n[page {id} \"{name}\"] Sent from this page of the user's: read it with read_page and change it with write_page (page_id {id}). Only this page, and only until the user writes again."
+        "\n[page {id} \"{name}\"] Sent from this page of the user's: read it with `brigadier page read {id}` and change it with `brigadier page write {id}`. Only this page, and only until the user writes again."
     )
 }
 
@@ -146,7 +146,7 @@ impl SessionManager {
                 "Saved: the page is at revision {revision}. It shows in the user's open tab."
             )),
             PageWriteOutcome::Conflict { current } => Err(Error::Invalid(format!(
-                "not saved: the page changed since revision {} (it is at revision {} now). Read it again with read_page and redo your change on what it holds now.",
+                "not saved: the page changed since revision {} (it is at revision {} now). Read it again and redo your change on what it holds now.",
                 base, current.revision
             ))),
         }

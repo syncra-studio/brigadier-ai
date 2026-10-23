@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier approval --json",
+  "type": "object",
+  "required": [
+    "action",
+    "text"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "request"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "description": "What the tool answered."
+    }
+  }
+}

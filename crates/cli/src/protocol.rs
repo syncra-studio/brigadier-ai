@@ -82,7 +82,7 @@ pub enum CliRequest {
     },
 }
 
-/// The kept tools behind `brigadier` (STRIP-DOWN-PLAN S13), by subcommand.
+/// The kept tools behind `brigadier` (STRIP-DOWN-PLAN S13, S16c), by subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Tool {
@@ -90,6 +90,55 @@ pub enum Tool {
     Browser,
     App,
     Page,
+    Brain,
+    Transcript,
+    Code,
+    Memory,
+    Report,
+    Feedback,
+    Approval,
+}
+
+impl Tool {
+    /// Every tool, in the order help lists their subcommands.
+    pub const ALL: &[Tool] = &[
+        Self::Preview,
+        Self::Browser,
+        Self::App,
+        Self::Page,
+        Self::Brain,
+        Self::Transcript,
+        Self::Code,
+        Self::Memory,
+        Self::Report,
+        Self::Feedback,
+        Self::Approval,
+    ];
+
+    /// Its subcommand's name.
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::Preview => "preview",
+            Self::Browser => "browser",
+            Self::App => "app",
+            Self::Page => "page",
+            Self::Brain => "brain",
+            Self::Transcript => "transcript",
+            Self::Code => "code",
+            Self::Memory => "memory",
+            Self::Report => "report",
+            Self::Feedback => "feedback",
+            Self::Approval => "approval",
+        }
+    }
+
+    /// The tool behind subcommand `name`.
+    pub fn of_command(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|tool| tool.command() == name)
+    }
 }
 
 /// `brigadier start`'s arguments.
@@ -628,7 +677,8 @@ pub struct CloseOutput {
     pub closed: bool,
 }
 
-/// `brigadier preview`, `browser`, `app` and `page`: what the tool answered.
+/// `brigadier preview`, `browser`, `app`, `page` and the other tools' subcommands: what the
+/// tool answered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolOutput {
@@ -649,4 +699,29 @@ pub struct AskOutput {
     pub answer: String,
     /// The chosen option's index (0 is the first), or none for an answer in their own words.
     pub option: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each tool goes over the socket as its subcommand's name, and back as itself.
+    #[test]
+    fn every_tool_call_round_trips_as_its_subcommand() {
+        for tool in Tool::ALL {
+            let call = CliCall {
+                protocol: PROTOCOL,
+                request: CliRequest::Tool {
+                    tool: *tool,
+                    action: "search".into(),
+                    args: serde_json::json!({"query": "x"}),
+                },
+            };
+            let json = serde_json::to_value(&call).unwrap();
+            assert_eq!(json["request"]["tool"], tool.command());
+            assert_eq!(serde_json::from_value::<CliCall>(json).unwrap(), call);
+            assert_eq!(Tool::of_command(tool.command()), Some(*tool));
+        }
+        assert_eq!(Tool::of_command("sessions"), None);
+    }
 }

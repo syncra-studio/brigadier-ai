@@ -1,6 +1,8 @@
-//! The tools a session keeps, behind `brigadier` (STRIP-DOWN-PLAN S13): `preview`, `browser`,
-//! `app`, `page` and `ask`. Each runs as the session's own call of the tool it was, with the
-//! grant it called with, so what a session or worker may do is what it could do before.
+//! The tools a session keeps, behind `brigadier` (STRIP-DOWN-PLAN S13, S16c): `preview`,
+//! `browser`, `app`, `page`, `ask`, and the thread's, Chat's and side chat's last MCP tools
+//! (`brain`, `transcript`, `code`, `report`, `memory`, `feedback`, `approval`). Each runs as the
+//! session's own call of the tool it was, with the grant it called with, so what a session or
+//! worker may do is what it could do before.
 //! `brigadier ask` waits for the user's answer on its card, and the answer goes back to it
 //! alone.
 
@@ -17,8 +19,8 @@ use super::cards::CardAnswer;
 use super::cli::CliCaller;
 use crate::Result;
 use crate::tools::{
-    AppToolCall, AskOption, AskQuestion, AskUser, BrowserToolCall, OrchestratorCall, ToolCall,
-    ToolHost, ToolReply, WorkerCall,
+    AppToolCall, AskOption, AskQuestion, AskUser, BrowserToolCall, ChatCall, OrchestratorCall,
+    Role, TabChatCall, TabTools, ToolCall, ToolHost, ToolReply, WorkerCall,
 };
 use crate::work::{CardId, QuestionKind};
 
@@ -73,17 +75,40 @@ fn args<T: DeserializeOwned>(args: Value) -> std::result::Result<T, CliReply> {
     serde_json::from_value(args).map_err(|err| usage(format!("bad arguments: {err}")))
 }
 
-/// The call a subcommand's action makes, for the thread or (`worker`) one of its workers.
+/// A tool its caller doesn't have, as the tools refuse one.
+fn not_theirs() -> CliReply {
+    CliReply::error(
+        ErrorCode::Refused,
+        "This tool is not available to this session.",
+    )
+}
+
+/// The call a subcommand's action makes, as its caller's (`role`) own: the thread's, a Chat's,
+/// a side chat's or a worker's. A call of a tool the caller doesn't have is refused where the
+/// tools refuse it.
 fn tool_call(
     tool: Tool,
     action: &str,
     given: Value,
-    worker: bool,
+    role: Option<&Role>,
 ) -> std::result::Result<ToolCall, CliReply> {
     use AppToolCall as A;
     use BrowserToolCall as B;
     use OrchestratorCall as O;
     use WorkerCall as W;
+    let worker = matches!(role, Some(Role::Worker { .. }));
+    let chat = matches!(role, Some(Role::Chat { .. }));
+    let tab = match role {
+        Some(Role::TabChat { tools, .. }) => Some(*tools),
+        _ => None,
+    };
+    // A side chat has its tab's page or file, and nothing else.
+    match (tab, tool, action) {
+        (None, _, _) => {}
+        (Some(TabTools::Page), Tool::Page, "read" | "write")
+        | (Some(TabTools::File), Tool::Page, "file-read" | "file-write") => {}
+        (Some(_), _, _) => return Err(not_theirs()),
+    }
     Ok(match (tool, action) {
         (Tool::Preview, "start") if worker => ToolCall::Worker(W::StartPreview(args(given)?)),
         (Tool::Preview, "start") => ToolCall::Orchestrator(O::StartPreview(args(given)?)),
@@ -105,8 +130,29 @@ fn tool_call(
         (Tool::App, "terminal-run") => ToolCall::App(A::TerminalRun(args(given)?)),
         (Tool::App, "show-session") => ToolCall::App(A::ShowSession(args(given)?)),
         (Tool::App, "close-tab") => ToolCall::App(A::CloseTab(args(given)?)),
+        (Tool::Page, "read") if tab.is_some() => {
+            ToolCall::TabChat(TabChatCall::ReadPage(args(given)?))
+        }
+        (Tool::Page, "write") if tab.is_some() => {
+            ToolCall::TabChat(TabChatCall::WritePage(args(given)?))
+        }
         (Tool::Page, "read") => ToolCall::Orchestrator(O::ReadPage(args(given)?)),
         (Tool::Page, "write") => ToolCall::Orchestrator(O::WritePage(args(given)?)),
+        (Tool::Page, "file-read") if tab.is_some() => ToolCall::TabChat(TabChatCall::ReadFile),
+        (Tool::Page, "file-write") if tab.is_some() => {
+            ToolCall::TabChat(TabChatCall::WriteFile(args(given)?))
+        }
+        (Tool::Page, "file-read" | "file-write") => return Err(not_theirs()),
+        (Tool::Brain, "search") => ToolCall::Orchestrator(O::QueryBrain(args(given)?)),
+        (Tool::Transcript, "search") => ToolCall::Orchestrator(O::SearchTranscript(args(given)?)),
+        (Tool::Code, "search") => ToolCall::Orchestrator(O::CodeSearch(args(given)?)),
+        (Tool::Code, "refs") => ToolCall::Orchestrator(O::CodeRefs(args(given)?)),
+        (Tool::Code, "map") => ToolCall::Orchestrator(O::ProjectMap),
+        (Tool::Report, "save") if chat => ToolCall::Chat(ChatCall::SaveReport(args(given)?)),
+        (Tool::Report, "save") => ToolCall::Orchestrator(O::SaveReport(args(given)?)),
+        (Tool::Memory, "save") => ToolCall::Chat(ChatCall::SaveMemory(args(given)?)),
+        (Tool::Feedback, "offer") => ToolCall::Orchestrator(O::OfferFeedback(args(given)?)),
+        (Tool::Approval, "request") => ToolCall::Orchestrator(O::RequestApproval(args(given)?)),
         (_, other) => return Err(usage(format!("no action {other:?}"))),
     })
 }
@@ -141,7 +187,7 @@ fn tool_reply(action: &str, reply: ToolReply) -> CliReply {
 }
 
 impl SessionManager {
-    /// `brigadier preview|browser|app|page <action>`: the tool's call, as the caller.
+    /// `brigadier <tool> <action>`: the tool's call, as the caller.
     pub(super) async fn cli_tool(
         &self,
         caller: &CliCaller,
@@ -149,7 +195,8 @@ impl SessionManager {
         action: &str,
         given: Value,
     ) -> CliReply {
-        let call = match tool_call(tool, action, given, caller.task_id.is_some()) {
+        let role = self.grants.resolve(&caller.grant);
+        let call = match tool_call(tool, action, given, role.as_ref()) {
             Ok(call) => call,
             Err(reply) => return reply,
         };

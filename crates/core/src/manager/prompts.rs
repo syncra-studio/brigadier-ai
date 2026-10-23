@@ -65,11 +65,15 @@ macro_rules! research_breakdown {
     };
 }
 
-/// Where a research answer's full findings go, for those that have `save_report` (Q79).
+/// Where a research answer's full findings go, saved with `$save` (Q79).
 macro_rules! research_report {
-    () => {
-        "
-- Findings longer than that (many options compared, prices, a full write-up) go in a report: save it with save_report and link it in one line ([Full report](brigadier-page:…)). Never paste the report into the chat."
+    ($save:literal) => {
+        concat!(
+            "
+- Findings longer than that (many options compared, prices, a full write-up) go in a report: save it with ",
+            $save,
+            " and link it in one line ([Full report](brigadier-page:…)). Never paste the report into the chat."
+        )
     };
 }
 
@@ -245,19 +249,19 @@ You are this session's one long-lived thread: you read, search, run commands and
 
 How to work:
 - Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}
-- Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
+- Answer code questions yourself from the Brain, `brigadier code search` and `code refs`, and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
 - {clarify} {start}
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) in your shell before your final answer. Before a merge, run the project's full checks yourself (`tools/full-checks.sh`, or the project's own), in the background when they run long, and read their output. Never background a command with `&` or nohup. Run dev servers and apps with `brigadier preview start`.
 - {own_commits}
 - For a large or risky change, get a second look before you merge: run `codex review` in your shell (in the background; it takes minutes) or ask a subagent to review the diff, and fix what you agree with. Small edits need none.
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
-- Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. The user's answers on cards are kept for you. Never reopen a settled decision.
+- Ask the Brain (`brigadier brain search`) before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. The user's answers on cards are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with `brigadier ask` (never a question in your text). Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
-- Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. After your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need request_approval first.
-- Brigadier's commands (previews, its browser, cards for the user, the app, pages, other sessions to read): `brigadier --help`.
+- Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. After your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need `brigadier approval request` first.
+- Brigadier's commands (previews, its browser, cards for the user, the app, pages, Brain, transcript and code search, reports, other sessions to read): `brigadier --help`.
 - {APP_RULE}
-- When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once; when they ask you to report something to its developers, call it with asked true.
+- When the user seems annoyed with Brigadier itself (not their project), run `brigadier feedback offer` once; when they ask you to report something to its developers, add `--asked`.
 - Brigadier's tools return at once: what they start reports back later as a message from Brigadier. Your workers don't report: you wait on them with `brigadier wait` (the brigade skill says how).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
@@ -330,7 +334,7 @@ pub(crate) const LATE_EVENT: &str = late_event!();
 
 macro_rules! no_promised_files {
     () => {
-        "Never promise a file or a link for later: a worker's findings go in your answer itself (a research report saved with save_report), not only a link to the worker's file or a path. A file the user asked for is still linked, once, inline."
+        "Never promise a file or a link for later: a worker's findings go in your answer itself (a research report saved with `brigadier report save`), not only a link to the worker's file or a path. A file the user asked for is still linked, once, inline."
     };
 }
 
@@ -434,7 +438,7 @@ const VOICE: &str = concat!(
     voice_core!(),
     thread_voice!(),
     answer_style!(),
-    research_report!()
+    research_report!("`brigadier report save`")
 );
 
 /// How the log names role instructions.
@@ -463,7 +467,11 @@ const CHAT_GRILLING: &str = grilling_rule!("read and search");
 const CHAT_THREAD: &str = chat_thread!();
 
 /// How a Chat writes, and shapes an answer with its report (Q79, Q87).
-const CHAT_VOICE: &str = concat!(voice_core!(), answer_style!(), research_report!());
+const CHAT_VOICE: &str = concat!(
+    voice_core!(),
+    answer_style!(),
+    research_report!("save_report")
+);
 /// The same for a tab chat, which has no `save_report`.
 const TAB_CHAT_VOICE: &str = concat!(voice_core!(), answer_style!());
 
@@ -819,14 +827,28 @@ mod environment_tests {
                 assert!(!prompt.contains("risky mark"));
                 assert!(!prompt.contains("start_verifier"));
                 assert!(!prompt.contains("Each landing and commit of yours queues"));
+                for name in ["remember", "note_for_user", "ci_status"] {
+                    assert!(prompt.contains(&tool(name, provider)), "{name}");
+                }
+                // The tools that moved to `brigadier` (S16c) are named as its commands.
+                for command in [
+                    "`brigadier brain search`",
+                    "`brigadier code search`",
+                    "`brigadier approval request`",
+                    "`brigadier feedback offer`",
+                    "`brigadier report save`",
+                ] {
+                    assert!(prompt.contains(command), "{command}");
+                }
                 for name in [
                     "query_brain",
-                    "remember",
                     "code_search",
-                    "note_for_user",
-                    "ci_status",
+                    "code_refs",
+                    "request_approval",
+                    "offer_feedback",
+                    "save_report",
                 ] {
-                    assert!(prompt.contains(&tool(name, provider)), "{name}");
+                    assert!(!prompt.contains(name), "{name}");
                 }
                 // The user is asked only on cards, in rounds; the merge too.
                 assert!(
@@ -1208,12 +1230,14 @@ mod environment_tests {
             }
             assert!(!text.contains("besides `### Details`"));
         }
-        // The report goes to a page where save_report is there to make one.
+        // The report goes to a page where something makes one: the thread's `brigadier`,
+        // a Chat's save_report.
+        for text in &threads {
+            assert!(text.contains("save it with `brigadier report save`"));
+            assert!(!text.contains("save_report"));
+        }
+        assert!(chat.contains("save it with save_report"));
         for text in threads.iter().chain([&chat]) {
-            assert!(
-                text.contains("save it with save_report")
-                    || text.contains("save it with mcp__brigadier__save_report")
-            );
             assert!(text.contains("Never paste the report into the chat."));
         }
         for text in [&page, &browser] {

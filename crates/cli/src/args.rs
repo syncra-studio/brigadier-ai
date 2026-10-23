@@ -361,7 +361,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 title: args.flag("title").map(str::to_owned),
             }
         }
-        "preview" | "browser" | "app" | "page" => tool_request(command, args)?,
+        name if Tool::of_command(name).is_some() => tool_request(command, args)?,
         other => return Err(error(format!("{other} has no request yet"))),
     }))
 }
@@ -529,7 +529,19 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             }
             Tool::App
         }
-        _ => {
+        "page" if action.starts_with("file-") => {
+            if action == "file-write" {
+                let Some(revision) = args.flag("revision") else {
+                    return Err(error("--revision: the revision `file-read` printed"));
+                };
+                put("base_revision", Some(json!(revision)));
+                put("text", Some(json!(text)));
+            } else if let Some(extra) = words.first() {
+                return Err(error(&format!("unexpected argument {extra:?}")));
+            }
+            Tool::Page
+        }
+        "page" => {
             let Some((page, body)) = words.split_first() else {
                 return Err(error("missing <page>"));
             };
@@ -545,6 +557,71 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
                 return Err(error(&format!("unexpected argument {extra:?}")));
             }
             Tool::Page
+        }
+        "brain" => {
+            put("query", Some(json!(args.text("query"))));
+            put("history", args.switch("history").then_some(json!(true)));
+            put("page", number("page"));
+            Tool::Brain
+        }
+        "transcript" => {
+            put("query", Some(json!(args.text("query"))));
+            put("limit", number("limit"));
+            Tool::Transcript
+        }
+        "code" => {
+            match action.as_str() {
+                "search" => {
+                    if text.trim().is_empty() {
+                        return Err(error("missing <query>"));
+                    }
+                    put("query", Some(json!(text)));
+                    put("kind", flag("kind"));
+                    put("language", flag("language"));
+                    put("path", flag("path"));
+                    put("limit", number("limit"));
+                }
+                "refs" => {
+                    put("symbol", one("symbol", true)?);
+                    put("limit", number("limit"));
+                }
+                _ => {
+                    one("nothing", false)?.map_or(Ok(()), |extra| {
+                        Err(error(&format!("unexpected argument {extra}")))
+                    })?;
+                }
+            }
+            Tool::Code
+        }
+        "report" => {
+            let Some(title) = args.flag("title") else {
+                return Err(error("--title: the report's title"));
+            };
+            put("title", Some(json!(title)));
+            put("markdown", Some(json!(args.text("markdown"))));
+            Tool::Report
+        }
+        "memory" => {
+            put("memory", Some(json!(args.text("memory"))));
+            Tool::Memory
+        }
+        "feedback" => {
+            let (Some(kind), Some(title)) = (args.flag("kind"), args.flag("title")) else {
+                return Err(error("--kind (bug or idea) and --title name the report"));
+            };
+            put("kind", Some(json!(kind)));
+            put("title", Some(json!(title)));
+            put("body", Some(json!(args.text("body"))));
+            put("asked", Some(json!(args.switch("asked"))));
+            Tool::Feedback
+        }
+        _ => {
+            let Some(what) = args.flag("action") else {
+                return Err(error("--action: what would happen, in one line"));
+            };
+            put("action", Some(json!(what)));
+            put("details", Some(json!(args.text("details"))));
+            Tool::Approval
         }
     };
     Ok(CliRequest::Tool {
@@ -816,6 +893,142 @@ mod tests {
         assert!(fails(&["page", "write", "p1", "text"]).contains("--revision"));
         assert!(fails(&["page", "list"]).contains("not one of"));
         assert!(fails(&["ask", "--option", "Only", "Go?"]).contains("2 to 4 options"));
+    }
+
+    /// STRIP-DOWN-PLAN S16c: the thread's, Chat's and side chat's last MCP tools, with the
+    /// fields their MCP schemas took.
+    #[test]
+    fn the_moved_tools_parse_into_their_tools_arguments() {
+        assert_eq!(
+            tool(&[
+                "brain",
+                "search",
+                "--history",
+                "--page",
+                "2",
+                "sidebar",
+                "modes"
+            ]),
+            (
+                Tool::Brain,
+                "search".into(),
+                json!({"query": "sidebar modes", "history": true, "page": 2})
+            )
+        );
+        assert_eq!(tool(&["brain", "search", "x"]).2, json!({"query": "x"}));
+        assert_eq!(
+            tool(&["transcript", "search", "--limit", "3", "the", "budget"]),
+            (
+                Tool::Transcript,
+                "search".into(),
+                json!({"query": "the budget", "limit": 3})
+            )
+        );
+        assert_eq!(
+            tool(&[
+                "code",
+                "search",
+                "--kind",
+                "symbol",
+                "--language",
+                "rust",
+                "--path",
+                "crates",
+                "--limit",
+                "5",
+                "ToolHost"
+            ]),
+            (
+                Tool::Code,
+                "search".into(),
+                json!({"query": "ToolHost", "kind": "symbol", "language": "rust",
+                       "path": "crates", "limit": 5})
+            )
+        );
+        assert_eq!(
+            tool(&["code", "refs", "cli_call"]).2,
+            json!({"symbol": "cli_call"})
+        );
+        assert_eq!(
+            tool(&["code", "map"]),
+            (Tool::Code, "map".into(), json!({}))
+        );
+        assert_eq!(
+            tool(&["page", "file-read"]),
+            (Tool::Page, "file-read".into(), json!({}))
+        );
+        assert_eq!(
+            tool(&["page", "file-write", "--revision", "r2", "fn", "main()"]).2,
+            json!({"base_revision": "r2", "text": "fn main()"})
+        );
+        assert_eq!(
+            tool(&["memory", "save", "Lives", "in", "Lisbon."]),
+            (
+                Tool::Memory,
+                "save".into(),
+                json!({"memory": "Lives in Lisbon."})
+            )
+        );
+        assert_eq!(
+            tool(&["report", "save", "--title", "Printers", "Bambu", "A1."]),
+            (
+                Tool::Report,
+                "save".into(),
+                json!({"title": "Printers", "markdown": "Bambu A1."})
+            )
+        );
+        assert_eq!(
+            tool(&[
+                "feedback",
+                "offer",
+                "--kind",
+                "bug",
+                "--title",
+                "Stop spins",
+                "--asked",
+                "It",
+                "kept",
+                "spinning."
+            ]),
+            (
+                Tool::Feedback,
+                "offer".into(),
+                json!({"kind": "bug", "title": "Stop spins", "body": "It kept spinning.",
+                       "asked": true})
+            )
+        );
+        assert_eq!(
+            tool(&[
+                "approval",
+                "request",
+                "--action",
+                "Buy a domain",
+                "12",
+                "euros",
+                "a",
+                "year."
+            ]),
+            (
+                Tool::Approval,
+                "request".into(),
+                json!({"action": "Buy a domain", "details": "12 euros a year."})
+            )
+        );
+        assert!(fails(&["brain", "search"]).contains("missing <query>"));
+        assert!(fails(&["brain", "find", "x"]).contains("not one of"));
+        assert!(fails(&["brain", "search", "--page", "0", "x"]).contains("whole number"));
+        assert!(fails(&["code", "search"]).contains("missing <query>"));
+        assert!(fails(&["code", "refs"]).contains("missing <symbol>"));
+        assert!(fails(&["code", "map", "x"]).contains("unexpected argument"));
+        assert!(fails(&["code", "search", "--kind", "type", "x"]).contains("one of: symbol"));
+        assert!(fails(&["page", "file-write", "text"]).contains("--revision"));
+        assert!(fails(&["page", "file-read", "x"]).contains("unexpected argument"));
+        assert!(fails(&["memory", "save"]).contains("missing <memory>"));
+        assert!(fails(&["report", "save", "text"]).contains("--title"));
+        assert!(fails(&["feedback", "offer", "--title", "T", "b"]).contains("--kind"));
+        assert!(fails(&["feedback", "offer", "--kind", "rant", "b"]).contains("one of: bug"));
+        assert!(fails(&["approval", "request", "why"]).contains("--action"));
+        assert!(fails(&["approval", "request", "--action", "Pay"]).contains("missing <details>"));
     }
 
     #[test]

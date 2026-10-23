@@ -832,7 +832,7 @@ impl SessionManager {
             // The thread reads the code itself too (BUILD-PLAN B3): a scout is for a big look
             // around, not a missing Brain line.
             _ => reply.push_str(
-                "The Project Brain has nothing on this yet: read the code yourself (code_search, code_refs, project_map, then the lines you need).",
+                "The Project Brain has nothing on this yet: read the code yourself (`brigadier code search`, `code refs`, `code map`, then the lines you need).",
             ),
         }
         if let Some(preferences) = preferences.filter(|found| !found.hits.is_empty()) {

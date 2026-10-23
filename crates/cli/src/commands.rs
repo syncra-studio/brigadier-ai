@@ -424,19 +424,186 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "page",
-        summary: "Read and write the page the user's message came from.",
+        summary: "Read and write the page the user's message came from, or the page or file \
+                  beside a chat.",
         details: "`read <page>` prints the page and its revision; `write <page> --revision \
                   <rev> <text…>` replaces its text (Markdown, without its title), refused if \
-                  it changed since that revision. With no text, or `-`, the text comes from \
-                  standard input. The page's id is in the `[page …]` note on the message.",
+                  it changed since that revision. The page's id is in the `[page …]` note on \
+                  the message, or the note of a chat beside a page. A chat beside a file: \
+                  `file-read` prints the file, its path and its revision; `file-write \
+                  --revision <rev> <text…>` replaces its whole text, refused if it changed \
+                  since. With no text, or `-`, the text comes from standard input.",
         args: &[
-            action(&["read", "write"], "What to do."),
-            flag("revision", "REV", "write: the revision `read` printed."),
+            action(&["read", "write", "file-read", "file-write"], "What to do."),
+            flag(
+                "revision",
+                "REV",
+                "write and file-write: the revision `read` or `file-read` printed.",
+            ),
             flag("title", "TEXT", "write: a new title."),
             rest("args", "The page, and the text to write.", false),
         ],
         available: true,
         schema: include_str!("../schemas/page.schema.json"),
+    },
+    Command {
+        name: "brain",
+        summary: "Search what Brigadier knows about this project.",
+        details: "`search <query…>` asks the Project Brain: modules, earlier findings, \
+                  decisions, conventions and contracts, and the user's preferences, each with \
+                  where it came from. Fast and cheap: ask it first; when it has nothing or \
+                  marks a line stale, read the code yourself. It answers with what holds now.",
+        args: &[
+            action(&["search"], "What to do."),
+            switch(
+                "history",
+                "Also earlier versions of decisions, conventions and contracts (what held \
+                 before and why it changed).",
+            ),
+            flag(
+                "page",
+                "N",
+                "The next page of results, when an answer says there are more.",
+            ),
+            rest("query", "What you want to know about the project.", true),
+        ],
+        available: true,
+        schema: include_str!("../schemas/brain.schema.json"),
+    },
+    Command {
+        name: "transcript",
+        summary: "Search this session's full transcript.",
+        details: "`search <words…>` finds the best-matching passages of this conversation (the \
+                  user's messages, your answers, reports and decisions, and the commands you \
+                  ran, files you read and tools you called), including what is no longer in \
+                  your context, with their dates. A message shows its number (#N); a step of \
+                  your own work shows as a thread step, with where its whole output is kept.",
+        args: &[
+            action(&["search"], "What to do."),
+            flag("limit", "N", "At most this many passages (8 by default)."),
+            rest("query", "Words to look for.", true),
+        ],
+        available: true,
+        schema: include_str!("../schemas/transcript.schema.json"),
+    },
+    Command {
+        name: "code",
+        summary: "Search the repository's code index.",
+        details: "Instant, and kept current as files change. `search <query…>` finds symbol \
+                  definitions by name (functions, types, classes, methods) and files by path, \
+                  best matches first: use it before grepping. `refs <symbol>` lists where a \
+                  symbol is defined and used, matched by name without type information. `map` \
+                  shows the repository at a glance: top folders, modules and their \
+                  dependencies, package manifests, scripts, services and their ports, and the \
+                  most used definitions per module.",
+        args: &[
+            action(&["search", "refs", "map"], "What to do."),
+            choice(
+                "kind",
+                "KIND",
+                &["symbol", "file", "any"],
+                "search: what to find; `any` by default.",
+            ),
+            flag(
+                "language",
+                "LANGUAGE",
+                "search: only this language, e.g. rust, typescript, python.",
+            ),
+            flag(
+                "path",
+                "DIR",
+                "search: only under this repository-relative folder.",
+            ),
+            flag(
+                "limit",
+                "N",
+                "search and refs: at most this many (30 hits, 50 references by default).",
+            ),
+            rest(
+                "args",
+                "search: a name or path fragment; refs: the symbol's name.",
+                false,
+            ),
+        ],
+        available: true,
+        schema: include_str!("../schemas/code.schema.json"),
+    },
+    Command {
+        name: "report",
+        summary: "Keep a research answer's full report as a page of the user's.",
+        details: "`save --title <title> <markdown…>`: everything the short answer leaves out, \
+                  in Markdown (without its title), with its sources. With no text, or `-`, \
+                  the text comes from standard input. It prints the link to put in your \
+                  answer ([Full report](brigadier-page:<id>)); one click opens it. Never paste \
+                  the report into the chat.",
+        args: &[
+            action(&["save"], "What to do."),
+            flag(
+                "title",
+                "TEXT",
+                "The report's title, a few words (\"AI models for 3D printing\").",
+            ),
+            rest("markdown", "The whole report.", false),
+        ],
+        available: true,
+        schema: include_str!("../schemas/report.schema.json"),
+    },
+    Command {
+        name: "memory",
+        summary: "Keep a stable fact about the user for later conversations.",
+        details: "`save <memory…>`: one short sentence (where they live, their trade, the \
+                  tools or devices they use, a preference), only when they state it or clearly \
+                  imply it holds beyond this chat. Never passwords, keys, card or account \
+                  numbers (refused), health or money details, or passing details. The user \
+                  sees, edits and deletes it in Settings.",
+        args: &[
+            action(&["save"], "What to do."),
+            rest("memory", "What to remember about the user.", true),
+        ],
+        available: true,
+        schema: include_str!("../schemas/memory.schema.json"),
+    },
+    Command {
+        name: "feedback",
+        summary: "Offer the user a report to Brigadier's developers, on a card.",
+        details: "`offer --kind bug|idea --title <title> <body…>`: when the user seems annoyed \
+                  with Brigadier itself (never their own project's code), or asks you to report \
+                  something to its developers. The card's Send files it on GitHub as the user; \
+                  nothing is sent without their click. body: what happened and what they \
+                  expected, steps if known, a few plain lines in their words; no secrets, \
+                  paths or project code. With no body, or `-`, it comes from standard input. \
+                  One offer per incident: unless --asked, refused while an earlier one is \
+                  unanswered or after they dismissed one.",
+        args: &[
+            action(&["offer"], "What to do."),
+            choice(
+                "kind",
+                "KIND",
+                &["bug", "idea"],
+                "bug for something wrong, idea for something missing.",
+            ),
+            flag("title", "TEXT", "One line naming the problem."),
+            switch("asked", "The user asked for it (\"report this\")."),
+            rest("body", "What happened and what they expected.", false),
+        ],
+        available: true,
+        schema: include_str!("../schemas/feedback.schema.json"),
+    },
+    Command {
+        name: "approval",
+        summary: "Ask the user to approve what only they may decide.",
+        details: "`request --action <what> <details…>`: spending money, handling credentials \
+                  yourself (a token, a password, the keychain directly), or destroying \
+                  something outside this session's own work. Not for pushes, pull requests or \
+                  deploys, nor for work inside the session. Returns at once; the decision \
+                  arrives later as a message.",
+        args: &[
+            action(&["request"], "What to do."),
+            flag("action", "TEXT", "What would happen, in one line."),
+            rest("details", "Why, and what exactly.", true),
+        ],
+        available: true,
+        schema: include_str!("../schemas/approval.schema.json"),
     },
     Command {
         name: "models",

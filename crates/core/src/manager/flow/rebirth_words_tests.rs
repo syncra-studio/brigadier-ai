@@ -90,7 +90,7 @@ async fn a_rebirth_carries_the_users_older_words_without_the_replies() {
     assert!(!briefing.contains("Reply 0:"), "{briefing}");
     assert!(
         recent.contains(
-            "aren't carried here; search_transcript finds them. The user's own words among them are above"
+            "aren't carried here; `brigadier transcript search` finds them. The user's own words among them are above"
         ),
         "{recent}"
     );
