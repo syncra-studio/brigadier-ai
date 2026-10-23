@@ -469,7 +469,7 @@ impl SessionManager {
 
     /// The model, effort and account the next message is written with, and why it isn't the
     /// user's `chosen` one when it isn't. Automatic: the first ready CLI's cheapest model the
-    /// user left on ([`Self::writer_model`]), leaving out the `exclude`d ones.
+    /// user left on ([`Self::writer_models`]), leaving out the `exclude`d ones.
     async fn writer_route(
         &self,
         chosen: Option<&ModelChoice>,
@@ -496,13 +496,14 @@ impl SessionManager {
             let account = self.runtime.account_for(chosen);
             return Ok((chosen.clone(), account, None));
         }
-        for provider in ProviderKind::ALL {
-            if !self.provider_ready(provider) {
-                continue;
-            }
-            let Some((model, effort)) = self.writer_model(provider) else {
-                continue;
-            };
+        let ready = ProviderKind::ALL
+            .into_iter()
+            .filter(|provider| self.provider_ready(*provider));
+        for (provider, (model, effort)) in ready.flat_map(|provider| {
+            self.writer_models(provider)
+                .into_iter()
+                .map(move |m| (provider, m))
+        }) {
             let choice = ModelChoice {
                 provider,
                 model: Some(model),
@@ -644,12 +645,10 @@ impl SessionManager {
         written
     }
 
-    /// The model Automatic writes git text with on `provider`: its cheapest model for chores
-    /// ([`Self::cheapest`]), else the first model of its list the user left on.
-    fn writer_model(&self, provider: ProviderKind) -> Option<(String, Option<String>)> {
-        if let Ok(cheapest) = self.cheapest(provider) {
-            return Some(cheapest);
-        }
+    /// The models Automatic writes git text with on `provider`, in order: its cheapest model for
+    /// chores ([`Self::cheapest`]), then the models of its list the user left on, so a limit on
+    /// one leaves the others.
+    fn writer_models(&self, provider: ProviderKind) -> Vec<(String, Option<String>)> {
         let settings = self.core.settings();
         let listed = self
             .runtime
@@ -657,13 +656,16 @@ impl SessionManager {
             .and_then(|overview| overview.models)
             .map(|catalog| catalog.models)
             .unwrap_or_default();
-        listed
-            .iter()
-            .find(|model| {
-                !model.legacy
-                    && crate::routing::availability::model_available(&settings, provider, &model.id)
-            })
-            .map(|model| (model.id.clone(), None))
+        let mut models: Vec<_> = self.cheapest(provider).ok().into_iter().collect();
+        for model in &listed {
+            if !model.legacy
+                && crate::routing::availability::model_available(&settings, provider, &model.id)
+                && models.iter().all(|(id, _)| *id != model.id)
+            {
+                models.push((model.id.clone(), None));
+            }
+        }
+        models
     }
 
     /// The provider's cheapest model for a one-off chore, at low effort where it has efforts:
