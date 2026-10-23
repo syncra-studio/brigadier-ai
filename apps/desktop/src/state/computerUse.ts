@@ -7,7 +7,8 @@ import { request } from "@/ipc/client";
 /**
  * Computer use as Settings, the setup window and the menu bar show it. Reading it never starts
  * the helper: brigadierd answers from a helper already running, or from what it last wrote.
- * Changes arrive as `computerUse` bridge events.
+ * Only permissions nothing has read yet are checked once ([`checkUnreadOnce`]). Changes arrive
+ * as `computerUse` bridge events.
  */
 
 let latest: ComputerUseStatus | null = null;
@@ -15,7 +16,7 @@ const listeners = new Set<() => void>();
 
 function set(next: ComputerUseStatus): void {
   latest = next;
-  for (const listener of listeners) listener();
+  notify();
 }
 
 function subscribeStore(listener: () => void): () => void {
@@ -55,6 +56,34 @@ export async function checkComputerUse(): Promise<ComputerUseStatus> {
   const { computerUse } = await request({ method: "checkComputerUse" });
   set(computerUse);
   return computerUse;
+}
+
+let firstCheck: Promise<unknown> | null = null;
+let checkingUnread = false;
+
+function notify(): void {
+  for (const listener of listeners) listener();
+}
+
+/**
+ * The permissions as the helper holds them, when nothing has read them yet (no helper has run
+ * for this data folder): one check per run of the app, as Check again does.
+ */
+export function checkUnreadOnce(): void {
+  if (firstCheck) return;
+  checkingUnread = true;
+  notify();
+  firstCheck = checkComputerUse()
+    .catch(() => {})
+    .finally(() => {
+      checkingUnread = false;
+      notify();
+    });
+}
+
+/** Whether that one check runs now. */
+export function useCheckingUnread(): boolean {
+  return useSyncExternalStore(subscribeStore, () => checkingUnread);
 }
 
 /** Takes one test picture; `problem` says why it didn't work, when it didn't. */

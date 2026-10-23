@@ -1,9 +1,12 @@
+import { useEffect } from "react";
+
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 import { Badge, Button } from "@/components/controls";
 import { SettingsCard, SettingsRow } from "@/components/shared";
 import type { ComputerPermission, ComputerUseStatus, PermissionState } from "@/ipc/generated";
 import {
+  checkUnreadOnce,
   grantComputerPermission,
   openComputerSetup,
   openPrivacySettings,
@@ -12,6 +15,7 @@ import {
   PERMISSIONS,
   setupLine,
   setupUnfinished,
+  useCheckingUnread,
   useComputerUse,
 } from "@/state/computerUse";
 import { setSetting } from "@/state/settings";
@@ -37,10 +41,11 @@ export function computerUseAvailable(): boolean {
 /**
  * Settings › Computer use: whether sessions, Chats and workers may use apps on this Mac, the
  * menu-bar item, the two macOS permissions the helper needs, and where setup stands. Showing it
- * starts nothing.
+ * starts nothing, but for one check of permissions nothing has read yet while computer use is on.
  */
 export function ComputerUsePage() {
   const status = useComputerUse();
+  const checking = useFirstCheck(status);
   return (
     <SettingsPage title="Computer use">
       <SettingsSection title="Enable">
@@ -59,13 +64,13 @@ export function ComputerUsePage() {
       >
         <SettingsCard>
           {PERMISSIONS.map((permission) => (
-            <PermissionRow key={permission} permission={permission} status={status} />
+            <PermissionRow key={permission} permission={permission} status={status} checking={checking} />
           ))}
         </SettingsCard>
       </SettingsSection>
       <SettingsSection title="Setup">
         <SettingsCard>
-          <SetupRow status={status} />
+          <SetupRow status={status} checking={checking} />
         </SettingsCard>
       </SettingsSection>
     </SettingsPage>
@@ -74,6 +79,20 @@ export function ComputerUsePage() {
 
 function known(status: ComputerUseStatus): boolean {
   return status.accessibility !== "unknown" || status.screenRecording !== "unknown";
+}
+
+/**
+ * With computer use on and the permissions never read (no helper has run for this data folder),
+ * the page asks the helper once, so it shows what macOS granted it: true while it asks.
+ */
+function useFirstCheck(status: ComputerUseStatus | null): boolean {
+  const enabled = useApp((s) => s.settings.computerUse);
+  const unread = enabled && status !== null && !known(status) && status.setup.state === "notSetUp";
+  const checking = useCheckingUnread();
+  useEffect(() => {
+    if (unread) checkUnreadOnce();
+  }, [unread]);
+  return checking && unread;
 }
 
 function EnableRow() {
@@ -110,7 +129,7 @@ const STATE_LABEL: Record<PermissionState, string> = {
   unknown: "Unknown",
 };
 
-function PermissionRow({ permission, status }: { permission: ComputerPermission; status: ComputerUseStatus | null }) {
+function PermissionRow({ permission, status, checking }: { permission: ComputerPermission; status: ComputerUseStatus | null; checking: boolean }) {
   const enabled = useApp((s) => s.settings.computerUse);
   const grant = useAction();
   const open = useAction();
@@ -119,9 +138,9 @@ function PermissionRow({ permission, status }: { permission: ComputerPermission;
   return (
     <SettingsRow label={row.label} description={row.description} error={grant.error ?? open.error}>
       <Badge data-slot="permission-state" variant={state === "granted" ? "success" : state === "notGranted" ? "warning" : "secondary"}>
-        {STATE_LABEL[state]}
+        {checking ? "Checking…" : STATE_LABEL[state]}
       </Badge>
-      {state !== "granted" && (
+      {state !== "granted" && !checking && (
         <Button variant="soft" size="sm" disabled={!enabled || grant.busy} onClick={() => grant.run(() => grantComputerPermission(permission))}>
           Grant…
         </Button>
@@ -138,13 +157,13 @@ function PermissionRow({ permission, status }: { permission: ComputerPermission;
   );
 }
 
-function SetupRow({ status }: { status: ComputerUseStatus | null }) {
+function SetupRow({ status, checking }: { status: ComputerUseStatus | null; checking: boolean }) {
   const enabled = useApp((s) => s.settings.computerUse);
   const open = useAction();
-  const line = status ? setupLine(status) : enabled ? "Checking…" : "Off. Agents can't use apps on this Mac.";
+  const line = status && !checking ? setupLine(status) : enabled ? "Checking…" : "Off. Agents can't use apps on this Mac.";
   return (
     <SettingsRow label={COMPUTER_USE_ROWS.setup.label} setting="Setup" description={<span data-slot="setup-line">{line}</span>} error={open.error}>
-      {status && enabled && setupUnfinished(status) && (
+      {status && enabled && !checking && setupUnfinished(status) && (
         <Button variant="soft" size="sm" onClick={() => open.run(() => openComputerSetup())}>Finish setup…</Button>
       )}
     </SettingsRow>

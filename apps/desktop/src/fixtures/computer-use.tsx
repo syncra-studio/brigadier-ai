@@ -30,6 +30,8 @@ const status = (
 ): ComputerUseStatus => ({ available: true, accessibility, screenRecording, current, setup, sessions: [] });
 
 const calls: string[] = [];
+// The first check's answer, held until the fixture has seen the page while it runs.
+let answerCheck: () => void = () => {};
 mockIPC((command, payload) => {
   if (command === "open_privacy_settings" || command === "open_computer_setup") {
     const permission = (payload as { permission?: string } | undefined)?.permission;
@@ -43,6 +45,16 @@ mockIPC((command, payload) => {
       calls.push(req.method);
       // Never set up: the helper has never run.
       return { method: req.method, computerUse: status({ state: "notSetUp" }) };
+    case "checkComputerUse":
+      calls.push(req.method);
+      // The helper holds both permissions.
+      return new Promise((resolve) => {
+        answerCheck = () => {
+          const computerUse = status({ state: "confirmCapture" }, "granted", "granted", true);
+          onComputerUse(computerUse);
+          resolve({ method: req.method, computerUse });
+        };
+      });
     case "grantComputerPermission":
       calls.push(`${req.method} ${req.permission}`);
       return { method: req.method };
@@ -101,6 +113,10 @@ function Fixture() {
         seen.rows = all('[data-slot="settings-row"]').map((element) => element.dataset.setting);
         seen.first = look();
         seen.listingCalls = [...calls];
+      },
+      () => answerCheck(),
+      () => {
+        seen.checked = look();
       },
       ...show("unknown", status({ state: "notSetUp" })),
       ...show("cached", status({ state: "missing" }, "granted", "notGranted")),

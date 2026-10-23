@@ -12,15 +12,24 @@ type Look = {
   menuBarDisabled: boolean | null;
 };
 type States = "unknown" | "cached" | "missingBoth" | "missingAccessibility" | "confirmCapture" | "ready" | "readyCached" | "restarting" | "failed" | "off";
-type Seen = Record<States, Look> & { sections: string[]; rows: string[]; listingCalls: string[]; calls: string[] };
+type Seen = Record<States, Look> & { first: Look; checked: Look; sections: string[]; rows: string[]; listingCalls: string[]; calls: string[] };
 
 // The real page in Chromium over a faked daemon.
 test("computer use settings: enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "computer-use.html?drive=1", "computer-use-result", 15000)) as Seen;
   assert.deepEqual(seen.sections, ["Enable", "Menu bar", "Permissions", "Setup"]);
   assert.deepEqual(seen.rows, ["Let sessions use apps on this Mac", "Show in menu bar", "Accessibility", "Screen Recording", "Setup"]);
-  // Listing the page only reads: it starts no helper.
-  assert.deepEqual(seen.listingCalls, ["getComputerUse"]);
+  // Permissions nothing has read yet (no helper has run for this data folder), with computer use
+  // on: the page asks the helper once and shows what it holds, "Checking…" meanwhile.
+  assert.deepEqual(seen.listingCalls, ["getComputerUse", "checkComputerUse"]);
+  assert.equal(seen.first.accessibility.state, "Checking…");
+  assert.equal(seen.first.screenRecording.state, "Checking…");
+  assert.deepEqual(seen.first.accessibility.buttons, ["Open System Settings"]);
+  assert.equal(seen.first.setup, "Checking…");
+  assert.equal(seen.checked.accessibility.state, "Granted");
+  assert.equal(seen.checked.screenRecording.state, "Granted");
+  // Checked once: permissions unread again later show as unknown, and start nothing.
+  assert.equal(seen.calls.filter((call) => call === "checkComputerUse").length, 1);
 
   const unknown = seen.unknown;
   assert.equal(unknown.accessibility.state, "Unknown");
@@ -60,7 +69,7 @@ test("computer use settings: enable, menu bar, permissions and setup, in every s
   assert.equal(seen.off.setup, "Off. Agents can't use apps on this Mac.");
   assert.deepEqual(seen.off.setupButtons, []);
 
-  assert.deepEqual(seen.calls.slice(1), [
+  assert.deepEqual(seen.calls.slice(2), [
     "grantComputerPermission screenRecording",
     "getComputerUse",
     "open_privacy_settings accessibility",
