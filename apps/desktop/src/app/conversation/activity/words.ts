@@ -377,8 +377,33 @@ export function stepLabel(words: StepWords, status: ItemStatus, _exit: number | 
   return words.done;
 }
 
+/** The shell tools of CLIs whose records keep no run time of a command: Claude Code's. */
+const UNTIMED_SHELLS = new Set(["Bash"]);
+
 /** How far apart a call's start or end and its approval's answer can be on the daemon's clock. */
 const ANSWER_SLACK_MS = 1000;
+
+/**
+ * When a lead's command the user had to allow began to run: the thread's own approval (not a
+ * worker's) of the same command, allowed while the call waited (from `atMs`, when it was first
+ * seen, to its end). A CLI whose record keeps no run time of its own times the call from when it
+ * asked, so its run time would count the wait for the user's answer; none when no approval held
+ * it up, or the CLI timed the command itself.
+ */
+export function allowedAt(call: ToolStep, atMs: number | undefined, approvals: readonly Approval[]): number | undefined {
+  if (call.item !== "command" || call.detail === null || atMs === undefined) return undefined;
+  let at: number | undefined;
+  for (const approval of approvals) {
+    if (approval.taskId !== null || approval.state.type !== "allowed" || approval.subject.type !== "cli") continue;
+    const { request } = approval.subject;
+    if (!UNTIMED_SHELLS.has(request.tool) || request.command === null || approval.resolvedAtMs === null) continue;
+    if ([...unwrapCommand(request.command)].slice(0, 240).join("") !== call.detail) continue;
+    if (approval.resolvedAtMs < atMs - ANSWER_SLACK_MS) continue;
+    if (call.endedAtMs !== undefined && approval.resolvedAtMs > call.endedAtMs + ANSWER_SLACK_MS) continue;
+    at = Math.max(at ?? atMs, Math.min(approval.resolvedAtMs, call.endedAtMs ?? approval.resolvedAtMs));
+  }
+  return at;
+}
 
 /**
  * Whether a lead's failed call is one an approval denied: the thread's own approval (not a

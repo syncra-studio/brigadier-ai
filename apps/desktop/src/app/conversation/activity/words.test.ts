@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   type ActionItem,
+  allowedAt,
   deniedCall,
   editHunks,
   foldRepeats,
@@ -229,6 +230,28 @@ test("a lead's call its denied approval stopped reads as declined, other failure
   // A call that completed, or failed with no approval, keeps its own status.
   assert.equal(denies([denied], { ...failed, status: "completed" }), false);
   assert.equal(denies([]), false);
+});
+
+test("a command the user had to allow runs from their answer, not from when it asked (issue 554)", () => {
+  // Asked at 1s, allowed at 4s, done at 4.1s: it ran 0.1s, not 3.1s.
+  const allowed = approval({ type: "allowed", by: "user", similar: false });
+  const ran: ToolStep = { type: "tool", itemId: "c1", name: "shell", detail: "git push", status: "completed", throughPosition: 0, endedAtMs: 4_100, item: "command" };
+  assert.equal(allowedAt(ran, 1_000, [allowed]), 4_000);
+  // Still running once allowed: its run time ticks from the answer.
+  const { endedAtMs: _ended, ...running } = ran;
+  assert.equal(allowedAt({ ...running, status: "inProgress" }, 1_000, [allowed]), 4_000);
+  // No approval held it up, another command's, a worker's, a denied one, or one answered
+  // before it asked or after it ended: its own times.
+  assert.equal(allowedAt(ran, 1_000, []), undefined);
+  assert.equal(allowedAt({ ...ran, detail: "ls" }, 1_000, [allowed]), undefined);
+  assert.equal(allowedAt(ran, 1_000, [approval(allowed.state, { taskId: "t1" })]), undefined);
+  assert.equal(allowedAt(ran, 1_000, [approval({ type: "denied", by: "user", message: null })]), undefined);
+  assert.equal(allowedAt(ran, 9_000, [allowed]), undefined);
+  assert.equal(allowedAt(ran, 1_000, [approval(allowed.state, { resolvedAtMs: 60_000 })]), undefined);
+  // Another tool's call, or a command its CLI timed itself, is timed as it was.
+  assert.equal(allowedAt({ ...ran, name: "Edit", item: "files" }, 1_000, [allowed]), undefined);
+  const timed = approval(allowed.state, { subject: { type: "cli", request: { id: "q", kind: "command", tool: "commandExecution", command: "git push", cwd: null, paths: [], reason: null, escalation: false, input: null, grant: null } } });
+  assert.equal(allowedAt(ran, 1_000, [timed]), undefined);
 });
 
 test("a web search's site operator reads after a bar", () => {

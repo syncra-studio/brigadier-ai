@@ -5,7 +5,7 @@ import { type Activity, type LeadStep, joinExchanges, thinkingLabel } from "@/ap
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
 import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
 import { went } from "@/app/conversation/activity/peerWords";
-import { deniedCall } from "@/app/conversation/activity/words";
+import { allowedAt, deniedCall } from "@/app/conversation/activity/words";
 import type { SequenceEntry as Entry } from "@/app/conversation/blocks";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { entryKey, SequenceEntry } from "@/app/conversation/SequenceEntry";
@@ -74,8 +74,15 @@ export const ActivityItems: FC<{
   // A call the user's Deny stopped reads as declined, not failed.
   const denied = (step: LeadStep) =>
     !!approvals && step.kind.type === "tool" && deniedCall(step.kind, step.atMs, requestIds, Object.values(approvals));
-  const shown = (step: LeadStep): LeadStep =>
-    denied(step) && step.kind.type === "tool" ? { ...step, kind: { ...step.kind, status: "declined" } } : step;
+  // A command the user had to allow ran from their answer, not from when it asked.
+  const ranFrom = (step: LeadStep): number | undefined =>
+    approvals && step.kind.type === "tool" ? allowedAt(step.kind, step.atMs, Object.values(approvals)) : undefined;
+  const shown = (step: LeadStep): LeadStep => {
+    if (step.kind.type !== "tool") return step;
+    const ran = ranFrom(step);
+    const timed = ran === undefined ? step : { ...step, atMs: ran };
+    return denied(step) ? { ...timed, kind: { ...step.kind, status: "declined" } } : timed;
+  };
   return (
     <>
       {activity.map((item, index) =>
