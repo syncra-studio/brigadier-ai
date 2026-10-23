@@ -52,7 +52,7 @@ async fn threads_workers_and_chats_add_and_show_their_own_ledger() {
                         return Reply::text("Recorded.");
                     }
                     let empty = brigadier(&turn, tool(Tool::Ledger, "show", json!({}))).await;
-                    assert_eq!(empty["text"], "");
+                    assert_eq!(empty["text"], "No entries yet.\n");
                     assert!(!path.exists(), "show creates no ledger");
                     let created =
                         brigadier(&turn, tool(Tool::Ledger, "add", json!({"text": ENTRY}))).await;
