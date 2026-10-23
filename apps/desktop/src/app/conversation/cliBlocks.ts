@@ -309,6 +309,18 @@ function fromSession(message: Message): { message: Message; text: string } {
   return { message: { ...message, id: header[2]!, role: "peer", text, peer: { messageId: header[2]!, from: header[1]! } }, text };
 }
 
+/**
+ * Brigadier's one message of what a session's workers did (S29), `[worker events wn-…] Worker
+ * "‹title›" (‹id›): ‹what›; … (ev-…, …)`: a quiet line per worker in plain words, without its
+ * ids, or null when the message is not one.
+ */
+export function workerNotices(text: string): string[] | null {
+  const header = /^\[worker events wn-[0-9a-f]+\] /.exec(text);
+  if (!header) return null;
+  const body = text.slice(header[0].length).replace(/ \((?:ev-[0-9a-f]+(?:, )?)+\)\s*$/, "");
+  return body.split(/; (?=Worker ")/).map((line) => line.replace(/^Worker "(.*?)" \([^)]*\): /, (_, title: string) => (title ? `Worker "${title}" ` : "A worker ")));
+}
+
 /** Whether an entry starts a turn: the user's own message in the session's thread. */
 function startsTurn(entry: FileEntry): boolean {
   return entry.event.type === "message" && entry.event.role === "user" && !entry.parent && !entry.steer;
@@ -394,16 +406,20 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const { event } = entry;
     // Brigadier's one message at a seam is its line in the turn, never a bubble of the user's;
     // sent as a turn of its own, that turn has no user message, as a successor's that carried on.
-    const own = event.type === "message" && event.role === "user" && carried.has(event.itemId);
-    if (own || (event.type === "message" && event.role === "user" && nudges.has(event.itemId))) {
+    const asked = event.type === "message" && event.role === "user" ? event : null;
+    const own = !!asked && carried.has(asked.itemId);
+    // Brigadier's message of what the workers did is its quiet lines in the turn, the same way.
+    const news = asked && workerNotices(asked.text);
+    if (asked && (own || news || nudges.has(asked.itemId))) {
       if (startsTurn(entry)) {
         if (block) settle(block, view.turns[blocks.length - 1]);
-        block = emptyBlock(event.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
+        block = emptyBlock(asked.itemId, entry.atMs ?? 0, view.turns[blocks.length]?.requests ?? []);
         blocks.push(block);
         times.push([[position, entry.atMs ?? 0]]);
       }
       if (entry.atMs !== undefined && !startsTurn(entry)) times.at(-1)?.push([position, entry.atMs]);
-      if (!own) block?.nudges.push(position);
+      if (news) news.forEach((text, nth) => block?.taskNotices.push({ position: position + nth / 1000, text }));
+      else if (!own) block?.nudges.push(position);
       return;
     }
     if (startsTurn(entry) && event.type === "message") {

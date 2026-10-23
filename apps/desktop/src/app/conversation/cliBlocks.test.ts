@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem } from "@/app/conversation/cliBlocks";
+import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
 import { blockSequence, type BoardDigest, foldsAway, foldTurns } from "@/app/conversation/blocks";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
@@ -205,6 +205,38 @@ test("a background job's end Claude took up shows the CLI's notice line before i
   const reply = sequence.findIndex((entry) => entry.kind === "text" && entry.index === 1);
   assert.ok(notice >= 0 && notice < reply, JSON.stringify(sequence));
   assert.equal(foldsAway(sequence[notice]!, 1), false);
+});
+
+test("Brigadier's message of what the workers did is a quiet line per worker in plain words, never a user's bubble, as a turn's start and in a turn", () => {
+  const news =
+    '[worker events wn-b3c2272b85e2] Worker "Fusion opus" (e7c8bc19): stopped · Brigadier restarted while it worked. Send it a message to carry on.; ' +
+    'Worker "Fusion codex" (238f8bbe): stopped · Brigadier restarted while it worked. Send it a message to carry on. (ev-4a2c75a9, ev-38ea442f)';
+  const lines = [
+    'Worker "Fusion opus" stopped · Brigadier restarted while it worked. Send it a message to carry on.',
+    'Worker "Fusion codex" stopped · Brigadier restarted while it worked. Send it a message to carry on.',
+  ];
+  const [first, second] = cliBlocks(
+    {
+      entries: [
+        user("u1", "JSON or SQLite?", 1000),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Asking both models." }, 1100),
+        user("n1", news, 5000),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "Both were cut off; I'll ask them again." }, 5100),
+        user("n2", '[worker events wn-0123456789ab] Worker "" (aa11bb22): finished · Hi. (ev-1234abcd)', 6000, { steer: true }),
+      ],
+      turns: [turn("u1", 1000, 1200, "done"), turn("n1", 5000, 6200, "done")],
+    },
+    "conv",
+  );
+  assert.equal(first?.user?.kind, "message");
+  // Its turn has no user message; its lines are the turn's own, without ids.
+  assert.equal(second?.user, null);
+  assert.deepEqual(second?.steers, []);
+  assert.deepEqual(
+    second?.taskNotices.map((notice) => notice.text),
+    [...lines, "A worker finished · Hi."],
+  );
+  assert.deepEqual(workerNotices("A message of the user's own"), null);
 });
 
 const stored = (id: string, createdAtMs: number): Message => ({
