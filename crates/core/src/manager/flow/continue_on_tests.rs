@@ -108,7 +108,7 @@ async fn asked_from_its_turn_a_claude_session_continues_on_codex_once_with_its_n
             .any(|(provider, ..)| *provider == ProviderKind::Codex)
     })
     .await;
-    flow.settled().await;
+    flow.idle().await;
 
     // Its own turn runs: refused, with how to ask for after the turn; then accepted for then.
     let answers = answers.lock().unwrap().clone();
@@ -495,6 +495,102 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
     assert!(!size.contains("SECRET-ASSISTANT-DETAIL"));
     assert!(size.contains("brigadier brain read test"));
     flow.stop().await;
+}
+
+/// A move back to Claude uses its startup window too. With no reported window it keeps
+/// the old tail; with a known one the earlier lineage detail fits, without a history read.
+#[tokio::test]
+async fn a_move_to_claude_carries_what_fits_its_reported_window() {
+    for window in [Some(100_000), None] {
+        let turns = Turns::default();
+        let script: Script = {
+            let turns = turns.clone();
+            Arc::new(move |turn: Turn| {
+                let turns = turns.clone();
+                Box::pin(async move {
+                    turns.lock().unwrap().push((
+                        turn.provider,
+                        turn.native_id.clone(),
+                        turn.input.clone(),
+                    ));
+                    if turn.input.starts_with(NUDGE_MARK) {
+                        std::fs::write(note_of(&turn.input), "Next: wait.").unwrap();
+                        return Reply {
+                            text: "Handed off.".into(),
+                            context_tokens: Some(90_000),
+                            ..Reply::default()
+                        };
+                    }
+                    let text = if turn.input.starts_with(HANDOFF_MARK) {
+                        "Carrying on.".into()
+                    } else {
+                        let detail = if turn.input == "first batch" {
+                            "CLAUDE-TARGET-OLD-DETAIL"
+                        } else {
+                            "batch"
+                        };
+                        format!("{detail} {}", "x".repeat(4_000))
+                    };
+                    Reply {
+                        text,
+                        context_tokens: Some(90_000),
+                        ..Reply::default()
+                    }
+                })
+            })
+        };
+        let flow = Flow::start(
+            "d49-claude-target",
+            Options {
+                behavior: Arc::new(FakeBehavior {
+                    session_file: true,
+                    claude_window: Some(window),
+                    ..FakeBehavior::default()
+                }),
+                ..Options::default()
+            },
+            script,
+        )
+        .await;
+        // Keep the detail only in the first CLI's native transcript, outside the 60KB tail.
+        for n in 0..24 {
+            flow.say(if n == 0 { "first batch" } else { "next batch" })
+                .await;
+            flow.idle().await;
+        }
+        for target in [ProviderKind::Codex, ProviderKind::Claude] {
+            flow.manager
+                .continue_on(&flow.conversation, target, None, false)
+                .await
+                .unwrap();
+            flow.until("a successor on the requested CLI", |_| {
+                turns
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .is_some_and(|(provider, _, input)| {
+                        *provider == target && input.starts_with(HANDOFF_MARK)
+                    })
+            })
+            .await;
+            flow.idle().await;
+        }
+        let input = turns.lock().unwrap().last().unwrap().2.clone();
+        assert_eq!(input.contains("CLAUDE-TARGET-OLD-DETAIL"), window.is_some());
+        assert!(input.contains("## Hand-off note\nNext: wait."));
+        assert!(input.contains("brigadier brain read"));
+        if window.is_some() {
+            // Half the reported 100K window, at four UTF-8 bytes per token.
+            assert!(input.len() > 60_000 && input.len() < 200_000);
+        }
+        let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
+        assert_eq!(file.seams.len(), 2);
+        let last = file.seams.last().unwrap();
+        assert_eq!(last.provider, ProviderKind::Claude);
+        assert_eq!(last.end.moved_to, Some(ProviderKind::Claude));
+        assert_eq!(last.end.hot_tokens, Some(90_000));
+        flow.stop().await;
+    }
 }
 
 /// A move asked for in a turn the daemon's restart cut off is kept in the record: after the

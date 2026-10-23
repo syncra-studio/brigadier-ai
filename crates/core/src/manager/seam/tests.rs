@@ -603,6 +603,34 @@ fn d49_tail_budget_uses_reason_hot_context_and_target_cap() {
 }
 
 #[test]
+fn a_claude_startup_window_expands_only_request_and_quota_bootstraps() {
+    let entries = transcript(80, &"x".repeat(4_000));
+    let size = boot(&entries, Some("whole note"), None);
+    for reason in [Reason::Size, Reason::Request, Reason::Quota] {
+        for target_window in [Some(100_000), None] {
+            let text = boot_tail(
+                &entries,
+                Some("whole note"),
+                None,
+                TailBudget {
+                    reason,
+                    hot_tokens: Some(90_000),
+                    target_window,
+                },
+            );
+            if reason == Reason::Size || target_window.is_none() {
+                assert_eq!(text, size);
+            } else {
+                assert!(shown(&text).len() > shown(&size).len());
+                assert!(text.len() <= 200_000 + 2_000);
+                let earlier = "## Earlier, newest first";
+                assert_eq!(size.split(earlier).next(), text.split(earlier).next());
+            }
+        }
+    }
+}
+
+#[test]
 fn expanded_tail_keeps_the_sections_first_and_whole_and_omissions_readable() {
     let entries = transcript(80, &"x".repeat(4_000));
     let size = boot(&entries, Some("whole note"), None);

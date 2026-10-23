@@ -170,7 +170,7 @@ pub trait ProviderSession: Send + Sync {
     /// The CLI's own id for the session (Claude session id, Codex thread id).
     fn native_id(&self) -> String;
 
-    /// The selected model's window, when startup read it from the CLI's own catalog.
+    /// The selected model's window, when the CLI reported it before the first turn.
     fn context_window(&self) -> Option<i64> {
         None
     }

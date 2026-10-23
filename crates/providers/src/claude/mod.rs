@@ -9,7 +9,7 @@
 //!   never cancels it, checked live on 2.1.302 with a running Bash; after an interrupt it
 //!   starts a turn of its own, so Brigadier holds other sessions' and its own messages while a
 //!   command runs, see `ConvState::held_peers`);
-//! - `initialize`, `get_usage` and `interrupt` are control requests;
+//! - `initialize`, `get_context_usage`, `get_usage` and `interrupt` are control requests;
 //! - permission prompts arrive as `can_use_tool` control requests (`--permission-prompt-tool
 //!   stdio`), which reach the user as cards.
 //!
@@ -80,6 +80,9 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const EXIT_GRACE: Duration = Duration::from_secs(3);
 /// The first version seen to run `/compact` sent as a stream-json message.
 const COMPACT_SINCE: &str = "2.1.282";
+/// `get_context_usage`'s local-only `summary` mode, per the Agent SDK 0.3.257 changelog:
+/// https://github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md#03257
+const CONTEXT_SUMMARY_SINCE: &str = "2.1.257";
 /// The only built-in tools a thread or worker goes without (STRIP-DOWN-PLAN S17): the ones that
 /// can't work inside a Brigadier tab. Scheduling, remote triggers and push notifications need the
 /// idle loop of an interactive CLI, which `-p` has none of; Claude's own question tool reaches
@@ -1286,8 +1289,9 @@ impl Provider for Claude {
                     .collect(),
                 session_files,
             ));
-            let session = Arc::new(ClaudeSession {
+            let mut session = ClaudeSession {
                 native_id: native_id.clone(),
+                context_window: None,
                 compacts: cli_version
                     .as_deref()
                     .is_some_and(|version| version_at_least(version, COMPACT_SINCE)),
@@ -1295,7 +1299,7 @@ impl Provider for Claude {
                 shared,
                 parser: parser_tx,
                 memory,
-            });
+            };
 
             let mut initialize = Map::new();
             initialize.insert("subtype".into(), "initialize".into());
@@ -1306,6 +1310,7 @@ impl Provider for Claude {
                     return Err(err);
                 }
             };
+            session.context_window = session.startup_window(cli_version.as_deref()).await;
             let model = spec.model.clone().or_else(|| {
                 answer
                     .get("models")
@@ -1332,7 +1337,10 @@ impl Provider for Claude {
                     file,
                 })
                 .await;
-            Ok(Started { session, events })
+            Ok(Started {
+                session: Arc::new(session),
+                events,
+            })
         })
     }
 
@@ -1623,6 +1631,7 @@ enum ParserCommand {
 
 pub struct ClaudeSession {
     native_id: String,
+    context_window: Option<i64>,
     /// The CLI's version takes `/compact` in stream-json.
     compacts: bool,
     process: Arc<CliProcess>,
@@ -1632,6 +1641,23 @@ pub struct ClaudeSession {
 }
 
 impl ClaudeSession {
+    /// Ask the initialized CLI before any input, so its chosen model, account and settings
+    /// determine D49's target window. Older CLIs may ignore `detail` and make token-count
+    /// API calls: never ask them, and never retry with the default (`full`) mode.
+    async fn startup_window(&self, version: Option<&str>) -> Option<i64> {
+        if !version.is_some_and(|version| version_at_least(version, CONTEXT_SUMMARY_SINCE)) {
+            return None;
+        }
+        let request = Map::from_iter([
+            ("subtype".into(), json!("get_context_usage")),
+            ("detail".into(), json!("summary")),
+        ]);
+        let answer = self.request(request, CONTROL_TIMEOUT).await.ok()?;
+        // SDK ContextUsageResponse: rawMaxTokens is the model window; maxTokens may have
+        // an auto-compaction buffer deducted. Missing or invalid means unknown, not 200K.
+        answer.get("rawMaxTokens")?.as_i64().filter(|n| *n > 0)
+    }
+
     async fn emit(&self, event: ProviderEvent) {
         self.shared.events.send(event).await;
     }
@@ -1709,6 +1735,10 @@ impl ClaudeSession {
 }
 
 impl ProviderSession for ClaudeSession {
+    fn context_window(&self) -> Option<i64> {
+        self.context_window
+    }
+
     fn native_id(&self) -> String {
         self.native_id.clone()
     }
@@ -3713,6 +3743,114 @@ for line in sys.stdin:
             }
             if memory.exists() {
                 std::fs::remove_dir_all(&memory).unwrap();
+            }
+        }
+    }
+
+    /// The real adapter reads a local control reply before any user input. A window is
+    /// never inferred from an alias, description, or a result that needs a first request.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_started_claude_reports_its_window_before_the_first_turn() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Kept;
+        impl Ledger for Kept {
+            fn record(&self, _: Artifact) -> BoxFuture<'_, Result<()>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, _: &Artifact) -> bool {
+                false
+            }
+        }
+        let dir = Temp::new();
+        let binary = dir.path().join("claude");
+        let capture = dir.path().join("requests.jsonl");
+        std::fs::write(
+            &binary,
+            r#"#!/usr/bin/env python3
+import json, os, sys
+if "--version" in sys.argv:
+    print(os.environ["VERSION"])
+    sys.exit(0)
+for line in sys.stdin:
+    message = json.loads(line)
+    with open(os.environ["CAPTURE"], "a") as f:
+        f.write(line)
+    if message.get("type") == "control_request":
+        request = message["request"]
+        answer = {"subtype":"success", "request_id":message["request_id"], "response":{}}
+        if request["subtype"] == "initialize":
+            answer["response"] = {"models":[{"value":"sonnet", "resolvedModel":"custom-route"}]}
+        elif request["subtype"] == "get_context_usage":
+            assert request["detail"] == "summary", "must not make token-count API calls"
+            if os.environ["REPLY"] == "rejected":
+                answer = {"subtype":"error", "request_id":message["request_id"], "error":"unavailable"}
+            else:
+                answer["response"] = json.loads(os.environ["REPLY"])
+        print(json.dumps({"type":"control_response", "response":answer}), flush=True)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.path().join("data")),
+        })
+        .unwrap();
+        for (version, reply, expected, queried) in [
+            (
+                "2.1.257",
+                r#"{"rawMaxTokens":200000,"maxTokens":167000}"#,
+                Some(200_000),
+                true,
+            ),
+            (
+                "2.1.309",
+                r#"{"rawMaxTokens":1000000,"maxTokens":967000}"#,
+                Some(1_000_000),
+                true,
+            ),
+            ("2.1.309", r#"{"maxTokens":200000}"#, None, true),
+            ("2.1.309", r#"{"rawMaxTokens":0}"#, None, true),
+            ("2.1.309", r#"{"rawMaxTokens":-1}"#, None, true),
+            ("2.1.309", r#"{"rawMaxTokens":"1000000"}"#, None, true),
+            ("2.1.309", "rejected", None, true),
+            ("2.1.256", r#"{"rawMaxTokens":1000000}"#, None, false),
+            ("unknown", r#"{"rawMaxTokens":1000000}"#, None, false),
+        ] {
+            std::fs::write(&capture, "").unwrap();
+            let env = Arc::new(CliEnv::from_vars([
+                ("HOME".into(), dir.path().as_os_str().to_owned()),
+                ("PATH".into(), std::env::var_os("PATH").unwrap()),
+                ("VERSION".into(), version.into()),
+                ("REPLY".into(), reply.into()),
+                ("CAPTURE".into(), capture.as_os_str().to_owned()),
+            ]));
+            env.choose(ProviderKind::Claude, Some(binary.clone()));
+            let claude = Claude::new(platform.clone(), env);
+            let started = claude
+                .start(spec(dir.path(), &[]), Arc::new(Kept))
+                .await
+                .unwrap();
+            let actual = started.session.context_window();
+            started.session.close().await;
+            assert_eq!(actual, expected, "{version}: {reply}");
+            let requests: Vec<Value> = std::fs::read_to_string(&capture)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert!(
+                requests
+                    .iter()
+                    .all(|request| request["type"] == "control_request")
+            );
+            assert_eq!(requests[0]["request"]["subtype"], "initialize");
+            assert_eq!(requests.len(), if queried { 2 } else { 1 });
+            if queried {
+                assert_eq!(
+                    requests[1]["request"],
+                    json!({"subtype":"get_context_usage", "detail":"summary"})
+                );
             }
         }
     }

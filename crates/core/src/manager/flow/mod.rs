@@ -571,6 +571,8 @@ type Removal = (ProviderKind, Option<String>, Vec<Artifact>);
 /// Per-flow knobs and observations; shared across a restart, never across tests.
 #[derive(Default)]
 pub(crate) struct FakeBehavior {
+    /// Claude's startup window; unset keeps the fake's usual 1M window.
+    pub claude_window: Option<Option<i64>>,
     pub signed_out: Mutex<Vec<ProviderKind>>,
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
@@ -1045,7 +1047,11 @@ fn input_text(input: &TurnInput) -> String {
 
 impl ProviderSession for FakeSession {
     fn context_window(&self) -> Option<i64> {
-        Some(1_000_000)
+        if self.kind == ProviderKind::Claude {
+            self.behavior.claude_window.unwrap_or(Some(1_000_000))
+        } else {
+            Some(1_000_000)
+        }
     }
 
     fn native_id(&self) -> String {
