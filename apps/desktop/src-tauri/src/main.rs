@@ -26,6 +26,7 @@ mod browser_ui;
 mod launcher;
 mod login_item;
 mod notifications;
+mod reports;
 mod shell;
 mod simulator;
 mod smoke;
@@ -816,6 +817,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            reports::get_continuity_report,
             documents::save_document,
             downloads::save_copy,
             drops::drag_shift,

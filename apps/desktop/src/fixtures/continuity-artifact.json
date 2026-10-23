@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-23T01:30:00Z",
+  "source": "abcdef1234567890",
+  "run_url": "https://github.com/syncra-studio/brigadier-ai/actions/runs/12345",
+  "baseline": true,
+  "providers": [
+    {
+      "provider": "claude",
+      "status": "complete",
+      "reason": null,
+      "arms": [
+        {
+          "block": "decisions",
+          "profile": "long",
+          "arm": "seam",
+          "status": "complete",
+          "compactions": 0,
+          "seams": 3,
+          "recall": 0.9,
+          "applied": 9,
+          "applicable": 9,
+          "planted": 10,
+          "contradictions": 0,
+          "unmarked_additions": 0,
+          "open_items": 2,
+          "task_passed": true,
+          "price_weighted_ratio": 0.94,
+          "usage": {
+            "input": 12000,
+            "cached_input": 420000,
+            "cache_write": 30000,
+            "output": 4500,
+            "cost_usd": 2.3456
+          },
+          "cold_return_cost_usd": 0.1234,
+          "cold_return_observations": 1
+        },
+        {
+          "block": "decisions",
+          "profile": "long",
+          "arm": "plain",
+          "status": "complete",
+          "compactions": 3,
+          "seams": 0,
+          "recall": 0.9,
+          "applied": 9,
+          "applicable": 9,
+          "planted": 10,
+          "contradictions": 0,
+          "unmarked_additions": 0,
+          "open_items": 2,
+          "task_passed": true,
+          "usage": {
+            "input": 12000,
+            "cached_input": 420000,
+            "cache_write": 30000,
+            "output": 4500,
+            "cost_usd": 2.49531914893617
+          },
+          "cold_return_cost_usd": 0.1234,
+          "cold_return_observations": 1
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "status": "skipped",
+      "reason": "needs the user: secrets",
+      "arms": []
+    }
+  ],
+  "weekly": {
+    "status": "complete",
+    "sampled_lineages": 1,
+    "sessions": [
+      {
+        "session_id": "real-session-42",
+        "provider": "codex",
+        "compactions": 1
+      }
+    ]
+  },
+  "regressions": []
+}

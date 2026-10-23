@@ -93,7 +93,8 @@ class Battery:
         self.result = {"started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                        "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=SRC, text=True).strip(),
                        "daemon_sha256": hashlib.sha256(Path(args.daemon).read_bytes()).hexdigest(),
-                       "model": args.model, "threshold": args.tokens, "arm": "seam",
+                       "model": args.model, "threshold": args.tokens, "arm": args.arm,
+                       "provider": args.provider,
                        "steps": self.steps,
                        "seams": self.seams, "errors": self.errors, "expected": self.expected}
 
@@ -113,8 +114,9 @@ class Battery:
 
     def start(self):
         self.data.mkdir(exist_ok=True)
-        env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH") if k in os.environ}
-        env.update(SHELL="/bin/zsh", TMPDIR="/tmp", LANG="en_US.UTF-8",
+        env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+                                               "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN") if k in os.environ}
+        env.update(SHELL=shutil.which("zsh") or "/bin/bash", TMPDIR="/tmp", LANG="en_US.UTF-8",
                    BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_SEAM_TOKENS=str(self.args.tokens))
         with (self.root / "daemon.log").open("a") as out:
             self.proc = subprocess.Popen([self.args.daemon, "--foreground", "--data-dir", str(self.data)],
@@ -139,10 +141,14 @@ class Battery:
         self.ipc.call({"method": "updateSettings", "settings": settings})
         def signed_in():
             view = self.ipc.call({"method": "getProviders"})["view"]
-            return next((p for p in view["providers"] if p["provider"] == "claude" and
+            return next((p for p in view["providers"] if p["provider"] == self.args.provider and
                          (p.get("status") or {}).get("loggedIn")), None)
         if not self.wait(signed_in, 60):
-            raise RuntimeError("Claude not installed or signed in; no credentials entered")
+            raise RuntimeError(f"{self.args.provider} not installed or signed in; no credentials entered")
+        self.fixture()
+        self.create_session()
+
+    def fixture(self):
         self.repo.mkdir()
         (self.repo / "src").mkdir()
         (self.repo / "src/exporters").mkdir()
@@ -152,11 +158,13 @@ class Battery:
         subprocess.run(["git", "-C", str(self.repo), "add", "src/storage.ts"], check=True)
         subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=continuity-battery",
                         "-c", "user.email=continuity@localhost", "commit", "-qm", "fixture"], check=True)
+
+    def create_session(self):
         self.project = self.ipc.call({"method": "addProject", "path": str(self.repo), "name": "continuity", "init": False})["project"]["id"]
         self.ipc.call({"method": "setFolderTrust", "id": self.project, "path": None, "trusted": True})
         setup = {"type": "session", "repo": str(self.repo),
                  "environment": {"type": "localCheckout", "branch": "main", "createFrom": None},
-                 "permission": "full", "orchestrator": {"provider": "claude", "model": self.args.model, "effort": "high"},
+                 "permission": "full", "orchestrator": {"provider": self.args.provider, "model": self.args.model, "effort": "high"},
                  "planMode": False}
         self.conversation = self.ipc.call({"method": "createConversation", "kind": "session",
                                            "projectId": self.project, "title": "Continuity baseline", "setup": setup})["conversation"]["id"]
@@ -225,7 +233,7 @@ class Battery:
             if kind in ("context", "limit"):
                 body = {"method": "debugInjectLimit" if kind == "limit" else "debugInjectError",
                         "target": {"type": "conversation", "conversationId": self.conversation},
-                        "provider": "claude", "afterToolCalls": 1}
+                        "provider": self.args.provider, "afterToolCalls": 1}
                 body.update({"window": "five_hour", "resetInMinutes": 1} if kind == "limit" else {"error": "contextWindow"})
                 def arm():
                     try:
@@ -255,9 +263,11 @@ class Battery:
                     for _ in range(20):
                         own.update(int(p) for p, parent, *_ in rows if int(parent) in own)
                     pids = [int(p) for p, _, command in rows if int(p) in own and native and native in command
-                            and ("claude" in command) and "--resume" not in command]
+                            and (self.args.provider in command) and "--resume" not in command]
                     if not pids:
-                        pids = [int(p) for p, _, command in rows if int(p) in own and native and native in command and "claude" in command]
+                        pids = [int(p) for p, _, command in rows if int(p) in own and native and native in command and self.args.provider in command]
+                    if self.args.provider == "codex":
+                        pids = [int(p) for p, _, command in rows if int(p) in own and "codex" in command and "app-server" in command]
                     for pid in pids:
                         os.kill(pid, signal.SIGKILL)
                     seam["killed_cli_pids"] = pids
@@ -296,14 +306,15 @@ class Battery:
                   "claim is true, and acknowledge in one sentence. Do not put this report or finding in the ledger.")
         for i in range(self.args.max_fillers):
             before = self.generations()
-            if before >= 2 and i >= 9:
+            if before >= 2 and i >= self.args.min_fillers:
                 break
             # Distinct inert text displaces the early plants from a bounded verbatim tail.
-            ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12] for j in range(1200))
+            ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12] for j in range(self.args.ballast))
             self.send(f"ballast-{i:02}", f"Ignore this inert fixture batch {i}; reply only 'batch {i} read'.\n" + ballast)
             # The seam's note is written asynchronously; allow it to finish.
-            self.wait(lambda: "handoff note written" in (self.root / "daemon.log").read_text(errors="replace") or
-                      self.generations() > before, 3)
+            if self.args.arm == "seam":
+                self.wait(lambda: "handoff note written" in (self.root / "daemon.log").read_text(errors="replace") or
+                          self.generations() > before, 3)
         self.result["size_seams_before_faults"] = self.generations()
         for kind in ("context", "crash", "restart", "limit"):
             command = (f"touch {kind}.waiting; sleep 18; printf 'wait finished\\n'" if kind in ("crash", "restart")
@@ -342,7 +353,9 @@ class Battery:
         self.result["provider_events"] = entries
         self.native_files = sorted({event["file"] for e in entries
                                     if (event := e["entry"].get("event") or {}).get("type") == "sessionStarted"
-                                    and event.get("file") and e["entry"].get("provider") == "claude"})
+                                    and event.get("file") and e["entry"].get("provider") == self.args.provider})
+        from lineages import compactions
+        self.result["compactions"] = sum(compactions(file, self.args.provider) for file in self.native_files)
         self.result["native_calls"] = native_calls(entries)
         self.result["seam_observations"] = seam_observations(self.result)
         # The seam's own record: each note and what each successor started from.
@@ -480,10 +493,10 @@ def report(result):
     events = result.get("provider_events", [])
     lookup = {e["entry"]["event"]["itemId"]: e["entry"]["event"] for e in events if probe and
               e["atMs"] >= probe["sent_ms"] and is_lookup(e["entry"].get("event") or {})}.values()
-    lines = ["# Claude continuity, seam arm — " + result["started_at"][:10], "",
+    lines = ["# Continuity battery — " + result["started_at"][:10], "",
              "Report only; no recall result gates a session or changes continuity.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
-             f"Claude `{result['model']}`, high effort; headless dev daemon; one session, several requests.",
+             f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one session, several requests.",
              f"Seam (`BRIGADIER_SEAM_TOKENS={result['threshold']}`); the bootstrap's tail budget is about 15k tokens.",
              "Mandatory sections and the minimum tail can exceed that budget; observed sizes follow below.",
              "A labelled, injected unverified worker report supplies the false claim; no real worker is spawned.",
@@ -545,7 +558,7 @@ def report(result):
         missing_cost = sum(u.get("cost_usd") is None for u in mine)
         lines.append(f"- {kind}: {len(mine)} usage rows; `{json.dumps(total, sort_keys=True)}`; {missing_cost} rows without reported dollar cost")
     lines += ["", "Limits: a short debug-threshold baseline, not the ≥400k token A/B or a nightly result. "
-              "Both-provider A/B, cold-return ratio, and weekly real-lineage samples belong to S25/L4. "
+              "Nightly A/B, observed cold-return costs, and opted-in real-lineage samples are summarized by nightly.py (S25/L4). "
               "No fewer-tokens claim is established. Later seams share this session, so recall cannot be attributed to one seam alone."]
     if rows.get("large_failure", {}).get("verdict") == "unknown":
         lines += ["The middle marker of the >250 KB failing command was not recovered. The retained command output "
@@ -562,7 +575,11 @@ def report(result):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--daemon", required=True)
-    parser.add_argument("--model", default="opus")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
+    parser.add_argument("--arm", choices=["seam", "plain"], default="seam")
+    parser.add_argument("--ballast", type=int, default=1200)
+    parser.add_argument("--min-fillers", type=int, default=9)
     parser.add_argument("--tokens", type=int, default=43750, help="the seam threshold (BRIGADIER_SEAM_TOKENS)")
     parser.add_argument("--max-fillers", type=int, default=18)
     parser.add_argument("--timeout", type=int, default=1500)
@@ -571,15 +588,23 @@ def main():
     parser.add_argument("--evidence", help="optional private JSON evidence, outside the repo")
     parser.add_argument("--scratch-prefix", default="continuity-battery", help="names the /tmp scratch root")
     args = parser.parse_args()
+    args.model = args.model or ("opus" if args.provider == "claude" else "gpt-6.1-sol")
     if not args.report:
-        args.report = str(Path(__file__).parent / "reports" / (time.strftime("%Y-%m-%d") + "-claude-seam.md"))
+        args.report = str(Path(__file__).parent / "reports" / (time.strftime("%Y-%m-%d") + f"-{args.provider}-{args.arm}.md"))
     if "fable" in args.model.lower() or args.tokens <= 0 or args.max_fillers < 9:
         parser.error("use a permitted model, positive threshold and at least nine fillers")
     if str(Path(args.daemon).resolve()).startswith("/Applications/"):
         parser.error("use a debug daemon built from this checkout")
     if args.evidence and Path(args.evidence).resolve().is_relative_to(SRC):
         parser.error("keep detailed evidence outside the repository")
-    battery = Battery(args)
+    if args.arm == "plain":
+        from plain import PlainBattery
+        battery = PlainBattery(args)
+    else:
+        battery = Battery(args)
+    def terminated(signum, frame):
+        raise TimeoutError("nightly supervisor stopped the run")
+    signal.signal(signal.SIGTERM, terminated)
     try:
         battery.run()
     except Exception as error:

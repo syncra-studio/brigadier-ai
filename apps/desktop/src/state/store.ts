@@ -34,6 +34,7 @@ export type SettingsPageId =
   | "computerUse"
   | "storage"
   | "inspector"
+  | "reports"
   | "archived"
   | "shortcuts"
   | "voice"

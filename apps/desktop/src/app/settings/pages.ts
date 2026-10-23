@@ -5,6 +5,7 @@ import { BROWSER_IMPORT_ROWS, BrowserImportPage } from "@/app/settings/BrowserIm
 import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage, computerUseAvailable } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
+import { REPORTS_ROWS, ReportsPage } from "@/app/settings/ReportsPage";
 import { GeneralPage } from "@/app/settings/GeneralPage";
 import { GENERAL_ROWS } from "@/app/settings/generalRows";
 import { PluginsPage, integrationSearchRows } from "@/app/settings/integrations/PluginsPage";
@@ -206,6 +207,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "System",
     component: StoragePage,
     rows: Object.values(STORAGE_ROWS),
+  },
+  {
+    id: "reports",
+    label: "Reports",
+    icon: Dock,
+    group: "System",
+    component: ReportsPage,
+    rows: REPORTS_ROWS,
   },
   {
     id: "inspector",

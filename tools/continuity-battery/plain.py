@@ -1,0 +1,118 @@
+"""Plain CLI transport for the existing battery's scripts and scorers.
+
+No seam, ledger instructions, compaction command or compaction threshold is installed.
+Each request resumes the same native session; each CLI compacts at its own default.
+"""
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import time
+
+import battery
+from lineages import compactions
+
+
+class PlainBattery(battery.Battery):
+    def setup(self):
+        self.fixture()
+        self.native_id = None
+        self.raw_events = []
+
+    def record(self):
+        # Plain CLI has no Brigadier record. If explicitly asked for a ledger by the recall
+        # script, it may keep one in its cwd; the decision block never asks for one.
+        return self.repo
+
+    def native_path(self):
+        if not getattr(self, "native_id", None):
+            return None
+        home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude") if self.args.provider == "claude"
+                    else os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+        root = home / ("projects" if self.args.provider == "claude" else "sessions")
+        return next(root.rglob(f"*{self.native_id}.jsonl"), None)
+
+    def generations(self):
+        path = self.native_path()
+        return compactions(path, self.args.provider) if path else 0
+
+    def fault(self, kind):
+        def record(step):
+            self.seams.append({"kind": kind, "request": step.get("request"), "skipped":
+                               "plain CLI comparison uses only its own automatic compaction"})
+        return record
+
+    def send(self, name, text, fault=None):
+        self.tick()
+        battery.log(name)
+        step = {"name": name, "sent_ms": battery.now()}
+        self.steps.append(step)
+        if self.args.provider == "claude":
+            command = ["claude", "-p", "--model", self.args.model, "--effort", "high",
+                       "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]
+            if self.native_id:
+                command += ["--resume", self.native_id]
+        else:
+            command = ["codex", "exec"] + (["resume", self.native_id] if self.native_id else [])
+            command += ["--model", self.args.model, "-c", 'model_reasoning_effort="high"',
+                        "--dangerously-bypass-approvals-and-sandbox", "--json", "-"]
+        env = dict(os.environ)
+        for key in ("DISABLE_AUTO_COMPACT", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"):
+            env.pop(key, None)
+        proc = subprocess.Popen(command, cwd=self.repo, env=env, stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        self.processes.append(proc)
+        if fault:
+            fault(step)
+        try:
+            stdout, stderr = proc.communicate(text, timeout=min(self.args.turn_timeout, max(1, self.deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            stdout, stderr = proc.communicate()
+            self.errors.append(name + ": native CLI timeout")
+        answer = []
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            self.raw_events.append(event)
+            self.native_id = event.get("session_id") or event.get("thread_id") or self.native_id
+            if event.get("type") == "assistant":
+                answer += [part["text"] for part in event.get("message", {}).get("content", []) if part.get("type") == "text"]
+            if event.get("type") == "item.completed" and event.get("item", {}).get("type") == "agent_message":
+                answer.append(event["item"]["text"])
+            if event.get("type") == "result":
+                if event.get("result"):
+                    answer = [event["result"]]
+                u = event.get("usage", {})
+                self.result.setdefault("usage", []).append({"at_ms": battery.now(), "kind": "thread",
+                    "input": u.get("input_tokens"), "cached_input": u.get("cache_read_input_tokens"),
+                    "cache_write": u.get("cache_creation_input_tokens"), "output": u.get("output_tokens"),
+                    "cost_usd": event.get("total_cost_usd")})
+            if event.get("type") == "turn.completed":
+                u = event.get("usage", {})
+                self.result.setdefault("usage", []).append({"at_ms": battery.now(), "kind": "thread",
+                    "input": max(0, u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)),
+                    "cached_input": u.get("cached_input_tokens"), "output": u.get("output_tokens"), "cost_usd": None})
+        step.update(ended_ms=battery.now(), settled=proc.returncode == 0, answer="\n".join(answer))
+        if proc.returncode:
+            self.errors.append(f"{name}: CLI exit {proc.returncode}: {stderr[-300:]}")
+        if not self.native_id:
+            raise RuntimeError("native CLI did not return a session id")
+        return step
+
+    def wait(self, fn, seconds=90):
+        # Nothing asynchronous runs between plain CLI turns.
+        return fn()
+
+    def capture(self):
+        path = self.native_path()
+        self.native_files = [str(path)] if path else []
+        self.result.update(compactions=self.generations(), native_session_id=getattr(self, "native_id", None),
+                           plain_events=getattr(self, "raw_events", []), ledger=battery.read_text(self.repo / "ledger.md"))
+
+    def cleanup(self):
+        # Reuse the battery's own process/evidence/scratch cleanup, with no daemon IPC.
+        super().cleanup()

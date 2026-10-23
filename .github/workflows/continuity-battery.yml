@@ -1,0 +1,188 @@
+name: Continuity battery
+
+# Invoked nightly even when the app build has no new commit. A hand-started battery never
+# builds, signs or publishes the app. Measurements and regressions cannot hold a session.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: continuity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  provider:
+    name: ${{ matrix.provider }} / ${{ matrix.arm }}
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [claude, codex]
+        arm: [seam, plain]
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Existing credentials only
+        id: credentials
+        env:
+          PROVIDER: ${{ matrix.provider }}
+        run: |
+          if { [ "$PROVIDER" = claude ] && { [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ -n "$ANTHROPIC_API_KEY" ]; }; } ||
+             { [ "$PROVIDER" = codex ] && [ -n "$CODEX_AUTH_JSON" ]; }; then
+            echo 'live=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'live=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::needs the user: secrets'
+          fi
+      - uses: actions/setup-node@v7
+        if: steps.credentials.outputs.live == 'true'
+        with:
+          node-version: 24
+      - name: Provider CLI
+        if: steps.credentials.outputs.live == 'true'
+        env:
+          PROVIDER: ${{ matrix.provider }}
+        run: |
+          if [ "$PROVIDER" = claude ]; then
+            npm install -g @anthropic-ai/claude-code
+          else
+            npm install -g @openai/codex
+            python3 - <<'PY'
+          import os
+          from pathlib import Path
+          home = Path(os.environ['RUNNER_TEMP']) / 'continuity-codex'
+          home.mkdir(mode=0o700)
+          auth = home / 'auth.json'
+          auth.write_text(os.environ['CODEX_AUTH_JSON'])
+          auth.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'CODEX_HOME={home}\n')
+          PY
+          fi
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.credentials.outputs.live == 'true'
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+        if: steps.credentials.outputs.live == 'true'
+        with:
+          shared-key: continuity
+      - name: Build existing headless harness
+        if: steps.credentials.outputs.live == 'true'
+        run: |
+          df -h .
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libclang-dev cmake
+          cargo build --locked -p brigadier-daemon --bin brigadierd -p brigadier-cli --bin brigadier
+      - name: Battery and decision survival
+        if: always()
+        env:
+          LIVE: ${{ steps.credentials.outputs.live }}
+          PROVIDER: ${{ matrix.provider }}
+          ARM: ${{ matrix.arm }}
+        run: |
+          args=()
+          if [ "$LIVE" = true ]; then args+=(--live); fi
+          python3 tools/continuity-battery/nightly.py provider --provider "$PROVIDER" --arm "$ARM" \
+            --output "$RUNNER_TEMP/continuity-provider-$PROVIDER-$ARM" "${args[@]}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: continuity-provider-${{ matrix.provider }}-${{ matrix.arm }}
+          path: ${{ runner.temp }}/continuity-provider-${{ matrix.provider }}-${{ matrix.arm }}
+          if-no-files-found: error
+          retention-days: 30
+
+  weekly:
+    name: Opted-in real lineages
+    if: github.ref == 'refs/heads/main'
+    # An opt-in runner can read its own real sessions. No home directory is ever scanned.
+    runs-on: ${{ fromJSON(vars.CONTINUITY_LINEAGE_RUNNER || '"ubuntu-24.04"') }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Weekly sample (Sunday, or a manual first sample)
+        env:
+          RECORDS: ${{ vars.CONTINUITY_RECORD_ROOTS }}
+          OPTED_RUNNER: ${{ vars.CONTINUITY_LINEAGE_RUNNER }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools/continuity-battery')
+          from lineages import sample
+          if datetime.datetime.now(datetime.timezone.utc).weekday() != 6 and os.environ['MANUAL'] != 'true':
+              report = {'status': 'skipped', 'reason': 'weekly sample not due'}
+          elif not os.environ['OPTED_RUNNER']:
+              report = sample([])
+          else:
+              report = sample(json.loads(os.environ['RECORDS'] or '[]'))
+          Path(os.environ['RUNNER_TEMP'], 'weekly.json').write_text(json.dumps(report, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: continuity-weekly
+          path: ${{ runner.temp }}/weekly.json
+          retention-days: 30
+
+  report:
+    name: Artifact and regression issue
+    needs: [provider, weekly]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: continuity-*
+          path: ${{ runner.temp }}/continuity-input
+      - name: Previous artifact (the first run is the baseline)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=continuity-battery&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main")] | sort_by(.id) | last | .workflow_run.id // empty')"
+          if [ -n "$run" ]; then
+            gh run download "$run" -R "$GITHUB_REPOSITORY" -n continuity-battery -D "$RUNNER_TEMP/continuity-previous"
+          fi
+      - name: Summarize measurements
+        if: always()
+        run: |
+          python3 tools/continuity-battery/nightly.py collect --input "$RUNNER_TEMP/continuity-input" \
+            --output "$RUNNER_TEMP/continuity-report" --previous "$RUNNER_TEMP/continuity-previous/summary.json"
+          cat "$RUNNER_TEMP/continuity-report/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: continuity-battery
+          path: ${{ runner.temp }}/continuity-report
+          if-no-files-found: error
+          retention-days: 90
+      - name: Open or update a regression issue (never a gate)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools/continuity-battery')
+          from nightly import issue
+          issue(json.loads(Path(os.environ['RUNNER_TEMP'], 'continuity-report/summary.json').read_text()))
+          PY

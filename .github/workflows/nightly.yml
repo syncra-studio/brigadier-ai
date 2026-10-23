@@ -38,6 +38,16 @@ env:
   BRIGADIER_BUDGET_TOLERANCE: "3"
 
 jobs:
+  continuity:
+    name: Continuity report
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/continuity-battery.yml
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    secrets: inherit
+
   gate:
     name: Anything new
     runs-on: ubuntu-24.04

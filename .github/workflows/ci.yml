@@ -76,6 +76,8 @@ jobs:
           cargo run --locked -q -p brigadier-ipc --bin gen-ts
           git diff --exit-code -- apps/desktop/src/ipc/generated
           test -z "$(git status --porcelain -- apps/desktop/src/ipc/generated)"
+      - name: Continuity report and sampler tests (no live calls)
+        run: python3 -B -m unittest discover -s tools/continuity-battery -p 'test_*.py' -v
       - run: pnpm typecheck
       - name: Lint, the style check (tokens and src/components only), tokens in step with Pen
         run: pnpm lint

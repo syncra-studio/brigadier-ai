@@ -216,6 +216,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       "Browser & Data: Browser",
       "Browser & Data: Import Browser Data",
       "System: Storage",
+      "System: Reports",
       "System: Inspector",
       "end: Archived chats",
     ]);
@@ -228,7 +229,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       { title: "Personal", pages: ["General", "Voice", "Configuration", "Keyboard shortcuts"] },
       { title: "Agents", pages: ["Providers", "Plugins", "Routing", "Git", "Computer use"] },
       { title: "Browser &amp; Data", pages: ["Browser", "Import Browser Data"] },
-      { title: "System", pages: ["Storage", "Inspector"] },
+      { title: "System", pages: ["Storage", "Reports", "Inspector"] },
       { title: null, pages: ["Archived chats"] },
     ]);
     type Result = { page: Page; row: unknown };

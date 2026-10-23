@@ -67,8 +67,84 @@ thread's own decision told and marked "I decided", and T6 recall when asked. It 
 a gate. The plain-CLI arm and Codex belong to S25 (L9). `decisions.rescore(evidence, report)` scores a
 saved run again with no model calls (it reuses the T3 judge's answer).
 
-This is a small Claude baseline for S21, not the nightly battery, both-provider A/B,
-400k-token comparison, or weekly sample of real lineages (S25/L4). Shared-session
+The original committed reports are a small Claude baseline for S21. The nightly extension
+below adds both-provider A/B, a longer comparison and opted-in real-lineage samples (S25/L4). Shared-session
 faults measure cumulative survival; they don't isolate each seam's causal effect.
 The runtime's token counts and reported dollar costs are measurements, not prices
 inferred from a model name.
+
+## Nightly reports (S25, L4/L5/L9)
+
+`nightly.yml` calls `continuity-battery.yml` every night, independently of the app's
+unchanged-commit build skip. To run only the battery (no app publication):
+
+```sh
+gh workflow run continuity-battery.yml --repo syncra-studio/brigadier-ai --ref main
+```
+
+The existing scripts now accept `--provider claude|codex` and `--arm seam|plain`.
+`plain.py` changes only the transport: the same plants, fixture, tasks and scorers go
+through `claude -p --resume` or `codex exec resume`, with automatic compaction at the
+CLI's own default. It installs no seam or standing ledger instructions. The decision
+block scores a plain CLI's own decision by its announced choice and applied separator;
+only Brigadier's arm is also checked for its ledger marker. No `/compact` is sent.
+
+The workflow runs both arms for short recall (nine filler turns), long recall (90),
+and decision survival (90), with matching filler schedules within each pair.
+The long schedule supplies over 400k inert input tokens at ordinary tokenization;
+the metered usage and observed compactions/seams are reported rather than assumed.
+The three-context decision bar is unqualified if fewer than three native compactions
+or seams happened before checks. A plain CLI with a very large window may not reach
+three automatic compactions in this bounded run. CLI defaults are never lowered to
+make that number happen. Claude uses `opus`, the rubric judge `sonnet`; Codex uses
+`gpt-6.1-sol`; all use high effort.
+
+Only existing repository secrets are consumed: `CLAUDE_CODE_OAUTH_TOKEN` or
+`ANTHROPIC_API_KEY` for Claude, `CODEX_AUTH_JSON` for the existing Codex account's
+native `auth.json`. No sign-in or credential creation runs. An absent provider's
+secret skips its live arms and writes **needs the user: secrets** into the report.
+An expired credential produces an incomplete observation, not a pass. Raw evidence
+stays in runner scratch and is deleted; uploaded Markdown contains only the synthetic
+battery's data, and `summary.json` contains the numbers. Never upload real transcripts.
+
+Every run uploads a consolidated **continuity-battery** artifact (`summary.json`,
+`report.md`, per-arm Markdown), retained for 90 days, plus provider artifacts for 30.
+Settings › Reports reads the newest retained artifact on main via the user's existing
+`gh` installation/sign-in, and Refresh reads it again. Missing artifacts, read failures,
+and skipped live arms stay visible. This checkout had no existing Reports component;
+the page reuses `SettingsPage`, `SettingsSection`, `SettingsCard` and `SettingsRow`.
+
+The summary reports native compactions, recall, task checks, all metered token kinds,
+reported dollar costs and price-weighted A/B ratios when both arms have reported prices,
+decision application/brief/open-item scores, and observed cold-return cost. Codex does
+not report dollar prices, so its dollar cost and price-weighted ratio are explicitly
+unavailable; no price is guessed from a model name. A cold return is a later uncached
+request, excluding the initial cold start; if none is observed, its cost is unavailable.
+Cold-return costs never trigger issues. The first artifact is the baseline; matching
+completed observations compare to the preceding artifact. Recall/task/decision/token
+bar misses, lost recall/application from that baseline, and native Claude compactions
+open or update a **Continuity battery regression** issue. Issue-post failure is reported
+by Actions but cannot gate sessions or app builds. Missing data is never a pass.
+
+No real-lineage sampler existed. `lineages.py` is the smallest read-only sampler: it
+reads only opted-in `record/lineage.json` files and their listed native files, draws up
+to 20 lineages deterministically per ISO week, and lists each native session id and
+compaction count. It counts Claude `compact_boundary` and Codex `compacted` records,
+not the duplicate notifications. It neither scans home directories nor copies content.
+A self-hosted runner that already has access to the opted-in records can run the Sunday
+sample by setting repository variables (no credentials):
+
+- `CONTINUITY_LINEAGE_RUNNER`: JSON runner labels, e.g. `["self-hosted", "continuity"]`.
+- `CONTINUITY_RECORD_ROOTS`: a JSON array of absolute `record/` folders explicitly opted in.
+
+Without those variables, the weekly artifact records the missing opt-in. Manual runs
+also sample once; other weekdays report that the sample is not due. Run locally with
+`python3 tools/continuity-battery/lineages.py --record /absolute/session/record --output /tmp/weekly.json`.
+
+Offline verification (no model calls):
+
+```sh
+python3 -B -m unittest discover -s tools/continuity-battery -p 'test_*.py' -v
+pnpm --filter @brigadier/desktop test src/app/settings/ReportsPageRender.test.ts src/app/settings/pages.test.ts
+actionlint .github/workflows/continuity-battery.yml .github/workflows/nightly.yml
+```

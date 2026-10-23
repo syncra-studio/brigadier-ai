@@ -135,7 +135,7 @@ class Decisions(battery.Battery):
         self.result["plant_replies"] = replies
         for i in range(self.args.max_fillers):
             before = self.generations()
-            if before >= 2:
+            if before >= (3 if self.args.arm == "plain" else 2) and i >= self.args.min_fillers:
                 break
             ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12]
                                for j in range(self.args.ballast))
@@ -222,14 +222,17 @@ def raised(answer):
             "open_promise": bool(re.search(r"README", answer, re.I))}
 
 
-def judge(brief, sep, model):
+def judge(brief, sep, model, provider="claude"):
     """T3: a model reads the fixed rubric. A report, not proof (plan §8 item 16)."""
     if not brief.strip():
         return {"error": "no brief.md"}
     prompt = RUBRIC.format(separator={",": "a comma", ";": "a semicolon"}.get(sep, "whatever the thread chose"),
                            brief=brief)
     try:
-        out = subprocess.run(["claude", "-p", "--model", model, "--output-format", "text"], input=prompt,
+        command = (["claude", "-p", "--model", model, "--effort", "high", "--output-format", "text"]
+                   if provider == "claude" else ["codex", "exec", "--model", model,
+                   "-c", 'model_reasoning_effort="high"', "--skip-git-repo-check", "-"])
+        out = subprocess.run(command, input=prompt,
                              capture_output=True, text=True, timeout=300, cwd="/tmp")
     except (OSError, subprocess.TimeoutExpired) as error:
         return {"error": str(error)}
@@ -243,7 +246,7 @@ def score(result, judge_model):
     t2 = principle(result.get("t2", ""))
     t4 = raised(result.get("t4", ""))
     sep = own["told"]
-    t3 = result.get("t3") or judge(result.get("brief", ""), sep, judge_model)
+    t3 = result.get("t3") or judge(result.get("brief", ""), sep, judge_model, result.get("provider", "claude"))
     result["t3"] = t3
     recall = battery.parse_answer(result.get("t6", ""))
     rows = {}
@@ -257,7 +260,7 @@ def score(result, judge_model):
             "principle": ("T2", t2["pass"]),
             "decision_padding": ("T1", t1.get("padding")),
             "decision_dates": ("T1", t1.get("dates")),
-            "own_decision": ("T1+T5", bool(sep) and t1.get("separator_used") == sep and own["marked"]),
+            "own_decision": ("T1+T5", bool(sep) and t1.get("separator_used") == sep and (own["marked"] or result.get("arm") == "plain")),
             "open_question": ("T4", t4["open_question"]),
             "open_promise": ("T4", t4["open_promise"]),
             "worker_claim": ("—", None),
@@ -280,11 +283,11 @@ def cell(text):
 def report(result, judge_model):
     rows = result.get("rows") or score(result, judge_model)
     applies = [r for r in rows.values() if r["unprompted"] is not None]
-    lines = ["# Claude decision survival (S22b) — " + result["started_at"][:10], "",
+    lines = ["# Decision survival (S22b) — " + result["started_at"][:10], "",
              "Report only; no result gates a session (plan §5). The baseline of `research/CONTINUITY.md` §3.7.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
-             f"Claude `{result['model']}`, high effort; headless dev daemon; one session; debug seam "
-             f"`BRIGADIER_SEAM_TOKENS={result['threshold']}`. T3 judge: `claude -p --model {judge_model}`.",
+             f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one session; debug seam "
+             f"`BRIGADIER_SEAM_TOKENS={result['threshold']}` (seam arm only). T3 judge: `{result.get('provider', 'claude')}/{judge_model}`.",
              "Ten items were planted as a user gives them, with no word about the ledger; nothing was restated "
              "before the checks.", ""]
     if rows:
@@ -322,7 +325,7 @@ def report(result, judge_model):
               f"\"Took over\" entries: {sum('Took over' in line for line in entries)}; closed: "
               f"{sum(bool(re.search(r'· Closed L', line)) for line in entries)}; archive bytes: {len(result.get('ledger_archive', '').encode())}.",
               "- `brigadier ledger` commands the thread ran: " + (", ".join(f"`{cell(c)[:80]}`" for c in result.get("ledger_commands", [])) or "none"),
-              f"- Seams: {result.get('size_seams_before_faults', 0)} by size, then the forced death "
+              f"- Context transitions: {result.get('size_seams_before_faults', 0)} by size or native compaction; forced death only in the seam arm "
               f"(seams closed before the checks: {result.get('seams_before_checks', 'unavailable')}).", "",
               "| Seam | Death | Note bytes | Hand-off bytes | Open items in it | Rules and decisions in it |",
               "|---|---|---:|---:|---:|---:|"]
@@ -337,8 +340,7 @@ def report(result, judge_model):
     total = {k: sum(u.get(k) or 0 for u in usage) for k in ("input", "cached_input", "cache_write", "output", "cost_usd")}
     total["cost_usd"] = round(total["cost_usd"], 6)
     lines += ["", f"Metered use: {len(usage)} rows; `{json.dumps(total, sort_keys=True)}` (the T3 judge's call is not metered here).",
-              "", "Limits: one short debug-threshold run on one provider. The plain-CLI arm that compacts on its own, "
-              "Codex, and the nightly run belong to S25/L9. T3 is a model reading a rubric: a report, not proof. "
+              "", "Limits: one short debug-threshold run on one provider. The nightly summary compares both providers with their plain-CLI arms (S25/L9). T3 is a model reading a rubric: a report, not proof. "
               "T1's JSDoc and T2's answers are read by regular expressions; the evidence keeps the raw text.",
               "", "Run problems: " + ("; ".join(result["errors"]) or "none"),
               "Cleanup: " + ("; ".join(map(str, result.get("cleanup", []))) or "own session, project, daemon and scratch root removed"), ""]
@@ -357,8 +359,11 @@ def rescore(evidence, report_path, judge_model):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--daemon", required=True)
-    parser.add_argument("--model", default="opus")
-    parser.add_argument("--judge-model", default="sonnet")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
+    parser.add_argument("--arm", choices=["seam", "plain"], default="seam")
+    parser.add_argument("--min-fillers", type=int, default=0)
+    parser.add_argument("--judge-model", default=None)
     parser.add_argument("--tokens", type=int, default=60000, help="the debug seam threshold (BRIGADIER_SEAM_TOKENS)")
     parser.add_argument("--max-fillers", type=int, default=24)
     parser.add_argument("--ballast", type=int, default=2000, help="inert words per filler")
@@ -368,16 +373,27 @@ def main():
     parser.add_argument("--evidence", help="optional private JSON evidence, outside the repo")
     parser.add_argument("--scratch-prefix", default="continuity-decisions", help="names the /tmp scratch root")
     args = parser.parse_args()
+    args.model = args.model or ("opus" if args.provider == "claude" else "gpt-6.1-sol")
+    args.judge_model = args.judge_model or ("sonnet" if args.provider == "claude" else args.model)
     if not args.report:
-        args.report = str(Path(__file__).parent / "reports" / (time.strftime("%Y-%m-%d") + "-claude-decisions.md"))
+        args.report = str(Path(__file__).parent / "reports" / (time.strftime("%Y-%m-%d") + f"-{args.provider}-{args.arm}-decisions.md"))
     if "fable" in (args.model + args.judge_model).lower() or args.tokens <= 0:
         parser.error("use permitted models and a positive threshold")
     if str(Path(args.daemon).resolve()).startswith("/Applications/"):
         parser.error("use a debug daemon built from this checkout")
     if args.evidence and Path(args.evidence).resolve().is_relative_to(battery.SRC):
         parser.error("keep detailed evidence outside the repository")
-    run = Decisions(args)
+    if args.arm == "plain":
+        from plain import PlainBattery
+        class PlainDecisions(Decisions, PlainBattery):
+            pass
+        run = PlainDecisions(args)
+    else:
+        run = Decisions(args)
     run.result["block"] = "decisions"
+    def terminated(signum, frame):
+        raise TimeoutError("nightly supervisor stopped the run")
+    battery.signal.signal(battery.signal.SIGTERM, terminated)
     try:
         run.run()
     except Exception as error:
