@@ -16,8 +16,8 @@ import { checkFolder } from "@/state/addProject";
 import { findProjects, finishOnboarding } from "@/state/onboarding";
 
 /**
- * The projects to start with, found in the agents' own session history, all ticked to begin
- * with: three cards to a row (fewer in a narrow window), and only the cards scroll. One button
+ * The projects to start with, found in the agents' own session history, none ticked to begin
+ * with (the history holds every folder an agent ever ran in): three cards to a row (fewer in a narrow window), and only the cards scroll. One button
  * ticks the rest or clears them all; Add folder… adds one more, ticked. Adding them finishes the
  * setup and opens the first; with none ticked the setup finishes without projects.
  */
@@ -39,7 +39,6 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
       .then((found) => {
         if (!live) return;
         setCandidates(found);
-        setSelected(new Set(found.filter((candidate) => candidate.projectId === null).map((candidate) => candidate.path)));
       })
       .catch((cause: unknown) => {
         if (!live) return;

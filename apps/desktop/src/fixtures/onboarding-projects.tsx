@@ -81,7 +81,7 @@ function Fixture() {
       const card = document.querySelector('[role="checkbox"][aria-label="billing"]');
       if (card) await fixtureClick(card);
       await wait(100);
-      const unticked = state();
+      const ticked = state();
       // The toggle's place, which must not move as it switches.
       const at = toggle().getBoundingClientRect().right;
       await fixtureClick(toggle());
@@ -96,7 +96,7 @@ function Fixture() {
       await wait(300);
       const enter = { billing: document.querySelector('[role="checkbox"][aria-label="billing"]')?.getAttribute("aria-checked") };
       setResult(
-        JSON.stringify({ first, header, afterAdd, unticked, all, none, enter, asked: calls.filter((method) => method !== "findProjects") }),
+        JSON.stringify({ first, header, afterAdd, ticked, all, none, enter, asked: calls.filter((method) => method !== "findProjects") }),
       );
     })();
   }, []);
