@@ -266,13 +266,14 @@ pub(crate) fn sync_session(brain: &Brain, session: &RecordSession) -> Result<()>
                 let position = position as i64;
                 if let Some(saved) = saved
                     && let Some(saved_stamp) = file_stamp(Path::new(&saved))
-                    && brain.record_stamp(&saved).map_err(error)?.as_deref()
+                    && let key = saved_key(&saved, &session.key)
+                    && brain.record_stamp(&key).map_err(error)?.as_deref()
                         != Some(saved_stamp.as_str())
                     && let Some(whole) = saved_text(&saved, &session.blobs)
                 {
                     brain
                         .sync_records(
-                            file(RecordSource::ToolOutput, Path::new(&saved), saved_stamp),
+                            file(RecordSource::ToolOutput, Path::new(&key), saved_stamp),
                             vec![RecordEntry {
                                 position,
                                 role: "output".into(),
@@ -296,12 +297,14 @@ pub(crate) fn sync_session(brain: &Brain, session: &RecordSession) -> Result<()>
                 .map_err(error)?;
         }
     }
+    // The archive before the ledger: an entry that moved there takes the hash its ledger row
+    // took of the file it cites before that row goes.
     let mut notes: Vec<(RecordSource, PathBuf)> = vec![
-        (RecordSource::Ledger, session.record.join(LEDGER_FILE)),
         (
             RecordSource::LedgerArchive,
             session.record.join(LEDGER_ARCHIVE_FILE),
         ),
+        (RecordSource::Ledger, session.record.join(LEDGER_FILE)),
     ];
     if let Ok(dir) = std::fs::read_dir(session.record.join(HANDOFF_DIR)) {
         let mut found: Vec<PathBuf> = dir
@@ -330,8 +333,27 @@ pub(crate) fn sync_session(brain: &Brain, session: &RecordSession) -> Result<()>
             )
             .map_err(error)?;
     }
+    // A ledger, archive or hand-off note that is gone (deleted, renamed) leaves nothing behind.
+    for (path, source) in brain.record_paths(&session.key).map_err(error)? {
+        let note = matches!(
+            source,
+            RecordSource::Ledger | RecordSource::LedgerArchive | RecordSource::Handoff
+        );
+        if note && !Path::new(&path).is_file() {
+            brain.forget_record_file(&path).map_err(error)?;
+        }
+    }
     Ok(())
 }
+
+/// Where a session's saved whole output is indexed: the file and the session, since a blob the
+/// Bash hook kept is one file for every session whose output it holds.
+fn saved_key(saved: &str, session: &str) -> String {
+    format!("{saved}{SAVED_BY}{session}")
+}
+
+/// Joins a saved output's file and session in its record key ([`saved_key`]).
+const SAVED_BY: &str = " · saved by ";
 
 /// A file's size and change time, as a stamp; none when it is missing.
 fn file_stamp(path: &Path) -> Option<String> {
@@ -623,7 +645,9 @@ fn hits_text(hits: &[RecordHit], command: &str) -> String {
                 transcript.get_or_insert((hit.session.clone(), hit.position));
                 text.push_str(&format!(
                     "[{} · #{} · whole output, saved at {}{date}]\n",
-                    hit.session, hit.position, hit.path
+                    hit.session,
+                    hit.position,
+                    hit.path.split(SAVED_BY).next().unwrap_or(&hit.path)
                 ));
             }
             RecordSource::Ledger | RecordSource::LedgerArchive | RecordSource::Handoff => {

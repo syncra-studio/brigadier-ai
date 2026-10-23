@@ -184,6 +184,19 @@ fn plant(flow: &Flow) -> (std::path::PathBuf, String, String) {
         &worker.join("record").join("lineage.json"),
         &lineage(&[("codex", "w1", &rollout)]),
     );
+    // A second worker whose output the Bash hook kept in the same blob: one file, two sessions.
+    let other = cli.join("projects").join("-other").join("g3.jsonl");
+    let mut text = claude_file("Count again.", "Counted.", None);
+    text.push_str(&hook_trimmed_bash("t4", &digest("out-0000cafe", &blob)));
+    write(&other, &text);
+    write(
+        &dir.root()
+            .join("workers")
+            .join("2-bcde2345")
+            .join("record")
+            .join("lineage.json"),
+        &lineage(&[("claude", "g3", &other)]),
+    );
     let checkout = flow
         .manager
         .recorded_workspace(&flow.conversation)
@@ -355,5 +368,41 @@ async fn the_brain_finds_what_the_records_hold_and_reads_them_back_verbatim() {
     let again = ask(json!([["ledger", "brain", "search", {"query": LEDGER}]])).await;
     let ledger = text(&again, "ledger");
     assert!(ledger.contains("STALE: "), "{ledger}");
+    // The entry moves to the archive: it keeps the hash it first took, so it still reads stale.
+    let record = flow.manager.session_dir(&flow.conversation).record();
+    write(
+        &record.join("ledger.md"),
+        "- Rule from the user: \"no tabs\" (message 1, project)\n",
+    );
+    write(
+        &record.join("ledger-archive.md"),
+        &format!(
+            "- Decision: the {ARCHIVE} cache stays (I decided)\n\
+             - Learned from reading: src/cited.rs:2 the {LEDGER} helper returns early\n"
+        ),
+    );
+    // A hand-off note that is gone is no longer found.
+    std::fs::remove_file(record.join("handoff").join("1.md")).unwrap();
+    let later = ask(json!([
+        ["moved", "brain", "search", {"query": LEDGER}],
+        ["gone", "brain", "search", {"query": HANDOFF}],
+        ["shared", "brain", "search", {"query": KEPT, "session": format!("{short}/2-bcde2345")}],
+    ]))
+    .await;
+    let moved = text(&later, "moved");
+    assert!(
+        moved.contains("· ledger-archive ") && moved.contains("STALE: "),
+        "{moved}"
+    );
+    assert!(!moved.contains("· ledger "), "{moved}");
+    assert_eq!(text(&later, "gone"), "Nothing in the records matches.");
+    // The blob both sessions' outputs are kept in is found for each.
+    let shared = text(&later, "shared");
+    assert!(
+        shared.contains(&format!("[{short}/2-bcde2345 · #"))
+            && shared.contains("whole output, saved at")
+            && !shared.contains(" · saved by "),
+        "{shared}"
+    );
     flow.stop().await;
 }

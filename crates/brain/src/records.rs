@@ -140,6 +140,27 @@ pub(crate) fn forget(tx: &Transaction, conversation_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The files indexed for `session` itself, each once.
+pub(crate) fn paths(conn: &Connection, session: &str) -> Result<Vec<(String, RecordSource)>> {
+    let rows = conn
+        .prepare_cached("SELECT DISTINCT path, source FROM records WHERE session = ?1")?
+        .query_map([session], |row| {
+            let source: String = row.get(1)?;
+            Ok((row.get(0)?, RecordSource::parse(&source)))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Drops everything indexed from one file.
+pub(crate) fn forget_file(tx: &Transaction, path: &str) -> Result<()> {
+    tx.prepare_cached("DELETE FROM records WHERE path = ?1")?
+        .execute([path])?;
+    tx.prepare_cached("DELETE FROM record_files WHERE path = ?1")?
+        .execute([path])?;
+    Ok(())
+}
+
 /// The entries that best match `query`, best first (then the most recent): every session's,
 /// or only `session`'s and its workers' (`<session>/…`).
 pub(crate) fn search(

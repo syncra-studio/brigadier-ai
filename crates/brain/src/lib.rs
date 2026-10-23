@@ -1300,6 +1300,17 @@ impl Brain {
         let conversation = conversation_id.to_owned();
         self.write(move |tx, _| records::forget(tx, &conversation))
     }
+
+    /// The files indexed for session `session` (not its workers'), with what each is.
+    pub fn record_paths(&self, session: &str) -> Result<Vec<(String, RecordSource)>> {
+        self.read(|conn| records::paths(conn, session))
+    }
+
+    /// Drops what was indexed from record file `path`, once it is gone.
+    pub fn forget_record_file(&self, path: &str) -> Result<()> {
+        let path = path.to_owned();
+        self.write(move |tx, _| records::forget_file(tx, &path))
+    }
 }
 
 fn filter_limit(filter: &NodeFilter) -> usize {
