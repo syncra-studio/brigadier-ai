@@ -439,7 +439,7 @@ mod tests {
         // entries per small task under "the moment something is settled").
         for words in [
             "Write one entry per thing settled (a rule or decision, an open item opened or closed) when it happens, batched with your other tool calls.",
-            "Never a progress log; a task that settled nothing needs no entry.",
+            "Never a progress log: not the request restated, a passing check or your own change; a task that settled nothing needs no entry.",
         ] {
             assert!(STANDING_INSTRUCTIONS.contains(words), "{words}");
         }
