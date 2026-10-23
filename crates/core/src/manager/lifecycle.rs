@@ -852,16 +852,21 @@ impl SessionManager {
             }
             closing.join_all().await;
         }
-        // Also stop detached commands in the session folder, including retained worktrees.
-        let folder_owner = super::session_dir::folder_owner(id);
-        let process = Artifact::ProcessesIn {
-            dir: self.session_dir(id).root().to_string_lossy().into_owned(),
-        };
-        let ledger = self.runtime.ledger();
-        if let Err(err) = ledger.record(&folder_owner, process).await {
-            tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
+        // A tab chat's folder, and what runs in it, is its own owner's and goes with it: the
+        // shared records never name it.
+        let tab_chat = conversation.tab_chat.is_some();
+        if !tab_chat {
+            // Also stop detached commands in the session folder, including retained worktrees.
+            let folder_owner = super::session_dir::folder_owner(id);
+            let process = Artifact::ProcessesIn {
+                dir: self.session_dir(id).root().to_string_lossy().into_owned(),
+            };
+            let ledger = self.runtime.ledger();
+            if let Err(err) = ledger.record(&folder_owner, process).await {
+                tracing::warn!(conversation = %id, error = %err, "could not record the session's process cleanup");
+            }
+            let _ = ledger.stop_processes(&folder_owner).await;
         }
-        let _ = ledger.stop_processes(&folder_owner).await;
         let _lane = self.closing.lane.lock().await;
         // What an older Brigadier kept of landed workers for their reviews goes too.
         let mut held = Vec::new();
@@ -929,7 +934,9 @@ impl SessionManager {
                     ?leftovers);
             }
         }
-        self.remove_transient_parts(id).await;
+        if !tab_chat {
+            self.remove_transient_parts(id).await;
+        }
         // Its CLI session files stay (S8): Restore resumes the same CLI session.
         self.expire_stale_cards(id).await;
         self.set_run(id, crate::work::RunState::Idle, None).await;
