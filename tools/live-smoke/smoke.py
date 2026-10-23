@@ -10,7 +10,7 @@ workers, turns metered) and leaves nothing behind.
   2  a thread's background job outlives its turn and its CLI: the result still reaches the user
   3  a Claude thread and a Codex thread each run a Codex worker through `brigadier start`, wait
      for its turn's end, and close it: the worker shows only in its session, never the sidebar
-  4  Stop during `brigadier wait`: the worker's turn end starts no turn of the stopped thread
+  4  Stop during `brigadier wait`: the worker's later turn end reaches the stopped thread once
   5  every request that finished ends on a real answer, not a narration line
 
 usage: smoke.py --daemon <brigadierd> [--claude-model sonnet] [--codex-model gpt-6-luna]
@@ -540,19 +540,24 @@ class Smoke:
             return
         self.ipc.call({"method": "interrupt", "conversationId": self.convs["C1"]})
         stopped_at = now_ms()
-        # The worker's turn ends well after the Stop: nothing of it may start a turn of the thread.
+        # The worker's turn ends well after the Stop: the thread hears it once, in the safety
+        # net's one message (S29), and no wait of the stopped turn takes it.
         time.sleep(70)
         v = self.view("C1")
         req = next((r for r in v["requests"] if r["id"] == rid), None)
         check(sc, "the request is stopped", req and state_of(req) == "stopped", f"state {state_of(req) if req else 'none'}")
         waits = [st["status"] for st in tool_steps(v) if st.get("requestId") == rid and self.runs("C1", st, "brigadier wait")]
         check(sc, "the wait ended with the Stop", waits and "inProgress" not in waits, f"waits: {waits}")
+        try:
+            entries = self.ipc.call({"method": "threadView", "conversationId": self.convs["C1"]})["view"]["entries"]
+        except RuntimeError:
+            entries = []
+        nets = [e for e in entries if e["event"].get("type") == "message" and e["event"].get("role") == "user"
+                and "[worker events wn-" in (e["event"].get("text") or "")]
+        check(sc, "the worker's end reaches the thread once", len(nets) == 1 and late in nets[0]["event"]["text"],
+              f"{len(nets)} net messages" + (f": {nets[0]['event']['text'][:200]!r}" if nets else ""))
         n = turns(self.data, self.convs["C1"], stopped_at + 1000, now_ms())
-        after = [m for m in messages(v) if m["role"] == "assistant" and m["createdAtMs"] > stopped_at + 1000]
-        check(sc, "no turn starts for the worker's end", n == 0 and not after, f"{n} turns metered, {len(after)} answers after it")
-        new = [r for r in v["requests"] if r["startedAtMs"] > stopped_at]
-        check(sc, "no request starts after the Stop", not new, f"{len(new)} new")
-
+        check(sc, "one turn starts for it", n == 1, f"{n} turns metered after the Stop")
     # -- scenario 5: every finished request ends on a real answer --
 
     def scenario_answers(self):

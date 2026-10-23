@@ -51,9 +51,9 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
    and never in the sidebar's catalog; close stopped it ("Closed by its session."); the answer
    carries the worker's code.
 4. **Stop during a wait.** C1 starts a Codex worker that sleeps 40 s before it answers, runs
-   `brigadier wait`, and is stopped while the wait runs. The request is stopped, the wait ended
-   with it, and when the worker's turn ends later no turn, answer or request of C1 starts for it:
-   nothing is pushed into a thread.
+   `brigadier wait`, and is stopped while the wait runs. The request is stopped and the wait ended
+   with it; when the worker's turn ends later, the thread hears it once, in the safety net's one
+   message (`[worker events …]`, S29) carrying the worker's code, and one turn starts for it.
 5. **Final answers.** Every request family (a request and those steered into it) that ended
    done ends on an assistant message that carries one of its codes: never a narration line,
    empty, or `[quiet]`. Stopped requests are checked in 4 instead.
