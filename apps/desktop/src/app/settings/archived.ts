@@ -1,7 +1,7 @@
 import type { Conversation, Project } from "@/ipc/generated";
 
 /*
- * The Archived chats page without the screen: which archived conversations show for a search,
+ * The Archived page without the screen: which archived conversations show for a search,
  * a kind, a project and an order, in what groups, and what its menus offer.
  */
 

@@ -1,5 +1,5 @@
 /**
- * The session tab's ⋯ "Chat actions" (issue 213): "New session" for a session in a project,
+ * The session tab's ⋯ "Session actions" (issue 213): "New session" for a session in a project,
  * "Remove worktree…" only for a session with a worktree of its own, and its dialog's confirm
  * sends `closeWorkspace`. Driven with the browser's real clicks; IPC is mocked and
  * records the calls, no daemon.
@@ -79,7 +79,7 @@ async function until(what: string, check: () => boolean, ms = 5000) {
 const seen: Record<string, unknown> = {};
 /** The row's ⋯ button, named by its screen-reader words. */
 const dots = (id: string) =>
-  [...(document.querySelector(`[data-fixture="${id}"]`)?.querySelectorAll("button") ?? [])].find((button) => button.textContent?.trim() === "Chat actions");
+  [...(document.querySelector(`[data-fixture="${id}"]`)?.querySelectorAll("button") ?? [])].find((button) => ["Chat actions", "Session actions"].includes(button.textContent?.trim() ?? ""));
 const items = () => [...document.querySelectorAll("[role=menu] [role=menuitem]")];
 async function open(id: string) {
   seen.step = `opening ${id}'s menu`;

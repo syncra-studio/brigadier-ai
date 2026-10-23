@@ -50,7 +50,7 @@ function TrustRow({ projectId, folder }: { projectId: string; folder: string }) 
           <label htmlFor={`${id}-trusted`} className="text-foreground text-label leading-4.25 font-medium">
             Trust this folder
           </label>
-          <p className="text-muted-foreground text-xs leading-4.25">Agents run commands here without asking first.</p>
+          <p className="text-muted-foreground text-xs leading-4.25">Agents work here, asking as your permission level says.</p>
         </div>
         <Switch
           id={`${id}-trusted`}

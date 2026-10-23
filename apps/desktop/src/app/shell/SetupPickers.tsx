@@ -86,7 +86,7 @@ export function openPermissionsHelp(): void {
 }
 
 /**
- * The permission pill and menu, opening upward: "How should Brigadier's actions be approved?"
+ * The permission pill and menu, opening upward: "How should the agent's actions be approved?"
  * with "Learn more", each level with its icon and a one-line summary, a check on the one in
  * use, Full access in orange and confirmed before it turns on. In a narrow composer the pill
  * keeps only its icon. In a folder the user doesn't trust it shows Ask, the only
@@ -147,7 +147,7 @@ export function PermissionPicker({
           className="max-w-(--radix-dropdown-menu-content-available-width) p-1.5"
         >
           <div className="flex items-baseline justify-between gap-6 px-2 pt-1 pb-1.5 text-sm">
-            <p className="text-muted-foreground">How should Brigadier’s actions be approved?</p>
+            <p className="text-muted-foreground">How should the agent’s actions be approved?</p>
             <button
               type="button"
               className="text-muted-foreground hover:text-foreground shrink-0 underline underline-offset-2"

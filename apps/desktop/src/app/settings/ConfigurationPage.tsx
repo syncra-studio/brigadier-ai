@@ -43,7 +43,7 @@ const levelRow = (level: PermissionLevel) => ({
 export const CONFIGURATION_ROWS = {
   sessionModel: {
     label: "Model for sessions",
-    description: "Choose the model that leads new sessions, their orchestrator",
+    description: "Choose the model new sessions start with",
   },
   chatModel: { label: "Model for chats", description: "Choose the model new chats start with" },
   permission: {

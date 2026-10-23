@@ -201,7 +201,7 @@ async function closeAndReopen() {
   const tabStatus = chatTabSlot?.querySelector('[data-slot="status-spinner"]')?.parentElement;
   seen.chatTabTip = chatTab?.getAttribute("title");
   seen.chatTabMark = chatTabSlot?.querySelector('[data-slot="status-spinner"]') ? "spinner" : null;
-  const chatTabActions = [...(chatTabSlot?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Chat actions");
+  const chatTabActions = [...(chatTabSlot?.querySelectorAll("button") ?? [])].find((button) => ["Chat actions", "Session actions"].includes(button.textContent ?? ""));
   seen.chatTabActions = chatTabActions ? getComputedStyle(chatTabActions).visibility : null;
   seen.chatTabStatusShare = tabStatus && chatTabSlot ? Math.round((tabStatus.getBoundingClientRect().width / chatTabSlot.clientWidth) * 100) : null;
   // An idle session's tab closes quietly: nothing still runs to reopen.

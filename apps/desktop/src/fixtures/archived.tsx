@@ -1,4 +1,4 @@
-/** Settings → Archived chats over a seeded store, with restore and delete faked through the IPC mock. */
+/** Settings → Archived over a seeded store, with restore and delete faked through the IPC mock. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

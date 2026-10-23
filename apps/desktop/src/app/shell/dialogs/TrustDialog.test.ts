@@ -16,7 +16,7 @@ test("the trust question names the folder, its own name apart, and offers Don't 
     );
     assert.match(html, />Trust this folder\?</);
     assert.match(html, /<span[^>]*>\/code\/<\/span><span[^>]*>p<\/span>/);
-    assert.match(html, /Agents can edit and run files here without asking, and the folder(&#x27;|')s own settings can run code\./);
+    assert.match(html, /Agents can edit files and run commands here, asking as your permission level says, and the folder(&#x27;|')s own settings can run code\./);
     const buttons = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
     assert.deepEqual(buttons, ["Don&#x27;t trust", "Trust folder"]);
   } finally {

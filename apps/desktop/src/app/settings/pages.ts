@@ -227,7 +227,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   },
   {
     id: "archived",
-    label: "Archived chats",
+    label: "Archived",
     icon: Archive,
     group: "end",
     component: ArchivedPage,

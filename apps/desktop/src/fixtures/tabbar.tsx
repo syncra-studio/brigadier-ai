@@ -95,7 +95,7 @@ function Fixture() {
       // Alone, the chat is still a tab: its ⋯ inside it, "+" right after it.
       seen.plain = bar().hasAttribute("data-plain");
       seen.aloneLabels = labels();
-      seen.aloneChatActions = [...tabEl("chat").querySelectorAll("button")].some((button) => button.textContent === "Chat actions");
+      seen.aloneChatActions = [...tabEl("chat").querySelectorAll("button")].some((button) => ["Chat actions", "Session actions"].includes(button.textContent ?? ""));
       seen.aloneControls = controls();
       seen.alonePlusAfterChat = Math.round(box(newTab())!.left - box(tabEl("chat"))!.right);
       newTab().click();
@@ -128,7 +128,7 @@ function Fixture() {
       // The tabs fill the bar: the rule shows.
       seen.dividerWhenFull = !bar().querySelector("[data-bar-divider]")!.hasAttribute("data-hidden");
       // Chat is in back here: its ⋯ still shows.
-      seen.chatActions = getComputedStyle([...bar().querySelectorAll('[role="tablist"] button')].find((button) => button.textContent === "Chat actions")!).opacity;
+      seen.chatActions = getComputedStyle([...bar().querySelectorAll('[role="tablist"] button')].find((button) => ["Chat actions", "Session actions"].includes(button.textContent ?? ""))!).opacity;
       seen.clamped = widths().every((width) => width >= 89 && width <= 241);
       // The scroller fills the list beside Chat, whatever its tabs' own widths would add up to.
       const scroller = tabEl(first!.id).parentElement!.parentElement!;

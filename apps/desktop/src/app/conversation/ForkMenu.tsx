@@ -27,7 +27,7 @@ export const FORK_PLACES: readonly { place: ForkPlace; title: string; detail: st
 ];
 
 /**
- * "Fork chat from here" under an answer. A session asks where the fork works (its checkout
+ * "Fork session from here" ("Fork chat from here" in a Chat) under an answer. A session asks where the fork works (its checkout
  * or a new worktree, from the commit current at this answer); a Chat, which works nowhere,
  * forks at once.
  */
@@ -41,7 +41,7 @@ export const ForkMenu: FC<{ conversationId: string; kind: ConversationKind; mess
     action.run(() => forkConversation(conversationId, messageId, place));
   const button = (
     <TooltipIconButton
-      tooltip="Fork chat from here"
+      tooltip={kind === "chat" ? "Fork chat from here" : "Fork session from here"}
       disabled={action.busy}
       aria-busy={action.busy || undefined}
       onClick={kind === "chat" ? () => fork("workspace") : undefined}
@@ -81,7 +81,7 @@ export const ForkPlaces: FC<{ side: "top" | "bottom"; onPick: (place: ForkPlace)
 }) => (
   <DropdownMenuContent side={side} align="start" className="w-sm p-2">
     <DropdownMenuLabel className="text-foreground px-2 pt-1 pb-2 font-sans text-base font-semibold tracking-normal normal-case">
-      Fork chat from here
+      Fork session from here
     </DropdownMenuLabel>
     {FORK_PLACES.map(({ place, title, detail }) => (
       <DropdownMenuItem key={place} className="items-start gap-3 py-2" onSelect={() => onPick(place)}>

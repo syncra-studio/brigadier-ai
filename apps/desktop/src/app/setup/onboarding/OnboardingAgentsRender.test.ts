@@ -41,7 +41,7 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
       { name: "Codex", line: "Pro plan", action: "Connected" },
       { name: "Claude Code", line: "Max plan", action: "Connected" },
     ],
-    subtitle: "Claude Code and Codex are ready. Connect any others you use, or start right away.",
+    subtitle: "Claude Code and Codex are ready.",
     count: "2 of 2 connected",
     continue: true,
   });

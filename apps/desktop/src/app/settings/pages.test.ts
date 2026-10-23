@@ -41,8 +41,8 @@ test("search finds every merged setting on Configuration, and no Recent activity
     const { searchSettings } = await server.ssrLoadModule("/src/app/settings/pages.ts");
     type Result = { page: { id: string }; row: { label: string; target?: string } | null };
     const found = (query: string): Result[] => searchSettings(query);
+    // "Orchestrator" is no word of the app's any more (#550).
     for (const query of [
-      "Orchestrator",
       "Chat model",
       "Model for sessions",
       "Show the Full access notice",
@@ -188,9 +188,9 @@ test("search finds every Browser row; import finds Import Browser Data", async (
   }
 });
 
-// The navigation: Personal, Agents, Browser & Data and System, then Archived chats on its own,
+// The navigation: Personal, Agents, Browser & Data and System, then Archived on its own,
 // set apart without a title. Searching a page's name, old or new, finds it in its new place.
-test("Settings lists its pages in their groups, Archived chats last and untitled", async () => {
+test("Settings lists its pages in their groups, Archived last and untitled", async () => {
   const globals = globalThis as Record<string, unknown>;
   const saved = { document: globals.document, getComputedStyle: globals.getComputedStyle };
   globals.document = { documentElement: {} };
@@ -218,7 +218,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       "System: Storage",
       "System: Reports",
       "System: Inspector",
-      "end: Archived chats",
+      "end: Archived",
     ]);
     const markup = ReactDOMServer.renderToStaticMarkup(React.createElement(SettingsNav));
     const sections = [...markup.matchAll(/<section[^>]*>([\s\S]*?)<\/section>/g)].map((match) => ({
@@ -230,7 +230,7 @@ test("Settings lists its pages in their groups, Archived chats last and untitled
       { title: "Agents", pages: ["Providers", "Plugins", "Routing", "Git", "Computer use"] },
       { title: "Browser &amp; Data", pages: ["Browser", "Import Browser Data"] },
       { title: "System", pages: ["Storage", "Reports", "Inspector"] },
-      { title: null, pages: ["Archived chats"] },
+      { title: null, pages: ["Archived"] },
     ]);
     type Result = { page: Page; row: unknown };
     for (const label of ["MCP servers", "Skills"]) {

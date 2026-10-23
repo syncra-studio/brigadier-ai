@@ -33,7 +33,7 @@ export const STORAGE_ROWS = {
     description: "What each project's agents keep. Open one to see what's in it or clean it up.",
   },
   archived: {
-    label: "Archived chats",
+    label: "Archived",
     description: "Restore or delete archived sessions and chats",
   },
   uninstall: {
@@ -144,7 +144,7 @@ function freeUpUnused(ids: string[]): void {
  * Settings › Storage, drawn to the user's design: what Brigadier uses on this computer, Free up
  * space (its review, removing and done right in the card), each project's disk use (opened
  * with a cleanup for just that project, or all of them with search, sort and the projects not
- * in use), Archived chats and Uninstall.
+ * in use), Archived and Uninstall.
  */
 export function StoragePage() {
   const { report, checkedAtMs, scanning, scanError, freeUp, cleanScan, unused } = useStorage();

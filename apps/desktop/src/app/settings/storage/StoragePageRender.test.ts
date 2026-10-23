@@ -12,7 +12,7 @@ test("Storage reviews, frees up and shows each project, in the design's words", 
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.equal(seen.error, undefined);
   assert.equal(seen.title, "Storage");
-  assert.deepEqual(seen.sections, ["This computer", "Free up space", "Disk use by project", "Archived chats", "Uninstall"]);
+  assert.deepEqual(seen.sections, ["This computer", "Free up space", "Disk use by project", "Archived", "Uninstall"]);
   assert.deepEqual(seen.legend, [
     "Work folders0 B",
     "Conversations5.1 MB",

@@ -38,7 +38,7 @@ export const GENERAL_ROWS = {
   },
   hibernate: {
     label: "Hibernate after",
-    description: "An idle chat pauses to free memory and picks up where it left off",
+    description: "An idle session or chat pauses to free memory and picks up where it left off",
   },
   openAtLogin: {
     label: "Open at login",

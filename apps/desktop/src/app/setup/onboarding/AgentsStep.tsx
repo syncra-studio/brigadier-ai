@@ -74,7 +74,7 @@ export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onConti
     ? `Looking for the agents on this ${mac ? "Mac" : "computer"}…`
     : ready.length === 0
       ? "Connect at least one agent to continue."
-      : `${listNames(ready.map((agent) => PROVIDER_LABELS[agent.provider]))} ${ready.length === 1 ? "is" : "are"} ready. Connect any others you use, or start right away.`;
+      : `${listNames(ready.map((agent) => PROVIDER_LABELS[agent.provider]))} ${ready.length === 1 ? "is" : "are"} ready.${ready.length < agents.length ? " Connect any others you use, or start right away." : ""}`;
 
   return (
     <div className="onboarding-step flex min-h-0 flex-1 flex-col">

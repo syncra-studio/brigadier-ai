@@ -38,7 +38,7 @@ test("Configuration shows its defaults in one card and explains the choices in i
   const dump = await renderFixtureLive(t, "configuration.html?drive=1", "configuration-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&"));
   assert.deepEqual(seen.firstCard, [
-    { setting: "Model for sessions", helper: "Choose the model that leads new sessions, their orchestrator" },
+    { setting: "Model for sessions", helper: "Choose the model new sessions start with" },
     { setting: "Model for chats", helper: "Choose the model new chats start with" },
     { setting: "Default permission level", helper: "Choose how much new sessions may do without asking" },
   ]);

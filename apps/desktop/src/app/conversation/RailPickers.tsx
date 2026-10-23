@@ -141,7 +141,7 @@ export function ProjectCombobox({
               icon={<Folder />}
               label="Project"
               title={
-                project ? "Change the project for this chat" : "Select a project to run your chat in"
+                project ? "Change the project for this session" : "Choose a project to start a session in"
               }
             >
               {project ? project.name : "Choose project"}
@@ -186,7 +186,7 @@ export function ProjectCombobox({
             ))}
           </div>
           {shown.length === 0 && !typedPath && (
-            <p className="text-muted-foreground px-2 py-1.5 text-sm">No projects found</p>
+            <p className="text-muted-foreground px-2 py-1.5 text-sm">{sorted.length === 0 ? "No projects yet" : "No projects match"}</p>
           )}
           <div className="border-foreground/10 mt-1 border-t pt-1">
             <button

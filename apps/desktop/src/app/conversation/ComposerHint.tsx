@@ -32,7 +32,7 @@ export function ComposerHint({ target }: { target: ComposerTarget }) {
       {dirty &&
         (local
           ? "The session works in your checkout, uncommitted changes and all."
-          : "Every tab starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout.")}
+          : "The session starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout.")}
     </p>
   );
 }

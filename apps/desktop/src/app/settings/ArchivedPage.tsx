@@ -76,7 +76,7 @@ export function ArchivedPage() {
 
   const filtered = narrowed(effective);
   return (
-    <SettingsPage title="Archived chats">
+    <SettingsPage title="Archived">
       {/* The toolbar stays in view over the list; the groups follow it. */}
       <div className="flex flex-col">
         {archived.length > 0 && (

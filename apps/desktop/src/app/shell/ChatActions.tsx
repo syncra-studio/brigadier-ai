@@ -81,7 +81,7 @@ async function copy(text: string, done: string) {
 }
 
 /**
- * The header's ⋯ "Chat actions": Rename ⌥⌘R, Pin ⌥⌘P, Archive ⇧⌘A; a session's New session (in
+ * The header's ⋯ "Session actions" ("Chat actions" in a Chat): Rename ⌥⌘R, Pin ⌥⌘P, Archive ⇧⌘A; a session's New session (in
  * its project) and, with a worktree of its own, Remove worktree…; Copy › (working directory,
  * Markdown); Fork ›; Open in › (a session's working directory). Share, side chats, scheduled
  * tasks and new windows need what Brigadier doesn't have, so they are not offered.
@@ -139,7 +139,7 @@ export const ChatActions: FC<{
         <DropdownMenuTrigger asChild>
           <TooltipIconButton
             look={compact ? "ghost" : "toolbar"}
-            tooltip="Chat actions"
+            tooltip={conversation.kind === "chat" ? "Chat actions" : "Session actions"}
             size={compact ? "icon-xs" : "icon-md"}
             className={className}
           >

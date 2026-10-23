@@ -216,7 +216,7 @@ export function TrustForm({ project, folder }: { project: Project; folder: strin
           <FolderPath folder={folder} />
         </DialogHeader>
         <DialogDescription>
-          Agents can edit and run files here without asking, and the folder's own settings can run code.
+          Agents can edit files and run commands here, asking as your permission level says, and the folder's own settings can run code.
         </DialogDescription>
         <ErrorLine error={action.error} className="leading-4.25" />
       </div>

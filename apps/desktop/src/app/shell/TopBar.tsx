@@ -112,7 +112,7 @@ export function ThreadTitle({ project, title, session, archived, onRename }: {
         <span className="truncate font-medium">{title}</span>
       )}
       {archived && (
-        <Badge variant="outline" className="ms-1" title="Archived: restore it from Settings → Archived chats to continue.">
+        <Badge variant="outline" className="ms-1" title="Archived: restore it from Settings → Archived to continue.">
           Archived
         </Badge>
       )}
