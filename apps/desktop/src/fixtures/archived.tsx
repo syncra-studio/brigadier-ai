@@ -147,6 +147,13 @@ function Fixture() {
   useEffect(() => {
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
+    if (params.has("empty")) {
+      void new Promise((resolve) => setTimeout(resolve, 300)).then(() => {
+        seen.emptyState = status();
+        setResult(JSON.stringify(seen));
+      });
+      return;
+    }
     const steps: (() => void | "menu")[] = [
       () => {
         seen.first = groups();

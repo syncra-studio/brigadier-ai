@@ -54,3 +54,12 @@ test("archived chats search, filter, sort, pick and delete", { timeout: 60000 },
   assert.match(String(seen.closing), /^Delete 3 conversations\?/);
   assert.deepEqual(seen.calls, ["restore s1,s2", "delete s4"]);
 });
+
+// Nothing archived yet: the empty line names what the page holds, sessions and chats, not just
+// chats (#583).
+test("archived chats, nothing archived yet, says what the page holds", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(
+    await renderFixturePage(t, "archived.html?empty=1&drive=1", "archived-result", 12000),
+  ) as Record<string, unknown>;
+  assert.equal(seen.emptyState, "No archived sessions or chats");
+});

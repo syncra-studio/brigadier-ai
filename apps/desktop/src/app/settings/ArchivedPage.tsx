@@ -121,7 +121,7 @@ export function ArchivedPage() {
         )}
 
         {shown.length === 0 && (
-          <EmptyState variant="centered" title={archived.length === 0 ? "No archived chats" : "No archived chats match"} />
+          <EmptyState variant="centered" title={archived.length === 0 ? "No archived sessions or chats" : "No archived chats match"} />
         )}
 
         <div className="flex flex-col gap-10 pt-5">
