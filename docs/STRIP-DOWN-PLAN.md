@@ -81,6 +81,8 @@ choice per worker, never the user's own sessions.
 - the user's messages;
 - results of things it started itself, which the CLI already delivers;
 - one message per seam: "write your hand-off" (G12);
+- its workers' events: through the `brigadier wait` it keeps running, else one batched message once its turn
+  ended and no `wait` runs (S29, Q9);
 - a message another session chose to send it, when the user asked for it or it was truly needed (S30) (user,
   2026-10-23: "Sessions should be able to message eachother").
 
@@ -1407,6 +1409,10 @@ the how is proposed unless tagged. Steps on disjoint files carry ∥.
     end and a daemon restart.
   - A flow test: Archive removes `tmp/`.
 - **Closes:** #532. ∥ S28–S30, S32–S36.
+- **As built (verifier, 10-23):** the CLI process layer's reaping goes for a session's and a Chat's CLI too
+  (`SessionSpec::keeps_detached`): when its CLI ends, only the CLI's own process group ends with it; nothing
+  it left is tracked, recorded for the crash sweep or swept from its folder. Workers, side chats and tab chats
+  keep "nothing survives". Archive and Delete end what runs in the session folder.
 
 **S32. Settings › Routing comes back as the rules editor (w95 item 14).** Opus.
 (user, 2026-10-23: "user should've been able to apply his rules there"; D22: "routing becomes advice not a
