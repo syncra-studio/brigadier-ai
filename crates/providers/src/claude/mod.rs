@@ -671,14 +671,6 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         // refuse).
         "crossSessionInbound": "refuse",
         "permissions": permissions,
-        // A repository's `AGENTS.md` files load next to its `CLAUDE.md` files (by default
-        // Claude reads them only where there is no `CLAUDE.md`), nested ones included once
-        // Claude reads a file in their directory.
-        "pluginConfigs": {
-            "agents-md@builtin": {
-                "options": { "instructionFiles": "claude-md-and-agents-md" },
-            },
-        },
     });
     // Claude's own memory follows the user's setting (STRIP-DOWN-PLAN S19), except where nobody's
     // memory should grow: a lean worker (G23), a side chat, which leaves nothing, and Brigadier's
@@ -805,7 +797,13 @@ fn brigadier_socket(spec: &SessionSpec) -> Option<String> {
         .ancestors()
         .find_map(|dir| {
             let rest = socket.strip_prefix(dir).ok()?;
-            Some(dir.canonicalize().ok()?.join(rest))
+            let real = dir.canonicalize().ok()?;
+            // Joining an empty rest would end the path in a separator.
+            Some(if rest.as_os_str().is_empty() {
+                real
+            } else {
+                real.join(rest)
+            })
         })
         .unwrap_or(socket);
     Some(real.display().to_string())
@@ -2442,6 +2440,15 @@ for line in sys.stdin:
         assert!(!data.exists());
         assert_eq!(
             settings(&spec, &SubAgents::Any, false)["sandbox"],
+            json!({ "network": { "allowUnixSockets": [socket.display().to_string()] } })
+        );
+        // The same path once the socket is there, with no separator after it.
+        std::fs::create_dir_all(data.join("run")).unwrap();
+        std::fs::write(data.join("run/brigadierd.sock"), "").unwrap();
+        let there = settings(&spec, &SubAgents::Any, false)["sandbox"].clone();
+        std::fs::remove_dir_all(&data).unwrap();
+        assert_eq!(
+            there,
             json!({ "network": { "allowUnixSockets": [socket.display().to_string()] } })
         );
     }
