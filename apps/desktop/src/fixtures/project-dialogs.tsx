@@ -5,14 +5,21 @@
  * failure).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { AppSidebar } from "@/app/shell/AppSidebar";
+import { SidebarPanel, SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/shell/dialogs/RemoveProjectDialog";
 import type { Project, ProjectRemoval, RemovalBranch, Request } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { useApp } from "@/state/store";
 
+const drive = new URLSearchParams(location.search).has("drive");
+const calls: Request[] = [];
 const show = new URLSearchParams(location.search).get("show") ?? "settings";
 const MB = 1024 * 1024;
 const folder = "/Users/you/code/website";
@@ -24,7 +31,7 @@ const project: Project = {
   prefs: { permission: null, orchestrator: null, environment: null, secretFiles: [".env.local", ".env.development.local"], branchPrefix: null },
   trust: [{ path: folder, trusted: true }],
 } as Project;
-useApp.setState((state) => ({ catalogLoaded: true, settings: { ...state.settings, onboarded: true }, projects: { p1: project } }));
+useApp.setState((state) => ({ catalogLoaded: true, settings: { ...state.settings, onboarded: true }, projects: drive ? Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`p${i + 1}`, { ...project, id: `p${i + 1}`, name: `Project ${i + 1}`, createdAtMs: 8 - i }])) : { p1: project } }));
 
 const branch = (name: string, merged: boolean): RemovalBranch => ({
   repo: folder,
@@ -58,10 +65,12 @@ const removal: ProjectRemoval = {
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  calls.push(req);
   switch (req.method) {
     case "previewRemoveProject":
-      return show === "remove-loading" ? new Promise(() => {}) : { method: req.method, removal };
+      return show === "remove-loading" ? new Promise(() => {}) : { method: req.method, removal: drive ? { ...removal, projectId: req.id, name: useApp.getState().projects[req.id]!.name } : removal };
     case "removeProject":
+      if (drive) return { method: req.method, report: { keptBranches: [], brainTrashedBytes: 0, failures: [] } };
       return {
         method: req.method,
         report: {
@@ -77,6 +86,11 @@ mockIPC((command, payload) => {
 void revealApp();
 
 function Page() {
+  const [result, setResult] = useState("");
+  useEffect(() => {
+    if (drive) void exerciseRemoval().then((seen) => setResult(JSON.stringify(seen))).catch((error: unknown) => setResult(JSON.stringify({ error: String(error) })));
+  }, []);
+  if (drive) return <TooltipProvider><SidebarProvider keepOpen><SidebarPanel><AppSidebar /></SidebarPanel><main /></SidebarProvider>{result && <pre id="remove-project-result">{result}</pre>}</TooltipProvider>;
   const settings = show.startsWith("settings");
   return (
     <>
@@ -94,3 +108,37 @@ function pressRemove() {
   else setTimeout(pressRemove, 50);
 }
 if (show === "removed") pressRemove();
+
+
+const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 120));
+const button = (label: string) => {
+  const found = [...document.querySelectorAll<HTMLElement>("button, [role=menuitem]")].find((item) => item.getAttribute("aria-label") === label || item.textContent?.trim() === label);
+  if (!found) throw new Error(`No button: ${label}`);
+  return found;
+};
+async function exerciseRemoval() {
+  await pause();
+  await fixtureClick(button("Actions for Project 1")); await pause();
+  const row = button("Remove project…").getBoundingClientRect();
+  const press = () => fixtureInput({ type: "click", x: row.x + row.width / 2, y: row.y + row.height / 2 });
+  await press(); await pause();
+  const dialog = document.querySelector('[role=dialog]');
+  const seen: Record<string, unknown> = {
+    title: dialog?.querySelector('h2')?.textContent,
+    choices: dialog?.textContent,
+    beforeConfirm: calls.filter((req) => req.method === "removeProject"),
+    remaining: Object.keys(useApp.getState().projects).length,
+  };
+  // Repeated clicks where the menu item was, and Escape: no removal can precede confirmation.
+  for (let i = 0; i < 7; i++) { await press(); await pause(); }
+  await fixtureInput({ type: "key", key: "Escape" }); await pause();
+  seen.cancelled = { removals: calls.filter((req) => req.method === "removeProject"), remaining: Object.keys(useApp.getState().projects).length };
+  await fixtureClick(button("Actions for Project 1")); await pause();
+  await fixtureClick(button("Remove project…")); await pause();
+  await fixtureClick(document.querySelector('[role=checkbox]')!); await pause();
+  await fixtureClick(button("Remove")); await pause();
+  for (let i = 0; i < 7; i++) { await press(); await fixtureInput({ type: "key", key: "Escape" }); await pause(); }
+  seen.removals = calls.filter((req) => req.method === "removeProject");
+  seen.remaining = Object.keys(useApp.getState().projects);
+  return seen;
+}
