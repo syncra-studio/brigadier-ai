@@ -500,7 +500,12 @@ fn append(record: &Path, text: &str, stamp: &Stamp) -> Result<String> {
 /// `ledger show`: everything verbatim, or with `--open` and `--rules` only those, whole.
 pub(crate) fn show_entries(record: &Path, open: bool, rules: bool) -> Result<String> {
     if !open && !rules {
-        return read(&record.join(LEDGER_FILE));
+        let text = read(&record.join(LEDGER_FILE))?;
+        return Ok(if text.trim().is_empty() {
+            "No entries yet.\n".to_owned()
+        } else {
+            text
+        });
     }
     let ledger = Ledger::read(record)?;
     let mut out = String::new();

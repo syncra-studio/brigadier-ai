@@ -396,6 +396,30 @@ pub fn ask(output: &AskOutput) -> String {
     format!("{}\n", output.answer.trim_end())
 }
 
+/// A usage window id as people say it ("five_hour" -> "5-hour").
+fn window_word(id: &str) -> std::borrow::Cow<'_, str> {
+    match id {
+        "five_hour" => "5-hour".into(),
+        "seven_day" => "weekly".into(),
+        "seven_day_fable" => "weekly (Fable)".into(),
+        "primary" => "primary".into(),
+        "secondary" => "secondary".into(),
+        other => other.into(),
+    }
+}
+
+/// An epoch-ms instant as a local date and time ("2026-10-23 09:40"), or `unknown`.
+fn local_time(at_ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(at_ms).map_or_else(
+        |_| "unknown".into(),
+        |at| {
+            at.to_zoned(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d %H:%M")
+                .to_string()
+        },
+    )
+}
+
 /// A compact advice view. `--json` carries every row when the terminal summary is abbreviated.
 pub fn models(output: &crate::models::ModelsOutput) -> String {
     let mut lines = vec!["Models and usage (advice; only your rules restrict starts)".to_owned()];
@@ -455,11 +479,14 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             .map(|w| {
                 format!(
                     "{} {}% reset {}{}{}",
-                    w.window,
+                    window_word(&w.window),
                     w.used_percent,
-                    w.resets_at_ms
-                        .map_or_else(|| "unknown".into(), |at| at.to_string()),
-                    if w.pooled { " pooled" } else { "" },
+                    w.resets_at_ms.map_or_else(|| "unknown".into(), local_time),
+                    if w.pooled {
+                        " shared with other models"
+                    } else {
+                        ""
+                    },
                     w.runway_ms.map_or_else(String::new, |ms| format!(
                         " runway {}m{}",
                         ms / 60_000,
@@ -521,4 +548,48 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
         lines.push("More rows: brigadier models --json".into());
     }
     lines.join("\n") + "\n"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Account, ModelsOutput, Usage};
+    use crate::protocol::Agent;
+
+    #[test]
+    fn models_reads_window_ids_as_words_and_times_as_times_not_epoch_ms() {
+        let output = ModelsOutput {
+            models: vec![],
+            agents: vec![],
+            switch_providers: false,
+            accounts: vec![Account {
+                id: "own".into(),
+                name: "own".into(),
+                agent: Agent::Claude,
+                current: true,
+                you: true,
+                logged_in: true,
+                age_s: Some(40),
+                fit: "ok".into(),
+                usage: vec![Usage {
+                    window: "five_hour".into(),
+                    used_percent: 8.0,
+                    resets_at_ms: Some(1_792_783_200_000),
+                    model: None,
+                    bucket: None,
+                    pooled: true,
+                    runway_ms: None,
+                    estimate_rough: false,
+                }],
+                place: Some(1),
+                why: "last".into(),
+            }],
+            guidance: vec![],
+            rules: vec![],
+        };
+        let text = models(&output);
+        assert!(!text.contains("five_hour"), "{text}");
+        assert!(!text.contains("1792783200000"), "{text}");
+        assert!(text.contains("5-hour"), "{text}");
+    }
 }

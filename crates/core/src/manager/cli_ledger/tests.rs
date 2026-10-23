@@ -110,6 +110,15 @@ fn close_appends_and_rewrites_nothing() {
 }
 
 #[test]
+fn show_says_the_ledger_is_empty_instead_of_printing_nothing() {
+    let record = Record::new();
+    assert_eq!(
+        show_entries(record.path(), false, false).unwrap(),
+        "No entries yet.\n"
+    );
+}
+
+#[test]
 fn show_open_leaves_out_closed_items_and_rules_leaves_out_superseded_ones() {
     let record = Record::new();
     record.write(

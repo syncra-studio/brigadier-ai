@@ -485,8 +485,12 @@ pub const COMMANDS: &[Command] = &[
         details: "`add <text…>` appends one Markdown list entry, keeping the existing list \
                   marker, stamped `L<n> · <MM-DD HH:MM> · gen <g> ·`, and prints its id. Ids \
                   count up and are never reused, `ledger-archive.md` included. With no text, \
-                  or `-`, reads standard input. Give the entry's kind and source as the \
-                  standing instructions say. `close <id> \"<how>\"` appends a closing entry; \
+                  or `-`, reads standard input. Give the entry's kind and source (which \
+                  message, command or file): `Rule from the user: \"…\" (message n)`, \
+                  `Decision: …` or `I decided: …`, `Open: a promise or a question` (close it \
+                  by id when it's done), or `Ruled out: …` / a failed check / an exact \
+                  identifier / what you learned from reading (file:line). \
+                  `close <id> \"<how>\"` appends a closing entry; \
                   nothing is rewritten. `show` prints the ledger verbatim; `--open` only the \
                   open items not closed, `--rules` only the rules and decisions still standing \
                   (the archive's too). `check <file>` lists the rule and decision ids the file \
