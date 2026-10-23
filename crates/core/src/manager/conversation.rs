@@ -858,7 +858,7 @@ impl ConvLive {
 
     /// Takes the CLI out of the state without waiting for its end, as a close still under way
     /// leaves it while the next CLI starts.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) async fn detach_cli(&self) -> Option<Arc<Cli>> {
         self.state.lock().await.cli.take()
     }
