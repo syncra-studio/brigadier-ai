@@ -27,6 +27,10 @@
 > the user's Q8 on workers' permission prompts (§8, item 14; S13).
 > Amended again with G23: research goes to lean workers (`brigadier start --lean`, S13), and the skill guides
 > asking once, adversarial reviews and adversarial consultation (S15); §9.1 adds a lean-research bar.
+> Amended again on 10-23 with `research/CONTINUITY.md`: decisions survive hand-offs (S22b, §6, §9.5 L8–L9).
+> From this amendment on, a plan line that comes from a user decision cites it (a G/Q id, or a ledger id), and a
+> line the writer adds says "proposed". Older text is not re-tagged. The known drifts are in the run's audit
+> (`workers/w95/report.md`, run `20261022-0805-take-over-5-sessions`) and wait on the user (§9.6).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -163,6 +167,9 @@ restores the start snapshot. A worker's card shows its own +/− against the par
 **Long sessions (G12).** The CLI never compacts.
 - **Ledger.** The thread keeps `record/ledger.md` as it works. A standing instruction asks for it; nothing
   enforces it (Q3).
+  - `brigadier ledger add` gives each entry an id and the time. Rules and decisions quote the user. Open items
+    (promises, questions waiting on the user) are one kind, closed by id. At every seam they travel first and
+    whole (S22b, `research/CONTINUITY.md`).
 - **Nudge.** Past 200k tokens of hot context, Brigadier queues one mid-turn nudge, Delegator style. 200k is an
   env default, not a cap (Q1, Q2). The thread finishes the step it is on, at a boundary it chooses, then
   updates the ledger and writes a hand-off note. The hand-off instructions travel in that nudge, not in the
@@ -1075,6 +1082,7 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - the note;
   - a verbatim tail of about 15k tokens;
   - the successor lines of §6's seam text.
+  - S22b then changes this order and the seam text (`research/CONTINUITY.md`); S22 lands with the text above.
 - **Edge cases:**
   - A user message during the note turn waits up to a minute, then goes to the successor, exactly once.
   - Death without a note (limit, crash, prompt too long) → the successor starts from the ledger and tail with
@@ -1096,6 +1104,49 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     without a note, and a restart between note and successor.
   - The battery is run against it, and its report goes into the run's notes.
 
+**S22b. Decisions survive the seam (`research/CONTINUITY.md`).** Opus. After S22; it may land with S23.
+Proposed (10-23): the user asked for a fix to forgotten decisions; the details below are the research's design,
+not the user's decisions. Why: on 10-22/23, 33 decisions and instructions were lost or changed between the
+user and the work. Most were not forgotten at a hand-off. They lost who decided them, lost their defining
+sentence in a summary, or waited with no moment to raise them (CONTINUITY §1).
+- **Scope:**
+  - `brigadier ledger add` writes `L<n> · <MM-DD HH:MM> · gen <g> ·` before the text. Ids count up per ledger
+    and are never reused. The model never types the time.
+  - `brigadier ledger close <id> "<how>"` appends a closing entry. Nothing is rewritten.
+  - `brigadier ledger show --open` lists open items that aren't closed; `--rules` lists rules and decisions.
+    With no flag it shows everything, as today.
+  - `brigadier ledger check <file>` lists the rule and decision ids the file never cites, the ids it cites that
+    are closed or superseded, and the ledger's entries with no id. Text out, `--json` too. It judges nothing
+    and refuses nothing; the thread reads the list and decides.
+  - **Bootstrap order** (replaces S22's list): the map; open items, rules and decisions, verbatim and whole,
+    never cut for budget; the rest of the ledger, newest first, within the budget, with the read command for
+    what it left out; the note; **every user message of the lineage, verbatim**, within about 8k tokens (the
+    first and the latest always; the read command for the rest); then L2's latest exchange and tail. The user's
+    own messages catch a rule the thread never wrote down: a 2026 compaction study kept over 90% of user
+    constraints by reading only the user's turns (CONTINUITY §2).
+  - The §6 standing text and seam text as amended on 10-23.
+  - **The `/brigade` skill** gains four lines:
+    - a worker's brief carries the rules that bear on its job, verbatim, with their ids;
+    - a plan or brief built from decisions cites their ids, lines of the writer's own say "proposed", and a gap
+      goes to `brigadier ask`, never a silent fill;
+    - before handing a derived document on, run `brigadier ledger check` on it, and give its reviewer the
+      ledger with the question "what is missing, changed or added?";
+    - when the user writes after a gap, raise the oldest open question first and say how many more wait.
+  - **The battery's decision-survival block** (`tools/continuity-battery/`, CONTINUITY §3.7): ten planted items
+    (rules, one later corrected, a principle with its defining sentence, decisions, one "I decided", open
+    items, a false worker claim), three forced seams, then six checks: applied without being asked, the
+    principle on a new case, a derived brief, open items raised, own decision told, recall when asked.
+- **Files:** `M/cli_ledger.rs`, `crates/cli/src/args.rs` and the ledger schema, S22's bootstrap module,
+  `M/standing_instructions.md`, the `/brigade` skill file, `tools/continuity-battery/`.
+- **Done when:**
+  - Unit tests: ids count up and survive a move to `ledger-archive.md`; `close` appends; `show --open` leaves
+    out closed items; `check` on a fixture plan lists exactly its uncited, closed and no-id entries.
+  - A bootstrap test: with a ledger over the budget, every open item, rule and decision is in the bootstrap
+    whole, and the cut part has a read command that works.
+  - S17's byte test still passes (≤ 2,000 bytes, ≤ 15 lines); the provider test asserts the new text.
+  - One battery run with the decision-survival block (Claude, 60k debug seam) exists as the baseline. It is a
+    report, never a gate.
+
 **S23. Seam on; delete rebirth (Q6).** Opus. It runs in the same run as S22, once the battery shows the seam no
 worse than today's rebirth.
 - **Scope:** the flag defaults on. Delete §3.8's rebirth, briefing, cold, overflow, threshold and stand-in
@@ -1107,6 +1158,8 @@ worse than today's rebirth.
   - Sessions open at upgrade are archived.
 - **Done when:** `git grep -n 'rebirth\|briefing\|BRIGADIER_REBIRTH_TOKENS\|OrchestratorLogged'` finds only
   docs, and the S22 tests pass with no flag.
+- If S22b has landed, the seam-versus-rebirth comparison includes its decision-survival block, with the same
+  planted items on both arms.
 
 **S24. Cold-cache rule.** Opus.
 - **Scope:** when the user returns after the cache TTL and the context is ≥ 100k, start the successor from the
@@ -1115,7 +1168,8 @@ worse than today's rebirth.
 
 **S25. Battery nightly (Q7).** Codex.
 - **Scope:**
-  - The battery runs nightly on both providers, as a CI artifact and a Reports page.
+  - The battery runs nightly on both providers, as a CI artifact and a Reports page. The decision-survival block
+    (S22b) runs with it, next to a plain-CLI arm that compacts on its own (L9).
   - A weekly sample is drawn from real lineages.
   - A regression becomes a GitHub issue, never a hold.
 - **Done when:** the first nightly artifact exists.
@@ -1142,10 +1196,10 @@ S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12
                                   └→ S11 (∥ S7–S10; merged files go under worker cards once S13 is on)
 after S10:  S17 → S18 → S19 → S20      (∥ Stage 3; S17 rebases after S16)
 after S8:  S21 (∥ anything)
-after S18 + S21:  S22 → S23 → S24 → S25 → S26 → S27
+after S18 + S21:  S22 → S22b → S23 → S24 → S25 → S26 → S27
 any time:  MA1, X1 (bounded Codex tasks, §9)
 after Stage 2, one run per capability (§9):  O1–O5 with S13–S15 · MA2–MA7 with S13–S14 and S23
-                                             L1–L7 with S18–S27 · BR1–BR8 after S13 · X2–X9 after X1
+                                             L1–L9 with S18–S27 · BR1–BR8 after S13 · X2–X9 after X1
 ```
 
 ## 5. Benchmarks never gate
@@ -1164,32 +1218,38 @@ This file is all Brigadier adds to a session (G17). The session still gets every
 project's CLAUDE.md or AGENTS.md, the user's MCP servers, skills, and memory per the user's own settings.
 Brigadier removes none of it; a `--lean` research worker (S13) is the thread's own choice (G23). The file
 holds only what every turn of every session needs; text that matters only at a seam travels in the seam
-message instead (`research/POCOCK.md` §3.1).
+message instead (`research/POCOCK.md` §3.1). The entry ids, the Decision and Open kinds, absolute paths and the
+"cites entry ids" line were added on 10-23, proposed (S22b, `research/CONTINUITY.md` §3.1–§3.6).
 
 ```
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
 Your session folder is $BRIGADIER_SESSION_DIR. Scratch files go in $TMPDIR (inside it), never in the repo.
-Keep a ledger at $BRIGADIER_LEDGER as you work. `brigadier ledger add` works in every role except chats beside a tab; `brigadier ledger show` reads it back. Write an entry the moment something is settled, in the same step as your other tool calls.
+Keep a ledger at $BRIGADIER_LEDGER as you work. `brigadier ledger add` works in every role except chats beside a tab and stamps each entry with an id and the time; `brigadier ledger show` reads it back. Write an entry the moment something is settled, in the same step as your other tool calls.
 Each entry says its kind and its source (which message, command or file). Kinds:
 - Rule from the user: their exact words, which message, scope (this request / session / project); add "supersedes …", never delete.
-- Decision: one line and the reason, marked "user decided" or "I decided".
-- Exact identifier (hash, path:line, number with units, id) · Failed check (command, exact error line, fixed or not) · Ruled out (what, why) · Open promise.
+- Decision: the user's words and what they answered (the option's text, not just "A"), or yours marked "I decided"; keep the sentence that defines it, and the reason.
+- Exact identifier (hash, absolute path:line, number with units, id) · Failed check (command, exact error line, fixed or not) · Ruled out (what, why).
+- Open: a promise, or a question waiting on the user; `brigadier ledger close <id>` when it is done.
 - Learned from reading: file:line and a one-line finding, never a copy.
 Never delete entries; move finished ones to ledger-archive.md beside it. A worker's claim is not a fact until you check it; say whose it is.
+A plan or brief built from the ledger cites entry ids; mark lines of your own "proposed". Tell the user each "I decided" that changes what they asked.
 For big reading, use your own subagents and keep only conclusions with file:line. Read exact ranges. Brigadier's commands: `brigadier --help`; ask the user with `brigadier ask`.
 You may run workers of your own through `brigadier start` when the job calls for them; the brigade skill says how.
 ```
 
 **Seam text (not standing).** S22 sends the first part as the seam nudge; the successor's bootstrap carries the
-last line.
+part after `---`. The check, take-over and "raise the oldest question" lines are S22b's (`research/CONTINUITY.md`
+§3.3–§3.4).
 
 ```
 A fresh session will continue this work. Finish the step you are on, at a boundary you choose; don't start new work.
-Update the ledger, then write the hand-off note at <path>: doing now, waiting for, next, "read A,B,C; next D,E", stale ledger entries. Then stop.
+Update the ledger. Run `brigadier ledger show --open --rules`: close or carry each open item by id, and check your last steps kept each rule; write any slip as a Failed check.
+Then write the hand-off note at <path>: doing now, waiting for, next, "read A,B,C; next D,E", stale ledger entries. Don't restate rules or decisions; they travel verbatim. Absolute paths only. Then stop.
 If this is your second hand-off in a row that is still reading, say so in the note and propose splitting the work.
 ---
-You continue an earlier session. The ledger, note and last exchanges below are authoritative. For anything else from before,
-search the record (`brigadier brain search`, `brigadier brain read`) and quote what you find; if it isn't there, say so rather than guess.
+You continue an earlier session. The open items, rules and decisions below are verbatim and authoritative; so are the note and last exchanges.
+First add one ledger entry: "Took over gen <n> · open <ids> · applies next: <id> (how), …". If a question waits on the user, raise the oldest one in this reply.
+For anything else from before, search the record (`brigadier brain search`, `brigadier brain read`) and quote what you find; if it isn't there, say so rather than guess.
 ```
 
 ## 7. Order of risk: what proves the plan early
@@ -1280,6 +1340,10 @@ search the record (`brigadier brain search`, `brigadier brain read`) and quote w
 15. **Seen in T3 Code and not taken** (`research/T3CODE-WORKTREES.md` §4, §6): PR-watch wakeups, because
     Brigadier pushes nothing (G1), and confirmations before pushing to the default branch, because permission
     modes belong to the CLI (G5). The thread may poll its PR with `gh` or a background task.
+16. **Decisions survive only as well as the model keeps them (S22b).** Ids come from `brigadier ledger add`;
+    entries written with file tools have none, and `ledger check` lists them. The take-over line costs about
+    100 tokens per seam: if the battery shows no gain in "applied without being asked", it goes. The derived-brief
+    check is a model reading a fixed rubric, so it is a report, not proof.
 
 ## 9. Excel at what we keep
 
@@ -1463,6 +1527,9 @@ sessions with token economy. Each has a measurable bar against the best rival to
     price-weighted ≤ 0.95× the plain CLI on the long battery (past 400k), ≤ 1.01× on the short one (< 150k).
   - **Recall** ≥ 90% of planted items across forced seams. **Cold return** at 250k ≤ 35% of a plain resume.
     **Done:** each scripted task still passes its test command.
+  - **Decisions survive** (proposed, CONTINUITY §3.7): after three seams, ≥ 9 of 10 planted items applied without being
+    asked where they apply; a brief derived from them has 0 contradictions and 0 additions not marked
+    "proposed"; every open item is raised again. The plain CLI with its own compaction is the comparison.
 - **Steps** (they extend S17–S27 and add no stage):
   1. **L1** (into S18): `brigadier transcript search|read` over the lineage's CLI files, `tool-results/` and
      rollouts included, no database copy. Files: `crates/brain/src/transcript*`, `crates/cli`. Done: fixture
@@ -1480,6 +1547,11 @@ sessions with token economy. Each has a measurable bar against the best rival to
   6. **L6** (into S26): the Codex 1M-window probe, and the divider on Codex's compacted events. Done when the
      probe is written up and a recorded rollout shows the divider. Codex, S.
   7. **L7** (S27, unchanged): the A/B of `bashOutputMaxChars` and the exact-read instructions. Opus, S.
+  8. **L8** (= S22b, proposed): entry ids and the time from `brigadier ledger add`, `ledger close|show --open|check`, the
+     bootstrap that carries open items, rules and decisions whole, the seam's check and take-over lines, four
+     `/brigade` lines, and the battery's decision-survival block. Done: S22b's done-when. Opus, S–M.
+  9. **L9** (into S25, proposed): the decision-survival block nightly on both providers, next to a plain-CLI arm that
+     compacts. Done when the nightly artifact shows the "decisions survive" bar per provider. Codex, S.
 - **Not copied:** no rival's words for compaction or hand-off in the UI. Before the first nightly numbers, no
   "fewer tokens" claim on the landing page.
 
@@ -1501,5 +1573,11 @@ sessions with token economy. Each has a measurable bar against the best rival to
   item 7)
 
 **Waiting on you:**
+- The 20 drifts between the 10-22 grill and the plan or the build (run `20261022-0805-take-over-5-sessions`,
+  `workers/w95/report.md`). Each needs your call. Until then the plan's text stands; the 10-23 continuity
+  amendment changes none of them.
+- After a seam, should the successor carry on by itself, as a Delegator does, or wait for your next message,
+  as S22 does by default (w95, item 9)? `BRIGADIER_SEAM_CARRY_ON=1` already does the first. S22b works either
+  way.
 - A terms check of multi-account auto-switch before marketing it.
 - Bench sign-ins for Superset and Orca (the orchestration and model-advice benches need them).
