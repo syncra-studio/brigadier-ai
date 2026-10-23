@@ -120,10 +120,9 @@ file (under `apps/desktop/src`) and the export that draws it. "Pen only" means t
 such part ("the code was removed in <commit>": the strip-down took it out, the card stays until the
 design drops it); "code only" means a component folder holds a part that has no card yet. "Look of X"
 means the part has no component of its own: it is a look of X. "Shown inside it" means it is
-drawn inside that component, with no card of its own. "Not found in foundations (check)" rows
-have no component found yet. Parts still in `src/app` (not yet under `src/components`) are noted
-"in app"; the per-surface "Design system: … parts as reusable components" issues track moving
-them. Cards in Pen carry no code paths: this table is the link.
+drawn inside that component, with no card of its own. Parts still in `src/app` (not yet under
+`src/components`) are noted "in app"; the per-surface "Design system: … parts as reusable
+components" issues track moving them. Cards in Pen carry no code paths: this table is the link.
 
 | Board | Pen component | Code file | Export | Note |
 |---|---|---|---|---|
@@ -425,8 +424,8 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Settings · Inspector · Processes & providers | `TranscriptList` | `app/inspector/providers/TranscriptList.tsx` | `TranscriptList` | |
 | Settings · Inspector · Processes & providers | `ApprovalCard/Raw` | `app/inspector/providers/RawApprovalCard.tsx` | `RawApprovalCard` | |
 | Settings · Inspector · Processes & providers | `RawComposer` | `app/inspector/providers/RawSessionComposer.tsx` | `RawSessionComposer` | |
-| — | `ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | not found in foundations (check) |
-| — | `Notices` | `app/conversation/Notices.tsx` | `Notices` | not found in foundations (check) |
+| Steps & tool rows | `Tool result › Raw link`, `Tool box` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | code only: the Raw link on `Tool result` opens it, a plain dialog holding two `Tool box` parts (Input, Output) |
+| Composer menus, rail & queue | `Rail item/Card` | `app/conversation/Notices.tsx` | `Notices` | look of `Rail item/Card` (the tray); its notice rows are code only |
 | — | `TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | code only (layout, no look of its own) |
 
 ## Icons
