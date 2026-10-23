@@ -1,0 +1,133 @@
+{
+  "source": "4129659e1e0fd4cd9c3c5f2dea842ad2923dc39b",
+  "started_at": "2026-10-24T01:10:11+0300",
+  "provider": "claude",
+  "model": "sonnet",
+  "arm": "seam",
+  "threshold": 200000,
+  "roles": {
+    "parent": {
+      "usage": {
+        "input": 64,
+        "cache_write": 53086,
+        "cache_read": 1120881,
+        "output": 3456
+      },
+      "usage_available": true,
+      "uncached_input": 53150,
+      "cache_read": 1120881,
+      "cache_hit_ratio": 0.9547286230091028,
+      "output": 3456,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "list_price_usd": 0.3591201,
+      "price_status": "priced",
+      "notes": []
+    },
+    "successor": {
+      "usage": {
+        "input": 49128,
+        "cache_write": 0,
+        "cache_read": 690048,
+        "output": 2050
+      },
+      "usage_available": true,
+      "uncached_input": 49128,
+      "cache_read": 690048,
+      "cache_hit_ratio": 0.9335368031429592,
+      "output": 2050,
+      "models": [
+        "gpt-6.1-sol"
+      ],
+      "list_price_usd": 0.1877608,
+      "price_status": "priced",
+      "notes": []
+    }
+  },
+  "economics": {
+    "usage": {
+      "input": 49192,
+      "cache_write": 53086,
+      "cache_read": 1810929,
+      "output": 5506
+    },
+    "usage_available": true,
+    "uncached_input": 102278,
+    "cache_read": 1810929,
+    "cache_hit_ratio": 0.9465410695235801,
+    "output": 5506,
+    "models": [
+      "claude-sonnet-5-5",
+      "gpt-6.1-sol"
+    ],
+    "list_price_usd": 0.5468809,
+    "price_status": "priced",
+    "notes": []
+  },
+  "list_price_usd": 0.5468809,
+  "variant": "p2",
+  "budget_scores": {
+    "details": {
+      "detail_0": {
+        "recalled": true,
+        "in_bootstrap": true,
+        "in_legacy_tail": true,
+        "never_ledgered": true,
+        "not_in_note": true
+      },
+      "detail_1": {
+        "recalled": true,
+        "in_bootstrap": true,
+        "in_legacy_tail": true,
+        "never_ledgered": true,
+        "not_in_note": true
+      },
+      "detail_2": {
+        "recalled": true,
+        "in_bootstrap": true,
+        "in_legacy_tail": true,
+        "never_ledgered": true,
+        "not_in_note": true
+      },
+      "detail_3": {
+        "recalled": true,
+        "in_bootstrap": true,
+        "in_legacy_tail": true,
+        "never_ledgered": true,
+        "not_in_note": true
+      },
+      "detail_4": {
+        "recalled": true,
+        "in_bootstrap": true,
+        "in_legacy_tail": true,
+        "never_ledgered": true,
+        "not_in_note": true
+      }
+    },
+    "recalled": 5,
+    "legacy_retained": 5,
+    "lookup_count": 0,
+    "qualified": true,
+    "detail_bar": true,
+    "decision_applied": 9,
+    "decision_recalled": 10,
+    "bar": true
+  },
+  "first_successor_write": {
+    "input": 36908,
+    "cache_write": 0,
+    "model": "gpt-6.1-sol",
+    "context": 49964,
+    "list_price_usd": 0.073816,
+    "basis": "observed first request uncached input and cache creation, excluding output",
+    "cache_1h": 0
+  },
+  "extra_bootstrap_estimate": {
+    "tokens_per_seam": 3341.0,
+    "list_price_usd_per_seam": 0.006682,
+    "basis": "UTF-8 bytes / 4; native input rate (Codex)"
+  },
+  "scorer_source": "a3f722a7e",
+  "measurement_note": "Offline rescored with a3f722a7e using saved evidence only (no new live calls): the old comparison includes the latest exchange, and inline JSDoc comments are scored independently. All five details also fit the legacy bootstrap in this first fixture, so this proves recall through the move, not an improvement over the legacy budget. Future nightly P2 fixtures add intervening prose reads after the five plants. No repeat live run was made under the two-run ceiling."
+}

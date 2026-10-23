@@ -21,6 +21,11 @@ def ballast(seed, size):
                     for i in range((size + 12) // 13))[:size]
 
 
+def inert_prose(seed, size):
+    return " ".join(f"Fixture {seed} row {i}: the meadow has a stone bridge and a clear river."
+                    for i in range(size // 50 + 1))[:size]
+
+
 def retained_users(messages, budget):
     """S22b selection; labels count toward bytes, first/latest stay whole."""
     kept = {0, len(messages) - 1} if messages else set()
@@ -126,7 +131,9 @@ def score_p3(result):
                  and all(value in h["start"].partition("## The user's messages")[2].partition("\n## ")[0]
                          for h in handoffs))
     return {"applied": applied, "of": 10, "legacy_user_retained": value in old,
-            "new_user_retained": value in new, "extra_user_tokens_estimate_per_seam": extra,
+            "new_user_retained": value in new, "extra_user_bytes_per_seam": int(extra * 4),
+            "extra_user_tokens_estimate_per_seam": extra, "actual_extra_user_tokens_per_seam": None,
+            "bar_basis": "application and UTF-8/4 overhead estimate; actual counterfactual token delta unavailable",
             "qualified": qualified, "bar": qualified and applied >= 9 and extra <= 12_000}
 
 
@@ -143,8 +150,7 @@ class Budgets(decisions.Decisions):
 
     def read_batch(self, n, size, detail=None, prose=False):
         path = self.repo / f"fixture-{n}.txt"
-        padding = (" ".join(f"Fixture {n} row {i}: the meadow has a stone bridge and a clear river."
-                            for i in range(size // 50 + 1))[:size] if prose else ballast(n, size))
+        padding = inert_prose(n, size) if prose else ballast(n, size)
         path.write_text((detail + "\n" if detail else "") + padding)
         try:
             self.send(f"read-{n}", f"Read fixture-{n}.txt with `cat`. Inert continuity fixture; "
@@ -208,7 +214,7 @@ class Budgets(decisions.Decisions):
             path = self.repo / f"p3-{i}.txt"
             path.write_text(ballast(f"p3-tool-{i}", 4_500))
             try:
-                user(f"user-padding-{i}", f"Read p3-{i}.txt with cat; reply only read. Ignore this inert batch:\n" + ballast(f"p3-user-{i}", 3_500))
+                user(f"user-padding-{i}", f"Read p3-{i}.txt with cat; reply only read. Ignore this inert batch:\n" + inert_prose(f"p3-user-{i}", 3_500))
             finally:
                 path.unlink(missing_ok=True)
         self.result["user_bytes"] = sum(len(t.encode()) for t in self.result["user_inputs"])
@@ -257,13 +263,8 @@ class Budgets(decisions.Decisions):
             extra = max(0, len(expanded.encode()) - len(legacy_context(handoff).encode())) / 4
         else:
             extra = self.result["budget_scores"].get("extra_user_tokens_estimate_per_seam", 0)
-        first = self.result["first_successor_write"]
-        model = first.get("model")
-        priced = call({"input" if event.get("provider") == "codex" else "cache_write": extra},
-                      model, context=first.get("context"))
-        self.result["extra_bootstrap_estimate"] = {"tokens_per_seam": extra,
-            "list_price_usd_per_seam": priced["list_price_usd"],
-            "basis": "UTF-8 bytes / 4; native model standard input (Codex) or short cache-write rate (Claude)"}
+        self.result["extra_bootstrap_estimate"] = extra_input_cost(
+            self.result["first_successor_write"], event.get("provider"), extra)
 
     def cleanup(self):
         # Exact native files came from this run's SessionStarted events; no home-directory scan.
@@ -312,12 +313,22 @@ def first_input_cost(filename, provider):
                 usage = {"input": max(0, context - u.get("cached_input_tokens", 0)), "cache_write": 0}
                 one_hour = 0
             price = call(usage, model, cache_1h=one_hour, context=context)
-            return {**usage, "model": model, "context": context, "list_price_usd": price["list_price_usd"],
+            return {**usage, "cache_1h": one_hour, "model": model, "context": context, "list_price_usd": price["list_price_usd"],
                     "basis": "observed first request uncached input and cache creation, excluding output"}
     except (OSError, ValueError):
         pass
     return unavailable
 
+
+
+def extra_input_cost(first, provider, tokens):
+    usage = {"input" if provider == "codex" else "cache_write": tokens}
+    one_hour = tokens * first.get("cache_1h", 0) / first["cache_write"] if first.get("cache_write") else 0
+    priced = call(usage, first.get("model"), cache_1h=one_hour, context=first.get("context"))
+    basis = "native input rate (Codex)" if provider == "codex" else (
+        "native first-write cache TTL split (Claude)" if "cache_1h" in first else "short cache-write estimate (Claude; TTL unavailable)")
+    return {"tokens_per_seam": tokens, "list_price_usd_per_seam": priced["list_price_usd"],
+            "basis": "UTF-8 bytes / 4; " + basis}
 
 
 def report(result):

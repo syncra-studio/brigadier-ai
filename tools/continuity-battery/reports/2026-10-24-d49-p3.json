@@ -1,0 +1,97 @@
+{
+  "source": "a3f722a7ebdeb43a1f3f0bd7944d2601f79b6650",
+  "started_at": "2026-10-24T01:15:46+0300",
+  "provider": "claude",
+  "model": "sonnet",
+  "arm": "seam",
+  "threshold": 200000,
+  "roles": {
+    "parent": {
+      "usage": {
+        "input": 70,
+        "cache_write": 116328,
+        "cache_read": 2305527,
+        "output": 1102
+      },
+      "usage_available": true,
+      "uncached_input": 116398,
+      "cache_read": 2305527,
+      "cache_hit_ratio": 0.9519398825314574,
+      "output": 1102,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "list_price_usd": 0.7070247,
+      "price_status": "priced",
+      "notes": []
+    },
+    "successor": {
+      "usage": {
+        "input": 20,
+        "cache_write": 273212,
+        "cache_read": 757062,
+        "output": 1511
+      },
+      "usage_available": true,
+      "uncached_input": 273232,
+      "cache_read": 757062,
+      "cache_hit_ratio": 0.7348019109108662,
+      "output": 1511,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "list_price_usd": 1.1837042,
+      "price_status": "priced",
+      "notes": []
+    }
+  },
+  "economics": {
+    "usage": {
+      "input": 90,
+      "cache_write": 389540,
+      "cache_read": 3062589,
+      "output": 2613
+    },
+    "usage_available": true,
+    "uncached_input": 389630,
+    "cache_read": 3062589,
+    "cache_hit_ratio": 0.8871363607001758,
+    "output": 2613,
+    "models": [
+      "claude-sonnet-5-5"
+    ],
+    "list_price_usd": 1.8907289,
+    "price_status": "priced",
+    "notes": []
+  },
+  "list_price_usd": 1.8907289,
+  "variant": "p3",
+  "budget_scores": {
+    "applied": 10,
+    "of": 10,
+    "legacy_user_retained": false,
+    "new_user_retained": true,
+    "extra_user_bytes_per_seam": 28719,
+    "extra_user_tokens_estimate_per_seam": 7179.75,
+    "actual_extra_user_tokens_per_seam": null,
+    "bar_basis": "application and UTF-8/4 overhead estimate; actual counterfactual token delta unavailable",
+    "qualified": true,
+    "bar": true
+  },
+  "first_successor_write": {
+    "input": 2,
+    "cache_write": 89896,
+    "model": "claude-sonnet-5-5",
+    "context": 102110,
+    "list_price_usd": 0.359588,
+    "basis": "observed first request uncached input and cache creation, excluding output",
+    "cache_1h": 89896
+  },
+  "extra_bootstrap_estimate": {
+    "tokens_per_seam": 7179.75,
+    "list_price_usd_per_seam": 0.028719,
+    "basis": "UTF-8 bytes / 4; native first-write cache TTL split (Claude)"
+  },
+  "scorer_source": "a3f722a7e",
+  "measurement_note": "Offline economics update using saved native usage only (no new live calls): the first write used one-hour cache creation, so the extra-byte dollar estimate uses that observed TTL. The <=12k extra-token bar is a UTF-8/4 estimate, not a measured counterfactual tokenizer delta. This first fixture used high-entropy padding; future nightly user padding is ordinary inert prose. Application was measured directly from all ten receipt objects after three seams."
+}

@@ -224,7 +224,10 @@ The offline legacy-budget comparison reports retained details/user rules from th
 with the old 60 KB tail / 32 KB user budget. It measures retention, not a second model's behavior.
 Per-role list-price dollars include all observed successor input; a separate first-successor row
 prices the native uncached input/cache write. Extra bootstrap tokens and dollars are explicitly
-labelled UTF-8/4 estimates at the native model's input (Codex) or short-write (Claude) rate.
+labelled UTF-8/4 estimates at the native model's input (Codex) or cache-write (Claude) rate, using
+the observed first-write TTL split when available and a labelled short-write fallback otherwise.
+P3's ≤12k overhead bar uses that byte/token estimate; the actual counterfactual token delta is
+unavailable without a matched old-budget run. High-entropy text can exceed that approximation.
 No incremental causal dollar saving/cost is claimed without a matched live baseline. These bars
 are reports only and never create regression issues or gate work. `--evidence` keeps private raw
 inputs outside git; report JSON retains numeric scores and economics only.

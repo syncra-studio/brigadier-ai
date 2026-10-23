@@ -113,7 +113,11 @@ export function three() {}
                 "cache_creation": {"ephemeral_1h_input_tokens": 1000}}}}))
             value = budgets.first_input_cost(str(file), "claude")
             self.assertEqual(value["cache_write"], 1000)
+            self.assertEqual(value["cache_1h"], 1000)
             self.assertAlmostEqual(value["list_price_usd"], .00804)
+            extra = budgets.extra_input_cost(value, "claude", 500)
+            self.assertAlmostEqual(extra["list_price_usd_per_seam"], .004)
+            self.assertIn("native first-write cache TTL", extra["basis"])
             self.assertIsNone(budgets.first_input_cost(None, "codex")["list_price_usd"])
 
     def test_p2_transport_moves_once_with_rules_selected_target_and_then_common_checks(self):
