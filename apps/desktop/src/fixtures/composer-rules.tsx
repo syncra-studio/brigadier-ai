@@ -13,7 +13,7 @@ import { ConversationView } from "@/app/conversation/ConversationView";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { model, overview } from "@/fixtures/agents";
-import { fixtureInput } from "@/fixtures/input";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { ModelRules, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { useApp } from "@/state/store";
@@ -73,8 +73,11 @@ async function drive() {
     }));
     menu()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     await until("the picker closed", () => menu() === null);
+    // The closed picker hands the keyboard back to its trigger first: the field takes it after.
+    await until("the keyboard back on the picker", () => document.activeElement === trigger());
     await until("the field", () => field() !== null);
-    field()!.focus();
+    await fixtureClick(field()!);
+    await until("the field focused", () => document.activeElement === field());
     await fixtureInput({ type: "type", text: "Reply with the single word OK." });
     await until("the text typed", () => typed() === "Reply with the single word OK.");
     document.querySelector<HTMLButtonElement>(".aui-composer-send")!.click();

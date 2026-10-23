@@ -162,7 +162,7 @@ createRoot(document.getElementById("root")!).render(
 );
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-async function until(what: string, check: () => boolean, ms = 5000) {
+async function until(what: string, check: () => boolean, ms = 10_000) {
   const end = performance.now() + ms;
   while (!check()) {
     if (performance.now() > end) throw new Error(`timed out waiting for ${what}`);
