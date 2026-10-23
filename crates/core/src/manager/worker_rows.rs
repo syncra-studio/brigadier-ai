@@ -252,7 +252,9 @@ impl SessionManager {
         if board.tasks.is_empty() {
             return Ok(Vec::new());
         }
-        let parent_branch = self.changes_checkout(id).and_then(|(_, branch)| branch);
+        let (parent_checkout, parent_branch) = self
+            .changes_checkout(id)
+            .map_or((None, None), |(path, branch)| (Some(path), branch));
         let read_git = git_now || {
             let last = self
                 .worker_rows
@@ -269,7 +271,7 @@ impl SessionManager {
                 .lock()
                 .unwrap()
                 .insert(id.clone(), now_ms());
-            self.read_workers_git(&board.tasks, parent_branch.clone())
+            self.read_workers_git(&board.tasks, parent_branch.clone(), parent_checkout)
                 .await;
         }
         let mut waiting: HashMap<&TaskId, Vec<WorkerWait>> = HashMap::new();
@@ -336,8 +338,15 @@ impl SessionManager {
     }
 
     /// Reads each worker's work against session branch `parent` in git: its +/− (what it
-    /// changed, committed or not), its commits ahead and whether they all merged.
-    async fn read_workers_git(&self, tasks: &HashMap<TaskId, Task>, parent: Option<String>) {
+    /// changed, committed or not), its commits ahead and whether they all merged. A worker whose
+    /// worktree is gone (closed) is read from the session's checkout `parent_checkout`, which
+    /// shares its branches: its commits ahead and whether they merged, with no +/−.
+    async fn read_workers_git(
+        &self,
+        tasks: &HashMap<TaskId, Task>,
+        parent: Option<String>,
+        parent_checkout: Option<PathBuf>,
+    ) {
         let Some(parent) = parent else {
             return;
         };
@@ -362,12 +371,16 @@ impl SessionManager {
             Ok(checkouts
                 .into_iter()
                 .map(|(task, path, branch, start)| {
-                    let Ok(repo) = git.open(&path) else {
-                        return (task, None);
+                    let (repo, own) = match git.open(&path) {
+                        Ok(repo) => (repo, true),
+                        Err(_) => match parent_checkout.as_ref().map(|dir| git.open(dir)) {
+                            Some(Ok(repo)) if !path.exists() => (repo, false),
+                            _ => return (task, None),
+                        },
                     };
-                    let diff = repo
-                        .worker_diff(&parent)
-                        .ok()
+                    let diff = own
+                        .then(|| repo.worker_diff(&parent).ok())
+                        .flatten()
                         .map(|stat| super::diff_stat_of(&stat));
                     let (ahead, merged) = branch
                         .as_deref()
@@ -400,6 +413,12 @@ impl SessionManager {
                 held.insert(task, git);
             }
         }
+    }
+
+    /// Drops every worker's git read held in memory, as a daemon restart does.
+    #[cfg(test)]
+    pub(crate) fn forget_workers_git(&self) {
+        self.worker_rows.git.lock().unwrap().clear();
     }
 
     /// Worker `task` of session `id`'s thread, as its CLI keeps it: its CLI session files, read

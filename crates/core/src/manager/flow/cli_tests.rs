@@ -1560,6 +1560,21 @@ async fn a_sessions_workers_are_rows_of_its_view_from_their_cli_and_git() {
     let b = by(&read().await, "Writer");
     assert!(b.merged, "{b:#?}");
     assert_eq!(b.ahead, 0);
+    // Its worktree removed and nothing held in memory, as after a close and a restart: b
+    // still reads merged, from the session's checkout.
+    let worktree = flow
+        .board()
+        .await
+        .tasks
+        .values()
+        .find(|task| task.title.starts_with("Writer"))
+        .and_then(|task| task.workspace.as_ref()?.worktree.clone())
+        .unwrap();
+    super::git(&checkout, &["worktree", "remove", "--force", &worktree]);
+    flow.manager.forget_workers_git();
+    let b = by(&read().await, "Writer");
+    assert!(b.merged, "{b:#?}");
+    assert_eq!(b.ahead, 0);
 
     // The rows came as thread news too, the prompt included, ending with none working (news
     // is debounced: the last may come after the turn settled).
