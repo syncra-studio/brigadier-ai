@@ -218,12 +218,21 @@ jobs:
 
       - name: Launch smoke check
         run: |
+          set -o pipefail
           if [ "$UNIVERSAL" = true ]; then dir=target/universal-apple-darwin/release; else dir=target/release; fi
-          tools/ci/smoke.sh "$dir/bundle/macos/Brigadier.app/Contents/MacOS/brigadier-app"
+          tools/ci/smoke.sh "$dir/bundle/macos/Brigadier.app/Contents/MacOS/brigadier-app" 2>&1 | tee "$RUNNER_TEMP/smoke.log"
 
       - name: Smoke report
         if: always()
         run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-log-macOS
+          path: ${{ runner.temp }}/smoke.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: No processes left behind
         if: always()
@@ -471,10 +480,19 @@ jobs:
           fi
           pnpm tauri build "${args[@]}" -- -p brigadier-desktop -p brigadier-daemon
       - name: Launch smoke check
-        run: tools/ci/smoke.sh "${{ matrix.app }}"
+        run: |
+          set -o pipefail
+          tools/ci/smoke.sh "${{ matrix.app }}" 2>&1 | tee "$RUNNER_TEMP/smoke.log"
       - name: Smoke report
         if: always()
         run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-log-${{ matrix.name }}
+          path: ${{ runner.temp }}/smoke.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: No processes left behind
         if: always()
         run: |
@@ -600,6 +618,45 @@ jobs:
           gh release create "$tag" -R "$repo" --verify-tag --draft --title "Brigadier ${tag#v}" \
             --notes "$notes" release/*
           gh release edit "$tag" -R "$repo" --draft=false --latest
+
+  perf-regressions:
+    name: Perf regression report (never a gate)
+    needs: [macos, others]
+    # §5 of docs/STRIP-DOWN-PLAN.md: benchmarks are a report, not a gate. This only files or
+    # updates a tracking issue from any "PERF REGRESSION" line the smoke check printed; it
+    # never fails the run.
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: smoke-log-*
+          path: ${{ runner.temp }}/smoke-logs
+          merge-multiple: false
+      - run: |
+          set -euo pipefail
+          lines="$(find "$RUNNER_TEMP/smoke-logs" -type f -name smoke.log -exec grep -h '^PERF REGRESSION:' {} + || true)"
+          if [ -z "$lines" ]; then
+            echo "No perf regressions."
+            exit 0
+          fi
+          metrics="$(printf '%s\n' "$lines" | sed -E 's/^PERF REGRESSION: (.*) [^ ]+ vs limit .*/\1/' | sort -u | paste -sd, -)"
+          title="Nightly perf regression: $metrics"
+          repo="$GITHUB_REPOSITORY"
+          found="$(gh issue list -R "$repo" --state open --search "$title in:title" --json number,title)"
+          open="$(echo "$found" | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -n1)"
+          body="$RUN_URL"$'\n\n'"$lines"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" -R "$repo" --body "$body"
+          else
+            gh issue create -R "$repo" --title "$title" --body "$body"
+          fi
 
   report:
     name: Failure issue

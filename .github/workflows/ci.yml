@@ -294,6 +294,9 @@ jobs:
     # Warm builds take up to ~18 min and a cold one about half as long again; a slow apt mirror
     # can add up to 12 more.
     timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
     env:
       # Keep release optimizations, but avoid cross-crate LTO and parallelize code generation.
       # Cargo passes these settings to the app and its sidecar builds alike.
@@ -354,10 +357,38 @@ jobs:
         # compiles once for the two.
         run: pnpm tauri build --bundles deb -- -p brigadier-desktop -p brigadier-daemon
       - name: Launch smoke check
-        run: tools/ci/smoke.sh target/release/brigadier-app
+        run: |
+          set -o pipefail
+          tools/ci/smoke.sh target/release/brigadier-app 2>&1 | tee "$RUNNER_TEMP/smoke.log"
       - name: Smoke report
         if: always()
         run: cat "${{ runner.temp }}/smoke-report.json" || echo "no smoke report was written"
+      - name: Perf regression report (never a gate)
+        # §5 of docs/STRIP-DOWN-PLAN.md: benchmarks are a report, not a gate. Only main's own
+        # pushes file or update the tracking issue; a PR run just prints the lines above.
+        if: always() && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          lines="$(grep '^PERF REGRESSION:' "$RUNNER_TEMP/smoke.log" || true)"
+          if [ -z "$lines" ]; then
+            echo "No perf regressions."
+            exit 0
+          fi
+          metrics="$(printf '%s\n' "$lines" | sed -E 's/^PERF REGRESSION: (.*) [^ ]+ vs limit .*/\1/' | sort -u | paste -sd, -)"
+          title="Nightly perf regression: $metrics"
+          repo="$GITHUB_REPOSITORY"
+          found="$(gh issue list -R "$repo" --state open --search "$title in:title" --json number,title)"
+          open="$(echo "$found" | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -n1)"
+          body="$RUN_URL"$'\n\n'"$lines"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" -R "$repo" --body "$body"
+          else
+            gh issue create -R "$repo" --title "$title" --body "$body"
+          fi
       - name: No processes left behind
         if: always()
         run: |

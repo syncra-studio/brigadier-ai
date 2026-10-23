@@ -29,12 +29,18 @@ const launches = launchPaths.map((path) => {
   }
 });
 
+// A launch that produced no report (app did not launch, daemon not up, ...) still fails the
+// job. A budget breach on a launch that did report is a performance limit, not a functional
+// failure: docs/STRIP-DOWN-PLAN.md §5 makes benchmarks a nightly report, never a gate, so it
+// only prints a "PERF REGRESSION" line for the workflow's regression-issue step to pick up.
 const failures = [];
 launches.forEach((launch, index) => {
   if (!Array.isArray(launch.checks)) {
     failures.push(`launch ${index + 1} produced no report (${launch.error ?? "unknown error"})`);
   }
 });
+const regression = (metric, measured, limit) =>
+  console.log(`PERF REGRESSION: ${metric} ${Math.round(measured)} vs limit ${Math.round(limit)}`);
 
 const STARTUP = { firstColdStart: "First launch", coldStart: "Cold start" };
 const checkOf = (launch, id) => launch.checks?.find((check) => check.id === id);
@@ -64,10 +70,12 @@ for (const [id, name] of Object.entries(STARTUP)) {
     }
   }
   console.log(`  median: ${median == null ? "n/a" : `${Math.round(median)} ms`}`);
-  if (median == null || limit == null || !(median < limit)) {
+  if (median == null || limit == null) {
     failures.push(
-      `${name.toLowerCase()} median ${median == null ? "n/a" : Math.round(median)} ms is not under ${limit} ms`,
+      `${name.toLowerCase()} median ${median == null ? "n/a" : Math.round(median)} ms has no limit to judge it against`,
     );
+  } else if (!(median < limit)) {
+    regression(name, median, limit);
   }
 }
 
@@ -75,7 +83,7 @@ const first = launches[0];
 for (const check of first.checks ?? []) {
   if (check.id in STARTUP) continue;
   console.log(`${check.metric}: ${check.status} (measured ${check.measured}, limit ${check.limit}) ${check.note}`);
-  if (check.status === "fail") failures.push(`${check.metric} failed on launch 1: ${check.note}`);
+  if (check.status === "fail") regression(check.metric, check.measured, check.limit);
 }
 
 const passed = failures.length === 0;
