@@ -15,10 +15,13 @@
 //!   once sent, the seam is complete and the generation one more.
 //! - **Death.** "Prompt is too long", or a CLI that can't be resumed, ends the generation
 //!   without a note: the successor starts the same way, told to check git first.
+//! - **Another agent.** Every account of the session's agent at its limit, with "Switch to
+//!   another agent automatically" on (S38, D23): the generation ends without a note and the
+//!   successor starts on another agent, with the turn's messages.
 
 use std::sync::Arc;
 
-use brigadier_providers::{Origin, TurnInput};
+use brigadier_providers::{Origin, ProviderKind, TurnInput};
 
 use super::{Cli, ConvLive, Envelope};
 use crate::manager::SessionManager;
@@ -27,8 +30,9 @@ use crate::manager::seam::{
     start_path, write_seam,
 };
 use crate::manager::session_dir::read_lineage;
-use crate::model::{ConversationId, ConversationKind, Message};
+use crate::model::{ConversationId, ConversationKind, Message, ModelChoice, Setup};
 use crate::now_ms;
+use crate::work::RunState;
 use crate::work::{CardState, InjectionKind};
 
 /// The seam's in-memory part of a conversation's state.
@@ -356,6 +360,102 @@ impl SessionManager {
         state.seam.hold_timer += 1;
         state.seam.carry_on = true;
         true
+    }
+
+    /// The agent another one goes on with when every account of `from`'s is at its limit,
+    /// with "Switch to another agent automatically" on (S38, D23): another agent that is on
+    /// and has an account that can take work, on the model and effort of the rules file's
+    /// `Fallback` row when it names that agent, else its CLI's own. `None`: the session waits
+    /// for the reset (Q11).
+    pub(super) fn fallback_agent(
+        &self,
+        conv: &ConvLive,
+        from: &ModelChoice,
+    ) -> Option<ModelChoice> {
+        let settings = self.core.settings();
+        if !settings.switch_providers || !self.seam_on(conv) {
+            return None;
+        }
+        let now = now_ms();
+        let provider = ProviderKind::ALL.into_iter().find(|provider| {
+            *provider != from.provider
+                && crate::routing::availability::provider_on(&settings, *provider)
+                && crate::accounts::ready(
+                    &settings,
+                    *provider,
+                    None,
+                    &self.runtime.account_candidates(*provider),
+                    &[],
+                    now,
+                )
+                .is_some()
+        })?;
+        let (model, effort) = self.fallback_row(provider);
+        Some(ModelChoice {
+            provider,
+            model,
+            effort,
+            fast: None,
+            account: None,
+        })
+    }
+
+    /// Every account of the session's agent (`from`) is at its limit: the generation ends
+    /// without a note, the session's model becomes `to`, and the successor starts there from
+    /// the hand-off with the turn's messages (`carried`) and those that waited. The divider
+    /// says why.
+    pub(super) async fn seam_to_agent(
+        &self,
+        conv: &Arc<ConvLive>,
+        from: ProviderKind,
+        to: ModelChoice,
+        carried: Vec<Message>,
+    ) {
+        let Ok(conversation) = self.core.conversation(&conv.id) else {
+            return;
+        };
+        let Some(mut setup) = conversation.setup.clone() else {
+            return;
+        };
+        let Setup::Session { orchestrator, .. } = &mut setup else {
+            return;
+        };
+        let death = format!(
+            "usage limit on {} · continued on {}",
+            from.label(),
+            to.provider.label()
+        );
+        *orchestrator = to;
+        if let Err(err) = self.core.set_setup(conv.id.clone(), setup).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not move the session to another agent"; conversation = %conv.id, error = %err);
+            return;
+        }
+        let file = self.read_seam_of(&conv.id).await;
+        let nudged = match &file.phase {
+            Phase::Nudged { at_ms, .. } => Some(*at_ms),
+            _ => None,
+        };
+        if matches!(file.phase, Phase::Live | Phase::Nudged { .. }) {
+            self.close_seam(conv, file, nudged, Some(death)).await;
+        }
+        let stopped = {
+            let mut state = conv.state.lock().await;
+            // Stopped meanwhile: its messages stay in the transcript, as a stopped turn's do.
+            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+            if !stopped {
+                let mut pending = carried;
+                pending.append(&mut state.pending);
+                state.pending = pending;
+                let envelopes = state.carry_envelopes(false);
+                self.keep_carried(&conv.id, &envelopes).await;
+            }
+            stopped
+        };
+        conv.close_cli().await;
+        if stopped {
+            self.set_run(&conv.id, RunState::Idle, None).await;
+        }
+        self.kick(conv);
     }
 
     /// The CLI's context overflowed ("prompt is too long"): the generation ends without a note.

@@ -1,8 +1,9 @@
+import { useAction } from "@/app/conversation/useAction";
 import { ConnectStatus } from "@/app/setup/onboarding/ConnectStatus";
 import { agentState } from "@/app/setup/onboarding/SetupTerminal";
 import { ROW_LINE, ROW_TITLE } from "@/app/settings/providers/parts";
 import { ProviderAgentRow } from "@/app/settings/providers/ProviderAgentRow";
-import { SettingsSection } from "@/app/settings/parts";
+import { SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 import { Button } from "@/components/controls";
 import {
   DropdownMenu,
@@ -11,16 +12,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays";
 import { Plus, ProviderGlyph } from "@/components/icons";
-import { SettingsCard } from "@/components/shared";
+import { SettingsCard, SettingsRow } from "@/components/shared";
 import type { AccountView, ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
 import { accountsOf } from "@/state/accounts";
 import { connectAgent, connecting, useConnect } from "@/state/connect";
 import { providerOn } from "@/state/providers";
+import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
 /** The overview's copy, for Settings search; the page renders this. */
 export const OVERVIEW_ROWS = {
+  switch: {
+    label: "Switch to another agent automatically",
+    description:
+      "When every account of an agent is at its limit, work carries on with another agent. Off, it waits for the limit to reset.",
+  },
   switchAccounts: {
     label: "Switch accounts automatically",
     description:
@@ -33,7 +40,7 @@ export const OVERVIEW_ROWS = {
 export const CLI_NAMES: Record<ProviderKind, string> = { claude: "Claude Code CLI", codex: "Codex CLI" };
 
 /**
- * Settings › Providers' first page: the agents Brigadier runs (how each
+ * Settings › Providers' first page: the fallback switch, the agents Brigadier runs (how each
  * stands, the busiest limit of the account in use, its switch; a row opens the agent's page),
  * the agents not installed yet with Set up (Connect: installed by their own installer, then
  * signed in), and Add another agent.
@@ -51,6 +58,7 @@ export function AgentsOverview({
   onOpen: (provider: ProviderKind, signIn?: boolean) => void;
 }) {
   const settings = useApp((s) => s.settings);
+  const switching = useAction();
   const overviewOf = (provider: ProviderKind) => overviews?.find((entry) => entry.provider === provider);
   const installed = PROVIDERS.filter((provider) => agentState(overviewOf(provider)) !== "install");
   const missing = PROVIDERS.filter((provider) => agentState(overviewOf(provider)) === "install");
@@ -61,6 +69,23 @@ export function AgentsOverview({
 
   return (
     <div data-slot="agents-overview" className="flex flex-col gap-10">
+      <SettingsSection title="Fallback" setting="Fallback">
+        <SettingsCard>
+          <SettingsRow
+            label={OVERVIEW_ROWS.switch.label}
+            description={OVERVIEW_ROWS.switch.description}
+            error={switching.error}
+          >
+            <SettingsSwitch
+              label={OVERVIEW_ROWS.switch.label}
+              checked={settings.switchProviders}
+              disabled={switching.busy}
+              onCheckedChange={(next) => switching.run(() => setSetting("switchProviders", next))}
+            />
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
       <SettingsSection title="Agents" setting="Agents">
         <SettingsCard>
           {installed.length === 0 ? (

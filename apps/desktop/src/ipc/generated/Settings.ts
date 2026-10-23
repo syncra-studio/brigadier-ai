@@ -145,10 +145,16 @@ accounts: Array<AccountEntry>,
 /**
  * Agents whose accounts don't switch on their own (their switch off, or an account picked
  * with Use): their new work starts on their default account. Every other agent's new work
- * starts on its account whose weekly window resets soonest, and work whose account hits
- * its usage limit carries on with the next such account.
+ * starts on the first of its accounts' order ([`crate::accounts::order`]), and work whose
+ * account hits its usage limit carries on with the next one.
  */
 manualAccounts: Array<ProviderKind>, 
+/**
+ * "Switch to another agent automatically" (S38, D23): when every account of a session's
+ * agent is at its limit, the session hands off through a seam to another agent. Off: it
+ * waits for the reset ("Resumes at", Q11).
+ */
+switchProviders: boolean, 
 /**
  * The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
  * it is detected from the speech.

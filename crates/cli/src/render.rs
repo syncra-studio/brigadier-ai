@@ -427,7 +427,11 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
                 )
             })
             .collect();
-        lines.push(format!("Account switching: {}", switches.join(", ")));
+        lines.push(format!(
+            "Account switching: {}; another agent when all are out: {}",
+            switches.join(", "),
+            if output.switch_providers { "on" } else { "off" }
+        ));
     }
     for account in &output.accounts {
         let usage: Vec<_> = account

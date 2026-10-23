@@ -4394,6 +4394,15 @@ impl SessionManager {
                 });
                 return;
             }
+            // Every account is out: another agent goes on, with that switch on (S38).
+            if let Some(to) = self.fallback_agent(conv, &cli.model) {
+                // Not from inside the CLI's own event pump: closing the CLI waits for it.
+                let (manager, conv, from) = (self.arc(), conv.clone(), cli.provider);
+                self.spawn(async move {
+                    manager.seam_to_agent(&conv, from, to, carried).await;
+                });
+                return;
+            }
             // Its own model's reset frees the messages: they wait for it.
             if let Some(waiting) = own_reset(&cli.model, &limit) {
                 let waits = self
@@ -4729,6 +4738,13 @@ impl SessionManager {
                 conv.state.lock().await.limit_tries += 1;
                 self.stop_waiting(conv).await;
                 self.kick(conv);
+                return;
+            }
+            // "Switch to another agent automatically" turned on while it waits (S38).
+            if let Some(to) = self.fallback_agent(conv, &from) {
+                self.stop_waiting(conv).await;
+                self.seam_to_agent(conv, from.provider, to, Vec::new())
+                    .await;
                 return;
             }
             let known_reset = conversation

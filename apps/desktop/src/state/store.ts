@@ -224,6 +224,7 @@ export const useApp = create<AppState>()(() => ({
     branchPrefix: "brigadier/",
     accounts: [],
     manualAccounts: [],
+    switchProviders: false,
     dictationLanguage: "",
     dictationWords: [],
     dictationMicrophone: "",

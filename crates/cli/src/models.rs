@@ -8,6 +8,9 @@ pub struct ModelsOutput {
     pub models: Vec<Model>,
     /// Each agent's account switch (Settings › Providers › the agent's page).
     pub agents: Vec<AgentAccounts>,
+    /// "Switch to another agent automatically": a session whose agent has every account at its
+    /// limit goes on with another agent.
+    pub switch_providers: bool,
     pub accounts: Vec<Account>,
     pub guidance: Vec<Guidance>,
     pub rules: Vec<Rule>,

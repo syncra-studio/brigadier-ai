@@ -303,10 +303,20 @@ function Fixture() {
         seen.rowMark = surface(document.querySelector('[data-slot="agent-row"] [data-slot="agent-mark"]'));
         seen.notSetUp = all('[data-slot="agent-not-set-up"]').length;
         seen.addAgent = Boolean(button("Add another agent"));
+        // The fallback switch (S38): off by default, and its click turns it on.
+        const fallback = document.querySelector<HTMLButtonElement>(
+          '[role="switch"][aria-label="Switch to another agent automatically"]',
+        );
+        seen.fallback = {
+          row: Boolean(document.querySelector('[data-setting="Switch to another agent automatically"]')),
+          on: fallback?.getAttribute("aria-checked") === "true",
+        };
+        fallback?.click();
         // The row's switch doesn't open the page.
         button("Use Codex")?.click();
       },
       () => {
+        seen.fallbackAfter = useApp.getState().settings.switchProviders;
         seen.afterSwitch = {
           page: Boolean(document.querySelector('[data-slot="agent-page"]')),
           disabled: useApp.getState().settings.disabledProviders,

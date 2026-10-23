@@ -108,10 +108,11 @@ pub fn rebase(current: &Settings, mut incoming: Settings) -> Settings {
 }
 
 /// Whether a settings change may let work waiting for quota run now: an agent or model turned
-/// back on.
+/// back on, or "Switch to another agent automatically" turned on.
 pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
     before.disabled_providers != after.disabled_providers
         || before.hidden_models != after.hidden_models
+        || (after.switch_providers && !before.switch_providers)
 }
 
 /// Saved settings brought up to [`SETTINGS_VERSION`], or `None` when they already are.

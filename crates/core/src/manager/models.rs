@@ -9,6 +9,8 @@ use std::path::PathBuf;
 
 const GUIDANCE: &str = include_str!("models_guidance.md");
 pub(super) const DEFAULT_RULES: &str = include_str!("models_default.md");
+/// The rules file's Work for a session that goes on with another agent (S38).
+const FALLBACK_WORK: &str = "Fallback";
 
 fn agent(provider: ProviderKind) -> Agent {
     match provider {
@@ -347,6 +349,19 @@ impl SessionManager {
             .into_iter()
             .find(|row| row.work.trim().eq_ignore_ascii_case(work.trim())))
     }
+    /// The model (`None`: the CLI's default) and effort a session goes on with on `provider`
+    /// when its own agent is out (S38): the rules file's `Fallback` row's, when it names
+    /// `provider`.
+    pub(super) fn fallback_row(&self, provider: ProviderKind) -> (Option<String>, Option<String>) {
+        match self.work_row(FALLBACK_WORK) {
+            Ok(Some(row)) if row.agent == agent(provider) => (
+                (!row.model.is_empty() && !row.model.eq_ignore_ascii_case("default"))
+                    .then_some(row.model),
+                row.effort,
+            ),
+            _ => (None, None),
+        }
+    }
     pub(super) fn model_policy(&self) -> Result<Policy> {
         Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?)
     }
@@ -505,6 +520,7 @@ impl SessionManager {
         Ok(ModelsOutput {
             models,
             agents,
+            switch_providers: settings.switch_providers,
             accounts,
             guidance: guidance(shipped, &user),
             rules: policy

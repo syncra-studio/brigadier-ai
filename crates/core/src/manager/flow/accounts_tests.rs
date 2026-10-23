@@ -2039,3 +2039,117 @@ async fn use_moves_a_running_session_to_the_picked_account_at_its_next_request()
     assert_eq!(moments(&flow).await.len(), 1);
     flow.stop().await;
 }
+
+/// S38 (D23): every Claude account at its limit with "Switch to another agent automatically"
+/// on: the session's generation ends with no note, and a successor on Codex carries on from
+/// the hand-off with the message, in the same thread; the divider says why.
+#[tokio::test]
+async fn with_every_account_out_and_the_switch_on_the_session_seams_to_another_agent() {
+    use crate::manager::seam::{Phase, read_seam};
+
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agent-fallback",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+
+    flow.say("Do the thing.").await;
+    flow.until("a turn on Codex", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let turns = seen(&log);
+    let path: Vec<_> = turns
+        .iter()
+        .map(|turn| (turn.provider, turn.account.clone()))
+        .collect();
+    assert_eq!(
+        path,
+        [
+            (ProviderKind::Claude, None),
+            (ProviderKind::Claude, Some("acct-b".into())),
+            (ProviderKind::Codex, None),
+        ]
+    );
+    // A fresh session: the successor starts from the hand-off, told to check git first, with
+    // the message that hit the limit.
+    let codex = &turns[2];
+    assert_ne!(codex.native_id, turns[1].native_id);
+    assert!(
+        codex.input.starts_with(crate::thread_view::HANDOFF_MARK),
+        "{}",
+        codex.input
+    );
+    assert!(
+        codex.input.contains("check `git status`"),
+        "{}",
+        codex.input
+    );
+    assert!(codex.input.contains("Do the thing."), "{}", codex.input);
+    // The session runs on Codex now, and its seam says why.
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
+    let file = read_seam(&flow.manager.session_dir(&flow.conversation).record());
+    assert!(matches!(file.phase, Phase::Live), "{:?}", file.phase);
+    assert_eq!(file.seams.len(), 1);
+    assert_eq!(file.seams[0].provider, ProviderKind::Codex);
+    assert_eq!(
+        file.seams[0].end.death.as_deref(),
+        Some("usage limit on Claude Code · continued on Codex")
+    );
+    flow.stop().await;
+}
+
+/// S38: a session waiting for its agent's reset goes on with another agent once the switch is
+/// turned on.
+#[tokio::test]
+async fn turning_the_switch_on_moves_a_waiting_session_to_another_agent() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agent-fallback-later",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    flow.say("Do the thing.").await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !moments(&flow)
+        .await
+        .iter()
+        .any(|text| text.contains("Your message waits"))
+    {
+        assert!(tokio::time::Instant::now() < deadline, "no wait");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+    // As the daemon does when the switch turns on (`wakes_waiting_work`).
+    flow.manager.retry_waiting_work().await;
+    flow.until("a turn on Codex", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let codex = seen(&log).into_iter().last().unwrap();
+    assert!(codex.input.contains("Do the thing."), "{}", codex.input);
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
+    flow.stop().await;
+}

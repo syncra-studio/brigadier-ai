@@ -145,6 +145,7 @@ fn sample(request: &CliRequest) -> CliReply {
                 agent: Agent::Claude,
                 switch_accounts: true,
             }],
+            switch_providers: false,
             accounts: vec![
                 brigadier_cli::models::Account {
                     id: "own".into(),

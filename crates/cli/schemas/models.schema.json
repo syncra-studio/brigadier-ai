@@ -5,6 +5,7 @@
   "required": [
     "models",
     "agents",
+    "switchProviders",
     "accounts",
     "guidance",
     "rules"
@@ -72,6 +73,9 @@
           }
         }
       }
+    },
+    "switchProviders": {
+      "type": "boolean"
     },
     "accounts": {
       "type": "array",

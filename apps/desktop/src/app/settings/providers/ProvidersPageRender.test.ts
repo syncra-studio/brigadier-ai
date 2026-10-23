@@ -20,6 +20,10 @@ test("Providers lists the agents, and an agent's page has its installation, acco
     { name: "Claude", state: "Ready · 3 accounts · v2.1.0", meter: "Weekly · in use69%" },
     { name: "Codex", state: "Ready · 1 account · v2.1.0", meter: "Weekly · in use69%" },
   ]);
+  // "Switch to another agent automatically" is back on the overview (S38, D23): off, and its
+  // switch writes the setting.
+  assert.deepEqual(seen.fallback, { row: true, on: false });
+  assert.equal(seen.fallbackAfter, true);
   // Both are installed: nothing under Not set up, and Add another agent is there.
   assert.equal(seen.notSetUp, 0);
   assert.equal(seen.addAgent, true);
@@ -198,7 +202,7 @@ test("Providers draws its cards, rows and switches as Settings › General does"
     agent: { cards: unknown[]; switch: unknown };
   };
   assert.ok(seen.general.card, "General has a card");
-  assert.equal(seen.overview.cards.length, 2);
+  assert.equal(seen.overview.cards.length, 3);
   for (const card of [...seen.overview.cards, ...seen.agent.cards]) assert.deepEqual(card, seen.general.card);
   assert.equal(seen.agent.cards.length, 3);
   assert.equal(seen.overview.hover, seen.overview.wash);
