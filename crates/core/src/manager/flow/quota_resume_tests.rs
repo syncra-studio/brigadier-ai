@@ -184,7 +184,7 @@ async fn continue_now_sends_the_waiting_message_at_once() {
     let (flow, turns) = limited_flow(
         "quota-continue-now",
         brigadier_providers::LimitKind::UsageWindow,
-        3_600_000,
+        Some(3_600_000),
     )
     .await;
     flow.manager
@@ -243,7 +243,7 @@ async fn a_credits_limit_never_resumes_on_its_own() {
     let (flow, turns) = limited_flow(
         "quota-credits",
         brigadier_providers::LimitKind::Credits,
-        300,
+        Some(300),
     )
     .await;
     let wait = flow
@@ -293,17 +293,53 @@ async fn a_credits_limit_never_resumes_on_its_own() {
     flow.stop().await;
 }
 
+/// Credits that ran out with no reset time named still wait, and Continue now sends the message.
+#[tokio::test]
+async fn credits_with_no_reset_time_wait_for_continue_now() {
+    let (flow, turns) = limited_flow(
+        "quota-credits-no-reset",
+        brigadier_providers::LimitKind::Credits,
+        None,
+    )
+    .await;
+    let wait = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .quota_wait
+        .unwrap();
+    assert_eq!(wait.resets_at_ms, None);
+    flow.manager
+        .continue_waiting(&flow.conversation)
+        .await
+        .unwrap();
+    flow.until("the request done", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    flow.stop().await;
+}
+
 /// A flow whose first turn hits a limit that resets in a moment; Codex is off, so nothing
 /// stands in and the thread waits. Also counts the turns.
 async fn waiting_flow(name: &str) -> (Flow, Arc<AtomicUsize>) {
-    limited_flow(name, brigadier_providers::LimitKind::UsageWindow, 1500).await
+    limited_flow(
+        name,
+        brigadier_providers::LimitKind::UsageWindow,
+        Some(1500),
+    )
+    .await
 }
 
-/// [`waiting_flow`] with a limit of `kind` that resets in `resets_in_ms`.
+/// [`waiting_flow`] with a limit of `kind` that resets in `resets_in_ms` (none: no reset time).
 async fn limited_flow(
     name: &str,
     kind: brigadier_providers::LimitKind,
-    resets_in_ms: i64,
+    resets_in_ms: Option<i64>,
 ) -> (Flow, Arc<AtomicUsize>) {
     let turns = Arc::new(AtomicUsize::new(0));
     let counted = turns.clone();
@@ -324,7 +360,7 @@ async fn limited_flow(
                         limit: Some(brigadier_providers::LimitHit {
                             kind,
                             window: Some("five_hour".into()),
-                            resets_at_ms: Some(crate::now_ms() + resets_in_ms),
+                            resets_at_ms: resets_in_ms.map(|ms| crate::now_ms() + ms),
                         }),
                         ..Reply::default()
                     }

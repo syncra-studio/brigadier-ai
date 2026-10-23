@@ -118,7 +118,7 @@ pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
         if error == INTERRUPTED_BY_QUIT || error == INTERRUPTED_BEFORE_START)
 }
 /// Sent with every turn while the session is in plan mode.
-const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. The plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then.";
+const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search) or with your own subagents, ask only what only they can decide (`brigadier ask`), then answer with the plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. They turn plan mode off when they agree; build only then.";
 
 /// Where a sent message went.
 #[derive(Debug, Clone)]
@@ -5663,12 +5663,15 @@ pub(crate) fn safe_file_name(name: &str) -> String {
     }
 }
 
-/// What a conversation whose model hit `limit` waits for: that limit's reset. Nothing when it
-/// isn't known (the turn fails as before).
+/// What a conversation whose model hit `limit` waits for: that limit's reset, or the user's
+/// Continue now for credits or a spend control. Nothing when a usage window's reset isn't
+/// known (the turn fails as before).
 fn own_reset(from: &ModelChoice, limit: &LimitHit) -> Option<ModelWait> {
-    limit.resets_at_ms.map(|resets_at_ms| ModelWait {
+    // Credits or a spend control wait for the user's Continue now, a reset time or not.
+    let waits = limit.resets_at_ms.is_some() || !resumes_on_its_own(Some(limit.kind));
+    waits.then(|| ModelWait {
         reason: format!("{} hit its usage limit", from.provider.label()),
-        resets_at_ms: Some(resets_at_ms),
+        resets_at_ms: limit.resets_at_ms,
     })
 }
 
