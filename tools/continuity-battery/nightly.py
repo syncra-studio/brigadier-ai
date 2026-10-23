@@ -27,7 +27,9 @@ def metrics(result):
     items = judge.get("items", {})
     opens = result.get("t4_scored", {})
     # A true cold return is a later request with no cache hit, not the initial cold start.
-    cold = [row for row in usage[1:] if row.get("kind") == "thread" and row.get("cached_input") == 0]
+    # The plain arm writes `kind`; the seam arm's rows are the daemon's own, with `step`.
+    cold = [row for row in usage[1:] if (row.get("kind") or row.get("step")) == "thread"
+            and row.get("cached_input") == 0]
     return {"usage": totals,
             "compactions": result.get("compactions"),
             "seams": result.get("seams_before_checks", result.get("size_seams_before_faults", 0)),
