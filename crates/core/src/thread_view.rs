@@ -41,11 +41,6 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<WorkerRow>>", optional)]
     pub workers: Vec<WorkerRow>,
-    /// The ledger the session keeps (`record/ledger.md`, S17), once it wrote one: Sources lists
-    /// it first.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub ledger: Option<String>,
 }
 
 /// One of a session's own workers, as its CLI and git show it: what the session's Workers
@@ -306,7 +301,6 @@ pub(crate) fn view(
         background: live.map(|live| live.background.clone()).unwrap_or_default(),
         mcp: live.map(|live| live.mcp.clone()).unwrap_or_default(),
         workers: Vec::new(),
-        ledger: None,
     }
 }
 

@@ -980,7 +980,8 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - Nothing of the user's is stripped (G17): project instructions, the user's MCP servers, skills and memory
     load as in a plain CLI. Brigadier's own additions are the only thing kept short.
   - The hand-off text is not in this file. It travels in the seam nudge and the successor's bootstrap (S22).
-  - The ledger shows in Sources and opens from there.
+  - The ledger is not shown in the UI: Sources stay what §1 defines (attachments, fetched pages,
+    searches, MCP servers).
 - **Done when:**
   - A provider test asserts the exact appended text, the Codex developer instructions and the env on both CLIs.
   - A byte test keeps the file under 2,000 bytes and 15 lines.

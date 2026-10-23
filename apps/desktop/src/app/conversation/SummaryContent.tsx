@@ -1,4 +1,4 @@
-import { FileTypeIcon, useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
+import { useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import {
   type ReactNode,
   useContext,
@@ -30,7 +30,7 @@ import {
   PullRequestMerged,
   PullRequestOpen,
 } from "@/components/icons";
-import { openFileTab, openPanelTab } from "@/state/sessionTabs";
+import { openPanelTab } from "@/state/sessionTabs";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/side-panel/WorkerSummary";
@@ -120,9 +120,8 @@ function statusOf(servers: readonly McpServerState[], used: string): McpServerSt
 }
 
 /**
- * What a session used, as its card's Sources list it (S14): the ledger it keeps, once it wrote one
- * (S17), then the files attached to the user's messages, then the pages its CLI fetched or
- * browsed, then the MCP servers it called, each
+ * What a session used, as its card's Sources list it (S14): the files attached to the user's
+ * messages, then the pages its CLI fetched or browsed, then the MCP servers it called, each
  * with its status as the CLI last said it (a sign-in it wants). Its searches are in the Sources
  * tab.
  */
@@ -130,16 +129,12 @@ export function useUsedSources(conversationId: string): UsedSource[] {
   const messages = useApp((s) => s.threads[conversationId]?.items);
   const entries = useEntries(conversationId);
   const servers = useSessionMcp(conversationId);
-  const ledger = useCliThread((s) => s.views[conversationId]?.ledger);
   return useMemo(() => {
     const users = (messages ?? []).filter((message) => message.role === "user");
     const files = [...new Map(users.flatMap((message) => message.attachments).map((file) => [file.id, file])).values()];
     const { pages } = webUse(entries);
     const used = usedMcpServers(entries);
     return [
-      ...(ledger
-        ? [{ key: "ledger", icon: <FileTypeIcon name="ledger.md" />, label: "Ledger", title: ledger, open: () => openFileTab(conversationId, ledger) }]
-        : []),
       ...files.map((file): UsedSource => ({ key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name })),
       ...pages.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
       ...used.map((name): UsedSource => {
@@ -148,7 +143,7 @@ export function useUsedSources(conversationId: string): UsedSource[] {
         return { key: `mcp:${name}`, icon: <Plugin />, label, title: label, meta: state?.status === "needs-auth" ? "Needs sign-in" : undefined };
       }),
     ];
-  }, [conversationId, ledger, messages, entries, servers]);
+  }, [conversationId, messages, entries, servers]);
 }
 
 /** Sources shown before "View all". */

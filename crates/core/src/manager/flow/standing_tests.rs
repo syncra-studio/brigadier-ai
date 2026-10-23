@@ -126,10 +126,10 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
     }
 }
 
-/// The ledger shows in Sources once the session wrote one, and opens from there by its full
-/// path; nothing else outside the checkout does.
+/// The ledger is the thread's working memory alone: writing one gives the session's thread view
+/// no ledger field, whether or not it exists.
 #[tokio::test]
-async fn the_ledger_shows_once_written_and_opens_by_its_path() {
+async fn a_session_with_a_ledger_shows_no_ledger_in_its_thread_view() {
     let flow = Flow::start(
         "standing-ledger",
         Options::default(),
@@ -139,30 +139,17 @@ async fn the_ledger_shows_once_written_and_opens_by_its_path() {
     flow.say("Hello").await;
     flow.settled().await;
     let id = flow.conversation.clone();
-    assert_eq!(flow.manager.thread_view(&id).unwrap().ledger, None);
+    let view = flow.manager.thread_view(&id).unwrap();
+    let json = serde_json::to_value(&view).unwrap();
+    assert!(json.get("ledger").is_none(), "{json}");
     let ledger = flow.manager.session_dir(&id).record().join("ledger.md");
     std::fs::write(
         &ledger,
         "- Rule from the user: \"tabs never\" (message 1, project)\n",
     )
     .unwrap();
-    let shown = flow
-        .manager
-        .thread_view(&id)
-        .unwrap()
-        .ledger
-        .expect("listed");
-    assert_eq!(shown, ledger.display().to_string());
-    let file = flow.manager.read_file(&id, shown.clone()).await.unwrap();
-    assert_eq!(file.path, shown);
-    assert!(file.text.unwrap().contains("tabs never"));
-    let record = flow.manager.session_dir(&id).record();
-    let out = record
-        .join("..")
-        .join("tmp")
-        .join("x")
-        .display()
-        .to_string();
-    assert!(flow.manager.read_file(&id, out).await.is_err());
+    let view = flow.manager.thread_view(&id).unwrap();
+    let json = serde_json::to_value(&view).unwrap();
+    assert!(json.get("ledger").is_none(), "{json}");
     flow.stop().await;
 }

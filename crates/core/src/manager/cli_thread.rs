@@ -321,10 +321,8 @@ impl SessionManager {
             })
             .collect();
         let records = thread_view::read_turns(&record);
-        let ledger = self.session_dir(id).ledger();
         let threads = self.cli_threads.lock().unwrap();
-        let mut view = thread_view::view(files, threads.get(id), &records);
-        view.ledger = ledger.is_file().then(|| ledger.display().to_string());
+        let view = thread_view::view(files, threads.get(id), &records);
         Ok(view)
     }
 
