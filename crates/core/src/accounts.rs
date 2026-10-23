@@ -249,6 +249,7 @@ pub enum OrderReason {
     /// It can't take work now (a limit, or a window used up): until `ready_at_ms`, when known.
     AtLimit {
         #[ts(optional)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         ready_at_ms: Option<i64>,
     },
     /// Not signed in.
@@ -504,6 +505,15 @@ mod tests {
         );
         assert_eq!(mask_email("me@mail.example.co.uk"), "me•••••@•••••.uk");
         assert_eq!(mask_email("Work account"), "Work account");
+    }
+
+    #[test]
+    fn an_unknown_reset_is_left_out_as_the_app_reads_it() {
+        let unknown = OrderReason::AtLimit { ready_at_ms: None };
+        assert_eq!(
+            serde_json::to_value(&unknown).unwrap(),
+            serde_json::json!({"kind": "atLimit"})
+        );
     }
     use crate::model::AccountEntry;
     use brigadier_providers::{LimitHit, LimitKind, QuotaSource, QuotaWindow};
