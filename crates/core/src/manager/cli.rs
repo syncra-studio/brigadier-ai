@@ -58,7 +58,7 @@ pub(super) fn short(id: &str) -> String {
     id[id.len().saturating_sub(8)..].to_owned()
 }
 
-fn agent(provider: ProviderKind) -> Agent {
+pub(super) fn agent(provider: ProviderKind) -> Agent {
     match provider {
         ProviderKind::Claude => Agent::Claude,
         ProviderKind::Codex => Agent::Codex,
@@ -428,6 +428,7 @@ impl SessionManager {
                 options,
                 title,
             } => self.cli_ask(caller, question, options, title).await,
+            CliRequest::Why { path, line } => self.cli_why(&path, line).await,
         };
         reply.unwrap_or_else(failed)
     }

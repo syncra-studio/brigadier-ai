@@ -369,7 +369,7 @@ fn file_stamp(path: &Path) -> Option<String> {
 
 /// The stamp of a session's transcript (its lineage and each CLI file in it), and those files
 /// with their CLI; none without a lineage.
-fn transcript_stamp(
+pub(crate) fn transcript_stamp(
     record: &Path,
 ) -> Option<(String, Vec<(brigadier_providers::ProviderKind, PathBuf)>)> {
     let mut stamp = file_stamp(&record.join("lineage.json"))?;

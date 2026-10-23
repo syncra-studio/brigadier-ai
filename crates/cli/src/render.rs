@@ -4,7 +4,8 @@ use base64::Engine as _;
 
 use crate::protocol::{
     Answer, AskOutput, Changes, CloseOutput, Item, ItemKind, ReadOutput, SendOutput,
-    SessionsOutput, ShowOutput, StartOutput, ToolOutput, WaitOutput, WorkerRow, WorkersOutput,
+    SessionsOutput, ShowOutput, StartOutput, ToolOutput, WaitOutput, WhyBy, WhyOutput, WorkerRow,
+    WorkersOutput,
 };
 
 /// Lays out rows in columns, two spaces apart; the last column is never padded.
@@ -397,6 +398,134 @@ pub fn ask(output: &AskOutput) -> String {
 }
 
 /// A usage window id as people say it ("five_hour" -> "5-hour").
+/// `brigadier why`: the line, who wrote it, and what was asked and answered then.
+pub fn why(output: &WhyOutput) -> String {
+    let mut out = format!("{}:{}  {}\n", output.path, output.line, output.text.trim());
+    let session = output.session.as_ref().map(|session| {
+        format!(
+            "session {} \"{}\" ({})",
+            session.id,
+            session.title,
+            session.agent.word()
+        )
+    });
+    let turn_line = |turn: &crate::protocol::WhyTurn| {
+        let mut line = format!("turn {}", turn.number);
+        if let Some(started) = turn.started_at_ms {
+            line.push_str(&format!(", {}", local_time(started)));
+        }
+        line
+    };
+    match output.by {
+        WhyBy::Turn => {
+            if let (Some(turn), Some(session)) = (&output.turn, &session) {
+                out.push_str(&format!("Written in {} of {session}.\n", turn_line(turn)));
+            }
+        }
+        WhyBy::Worker => {
+            if let Some(worker) = &output.worker {
+                out.push_str(&format!(
+                    "Written by worker {} \"{}\" ({})",
+                    worker.id,
+                    worker.title,
+                    worker.agent.word()
+                ));
+                if let Some(session) = &session {
+                    out.push_str(&format!(" of {session}"));
+                }
+                match &output.turn {
+                    Some(turn) => out.push_str(&format!(", landed in {}.\n", turn_line(turn))),
+                    None => out.push_str(", landed outside any turn.\n"),
+                }
+            }
+        }
+        WhyBy::Commit => out.push_str("No Brigadier turn wrote it.\n"),
+        WhyBy::Uncommitted => out.push_str(
+            "No Brigadier turn wrote it, and it isn't committed: it was edited outside any \
+             session's turn.\n",
+        ),
+    }
+    for moved in &output.moved_by {
+        out.push_str(&format!(
+            "Moved later by turn {} of session {}.\n",
+            moved.turn, moved.session
+        ));
+    }
+    if let Some(commit) = &output.commit {
+        let id = &commit.id[..commit.id.len().min(12)];
+        out.push_str(&format!(
+            "Commit {id} by {}, {}: {}\n",
+            commit.author,
+            local_time(commit.at_ms),
+            commit.summary
+        ));
+        if let Some(branch) = &commit.branch {
+            out.push_str(&format!("From branch {branch}"));
+            if let Some(merge) = &commit.merge {
+                out.push_str(&format!(", merged in {}", &merge[..merge.len().min(12)]));
+            }
+            out.push_str(".\n");
+        }
+    }
+    let block = |out: &mut String, head: &str, text: &str| {
+        out.push_str(&format!("\n{head}\n"));
+        for line in text.trim_end().lines() {
+            out.push_str(&format!("  {line}\n"));
+        }
+    };
+    if let Some(worker) = &output.worker {
+        if let Some(gone) = &worker.gone {
+            out.push_str(&format!("\n{gone}\n"));
+        }
+        if let Some(task) = &worker.task {
+            block(&mut out, "Its task:", task);
+        }
+        if let Some(reply) = &worker.reply {
+            block(
+                &mut out,
+                &reply_head("Its last reply", worker.reply_cut, &worker.read),
+                reply,
+            );
+        }
+        return out;
+    }
+    let Some(turn) = &output.turn else {
+        return out;
+    };
+    if let Some(gone) = &turn.gone {
+        out.push_str(&format!("\n{gone}\n"));
+    }
+    if let Some(message) = &turn.message {
+        block(&mut out, "Message:", message);
+    }
+    if let Some(reply) = &turn.reply {
+        block(
+            &mut out,
+            &reply_head("Reply", turn.reply_cut, &turn.read),
+            reply,
+        );
+    }
+    if !turn.ledger.is_empty() {
+        out.push_str("\nLedger, written in that turn:\n");
+        for entry in &turn.ledger {
+            for line in entry.text.trim_end().lines() {
+                out.push_str(&format!("  {}\n", line.trim_start()));
+            }
+        }
+    }
+    out
+}
+
+/// "Reply (its start; whole: brigadier brain read …):".
+fn reply_head(what: &str, cut: bool, read: &Option<String>) -> String {
+    match (cut, read) {
+        (true, Some(read)) => format!("{what} (its start; whole: {read}):"),
+        (true, None) => format!("{what} (its start):"),
+        (false, Some(read)) => format!("{what} ({read}):"),
+        (false, None) => format!("{what}:"),
+    }
+}
+
 fn window_word(id: &str) -> std::borrow::Cow<'_, str> {
     match id {
         "five_hour" => "5-hour".into(),
@@ -576,6 +705,60 @@ mod tests {
     use super::*;
     use crate::models::{Account, ModelsOutput, Usage};
     use crate::protocol::Agent;
+
+    #[test]
+    fn why_names_the_turn_its_message_reply_and_ledger() {
+        use crate::protocol::{WhyLedgerEntry, WhySession, WhyTurn};
+        let output = WhyOutput {
+            path: "src/a.rs".into(),
+            line: 4,
+            text: "    let x = 1;".into(),
+            by: WhyBy::Turn,
+            session: Some(WhySession {
+                id: "a1b2c3d4".into(),
+                title: "Parser".into(),
+                agent: crate::protocol::Agent::Claude,
+            }),
+            turn: Some(WhyTurn {
+                number: 2,
+                started_at_ms: None,
+                ended_at_ms: None,
+                path: "src/a.rs".into(),
+                line: 3,
+                message: Some("Add x.\nKeep it short.".into()),
+                reply: Some("Added x.".into()),
+                reply_cut: true,
+                read: Some("brigadier brain read a1b2c3d4 7 9".into()),
+                ledger: vec![WhyLedgerEntry {
+                    id: Some("L4".into()),
+                    text: "- L4 · 10-24 09:12 · gen 1 · Decision: x starts at 1".into(),
+                }],
+                gone: None,
+            }),
+            worker: None,
+            commit: None,
+            moved_by: Vec::new(),
+        };
+        assert_eq!(
+            why(&output),
+            "src/a.rs:4  let x = 1;\n\
+             Written in turn 2 of session a1b2c3d4 \"Parser\" (claude).\n\
+             \nMessage:\n  Add x.\n  Keep it short.\n\
+             \nReply (its start; whole: brigadier brain read a1b2c3d4 7 9):\n  Added x.\n\
+             \nLedger, written in that turn:\n  - L4 · 10-24 09:12 · gen 1 · Decision: x starts at 1\n"
+        );
+        let outside = WhyOutput {
+            by: WhyBy::Uncommitted,
+            session: None,
+            turn: None,
+            ..output
+        };
+        assert!(
+            why(&outside).contains("isn't committed"),
+            "{}",
+            why(&outside)
+        );
+    }
 
     #[test]
     fn models_reads_window_ids_as_words_and_times_as_times_not_epoch_ms() {

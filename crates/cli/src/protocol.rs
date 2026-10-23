@@ -86,6 +86,13 @@ pub enum CliRequest {
         action: String,
         args: serde_json::Value,
     },
+    /// Which session turn wrote a line of a file (S39).
+    Why {
+        /// The file, as an absolute path: the daemon doesn't know the caller's folder.
+        path: String,
+        /// From 1.
+        line: u32,
+    },
     /// A question on a card for the user, answered when they answer it.
     Ask {
         question: String,
@@ -242,7 +249,7 @@ pub enum Answer {
 pub enum CliReply {
     /// The request's output: [`SessionsOutput`], [`WorkersOutput`], [`ShowOutput`],
     /// [`ReadOutput`], [`StartOutput`], [`SendOutput`], [`WaitOutput`], [`CloseOutput`],
-    /// [`ToolOutput`] or [`AskOutput`], by request.
+    /// [`ToolOutput`], [`AskOutput`] or [`WhyOutput`], by request.
     Ok {
         output: serde_json::Value,
     },
@@ -846,4 +853,129 @@ mod tests {
         }
         assert_eq!(Tool::of_command("sessions"), None);
     }
+}
+
+/// `brigadier why`: who wrote a line, read from the CLI's own session files, the turn
+/// snapshots and git.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhyOutput {
+    /// The file, relative to its checkout's top level.
+    pub path: String,
+    pub line: u32,
+    /// The line as the file has it now.
+    pub text: String,
+    pub by: WhyBy,
+    /// The session whose turn wrote it, or landed the worker's work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<WhySession>,
+    /// That turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<WhyTurn>,
+    /// The worker that wrote it (`by` is `worker`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WhyWorker>,
+    /// The commit that holds it: `git blame`'s, or the one made during the turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<WhyCommit>,
+    /// Later turns that only moved the line, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved_by: Vec<WhyMove>,
+}
+
+/// Who wrote a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WhyBy {
+    /// A session's turn.
+    Turn,
+    /// A worker, whose work landed in the session's checkout.
+    Worker,
+    /// A commit outside any session's turn.
+    Commit,
+    /// An edit outside any session's turn, not committed.
+    Uncommitted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhySession {
+    pub id: String,
+    pub title: String,
+    pub agent: Agent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhyTurn {
+    /// Its number in the session, from 1.
+    pub number: u32,
+    pub started_at_ms: Option<i64>,
+    pub ended_at_ms: Option<i64>,
+    /// Where the line was when the turn ended (a later turn may have moved it).
+    pub path: String,
+    pub line: u32,
+    /// The user's message that started it, whole.
+    pub message: Option<String>,
+    /// Its last reply, from the start; `reply_cut` when trimmed.
+    pub reply: Option<String>,
+    pub reply_cut: bool,
+    /// The command that prints the message and the reply whole.
+    pub read: Option<String>,
+    /// The session's ledger entries stamped during the turn, verbatim.
+    pub ledger: Vec<WhyLedgerEntry>,
+    /// Why its message and reply can't be read: its CLI's session file is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gone: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhyLedgerEntry {
+    /// `L<n>`; absent for an entry without one.
+    pub id: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhyWorker {
+    pub id: String,
+    pub number: u32,
+    pub title: String,
+    pub agent: Agent,
+    pub branch: Option<String>,
+    /// The first message it was given, whole.
+    pub task: Option<String>,
+    /// Its last reply, from the start; `reply_cut` when trimmed.
+    pub reply: Option<String>,
+    pub reply_cut: bool,
+    /// The command that prints its task and reply whole.
+    pub read: Option<String>,
+    /// Why its task and reply can't be read: its CLI's session file is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gone: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhyCommit {
+    pub id: String,
+    pub author: String,
+    pub at_ms: i64,
+    pub summary: String,
+    /// The merge, made during the turn, that brought it in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge: Option<String>,
+    /// The branch it came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhyMove {
+    /// The session's id.
+    pub session: String,
+    pub turn: u32,
 }

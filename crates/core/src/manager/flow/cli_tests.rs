@@ -55,6 +55,7 @@ pub(super) async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         CliRequest::Close { .. } => "close",
         CliRequest::Tool { tool, .. } => tool.command(),
         CliRequest::Ask { .. } => "ask",
+        CliRequest::Why { .. } => "why",
     };
     let caller = turn
         .host

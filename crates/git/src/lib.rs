@@ -16,6 +16,7 @@ mod request_changes;
 pub mod snapshot;
 mod source;
 mod trailers;
+pub mod why;
 mod worktree;
 
 use std::{ffi::OsString, path::PathBuf};

@@ -266,6 +266,34 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 screen,
             }
         }
+        "why" => {
+            let given = args.one("file").unwrap_or_default();
+            let (file, line) = match (given.rsplit_once(':'), number("line")?) {
+                (_, Some(line)) => (given, line),
+                (Some((file, line)), None)
+                    if !file.is_empty()
+                        && !line.is_empty()
+                        && line.bytes().all(|b| b.is_ascii_digit()) =>
+                {
+                    match line.parse::<u32>() {
+                        Ok(line) if line > 0 => (file, line),
+                        _ => return Err(error("the line must be a whole number above 0".into())),
+                    }
+                }
+                _ => {
+                    return Err(error(format!(
+                        "which line of {given:?}? give <file>:<line> or --line N"
+                    )));
+                }
+            };
+            CliRequest::Why {
+                path: std::path::absolute(file)
+                    .map_err(|err| error(format!("{file}: {err}")))?
+                    .display()
+                    .to_string(),
+                line,
+            }
+        }
         "start" => {
             if args.switch("local") && args.switch("worktree") {
                 return Err(error("--local and --worktree don't go together".into()));
@@ -913,6 +941,33 @@ mod tests {
         assert!(fails(&["send", "ab12"]).contains("missing <text>"));
         assert!(fails(&["send", "ab12", "--allow", "--deny"]).contains("don't go together"));
         assert!(fails(&["send", "ab12", "--deny", "no"]).contains("take no message"));
+    }
+
+    #[test]
+    fn why_takes_a_file_and_line_from_this_folder() {
+        let here = std::env::current_dir().unwrap();
+        let path = |file: &str| here.join(file).display().to_string();
+        assert_eq!(
+            run(&["why", "src/a.rs:12"]).0,
+            CliRequest::Why {
+                path: path("src/a.rs"),
+                line: 12
+            }
+        );
+        assert_eq!(
+            run(&["why", "src/a:b.rs", "--line", "3", "--json"]),
+            (
+                CliRequest::Why {
+                    path: path("src/a:b.rs"),
+                    line: 3
+                },
+                true
+            )
+        );
+        assert!(fails(&["why", "src/a.rs"]).contains("which line"));
+        assert!(fails(&["why", "src/a.rs:0"]).contains("whole number"));
+        assert!(fails(&["why", "src/a.rs:x"]).contains("which line"));
+        assert!(fails(&["why"]).contains("missing <file>"));
     }
 
     #[test]

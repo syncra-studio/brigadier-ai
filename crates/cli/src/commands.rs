@@ -567,6 +567,23 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/transcript.schema.json"),
     },
     Command {
+        name: "why",
+        summary: "Which session turn wrote a line, and what was asked and answered then.",
+        details: "`why <file>:<line>` (or `<file> --line N`; the path from this folder) walks \
+                  the turn snapshots of the sessions that worked in that checkout, newest \
+                  first, to the turn that wrote the line as it is now, through later moves. It \
+                  prints that turn's session, number and time, the user's message whole, the \
+                  reply's start with the command that reads it whole, and the ledger entries \
+                  stamped in that turn, read from the CLI's own session files. A worker's line \
+                  names the worker; a line no turn wrote names `git blame`'s commit.",
+        args: &[
+            positional("file", "The file, with :<line> unless --line gives it."),
+            flag("line", "N", "The line, from 1."),
+        ],
+        available: true,
+        schema: include_str!("../schemas/why.schema.json"),
+    },
+    Command {
         name: "code",
         summary: "Search the repository's code index.",
         details: "Instant, and kept current as files change. `search <query…>` finds symbol \

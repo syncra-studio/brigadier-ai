@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier why --json",
+  "type": "object",
+  "required": [
+    "path",
+    "line",
+    "text",
+    "by"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "The file, relative to its checkout's top level."
+    },
+    "line": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "text": {
+      "type": "string",
+      "description": "The line as the file has it now."
+    },
+    "by": {
+      "enum": [
+        "turn",
+        "worker",
+        "commit",
+        "uncommitted"
+      ],
+      "description": "A session's turn, a worker whose work landed, a commit outside any turn, or an edit outside any turn not committed."
+    },
+    "session": {
+      "type": "object",
+      "description": "The session whose turn wrote it, or landed the worker's work.",
+      "required": [
+        "id",
+        "title",
+        "agent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/agent"
+        }
+      }
+    },
+    "turn": {
+      "type": "object",
+      "required": [
+        "number",
+        "startedAtMs",
+        "endedAtMs",
+        "path",
+        "line",
+        "message",
+        "reply",
+        "replyCut",
+        "read",
+        "ledger"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "startedAtMs": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "endedAtMs": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "description": "Where the line was when the turn ended."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The user's message that started the turn, whole."
+        },
+        "reply": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The turn's last reply, from its start."
+        },
+        "replyCut": {
+          "type": "boolean"
+        },
+        "read": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The command that prints the message and the reply whole."
+        },
+        "ledger": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "text"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "gone": {
+          "type": "string",
+          "description": "Why the message and reply can't be read."
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "required": [
+        "id",
+        "number",
+        "title",
+        "agent",
+        "branch",
+        "task",
+        "reply",
+        "replyCut",
+        "read"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/agent"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The first message it was given, whole."
+        },
+        "reply": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replyCut": {
+          "type": "boolean"
+        },
+        "read": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gone": {
+          "type": "string"
+        }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "required": [
+        "id",
+        "author",
+        "atMs",
+        "summary"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "atMs": {
+          "type": "integer"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "merge": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        }
+      }
+    },
+    "movedBy": {
+      "type": "array",
+      "description": "Later turns that only moved the line, newest first.",
+      "items": {
+        "type": "object",
+        "required": [
+          "session",
+          "turn"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "agent": {
+      "enum": [
+        "claude",
+        "codex"
+      ]
+    }
+  }
+}

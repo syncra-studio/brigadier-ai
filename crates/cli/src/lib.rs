@@ -147,6 +147,7 @@ fn print(
         "wait" => present(output, json, render::wait),
         "close" => present(output, json, render::close),
         "ask" => present(output, json, render::ask),
+        "why" => present(output, json, render::why),
         "ledger" => present(output, json, |output: &protocol::LedgerOutput| {
             output.text.clone()
         }),

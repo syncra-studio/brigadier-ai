@@ -28,6 +28,7 @@ mod cli;
 mod cli_ledger;
 mod cli_thread;
 mod cli_tools;
+mod cli_why;
 mod close_tab;
 mod closing;
 mod codex_children;

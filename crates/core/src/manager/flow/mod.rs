@@ -2282,6 +2282,8 @@ mod seam_tests;
 mod source_branch_tests;
 #[cfg(unix)]
 mod turn_changes_tests;
+#[cfg(unix)]
+mod why_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]

@@ -328,6 +328,16 @@ fn split_stamp(body: &str) -> (Option<u32>, &str) {
     (Some(id), rest)
 }
 
+/// When `add` wrote an entry: its stamp's `MM-DD HH:MM`, local time.
+pub(crate) fn stamped_at(entry: &Entry) -> Option<&str> {
+    let line = entry.text.lines().next()?.trim_start();
+    let body = list_body(line).unwrap_or(line);
+    let (head, rest) = body.split_once(" · ")?;
+    id_of(head)?;
+    let (time, _) = rest.split_once(" · ")?;
+    (time.len() == 11 && time.as_bytes()[2] == b'-').then_some(time)
+}
+
 /// `L14` → 14.
 fn id_of(word: &str) -> Option<u32> {
     let digits = word.strip_prefix('L')?;

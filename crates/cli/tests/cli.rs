@@ -416,6 +416,70 @@ fn sample(request: &CliRequest) -> CliReply {
             images: Vec::new(),
             saved: Vec::new(),
         }),
+        // By line: a turn's (3), a worker's (4), the user's commit (5).
+        CliRequest::Why { path, line } => {
+            assert!(Path::new(path).is_absolute(), "{path}");
+            let turn = WhyTurn {
+                number: 2,
+                started_at_ms: Some(1_792_783_200_000),
+                ended_at_ms: None,
+                path: "src/main.rs".into(),
+                line: 3,
+                message: Some("Count the lines.".into()),
+                reply: Some("Counted.".into()),
+                reply_cut: true,
+                read: Some("brigadier brain read a1b2c3d4 4 6".into()),
+                ledger: vec![WhyLedgerEntry {
+                    id: Some("L3".into()),
+                    text: "- L3 · 10-23 08:10 · gen 1 · Decision: keep tabs".into(),
+                }],
+                gone: (*line == 4).then(|| "Its CLI session file is gone.".into()),
+            };
+            let commit = WhyCommit {
+                id: "0123456789abcdef0123456789abcdef01234567".into(),
+                author: "Test".into(),
+                at_ms: 1_792_783_200_000,
+                summary: "Start".into(),
+                merge: (*line == 4).then(|| "1123456789abcdef0123456789abcdef01234567".into()),
+                branch: (*line == 4).then(|| "brigadier/count".into()),
+            };
+            CliReply::ok(&WhyOutput {
+                path: "src/main.rs".into(),
+                line: *line,
+                text: "fn main() {}".into(),
+                by: match line {
+                    3 => WhyBy::Turn,
+                    4 => WhyBy::Worker,
+                    _ => WhyBy::Commit,
+                },
+                session: (*line != 5).then(|| WhySession {
+                    id: "a1b2c3d4".into(),
+                    title: "Count".into(),
+                    agent: Agent::Claude,
+                }),
+                turn: (*line != 5).then_some(turn),
+                worker: (*line == 4).then(|| WhyWorker {
+                    id: "e5f6a7b8".into(),
+                    number: 1,
+                    title: "Count the lines".into(),
+                    agent: Agent::Codex,
+                    branch: Some("brigadier/count".into()),
+                    task: Some("Count the lines in README.".into()),
+                    reply: Some("Three.".into()),
+                    reply_cut: false,
+                    read: Some("brigadier brain read a1b2c3d4/1-e5f6a7b8 0 9".into()),
+                    gone: None,
+                }),
+                commit: (*line != 3).then_some(commit),
+                moved_by: (*line == 3)
+                    .then(|| WhyMove {
+                        session: "a1b2c3d4".into(),
+                        turn: 3,
+                    })
+                    .into_iter()
+                    .collect(),
+            })
+        }
         CliRequest::Ask { options, .. } => CliReply::ok(&AskOutput {
             answer: options
                 .first()
@@ -597,6 +661,9 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["code", "search", "--kind", "symbol", "--json", "ToolHost"],
         &["code", "refs", "cli_call", "--json"],
         &["code", "map", "--json"],
+        &["why", "src/main.rs:3", "--json"],
+        &["why", "src/main.rs", "--line", "4", "--json"],
+        &["why", "src/main.rs:5", "--json"],
         &[
             "report", "save", "--title", "Printers", "--json", "Bambu", "A1.",
         ],
