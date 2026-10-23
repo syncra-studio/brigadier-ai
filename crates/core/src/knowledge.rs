@@ -174,36 +174,6 @@ pub fn cold_rebirth_min_tokens(provider: ProviderKind, window: Option<i64>) -> i
     COLD_REBIRTH_MIN_TOKENS.min(rebirth_thresholds(provider, window).prepare_tokens)
 }
 
-/// The most context a worker carries before it is handed over to a fresh session.
-const WORKER_HANDOFF_MAX_TOKENS: i64 = 200_000;
-
-/// The worker context at which a worker is handed over to a fresh session (PLAN.md §7): 200k
-/// tokens (SESSION-FIXES-PLAN.md Q6.4) or 70% of its model's context window, whichever comes
-/// first. A debug build takes
-/// `BRIGADIER_WORKER_HANDOFF_TOKENS`, so a hand-off can be tried on a small task.
-pub fn worker_handoff_tokens(window: Option<i64>) -> i64 {
-    if cfg!(debug_assertions)
-        && let Some(tokens) = std::env::var("BRIGADIER_WORKER_HANDOFF_TOKENS")
-            .ok()
-            .and_then(|value| value.trim().parse::<i64>().ok())
-            .filter(|tokens| *tokens > 0)
-    {
-        return tokens;
-    }
-    let size = window.filter(|size| *size > 0).unwrap_or(DEFAULT_WINDOW);
-    WORKER_HANDOFF_MAX_TOKENS.min(size * 7 / 10)
-}
-
-/// Whether a worker session at `tokens` is handed over, given the hand-off size `at` and the
-/// session's first context size `start` (a fresh session already carries its hand-off). A
-/// session must grow by at least half the hand-off size since it started, so one that starts
-/// near the size is not handed over again at once; there is no limit on how many hand-overs a
-/// task makes. Never later than `cap`, below where the CLI itself would act on a full context
-/// (BUILD-PLAN D2.3).
-pub fn worker_handoff_due(tokens: i64, start: Option<i64>, at: i64, cap: i64) -> bool {
-    tokens >= at.max(start.unwrap_or(0) + at / 2).min(cap)
-}
-
 /// The room Claude keeps in its window for the reply (its CLI's default most output tokens): a
 /// request whose context leaves less is refused.
 const CLAUDE_OUTPUT_ROOM: i64 = 32_000;
@@ -234,22 +204,6 @@ pub fn hard_line(provider: ProviderKind, window: Option<i64>) -> i64 {
         return tokens;
     }
     context_ceiling(provider, window) * 85 / 100
-}
-
-/// A worker's hard line where its provider isn't known: the lower of the two.
-pub fn worker_hard_line(window: Option<i64>) -> i64 {
-    hard_line(ProviderKind::Claude, window).min(hard_line(ProviderKind::Codex, window))
-}
-
-/// Where a worker is first asked to wrap up for a hand-off: [`worker_handoff_tokens`], kept
-/// below the hard line so the steer comes, and can come again, before the turn is stopped. An
-/// unknown window has no hard line (see `worker_context`), so nothing to keep below.
-pub fn worker_handoff_at(window: Option<i64>) -> i64 {
-    let at = worker_handoff_tokens(window);
-    match window {
-        Some(_) => at.min(worker_hard_line(window) * 85 / 100),
-        None => at,
-    }
 }
 
 /// How much more a context grows, past a first wrap-up steer, before the steer is sent again:
@@ -359,59 +313,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_hand_off_comes_before_the_cli_acts_on_a_full_context() {
-        // A fresh session that started large would grow to 250k first: capped below the hard
-        // line of a 200k-window Codex model (153k).
-        let cap = hard_line(ProviderKind::Codex, Some(200_000));
-        assert_eq!(cap, 153_000);
-        assert!(!worker_handoff_due(140_000, Some(100_000), 140_000, cap));
-        assert!(worker_handoff_due(153_000, Some(100_000), 140_000, cap));
+    fn the_hard_line_comes_before_the_cli_acts_on_a_full_context() {
+        assert_eq!(hard_line(ProviderKind::Codex, Some(200_000)), 153_000);
         // Claude refuses once less than its reply's room is left.
         assert_eq!(
             context_ceiling(ProviderKind::Claude, Some(200_000)),
             168_000
         );
         assert_eq!(hard_line(ProviderKind::Claude, Some(200_000)), 142_800);
-        assert_eq!(worker_hard_line(Some(200_000)), 142_800);
-        assert_eq!(worker_hard_line(Some(1_000_000)), 765_000);
         assert_eq!(steer_stretch(140_000, 170_000), 10_000);
         assert_eq!(steer_stretch(200_000, 850_000), 50_000);
-    }
-
-    #[test]
-    fn a_first_session_hands_over_at_the_size() {
-        assert!(!worker_handoff_due(
-            159_999,
-            Some(15_000),
-            160_000,
-            i64::MAX
-        ));
-        assert!(worker_handoff_due(160_000, Some(15_000), 160_000, i64::MAX));
-        assert!(worker_handoff_due(160_000, None, 160_000, i64::MAX));
-    }
-
-    #[test]
-    fn a_fresh_session_near_the_size_needs_headroom() {
-        // Started at 28k with the size at 25k: not at once, only after growing by half of it.
-        assert!(!worker_handoff_due(28_000, Some(28_000), 25_000, i64::MAX));
-        assert!(!worker_handoff_due(40_000, Some(28_000), 25_000, i64::MAX));
-        assert!(worker_handoff_due(40_500, Some(28_000), 25_000, i64::MAX));
-    }
-
-    #[test]
-    fn a_worker_hands_over_at_200k_or_70_percent_of_its_window_and_again_after() {
-        if std::env::var_os("BRIGADIER_WORKER_HANDOFF_TOKENS").is_some() {
-            return;
-        }
-        assert_eq!(worker_handoff_tokens(Some(1_000_000)), 200_000);
-        assert_eq!(worker_handoff_tokens(Some(272_000)), 190_400);
-        assert_eq!(worker_handoff_tokens(None), 140_000);
-        // Asked below the hard line, so the steer has room before the stop.
-        assert_eq!(worker_handoff_at(Some(1_000_000)), 200_000);
-        assert_eq!(worker_handoff_at(Some(200_000)), 121_380);
-        assert_eq!(worker_handoff_at(None), 140_000);
-        // No limit on how many: a successor that started small hands over again.
-        assert!(worker_handoff_due(200_000, Some(30_000), 200_000, i64::MAX));
     }
 
     #[test]
