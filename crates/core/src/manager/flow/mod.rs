@@ -217,6 +217,7 @@ impl Turn {
             agent: None,
             model: None,
             effort: None,
+            work: None,
             local: false,
             repo: None,
             base: None,

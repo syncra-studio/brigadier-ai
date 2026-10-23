@@ -340,6 +340,13 @@ impl SessionManager {
         std::fs::rename(&staged, &path).map_err(io)?;
         self.model_rules()
     }
+    /// `brigadier start --work`'s row: the user's row of that work, else the shipped one (S32).
+    pub(super) fn work_row(&self, work: &str) -> Result<Option<Guidance>> {
+        let user = editable(&self.models_rules_path(), DEFAULT_RULES)?;
+        Ok(guidance(GUIDANCE, &user)
+            .into_iter()
+            .find(|row| row.work.trim().eq_ignore_ascii_case(work.trim())))
+    }
     pub(super) fn model_policy(&self) -> Result<Policy> {
         Policy::parse(&editable(&self.models_rules_path(), DEFAULT_RULES)?)
     }

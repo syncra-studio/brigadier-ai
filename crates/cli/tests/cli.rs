@@ -282,6 +282,12 @@ fn sample(request: &CliRequest) -> CliReply {
             },
             permission: start.permission.unwrap_or(Permission::AcceptEdits),
             base: (!start.local).then(|| "brigadier/0000c0de/session".into()),
+            // `--work` answers with the row that picked what the flags left out.
+            row: start.work.as_ref().map(|work| StartRow {
+                work: work.clone(),
+                source: "user".into(),
+                picked: vec!["agent".into(), "effort".into()],
+            }),
         }),
         CliRequest::Send { id, answer, .. } => CliReply::ok(&SendOutput {
             id: id.clone(),
@@ -435,6 +441,7 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["read", "0000", "--screen", "--json"],
         &["start", "--json", "write", "a", "file"],
         &["start", "--local", "--permission", "ask", "--json", "go"],
+        &["start", "--work", "Independent review", "--json", "go"],
         &["send", "a1b2", "keep", "going", "--json"],
         &["send", "a1b2", "--allow", "--json"],
         &["wait", "--json"],
@@ -569,7 +576,7 @@ fn every_subcommands_json_output_fits_its_schema() {
 #[test]
 fn text_output_reads_well() {
     let dir = DataDir::new("text");
-    let daemon = stand_in_daemon(&dir.0, 11, sample);
+    let daemon = stand_in_daemon(&dir.0, 12, sample);
     let models = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["models"]));
     assert!(
         models.contains("Your rules") && models.contains("forbid: fable"),
@@ -591,10 +598,27 @@ fn text_output_reads_well() {
     let start = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["start", "go"]));
     assert!(
         start.starts_with(
-            "a1b2c3d4\nStarted worker 2 (codex, codex-model-1), in a new worktree from \
-             brigadier/0000c0de/session, "
+            "a1b2c3d4\nStarted worker 2 (codex, codex-model-1, high effort), in a new \
+             worktree from brigadier/0000c0de/session, "
         ),
         "{start}"
+    );
+    // The receipt names the row `--work` followed and what it picked.
+    let by_work = stdout(&brigadier(
+        Some(&dir.0),
+        Some(GRANT),
+        &[
+            "start",
+            "--model",
+            "codex-model-1",
+            "--work",
+            "Independent review",
+            "go",
+        ],
+    ));
+    assert!(
+        by_work.contains("\nYour row \"Independent review\" picked its agent and effort.\n"),
+        "{by_work}"
     );
     let local = stdout(&brigadier(
         Some(&dir.0),

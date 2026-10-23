@@ -311,6 +311,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 }),
                 model: given("model"),
                 effort: given("effort"),
+                work: given("work"),
                 local: args.switch("local"),
                 repo,
                 base: given("base"),
@@ -751,6 +752,7 @@ mod tests {
                 agent: Some(Agent::Codex),
                 model: Some("m".into()),
                 effort: None,
+                work: None,
                 local: false,
                 repo: None,
                 base: None,
@@ -775,6 +777,11 @@ mod tests {
         };
         assert!(start.local);
         assert_eq!(start.repo, None);
+        let CliRequest::Start(by_work) = run(&["start", "--work", "Independent review", "go"]).0
+        else {
+            panic!("not a start");
+        };
+        assert_eq!(by_work.work.as_deref(), Some("Independent review"));
         assert_eq!(start.permission, Some(Permission::FullAccess));
         assert_eq!(start.title.as_deref(), Some("T"));
         let CliRequest::Start(start) = run(&["start", "--repo", "/src/app", "go"]).0 else {

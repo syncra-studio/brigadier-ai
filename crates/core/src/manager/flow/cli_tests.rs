@@ -529,6 +529,7 @@ pub(super) fn start(prompt: &str) -> StartRequest {
         agent: None,
         model: None,
         effort: None,
+        work: None,
         local: false,
         repo: None,
         base: None,
@@ -1567,6 +1568,133 @@ async fn models_page_rules_show_in_models_and_refuse_start() {
     assert_eq!(mine["model"], "sonnet");
     assert_eq!(mine["source"], "user");
     assert!(flow.board().await.tasks.is_empty());
+    flow.stop().await;
+}
+
+/// `brigadier start --work` (S32): with no flags the row of that work (the user's, else the
+/// shipped one) picks agent, model and effort, even the other provider's; each flag given wins
+/// over its field; the user's rules judge the choice that results; the receipt names the row.
+#[tokio::test]
+async fn start_by_work_follows_the_row_and_the_flags_win() {
+    let answers = Answers::default();
+    let seen = answers.clone();
+    let script: Script = Arc::new(move |turn| {
+        let seen = seen.clone();
+        Box::pin(async move {
+            if matches!(
+                turn.host.grants().resolve(&turn.grant),
+                Some(Role::Worker { .. })
+            ) {
+                return Reply::text("Done.");
+            }
+            if turn.input.contains("Start by work.") {
+                let by = |work: &str| StartRequest {
+                    work: Some(work.into()),
+                    local: true,
+                    ..start("Reply once.")
+                };
+                let starts = [
+                    ("row", by("review")),
+                    ("shipped", by("Architecture and broad changes")),
+                    (
+                        "model flag",
+                        StartRequest {
+                            model: Some("gpt-6-luna".into()),
+                            ..by("Review")
+                        },
+                    ),
+                    (
+                        "agent flag",
+                        StartRequest {
+                            agent: Some(brigadier_cli::protocol::Agent::Claude),
+                            ..by("Review")
+                        },
+                    ),
+                    (
+                        "effort flag",
+                        StartRequest {
+                            effort: Some("xhigh".into()),
+                            ..by("Review")
+                        },
+                    ),
+                    ("unknown", by("Nothing like it")),
+                ];
+                for (name, request) in starts {
+                    let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
+                    seen.lock().unwrap().insert(name.into(), result);
+                }
+            }
+            Reply::text("Checked.")
+        })
+    });
+    let flow = Flow::start("cli-start-by-work", Options::default(), script).await;
+    std::fs::write(
+        flow.manager.models_rules_path(),
+        "- effort-ceiling: high\n\n| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Review | codex | gpt-6-astra | medium | Mine. |\n",
+    )
+    .unwrap();
+    flow.say("Start by work.").await;
+    flow.until("the started workers reported", |b| {
+        b.tasks.len() == 4
+            && b.tasks
+                .values()
+                .all(|t| t.state == crate::work::TaskState::Reported)
+    })
+    .await;
+    flow.settled().await;
+    let seen = answers.lock().unwrap().clone();
+    let worker = |name: &str| {
+        let w = &seen[name]["worker"];
+        (w["agent"].clone(), w["model"].clone(), w["effort"].clone())
+    };
+    // The user's row, for the other provider than the Claude session's: a Codex worker.
+    assert_eq!(
+        worker("row"),
+        (json!("codex"), json!("gpt-6-astra"), json!("medium")),
+        "{seen:#?}"
+    );
+    assert_eq!(
+        seen["row"]["row"],
+        json!({ "work": "Review", "source": "user", "picked": ["agent", "model", "effort"] })
+    );
+    // No row of the user's: the shipped one.
+    assert_eq!(
+        worker("shipped"),
+        (json!("claude"), json!("opus"), json!("high"))
+    );
+    assert_eq!(seen["shipped"]["row"]["source"], "shipped");
+    // A flag wins over its field only.
+    assert_eq!(
+        worker("model flag"),
+        (json!("codex"), json!("gpt-6-luna"), json!("medium"))
+    );
+    assert_eq!(
+        seen["model flag"]["row"]["picked"],
+        json!(["agent", "effort"])
+    );
+    // Another agent than the row's keeps its own default model; the row's effort still applies.
+    assert_eq!(
+        worker("agent flag"),
+        (json!("claude"), Value::Null, json!("medium"))
+    );
+    assert_eq!(seen["agent flag"]["row"]["picked"], json!(["effort"]));
+    // The rules judge what results.
+    assert_eq!(seen["effort flag"]["error"]["code"], "refused");
+    assert!(
+        seen["effort flag"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("\"effort-ceiling: high\"")
+    );
+    assert_eq!(seen["unknown"]["error"]["code"], "not-found");
+    let specs = flow.specs();
+    assert!(
+        specs
+            .iter()
+            .any(|(provider, spec)| *provider == ProviderKind::Codex
+                && spec.model.as_deref() == Some("gpt-6-astra")
+                && spec.effort.as_deref() == Some("medium"))
+    );
     flow.stop().await;
 }
 

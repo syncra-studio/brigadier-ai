@@ -152,6 +152,10 @@ pub struct StartRequest {
     /// Absent: the CLI's own default.
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// A kind of work of the rules file (`brigadier models`' Work): its row (the user's, else
+    /// the shipped one) picks the agent, model and effort the flags above leave out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<String>,
     /// Works in the calling session's checkout (a Chat's: `repo`'s) rather than a worktree of
     /// its own.
     pub local: bool,
@@ -594,6 +598,20 @@ pub struct StartOutput {
     pub permission: Permission,
     /// The branch its worktree started from and merges back into; absent with `--local`.
     pub base: Option<String>,
+    /// With `--work`: the row that picked what the flags left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row: Option<StartRow>,
+}
+
+/// The rules-file row `brigadier start --work` followed (S32).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartRow {
+    pub work: String,
+    /// `user` (the user's row) or `shipped`.
+    pub source: String,
+    /// What the row set: `agent`, `model`, `effort`; the flags given set the rest.
+    pub picked: Vec<String>,
 }
 
 /// `brigadier send`.

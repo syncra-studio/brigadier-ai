@@ -26,6 +26,37 @@
         "null"
       ],
       "description": "The branch its worktree started from and merges back into; null with --local."
+    },
+    "row": {
+      "type": "object",
+      "description": "With --work: the rules-file row that picked what the flags left out.",
+      "required": [
+        "work",
+        "source",
+        "picked"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "work": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "user",
+            "shipped"
+          ]
+        },
+        "picked": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "agent",
+              "model",
+              "effort"
+            ]
+          }
+        }
+      }
     }
   },
   "$defs": {

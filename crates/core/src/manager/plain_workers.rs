@@ -206,15 +206,50 @@ impl SessionManager {
                 ));
             }
         };
-        let provider = match start.agent {
+        // S32: `--work` names a row of the rules file; the flags given win field by field, the
+        // row fills in the rest, and only then do the user's rules judge the whole choice.
+        let row = match start.work.as_deref() {
+            None => None,
+            Some(work) => match self.work_row(work)? {
+                Some(row) => Some(row),
+                None => {
+                    return Ok(CliReply::error(
+                        ErrorCode::NotFound,
+                        format!(
+                            "no row for the work \"{work}\"; `brigadier models` lists each kind \
+                             of work"
+                        ),
+                    ));
+                }
+            },
+        };
+        let mut picked = Vec::new();
+        let agent = start.agent.or_else(|| {
+            let row = row.as_ref()?;
+            picked.push("agent".to_owned());
+            Some(row.agent)
+        });
+        let provider = match agent {
             Some(cli::Agent::Claude) => ProviderKind::Claude,
             Some(cli::Agent::Codex) => ProviderKind::Codex,
             None => own.provider,
         };
         let chat = matches!(conversation.setup, Some(Setup::Chat { .. }));
-        if let Some(rule) =
-            self.model_refusal(provider, start.model.as_deref(), start.effort.as_deref())?
-        {
+        let model = match (start.model, &row) {
+            (Some(model), _) => Some(model),
+            // A row's model is its agent's: another agent keeps its own default.
+            (None, Some(row)) if agent == Some(row.agent) => {
+                picked.push("model".to_owned());
+                (row.model != "default").then(|| row.model.clone())
+            }
+            (None, _) => None,
+        };
+        let effort = start.effort.or_else(|| {
+            let effort = row.as_ref()?.effort.clone()?;
+            picked.push("effort".to_owned());
+            Some(effort)
+        });
+        if let Some(rule) = self.model_refusal(provider, model.as_deref(), effort.as_deref())? {
             return Ok(refused(rule));
         }
         // Q8: the session's own level unless `--permission` says.
@@ -235,8 +270,8 @@ impl SessionManager {
         let title = start.title.unwrap_or_else(|| title_of(&start.prompt));
         let choice = ModelChoice {
             provider,
-            model: start.model,
-            effort: start.effort,
+            model,
+            effort,
             fast: None,
             account: None,
         };
@@ -264,6 +299,11 @@ impl SessionManager {
             worker: worker_row(&task, &Default::default()),
             permission: permission_word(permission),
             base,
+            row: row.map(|row| cli::StartRow {
+                work: row.work,
+                source: row.source,
+                picked,
+            }),
         }))
     }
 

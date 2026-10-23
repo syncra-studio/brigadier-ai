@@ -244,13 +244,29 @@ pub fn start(output: &StartOutput) -> String {
         (None, Some(base)) => format!("in a new worktree from {base}"),
         (None, None) => "in this session's checkout".into(),
     };
+    let row = output.row.as_ref().map_or(String::new(), |row| {
+        let whose = match row.source.as_str() {
+            "user" => "Your row",
+            _ => "The shipped row",
+        };
+        let picked = match row.picked.as_slice() {
+            [] => "nothing; your flags set it all".to_owned(),
+            [one] => format!("its {one}"),
+            [rest @ .., last] => format!("its {} and {last}", rest.join(", ")),
+        };
+        format!("{whose} \"{}\" picked {picked}.\n", row.work)
+    });
     format!(
-        "{}\nStarted worker {} ({}, {}), {place}, permission {}.\n`brigadier wait {}` hears \
-         when its turn ends.\n",
+        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}`brigadier wait {}` \
+         hears when its turn ends.\n",
         worker.id,
         worker.number,
         worker.agent.word(),
         worker.model.as_deref().unwrap_or("default model"),
+        worker
+            .effort
+            .as_deref()
+            .map_or(String::new(), |effort| format!(", {effort} effort")),
         output.permission.word(),
         worker.id,
     )

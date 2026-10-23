@@ -180,6 +180,12 @@ pub const COMMANDS: &[Command] = &[
                 "The model id; the CLI's own default by default.",
             ),
             flag("effort", "EFFORT", "The reasoning effort."),
+            flag(
+                "work",
+                "KIND",
+                "A kind of work from `brigadier models`: its row (the user's, else the shipped \
+                 one) picks the agent, model and effort you don't give.",
+            ),
             switch(
                 "worktree",
                 "Work in a new worktree of its own (the default).",
