@@ -2189,6 +2189,7 @@ mod computer_host_tests;
 mod decision_index_tests;
 #[cfg(unix)]
 mod engine_tests;
+#[cfg(unix)]
 mod ledger_tests;
 #[cfg(unix)]
 mod open_in_app_tests;
