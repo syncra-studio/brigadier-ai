@@ -85,23 +85,24 @@ test("Routing lists the rules file, writes its edits back, and shows a hand edit
   );
   assert.equal(seen.openAfterClash, 0);
   assert.equal(seen.openedByNote, "Architecture and broad changes");
+  // Independent review runs on Codex's default, GPT-6 here: the daemon refuses it too.
   assert.equal(
     seen.preview,
-    "“Release notes” uses GPT-6, so starting it would be refused. Pick another model for it in Who does what, or make this rule for one kind of work.Open Release notes",
+    "“Independent review” and “Release notes” use GPT-6, so starting them would be refused. Pick another model for them in Who does what, or make this rule for one kind of work.Open Independent reviewOpen Release notes",
   );
   // For one kind of work only, it stops nothing else.
   assert.equal(
     seen.scoped,
-    "GPT-6 won't be used for Independent review: a worker for Independent review that asks for it is refused, quoting this rule.",
+    "GPT-6 won't be used for Mechanical changes and search: a worker for Mechanical changes and search that asks for it is refused, quoting this rule.",
   );
   // Added: the file gets the rule for that work, the form closes, the new rule comes first and marked, and Undo takes it back.
   assert.equal(seen.formAfterAdd, false);
   assert.deepEqual(seen.writtenRules, [
     { type: "forbid", names: ["fable"] },
     { type: "effortCeiling", effort: "high" },
-    { type: "forbid", names: ["gpt-6"], work: "Independent review" },
+    { type: "forbid", names: ["gpt-6"], work: "Mechanical changes and search" },
   ]);
-  assert.deepEqual(seen.rulesAfterAdd, ["Don't use GPT-6 for Independent reviewNewIndependent review only · Its workers can't run on it", ...rules]);
+  assert.deepEqual(seen.rulesAfterAdd, ["Don't use GPT-6 for Mechanical changes and searchNewMechanical changes and search only · Its workers can't run on it", ...rules]);
   assert.deepEqual(seen.toast, ["Rule added", "Undo"]);
   assert.deepEqual(seen.rulesAfterUndo, rules);
   // The file edited by hand shows when the page opens again: an order of two, a rule for one work

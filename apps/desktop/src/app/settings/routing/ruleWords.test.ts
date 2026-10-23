@@ -20,12 +20,13 @@ let ruleTitle: typeof RuleWords.ruleTitle;
 let allowedPick: typeof RuleWords.allowedPick;
 let pickRefusal: typeof RuleWords.pickRefusal;
 let refusalText: typeof RuleWords.refusalText;
+let rowChoice: typeof RuleWords.rowChoice;
 before(async () => {
   const globals = globalThis as Record<string, unknown>;
   globals.document ??= { documentElement: {} };
   globals.getComputedStyle ??= () => ({ getPropertyValue: () => "" });
   server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
-  ({ allowedPick, draftRules, matches, pickRefusal, previewDraft, refusalText, refusingRule, ruleLine, ruleText, ruleTitle } = (await server.ssrLoadModule(
+  ({ allowedPick, draftRules, matches, pickRefusal, previewDraft, refusalText, refusingRule, rowChoice, ruleLine, ruleText, ruleTitle } = (await server.ssrLoadModule(
     "/src/app/settings/routing/ruleWords.ts",
   )) as typeof RuleWords);
 });
@@ -116,6 +117,21 @@ test("a rule for one kind of work refuses only a start of that work, as the daem
   assert.equal(refusingRule(rules, sonnetChoice, "Architecture"), null);
   assert.equal(refusingRule(rules, sonnetChoice, null), null);
   assert.equal(refusingRule(rules, { ...sonnetChoice, effort: "max" }, null), rules[1]);
+});
+
+test("a row of the agent's default is judged as its default model at that model's effort, as the daemon resolves it", () => {
+  const listed: ListedModel[] = [
+    { provider: "codex", id: "gpt-6", resolved: null, name: "GPT-6", isDefault: true, defaultEffort: "medium" },
+    { provider: "codex", id: "gpt-6-luna", resolved: null, name: "GPT-6 Luna", isDefault: false, defaultEffort: "low" },
+  ];
+  const review: GuidanceRow = { work: "Independent review", agent: "codex", model: "default", effort: null, reason: "Shipped." };
+  assert.deepEqual(rowChoice(review, listed), { provider: "codex", names: ["gpt-6"], effort: "medium" });
+  // A rule that keeps the default model out keeps the row out, so the page never shows it as the pick.
+  const rules: ModelRule[] = [{ type: "forbid", names: ["gpt-6"] }];
+  assert.equal(refusingRule(rules, rowChoice(review, listed), "Independent review"), rules[0]);
+  assert.equal(refusingRule([{ type: "effortCeiling", effort: "low" }], rowChoice(review, listed), null)?.type, "effortCeiling");
+  // A named model with no effort starts at its own default effort.
+  assert.equal(rowChoice({ ...review, model: "gpt-6-luna" }, listed).effort, "low");
 });
 
 test("a draft adds its rule: Only joins its agent's allowlist of the same work, a ceiling replaces the one of its work", () => {

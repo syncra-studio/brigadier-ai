@@ -46,7 +46,16 @@ export function ruleNames(groups: readonly ModelGroup[]): Names {
 }
 
 /** A model the agents list now, as a rule's preview checks it. */
-export type ListedModel = { provider: ProviderKind; id: string; resolved: string | null; name: string };
+export type ListedModel = {
+  provider: ProviderKind;
+  id: string;
+  resolved: string | null;
+  name: string;
+  /** The agent's default model, which a row of `default` starts on. */
+  isDefault?: boolean;
+  /** The effort it starts at when none is named. */
+  defaultEffort?: string | null;
+};
 
 /** Whether a rule's pattern names a model: `*`, the exact id, or one of its words (as the daemon matches). */
 export function matches(pattern: string, model: string): boolean {
@@ -136,15 +145,20 @@ export function refusingRule(rules: readonly ModelRule[], choice: Choice, work: 
   );
 }
 
-/** A row as a choice: the names its model goes by (as written, and as the listed model it is); none for the CLI's default. */
+/**
+ * A row as a choice, as the daemon judges its start: the names its model goes by (as written, and
+ * as the listed model it is; for the CLI's default, the model the agent lists as its default) and
+ * its effort (the model's default when the row names none).
+ */
 export function rowChoice(row: GuidanceRow, models: readonly ListedModel[]): Choice {
-  // The CLI's default: which model it is isn't known here, so no rule about a model judges it.
-  if (row.model === "default") return { provider: row.agent, names: [], effort: row.effort };
-  const listed = models.find((model) => model.provider === row.agent && (model.id === row.model || model.resolved === row.model));
+  const fallback = row.model === "default";
+  const listed = models.find(
+    (model) => model.provider === row.agent && (fallback ? model.isDefault : model.id === row.model || model.resolved === row.model),
+  );
   return {
     provider: row.agent,
-    names: [row.model, ...(listed ? [listed.id, ...(listed.resolved ? [listed.resolved] : [])] : [])],
-    effort: row.effort,
+    names: [...(fallback ? [] : [row.model]), ...(listed ? [listed.id, ...(listed.resolved ? [listed.resolved] : [])] : [])],
+    effort: row.effort ?? listed?.defaultEffort ?? null,
   };
 }
 

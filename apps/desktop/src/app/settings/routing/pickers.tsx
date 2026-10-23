@@ -5,7 +5,7 @@ import type { ListedModel } from "@/app/settings/routing/ruleWords";
 import { capital } from "@/app/settings/routing/words";
 import type { OverrideTarget } from "@/ipc/generated";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
-import { useAvailableModelGroups } from "@/lib/setup";
+import { useAvailableModelGroups, useModelGroups } from "@/lib/setup";
 import { providerOn } from "@/state/providers";
 import { useApp } from "@/state/store";
 import { loadUsage, useUsage } from "@/state/usage";
@@ -20,12 +20,24 @@ export function sameTarget(a: OverrideTarget, b: OverrideTarget): boolean {
   return a.type === "model" ? a.id === (b as typeof a).id : a.type === "family" ? a.family === (b as typeof a).family : true;
 }
 
-/** The models the agents list now, as the rules judge them. */
+/** The models the agents list now, as the rules judge them: which is each agent's default, at what effort, from its own list. */
 export function useListedModels(): ListedModel[] {
   const models = useUsage((s) => s.view?.models);
+  const groups = useModelGroups();
   return useMemo(
-    () => (models ?? []).map((model) => ({ provider: model.provider, id: model.id, resolved: model.resolved, name: model.displayName })),
-    [models],
+    () =>
+      (models ?? []).map((model) => {
+        const own = groups.find((group) => group.provider === model.provider)?.models.find((info) => info.id === model.id);
+        return {
+          provider: model.provider,
+          id: model.id,
+          resolved: model.resolved,
+          name: model.displayName,
+          isDefault: own?.isDefault ?? false,
+          defaultEffort: own?.defaultEffort ?? null,
+        };
+      }),
+    [models, groups],
   );
 }
 

@@ -265,7 +265,7 @@ function Fixture() {
         () => {
           seen.preview = note();
         },
-        ...pick("The work the rule is for", "Independent review"),
+        ...pick("The work the rule is for", "Mechanical changes and search"),
         () => {
           seen.scoped = note();
           button("Add rule", form() ?? document)?.click();
