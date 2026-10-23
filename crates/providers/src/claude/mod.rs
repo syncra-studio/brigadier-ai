@@ -15,7 +15,8 @@
 //!
 //! The permission mode is the session's level, passed straight through ([`permission_mode`]):
 //! Ask runs in `default`, Accept edits in `acceptEdits`, Full access in `bypassPermissions`.
-//! Brigadier adds no sandbox and no rules of its own. A read-only session (`dontAsk`) never
+//! Brigadier adds no sandbox and no rules of its own, save one: at Accept edits a thread or
+//! worker runs `brigadier` unasked, as it does its edits. A read-only session (`dontAsk`) never
 //! asks: what its allow rules don't cover is denied. A side chat and a tab chat always run so,
 //! and their shell's one allow rule is `brigadier` (a tab chat's also the read-only git
 //! commands). A Chat runs as a thread does, at its own level (STRIP-DOWN-PLAN S28).
@@ -697,6 +698,12 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
         ToolSet::Web | ToolSet::SideChat | ToolSet::Thread
     ) {
         allow.extend(["WebSearch".to_owned(), "WebFetch".to_owned()]);
+    }
+    // At Accept edits a thread or worker runs Brigadier's own commands (`brigadier start`,
+    // `wait`, `ledger show`) unasked, as it does its edits (#578); everything else keeps
+    // Claude's own Accept-edits prompts. Ask asks for them too; Full access runs everything.
+    if spec.access == Access::AcceptEdits && spec.tools.user_setup() {
+        allow.push(BRIGADIER_ALLOWED.to_owned());
     }
     let mut permissions = json!({});
     if !allow.is_empty() {
@@ -2515,6 +2522,47 @@ for line in sys.stdin:
             ..spec(cwd.path(), &["claude-sonnet-5"])
         };
         assert_eq!(permission_mode(&reader), "dontAsk");
+    }
+
+    /// At Accept edits a thread or worker runs `brigadier` unasked (#578), and nothing else
+    /// is added: Ask still asks for it, Full access needs no rule, and no other role gets it.
+    #[test]
+    fn brigadier_runs_unasked_at_accept_edits_only() {
+        let cwd = Temp::new();
+        let native_id = "00000000-0000-4000-8000-000000000000";
+        let allowed = |spec: &SessionSpec| -> Vec<Value> {
+            let args =
+                Claude::session_args(spec, cwd.path(), native_id, false, None).expect("args");
+            let layer = args
+                .windows(2)
+                .find(|pair| pair[0] == "--settings")
+                .map(|pair| serde_json::from_str::<Value>(&pair[1]).expect("settings json"))
+                .expect("--settings");
+            layer["permissions"]["allow"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        };
+        for tools in [ToolSet::Thread, ToolSet::Lean, ToolSet::Default] {
+            for access in [Access::Ask, Access::AcceptEdits, Access::Full] {
+                let spec = SessionSpec {
+                    access,
+                    tools,
+                    ..spec(cwd.path(), &["claude-sonnet-5"])
+                };
+                let ours = allowed(&spec)
+                    .iter()
+                    .filter(|rule| rule.as_str().is_some_and(|rule| rule.contains("brigadier")))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let expected = if access == Access::AcceptEdits && tools != ToolSet::Default {
+                    vec![json!("Bash(brigadier:*)")]
+                } else {
+                    vec![]
+                };
+                assert_eq!(ours, expected, "{tools:?} {access:?}");
+            }
+        }
     }
 
     /// No session asks Claude Code for its own next-message guesses (Q89): a thread's or Chat's
