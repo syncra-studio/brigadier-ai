@@ -8,7 +8,7 @@ the repository, so sessions never step on each other or on your checkout.
 The sidebar lists your projects, and under each project its sessions. Each row says what the
 session is doing, and why when there is a reason:
 
-- **Working**: for example · watching CI, · 2 workers, · waiting for reset 14:30.
+- **Working**: for example · waiting for reset 14:30.
 - **Needs you**: · approval, · question, or · failed. These rows come first in their project, and
   the project shows how many need you.
 - **Ready**: the work is done; · PR open or · proof attached says what is waiting.
@@ -28,9 +28,6 @@ Each parallel task is a new session.
 - When you ask a session for something outside its task, it can offer **Start this as its own
   session?** in the chat. **Start as session** starts it in the background; **Open** then shows
   it.
-
-Sessions in the same project know about each other: they see what the others are changing and
-warn when two touch the same files. When one merges, the others move onto the new base.
 
 ## Tabs
 

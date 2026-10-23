@@ -22,6 +22,8 @@ decisions as they were made, so later plans supersede parts of earlier ones; eac
 it does. Code comments cite them by section.
 
 - [PLAN.md](PLAN.md): the founding build plan, its phases, performance budgets and decision log.
+- [STRIP-DOWN-PLAN.md](STRIP-DOWN-PLAN.md): every Brigadier session becomes a plain Claude Code or
+  Codex CLI session (supersedes the engine parts of the plans below; §2 says where).
 - [THREAD-PLAN.md](THREAD-PLAN.md): the session as one long-lived thread that delegates to
   workers (supersedes PLAN.md's pure-orchestrator design).
 - [THREAD-UX-PLAN.md](THREAD-UX-PLAN.md), [THREAD-PARITY-PLAN.md](THREAD-PARITY-PLAN.md): how the

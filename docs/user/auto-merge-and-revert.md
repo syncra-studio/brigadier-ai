@@ -4,26 +4,18 @@ When a session's work is done, Brigadier merges it for you. That is on by defaul
 
 ## What happens
 
-1. When the agent judges the work ready, it merges it, without asking. If the project is on GitHub
-   and `gh` is signed in, it pushes the branch, opens a pull request, watches its CI and reviews,
-   fixes what they find, and merges it. Otherwise it merges the branch into its base on your Mac.
-2. Your project's full checks and the other agent's review run in the background. They inform the
-   merge but don't hold it: the merge message says what was verified and what was still running
-   or left out.
-3. A line in the chat says what happened: "Merged *branch* into *base*", or "… on this Mac, not
+1. The agent runs its own checks and gets a review from the other agent's CLI before it decides
+   the work is ready. It merges it then, without asking: if the project is on GitHub and `gh` is
+   signed in, it pushes the branch and opens a pull request (or merges straight into it), otherwise
+   it merges the branch into its base on your Mac.
+2. A line in the chat says what happened: "Merged *branch* into *base*", or "… on this Mac, not
    pushed to *remote*" when nothing was pushed.
-
-![A merged session: the merge message, its Revert button and the files it changed](images/merged.png)
 
 ## Revert
 
 Under the merge message there is a **Revert** button. It asks the agent to undo that merge the way
-it went in: a revert commit on the base branch, pushed if the merge was pushed. The button then
-reads **Revert asked**, and the agent reports when it's done.
-
-When the work went in as a pull request, its row in the summary at the top right of the chat has
-buttons for what applies: **Fix CI**, **Address comments**, **Resolve conflicts**, **Merge now**,
-or **Revert** once it's merged. Each one sends that request as your message.
+it went in: a revert commit on the base branch, pushed if the merge was pushed. The agent reports
+when it's done.
 
 You can also just ask in the chat, in your own words.
 

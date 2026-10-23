@@ -12,10 +12,9 @@ crates/        Rust workspace
   ipc/           authenticated local IPC + protocol types (exported to TypeScript)
   sandbox/       OS abstraction: paths, private files, processes, credentials, shell, sandbox
   providers/     Provider trait, normalized events, Claude and Codex adapters, replay fixtures
-  git/           git engine: worktrees, snapshots, candidates, guarded landing
-  mcp-server/    the Brigadier MCP server the thread and workers talk to
-  router/        routing: model registry, quota forecasts, outcome learning, decide()
-  review/        one-shot cross-vendor reviews
+  cli/           the `brigadier` binary: worker commands, models, brain and code search, previews
+  git/           git operations: worktrees, snapshots, candidates, landing
+  router/        the model registry and quota estimates `brigadier models` reads; routes no work
   brain/         the Project Brain: graph, full-text and embedding search
   index/         the code index (tree-sitter symbols and references)
   registry/      the MCP, plugin and skill registry
@@ -258,8 +257,6 @@ CLI behaviour this rests on.
 
 None of these exist in a release build.
 
-- `BRIGADIER_ROUTE_CHEAP=1` in the daemon's environment makes every worker use its vendor's
-  cheapest model at low effort, keeping the routing reason and saying so.
 - `BRIGADIER_FAULT=claude-limit[:tool-calls=N][:window=ID][:reset=MINUTES]` (or `codex-limit`)
   forces a usage limit on the first worker the daemon starts on that provider, to exercise
   fallback without spending real quota. After the session's next N finished tool calls (3 by
@@ -292,9 +289,9 @@ None of these exist in a release build.
   before any of its own and in every frame, that takes screen capture and the
   speech-recognition APIs away for good (`NO_CAPTURE` in `browser.rs`); on Windows, whose
   WebView2 has no per-site choices here, it takes the camera and microphone APIs away too.
-- Overnight run notifications use a small macOS UserNotifications adapter under the app's
-  bundle identity, retaining a stable notification ID and session/run activation payload.
-  `overnight_notifications.rs::mac` is the shell's other narrowly scoped unsafe exception:
+- Session notifications use a small macOS UserNotifications adapter under the app's
+  bundle identity, retaining a stable notification ID and session activation payload.
+  `notifications.rs::mac` is the shell's other narrowly scoped unsafe exception:
   its C strings live through each call, Objective-C copies them, and callback tickets carry
   no borrowed pointers. The desktop notification plugin handles the other platforms.
 - Computer use's setup window drags the helper app into a list in System Settings, which a web

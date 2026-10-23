@@ -40,8 +40,8 @@ agents work on their own; with **Don't trust**, every session there asks you bef
 3. Press Enter.
 
 The session starts on its own branch, in its own copy of the repository (a worktree), so your
-checkout is never touched. It reads the code, plans and makes the change; your project's checks
-and a review by the other agent run in the background. Its row in the sidebar says what it is doing, and why:
+checkout is never touched. It reads the code, plans and makes the change, running your project's
+checks and getting a review from the other agent itself. Its row in the sidebar says what it is doing, and why:
 **Working**, **Needs you** when it has a question or an approval for you, and **Ready** when
 the work is done and waiting to merge (more in [Sessions and tabs](sessions-and-tabs.md)).
 
@@ -50,10 +50,10 @@ the row says **Merged**. A **Revert** button sits under the merge message if you
 
 ## How much it asks you
 
-The permission level is the pill in the composer. New sessions start in **Approve for me**:
-Brigadier approves plans and changes for you, and asks only what only you can answer. **Ask for
-approval** asks before every plan and change; **Full access** lets agents run like your own
-terminal. Change the default in **Settings › Configuration**.
+The permission level is the pill in the composer: **Ask**, **Accept edits** or **Full access** —
+the agent's own modes. New sessions start in **Accept edits**: it edits files freely and asks
+before other commands. **Ask** asks before every edit and command; **Full access** never asks.
+Change the default in **Settings › Configuration**.
 
 ## Next
 

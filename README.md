@@ -4,16 +4,16 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey.svg)](#status-and-roadmap)
 
-**Brigadier runs Claude Code and Codex as one team on your Mac.** You talk to one thread. It
-makes small changes itself, hands the rest to agents running in parallel in their own git
-worktrees, and the other vendor's model reviews every change in the background.
+**Brigadier runs your CLIs — Claude Code and Codex today, more soon — as one team on your Mac.**
+You talk to one thread: a plain Claude Code or Codex session. It does most jobs itself, and when
+a job calls for it, starts other CLI sessions as workers in their own git worktrees, getting a
+review from the other vendor before it merges their work.
 
-![Brigadier: a task merged into main, with what changed, what was checked and a Revert button](docs/user/images/hero.png)
-
-- **Parallel agents, cross-vendor review.** Each task runs in its own worktree on the model
-  best suited to it, and its commits land by fast-forward. Every worker's change also gets a
-  read-only review from the other vendor (Codex reviews Claude's work, Claude reviews Codex's) in
-  the background, and the work doesn't wait for it. The thread fixes the findings or says why not.
+- **Workers, cross-vendor review.** When a job calls for it — parallel parts, a long build,
+  research, a second opinion — the thread starts a worker: a plain Claude Code or Codex session
+  of its own choosing, in its own worktree. A worker runs its own checks, gets a review from the
+  other vendor's CLI (`codex review`, or Claude on Codex's work), and merges into the thread that
+  started it.
 - **Computer use in the background (macOS).** Workers can open and use the apps they build, and
   any other app a task needs, without moving your cursor or bringing the app to the front: a
   step that would interrupt you is refused. System Settings is read-only to them. The
@@ -21,8 +21,6 @@ worktrees, and the other vendor's model reviews every change in the background.
   [helpers/computer-use/README.md](helpers/computer-use/README.md).
 - **Long sessions without compaction.** The thread never compacts its context. Before it fills, a
   fresh session takes over from a handoff note, every decision so far and the latest messages.
-  Workers start with what the thread already read, search a local code index before reading
-  files, and ask the Project Brain what earlier sessions learned.
 
 Free and open source (MIT). Brigadier runs the `claude` and `codex` CLIs you already have, under
 your own logins. It holds no API keys and never reads your credentials.
@@ -54,17 +52,17 @@ better: each reviews the other's work. To build from source (or for Windows and 
 2. Pick a project: one it suggests from your recent Claude Code and Codex work, or any git
    repository (**+** next to **Projects**). It can also clone one, or start git in a folder.
 3. Press **New session** on the project and say what you want in plain words.
-4. The session works on its own branch, in its own worktree: it plans and changes the code, while
-   your checks and the other vendor's review run in the background. Then it merges the work, and a
-   **Revert** button sits under the merge message.
+4. The session works on its own branch, in its own worktree: it plans and changes the code,
+   running your checks and getting the other vendor's review itself. Then it merges the work, and
+   a **Revert** button sits under the merge message.
 
 Step by step: [docs/user/first-task.md](docs/user/first-task.md).
 
 ## Sessions
 
 One session is one task: a chat with an agent, on its own branch and worktree. The sidebar lists
-each project's sessions with what each is doing and why (Working · watching CI, Needs you ·
-question, Ready · PR open, Merged); the ones that need you come first. For a second task at the
+each project's sessions with what each is doing and why (Working · waiting for reset 14:30,
+Needs you · question, Ready · PR open, Merged); the ones that need you come first. For a second task at the
 same time, start another session: **New session** on the project, or **⌘Enter** in the composer
 to start it in the background. A session can also offer to start something outside its task as
 its own session. The tab bar holds the open session's chat and its own terminals, browser pages
@@ -113,9 +111,6 @@ rough edges.
   button).
 - **Overnight runs.** Ask a session to work until a time ("until 07:00"). It plans its workers
   to finish before the deadline and leaves a report.
-- **Sessions that message each other.** A session's thread can send a message to another
-  session, in the same project or another one, and the reply comes back to it on its own. Both
-  sides show the exchange. Under Ask, each message waits for your Send.
 - **Long commands in the background.** A command the thread runs that is still going after a
   minute moves to the background with a live line, and its result comes back to the thread when
   it ends. A turn's steps fold under "Worked for …" once the answer starts. A sidebar dot marks a
@@ -126,8 +121,10 @@ rough edges.
   which one new conversations use (Settings › Providers). When one runs out, Brigadier switches
   to another (a setting, on by default).
 - **Usage and fallback.** The sidebar's usage button and Settings › Providers show each
-  agent's usage windows and where they are heading. A worker whose provider hits its limit hands its task to the best other model, in the
-  same worktree. A conversation continues on the other vendor and goes back after the reset.
+  agent's usage windows and where they are heading. When an account runs out, Brigadier switches
+  the conversation to another account of the same agent automatically (a setting, on by default);
+  only once every account of that agent is used up does work move to the other agent, and it goes
+  back after the reset.
 - **Built-in browser** (macOS, Windows). Opens the pages agents and you work on, with history and
   downloads. On macOS it also has per-site camera and microphone choices, and can import cookies
   and history from your other browsers. On macOS agents use it too: they read and work a page in a
@@ -158,45 +155,32 @@ records.
 
 ### Sessions
 
-A session is one long-lived CLI session (Claude or Codex), the **thread**, that talks with you.
-It reads code, runs builds and tests, and makes a small change itself: one bounded change in one
-area, about 100 changed lines or fewer. Everything else goes to **workers**: one CLI session per
-task, on a model the router picks for that kind of work. A write task gets its own worktree on a
-task branch and a scratch folder outside the repository. It starts with a context pack (what
-the thread already read and searched) and with the dependency installs and build caches of your
-checkout copied in, so its first build doesn't start from nothing. Workers follow your repository's `CLAUDE.md` and `AGENTS.md` whichever
-vendor runs them.
+A session is one long-lived CLI session (Claude Code or Codex), the **thread**, that talks with
+you. It reads code, runs builds and tests, and makes most changes itself. For a part that calls
+for it — disjoint parallel work, a long build, research, a second vendor's view — it starts a
+**worker**: a plain Claude Code or Codex session of its own choosing, through the `brigade` skill
+and the `brigadier` command. A worker gets its own worktree on a branch from the thread's current
+branch, and the thread's permission level; it follows your repository's `CLAUDE.md` and
+`AGENTS.md` like any other session. It shows only inside the session that started it (its Workers
+row and the rail above the composer), never in the sidebar, and it's read-only to you: you answer
+its questions in the parent thread, which relays them with `brigadier send`.
 
-A worker reports when it's done. Its commits then **land**:
+A worker runs its own checks and reports when it's done. Its commits then **land**:
 
-- **Rebased** onto the target's tip if it moved. A conflict goes to a merge worker.
-- **Fast-forwarded** onto your checked-out branch (local checkout) or the session branch
-  `brigadier/<session>/session` (new worktree). Landing into your checkout never overwrites
-  uncommitted, untracked or ignored files. If it would, or if the branch moved unexpectedly, the
-  task waits as "ready to land" and nothing changes.
-- **Checked** once on the combined work. Workers run only the checks of their own change; the
-  project's full checks run in the background on the branch the work landed on, and a failure
-  goes back to the worker that caused it. The merge doesn't wait for them: its message says
-  where they stood.
-- **Reviewed** in the background. Every worker's change gets one read-only review by the other
-  vendor, in its own checkout. A worker starts it once its work is committed and reports without
-  waiting for it. The thread's own changes get one once they reach about 150 changed lines or
-  more than five code files, or when it marks them risky, and it waits for those findings before
-  it answers. Findings that reach a
-  worker before it reports are its to fix. Later ones go to the thread as a message, and the
-  thread fixes them or says why not. Settings › Configuration › "Review the work" turns reviews
-  off (they're on by default).
+- **Merged into its parent**, with plain git. The thread decides merge or rebase, and resolves
+  conflicts with the worker's help.
+- **Checked again** on the integrated tree, by the thread itself.
+- **Reviewed.** Before it merges, `codex review` (or the other vendor's CLI) looks at the change
+  once, on the integrated tree, never mid-run. The thread fixes what it agrees with, then reports
+  what's left.
 
-When the session's work is ready, the thread merges it into its base: through a pull request when
-the project is on GitHub and `gh` is signed in, otherwise on your Mac. The full checks and the
-reviews inform the merge without holding it, and the merge message says where they stood. The
-merge message has a Revert button that asks the thread to undo it the way it went in. With
-Settings › Git › "Merge on its own when the work is ready" off, the thread tells you the work is
-ready and merges when you ask.
+When the thread's own work is ready, it merges it the same way: through a pull request when the
+project is on GitHub and `gh` is signed in, otherwise on your Mac. The merge message has a Revert
+button that asks the thread to undo it the way it went in. With Settings › Git › "Merge on its own
+when the work is ready" off, the thread tells you the work is ready and merges when you ask.
 
 Archiving a session removes its worktrees, scratch folders, CLI session files and processes,
-including detached children. Unfinished work is kept as a WIP commit on its task
-branch, or as a patch when it overlaps uncommitted changes you let workers see. Anything that
+including detached children. Unfinished work is kept as a WIP commit on its branch. Anything that
 couldn't be removed is retried at the next launch.
 
 ### Permission levels
@@ -227,17 +211,13 @@ own work; a worker lists such steps for you instead.
 
 ### What still depends on trust
 
-- Workers and threads get grants scoped to their role and task, checked on every call to
-  Brigadier's MCP server and revoked when the session ends. Requests only the UI may make (such as
+- Workers and threads get a session token, checked on every call to `brigadier` and revoked when
+  the session ends. Requests only the UI may make (such as
   answering approvals) need the IPC token in `<data>/run/`. Sessions run as their CLI would on
   its own, so a hostile one could read the token. On macOS a process inside Codex's sandbox still
   can't act as the UI: the daemon refuses the token from any sandboxed process. A Claude Code
   session, or a Codex one at Full access, has no sandbox, and nothing refuses it.
 - A process that detaches and moves out of Brigadier's folders escapes the cleanup.
-- A thread can message sessions in other projects. The receiver hears it as coming from another
-  session, not from you. After eight messages with no word from you, the next one still goes
-  and the sending thread is told how many went back and forth. One session can send another at
-  most twenty messages a minute.
 - Codex writes a trust entry into `~/.codex/config.toml` when a thread starts with a writable
   sandbox in a folder you never trusted. Brigadier starts every thread without a sandbox of its
   own and sets it per turn, so Codex writes none. If one ever appears for a folder Brigadier
@@ -250,12 +230,13 @@ To report a security problem, see [SECURITY.md](SECURITY.md).
 Each project has a Brain: what Brigadier knows about it, so a question answered once is not
 investigated again. It is a graph of modules, file summaries, decisions, conventions, reports and
 research, each with where it came from (the code index, a worker's report, the thread, you), and
-from which session, model and commit. The thread asks it first, using full-text search plus local
-embeddings, then one hop along the graph. It also keeps what you settle. Reports, plan decisions
-and your answers on cards are recorded without being asked.
+from which session, model and commit. The thread searches it (`brigadier brain search`), using
+full-text search plus local embeddings, then one hop along the graph. It also keeps what you
+settle. Reports, plan decisions and your answers on cards are recorded without being asked.
 
 - **Code index.** The repository is scanned (tree-sitter symbols and references, manifests,
-  scripts) and kept current by a file watcher. Workers search it before reading files.
+  scripts) and kept current by a file watcher. The thread and its workers search it
+  (`brigadier code search`) before reading files.
 - **Staleness.** Nodes remember the content hash of the files they describe. When a file
   changes, they're marked stale and answered as "may be outdated".
 - **Spare quota.** After a project's first scan, the cheapest model maps its modules, stack,
@@ -268,30 +249,34 @@ and your answers on cards are recorded without being asked.
 Everything stays in the data folder: `brains/<project>/brain.sqlite`, `index.sqlite`,
 `brains/personal.sqlite`, and the embedding model under `models/embeddings/`.
 
-### Routing and quota
+### Models and quota
 
-Brigadier picks each worker's model and says why on the worker's card.
+Brigadier picks no model for you: the thread reads `brigadier models` and picks provider, model
+and effort itself, for every session it starts.
 
+- **`brigadier models`.** Before it starts a worker, the thread reads this: the models each CLI
+  reports as available, usage and reset times per account, the current account, a shipped
+  guidance table (which provider, model and effort fits what kind of work, with a one-line reason
+  each), and your own rules on top.
+- **Your rules.** `~/.brigadier/models.md` is your own editable file: forbidden models, an effort
+  ceiling, allowlists. The shipped default carries today's rules (never Fable, effort ≤ high).
+  `brigadier start` refuses only what this file forbids, and quotes the rule.
 - **Registry.** `registry/models.json` rates every model Brigadier drives: strengths per kind of
   work, efforts, context window. The app checks this repository for a newer revision daily. It
   takes one only if it stays within fixed bounds and has a higher revision.
-- **Outcomes.** Every model's run of a task is recorded per project (result, review findings,
-  rework, time, tokens), and nudges that model's score for that kind of work in that project.
-- **Your choices.** Each agent's page in Settings › Providers turns its models on or off.
-  Settings › Routing says who does what: a model per kind of work, or Automatic, plus rules
-  with a live preview.
-- **Quota.** Brigadier reads Claude's and Codex's usage windows, projects each one to its reset,
-  and shifts new work away from a provider that's running hot.
+- **Quota.** Brigadier reads Claude's and Codex's usage windows and projects each one to its
+  reset. When an account runs out, Brigadier switches the conversation to another account of the
+  same agent automatically (a setting, on by default).
 - **Fewer tokens, built in.** Nothing to turn on. A thread idle past its prompt cache restarts
   from a checkpoint briefing instead of resending its whole history. A worker at about two-thirds of
   its model's context window (200k tokens at most) hands over to a fresh session of the same model.
-  Workers start without the built-in tools they never use. Brain answers return a few results of each kind and page the rest.
+  Brain answers return a few results of each kind and page the rest.
 
 ### Settings
 
-Settings is grouped into Personal (General, Voice, Configuration, Keyboard shortcuts), Agents
-(Providers, Routing, Git, Computer use), Browser & Data (Browser, Import Browser Data) and System
-(Storage, Inspector), with Archived chats at the end. Settings › Computer use (macOS) turns it
+Settings is grouped into Personal (General, Voice, Configuration, Memory, Keyboard shortcuts),
+Agents (Providers, Plugins, Git, Computer use), Browser & Data (Browser, Import Browser Data) and
+System (Storage, Inspector), with Archived chats at the end. Settings › Computer use (macOS) turns it
 on or off and walks through its Accessibility and Screen Recording permissions. Accounts:
 [docs/user/accounts.md](docs/user/accounts.md).
 
