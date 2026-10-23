@@ -148,7 +148,9 @@ async function typeWhileAsked(): Promise<string> {
     (button) => button.textContent === "Trust folder",
   );
   if (trust) await fixtureClick(trust);
-  for (let i = 0; i < 50 && dialog(); i++) await settle();
+  // Typing on once the box has the keyboard back: under load that comes a frame or two after
+  // the card goes.
+  for (let i = 0; i < 50 && (dialog() || !field()?.contains(document.activeElement)); i++) await settle();
   await fixtureInput({ type: "type", text: ", please" });
   // Long enough for the draft to be kept (it waits for typing to rest).
   for (let i = 0; i < 6; i++) await settle();
