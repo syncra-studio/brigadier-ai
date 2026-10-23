@@ -300,22 +300,11 @@ pub(crate) fn view(
     }
     let running = live.is_some_and(|live| live.open);
     if let Some(live) = live {
-        // Once the turn ended its file holds it: what the stream said adds only items the
-        // file still lacks (by id), so the thread reads as it will after a restart. What has
-        // no id of its own (an error) would show twice.
-        let held: std::collections::HashSet<&str> = entries
-            .iter()
-            .filter_map(|entry| session_file::item_id(&entry.event))
-            .collect();
-        let more = live
-            .entries
-            .iter()
-            .filter(|entry| {
-                running || session_file::item_id(&entry.event).is_some_and(|id| !held.contains(id))
-            })
-            .cloned()
-            .collect();
-        entries = session_file::merge(entries, more);
+        if running {
+            entries = session_file::merge(entries, live.entries.clone());
+        } else {
+            entries = add_unheld(entries, &live.entries);
+        }
     }
     let mut turns = turns(&entries, records, running);
     if running
@@ -338,6 +327,36 @@ pub(crate) fn view(
         workers: Vec::new(),
         seams: Vec::new(),
     }
+}
+
+/// Once the turn ended its file holds it: what the stream said adds only items the file
+/// still lacks (by id), so the thread reads as it will after a restart. What has no id of its
+/// own (an error) would show twice. Each goes after the item the stream had before it, not
+/// after the turn's end the file holds (#560).
+fn add_unheld(mut entries: Vec<FileEntry>, live: &[FileEntry]) -> Vec<FileEntry> {
+    let mut held: std::collections::HashSet<String> = entries
+        .iter()
+        .filter_map(|entry| session_file::item_id(&entry.event).map(str::to_owned))
+        .collect();
+    let mut before: Option<String> = None;
+    for entry in live {
+        let Some(id) = session_file::item_id(&entry.event).map(str::to_owned) else {
+            continue;
+        };
+        if held.insert(id.clone()) {
+            let at = before
+                .as_deref()
+                .and_then(|before| {
+                    entries
+                        .iter()
+                        .position(|held| session_file::item_id(&held.event) == Some(before))
+                })
+                .map_or(entries.len(), |index| index + 1);
+            entries.insert(at, entry.clone());
+        }
+        before = Some(id);
+    }
+    entries
 }
 
 /// The turns `entries` hold: each user message that isn't a steer starts one.
@@ -493,4 +512,85 @@ pub(crate) fn append_turn(record: &Path, turn: &TurnRecord) -> std::io::Result<(
         .open(record.join("turns.jsonl"))?;
     let line = serde_json::to_string(turn).map_err(std::io::Error::other)?;
     writeln!(file, "{line}")
+}
+
+#[cfg(test)]
+mod tests {
+    use brigadier_providers::{ItemStatus, TurnStatus};
+
+    use super::*;
+
+    fn entry(event: ProviderEvent) -> FileEntry {
+        FileEntry {
+            event,
+            at_ms: Some(1),
+            updated_at_ms: None,
+            parent: None,
+            steer: false,
+            images: Vec::new(),
+            phase: None,
+        }
+    }
+
+    fn message(id: &str, role: Role) -> FileEntry {
+        entry(ProviderEvent::Message {
+            item_id: id.into(),
+            role,
+            text: id.into(),
+        })
+    }
+
+    fn command(id: &str, status: ItemStatus) -> FileEntry {
+        entry(ProviderEvent::Command {
+            item_id: id.into(),
+            command: "curl -sI x".into(),
+            cwd: None,
+            status,
+            exit_code: None,
+            output: None,
+            duration_ms: None,
+            kept: None,
+        })
+    }
+
+    fn ids(view: &ThreadView) -> Vec<String> {
+        view.entries
+            .iter()
+            .map(|entry| match &entry.event {
+                ProviderEvent::TurnCompleted { .. } => "end".to_owned(),
+                event => session_file::item_id(event).unwrap_or("?").to_owned(),
+            })
+            .collect()
+    }
+
+    /// A command only the stream said (Codex keeps none of a declined or killed one) reads
+    /// where the stream had it once the turn ended, not after the turn's end (#560).
+    #[test]
+    fn an_item_only_the_stream_said_reads_in_its_place_after_the_turn() {
+        let end = entry(ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: TurnStatus::Completed,
+            duration_ms: None,
+            usage: None,
+        });
+        let file = vec![
+            message("u1", Role::User),
+            message("a1", Role::Assistant),
+            message("a2", Role::Assistant),
+            end,
+        ];
+        let live = LiveTurn {
+            entries: vec![
+                message("u1", Role::User),
+                message("a1", Role::Assistant),
+                command("c1", ItemStatus::Declined),
+                command("c2", ItemStatus::InProgress),
+                message("a2", Role::Assistant),
+            ],
+            ..LiveTurn::default()
+        };
+        let view = view(vec![Arc::new(file)], Some(&live), &[]);
+        assert_eq!(ids(&view), ["u1", "a1", "c1", "c2", "a2", "end"]);
+        assert_eq!(view.turns.len(), 1);
+    }
 }

@@ -44,12 +44,47 @@ pub enum Control {
     Unsupported { rpc_id: Value, method: String },
 }
 
+/// How Brigadier's word on a decline begins: a decline carries no words in the app-server's
+/// answer, so the reason goes into the turn as a steer of Brigadier's ([`decline_steer`]). It
+/// is no message of the user's: the thread reads it as the declined command (#560).
+const DECLINED_MARK: &str = "[Declined";
+/// Where the steer names the declined command.
+const DECLINED_COMMAND: &str = "\nThe command: ";
+
+/// The steer that tells Codex why a request was declined. A command's names its item and the
+/// command, so its rollout, which keeps no item of a declined command, still holds it where
+/// Codex took the decline ([`declined_command`]).
+pub(crate) fn decline_steer(command: Option<(&str, &str)>, message: &str) -> String {
+    match command {
+        Some((item, command)) => {
+            format!("{DECLINED_MARK} {item}] {message}{DECLINED_COMMAND}{command}")
+        }
+        None => format!("{DECLINED_MARK}] {message}"),
+    }
+}
+
+/// Whether a user message is Brigadier's steer after a decline, not the user's.
+pub(crate) fn is_decline_steer(text: &str) -> bool {
+    text.starts_with(DECLINED_MARK)
+}
+
+/// The declined command a decline's steer names: its item and the command.
+pub(crate) fn declined_command(text: &str) -> Option<(String, String)> {
+    let rest = text.strip_prefix(DECLINED_MARK)?.strip_prefix(' ')?;
+    let (item, rest) = rest.split_once("] ")?;
+    let (_, command) = rest.split_once(DECLINED_COMMAND)?;
+    Some((item.to_owned(), command.to_owned()))
+}
+
 /// What an approval answer has to look like.
 #[derive(Debug, Clone)]
 pub enum PendingKind {
-    /// `grant`: Codex can allow the same command again for the rest of its session.
+    /// `grant`: Codex can allow the same command again for the rest of its session. `item`
+    /// and `command`: the command's item, which a decline names ([`decline_steer`]).
     Command {
         grant: bool,
+        item: String,
+        command: Option<String>,
     },
     FileChange,
     /// The requested permission profile, echoed back when granted.
@@ -414,18 +449,25 @@ impl Parser {
         }
         let looked = completed.then(|| looked(&item)).flatten();
         let event = match item {
-            ThreadItem::UserMessage { id, content, .. } if completed => ProviderEvent::Message {
-                item_id: id,
-                role: Role::User,
-                text: content
+            ThreadItem::UserMessage { id, content, .. } if completed => {
+                let text = content
                     .iter()
                     .filter_map(|input| match input {
                         p::UserInput::TextUserInput { text, .. } => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
-                    .join("\n"),
-            },
+                    .join("\n");
+                // Brigadier's word on a decline: the declined command's own row says it.
+                if is_decline_steer(&text) {
+                    return;
+                }
+                ProviderEvent::Message {
+                    item_id: id,
+                    role: Role::User,
+                    text,
+                }
+            }
             ThreadItem::AgentMessage { id, text, .. } if completed => ProviderEvent::Message {
                 item_id: id,
                 role: Role::Assistant,
@@ -730,11 +772,13 @@ impl Parser {
                                 .map(|network| format!("network access to {}", network.host))
                         }),
                         escalation: true,
-                        input: ask.command,
+                        input: ask.command.clone(),
                         grant: grant.clone(),
                     },
                     PendingKind::Command {
                         grant: grant.is_some(),
+                        item: ask.item_id,
+                        command: ask.command,
                     },
                 )
             }
@@ -1603,6 +1647,55 @@ mod tests {
                 // sed -n '100,$p' src.rs, which Codex left unknown.
                 only_reads(vec![read("src.rs", Some((100, None)))]),
             ]
+        );
+    }
+
+    /// Brigadier's word on a declined command is no message of the user's (#560): the
+    /// command's own row says it was declined, and the word names it for the rollout.
+    #[test]
+    fn a_declines_steer_is_no_user_message() {
+        let mut parser = Parser::live();
+        let steer = decline_steer(Some(("exec-1", "/bin/zsh -lc \"curl -sI x\"")), "No.");
+        assert_eq!(
+            declined_command(&steer),
+            Some(("exec-1".into(), "/bin/zsh -lc \"curl -sI x\"".into()))
+        );
+        assert_eq!(declined_command(&decline_steer(None, "No.")), None);
+        assert_eq!(declined_command("[Declined] No."), None);
+        let lines = [
+            json!({"method":"item/completed", "params":{"threadId":"t", "turnId":"u",
+                "completedAtMs": 1, "item":{
+                "type":"commandExecution", "id": "exec-1", "command": "/bin/zsh -lc \"curl -sI x\"",
+                "cwd":"/r", "commandActions": [], "status": "declined",
+                "exitCode": null, "aggregatedOutput": null, "durationMs": null,
+                "source": "agent"}}}),
+            json!({"method":"item/completed", "params":{"threadId":"t", "turnId":"u",
+                "completedAtMs": 2, "item":{"type":"userMessage", "id": "m1",
+                "content": [{"type": "text", "text": steer, "text_elements": []}]}}}),
+            json!({"method":"item/completed", "params":{"threadId":"t", "turnId":"u",
+                "completedAtMs": 3, "item":{"type":"userMessage", "id": "m2",
+                "content": [{"type": "text", "text": "[Declined] Not this.", "text_elements": []}]}}}),
+        ];
+        let events: Vec<ProviderEvent> = lines
+            .iter()
+            .flat_map(|line| events(&mut parser, line))
+            .collect();
+        assert!(
+            events.iter().all(|event| !matches!(
+                event,
+                ProviderEvent::Message {
+                    role: Role::User,
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                ProviderEvent::Command { item_id, status: ItemStatus::Declined, .. } if item_id == "exec-1"
+            )),
+            "{events:?}"
         );
     }
 

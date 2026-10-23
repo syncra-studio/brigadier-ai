@@ -2249,14 +2249,14 @@ impl ProviderSession for CodexSession {
                 .remove(&approval_id)
                 .ok_or_else(|| Error::Invalid(format!("no pending approval {approval_id}")))?;
             let allow = !matches!(decision, ApprovalDecision::Deny { .. });
-            let result = match kind {
-                PendingKind::Command { grant: true }
+            let result = match &kind {
+                PendingKind::Command { grant: true, .. }
                     if decision == ApprovalDecision::AllowSimilar =>
                 {
                     json!({ "decision": "acceptForSession" })
                 }
                 _ if decision == ApprovalDecision::AllowSimilar => {
-                    lock(&self.shared.approvals).insert(approval_id, (rpc_id, kind));
+                    lock(&self.shared.approvals).insert(approval_id, (rpc_id, kind.clone()));
                     return Err(Error::Invalid(
                         "this request has no \"don't ask again\" option".into(),
                     ));
@@ -2265,7 +2265,7 @@ impl ProviderSession for CodexSession {
                     json!({ "decision": if allow { "accept" } else { "decline" } })
                 }
                 PendingKind::Permissions(requested) => json!({
-                    "permissions": if allow { requested } else { json!({}) },
+                    "permissions": if allow { requested.clone() } else { json!({}) },
                     "scope": "turn",
                 }),
                 // An elicitation's answer (`mcpServer/elicitation/request`); declined, the
@@ -2273,12 +2273,20 @@ impl ProviderSession for CodexSession {
             };
             self.rpc.respond(rpc_id, result).await?;
             // A decline carries no words (the app-server's approval responses, 0.162.1), so
-            // the reason reaches the model as a message into its turn.
+            // the reason reaches the model as a message into its turn, naming the command.
             if let ApprovalDecision::Deny { message } = &decision
                 && !message.trim().is_empty()
                 && let Some(turn_id) = self.turn_id()
             {
-                let why = TurnInput::text(format!("[Declined] {message}"));
+                let command = match &kind {
+                    PendingKind::Command {
+                        item,
+                        command: Some(command),
+                        ..
+                    } => Some((item.as_str(), command.as_str())),
+                    _ => None,
+                };
+                let why = TurnInput::text(parse::decline_steer(command, message));
                 if let Err(err) = self.steer_turn(turn_id, &why).await {
                     crate::logging::private_trace!(self.rpc.process.private_logs(), debug, "could not pass a decline's reason"; thread = %self.thread_id, error = %err);
                 }

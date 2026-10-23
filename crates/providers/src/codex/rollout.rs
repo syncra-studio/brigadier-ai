@@ -7,6 +7,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use super::parse::{declined_command, is_decline_steer};
 use crate::model::{
     FileChange, FileChangeKind, ItemStatus, ProviderEvent, Role, TextPhase, TurnStatus,
 };
@@ -113,11 +114,31 @@ pub fn read(path: &Path) -> std::io::Result<Vec<FileEntry>> {
 fn item_event(item: &Value) -> Option<ProviderEvent> {
     let id = str_of(item, "id")?.to_owned();
     let event = match str_of(item, "type")? {
-        "UserMessage" => ProviderEvent::Message {
-            item_id: id,
-            role: Role::User,
-            text: texts(item.get("content")?, "text").join("\n"),
-        },
+        "UserMessage" => {
+            let text = texts(item.get("content")?, "text").join("\n");
+            // Brigadier's word on a decline is no message of the user's: Codex keeps no item
+            // of a declined command, so the word stands for it, where Codex took it (#560).
+            if let Some((item_id, command)) = declined_command(&text) {
+                return Some(ProviderEvent::Command {
+                    item_id,
+                    command,
+                    cwd: None,
+                    status: ItemStatus::Declined,
+                    exit_code: None,
+                    output: None,
+                    duration_ms: None,
+                    kept: None,
+                });
+            }
+            if is_decline_steer(&text) {
+                return None;
+            }
+            ProviderEvent::Message {
+                item_id: id,
+                role: Role::User,
+                text,
+            }
+        }
         "AgentMessage" => ProviderEvent::Message {
             item_id: id,
             role: Role::Assistant,
@@ -308,6 +329,90 @@ fn file_change(path: &str, change: &Value) -> FileChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Codex keeps no item of a declined command; Brigadier's word on it stands for it, in
+    /// its place, and is no message of the user's (#560). An older word names no command and
+    /// shows nothing.
+    #[test]
+    fn a_declined_command_reads_where_codex_took_the_decline() {
+        let line = |at: &str, payload: serde_json::Value| {
+            serde_json::json!({"timestamp": at, "type": "event_msg", "payload": payload})
+                .to_string()
+        };
+        let item = |item: serde_json::Value| {
+            serde_json::json!({"type": "item_completed", "thread_id": "t", "turn_id": "u",
+                "item": item})
+        };
+        let user = |id: &str, text: &str| {
+            item(serde_json::json!({"type": "UserMessage", "id": id,
+                "content": [{"type": "text", "text": text, "text_elements": []}]}))
+        };
+        let agent = |id: &str, text: &str, phase: &str| {
+            item(serde_json::json!({"type": "AgentMessage", "id": id,
+                "content": [{"type": "Text", "text": text}], "phase": phase}))
+        };
+        let steer = super::super::parse::decline_steer(
+            Some(("exec-1", "/bin/zsh -lc \"curl -sI x\"")),
+            "The user declined this.",
+        );
+        let text = [
+            line(
+                "2026-10-23T16:02:44.000Z",
+                serde_json::json!({"type": "task_started", "turn_id": "u"}),
+            ),
+            line("2026-10-23T16:02:46.000Z", user("m1", "Run curl.")),
+            line(
+                "2026-10-23T16:02:48.000Z",
+                agent("a1", "Running it.", "commentary"),
+            ),
+            line("2026-10-23T16:02:50.000Z", user("m2", &steer)),
+            line(
+                "2026-10-23T16:02:51.000Z",
+                user("m3", "[Declined] Older word."),
+            ),
+            line(
+                "2026-10-23T16:02:52.000Z",
+                agent("a2", "I didn't run it.", "final_answer"),
+            ),
+            line(
+                "2026-10-23T16:02:53.000Z",
+                serde_json::json!({"type": "task_complete", "turn_id": "u"}),
+            ),
+        ]
+        .join("\n");
+        let path = std::env::temp_dir().join(format!(
+            "brigadier-rollout-declined-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, text).unwrap();
+        let entries = read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let kinds: Vec<String> = entries
+            .iter()
+            .map(|entry| match &entry.event {
+                ProviderEvent::Message { role, item_id, .. } => format!("{role:?} {item_id}"),
+                ProviderEvent::Command {
+                    item_id,
+                    status,
+                    command,
+                    ..
+                } => format!("command {item_id} {status:?} {command}"),
+                ProviderEvent::TurnCompleted { .. } => "end".into(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "User m1",
+                "Assistant a1",
+                "command exec-1 Declined /bin/zsh -lc \"curl -sI x\"",
+                "Assistant a2",
+                "end"
+            ]
+        );
+        assert!(!entries[2].steer);
+    }
 
     #[test]
     fn native_compaction_and_its_finished_item_make_one_divider_in_rollout_order() {
