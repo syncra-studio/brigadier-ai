@@ -709,6 +709,53 @@ async fn every_fault_of_a_worker_reaches_an_idle_parent_once() {
     flow.stop().await;
 }
 
+/// A worker cut off by a restart waits for its session's next message, as an interrupted
+/// turn leaves it, never paused for good: its parent hears it stopped once, with how it goes
+/// on, and a message carries it on (#559).
+#[tokio::test]
+async fn a_worker_cut_off_by_a_restart_goes_on_when_its_session_sends_it_more() {
+    let (mut flow, seen) = flow("events-restart-cut", PermissionLevel::Full).await;
+    flow.say("Start Hang-on.").await;
+    flow.until("the worker works", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == crate::work::TaskState::Running)
+    })
+    .await;
+    flow.settled().await;
+
+    flow.crash().await;
+    let stopped = ("Hang-on".to_owned(), "stopped".to_owned());
+    super::eventually("the parent told", || seen.told().contains(&stopped)).await;
+    let board = flow.settled().await;
+    let task = Flow::task(&board, 1).clone();
+    assert_eq!(task.state, crate::work::TaskState::Reported);
+    assert_eq!(task.blocked_reason, None);
+    let nets = seen.nets();
+    assert!(
+        nets.iter()
+            .any(|(_, input)| input.contains("Send it a message to carry on.")),
+        "{nets:#?}"
+    );
+
+    flow.manager
+        .message_worker(&flow.conversation, &task, "Go on.".into())
+        .await
+        .unwrap();
+    let finished = ("Hang-on".to_owned(), "finished".to_owned());
+    super::eventually("the worker finished", || seen.told().contains(&finished)).await;
+    flow.settled().await;
+    settle_net().await;
+    let told = seen.told();
+    assert_eq!(
+        told.iter().filter(|told| **told == stopped).count(),
+        1,
+        "{told:#?}"
+    );
+    flow.stop().await;
+}
+
 /// A Codex parent: its `brigadier wait` still runs when its turn ends; its end starts the
 /// parent's next turn with what it printed, and the net sends nothing.
 #[tokio::test]

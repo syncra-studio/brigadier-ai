@@ -167,21 +167,27 @@ impl SessionManager {
                         if conversation.lifecycle != Lifecycle::Archived
                             && task.native_session.is_some() =>
                     {
+                        // A paused one stays paused, as it was.
+                        if task.state == TaskState::Paused {
+                            continue;
+                        }
+                        // A plain worker's cut-off turn ends as an interrupted one does: it
+                        // waits for its session's next message, and its parent hears it
+                        // stopped (S29), once, with how it goes on (#559).
+                        let plain = task.plain.is_some();
                         let _ = self
                             .update_task(&conversation.id, &task.id, |t| {
-                                t.state = TaskState::Paused;
-                                t.blocked_reason =
-                                    Some("Brigadier restarted while it worked.".into());
+                                if plain {
+                                    t.state = TaskState::Reported;
+                                    t.blocked_reason = None;
+                                } else {
+                                    t.state = TaskState::Paused;
+                                    t.blocked_reason =
+                                        Some("Brigadier restarted while it worked.".into());
+                                }
                             })
                             .await;
-                        // Its parent hears it stopped (S29), unless it was already between
-                        // turns.
-                        if task.plain.is_some()
-                            && matches!(
-                                task.state,
-                                TaskState::Running | TaskState::Starting | TaskState::Blocked
-                            )
-                        {
+                        if plain {
                             self.plain_cut_off(&task);
                         }
                         continue;

@@ -603,7 +603,8 @@ impl SessionManager {
     /// A plain worker's CLI was working when Brigadier quit: its session hears it stopped.
     pub(super) fn plain_cut_off(&self, task: &Task) {
         let mut event = event(&task.id, EventKind::Interrupted);
-        event.message = Some("Brigadier restarted while it worked.".into());
+        event.message =
+            Some("Brigadier restarted while it worked. Send it a message to carry on.".into());
         self.worker_event(&task.conversation_id, &task.id, None, event);
     }
 
