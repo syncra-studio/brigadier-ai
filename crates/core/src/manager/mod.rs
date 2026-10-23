@@ -570,18 +570,36 @@ impl SessionManager {
     /// session whose branch or base does not exist (yet).
     pub async fn session_diff_stat(&self, id: &ConversationId) -> Result<Option<(DiffStat, u32)>> {
         let conversation = self.core.conversation(id)?;
-        let Some(Setup::Session {
-            repo,
-            environment:
-                Environment::NewWorktree {
-                    base, branch, path, ..
-                },
-            ..
-        }) = conversation.setup
-        else {
-            return Ok(None);
-        };
         let git = self.git.clone();
+        let (repo, base, branch, path) = match conversation.setup {
+            Some(Setup::Session {
+                repo,
+                environment:
+                    Environment::NewWorktree {
+                        base, branch, path, ..
+                    },
+                ..
+            }) => (repo, base, branch, path),
+            // A Local checkout has no branch of its own: what git shows uncommitted there,
+            // new files too, the user's own edits as well.
+            Some(Setup::Session {
+                repo,
+                environment: Environment::LocalCheckout { .. },
+                ..
+            }) => {
+                return blocking(move || {
+                    let checkout = git.open(Path::new(&repo)).map_err(git_error)?;
+                    let Ok(head) = checkout.resolve("HEAD") else {
+                        return Ok(None);
+                    };
+                    let tree = checkout.snapshot_tree().map_err(git_error)?;
+                    let stat = checkout.diff_stat(&head, &tree).map_err(git_error)?;
+                    Ok(Some((diff_stat_of(&stat), 0)))
+                })
+                .await;
+            }
+            _ => return Ok(None),
+        };
         let base_name = base.clone();
         blocking(move || {
             let repo = git.open(Path::new(&repo)).map_err(git_error)?;

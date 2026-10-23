@@ -187,6 +187,65 @@ async fn the_session_diff_counts_uncommitted_work() {
     flow.stop().await;
 }
 
+/// A Local checkout session's diff is what git shows uncommitted in the checkout, new files too,
+/// the user's own edits as well: `brigadier sessions` and the context card read it (#552).
+#[tokio::test]
+async fn a_local_checkout_sessions_diff_is_its_uncommitted_work() {
+    let (flow, _log) = session("merge-local-uncommitted").await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id;
+    let local = flow
+        .manager
+        .create_conversation(
+            crate::model::ConversationKind::Session,
+            project,
+            Some("Local".into()),
+            Some(crate::model::SetupRequest::Session {
+                repo: flow.repo.display().to_string(),
+                environment: crate::model::EnvironmentRequest::LocalCheckout {
+                    branch: "main".into(),
+                    create_from: None,
+                },
+                permission: crate::model::PermissionLevel::Full,
+                orchestrator: crate::model::ModelChoice {
+                    provider: brigadier_providers::ProviderKind::Claude,
+                    model: Some("claude-opus-5-5".into()),
+                    effort: None,
+                    fast: None,
+                    account: None,
+                },
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    let diff = || async {
+        flow.manager
+            .session_diff_stat(&local)
+            .await
+            .unwrap()
+            .expect("a Local checkout session's diff")
+    };
+    let (stat, commits) = diff().await;
+    assert_eq!((stat.files.len(), commits), (0, 0), "{stat:?}");
+    std::fs::write(flow.repo.join("notes.md"), "One line.\n").unwrap();
+    let (stat, commits) = diff().await;
+    assert_eq!(
+        (stat.files.len(), stat.insertions, stat.deletions, commits),
+        (1, 1, 0, 0),
+        "{stat:?}"
+    );
+    assert!(
+        git(&flow.repo, &["status", "--porcelain"]).contains("?? notes.md"),
+        "the user's index is left as it was"
+    );
+    flow.stop().await;
+}
+
 /// #233: the local `main` fell behind GitHub's, and the session merged GitHub's `main` in. Its
 /// size is what it changed since that merge base, its own notes only, not every file
 /// GitHub's `main` gained.
