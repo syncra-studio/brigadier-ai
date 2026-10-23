@@ -13,6 +13,7 @@ Use it when the user types `/fusion <question>`, or when they are uncertain: the
 2. Run `brigadier models`. Start one consult per installed CLI with quota left, each through its own row: `fusion-claude`, `fusion-codex` (another CLI: `fusion-<agent>`). The row picks the strongest model and effort the user's rules allow. If that model is out of quota or refused, pass the strongest one left with `--model`.
 3. Start them together, lean, with the same brief:
    `brigadier start "<brief>" --lean --work fusion-claude --title "Fusion · <model>"`
+   Run each `brigadier` command as it is, with nothing piped after it (`| tail`): at Accept edits Claude Code asks before such a command.
    The brief has:
    - the question;
    - the context, with file:line;

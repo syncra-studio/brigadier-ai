@@ -184,6 +184,7 @@ mod tests {
             "/fusion <question>",
             "`fusion-claude`, `fusion-codex`",
             "brigadier start \"<brief>\" --lean --work fusion-claude",
+            "with nothing piped after it",
             "Answer only; change no file.",
             "One cross round.",
             "You judge; never count votes.",
