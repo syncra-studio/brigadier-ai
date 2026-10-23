@@ -207,13 +207,6 @@ pub trait ProviderSession: Send + Sync {
     fn close(&self) -> BoxFuture<'_, ()>;
 
     fn is_running(&self) -> bool;
-
-    /// What the CLI's commands that ended left running out of its process tree, with each
-    /// one's start time ([`process::CliProcess::left_behind`]). Nothing for a session with no
-    /// process of its own.
-    fn left_behind(&self) -> Vec<(u32, Option<f64>)> {
-        Vec::new()
-    }
 }
 
 /// Turns a recorded session back into events.

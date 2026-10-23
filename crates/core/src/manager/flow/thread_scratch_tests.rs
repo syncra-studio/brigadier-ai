@@ -1,9 +1,5 @@
-//! A session thread's scratch goes once its requests are over ([`super::super::thread_scratch`]):
-//! what its commands left in its temporary folder, and the processes working there, but a
-//! server that listens on a port. A request still waiting keeps it, no turn starts while it
-//! goes, and the launch sweeps what a quit or a crash left.
+//! A session's TMPDIR survives turns and restarts; Archive and Delete own its cleanup.
 
-use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -17,324 +13,120 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-/// A process of the thread's commands working in `dir`, in a group of its own, as a test the
-/// thread started and killed leaves its children.
-fn spawn_in(dir: &Path, program: &str, args: &[&str]) -> Child {
-    use std::os::unix::process::CommandExt;
-    Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .unwrap()
-}
+/// Kill and reap only the process this test started, including on assertion failure.
+#[derive(Default)]
+struct Background(Option<Child>);
 
-/// What the thread's turn leaves in its temporary folder: a second checkout's build output, a
-/// stopped test's process and a running helper's.
-fn litter(turn: &Turn, children: &Arc<Mutex<Vec<Child>>>) -> PathBuf {
-    let tmp = turn.session_tmp();
-    let target = tmp.join("bt-main/target");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(target.join("out.bin"), vec![7u8; 64 * 1024]).unwrap();
-    let stopped = spawn_in(&target, "/bin/sleep", &["300"]);
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(stopped.id() as i32),
-        nix::sys::signal::Signal::SIGSTOP,
-    )
-    .unwrap();
-    let running = spawn_in(&tmp, "/bin/sleep", &["300"]);
-    children.lock().unwrap().extend([stopped, running]);
-    tmp
-}
-
-/// Whether every child has ended (and is reaped).
-fn all_ended(children: &Arc<Mutex<Vec<Child>>>) -> bool {
-    children
-        .lock()
-        .unwrap()
-        .iter_mut()
-        .all(|child| child.try_wait().ok().flatten().is_some())
-}
-
-/// Ends what a failed test left running.
-fn end(children: &Arc<Mutex<Vec<Child>>>) {
-    for child in children.lock().unwrap().iter_mut() {
-        let _ = child.kill();
-        let _ = child.wait();
+impl Background {
+    #[track_caller]
+    fn assert_running(&mut self) {
+        assert!(
+            self.0
+                .as_mut()
+                .expect("the session started sleep")
+                .try_wait()
+                .unwrap()
+                .is_none(),
+            "the session's background process was ended"
+        );
     }
 }
 
-/// Once its request is over, what the thread's commands left in its temporary folder goes,
-/// stopped processes included; the folder stays, as its CLI's TMPDIR.
-#[tokio::test]
-async fn a_threads_scratch_goes_once_its_request_is_over() {
-    let children: Arc<Mutex<Vec<Child>>> = Arc::default();
-    let made = children.clone();
-    let flow = Flow::start(
-        "scratch-over",
-        Options::default(),
-        script(move |turn| {
-            let made = made.clone();
-            async move {
-                litter(&turn, &made);
-                Reply::text("Built it in a second checkout.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Build main apart.").await;
-    flow.settled().await;
-    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
-    super::eventually("the scratch to go", || {
-        std::fs::read_dir(&tmp).is_ok_and(|mut entries| entries.next().is_none())
-    })
-    .await;
-    super::eventually("its processes to end", || all_ended(&children)).await;
-    assert!(tmp.is_dir(), "{}", tmp.display());
-    end(&children);
-    flow.stop().await;
+impl Drop for Background {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
-/// A server the thread's commands left listening on a port stays, and so does the folder it
-/// works in; what is stopped beside it goes.
 #[tokio::test]
-async fn a_listening_server_stays_through_the_sweep() {
-    let children: Arc<Mutex<Vec<Child>>> = Arc::default();
-    let made = children.clone();
-    let flow = Flow::start(
-        "scratch-server",
+async fn tmp_and_background_process_survive_turn_end_and_daemon_restart() {
+    let background = Arc::new(Mutex::new(Background::default()));
+    let started = background.clone();
+    let mut flow = Flow::start(
+        "20261022-0805-take-over-5-sessions-w99-tmp-survives",
         Options::default(),
         script(move |turn| {
-            let made = made.clone();
+            let started = started.clone();
             async move {
-                let tmp = litter(&turn, &made);
-                let site = tmp.join("site");
-                std::fs::create_dir_all(&site).unwrap();
-                let server = spawn_in(
-                    &site,
-                    "python3",
-                    &[
-                        "-c",
-                        "import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', 0))\ns.listen()\nopen('up', 'w').close()\ntime.sleep(300)",
-                    ],
-                );
-                made.lock().unwrap().push(server);
-                for _ in 0..250 {
-                    if site.join("up").exists() {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                let tmp = turn.session_tmp();
+                let mut background = started.lock().unwrap();
+                if background.0.is_none() {
+                    std::fs::write(tmp.join("keep.txt"), b"keep between turns").unwrap();
+                    use std::os::unix::process::CommandExt;
+                    background.0 = Some(
+                        Command::new("/bin/sleep")
+                            .arg("600")
+                            .current_dir(&tmp)
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .process_group(0)
+                            .spawn()
+                            .unwrap(),
+                    );
+                } else {
+                    assert_eq!(
+                        std::fs::read(tmp.join("keep.txt")).unwrap(),
+                        b"keep between turns"
+                    );
+                    background.assert_running();
                 }
-                assert!(site.join("up").exists());
-                Reply::text("The site serves.")
-            }
-        }),
-    )
-    .await;
-    flow.say("Serve the site.").await;
-    flow.settled().await;
-    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
-    super::eventually("the build output to go", || !tmp.join("bt-main").exists()).await;
-    let ended = |index: usize| {
-        children.lock().unwrap()[index]
-            .try_wait()
-            .ok()
-            .flatten()
-            .is_some()
-    };
-    super::eventually("the stopped and idle processes to end", || {
-        ended(0) && ended(1)
-    })
-    .await;
-    assert!(!ended(2), "the server was ended");
-    assert!(tmp.join("site/up").exists());
-    end(&children);
-    flow.stop().await;
-}
-
-/// While the scratch is reserved for a sweep, a message the user sends starts no turn; once
-/// the sweep is done, it does.
-#[tokio::test]
-async fn no_turn_starts_while_the_scratch_is_swept() {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        "scratch-race",
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
                 Reply::text("Done.")
             }
         }),
     )
     .await;
-    flow.say("First.").await;
-    flow.settled().await;
-    let conv = flow.manager.conv(&flow.conversation).unwrap();
-    super::eventually_async("the thread to be free", || conv.begin_scratch_sweep()).await;
-    flow.say("Second.").await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    assert_eq!(
-        inputs.lock().unwrap().len(),
-        1,
-        "a turn ran during the sweep"
-    );
-    conv.end_scratch_sweep().await;
-    flow.manager.kick(&conv);
-    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
+    flow.say("Leave a file and a background sleep in TMPDIR.")
         .await;
-    flow.settled().await;
-    assert!(inputs.lock().unwrap()[1].contains("Second."));
-    flow.stop().await;
-}
+    flow.idle().await;
+    let file = flow
+        .manager
+        .session_dir(&flow.conversation)
+        .tmp()
+        .join("keep.txt");
+    assert_eq!(std::fs::read(&file).unwrap(), b"keep between turns");
+    background.lock().unwrap().assert_running();
 
-/// What a quit left in a thread's temporary folder goes when the app starts again, before
-/// anything runs.
-#[tokio::test]
-async fn the_launch_sweeps_what_a_quit_left() {
-    let mut flow = Flow::start(
-        "scratch-launch",
-        Options::default(),
-        script(|_| async { Reply::text("Done.") }),
-    )
-    .await;
-    flow.say("First.").await;
-    flow.settled().await;
-    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
-    super::scratch_sweep_over(&flow, &tmp).await;
-    // Left while the app was down.
-    std::fs::create_dir_all(tmp.join("bt-verify/target")).unwrap();
-    std::fs::write(tmp.join("bt-verify/target/out.bin"), b"built").unwrap();
-    let children: Arc<Mutex<Vec<Child>>> =
-        Arc::new(Mutex::new(vec![spawn_in(&tmp, "/bin/sleep", &["300"])]));
+    flow.say("Check them on the next turn.").await;
+    flow.idle().await;
     flow.restart().await;
-    assert!(!tmp.join("bt-verify").exists());
-    super::eventually("the leftover process to end", || all_ended(&children)).await;
-    assert!(tmp.is_dir());
-    end(&children);
+    assert_eq!(std::fs::read(&file).unwrap(), b"keep between turns");
+    background.lock().unwrap().assert_running();
+    flow.say("Check them after the restart.").await;
+    flow.idle().await;
+    assert_eq!(std::fs::read(&file).unwrap(), b"keep between turns");
+    background.lock().unwrap().assert_running();
     flow.stop().await;
 }
 
-/// A server started through a wrapper (`sh -c`, as `npm run dev` starts node) in the temporary
-/// folder itself stays with its wrapper, and so does everything in the folder it works in.
 #[tokio::test]
-async fn a_server_below_a_wrapper_in_the_folder_itself_keeps_it() {
-    let children: Arc<Mutex<Vec<Child>>> = Arc::default();
-    let made = children.clone();
+async fn archive_removes_the_tmp_files_a_turn_left() {
     let flow = Flow::start(
-        "scratch-wrapper",
+        "20261022-0805-take-over-5-sessions-w99-tmp-archive",
         Options::default(),
-        script(move |turn| {
-            let made = made.clone();
-            async move {
-                let tmp = turn.session_tmp();
-                std::fs::create_dir_all(&tmp).unwrap();
-                std::fs::write(tmp.join("index.html"), b"<p>served</p>").unwrap();
-                let wrapper = spawn_in(
-                    &tmp,
-                    "/bin/sh",
-                    &[
-                        "-c",
-                        "python3 -c \"import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', 0))\ns.listen()\nopen('up', 'w').close()\ntime.sleep(300)\"; true",
-                    ],
-                );
-                made.lock().unwrap().push(wrapper);
-                for _ in 0..250 {
-                    if tmp.join("up").exists() {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                }
-                assert!(tmp.join("up").exists());
-                Reply::text("The site serves.")
-            }
+        script(|turn| async move {
+            let output = turn.session_tmp().join("checkout/target");
+            std::fs::create_dir_all(&output).unwrap();
+            std::fs::write(output.join("out.bin"), b"built").unwrap();
+            Reply::text("Built.")
         }),
     )
     .await;
-    flow.say("Serve the site.").await;
-    flow.settled().await;
-    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
-    // The sweep the request's end started may still hold the thread: sweep again once free.
-    let mut swept = None;
-    for _ in 0..250 {
-        swept = flow
-            .manager
-            .sweep_thread_scratch(&flow.conversation)
-            .await
-            .unwrap();
-        if swept.is_some() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    let swept = swept.expect("the session to be idle");
-    assert!(
-        swept
-            .kept
-            .iter()
-            .any(|kept| kept.contains("listens on a port")),
-        "{swept:?}"
-    );
-    let wrapper = children.lock().unwrap()[0].id();
-    let alive =
-        |pid: u32| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok();
-    assert!(alive(wrapper), "the wrapper was ended: {swept:?}");
-    assert!(tmp.join("index.html").exists(), "{swept:?}");
-    assert!(tmp.join("up").exists(), "{swept:?}");
-    // The wrapper's group holds the server too.
-    let group = nix::unistd::Pid::from_raw(-(wrapper as i32));
-    let _ = nix::sys::signal::kill(group, nix::sys::signal::Signal::SIGKILL);
-    end(&children);
-    let _ = std::fs::remove_file(tmp.join("index.html"));
-    let _ = std::fs::remove_file(tmp.join("up"));
-    flow.stop().await;
-}
-
-/// A temporary folder that became a link is left alone, and so is what it points to and what
-/// works there: the sweep would otherwise delete and end what isn't the thread's.
-#[tokio::test]
-async fn a_temp_folder_replaced_by_a_link_is_left_alone() {
-    let flow = Flow::start(
-        "scratch-link",
-        Options::default(),
-        script(|_| async { Reply::text("Done.") }),
-    )
+    flow.say("Build in TMPDIR.").await;
+    flow.idle().await;
+    let id = flow.conversation.clone();
+    let dir = flow.manager.session_dir(&id);
+    assert!(dir.tmp().join("checkout/target/out.bin").is_file());
+    flow.manager.archive(id.clone()).await.unwrap();
+    flow.manager.cleanup_finished(&id).await;
+    super::eventually_async("the archive's cleanup to finish", || async {
+        !flow.core.conversation(&id).unwrap().cleanup_pending
+    })
     .await;
-    flow.say("First.").await;
-    flow.settled().await;
-    let tmp = flow.manager.session_dir(&flow.conversation).tmp();
-    super::scratch_sweep_over(&flow, &tmp).await;
-    let elsewhere =
-        std::env::temp_dir().join(format!("brigadier-scratch-link-{}", flow.conversation));
-    std::fs::create_dir_all(&elsewhere).unwrap();
-    std::fs::write(elsewhere.join("keep.txt"), b"not the thread's").unwrap();
-    std::fs::remove_dir(&tmp).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, &tmp).unwrap();
-    let children: Arc<Mutex<Vec<Child>>> = Arc::new(Mutex::new(vec![spawn_in(
-        &elsewhere,
-        "/bin/sleep",
-        &["300"],
-    )]));
-    flow.manager.sweep_scratch_at_launch().await;
-    let swept = flow
-        .manager
-        .sweep_thread_scratch(&flow.conversation)
-        .await
-        .unwrap();
-    let kept = elsewhere.join("keep.txt").exists();
-    let running = children.lock().unwrap()[0].try_wait().unwrap().is_none();
-    end(&children);
-    let _ = std::fs::remove_file(&tmp);
-    let _ = std::fs::remove_dir_all(&elsewhere);
-    assert!(kept, "a file the link points to was deleted: {swept:?}");
-    assert!(
-        running,
-        "a process where the link points was ended: {swept:?}"
-    );
+    assert!(!dir.tmp().exists());
+    assert!(dir.record().is_dir());
     flow.stop().await;
 }

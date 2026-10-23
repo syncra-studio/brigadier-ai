@@ -214,7 +214,20 @@ impl SessionManager {
     /// its own owner, which goes with the session.
     pub(crate) async fn thread_temp(&self, id: &ConversationId) -> Result<PathBuf> {
         let dir = self.session_dir(id).tmp();
-        self.prepare_owned_dir(&thread_temp_owner(id), &dir).await?;
+        self.runtime
+            .ledger()
+            .record(
+                &thread_temp_owner(id),
+                brigadier_providers::Artifact::ScratchDir {
+                    path: dir.to_string_lossy().into_owned(),
+                },
+            )
+            .await?;
+        let tmp = dir.clone();
+        super::blocking(move || {
+            std::fs::create_dir_all(tmp).map_err(|err| Error::Invalid(err.to_string()))
+        })
+        .await?;
         Ok(dir)
     }
 

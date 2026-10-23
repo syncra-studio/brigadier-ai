@@ -66,7 +66,7 @@ struct Target {
 }
 
 impl Uninstall {
-    /// Uninstalling has begun: nothing housekeeps any more.
+    /// Uninstalling has begun: background maintenance stops.
     pub fn started(&self) -> bool {
         self.started.load(Ordering::Acquire)
     }

@@ -101,9 +101,6 @@ pub enum Action {
     },
     /// Build output in a work folder of an idle session, checked again before it goes.
     DeleteBuildFiles(build_files::BuildFiles),
-    /// What the commands of these sessions' threads left in their temporary folders, swept
-    /// as their requests' end does, each only while its session is still idle.
-    SweepThreadScratch(Vec<ConversationId>),
     /// CLI session files proven Brigadier's, taken on by the cleanup ledger with their bound
     /// identities and removed through it.
     Adopt(agent_files::Adoption),
@@ -126,9 +123,6 @@ impl Action {
 pub struct ScanItem {
     pub item: CleanItem,
     pub action: Action,
-    /// Purely Brigadier's, rebuildable, and clearly left over: housekeeping removes it without
-    /// asking.
-    pub routine: bool,
 }
 
 /// What the daemon knows that the session manager doesn't.
@@ -167,8 +161,6 @@ struct Records {
     kept: Vec<(String, KeptBranch)>,
     /// Conversations with a turn, waiting work or a worker running now.
     running: HashSet<ConversationId>,
-    /// Sessions whose thread scratch may go now ([`SessionManager::scratch_sweepable`]).
-    scratch_idle: HashSet<ConversationId>,
     /// Every CLI session this data directory ever started.
     native: HashMap<String, crate::ledger::NativeSession>,
     /// The branches Brigadier's records prove its own.
@@ -380,7 +372,6 @@ impl SessionManager {
             scan.agent_files(&agent_homes);
             scan.working_folders();
             scan.session_temp_folders();
-            scan.thread_scratch();
             scan.brains();
             scan.logs_and_recordings();
             scan.site_icons();
@@ -409,7 +400,6 @@ impl SessionManager {
                     true,
                 ),
                 action: Action::CollectBlobs,
-                routine: false,
             });
         }
         if let Some(space) = space
@@ -426,7 +416,6 @@ impl SessionManager {
                     true,
                 ),
                 action: Action::Compact,
-                routine: false,
             });
         }
         Ok((items, usage))
@@ -436,12 +425,9 @@ impl SessionManager {
         let catalog = self.core.catalog();
         let mut tasks = HashMap::new();
         let mut running = HashSet::new();
-        let mut scratch_idle = HashSet::new();
         for conversation in &catalog.conversations {
             if self.conversation_running(&conversation.id).await {
                 running.insert(conversation.id.clone());
-            } else if self.scratch_sweepable(&conversation.id).await.is_some() {
-                scratch_idle.insert(conversation.id.clone());
             }
             if let Ok(board) = self.core.board(&conversation.id).await {
                 tasks.insert(conversation.id.clone(), board.sorted_tasks());
@@ -456,7 +442,6 @@ impl SessionManager {
             owners: self.runtime.ledger().owners(),
             kept: self.kept_branches().await?,
             running,
-            scratch_idle,
             native: self.runtime.ledger().native_sessions(),
             owned: self.runtime.ledger().branch_ownership(),
         })
@@ -735,22 +720,6 @@ impl SessionManager {
                 .await
             }
             Action::DeleteBuildFiles(files) => self.delete_build_files(files, context).await,
-            Action::SweepThreadScratch(sessions) => {
-                let mut cleaned = Cleaned::default();
-                for id in sessions {
-                    match self.sweep_thread_scratch(&id).await {
-                        Ok(Some(swept)) => {
-                            cleaned.reclaimed += swept.bytes;
-                            cleaned.failures.extend(swept.kept);
-                        }
-                        Ok(None) => cleaned.failures.push(
-                            "its session is working again: it is swept when it is over".into(),
-                        ),
-                        Err(err) => cleaned.failures.push(err.to_string()),
-                    }
-                }
-                Ok(cleaned)
-            }
             Action::Adopt(adoption) => self.adopt(adoption).await,
             Action::CollectBlobs => self
                 .core
@@ -1200,7 +1169,6 @@ fn project_of(records: &Records, worktrees: &Path, action: &Action) -> Option<Pr
         }
         Action::PruneWorktrees { repo } | Action::DeleteBranch { repo, .. } => of_repo(repo),
         Action::DeleteBuildFiles(files) => of_conversation(&files.conversation().0),
-        Action::SweepThreadScratch(ids) => one(ids.iter().map(|id| of_conversation(&id.0))),
         Action::Dispose { owners } => one(owners.iter().map(|(owner, _)| of_owner(owner))),
         Action::Delete(entries) | Action::Trash(entries) => {
             one(entries.iter().map(|(bound, _)| of_path(bound.path())))
@@ -1380,11 +1348,7 @@ impl Scanner<'_> {
     }
 
     fn push(&mut self, item: CleanItem, action: Action) {
-        self.items.push(ScanItem {
-            item,
-            action,
-            routine: false,
-        });
+        self.items.push(ScanItem { item, action });
     }
 
     /// Tags each item with the project it belongs to, when what removing it takes names
@@ -1395,15 +1359,6 @@ impl Scanner<'_> {
         for scanned in &mut self.items {
             scanned.item.project_id = project_of(records, &worktrees, &scanned.action);
         }
-    }
-
-    /// An item housekeeping may remove on its own too.
-    fn push_routine(&mut self, item: CleanItem, action: Action) {
-        self.items.push(ScanItem {
-            item,
-            action,
-            routine: true,
-        });
     }
 
     /// Worktree folders in the data directory. Those of ended tasks and sessions are offered
@@ -1432,7 +1387,7 @@ impl Scanner<'_> {
             if worktrees.is_empty() {
                 let empty = std::fs::read_dir(&project_dir).is_ok_and(|mut e| e.next().is_none());
                 if empty && let Some(bound) = self.bind_data(&project_dir) {
-                    self.push_routine(
+                    self.push(
                         item(
                             CleanCategory::FinishedWork,
                             "Empty work folder of a project".into(),
@@ -1684,7 +1639,6 @@ impl Scanner<'_> {
         self.items.push(ScanItem {
             item: entry,
             action: Action::External("none".into()),
-            routine: false,
         });
     }
 
@@ -1859,7 +1813,6 @@ impl Scanner<'_> {
                 self.items.push(ScanItem {
                     item: entry,
                     action: Action::External("none".into()),
-                    routine: false,
                 });
                 continue;
             }
@@ -2006,7 +1959,6 @@ impl Scanner<'_> {
                 self.items.push(ScanItem {
                     item: entry,
                     action: Action::External("none".into()),
-                    routine: false,
                 });
                 continue;
             }
@@ -2174,7 +2126,7 @@ impl Scanner<'_> {
         }
         if !entries.is_empty() {
             let bytes = entries.iter().map(|(_, bytes)| bytes).sum();
-            self.push_routine(
+            self.push(
                 item(
                     CleanCategory::Temporary,
                     counted(entries.len(), "session temp folder", "session temp folders"),
@@ -2210,69 +2162,12 @@ impl Scanner<'_> {
             self.items.push(ScanItem {
                 item: entry,
                 action: Action::External("none".into()),
-                routine: false,
             });
         }
     }
 
     #[cfg(not(unix))]
     fn session_temp_folders(&mut self) {}
-
-    /// What the commands of idle sessions' threads left in their temporary folders: swept
-    /// when their requests end, so only what a sweep couldn't finish is left here.
-    fn thread_scratch(&mut self) {
-        let mut sessions = Vec::new();
-        let mut bytes = 0;
-        let mut first = None;
-        for conversation in &self.records.conversations {
-            if !self.records.scratch_idle.contains(&conversation.id) {
-                continue;
-            }
-            let tmp = self
-                .records
-                .sessions_dir
-                .join(conversation.id.short())
-                .join("tmp");
-            let (owner, _) = super::lifecycle::conversation_owner(conversation);
-            let temps = self
-                .records
-                .owners
-                .iter()
-                .find(|(of, _, _)| *of == owner)
-                .map(|(_, artifacts, _)| super::thread_scratch::command_temps(artifacts))
-                .unwrap_or_default();
-            let found = super::thread_scratch::leftovers(&tmp, &temps);
-            if found.is_empty() {
-                continue;
-            }
-            bytes += found
-                .iter()
-                .map(|path| removal::allocated_size(path))
-                .sum::<u64>();
-            first.get_or_insert(tmp);
-            sessions.push(conversation.id.clone());
-        }
-        if sessions.is_empty() {
-            return;
-        }
-        let label = format!(
-            "Thread temp files of {}",
-            counted(sessions.len(), "idle session", "idle sessions")
-        );
-        self.push(
-            item(
-                CleanCategory::Temporary,
-                label,
-                if sessions.len() == 1 { first } else { None },
-                bytes,
-                "What a session thread's commands left in its temp folder (second checkouts, build \
-                 output, test data) after its requests ended. Its session isn't working; what \
-                 its commands left running there ends too, but a server listening on a port.",
-                true,
-            ),
-            Action::SweepThreadScratch(sessions),
-        );
-    }
 
     /// Brains of projects that are no longer in Brigadier.
     fn brains(&mut self) {

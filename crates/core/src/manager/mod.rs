@@ -97,7 +97,6 @@ mod thread;
 mod thread_images;
 mod thread_items;
 mod thread_metrics;
-mod thread_scratch;
 mod tool_output;
 mod tools;
 mod trust;

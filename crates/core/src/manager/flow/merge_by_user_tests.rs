@@ -128,18 +128,6 @@ async fn plant_merge_card(flow: &Flow, answer: Option<&str>) -> Question {
     question
 }
 
-/// Waits until the thread is idle again, its scratch swept: a Close workspace during the
-/// sweep that follows a request is refused as working.
-async fn quiet(flow: &Flow) -> crate::board::Board {
-    let board = flow.settled().await;
-    let conv = flow.manager.conv(&flow.conversation).unwrap();
-    super::eventually_async("the thread to be idle, its scratch swept", || async {
-        !conv.scratch_used.load(std::sync::atomic::Ordering::SeqCst) && conv.scratch_idle().await
-    })
-    .await;
-    board
-}
-
 /// "Merge into main" reads the branch's commits, not its diff: commits that change nothing in
 /// sum (a file added, then removed) are still work to merge, and none is none.
 #[tokio::test]
@@ -412,7 +400,7 @@ async fn an_archived_sessions_unfinished_removal_still_goes() {
 async fn a_failed_close_workspace_says_so_at_the_next_start() {
     let (mut flow, _) = session("merge-close-failed-restart").await;
     flow.say("Add notes.").await;
-    quiet(&flow).await;
+    flow.idle().await;
     let path = workspace(&flow).0.unwrap();
     flow.manager
         .runtime
@@ -452,7 +440,7 @@ async fn a_failed_close_workspace_says_so_at_the_next_start() {
 async fn an_older_removal_that_kept_its_folder_recorded_says_nothing_at_the_next_start() {
     let (mut flow, _) = session("merge-old-removal-path").await;
     flow.say("Add notes.").await;
-    quiet(&flow).await;
+    flow.idle().await;
     let path = workspace(&flow).0.unwrap();
     flow.core
         .record(vec![(
@@ -481,16 +469,18 @@ async fn an_older_removal_that_kept_its_folder_recorded_says_nothing_at_the_next
     flow.stop().await;
 }
 
-/// Close workspace right after a turn, while the sweep that follows it still holds the
-/// thread, waits for the sweep and closes instead of saying the session is working (#180).
+/// Concurrent Close workspace calls wait for the reservation already held by the first.
 #[tokio::test]
-async fn close_workspace_right_after_a_turn_waits_for_its_sweep() {
-    let (flow, _) = session("merge-close-sweep").await;
+async fn close_workspace_waits_for_an_existing_reservation() {
+    let (flow, _) = session("merge-close-reserved").await;
     flow.say("Add notes.").await;
-    quiet(&flow).await;
+    flow.idle().await;
     let path = workspace(&flow).0.unwrap();
     let conv = flow.manager.conv(&flow.conversation).unwrap();
-    assert!(conv.begin_scratch_sweep().await, "the sweep after the turn");
+    assert!(
+        conv.reserve_workspace().await,
+        "the first close holds the workspace"
+    );
     let closing = tokio::spawn({
         let manager = flow.manager.clone();
         let id = flow.conversation.clone();
@@ -499,26 +489,28 @@ async fn close_workspace_right_after_a_turn_waits_for_its_sweep() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(
         !closing.is_finished(),
-        "it waits for the sweep, not refuses"
+        "it waits for the existing reservation"
     );
-    conv.end_scratch_sweep().await;
+    conv.release_workspace().await;
     closing.await.unwrap().unwrap();
     assert!(!path.exists());
     flow.stop().await;
 }
 
-/// A message sent while Close workspace waits for the sweep may get its turn first: what that
-/// turn leaves uncommitted is still kept on the branch, never removed with the folder (Codex
-/// review of #180).
+/// A message sent while Close workspace waits for another reservation may get its turn first.
+/// What it leaves uncommitted stays on the branch, never removed with the folder (#180).
 #[tokio::test]
 async fn a_turn_that_overtakes_a_waiting_close_keeps_its_changes() {
-    let (flow, _) = session("merge-close-sweep-turn").await;
+    let (flow, _) = session("merge-close-reserved-turn").await;
     flow.say("Add notes.").await;
-    quiet(&flow).await;
+    flow.idle().await;
     let (path, branch) = workspace(&flow);
     let path = path.unwrap();
     let conv = flow.manager.conv(&flow.conversation).unwrap();
-    assert!(conv.begin_scratch_sweep().await, "the sweep after the turn");
+    assert!(
+        conv.reserve_workspace().await,
+        "the first close holds the workspace"
+    );
     let closing = tokio::spawn({
         let manager = flow.manager.clone();
         let id = flow.conversation.clone();
@@ -526,7 +518,7 @@ async fn a_turn_that_overtakes_a_waiting_close_keeps_its_changes() {
     });
     flow.say("Draft it.").await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    conv.end_scratch_sweep().await;
+    conv.release_workspace().await;
     flow.manager.kick(&conv);
     closing.await.unwrap().unwrap();
     flow.settled().await;
@@ -544,7 +536,7 @@ async fn a_turn_that_overtakes_a_waiting_close_keeps_its_changes() {
 async fn close_workspace_removes_it_only_when_asked() {
     let (flow, log) = session("merge-close").await;
     flow.say("Add notes.").await;
-    quiet(&flow).await;
+    flow.idle().await;
     let (path, branch) = workspace(&flow);
     let path = path.unwrap();
     // Uncommitted work is kept on the branch.
@@ -604,7 +596,7 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
         !logged(&heard, "merged ").is_empty()
     })
     .await;
-    quiet(&flow).await;
+    flow.idle().await;
     let (path, branch) = workspace(&flow);
     let path = path.unwrap();
     let reply = flow
@@ -634,7 +626,7 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
 async fn a_message_during_close_workspace_waits_for_it() {
     let (flow, log) = session("merge-close-fence").await;
     flow.say("Add notes.").await;
-    quiet(&flow).await;
+    flow.idle().await;
     let path = workspace(&flow).0.unwrap();
     // The workspace's removal holds until released, so the message comes while it runs.
     let removing = Arc::new(tokio::sync::Notify::new());

@@ -156,8 +156,6 @@ async fn archive_keeps_the_record_and_delete_removes_the_folder() {
     flow.settled().await;
     let id = flow.conversation.clone();
     let dir = flow.manager.session_dir(&id);
-    // Left in tmp/ once the requests are over: the scratch sweep empties it then, in the
-    // background, so what a turn wrote there may be gone already.
     std::fs::write(dir.tmp().join("scratch.txt"), "x").unwrap();
     assert!(dir.work().join(".git").is_file());
     flow.manager.archive(id.clone()).await.unwrap();

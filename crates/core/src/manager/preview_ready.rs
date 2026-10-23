@@ -206,14 +206,6 @@ pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
     lsof_listening(LSOF, "-g", group).await.unwrap_or_default()
 }
 
-/// The TCP ports process `pid` listens on, per `lsof`; `None` when that can't be told (`lsof`
-/// missing, failing or too slow), which a caller sparing listening servers must read as
-/// "may listen".
-#[cfg(target_os = "macos")]
-pub(super) async fn process_listening_ports(pid: u32) -> Option<Vec<u16>> {
-    lsof_listening(LSOF, "-p", pid).await
-}
-
 /// The TCP ports the processes `lsof` selects with `flag` `id` (`-g` a group, `-p` a process)
 /// listen on; `None` when `lsof` can't run or doesn't finish in time.
 #[cfg(target_os = "macos")]
@@ -260,14 +252,6 @@ pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
     })
     .await
     .unwrap_or_default()
-}
-
-/// The TCP ports process `pid` listens on; `None` when that can't be told (no socket table
-/// readable), which a caller sparing listening servers must read as "may listen".
-#[cfg(target_os = "linux")]
-pub(super) async fn process_listening_ports(pid: u32) -> Option<Vec<u16>> {
-    let pid = pid.to_string();
-    proc_listening(move |of| of == pid).await
 }
 
 /// The TCP ports the processes `wanted` picks (by pid) listen on: the listening sockets of
@@ -331,11 +315,6 @@ async fn proc_listening(wanted: impl Fn(&str) -> bool + Send + 'static) -> Optio
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(super) async fn listening_ports(_group: u32) -> Vec<u16> {
     Vec::new()
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub(super) async fn process_listening_ports(_pid: u32) -> Option<Vec<u16>> {
-    None
 }
 
 /// Whether an HTTP server on `port` of this machine answers (a TCP connect alone isn't enough:
@@ -489,7 +468,7 @@ mod tests {
         assert_eq!(lsof_listening("/nonexistent/lsof", "-p", own).await, None);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let ports = process_listening_ports(own).await.expect("lsof ran");
+        let ports = lsof_listening(LSOF, "-p", own).await.expect("lsof ran");
         assert!(ports.contains(&port), "{ports:?} lacks {port}");
     }
 

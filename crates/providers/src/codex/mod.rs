@@ -2286,10 +2286,6 @@ impl ProviderSession for CodexSession {
     fn is_running(&self) -> bool {
         self.rpc.process.is_running()
     }
-
-    fn left_behind(&self) -> Vec<(u32, Option<f64>)> {
-        self.rpc.process.left_behind()
-    }
 }
 
 /// Lists the thread's MCP servers with their state and tools, as

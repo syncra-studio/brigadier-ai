@@ -104,8 +104,6 @@ impl SessionManager {
         self.runtime.ledger().sweep().await;
         // Spare worktrees an earlier version made ahead of a task that never came (BUILD-PLAN A8).
         self.sweep_spare_worktrees().await;
-        // No thread runs yet: what their commands left goes before anything starts again.
-        self.sweep_scratch_at_launch().await;
         self.reconcile_trust().await;
         // Tab chats whose session went go now; those whose tab closed, once the app says.
         self.sweep_tab_chats().await;
@@ -686,11 +684,10 @@ impl SessionManager {
         };
         self.quiet_for_close(id).await?;
         // No turn starts from here until the folder is gone: a message or a worker's report
-        // that comes meanwhile waits for the turn after, in a fresh worktree. The sweep right
-        // after a turn holds the thread a moment: the close waits for it (#180).
+        // that comes meanwhile waits for the turn after, in a fresh worktree.
         let conv = self.conv(id)?;
         if !conv
-            .begin_scratch_sweep_within(std::time::Duration::from_secs(10))
+            .reserve_workspace_within(std::time::Duration::from_secs(10))
             .await
         {
             return Err(Error::Invalid(
@@ -700,7 +697,7 @@ impl SessionManager {
         let closed = self
             .close_reserved(id, &conversation, &path, &branch, &base, &conv)
             .await;
-        conv.end_scratch_sweep().await;
+        conv.release_workspace().await;
         self.kick(&conv);
         closed
     }

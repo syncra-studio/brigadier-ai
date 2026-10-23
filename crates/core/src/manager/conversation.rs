@@ -256,9 +256,8 @@ struct ConvState {
     /// Nor while startup puts back what the stop left (#210), so no turn takes a message
     /// before its recovery has seen it there.
     recovering: bool,
-    /// The thread's scratch is being swept (its requests are over): no turn starts until
-    /// the sweep is done, which then looks for one ([`super::thread_scratch`]).
-    sweeping: bool,
+    /// No turn starts while Close workspace removes the session's worktree.
+    workspace_reserved: bool,
     /// Tasks stopped by an edit or redo: what they still send is dropped.
     withdrawn: HashSet<TaskId>,
     /// The user messages the running turn carries (resent after a Chat fallback).
@@ -501,9 +500,6 @@ pub(crate) struct ConvLive {
     /// (#342), and whether the disk was looked at for one since Brigadier started.
     pub(super) user_rebase: std::sync::Mutex<Option<super::user_rebase::UserRebase>>,
     pub(super) user_rebase_looked: std::sync::atomic::AtomicBool,
-    /// A turn ran since the thread's scratch was last swept: the next time its requests are
-    /// all over, it is swept ([`super::thread_scratch`]).
-    pub(super) scratch_used: std::sync::atomic::AtomicBool,
     /// The CLI session a turn on each provider resumes, as [`SessionManager::last_native_id`]
     /// last found it in the log, kept up to date as sessions start and reset.
     native_ids: std::sync::Mutex<NativeIds>,
@@ -550,7 +546,6 @@ impl ConvLive {
             workspace_closed: std::sync::atomic::AtomicBool::new(false),
             user_rebase: std::sync::Mutex::new(None),
             user_rebase_looked: std::sync::atomic::AtomicBool::new(false),
-            scratch_used: std::sync::atomic::AtomicBool::new(false),
             native_ids: std::sync::Mutex::new(NativeIds::default()),
             items: std::sync::Mutex::default(),
             #[cfg(test)]
@@ -720,16 +715,12 @@ impl ConvLive {
         state.compacting = false;
     }
 
-    /// Whether a turn is starting or running, or work waits for one.
-    /// Whether nothing of the driver holds the thread's scratch: no turn starting or running,
-    /// nothing waiting for a turn (a message, an envelope, a task's or card's news on its
-    /// way), no hand-over, edit or close under way, and no command of its CLI's still going
-    /// (a Codex command left running, a background job, or the turn its end starts).
-    fn scratch_free(state: &ConvState) -> bool {
+    /// Whether the workspace can be reserved without interrupting pending or running work.
+    fn workspace_free(state: &ConvState) -> bool {
         !(state.busy
             || state.closing
             || state.held
-            || state.sweeping
+            || state.workspace_reserved
             || state.hand_over.is_some()
             || !state.inbox.is_empty()
             || !state.pending.is_empty()
@@ -741,28 +732,21 @@ impl ConvLive {
             || state.background.is_some())
     }
 
-    /// [`Self::scratch_free`], as it stands now.
-    pub(super) async fn scratch_idle(&self) -> bool {
-        Self::scratch_free(&*self.state.lock().await)
-    }
-
-    /// Reserves the thread's scratch for a sweep when nothing holds it: no turn starts until
-    /// [`Self::end_scratch_sweep`]. False when something holds it (nothing is reserved).
-    pub(super) async fn begin_scratch_sweep(&self) -> bool {
+    /// Reserves the workspace for removal; new turns wait until it is released.
+    pub(super) async fn reserve_workspace(&self) -> bool {
         let mut state = self.state.lock().await;
-        if !Self::scratch_free(&state) {
+        if !Self::workspace_free(&state) {
             return false;
         }
-        state.sweeping = true;
+        state.workspace_reserved = true;
         true
     }
 
-    /// [`Self::begin_scratch_sweep`], waiting up to `limit` for what holds the scratch to let
-    /// go: the sweep right after a turn, say (#180).
-    pub(super) async fn begin_scratch_sweep_within(&self, limit: std::time::Duration) -> bool {
+    /// Waits up to `limit` for the workspace to become free, then reserves it.
+    pub(super) async fn reserve_workspace_within(&self, limit: std::time::Duration) -> bool {
         let deadline = tokio::time::Instant::now() + limit;
         loop {
-            if self.begin_scratch_sweep().await {
+            if self.reserve_workspace().await {
                 return true;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -772,9 +756,9 @@ impl ConvLive {
         }
     }
 
-    /// The sweep is over: turns may start again (the caller looks for one).
-    pub(super) async fn end_scratch_sweep(&self) {
-        self.state.lock().await.sweeping = false;
+    /// Workspace removal is over: turns may start again (the caller looks for one).
+    pub(super) async fn release_workspace(&self) {
+        self.state.lock().await.workspace_reserved = false;
     }
 
     pub async fn is_busy(&self) -> bool {
@@ -1050,8 +1034,6 @@ impl SessionManager {
         if waiting {
             self.kick(&conv);
         }
-        // Requests all over: what the thread's commands left goes.
-        self.sweep_scratch_when_over(&conv);
     }
 
     /// The request new rows are filed under: the running turn's, else the conversation's
@@ -1834,7 +1816,7 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             if state.busy
                 || state.held
-                || state.sweeping
+                || state.workspace_reserved
                 || state.hand_over.is_some()
                 || !state.pending.is_empty()
                 || !state.inbox.is_empty()
@@ -2057,8 +2039,7 @@ impl SessionManager {
     async fn next_turn(self: Arc<Self>, conv: Arc<ConvLive>) {
         let waiting = {
             let state = conv.state.lock().await;
-            // A hand-over under way starts the next turn itself, once it has moved its turn; a
-            // sweep of the thread's scratch looks for the next turn once it is done.
+            // A hand-over under way starts the next turn itself, once it has moved its turn.
             if state.hand_over.is_some() {
                 return;
             }
@@ -2096,7 +2077,7 @@ impl SessionManager {
                 || state.closing
                 || state.held
                 || state.recovering
-                || state.sweeping
+                || state.workspace_reserved
                 || state.hand_over.is_some()
                 || self.admit().is_err()
             {
@@ -2181,8 +2162,6 @@ impl SessionManager {
             };
             state.busy = true;
             state.interrupted = false;
-            conv.scratch_used
-                .store(true, std::sync::atomic::Ordering::SeqCst);
             state.landed = false;
             state.watchdog.begin(now_ms());
             state.limit_hit = None;

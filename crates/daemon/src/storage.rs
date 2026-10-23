@@ -31,10 +31,6 @@ const PROGRESS_BACKLOG: usize = 64;
 const ASK_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long another daemon gets to quit.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(30);
-/// Housekeeping's first run after the daemon starts, once launch-time work has settled.
-const HOUSEKEEPING_DELAY: Duration = Duration::from_secs(2 * 60);
-/// And then once a day.
-const HOUSEKEEPING_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 /// The database compacts on its own once nothing has run or been written for this long.
 const COMPACT_QUIET: Duration = Duration::from_secs(2 * 60);
 /// Its first look after the daemon starts, once launch-time work has settled.
@@ -137,7 +133,6 @@ impl Storage {
             items.push(ScanItem {
                 item,
                 action: Action::External(key),
-                routine: false,
             });
         }
         for (item, action) in ask_daemons(daemons).await {
@@ -146,7 +141,6 @@ impl Storage {
             items.push(ScanItem {
                 item,
                 action: Action::External(key),
-                routine: false,
             });
         }
         let scan_id = uuid::Uuid::now_v7().to_string();
@@ -317,25 +311,6 @@ async fn remove(
     }
 }
 
-/// Removes on its own, shortly after the daemon starts and then daily, what is clearly left
-/// over, purely Brigadier's and rebuildable: empty worktree folders, this data directory's
-/// session temp folders untouched for a day with nothing working in them, connection folders
-/// nobody listens on. Never user data, never git branches, never anything with changes.
-pub async fn housekeeping(daemon: Arc<Daemon>, stop: CancellationToken) -> anyhow::Result<()> {
-    let mut wait = HOUSEKEEPING_DELAY;
-    loop {
-        tokio::select! {
-            () = stop.cancelled() => return Ok(()),
-            () = tokio::time::sleep(wait) => {}
-        }
-        wait = HOUSEKEEPING_EVERY;
-        if daemon.uninstall.started() {
-            return Ok(());
-        }
-        daemon.storage.housekeep(&daemon).await;
-    }
-}
-
 /// Compacts the database on its own (PLAN.md §2, Delete): once Brigadier has been quiet for
 /// [`COMPACT_QUIET`] (nothing works, nothing was written) and that gives back enough space.
 /// Never in the daemon's first minutes, and never once it is stopping.
@@ -397,43 +372,6 @@ fn compact_timing() -> (Duration, Duration) {
         return (secs, secs);
     }
     (COMPACT_DELAY, COMPACT_QUIET)
-}
-
-impl Storage {
-    async fn housekeep(&self, daemon: &Daemon) {
-        let _one = self.cleaning.lock().await;
-        let items = match daemon.sessions.scan_storage(context(daemon)).await {
-            Ok((items, _)) => items,
-            Err(err) => {
-                tracing::warn!(error = %err, "housekeeping could not look around");
-                return;
-            }
-        };
-        let paths = daemon.runtime.platform().paths().clone();
-        let sockets = tokio::task::spawn_blocking(move || stale_sockets(&paths))
-            .await
-            .unwrap_or_default();
-        let mut removed = 0;
-        for ScanItem { item, action, .. } in
-            items.into_iter().chain(sockets).filter(|item| item.routine)
-        {
-            let private_logs = action.private_logs();
-            match daemon.sessions.clean_storage(action, context(daemon)).await {
-                Ok(cleaned) if !cleaned.failures.is_empty() => {
-                    let error = cleaned.failures.join("; ");
-                    crate::logging::private_trace!(private_logs, debug, "housekeeping left part of an item"; item = %item.label, %error);
-                }
-                Ok(_) => {
-                    removed += 1;
-                    crate::logging::private_trace!(private_logs, info, "housekeeping removed a leftover"; item = %item.label, path = item.path.as_deref().unwrap_or(""));
-                }
-                Err(error) => {
-                    crate::logging::private_trace!(private_logs, debug, "housekeeping left an item"; item = %item.label, %error);
-                }
-            }
-        }
-        tracing::info!(removed, "housekeeping done");
-    }
 }
 
 /// What the daemon knows now that the session manager doesn't.
@@ -518,7 +456,6 @@ fn rank(action: &Action) -> u8 {
         | Action::RemoveEmptyDir(_)
         | Action::DeleteModel { .. }
         | Action::DeleteBuildFiles(_)
-        | Action::SweepThreadScratch(_)
         | Action::Adopt(_) => 5,
         Action::CollectBlobs => 6,
         Action::Compact => 7,
@@ -613,7 +550,6 @@ fn stale_sockets(paths: &AppPaths) -> Vec<ScanItem> {
     vec![ScanItem {
         item,
         action: Action::Delete(stale),
-        routine: true,
     }]
 }
 

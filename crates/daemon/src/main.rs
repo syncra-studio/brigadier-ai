@@ -339,7 +339,6 @@ async fn run(
     supervisor.spawn_critical("wal checkpointer", checkpoint_loop(store.clone()));
     supervisor.spawn(awake.clone().run(stopping.clone()));
     supervisor.spawn(idle::exit_when_idle(daemon.clone(), stopping.clone()));
-    supervisor.spawn(storage::housekeeping(daemon.clone(), stopping.clone()));
     supervisor.spawn(storage::compact_when_quiet(
         daemon.clone(),
         stopping.clone(),

@@ -733,14 +733,19 @@ async fn agent_files_go_only_with_proof_once_what_they_served_is_gone() {
     flow.stop().await;
 }
 
-/// What a thread's commands left in its temporary folder, which a crash kept its request's
-/// end from sweeping, is listed while its session is idle and swept from here.
+/// Free up space is an explicit action, but even that leaves a live session's TMPDIR
+/// for Archive and Delete. Scanning alone never removes anything.
 #[tokio::test]
-async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
-    let (flow, _worktree, _branch) = session("disk-thread-scratch").await;
+async fn free_up_space_keeps_an_idle_sessions_tmp() {
+    let (flow, _worktree, _branch) =
+        session("20261022-0805-take-over-5-sessions-w99-disk-tmp").await;
+    flow.idle().await;
     let tmp = flow.manager.session_dir(&flow.conversation).tmp();
-    crate::manager::flow::scratch_sweep_over(&flow, &tmp).await;
+    std::fs::create_dir_all(tmp.join("bt-main/target")).unwrap();
+    let file = tmp.join("bt-main/target/out.bin");
+    std::fs::write(&file, vec![1u8; 256 * 1024]).unwrap();
     let (items, _) = scan(&flow, context()).await;
+    assert!(file.is_file(), "a scan must not clean TMPDIR");
     assert!(
         !labels(&items)
             .iter()
@@ -748,24 +753,12 @@ async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
         "{:?}",
         labels(&items)
     );
-    std::fs::create_dir_all(tmp.join("bt-main/target")).unwrap();
-    std::fs::write(tmp.join("bt-main/target/out.bin"), vec![1u8; 256 * 1024]).unwrap();
-    let (items, _) = scan(&flow, context()).await;
-    let listed = named(&items, "Thread temp files of 1 idle session");
-    assert_eq!(listed.item.category, CleanCategory::Temporary);
-    assert!(listed.item.bytes >= 256 * 1024, "{}", listed.item.bytes);
+    let cleaned = sweep(&flow, &items, context()).await;
     assert!(
-        matches!(&listed.action, Action::SweepThreadScratch(ids) if ids.as_slice() == std::slice::from_ref(&flow.conversation))
+        cleaned.iter().all(|item| item.failures.is_empty()),
+        "{cleaned:?}"
     );
-    let cleaned = flow
-        .manager
-        .clean_storage(listed.action.clone(), context())
-        .await
-        .unwrap();
-    assert!(cleaned.reclaimed >= 256 * 1024, "{cleaned:?}");
-    assert!(cleaned.failures.is_empty(), "{cleaned:?}");
-    assert!(!tmp.join("bt-main").exists());
-    assert!(tmp.is_dir());
+    assert_eq!(std::fs::read(&file).unwrap(), vec![1u8; 256 * 1024]);
     flow.stop().await;
 }
 

@@ -225,9 +225,13 @@ impl SessionManager {
             ledger
                 .record(&owner, Artifact::ScratchDir { path: path.clone() })
                 .await?;
-            ledger
-                .record(&owner, Artifact::ProcessesIn { dir: path })
-                .await?;
+            // Open sessions keep detached commands across daemon restarts. Archive and
+            // Delete record their process cleanup when the user closes the session.
+            if conversation.tab_chat.is_some() {
+                ledger
+                    .record(&owner, Artifact::ProcessesIn { dir: path })
+                    .await?;
+            }
         }
         let workspace = match &conversation.setup {
             Some(Setup::Session { environment, .. }) => Some(WorkspaceRecord::of(environment)),
