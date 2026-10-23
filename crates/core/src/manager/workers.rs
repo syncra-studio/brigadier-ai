@@ -725,6 +725,7 @@ impl SessionManager {
             } else {
                 cwd.clone()
             }),
+            keeps_detached: false,
             // It compacts as its CLI does.
             auto_compact: true,
             allowed_models,
@@ -950,7 +951,7 @@ impl SessionManager {
             .session_dir(&task.conversation_id)
             .worker(task)
             .join("tmp");
-        self.prepare_owned_dir(owner, &scratch).await?;
+        self.prepare_owned_dir(owner, &scratch, true).await?;
         let plain = task
             .plain
             .as_ref()

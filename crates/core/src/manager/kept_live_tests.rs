@@ -132,6 +132,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         redactor: None,
         owned_cwd: true,
         sweep_dir: None,
+        keeps_detached: false,
         auto_compact: true,
         allowed_models: None,
         omit_ai_coauthors: false,

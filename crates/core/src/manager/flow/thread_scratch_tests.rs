@@ -89,6 +89,20 @@ async fn tmp_and_background_process_survive_turn_end_and_daemon_restart() {
         .join("keep.txt");
     assert_eq!(std::fs::read(&file).unwrap(), b"keep between turns");
     background.lock().unwrap().assert_running();
+    // The real CLI's left-behind commands: its process layer ends none of them, and the crash
+    // sweep has no folder of the session's to end what runs in it.
+    assert!(flow.thread_specs()[0].1.keeps_detached);
+    let held = flow
+        .manager
+        .runtime
+        .ledger()
+        .artifacts(&format!("orch:{}", flow.conversation));
+    assert!(
+        !held
+            .iter()
+            .any(|artifact| matches!(artifact, brigadier_providers::Artifact::ProcessesIn { .. })),
+        "{held:?}"
+    );
 
     flow.say("Check them on the next turn.").await;
     flow.idle().await;

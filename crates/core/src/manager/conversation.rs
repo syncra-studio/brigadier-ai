@@ -2474,7 +2474,11 @@ impl SessionManager {
         // scratch folder of its own, and only that goes with it.
         let mut tab_checkout = None;
         let dir = self.owned_dir(area, &conv.id.0);
-        self.prepare_owned_dir(&owner, &dir).await?;
+        // What a session's or a Chat's commands leave running outlives its CLI and a daemon
+        // restart (S31): Archive and Delete end what runs in its folder. Its helpers' doesn't.
+        let keeps_detached = conversation.side_of.is_none() && conversation.tab_chat.is_none();
+        self.prepare_owned_dir(&owner, &dir, !keeps_detached)
+            .await?;
         // A side chat (of a session, or of a tab) is its session's helper, with a limited shell
         // (S16c); a session and a Chat have their CLI's own (S28).
         let side = conversation.side_of.is_some();
@@ -2694,6 +2698,7 @@ impl SessionManager {
             redactor: grant_redactor.clone(),
             owned_cwd,
             sweep_dir: Some(dir.clone()),
+            keeps_detached,
             // A session's thread goes on at seams, never compacted.
             auto_compact: conv.kind == ConversationKind::Chat,
             allowed_models: self.rules_models(choice.provider)?,
@@ -2860,17 +2865,24 @@ impl SessionManager {
         }
     }
 
-    /// Creates a Brigadier-owned folder and records it (and anything running inside it) in
-    /// the cleanup ledger first.
-    pub(crate) async fn prepare_owned_dir(&self, owner: &str, dir: &std::path::Path) -> Result<()> {
+    /// Creates a Brigadier-owned folder and records it (and, with `processes`, anything running
+    /// inside it) in the cleanup ledger first.
+    pub(crate) async fn prepare_owned_dir(
+        &self,
+        owner: &str,
+        dir: &std::path::Path,
+        processes: bool,
+    ) -> Result<()> {
         let ledger = self.runtime.ledger();
         let path = dir.to_string_lossy().into_owned();
         ledger
             .record(owner, Artifact::ScratchDir { path: path.clone() })
             .await?;
-        ledger
-            .record(owner, Artifact::ProcessesIn { dir: path })
-            .await?;
+        if processes {
+            ledger
+                .record(owner, Artifact::ProcessesIn { dir: path })
+                .await?;
+        }
         let dir = dir.to_owned();
         super::blocking(move || {
             std::fs::create_dir_all(&dir).map_err(|err| Error::Invalid(err.to_string()))

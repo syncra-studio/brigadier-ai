@@ -285,6 +285,7 @@ impl Codex {
                 redactor,
                 ledger,
                 sweep_dir: session.and_then(|session| session.sweep_dir.clone()),
+                keeps_detached: session.is_some_and(|session| session.keeps_detached),
             },
         )?;
         Ok((Arc::new(Rpc::new(process)), stdout))
@@ -2582,6 +2583,7 @@ mod tests {
             redactor: None,
             owned_cwd: false,
             sweep_dir: None,
+            keeps_detached: false,
             auto_compact: true,
             allowed_models,
             omit_ai_coauthors: false,

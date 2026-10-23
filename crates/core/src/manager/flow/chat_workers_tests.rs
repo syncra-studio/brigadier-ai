@@ -289,6 +289,7 @@ async fn a_chats_cli_runs_as_a_sessions_at_its_level() {
             assert_eq!(spec.access, session.access, "{label}");
             assert_eq!(spec.access, level.access(), "{label}");
             assert_eq!(spec.tools, session.tools, "{label}");
+            assert!(spec.keeps_detached && session.keeps_detached, "{label}");
             assert!(spec.tools.user_setup(), "{label}");
             assert_eq!(spec.add_dirs, vec![folder.record()], "{label}");
             let tmp = spec

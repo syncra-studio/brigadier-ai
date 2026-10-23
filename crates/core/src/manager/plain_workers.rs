@@ -338,7 +338,7 @@ impl SessionManager {
             .worker(task)
             .join("work");
         let Some(repo) = repo else {
-            self.prepare_owned_dir(owner, &worker_dir).await?;
+            self.prepare_owned_dir(owner, &worker_dir, true).await?;
             return Ok(Workspace {
                 repo: None,
                 worktree: Some(worker_dir),

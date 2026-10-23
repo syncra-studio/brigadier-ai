@@ -224,10 +224,12 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
     );
     let thread_owner = format!("orch:{}", flow.conversation);
     let held = ledger.artifacts(&thread_owner);
+    // What the thread's commands leave running outlives its CLI (S31).
     assert!(
-        held.iter()
+        !held
+            .iter()
             .any(|artifact| matches!(artifact, Artifact::ProcessesIn { .. })),
-        "the thread's scratch folder is swept: {held:?}"
+        "the thread's scratch folder is not swept: {held:?}"
     );
     for artifact in &held {
         if let Artifact::ProcessesIn { dir } | Artifact::ScratchDir { path: dir } = artifact {

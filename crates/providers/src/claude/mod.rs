@@ -1237,6 +1237,7 @@ impl Provider for Claude {
                     redactor: spec.redactor.clone(),
                     ledger: Some(ledger.clone()),
                     sweep_dir: spec.sweep_dir.clone(),
+                    keeps_detached: spec.keeps_detached,
                 },
             )?;
             ledger
@@ -2391,6 +2392,7 @@ for line in sys.stdin:
             redactor: None,
             owned_cwd: false,
             sweep_dir: None,
+            keeps_detached: false,
             auto_compact: true,
             allowed_models: Some(allowed(ids, &["claude-opus-5-5", "claude-fable-5-1"])),
             omit_ai_coauthors: false,

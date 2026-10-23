@@ -11,6 +11,10 @@
 //! process seen in the tree is remembered with its start time and ended when the CLI goes,
 //! however it goes, and each group or session leader among them is also recorded in the
 //! cleanup ledger, so the crash sweep finds it after the daemon died.
+//!
+//! A session's or a Chat's CLI ([`Options::keeps_detached`]) is the exception: what its commands
+//! leave running outlives it, as with the plain CLI (STRIP-DOWN-PLAN S31). Only its own process
+//! group ends with it.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -98,6 +102,9 @@ pub struct Options {
     /// still runs inside it when the CLI goes is ended too: that finds a server that detached
     /// from the tree before a walk saw it.
     pub sweep_dir: Option<PathBuf>,
+    /// What its commands leave running outlives it: nothing below it is tracked, recorded or
+    /// ended but its own process group (S31).
+    pub keeps_detached: bool,
 }
 
 /// The processes seen below the CLI, by pid, with their start times.
@@ -107,6 +114,8 @@ struct Tree {
     platform: Arc<dyn Platform>,
     seen: Mutex<HashMap<u32, Option<f64>>>,
     sweep_dir: Option<PathBuf>,
+    /// Nothing is tracked or ended ([`Options::keeps_detached`]).
+    keeps_detached: bool,
 }
 
 impl Tree {
@@ -114,6 +123,9 @@ impl Tree {
     /// no longer the CLI's descendant, but what it starts is its own). Returns the leaders of
     /// process groups among the processes seen for the first time.
     fn scan(&self) -> Vec<(u32, Option<f64>)> {
+        if self.keeps_detached {
+            return Vec::new();
+        }
         let processes = self.platform.processes();
         let mut roots = vec![self.root];
         {
@@ -147,6 +159,9 @@ impl Tree {
     /// with its own tree and group, then whatever still works inside the swept folder but a
     /// spared group's ([`spare`]). Returns how many were running.
     fn end_all(&self) -> usize {
+        if self.keeps_detached {
+            return 0;
+        }
         let processes = self.platform.processes();
         let seen: Vec<(u32, Option<f64>)> = lock(&self.seen).drain().collect();
         let mut ended = 0;
@@ -203,6 +218,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
         redactor,
         ledger,
         sweep_dir,
+        keeps_detached,
     } = options;
     let private_logs = private_logs || ledger.as_ref().is_some_and(|ledger| ledger.private_logs());
     let mut command = tokio::process::Command::from(platform.processes().piped_command(spec));
@@ -262,6 +278,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
         platform: platform.clone(),
         seen: Mutex::new(HashMap::new()),
         sweep_dir,
+        keeps_detached,
     });
     let (exit_tx, exit) = watch::channel(None);
     let tracked = tree.clone();
@@ -582,6 +599,58 @@ mod tests {
             ended.is_ok(),
             "the sweep should end a group no longer spared"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// S31: what a session's CLI leaves running, detached and seen by a walk, outlives the
+    /// CLI; any other CLI's ends with it.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_a_cli_that_keeps_detached_leaves_its_commands_running() {
+        let root = std::env::temp_dir().join(format!("brigadier-keep-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        for keeps_detached in [true, false] {
+            // A command in a session of its own, as both CLIs start them; the CLI stays past a
+            // walk of its tree, then exits.
+            let spec = SpawnSpec::new("python3").arg("-c").arg(
+                "import subprocess, sys, time\n\
+                 child = subprocess.Popen(['sleep', '60'], start_new_session=True)\n\
+                 print(child.pid, flush=True)\n\
+                 time.sleep(2.5)",
+            );
+            let Spawned {
+                process,
+                mut stdout,
+            } = spawn(
+                platform.clone(),
+                &spec,
+                Options {
+                    keeps_detached,
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            let pid = stdout.recv().await.unwrap().trim().to_owned();
+            process.exited().await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let kill = |signal: &str| {
+                std::process::Command::new("kill")
+                    .args([signal, pid.as_str()])
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success()
+            };
+            let running = kill("-0");
+            if running {
+                kill("-9");
+            }
+            assert_eq!(running, keeps_detached, "keeps_detached: {keeps_detached}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

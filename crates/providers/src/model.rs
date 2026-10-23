@@ -1379,6 +1379,9 @@ pub struct SessionSpec {
     /// folder shared with other sessions): whatever still runs inside it when the CLI goes is
     /// ended too. `None`: only the CLI's own tree is ended.
     pub sweep_dir: Option<PathBuf>,
+    /// What its commands leave running outlives the CLI, as with the plain CLI: a session's or
+    /// a Chat's (S31). Only its own process group ends with it, and `sweep_dir` is not swept.
+    pub keeps_detached: bool,
     /// The CLI may compact its context on its own as it fills up. Off for orchestrators,
     /// which are reborn instead (PLAN.md §2): Claude's auto-compact is switched off; Codex's
     /// cannot be, so its limit is raised as far as Codex allows (90% of the window).

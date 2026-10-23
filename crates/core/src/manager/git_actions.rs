@@ -585,6 +585,7 @@ impl SessionManager {
             redactor: None,
             owned_cwd: true,
             sweep_dir: Some(dir.clone()),
+            keeps_detached: false,
             auto_compact: true,
             allowed_models: None,
             omit_ai_coauthors: false,
