@@ -463,17 +463,8 @@ impl SessionManager {
                 if provider == ProviderKind::Claude {
                     tracing::info!(conversation = %id, "no thread start to copy: the note fork starts on its own");
                 }
-                let conversation = self.core.conversation(id).ok()?;
-                let preferences = self.memory_lines(super::memories::MEMORY_BYTES).await;
                 // The thread's own instructions.
-                let prompt = self
-                    .thread_prompt(
-                        &conversation,
-                        &preferences,
-                        self.recorded_workspace(id).as_ref(),
-                        provider,
-                    )
-                    .await;
+                let prompt = self.thread_prompt(provider);
                 plain_fork_spec(self.thread_cwd(id), &choice, native_id, prompt)
             }
         };

@@ -29,4 +29,9 @@ mcp?: Array<McpServerState>,
 /**
  * Its own workers (`brigadier start`), as their CLIs and git show them (S14).
  */
-workers?: Array<WorkerRow>, };
+workers?: Array<WorkerRow>, 
+/**
+ * The ledger the session keeps (`record/ledger.md`, S17), once it wrote one: Sources lists
+ * it first.
+ */
+ledger?: string, };

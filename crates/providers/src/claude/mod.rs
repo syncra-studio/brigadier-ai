@@ -77,25 +77,15 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const EXIT_GRACE: Duration = Duration::from_secs(3);
 /// The first version seen to run `/compact` sent as a stream-json message.
 const COMPACT_SINCE: &str = "2.1.282";
-/// Built-in tools a worker's lean start leaves out ([`ToolSet::Lean`]): scheduling, background
-/// agents and messaging, worktrees (Brigadier manages them), notebooks and the like. Each tool's
-/// description is part of every request; without these a worker starts at about 10k tokens
-/// instead of 15k (measured on 2.1.285). Subagents, web and tool search stay. A worker asks
-/// through Brigadier's ask_orchestrator, never Claude's own question or plan-mode tools
-/// (SESSION-FIXES-PLAN.md Q6.5; the three names checked in 2.1.296).
-const LEAN_DENIED_TOOLS: &str = "Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,\
-RemoteTrigger,PushNotification,DesignSync,ReportFindings,EnterWorktree,ExitWorktree,ListAgents,\
-SendMessage,TaskStop,Monitor,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode";
+/// The only built-in tools a thread or worker goes without (STRIP-DOWN-PLAN S17): the ones that
+/// can't work inside a Brigadier tab. Scheduling, remote triggers and push notifications need the
+/// idle loop of an interactive CLI, which `-p` has none of; Claude's own question tool reaches
+/// Brigadier as a bare permission request that carries no answer back, and `brigadier ask` asks
+/// instead. Everything else the plain CLI has stays (G17; measured on 2.1.309 in the S17 run).
+const TAB_DENIED_TOOLS: &str =
+    "RemoteTrigger,PushNotification,ScheduleWakeup,CronCreate,CronDelete,CronList,AskUserQuestion";
 /// Claude's built-in tool that starts a sub-agent (`Task` is its older name).
 const SUB_AGENT_TOOLS: &str = "Agent,Task";
-/// A thread's built-in tools ([`ToolSet::Thread`]): Claude Code's own sub-agents (`Agent`, which
-/// its init event lists as `Task`) and background-task control (`Monitor`, `TaskStop`) are on, as
-/// in a plain CLI (STRIP-DOWN-PLAN S3), and so is `Skill`, which reads the skills it is given, the
-/// brigade skill among them (S15). Tool search stays (BUILD-PLAN C2): Brigadier marks its
-/// everyday tools to load from the start, and the rest wait behind the search until the thread
-/// needs one.
-const THREAD_TOOLS: &str =
-    "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop,Skill";
 /// A one-shot reviewer's built-in tools ([`ToolSet::Review`]).
 const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
@@ -351,7 +341,9 @@ impl Claude {
             args.push(denied);
         }
         match spec.tools {
-            ToolSet::Default | ToolSet::Lean => {}
+            // A thread or worker has the CLI's own tools less the few dead in a tab
+            // ([`TAB_DENIED_TOOLS`]).
+            ToolSet::Default | ToolSet::Lean | ToolSet::Thread => {}
             ToolSet::None => {
                 args.push("--tools".into());
                 args.push(String::new());
@@ -367,10 +359,6 @@ impl Claude {
                 args.push(CHAT_TOOLS.into());
                 args.push("--allowedTools".into());
                 args.push(BRIGADIER_ALLOWED.into());
-            }
-            ToolSet::Thread => {
-                args.push("--tools".into());
-                args.push(THREAD_TOOLS.into());
             }
             ToolSet::Review => {
                 args.push("--tools".into());
@@ -530,8 +518,8 @@ fn sub_agents(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> Sub
 /// started at all.
 fn denied_tools(spec: &SessionSpec, sub_agents: &SubAgents) -> Option<String> {
     let mut denied: Vec<&str> = Vec::new();
-    if spec.tools == ToolSet::Lean {
-        denied.push(LEAN_DENIED_TOOLS);
+    if spec.tools.user_setup() {
+        denied.push(TAB_DENIED_TOOLS);
     }
     if *sub_agents == SubAgents::Off {
         denied.push(SUB_AGENT_TOOLS);
@@ -685,16 +673,10 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
             },
         },
     });
-    // A worker or a thread needs none of what ships with Claude Code for a person at the
-    // keyboard, and each of it is in every request or connects at start: bundled skills and
-    // workflows, claude.ai's MCP connectors, the Artifact tool, Remote Control
-    // (SESSION-FIXES-PLAN.md Q6.5). Each key is in 2.1.296's settings schema; `enableArtifact:
-    // false` replaces the deprecated `disableArtifact`, and set in `--settings` it wins.
-    if matches!(spec.tools, ToolSet::Lean | ToolSet::Thread) {
-        settings["disableBundledSkills"] = json!(true);
+    // claude.ai's connectors can't work in a Brigadier tab (STRIP-DOWN-PLAN S17): nothing
+    // else of what ships with Claude Code is switched off.
+    if spec.tools.user_setup() {
         settings["disableClaudeAiConnectors"] = json!(true);
-        settings["enableArtifact"] = json!(false);
-        settings["disableRemoteControl"] = json!(true);
     }
     // The models the session and its sub-agents may run on (a sub-agent asking for another
     // steps down to an allowed one).
@@ -798,7 +780,7 @@ fn brigadier_socket(spec: &SessionSpec) -> Option<String> {
     Some(real.display().to_string())
 }
 
-/// A thread's output/rules hook after a tool finishes. Changes cards use turn trees.
+/// A thread's output hook after each `Bash` call, a success or a failure.
 fn output_hooks(spec: &SessionSpec) -> Option<Value> {
     let hook = spec
         .output_hook
@@ -810,19 +792,12 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
         .collect::<Vec<_>>()
         .join(" ");
     let run = json!({ "type": "command", "command": command, "timeout": hook.timeout_secs });
-    let entry = json!([{ "matcher": "Bash", "hooks": [run.clone()] }]);
-    // A file tool's call brings its folder's rules (BUILD-PLAN D1.6).
-    let files = json!({ "matcher": FILE_TOOLS_MATCHER, "hooks": [run] });
-    let mut success = entry.clone();
-    success.as_array_mut()?.push(files);
+    let entry = json!([{ "matcher": "Bash", "hooks": [run] }]);
     Some(json!({
-        "PostToolUse": success,
+        "PostToolUse": entry.clone(),
         "PostToolUseFailure": entry,
     }))
 }
-
-/// The file tools whose successful calls also run a thread's output hook.
-const FILE_TOOLS_MATCHER: &str = "Read|Edit|Write|MultiEdit|NotebookEdit";
 
 /// A worker's `Stop` hook ([`SessionSpec::stop_hook`]) as settings `hooks.Stop`: its command
 /// reads the stop's event (`stop_hook_active` among it) and answers `decision: "block"` with a
@@ -2741,7 +2716,12 @@ for line in sys.stdin:
                     .find(|pair| pair[0] == flag)
                     .map(|pair| pair[1].clone())
             };
-            assert_eq!(after("--tools").as_deref(), Some(THREAD_TOOLS));
+            // The CLI's own tools, less only the ones dead in a tab (S17).
+            assert_eq!(after("--tools"), None);
+            assert_eq!(
+                after("--disallowedTools").as_deref(),
+                Some(TAB_DENIED_TOOLS)
+            );
             assert_eq!(after("--permission-mode").as_deref(), Some(mode));
             assert_eq!(
                 args.windows(2)
@@ -2790,12 +2770,7 @@ for line in sys.stdin:
             }],
         }]);
         assert_eq!(hooks["PostToolUseFailure"], expected);
-        // A successful file tool's call runs it too, for its folder's rules (BUILD-PLAN D1.6).
-        let mut success = expected.clone();
-        let mut files = expected[0].clone();
-        files["matcher"] = json!("Read|Edit|Write|MultiEdit|NotebookEdit");
-        success.as_array_mut().unwrap().push(files);
-        assert_eq!(hooks["PostToolUse"], success);
+        assert_eq!(hooks["PostToolUse"], expected);
         assert!(hooks.get("PreToolUse").is_none());
         assert_eq!(hooks.as_object().map(Map::len), Some(2));
         let args = Claude::session_args(
@@ -2944,22 +2919,104 @@ for line in sys.stdin:
         assert!(hooks.get("PreToolUse").is_none());
     }
 
-    /// SESSION-FIXES-PLAN.md Q6.5: workers and threads start without what ships for a person
-    /// at the keyboard, and workers can't open Claude's own questions or plan mode.
+    /// STRIP-DOWN-PLAN S17: Brigadier's instructions reach Claude word for word as its one
+    /// `--append-system-prompt`, and the CLI gets the session's folder and ledger in its
+    /// environment.
     #[test]
-    fn workers_and_threads_start_without_bundled_extras_and_workers_without_questions() {
+    fn the_standing_instructions_and_their_env_reach_claude_as_given() {
+        let cwd = Temp::new();
+        let text = "This is a plain Claude Code / Codex session inside Brigadier.\nKeep a ledger at $BRIGADIER_LEDGER as you work.";
+        let env = vec![
+            ("BRIGADIER_SESSION_DIR".to_owned(), "/s/abc".to_owned()),
+            (
+                "BRIGADIER_LEDGER".to_owned(),
+                "/s/abc/record/ledger.md".to_owned(),
+            ),
+        ];
+        for tools in [
+            ToolSet::Thread,
+            ToolSet::Lean,
+            ToolSet::Chat,
+            ToolSet::TabChat,
+        ] {
+            let session = SessionSpec {
+                tools,
+                append_system_prompt: Some(text.into()),
+                env: env.clone(),
+                ..spec(cwd.path(), &[])
+            };
+            let args = Claude::session_args(
+                &session,
+                cwd.path(),
+                "00000000-0000-4000-8000-000000000000",
+                false,
+                None,
+            )
+            .expect("args");
+            let given: Vec<&String> = args
+                .windows(2)
+                .filter(|pair| pair[0] == "--append-system-prompt")
+                .map(|pair| &pair[1])
+                .collect();
+            assert_eq!(given, [text], "{tools:?}");
+            let set = session_env(&session);
+            for pair in &env {
+                assert!(set.contains(pair), "{tools:?}: {pair:?}");
+            }
+        }
+    }
+
+    /// STRIP-DOWN-PLAN S17: a thread or worker goes without exactly the tools that can't work
+    /// in a Brigadier tab, and claude.ai's connectors; nothing else of the CLI's own is switched
+    /// off, and every other role keeps its sealed setup.
+    #[test]
+    fn threads_and_workers_go_without_only_what_cannot_work_in_a_tab() {
         let cwd = Temp::new();
         let cwd = cwd.path();
+        assert_eq!(
+            TAB_DENIED_TOOLS.split(',').collect::<Vec<_>>(),
+            [
+                "RemoteTrigger",
+                "PushNotification",
+                "ScheduleWakeup",
+                "CronCreate",
+                "CronDelete",
+                "CronList",
+                "AskUserQuestion",
+            ]
+        );
         for tools in [ToolSet::Lean, ToolSet::Thread] {
             let session = SessionSpec {
                 tools,
+                allowed_models: None,
                 ..spec(cwd, &[])
             };
+            assert_eq!(
+                denied_tools(&session, &SubAgents::Any).as_deref(),
+                Some(TAB_DENIED_TOOLS)
+            );
+            let args = Claude::session_args(
+                &session,
+                cwd,
+                "00000000-0000-4000-8000-000000000000",
+                false,
+                None,
+            )
+            .expect("args");
+            assert!(!args.iter().any(|arg| arg == "--tools"), "{args:?}");
             let settings = settings(&session, &SubAgents::Any, false);
-            assert_eq!(settings["disableBundledSkills"], json!(true));
             assert_eq!(settings["disableClaudeAiConnectors"], json!(true));
-            assert_eq!(settings["enableArtifact"], json!(false));
-            assert_eq!(settings["disableRemoteControl"], json!(true));
+            for kept in [
+                "disableBundledSkills",
+                "enableArtifact",
+                "disableRemoteControl",
+            ] {
+                assert!(settings.get(kept).is_none(), "{kept}");
+            }
+            assert!(
+                settings["permissions"].get("deny").is_none(),
+                "nothing of the user's is denied"
+            );
         }
         for tools in [ToolSet::Default, ToolSet::Web, ToolSet::Review] {
             let session = SessionSpec {
@@ -2968,20 +3025,12 @@ for line in sys.stdin:
             };
             assert!(
                 settings(&session, &SubAgents::Any, false)
-                    .get("disableBundledSkills")
+                    .get("disableClaudeAiConnectors")
                     .is_none()
             );
         }
-        let worker = spec(cwd, &[]);
-        let denied = denied_tools(&worker, &SubAgents::Any).unwrap();
-        for tool in ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"] {
-            assert!(denied.split(',').any(|name| name == tool), "{denied}");
-        }
     }
 
-    /// Claude generates no images: a Chat runs as research does, a tab chat as a reviewer,
-    /// flags and settings alike, but for the shell each has for `brigadier` and its never
-    /// asking (S16c, [`a_chat_and_a_side_chat_run_only_brigadier_in_their_shell`]).
     #[test]
     fn a_chat_runs_with_researchs_tools_and_a_tab_chat_with_a_reviewers() {
         let cwd = Temp::new();
@@ -3052,7 +3101,7 @@ for line in sys.stdin:
         );
         assert_eq!(
             denied_tools(&held, &models).as_deref(),
-            Some(LEAN_DENIED_TOOLS)
+            Some(TAB_DENIED_TOOLS)
         );
         let leaky = spec(cwd, &["claude-opus-5"]);
         let models = sub_agents(&leaky, cwd, None);
@@ -3064,7 +3113,7 @@ for line in sys.stdin:
         );
         assert_eq!(
             denied_tools(&leaky, &models),
-            Some(format!("{LEAN_DENIED_TOOLS},{SUB_AGENT_TOOLS}"))
+            Some(format!("{TAB_DENIED_TOOLS},{SUB_AGENT_TOOLS}"))
         );
         let unlimited = SessionSpec {
             allowed_models: None,
@@ -3323,13 +3372,13 @@ for line in sys.stdin:
                 .position(|arg| arg == name)
                 .map(|at| args[at + 1].clone())
         };
+        // The CLI's own tools, sub-agents among them; only those dead in a tab are denied.
+        assert_eq!(flag("--tools"), None, "{args:?}");
         assert_eq!(
-            flag("--tools").as_deref(),
-            Some(
-                "Read,Grep,Glob,Bash,Edit,Write,WebSearch,WebFetch,ToolSearch,Agent,Monitor,TaskStop,Skill"
-            )
+            flag("--disallowedTools").as_deref(),
+            Some(TAB_DENIED_TOOLS),
+            "{args:?}"
         );
-        assert_eq!(flag("--disallowedTools"), None, "{args:?}");
         let settings: Value = serde_json::from_str(&flag("--settings").unwrap()).unwrap();
         assert!(settings.get("availableModels").is_none());
         // Only a thread: other sessions without a model limit set none.

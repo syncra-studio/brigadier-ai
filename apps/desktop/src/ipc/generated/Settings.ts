@@ -53,11 +53,6 @@ showFullAccessNotice: boolean,
  */
 shortReplies: boolean, 
 /**
- * The thread starts workers when they help, saying so in one line first; off, it asks
- * first. A worker the user asks for starts either way (BUILD-PLAN §1.4).
- */
-startWorkersOnOwn: boolean, 
-/**
  * Co-authored-by trailers that name an AI are left out of commit messages: the user's
  * own commits, what the agents write, and the commits Brigadier lands or keeps.
  */

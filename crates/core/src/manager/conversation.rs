@@ -2437,15 +2437,7 @@ impl SessionManager {
                     self.record_session_refs(&conv.id, &workspace.path);
                 }
                 launch = Some(started_for);
-                let preferences = self.memory_lines(super::memories::MEMORY_BYTES).await;
-                let prompt = self
-                    .thread_prompt(
-                        &conversation,
-                        &preferences,
-                        workspace.as_ref(),
-                        choice.provider,
-                    )
-                    .await;
+                let prompt = self.thread_prompt(choice.provider);
                 thread = true;
                 let grant = self.grants.issue(
                     &owner,
@@ -2463,10 +2455,7 @@ impl SessionManager {
                         },
                     );
                     grant_values.push(hook_grant.clone());
-                    if let Some(launch) = launch.as_mut() {
-                        launch.hook_grant = Some(hook_grant.clone());
-                    }
-                    output_hook = Some(self.output_hook(hook_grant, choice.provider));
+                    output_hook = Some(self.output_hook(hook_grant));
                 }
                 (choice, prompt)
             }
@@ -2607,6 +2596,7 @@ impl SessionManager {
                 .unwrap_or_default()
                 .into_iter()
                 .chain(cli_env)
+                .chain(self.session_dir(&conv.id).standing_env())
                 .collect(),
             unset_env: Vec::new(),
             low_priority: false,
@@ -2775,18 +2765,14 @@ impl SessionManager {
         }
     }
 
-    /// A thread's output hook (`brigadierd hook post-tool-use`), with its grant; a Codex
-    /// thread's reads Codex's events (`--codex`), for a subfolder's rules only (#121).
-    fn output_hook(&self, grant: String, provider: ProviderKind) -> OutputHook {
-        let mut args: Vec<String> = vec![
+    /// A Claude thread's output hook (`brigadierd hook post-tool-use`), with its grant.
+    fn output_hook(&self, grant: String) -> OutputHook {
+        let args: Vec<String> = vec![
             "hook".into(),
             "post-tool-use".into(),
             "--data-dir".into(),
             self.data_dir.to_string_lossy().into_owned(),
         ];
-        if provider == ProviderKind::Codex {
-            args.push("--codex".into());
-        }
         OutputHook {
             command: self.config.daemon_exe.clone(),
             args,

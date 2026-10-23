@@ -12,9 +12,4 @@ excerpt: boolean,
  * How the command ended ("exit 0", "exit 1", or the CLI's interpretation of a benign
  * non-zero exit).
  */
-status: string, bytes: number, 
-/**
- * Instead of an output: the file a `Read`, `Edit` or `Write` call touched, for the rules
- * of its folder the thread hasn't had yet (BUILD-PLAN D1.6). No bytes follow.
- */
-touched?: string, };
+status: string, bytes: number, };

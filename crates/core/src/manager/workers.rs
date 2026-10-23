@@ -632,6 +632,10 @@ impl SessionManager {
         };
         let mut env = worker_env(&workspace.scratch);
         env.extend(self.cli_env(&task.id.0, &worker_grant));
+        // Its own folder and ledger, which the standing instructions name (S17).
+        env.extend(super::session_dir::standing_env(
+            &self.session_dir(&conversation_id).worker(task),
+        ));
         let redactor = secrets::redactor(secret_values);
         // Its sub-agents run on what its CLI allows (G18).
         let allowed_models = self.rules_models(provider)?;
@@ -664,7 +668,11 @@ impl SessionManager {
             // Resumed when its session sends it more.
             ephemeral: false,
             access,
-            append_system_prompt: None,
+            // The standing instructions, as every session gets them (S17).
+            append_system_prompt: Some(super::prompts::session_instructions(
+                &self.core.settings(),
+                provider,
+            )),
             mcp_servers: Vec::new(),
             tools: ToolSet::Lean,
             skill_plugins: Vec::new(),

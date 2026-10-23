@@ -934,10 +934,6 @@ pub struct Settings {
     /// stored `false` is copied once into the personal preference for longer answers, and then
     /// saved as `true`.
     pub short_replies: bool,
-    /// The thread starts workers when they help, saying so in one line first; off, it asks
-    /// first. A worker the user asks for starts either way (BUILD-PLAN §1.4).
-    #[serde(default = "default_true")]
-    pub start_workers_on_own: bool,
     /// Co-authored-by trailers that name an AI are left out of commit messages: the user's
     /// own commits, what the agents write, and the commits Brigadier lands or keeps.
     #[serde(default = "default_true")]
@@ -1197,7 +1193,6 @@ impl Default for Settings {
             plain_text_composer: false,
             show_full_access_notice: true,
             short_replies: true,
-            start_workers_on_own: true,
             omit_ai_coauthors: true,
             git_writer: None,
             commit_style: GitStyle::default(),
@@ -2979,15 +2974,6 @@ mod tests {
         assert!(settings.short_replies);
         let settings: Settings = serde_json::from_str(r#"{"shortReplies":false}"#).unwrap();
         assert!(!settings.short_replies);
-    }
-
-    #[test]
-    fn workers_start_on_their_own_by_default_and_for_settings_saved_before_the_switch() {
-        assert!(Settings::default().start_workers_on_own);
-        let settings: Settings = serde_json::from_str(r#"{"hibernateAfterMinutes":12}"#).unwrap();
-        assert!(settings.start_workers_on_own);
-        let settings: Settings = serde_json::from_str(r#"{"startWorkersOnOwn":false}"#).unwrap();
-        assert!(!settings.start_workers_on_own);
     }
 
     #[test]

@@ -57,7 +57,6 @@ mod fresh_base;
 mod gh;
 mod git_actions;
 mod inbox_store;
-mod instructions;
 pub mod integrations;
 mod kept;
 #[cfg(all(test, unix))]
@@ -136,7 +135,6 @@ pub use brains::{BrainCounters, IndexRunStats};
 pub use cli::CliCaller;
 pub use closing::Turn;
 pub use conversation::SendOutcome;
-pub use instructions::{COMMAND_PATHS_MAX, command_paths, lexical};
 pub use mcp_auth::McpSignInStatus;
 pub use side_chat::BrowserPage;
 pub use terminal_host::{HostedTerminal, TerminalHost, TerminalSnapshot};
@@ -263,11 +261,6 @@ pub struct SessionManager {
     pub(crate) trust_home: std::sync::OnceLock<PathBuf>,
     /// Background model turns, for maintenance's idle check.
     activity: Arc<quiet::Activity>,
-    /// The subfolder rules each thread's CLI session was given by its output hook, by its
-    /// hook's grant (BUILD-PLAN D1.6).
-    rules_given: std::sync::Mutex<
-        std::collections::HashMap<ConversationId, (String, std::collections::HashSet<String>)>,
-    >,
     /// The MCP servers and skills of every agent's own configuration ([`integrations`]),
     /// read from the CLIs' environment. Tests read an empty home unless they set one.
     registry: std::sync::RwLock<Arc<brigadier_registry::Registry>>,
@@ -422,7 +415,6 @@ impl SessionManager {
             #[cfg(test)]
             trust_home: std::sync::OnceLock::new(),
             activity: Arc::default(),
-            rules_given: std::sync::Mutex::default(),
         });
         manager.install_worktree_remover();
         // Each step's future is polled from the heap: made in this frame, they took half a

@@ -41,10 +41,6 @@ test("Configuration shows its defaults in one card and explains the choices in i
     { setting: "Model for sessions", helper: "Choose the model that leads new sessions, their orchestrator" },
     { setting: "Model for chats", helper: "Choose the model new chats start with" },
     { setting: "Default permission level", helper: "Choose how much new sessions may do without asking" },
-    {
-      setting: "Start workers on its own",
-      helper: "Choose whether a session starts helpers when they help, or asks you first",
-    },
   ]);
   assert.equal(seen.firstCardHeading, false, "the first card has no heading");
   // Every section shows.

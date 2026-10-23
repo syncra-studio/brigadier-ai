@@ -53,10 +53,6 @@ export const CONFIGURATION_ROWS = {
   ask: levelRow("ask"),
   acceptEdits: levelRow("acceptEdits"),
   full: levelRow("full"),
-  startWorkersOnOwn: {
-    label: "Start workers on its own",
-    description: "Choose whether a session starts helpers when they help, or asks you first",
-  },
   fullAccessNotice: {
     label: "Show the Full access notice",
     description: "A card above the composer while a session is on Full access",
@@ -69,7 +65,7 @@ export const CONFIGURATION_ROWS = {
 
 /**
  * How Brigadier works for the user: one card of the defaults new sessions and chats start with
- * (models, permission level, starting workers), and what the composer shows. Each row says in a
+ * (models and permission level), and what the composer shows. Each row says in a
  * line what it chooses; its menu explains the choices.
  */
 export function ConfigurationPage() {
@@ -102,7 +98,6 @@ export function ConfigurationPage() {
           fallback={orchestrator ?? automatic}
         />
         <PermissionRow value={permission} />
-        <SwitchSetting setting="startWorkersOnOwn" row={CONFIGURATION_ROWS.startWorkersOnOwn} />
       </SettingsCard>
 
       <SettingsSection title="Workers">

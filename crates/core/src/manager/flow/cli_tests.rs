@@ -786,7 +786,7 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     );
     assert_eq!(plain(&c).permission, crate::model::PermissionLevel::Full);
 
-    // Each worker's CLI knows itself for `brigadier`, and starts with its prompt alone.
+    // Each worker's CLI knows itself for `brigadier`, and starts with its prompt.
     let bin = flow.manager.config.daemon_exe.parent().unwrap().to_owned();
     for task in [&a, &b, &c] {
         let seen = &answers[&format!("worker env {}", task.id.0)];
@@ -794,9 +794,19 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         assert_eq!(seen["first on path"], json!(bin));
         let prompt = &answers[&format!("worker prompt {}", task.id.0)];
         assert_eq!(prompt["input"], task.spec.as_str(), "{prompt:#}");
-        assert_eq!(
-            prompt["prompt"], "",
-            "no Brigadier instructions: {prompt:#}"
+        // Brigadier's instructions are the standing ones alone (S17).
+        let given = prompt["prompt"].as_str().unwrap_or_default();
+        assert!(
+            [ProviderKind::Claude, ProviderKind::Codex]
+                .iter()
+                .any(|provider| {
+                    given
+                        == crate::manager::prompts::session_instructions(
+                            &flow.core.settings(),
+                            *provider,
+                        )
+                }),
+            "only the standing instructions: {prompt:#}"
         );
     }
     let specs = flow.specs();
@@ -814,7 +824,13 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     let (kind, spec) = spec_of(&b);
     assert_eq!(kind, ProviderKind::Codex);
     assert!(spec.mcp_servers.is_empty(), "no Brigadier server: {spec:?}");
-    assert!(spec.append_system_prompt.is_none());
+    assert_eq!(
+        spec.append_system_prompt,
+        Some(crate::manager::prompts::session_instructions(
+            &flow.core.settings(),
+            ProviderKind::Codex
+        ))
+    );
     assert!(spec.stop_hook.is_none());
     assert!(!spec.lean_worker);
     assert_eq!(

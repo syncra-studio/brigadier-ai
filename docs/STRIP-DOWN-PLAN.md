@@ -986,8 +986,9 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     same repo: `/context`, or our own small local proxy on `ANTHROPIC_BASE_URL` (written by us, not copied). The
     report lists each block and tool with its size. Then Brigadier denies only the tools that cannot work inside
     a Brigadier tab: `RemoteTrigger`, `PushNotification`, `ScheduleWakeup` and `Cron*` (no idle loop in `-p`),
-    and claude.ai connectors (`disableClaudeAiConnectors`). Nothing of the user's is denied. A provider test
-    asserts that deny list and nothing more.
+    `AskUserQuestion` (it reaches Brigadier as a bare permission card that carries no answer back; `brigadier
+    ask` asks instead), and claude.ai connectors (`disableClaudeAiConnectors`). Nothing of the user's is denied.
+    A provider test asserts that deny list and nothing more.
 
 **S18. Brain = pull-only search over the records (G14, Q5).** Codex for the reader, Opus for the deletions.
 - **Scope:** re-point the transcript index (`M/brains.rs:1218–1302` `sync_transcript_stream`, `crates/brain/src/transcript.rs`)
@@ -1157,7 +1158,7 @@ Each entry says its kind and its source (which message, command or file). Kinds:
 - Exact identifier (hash, path:line, number with units, id) · Failed check (command, exact error line, fixed or not) · Ruled out (what, why) · Open promise.
 - Learned from reading: file:line and a one-line finding, never a copy.
 Never delete entries; move finished ones to ledger-archive.md beside it. A worker's claim is not a fact until you check it; say whose it is.
-For big reading, use your own subagents and keep only conclusions with file:line. Read exact ranges. Brigadier's commands: `brigadier --help`.
+For big reading, use your own subagents and keep only conclusions with file:line. Read exact ranges. Brigadier's commands: `brigadier --help`; ask the user with `brigadier ask`.
 You may run workers of your own through `brigadier start` when the job calls for them; the brigade skill says how.
 ```
 

@@ -33,6 +33,9 @@ pub(crate) fn folder_owner(id: &ConversationId) -> String {
     format!("session-folder:{id}")
 }
 
+/// The ledger's name in `record/`.
+pub(crate) const LEDGER_FILE: &str = "ledger.md";
+
 /// A session's folder and its parts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionDir(PathBuf);
@@ -62,6 +65,16 @@ impl SessionDir {
         self.0.join("logs")
     }
 
+    /// The ledger the session keeps as it works (S17); nothing makes it but the session.
+    pub(crate) fn ledger(&self) -> PathBuf {
+        self.record().join(LEDGER_FILE)
+    }
+
+    /// What the standing instructions name, for the CLI's environment ([`standing_env`]).
+    pub(crate) fn standing_env(&self) -> Vec<(String, String)> {
+        standing_env(self.root())
+    }
+
     /// The folder Claude workers of the session start in.
     pub(crate) fn workers_home(&self) -> PathBuf {
         self.0.join("workers").join("home")
@@ -75,6 +88,22 @@ impl SessionDir {
             &task.id.0[task.id.0.len().saturating_sub(8)..]
         ))
     }
+}
+
+/// What the standing instructions name, for the CLI's environment: the folder `root` of a
+/// session or worker and the ledger in its `record/` ([`super::prompts::SESSION_DIR_ENV`],
+/// [`super::prompts::LEDGER_ENV`]).
+pub(crate) fn standing_env(root: &Path) -> Vec<(String, String)> {
+    vec![
+        (
+            super::prompts::SESSION_DIR_ENV.to_owned(),
+            root.display().to_string(),
+        ),
+        (
+            super::prompts::LEDGER_ENV.to_owned(),
+            root.join("record").join(LEDGER_FILE).display().to_string(),
+        ),
+    ]
 }
 
 /// `record/workspace.json`: where the session works and what its work lands on, as chosen on

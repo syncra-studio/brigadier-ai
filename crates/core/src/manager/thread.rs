@@ -46,13 +46,6 @@ pub(crate) struct ThreadWorkspace {
     pub repo: PathBuf,
 }
 
-impl ThreadWorkspace {
-    /// How [`crate::work::Told::workspace`] keeps it.
-    pub(crate) fn told(&self) -> String {
-        format!("{} @ {}", self.path.display(), self.branch)
-    }
-}
-
 /// What a thread's CLI was started for.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadLaunch {
@@ -60,9 +53,6 @@ pub(crate) struct ThreadLaunch {
     pub permission: PermissionLevel,
     /// Its CLI's permission mode, the level's.
     pub access: Access,
-    /// Its output hook's grant, under which the subfolder rules its CLI session has had are
-    /// kept; `None` without the hook (it has every rule up front).
-    pub hook_grant: Option<String>,
 }
 
 impl ThreadLaunch {
@@ -174,7 +164,6 @@ impl SessionManager {
             workspace,
             permission,
             access: permission.access(),
-            hook_grant: None,
         })
     }
 
@@ -208,52 +197,17 @@ impl SessionManager {
         }
     }
 
-    /// Whether a thread on `provider` gets its output hook, which brings a subfolder's rules
-    /// with the first file it touches there: a Claude thread always; a Codex thread when its
-    /// login can follow it to a home of its own, where Codex runs the hook (#121).
+    /// Whether a thread on `provider` gets its output hook, which trims long `Bash` output:
+    /// a Claude thread only (Codex doesn't run it).
     pub(crate) fn thread_hooked(&self, provider: ProviderKind) -> bool {
-        match provider {
-            ProviderKind::Claude => true,
-            ProviderKind::Codex => {
-                brigadier_providers::codex::runs_thread_hook(self.runtime.cli_env())
-            }
-        }
+        provider == ProviderKind::Claude
     }
 
-    /// The thread's instructions: its role, its workspace, and the workspace's own
-    /// instruction files (its CLI doesn't find them from its working directory).
-    pub(crate) async fn thread_prompt(
-        &self,
-        conversation: &crate::model::Conversation,
-        preferences: &[String],
-        workspace: Option<&ThreadWorkspace>,
-        provider: ProviderKind,
-    ) -> String {
-        let project = conversation
-            .project_id
-            .as_ref()
-            .and_then(|id| self.core.project(id).ok());
-        let mut prompt = super::prompts::thread(
-            conversation,
-            project.as_ref(),
-            preferences,
-            workspace.map(ThreadWorkspace::told).as_deref(),
-            self.core.settings().start_workers_on_own,
-        );
-        prompt.push_str(&super::prompts::git_writing_section(&self.core.settings()));
-        prompt.push_str(&super::prompts::browser_section(
-            self.core.settings().browser_enabled,
-        ));
-        if let Some(workspace) = workspace {
-            let hooked = self.thread_hooked(provider);
-            prompt.push_str(&super::instructions::for_thread(&workspace.path, hooked).await);
-        }
-        // Claude's attribution settings hold its commits to it; Codex is told.
-        if provider == ProviderKind::Codex && self.core.settings().omit_ai_coauthors {
-            prompt.push_str("\n\n");
-            prompt.push_str(super::prompts::NO_AI_COAUTHORS);
-        }
-        prompt
+    /// The thread's instructions: the standing instructions, and what the user's settings add
+    /// ([`super::prompts::session_instructions`]). The repository's own instruction files are
+    /// its CLI's to read, as in a plain session (S17).
+    pub(crate) fn thread_prompt(&self, provider: ProviderKind) -> String {
+        super::prompts::session_instructions(&self.core.settings(), provider)
     }
 
     /// The thread's temporary folder (its session folder's `tmp/`), made and recorded under

@@ -31,9 +31,16 @@ impl SessionManager {
         })
     }
 
-    /// The file at `path`, relative to the session's checkout: its text, or that it is
-    /// binary.
+    /// The file at `path`, relative to the session's checkout, or by its full path a file of
+    /// the session's own record (its ledger, S17): its text, or that it is binary.
     pub async fn read_file(&self, id: &ConversationId, path: String) -> Result<CheckoutFile> {
+        let record = self.session_dir(id).record();
+        if let Ok(inside) = Path::new(&path).strip_prefix(&record) {
+            let inside = inside.to_string_lossy().into_owned();
+            let mut file = blocking(move || read_checkout_file(&record, &inside)).await?;
+            file.path = path;
+            return Ok(file);
+        }
         let root = self.checkout_dir(id)?;
         blocking(move || read_checkout_file(Path::new(&root), &path)).await
     }

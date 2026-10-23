@@ -129,11 +129,6 @@ pub struct HookOutput {
     /// non-zero exit).
     pub status: String,
     pub bytes: u64,
-    /// Instead of an output: the file a `Read`, `Edit` or `Write` call touched, for the rules
-    /// of its folder the thread hasn't had yet (BUILD-PLAN D1.6). No bytes follow.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub touched: Option<String>,
 }
 
 /// The daemon's answer to a thread's output hook.
@@ -142,11 +137,6 @@ pub struct HookOutput {
 pub struct HookReply {
     /// What the model gets instead of the output (its digest); none: the output as it is.
     pub replacement: Option<String>,
-    /// What the model gets after the call's result: the rules of the touched file's folders
-    /// it hasn't had yet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub context: Option<String>,
 }
 
 /// Commands and queries.

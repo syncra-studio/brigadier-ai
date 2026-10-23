@@ -20,9 +20,7 @@
 //! servers and compatible options ([`project_options`]). Every other session keeps the user's
 //! setup out: plugins and hooks are switched off per process, and the MCP servers from their
 //! config are disabled per thread.
-//! Apps, computer and browser use, memories and `notify` are off for every session. A thread
-//! with an output hook runs from a home of its own, which carries the user's hooks and adds
-//! Brigadier's ([`home`]).
+//! Apps, computer and browser use, memories and `notify` are off for every session.
 //!
 //! Brigadier never makes Codex write to `~/.codex/config.toml`. Starting a thread with a
 //! writable sandbox in a project the user never trusted makes Codex persist a trust entry for
@@ -33,9 +31,6 @@
 //! config API, only while it is still exactly `trusted`.
 
 pub(crate) mod files;
-pub(crate) mod home;
-#[cfg(all(test, unix))]
-mod home_live_tests;
 pub mod parse;
 #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
 pub mod protocol;
@@ -62,8 +57,6 @@ use crate::{
     BoxFuture, Error, Ledger, Provider, ProviderSession, Replayer, Result, Started,
     TerminalCommand, now_ms,
 };
-use home::ThreadHome;
-pub use home::runs_thread_hook;
 use parse::{Control, Output, Parser, PendingKind};
 use protocol as p;
 
@@ -125,13 +118,6 @@ const NO_SUB_AGENTS: &str = "agents.enabled=false";
 /// Desktop integrations and Codex's own memory, off for every session (Brigadier's Brain is
 /// its memory, its browser and computer tools are Brigadier's own).
 const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use", "memories"];
-
-/// Told to a thread whose hook couldn't be trusted, so a subfolder's rules its instructions
-/// list won't come to it ([`home`]).
-const NO_RULES_HOOK: &str = "A subfolder's rules listed above won't come to you by themselves in this session: read a listed rules file yourself before you read or change files under its folder.";
-
-/// Where the homes Codex threads run from are, in Brigadier's data folder ([`home`]).
-const THREAD_HOMES: &str = "codex-thread-homes";
 
 /// The user's personal Codex setup, off for a session without it ([`ToolSet::user_setup`]).
 const USER_SETUP_FEATURES: &[&str] = &["plugins", "hooks"];
@@ -253,18 +239,15 @@ impl Codex {
         parse_version(&output.stdout)
     }
 
-    /// Spawns an app-server for `cwd` with the user's personal setup switched off, and
-    /// initializes it.
-    async fn app_server(
+    /// How an app-server for `cwd` is spawned: its arguments, and a session's own environment
+    /// on top of the CLI's.
+    fn server_spec(
         &self,
+        binary: &Path,
         cwd: &Path,
         session: Option<&SessionSpec>,
-        own_home: Option<&ThreadHome>,
-        recorder: Option<Arc<Recorder>>,
-        ledger: Option<Arc<dyn Ledger>>,
-        private_logs: bool,
-    ) -> Result<(Arc<Rpc>, mpsc::Receiver<String>)> {
-        let mut spec = self.env.spec(&self.binary()?);
+    ) -> brigadier_sandbox::SpawnSpec {
+        let mut spec = self.env.spec(binary);
         spec.args = app_server_args(session)
             .into_iter()
             .map(Into::into)
@@ -273,21 +256,21 @@ impl Codex {
         if let Some(session) = session {
             crate::cli::apply_session_env(&mut spec, &session.env, &session.unset_env);
             spec.low_priority = session.low_priority;
-            if let Some(home) = own_home {
-                // Its databases stay in the account's home, where they were.
-                let sqlite = match self.env.var(home::SQLITE_HOME) {
-                    Some(dir) if !dir.is_empty() => dir.to_string_lossy().into_owned(),
-                    _ => home.base.display().to_string(),
-                };
-                let mut vars = vec![
-                    ("CODEX_HOME".to_owned(), home.dir.display().to_string()),
-                    (home::SQLITE_HOME.to_owned(), sqlite),
-                ];
-                // Its hook's grant, which the hook inherits (never on a command line).
-                vars.extend(session.output_hook.iter().flat_map(|hook| hook.env.clone()));
-                crate::cli::apply_session_env(&mut spec, &vars, &[]);
-            }
         }
+        spec
+    }
+
+    /// Spawns an app-server for `cwd` with the user's personal setup switched off, and
+    /// initializes it.
+    async fn app_server(
+        &self,
+        cwd: &Path,
+        session: Option<&SessionSpec>,
+        recorder: Option<Arc<Recorder>>,
+        ledger: Option<Arc<dyn Ledger>>,
+        private_logs: bool,
+    ) -> Result<(Arc<Rpc>, mpsc::Receiver<String>)> {
+        let spec = self.server_spec(&self.binary()?, cwd, session);
         let redactor = session.and_then(|session| session.redactor.clone());
         let process::Spawned { process, stdout } = process::spawn(
             self.platform.clone(),
@@ -315,7 +298,7 @@ impl Codex {
     ) -> Result<T> {
         let cwd = self.platform.paths().data_dir.clone();
         let (rpc, stdout) = self
-            .app_server(&cwd, None, None, None, None, private_logs)
+            .app_server(&cwd, None, None, None, private_logs)
             .await?;
         let reader = tokio::spawn(control_reader(rpc.clone(), stdout));
         let result = async {
@@ -342,34 +325,6 @@ impl Codex {
                 .await;
         if let Ok(Err(error)) = installed {
             tracing::warn!(%error, "couldn't install Brigadier's skills for Codex");
-        }
-    }
-
-    /// The `CODEX_HOME` a thread with an output hook runs from ([`home`]), brought up to date;
-    /// `None` for any other session, where the login can't follow the thread there
-    /// ([`runs_thread_hook`]), or when it can't be made.
-    async fn own_home(&self, spec: &SessionSpec) -> Option<ThreadHome> {
-        let hook = spec
-            .output_hook
-            .clone()
-            .filter(|_| spec.tools == ToolSet::Thread)?;
-        let base = self.codex_home()?;
-        if !runs_thread_hook(&self.env) {
-            return None;
-        }
-        let root = self.platform.paths().data_dir.join(THREAD_HOMES);
-        let made =
-            tokio::task::spawn_blocking(move || ThreadHome::prepare(&base, &root, &hook)).await;
-        match made {
-            Ok(Ok(home)) => Some(home),
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "no home of its own for a Codex thread");
-                None
-            }
-            Err(error) => {
-                tracing::warn!(%error, "no home of its own for a Codex thread");
-                None
-            }
         }
     }
 }
@@ -858,14 +813,11 @@ impl Provider for Codex {
                 )?)),
                 None => None,
             };
-            // Before its home is made, which links the user's skills folder.
             self.install_skills(&spec).await;
-            let own_home = self.own_home(&spec).await;
             let spawned = self
                 .app_server(
                     &cwd,
                     Some(&spec),
-                    own_home.as_ref(),
                     recorder,
                     Some(ledger.clone()),
                     ledger.private_logs(),
@@ -904,7 +856,7 @@ impl Provider for Codex {
 
             let started = tokio::time::timeout(
                 START_TIMEOUT,
-                open_thread(&rpc, &spec, &cwd, own_home.as_ref(), self, ledger.as_ref()),
+                open_thread(&rpc, &spec, &cwd, self, ledger.as_ref()),
             )
             .await
             .map_err(|_| Error::Timeout("Codex to start the thread"))
@@ -1100,6 +1052,28 @@ enum Opening {
 
 /// The call that opens `spec`'s thread with the settings in `start`. A one-shot run's new or
 /// forked thread is ephemeral (never saved); a resumed thread was saved.
+/// A thread's start: Brigadier's instructions for it go, word for word, as its developer
+/// instructions (STRIP-DOWN-PLAN S17).
+fn start_params(
+    spec: &SessionSpec,
+    cwd: &Path,
+    config: Map<String, Value>,
+) -> p::ThreadStartParams {
+    // Always named: an omitted tier inherits the resumed thread's or the user's config.
+    let service_tier = Some(if spec.fast { FAST_TIER } else { STANDARD_TIER }.to_owned());
+    p::ThreadStartParams {
+        cwd: Some(cwd.display().to_string()),
+        model: spec.model.clone(),
+        sandbox: thread_sandbox(spec.access),
+        approval_policy: Some(approval_policy(spec.access)),
+        approvals_reviewer: Some(REVIEWER),
+        developer_instructions: spec.append_system_prompt.clone(),
+        config: Some(config),
+        service_tier,
+        ..Default::default()
+    }
+}
+
 fn opening(spec: &SessionSpec, start: p::ThreadStartParams) -> Opening {
     let ephemeral = spec.ephemeral.then_some(true);
     match &spec.origin {
@@ -1135,63 +1109,18 @@ fn opening(spec: &SessionSpec, start: p::ThreadStartParams) -> Opening {
     }
 }
 
-/// Trusts the hooks of a thread's own home before its thread starts ([`home`]): Brigadier's
-/// with the hash Codex lists for it, the user's with the trust they gave them. Written through
-/// Codex's own config API into the home's copy of the config, where Codex looks for it.
-async fn trust_hooks(rpc: &Rpc, cwd: &Path, home: &ThreadHome) -> Result<()> {
-    let listed: Value = rpc.call("hooks/list", &json!({ "cwds": [cwd] })).await?;
-    let own = home.own_key();
-    let hash = listed["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten())
-        .find(|hook| hook["key"] == own.as_str())
-        .and_then(|hook| hook["currentHash"].as_str())
-        .ok_or_else(|| Error::Protocol("Codex didn't list Brigadier's hook".into()))?
-        .to_owned();
-    let mut state = home.carried_trust();
-    state.insert(own, json!({ "trusted_hash": hash }));
-    let _: Value = rpc
-        .call(
-            "config/value/write",
-            &json!({
-                "keyPath": "hooks.state",
-                "value": state,
-                "mergeStrategy": "upsert",
-                "filePath": home.dir.join("config.toml"),
-            }),
-        )
-        .await?;
-    Ok(())
-}
-
 /// Starts, resumes or forks the session's thread, recording it if saved (and the folder its
 /// generated images would go to, under `codex`'s images root) in the ledger.
 async fn open_thread(
     rpc: &Rpc,
     spec: &SessionSpec,
     cwd: &Path,
-    own_home: Option<&ThreadHome>,
     codex: &Codex,
     ledger: &dyn Ledger,
 ) -> Result<Opened> {
     let images_root = codex.images_root();
     let home = codex.account_home();
     rpc.initialize().await?;
-    // A thread whose hook can't run (no home of its own could be made, or Codex didn't trust
-    // it) still runs: its instructions list the rules it would bring, and it is told to read
-    // them itself.
-    let unhooked = match own_home {
-        Some(home) => match trust_hooks(rpc, cwd, home).await {
-            Ok(()) => false,
-            Err(error) => {
-                tracing::warn!(%error, "Codex didn't trust the thread's hooks");
-                true
-            }
-        },
-        None => spec.tools == ToolSet::Thread && spec.output_hook.is_some(),
-    };
     // Brigadier's own skills join the ones Codex finds itself, for this app-server only. A Codex
     // without extra skill roots still runs; the agent's prompt names the tools either way.
     if !spec.skill_plugins.is_empty() {
@@ -1210,8 +1139,7 @@ async fn open_thread(
     let config = thread_config(rpc, spec, cwd).await?;
     // Only a folder Brigadier created may have its trust entry recorded and undone. Codex keys
     // trust on the main checkout for a worktree, which is the user's: watched, never touched.
-    // A thread with a home of its own writes trust into that home's copy of the config only.
-    let watched: Vec<String> = if spec.owned_cwd && own_home.is_none() {
+    let watched: Vec<String> = if spec.owned_cwd {
         let mut watched = vec![cwd.display().to_string()];
         let root = trust_root(cwd).display().to_string();
         if !watched.contains(&root) {
@@ -1226,24 +1154,7 @@ async fn open_thread(
     } else {
         trusted_projects(rpc, cwd).await?
     };
-    let mut instructions = spec.append_system_prompt.clone();
-    if unhooked && let Some(prompt) = instructions.as_mut() {
-        prompt.push_str("\n\n");
-        prompt.push_str(NO_RULES_HOOK);
-    }
-    // Always named: an omitted tier inherits the resumed thread's or the user's config.
-    let service_tier = Some(if spec.fast { FAST_TIER } else { STANDARD_TIER }.to_owned());
-    let start = p::ThreadStartParams {
-        cwd: Some(cwd.display().to_string()),
-        model: spec.model.clone(),
-        sandbox: thread_sandbox(spec.access),
-        approval_policy: Some(approval_policy(spec.access)),
-        approvals_reviewer: Some(REVIEWER),
-        developer_instructions: instructions,
-        config: Some(config),
-        service_tier,
-        ..Default::default()
-    };
+    let start = start_params(spec, cwd, config);
     let (thread, model) = match opening(spec, start) {
         Opening::Start(params) => {
             let started: p::ThreadStartResponse = rpc.call("thread/start", &params).await?;
@@ -2677,6 +2588,66 @@ mod tests {
         let params = params.unwrap();
         assert_eq!(params["model"], "gpt-6.1-sol");
         (method, params.get("ephemeral").cloned())
+    }
+
+    /// STRIP-DOWN-PLAN S17: Brigadier's instructions reach a Codex thread word for word as its
+    /// developer instructions, whether it starts, resumes or forks, and the app-server gets the
+    /// session's folder and ledger in its environment.
+    #[test]
+    fn the_standing_instructions_and_their_env_reach_codex_as_given() {
+        let text = "This is a plain Claude Code / Codex session inside Brigadier.\nKeep a ledger at $BRIGADIER_LEDGER as you work.";
+        let env = vec![
+            ("BRIGADIER_SESSION_DIR".to_owned(), "/s/abc".to_owned()),
+            (
+                "BRIGADIER_LEDGER".to_owned(),
+                "/s/abc/record/ledger.md".to_owned(),
+            ),
+        ];
+        for tools in [ToolSet::Thread, ToolSet::Lean, ToolSet::Chat] {
+            for origin in [
+                Origin::New,
+                Origin::Resume {
+                    native_id: "t1".into(),
+                },
+                Origin::Fork {
+                    native_id: "t1".into(),
+                },
+            ] {
+                let session = SessionSpec {
+                    origin,
+                    append_system_prompt: Some(text.into()),
+                    env: env.clone(),
+                    ..spec(tools, None)
+                };
+                let start = start_params(&session, Path::new("/tmp"), Map::new());
+                let params = match opening(&session, start) {
+                    Opening::Start(params) => serde_json::to_value(params),
+                    Opening::Resume(params) => serde_json::to_value(params),
+                    Opening::Fork(params) => serde_json::to_value(params),
+                }
+                .unwrap();
+                assert_eq!(params["developerInstructions"], json!(text), "{params}");
+            }
+            let codex = Codex::new(
+                brigadier_sandbox::native(brigadier_sandbox::PlatformOptions::default()).unwrap(),
+                Arc::new(CliEnv::from_vars([("HOME".into(), "/home/me".into())])),
+            );
+            let session = SessionSpec {
+                env: env.clone(),
+                ..spec(tools, None)
+            };
+            let server =
+                codex.server_spec(Path::new("/bin/codex"), Path::new("/tmp"), Some(&session));
+            for (name, value) in &env {
+                assert!(
+                    server
+                        .env
+                        .iter()
+                        .any(|(key, set)| key.to_str() == Some(name) && set.to_str() == Some(value)),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -203,7 +203,6 @@ export const useApp = create<AppState>()(() => ({
     plainTextComposer: false,
     showFullAccessNotice: true,
     shortReplies: true,
-    startWorkersOnOwn: true,
     onboarded: false,
     introSeen: false,
     userName: "",

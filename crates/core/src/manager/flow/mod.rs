@@ -42,6 +42,8 @@ static PATIENCE: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(crate:
 #[derive(Clone)]
 pub(crate) struct Turn {
     pub provider: ProviderKind,
+    /// The tool set its session was started with: a thread's is [`ToolSet::Thread`].
+    pub tools: brigadier_providers::ToolSet,
     /// Brigadier's instructions for the session (its system prompt addition), and a worker's
     /// task, its new session's first message.
     pub prompt: String,
@@ -149,8 +151,7 @@ impl Turn {
     }
 
     pub fn is_orchestrator(&self) -> bool {
-        self.prompt
-            .contains(crate::manager::prompts::THREAD_OPENING)
+        self.tools == brigadier_providers::ToolSet::Thread
     }
 
     /// The number of the task a worker works on (`task-N`).
@@ -846,6 +847,7 @@ impl Provider for FakeCli {
                 account: self.account.clone(),
                 native_id,
                 prompt,
+                tools: spec.tools,
                 cwd: spec.cwd.clone(),
                 add_dirs: spec.add_dirs.clone(),
                 grant,
@@ -995,6 +997,7 @@ struct FakeSession {
     account: Option<String>,
     native_id: String,
     prompt: String,
+    tools: brigadier_providers::ToolSet,
     cwd: PathBuf,
     add_dirs: Vec<PathBuf>,
     grant: String,
@@ -1090,6 +1093,7 @@ impl ProviderSession for FakeSession {
             };
             let turn = Turn {
                 provider: self.kind,
+                tools: self.tools,
                 prompt,
                 input: input_text(&input),
                 cwd,
@@ -1987,9 +1991,7 @@ impl Flow {
             .unwrap()
             .iter()
             .filter(|(_, spec)| {
-                spec.append_system_prompt
-                    .as_deref()
-                    .is_some_and(|prompt| prompt.contains(crate::manager::prompts::THREAD_OPENING))
+                spec.tools == brigadier_providers::ToolSet::Thread
                     && matches!(
                         spec.origin,
                         brigadier_providers::model::Origin::New
@@ -2199,6 +2201,7 @@ mod engine_tests;
 mod open_in_app_tests;
 #[cfg(unix)]
 mod personal_memory_tests;
+mod standing_tests;
 #[cfg(unix)]
 mod terminal_run_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
@@ -2261,8 +2264,6 @@ mod same_session_tests;
 mod search_tests;
 #[cfg(unix)]
 mod spare_worktree_tests;
-#[cfg(unix)]
-mod subfolder_rules_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 #[cfg(unix)]
