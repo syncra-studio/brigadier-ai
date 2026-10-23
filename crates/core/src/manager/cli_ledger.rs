@@ -363,7 +363,8 @@ fn kind_of(body: &str) -> Kind {
 
 /// The ids named right after "supersedes".
 fn supersedes(body: &str) -> Vec<u32> {
-    let lower = body.to_lowercase();
+    // ASCII only: its offsets are the body's (full lowercasing can change a letter's length).
+    let lower = body.to_ascii_lowercase();
     let mut ids = Vec::new();
     let mut from = 0;
     while let Some(at) = lower[from..].find("supersedes") {

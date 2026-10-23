@@ -250,4 +250,6 @@ fn kinds_are_read_from_whole_words() {
         ]
     );
     assert_eq!(cited("L1, (L22) xL3 L4b L5."), [1, 22, 5]);
+    // A letter that lowercases longer before "supersedes" still finds the id after it.
+    assert_eq!(supersedes("Rule: İİİİ; Supersedes L1"), [1]);
 }
