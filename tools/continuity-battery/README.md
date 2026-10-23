@@ -196,5 +196,5 @@ Claude's native auto-compaction is disabled for this arm; any native compactions
 observed (including Codex defaults) are reported separately from explicit Zed compactions.
 Summary calls and every fresh session are included in per-role cache/list-price dollars.
 Nightly aggregates compare seam versus Zed on T1–T6, each decision item's application
-and recall, overall recall/task success, and reported/list-price dollars. Missing data
+and recall, each recall item, overall recall/task success, and reported/list-price dollars. Missing data
 is unavailable; decision comparisons with fewer than three transitions are unqualified.

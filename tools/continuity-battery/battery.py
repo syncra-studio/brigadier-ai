@@ -562,9 +562,8 @@ def report(result):
     lines = ["# Continuity battery — " + result["started_at"][:10], "",
              "Report only; no recall result gates a session or changes continuity.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
-             f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one session, several requests.",
-             f"Seam (`BRIGADIER_SEAM_TOKENS={result['threshold']}`); the bootstrap's tail budget is about 15k tokens.",
-             "Mandatory sections and the minimum tail can exceed that budget; observed sizes follow below.",
+             f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one measured lineage, several requests.",
+             f"Size threshold: `{result['threshold']}` tokens (seam and zed arms).",
              "A labelled, injected unverified worker report supplies the false claim; no real worker is spawned.",
              "Random one-time facts are removed from the fixture after observation. Inert batches displace the early items.", "",
              "| Item | Result | In final verbatim tail? | Successor searched? | Answer / evidence |", "|---|---|---|---|---|"]
@@ -574,6 +573,10 @@ def report(result):
     # The successor's verbatim part: the user's own messages, the latest exchange and the tail.
     last = (result.get("handoffs") or [{}])[-1].get("start", "")
     recent = last.partition("## The user's messages, oldest first")[2].partition("## Left out")[0]
+    if result.get("arm") == "zed":
+        # Only the verbatim users before the wrapper, not facts paraphrased in the summary.
+        recent = (result.get("zed_handoffs") or [{}])[-1].get("bootstrap", "").partition(
+            "The previous conversation was compacted. Use this summary as context:\n\n")[0]
     markers = {"rule": "Since 0.5:", "exception": "Exporter since 0.5:", "decision": "accounting import rejects",
                "hash": "4e1d9b7c2a03", "path": "src/invoice.ts:57", "units": "4500 ms",
                "failed": "B-2291", "ruled_out": "module-level Map", "false_worker": "writes atomically through"}
@@ -589,6 +592,9 @@ def report(result):
     starts = [e["entry"] for e in result.get("provider_events", []) if
               (e["entry"].get("event") or {}).get("type") == "sessionStarted"]
     models = sorted({(entry.get("provider", "unknown"), entry["event"].get("model", "unknown")) for entry in starts})
+    if not models:
+        models = sorted({(result.get("provider", "unknown"), model)
+                         for role in result.get("roles", {}).values() for model in role.get("models", [])})
     lines += ["", "Observed session providers/models: " + ", ".join(f"`{p}/{m}`" for p, m in models) + ".",
               "The usage-limit injection may use today's stand-in path; the requested Claude model returns after its window resets."]
     lines += ["", "| Forced seam | Observed |", "|---|---|",

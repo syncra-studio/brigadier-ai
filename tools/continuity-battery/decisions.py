@@ -286,8 +286,8 @@ def report(result, judge_model):
     lines = ["# Decision survival (S22b) — " + result["started_at"][:10], "",
              "Report only; no result gates a session (plan §5). The baseline of `research/CONTINUITY.md` §3.7.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
-             f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one session; debug seam "
-             f"`BRIGADIER_SEAM_TOKENS={result['threshold']}` (seam arm only). T3 judge: `{result.get('provider', 'claude')}/{judge_model}`.",
+             f"{result.get('provider', 'claude')} `{result['model']}`, high effort; {result.get('arm', 'seam')} arm; one measured lineage; size threshold "
+             f"`{result['threshold']}` (seam and zed arms). T3 judge: `{result.get('provider', 'claude')}/{judge_model}`.",
              "Ten items were planted as a user gives them, with no word about the ledger; nothing was restated "
              "before the checks.", ""]
     if rows:
