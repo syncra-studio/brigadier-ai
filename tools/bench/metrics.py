@@ -25,6 +25,12 @@ def cost(usage, provider):
             + .1 * usage["cache_read"] + (5 if provider == "claude" else 8) * usage["output"]) / 1000
 
 
+def quoted(key, source):
+    """The strings given to `key` in JavaScript source, each up to its own closing quote."""
+    found = re.findall(rf"{key}\s*:\s*(?:\"((?:\\.|[^\"\\])*)\"|'((?:\\.|[^'\\])*)'|`((?:\\.|[^`\\])*)`)", source, re.S)
+    return ["".join(groups) for groups in found]
+
+
 def parse(path, provider, prompt):
     rows = records(path)
     usage = Counter({k: 0 for k in FIELDS})
@@ -87,11 +93,11 @@ def parse(path, provider, prompt):
                 value = json.loads(value)
             except ValueError:
                 # Codex code-mode tools carry shell calls inside JavaScript source.
-                commands.extend(re.findall(r"(?:cmd|command)\s*:\s*[\"'`](.*?)[\"'`]", value, re.S))
+                commands.extend(quoted(r"(?:cmd|command)", value))
                 continue
         if isinstance(value, dict):
             if isinstance(value.get("code"), str):
-                commands.extend(re.findall(r"(?:[\"']?(?:cmd|command)[\"']?)\s*:\s*[\"'`](.*?)[\"'`]", value["code"], re.S))
+                commands.extend(quoted(r"[\"']?(?:cmd|command)[\"']?", value["code"]))
             commands += [value[k] for k in ("cmd", "command") if isinstance(value.get(k), str)]
     text = "\n".join(commands)
     return {"usage": dict(usage), "raw_tokens": sum(usage.values()), "cost_units": cost(usage, provider),

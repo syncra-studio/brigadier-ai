@@ -3,6 +3,7 @@
 import argparse
 from collections import Counter
 import datetime as dt
+import errno
 import importlib.util
 import json
 import os
@@ -139,6 +140,7 @@ class Daemon:
         self.ipc = ipc_module.Ipc(str(self.data))
         self.conv = self.project = None
         self.kept = {}
+        self.copied = set()
         self.natives = set()
         self.after = 0
         self.data.mkdir()
@@ -173,8 +175,15 @@ class Daemon:
         path = Path(path)
         if path.is_file() and str(path) not in self.kept:
             dest = self.saved / f"{provider}-{path.name}"
-            # Keep before a worker closes and deletes its CLI transcript.
-            os.link(path, dest)
+            # Keep before a worker closes and deletes its CLI transcript. A hard link sees its
+            # later writes; on another filesystem a copy, refreshed on every poll, stands in.
+            try:
+                os.link(path, dest)
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
+                shutil.copyfile(path, dest)
+                self.copied.add(str(path))
             self.kept[str(path)] = (provider, dest)
 
     def events(self):
@@ -199,6 +208,9 @@ class Daemon:
                 for path in native_files(provider, sid):
                     self.save_native(provider, path)
                     self.natives.discard((provider, sid))
+            for original in self.copied:
+                if Path(original).is_file():
+                    shutil.copyfile(original, self.kept[original][1])
             if len(events) < 500:
                 break
 

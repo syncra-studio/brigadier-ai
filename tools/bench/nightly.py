@@ -35,6 +35,10 @@ def regressions(current, previous, threshold=.2):
             continue
         provider, arm, task = key
         label = f"{provider} {arm} {task}"
+        # Changing CLI model is a new baseline, not a product regression.
+        models = lambda rs: {tuple(r.get("models", [])) for r in rs}
+        if models(rows) != models(prior):
+            continue
         passed, total = sum(r["grade"]["passed"] for r in rows), len(rows)
         old_passed = sum(r["grade"]["passed"] for r in prior)
         if old_passed == len(prior) and passed < total:
@@ -45,9 +49,7 @@ def regressions(current, previous, threshold=.2):
         baseline, old_baseline = now.get(plain_key), old.get(plain_key)
         if not baseline or not old_baseline:
             continue
-        # Changing CLI model is a new baseline, not a product regression.
-        models = lambda rs: {tuple(r.get("models", [])) for r in rs}
-        if not (models(rows) == models(prior) == models(baseline) == models(old_baseline)):
+        if not (models(rows) == models(baseline) == models(old_baseline)):
             continue
         for metric in ("raw_tokens", "wall_s"):
             mean = lambda rs: sum(r[metric] for r in rs) / len(rs)

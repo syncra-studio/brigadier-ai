@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused offline checks: transcript accounting, graders, and non-gating comparisons."""
 from copy import deepcopy
+import errno
 import json
 import os
 import re
@@ -47,6 +48,10 @@ class Accounting(unittest.TestCase):
             self.assertEqual(result["usage"], {"input": 60, "cache_write": 0, "cache_read": 20, "output": 5})
             self.assertEqual(result["api_calls"], 2)
             self.assertEqual(result["ledger_adds"], 1)
+            # Shell quoting inside the command string doesn't end it.
+            rows[-1]["payload"]["arguments"] = json.dumps({"code": 'await tools.exec_command({cmd: "cd \'/tmp/repo\' && brigadier ledger add decision ok"})'})
+            path.write_text("\n".join(map(json.dumps, rows)))
+            self.assertEqual(parse(path, "codex", "task")["ledger_adds"], 1)
             path.write_text('{}\n')
             with self.assertRaises(RuntimeError):
                 parse(path, "codex", "task")
@@ -102,6 +107,22 @@ class Accounting(unittest.TestCase):
             self.assertIn(str(transcript), daemon.kept)
             keep([saved for _, saved in daemon.kept.values()], daemon.keep_to)
             self.assertTrue((root / "kept" / "claude-w.jsonl").is_file())
+
+    def test_a_transcript_on_another_filesystem_is_copied_with_its_later_writes(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            root = Path(tmp)
+            (root / "run").mkdir()
+            daemon = Daemon(None, root / "run")
+            transcript = root / "w.jsonl"
+            transcript.write_text("{}\n")
+            def cross(*_):
+                raise OSError(errno.EXDEV, "Cross-device link")
+            daemon.call = lambda method, **_: {"events": []}
+            with patch.object(bench.os, "link", cross):
+                daemon.save_native("claude", transcript)
+                transcript.write_text("{}\n{}\n")
+                daemon.events()
+            self.assertEqual(daemon.kept[str(transcript)][1].read_text(), "{}\n{}\n")
 
 
 class Graders(unittest.TestCase):
@@ -164,6 +185,10 @@ class Reports(unittest.TestCase):
             row["grade"]["passed"] = True
         self.assertFalse(regressions(new, old))
         new["runs"][1].update(raw_tokens=1000, models=["changed"])
+        self.assertFalse(regressions(new, old))
+        # A changed model that fails a task is a new baseline too, plain arms included.
+        for index in (0, 1):
+            new["runs"][index].update(models=["changed"], grade={"passed": False})
         self.assertFalse(regressions(new, old))
 
     def test_skips_collect_green_missing_arm_is_harness_failure(self):
