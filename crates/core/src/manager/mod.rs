@@ -781,7 +781,7 @@ impl SessionManager {
     }
 
     /// Tests: sets how sessions go on past a long context.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn set_seam(&self, config: seam::SeamConfig) {
         *self.seam.lock().unwrap() = config;
     }
