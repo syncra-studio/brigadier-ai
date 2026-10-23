@@ -4712,12 +4712,18 @@ impl SessionManager {
         };
         if first {
             crate::logging::private_trace!(conv.private_logs, info, "messages wait for quota"; conversation = %conv.id, reason = %waiting.reason);
+            let goes = match resumes_on_its_own(Some(limit)) {
+                true => format!(
+                    "goes on its own once {} can take it again",
+                    from.provider.label()
+                ),
+                false => "goes when you choose Continue now".to_owned(),
+            };
             self.moment(
                 &conv.id,
                 format!(
-                    "{}. Your message waits and goes on its own once {} can take it again.",
+                    "{}. Your message waits and {goes}.",
                     waiting.reason.trim_end_matches('.'),
-                    from.provider.label()
                 ),
             )
             .await;

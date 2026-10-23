@@ -612,7 +612,7 @@ impl SessionManager {
             .any(|constraint| constraint.words.len() > super::constraints::WORDS_MAX);
         let search = Part::new(
             "search",
-            "[Older context] Not all of this conversation is carried here: before you answer that something from it is unknown or ask the user again, look it up. `brigadier transcript search` searches its whole transcript, your earlier commands, reads and tool calls too; `brigadier brain search` finds decisions (by id or words), reports and findings; read_report gives a task's report in full.".into(),
+            "[Older context] Not all of this conversation is carried here: before you answer that something from it is unknown or ask the user again, look it up. `brigadier transcript search` searches its whole transcript, your earlier commands, reads and tool calls too; `brigadier brain search` finds decisions (by id or words), reports and findings.".into(),
             0,
         );
         let mut brain = self.brain_part(id, carried).await;
@@ -836,7 +836,7 @@ impl SessionManager {
                 tracing::warn!(conversation = %id, error = %err, "could not read the decision ledger");
                 let mut part = Part::new(
                     "decisions",
-                    "[Decisions settled in this conversation] The ledger could not be read just now. Before acting on anything settled earlier, look it up with query_brain or search_transcript.".into(),
+                    "[Decisions settled in this conversation] The ledger could not be read just now. Before acting on anything settled earlier, look it up with `brigadier brain search` or `brigadier transcript search`.".into(),
                     0,
                 );
                 part.truncated = true;
@@ -1425,7 +1425,7 @@ fn decision_text(nodes: &[Node]) -> String {
 /// <status>[ · replaces <ids>] · <title>`.
 fn decision_index(nodes: &[Node]) -> String {
     let mut text = String::from(
-        "[Decision index: every decision, convention and contract of this conversation, oldest first, replaced ones too. Id · scope · status · what it replaced · what it is. The active ones follow in full; query_brain <id> gives a replaced one]\n",
+        "[Decision index: every decision, convention and contract of this conversation, oldest first, replaced ones too. Id · scope · status · what it replaced · what it is. The active ones follow in full; `brigadier brain search <id>` gives a replaced one]\n",
     );
     for node in nodes {
         let scope = match node.kind {
