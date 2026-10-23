@@ -12,7 +12,7 @@ review from the other vendor before it merges their work.
 - **Workers, cross-vendor review.** When a job calls for it — parallel parts, a long build,
   research, a second opinion — the thread starts a worker: a plain Claude Code or Codex session
   of its own choosing, in its own worktree. A worker runs its own checks, gets a review from the
-  other vendor's CLI (`codex review`, or Claude on Codex's work), and merges into the thread that
+  other vendor's CLI when the work is worth one (`codex review`, or Claude on Codex's work), and merges into the thread that
   started it.
 - **Computer use in the background (macOS).** Workers can open and use the apps they build, and
   any other app a task needs, without moving your cursor or bringing the app to the front: a
@@ -170,9 +170,10 @@ A worker runs its own checks and reports when it's done. Its commits then **land
 - **Merged into its parent**, with plain git. The thread decides merge or rebase, and resolves
   conflicts with the worker's help.
 - **Checked again** on the integrated tree, by the thread itself.
-- **Reviewed.** Before it merges, `codex review` (or the other vendor's CLI) looks at the change
-  once, on the integrated tree, never mid-run. The thread fixes what it agrees with, then reports
-  what's left.
+- **Reviewed** when the work is worth it (several files, no tests of its own, risky, or you asked):
+  before it merges, `codex review` (or the other vendor's CLI) looks at the change once, on the
+  integrated tree, never mid-run. The thread fixes what it agrees with, then reports what's left. A
+  small change with its tests passing lands without one.
 
 When the thread's own work is ready, it merges it the same way: through a pull request when the
 project is on GitHub and `gh` is signed in, otherwise on your Mac. The merge message has a Revert

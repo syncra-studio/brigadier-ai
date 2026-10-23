@@ -957,10 +957,12 @@ and `run`.
       or the thread's own judgement (S36) (user, 2026-10-23: "if the user is uncertain - we help him").
       One lean researcher when the options need evidence. Builders only when prototypes must be compared,
       never by default.
-    - Adversarial review stays: `codex review` per step, and the verifier per phase.
-    - Adversarial consultation before approving a plan or outline, or taking an irreversible step (a delete, a
-      merge into the user's branch, a publish): a critique from the other vendor's CLI; take what you agree with.
-      Not for every small decision.
+    - Adversarial review stays, in proportion: `codex review` per step, and the verifier per phase, for work
+      worth one (several files, no tests of its own, risky, or the user asked).
+    - Adversarial consultation on such work before approving a plan or outline, or taking an irreversible step
+      (a delete, a merge into the user's branch, a publish): a critique from the other vendor's CLI; take what
+      you agree with. A small change with its tests passing lands without a review or a critique (the w123
+      bench, 10-23: on a two-file job these rules tripled a Codex thread's time).
   - A Chat starts workers like any session; a worker of a Chat runs in a folder of its own under the Chat's
     session folder unless the Chat names a repo (S28) (user, 2026-10-23: "a chat is always a brigade").
     A worker can't start workers; it uses its CLI's own subagents (user, 2026-10-23: "workers cant start
@@ -1847,7 +1849,7 @@ sessions with token economy. Each has a measurable bar against the best rival to
      `WorkersStrip.tsx`, `stripView.ts`, `WorkerList.tsx`. Done: app tests per state, timings live. Opus, S–M.
   4. **O4** (into S15): the skill: fan out or not, a five-line brief (target, change, do-not-touch, files,
      acceptance commands), wave, wait, integrate small and often, land on, lean research and adversarial
-     consultation (G23); ≤ 150 lines. A user copy at
+     review and consultation in proportion to the work (G23); ≤ 150 lines. A user copy at
      `~/.brigadier/brigade/SKILL.md` overrides it ("Reset to shipped" in Settings). Done: skill tests + S15's live
      run. Opus, S.
   5. **O5** (after S15): the fault battery, the landing bench and the lean-research comparison as a nightly

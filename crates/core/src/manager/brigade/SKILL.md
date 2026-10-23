@@ -73,8 +73,8 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope." The wo
 
 ## Reviews and consultation
 
-- Adversarial review: `codex review` (or the other vendor's CLI) once per step on the integrated tree, never mid-run. Fix what you agree with. One review, one fix pass, then report what is left; never loop.
-- Before you approve a plan or outline, or take an irreversible step (a delete, a merge into the user's branch, a publish), get a critique from the other vendor's CLI. Take what you agree with. Not for every small decision.
+- Adversarial review, for work worth one (several files, no tests of its own, risky, or the user asked): `codex review` (or the other vendor's CLI) once per step on the integrated tree, never mid-run. Fix what you agree with. One review, one fix pass, then report what is left; never loop.
+- On such work, before you approve a plan or outline, or take an irreversible step (a delete, a merge into the user's branch, a publish), get a critique from the other vendor's CLI. Take what you agree with. A small change with its tests passing lands without a review or a critique.
 - Before you hand a derived document on (a plan, a brief, a report), run `brigadier ledger check <file>` on it, and give its reviewer the ledger with the question "what is missing, changed or added?".
 
 ## Gotchas

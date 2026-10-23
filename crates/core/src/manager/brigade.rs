@@ -139,6 +139,14 @@ mod tests {
             assert!(SKILL.contains(line), "{line}");
         }
         assert!(SKILL.contains("the fusion skill"));
+        // Reviews in proportion (the w123 bench: a two-file job tripled in time under them).
+        for line in [
+            "- Default: do it yourself.",
+            "Adversarial review, for work worth one (several files, no tests of its own, risky, or the user asked)",
+            "A small change with its tests passing lands without a review or a critique.",
+        ] {
+            assert!(SKILL.contains(line), "{line}");
+        }
     }
 
     #[test]
