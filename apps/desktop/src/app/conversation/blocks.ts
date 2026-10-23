@@ -738,8 +738,6 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  // The CLI's line for the background job its reply is about stays with the reply, as in the CLI.
-  if (entry.kind === "taskNotice") return false;
   if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "moment")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }

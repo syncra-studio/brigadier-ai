@@ -3,7 +3,9 @@ import { test } from "node:test";
 
 import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem, workerNotices } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import { blockSequence, type BoardDigest, foldsAway, foldTurns } from "@/app/conversation/blocks";
+import { answerIndex, blockSequence, type BoardDigest, foldsAway, foldTurns } from "@/app/conversation/blocks";
+import { turnActivity } from "@/app/conversation/activity/group";
+import { turnParts } from "@/app/conversation/workParts";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
@@ -204,7 +206,39 @@ test("a background job's end Claude took up shows the CLI's notice line before i
   const notice = sequence.findIndex((entry) => entry.kind === "taskNotice");
   const reply = sequence.findIndex((entry) => entry.kind === "text" && entry.index === 1);
   assert.ok(notice >= 0 && notice < reply, JSON.stringify(sequence));
-  assert.equal(foldsAway(sequence[notice]!, 1), false);
+  // The work folds; the notice is in view between the two answers, the first one kept (#577).
+  const parts = turnParts(turnActivity(sequence, false), 1, true, false, () => true);
+  assert.deepEqual(
+    parts.map((part) => (part.type === "between" ? part.entry.kind : part.answer?.kind === "text" ? `answer ${part.answer.index}` : "work")),
+    ["answer 0", "taskNotice"],
+  );
+});
+
+test("an answer already shown stays in view as its own reply when a background job's end brings another, live and once done", () => {
+  const [block] = cliBlocks(
+    {
+      entries: [
+        user("u1", "Run sleep 20 in the background, tell me when it's done", 1000),
+        at({ type: "command", itemId: "c1", command: "sleep 20; echo bg-done", cwd: null, status: "completed", exitCode: 0, output: "", durationMs: 5 }, 1100),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "It's running in the background now." }, 1200),
+        at({ type: "taskNotice", itemId: "n1", text: 'Background command "sleep 20; echo bg-done" completed (exit code 0)' }, 21000),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "It finished and printed bg-done." }, 21100),
+      ],
+      turns: [turn("u1", 1000, 21200, "done")],
+    },
+    "conv",
+  );
+  assert.ok(block);
+  const sequence = blockSequence({ ...block, steers: [] });
+  const activity = turnActivity(sequence, false);
+  const answer = answerIndex(block.texts, true);
+  assert.equal(answer, 1);
+  const [work, notice] = turnParts(activity, answer, true, false, () => true);
+  // The first answer is its own reply out of the fold; only the command folds.
+  assert.equal(work?.type === "work" && work.answer?.kind === "text" && work.answer.index, 0);
+  assert.deepEqual(work?.type === "work" && work.items.map((item) => item.type), ["group"]);
+  assert.equal(notice?.type === "between" && notice.entry.kind, "taskNotice");
+  assert.equal(foldsAway(sequence.find((entry) => entry.kind === "text" && entry.index === 0)!, answer), true);
 });
 
 test("Brigadier's message of what the workers did is a quiet line per worker in plain words, never a user's bubble, as a turn's start and in a turn", () => {

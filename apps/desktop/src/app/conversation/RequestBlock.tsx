@@ -18,10 +18,11 @@ import { UpdateText } from "@/app/conversation/UpdateText";
 import { WorkHeader } from "@/app/conversation/WorkHeader";
 import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
+import { turnParts } from "@/app/conversation/workParts";
 import { MadeImages } from "@/app/conversation/activity/ImageRows";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
-import { type Activity, type LeadStep, turnActivity } from "@/app/conversation/activity/group";
+import { turnActivity } from "@/app/conversation/activity/group";
 import { deniedCall } from "@/app/conversation/activity/words";
 import {
   type BlockCard,
@@ -180,14 +181,13 @@ export const RequestBlock: FC = () => {
   // Decide which peer send is still in flight where the live row state is known.
   const activity = turnActivity(sequence, false);
   // The answer, kept cards and access notices stay outside the fold.
-  const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
   const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer));
-  const allParts = keepJoinedAnswers(workParts(done ? folded : activity, live && !done), done, (index) => {
+  const allParts = turnParts(activity, answer, done, live, (index) => {
     const text = meta.texts[index];
     return !!text && !text.commentary && !text.update;
   });
   // Bubbles the user sent before any work came sit under their message, above the header.
-  const leading = allParts.findIndex((part) => part.type !== "steer");
+  const leading = allParts.findIndex((part) => part.type !== "between");
   const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
   const parts = allParts.slice(before.length);
   const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
@@ -227,7 +227,7 @@ export const RequestBlock: FC = () => {
       <div ref={body} data-slot="request-body" className="flex min-w-0 flex-col">
         {before.length > 0 && (
           <div data-slot="request-leading-steers" className="gap-activity pb-activity flex min-w-0 flex-col">
-            {before.map((part) => part.type === "steer" && <SequenceEntry key={entryKey(part.entry)} entry={part.entry} streaming={false} />)}
+            {before.map((part) => part.type === "between" && <SequenceEntry key={entryKey(part.entry)} entry={part.entry} streaming={false} />)}
           </div>
         )}
         {header && (
@@ -250,7 +250,7 @@ export const RequestBlock: FC = () => {
             bubbles between them stay mounted whether it is open or folded, so nothing below
             them pops in or out when it settles (THREAD-PARITY-PLAN.md §4.2). */}
         {parts.map((part, index) =>
-          part.type === "steer" ? (
+          part.type === "between" ? (
             <div key={entryKey(part.entry)} className={cn("flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}>
               <SequenceEntry entry={part.entry} streaming={false} />
             </div>
@@ -269,7 +269,7 @@ export const RequestBlock: FC = () => {
                   streaming={streaming}
                   commentary={commentary}
                   // A follow-up steered in after it: the work before it is over, whatever still runs.
-                  summary={parts.slice(index + 1).some((next) => next.type === "steer")}
+                  summary={parts.slice(index + 1).some((next) => next.type === "between")}
                   revealDenied={revealDenied}
                 />
               </div>
@@ -368,44 +368,6 @@ function useFold(requestId: string | null) {
   }, [requestId]);
   const show = useCallback(() => set(true), [set]);
   return { open, set, show };
-}
-
-/** A turn's work cut at the user's follow-ups: runs of work, and the steered bubbles between them. */
-type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answer?: Entry } | { type: "steer"; entry: Entry };
-
-/**
- * A finished turn a follow-up joined (sent while it ended, it runs in the same turn): the reply
- * each run of work came to before the next bubble is that request's answer, so it stays in view
- * under its run's fold instead of folding away with the work. Only the turn's own last answer
- * stood outside the fold before.
- */
-function keepJoinedAnswers(parts: WorkPart[], done: boolean, answers: (index: number) => boolean): WorkPart[] {
-  if (!done) return parts;
-  return parts.map((part, index) => {
-    if (part.type !== "work" || parts[index + 1]?.type !== "steer") return part;
-    const last = part.items.at(-1);
-    if (last?.type !== "entry" || last.entry.kind !== "text" || !answers(last.entry.index)) return part;
-    return { type: "work", items: part.items.slice(0, -1), answer: last.entry };
-  });
-}
-
-/**
- * The work in runs between its steered bubbles. A live turn always ends on a run, where its live
- * line goes, even right after a bubble.
- */
-function workParts(items: readonly Activity<LeadStep, Entry>[], live: boolean): WorkPart[] {
-  const parts: WorkPart[] = [];
-  for (const item of items) {
-    if (item.type === "entry" && item.entry.kind === "steer") {
-      parts.push({ type: "steer", entry: item.entry });
-      continue;
-    }
-    const last = parts.at(-1);
-    if (last?.type === "work") last.items.push(item);
-    else parts.push({ type: "work", items: [item] });
-  }
-  if (live && parts.at(-1)?.type !== "work") parts.push({ type: "work", items: [] });
-  return parts;
 }
 
 /**
