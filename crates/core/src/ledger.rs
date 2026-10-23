@@ -439,9 +439,20 @@ impl CleanupLedger {
 
     /// A handle a provider records its session's artifacts through.
     pub fn handle(self: &Arc<Self>, owner: String) -> Arc<dyn brigadier_providers::Ledger> {
+        self.cli_handle(owner, false)
+    }
+
+    /// [`Self::handle`] for a CLI session: one that `keeps_detached` (S31) has its processes
+    /// recorded as [`Artifact::KeptCli`], so no sweep ends what its commands left running.
+    pub fn cli_handle(
+        self: &Arc<Self>,
+        owner: String,
+        keeps_detached: bool,
+    ) -> Arc<dyn brigadier_providers::Ledger> {
         Arc::new(OwnerLedger {
             ledger: self.clone(),
             owner,
+            keeps_detached,
         })
     }
 
@@ -712,7 +723,8 @@ impl CleanupLedger {
             .iter()
             .flat_map(|(owner, artifacts)| {
                 artifacts.iter().filter_map(move |artifact| match artifact {
-                    Artifact::Process { pid, started_at_ms } => {
+                    Artifact::Process { pid, started_at_ms }
+                    | Artifact::KeptCli { pid, started_at_ms } => {
                         Some((owner.clone(), *pid, *started_at_ms))
                     }
                     _ => None,
@@ -866,6 +878,14 @@ impl CleanupLedger {
                     let (platform, pid, started) = (self.platform.clone(), *pid, *started_at_ms);
                     let _ = tokio::task::spawn_blocking(move || {
                         cleanup::end_process(&*platform, pid, started)
+                    })
+                    .await;
+                    removed.push(artifact);
+                }
+                Artifact::KeptCli { pid, started_at_ms } => {
+                    let (platform, pid, started) = (self.platform.clone(), *pid, *started_at_ms);
+                    let _ = tokio::task::spawn_blocking(move || {
+                        cleanup::end_cli_alone(&*platform, pid, started)
                     })
                     .await;
                     removed.push(artifact);
@@ -1172,7 +1192,7 @@ fn remove_adopted(
 fn is_process(artifact: &Artifact) -> bool {
     matches!(
         artifact,
-        Artifact::Process { .. } | Artifact::ProcessesIn { .. }
+        Artifact::Process { .. } | Artifact::KeptCli { .. } | Artifact::ProcessesIn { .. }
     )
 }
 
@@ -1355,7 +1375,8 @@ impl CleanupLedger {
         for (_, artifacts, _) in self.owners() {
             for artifact in artifacts {
                 match artifact {
-                    Artifact::Process { pid, started_at_ms } => {
+                    Artifact::Process { pid, started_at_ms }
+                    | Artifact::KeptCli { pid, started_at_ms } => {
                         cleanup::end_process(&*self.platform, pid, started_at_ms);
                     }
                     Artifact::ScratchDir { path } if test_data_folder(Path::new(&path)) => {
@@ -1432,6 +1453,8 @@ fn session_file(artifact: &Artifact) -> bool {
 struct OwnerLedger {
     ledger: Arc<CleanupLedger>,
     owner: String,
+    /// Its CLI's processes are recorded as [`Artifact::KeptCli`].
+    keeps_detached: bool,
 }
 
 impl brigadier_providers::Ledger for OwnerLedger {
@@ -1443,6 +1466,12 @@ impl brigadier_providers::Ledger for OwnerLedger {
         &self,
         artifact: Artifact,
     ) -> brigadier_providers::BoxFuture<'_, brigadier_providers::Result<()>> {
+        let artifact = match artifact {
+            Artifact::Process { pid, started_at_ms } if self.keeps_detached => {
+                Artifact::KeptCli { pid, started_at_ms }
+            }
+            artifact => artifact,
+        };
         Box::pin(async move {
             let owner = lineage_owner_for(&self.owner, &artifact);
             self.ledger
@@ -1640,6 +1669,70 @@ mod tests {
         reached.notified().await;
         *ledger.append_pause.lock().unwrap() = None;
         (disposing, release)
+    }
+
+    /// S31 across a restart (#558): the sweep of a previous daemon's CLIs ends a session's CLI
+    /// and its own group, and leaves what its commands started in groups of their own (a
+    /// background task); any other CLI's whole tree ends.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_sweep_leaves_a_session_clis_detached_commands_running() {
+        use std::io::BufRead as _;
+        use std::os::unix::process::CommandExt as _;
+        use std::time::Duration;
+
+        let fixture = Fixture::new().await;
+        for keeps_detached in [true, false] {
+            // A CLI as the daemon starts one, leading its own group: a command in a session of
+            // its own, then it goes on as the daemon dies.
+            let mut cli = std::process::Command::new("python3")
+                .args([
+                    "-c",
+                    "import subprocess, time\n\
+                     child = subprocess.Popen(['sleep', '60'], start_new_session=True)\n\
+                     print(child.pid, flush=True)\n\
+                     time.sleep(60)",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(cli.stdout.take().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let command: u32 = line.trim().parse().unwrap();
+            let processes = fixture.platform.processes();
+            let owner = format!("orch:sweep-{keeps_detached}");
+            let ledger = fixture.load().await;
+            ledger
+                .cli_handle(owner.clone(), keeps_detached)
+                .record(Artifact::Process {
+                    pid: cli.id(),
+                    started_at_ms: processes.start_time_ms(cli.id()).ok(),
+                })
+                .await
+                .unwrap();
+
+            // The next daemon sweeps.
+            fixture.load().await.sweep().await;
+            let ended = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if cli.try_wait().unwrap().is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await;
+            assert!(ended.is_ok(), "the CLI ends ({keeps_detached})");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let running = processes.is_alive(command) && !processes.is_zombie(command);
+            if running {
+                let _ = processes.kill_tree(command);
+            }
+            assert_eq!(running, keeps_detached, "keeps_detached: {keeps_detached}");
+        }
     }
 
     #[tokio::test]

@@ -224,21 +224,50 @@ pub mod cleanup {
     /// Kills a recorded CLI process group, if that process is still the one recorded (its
     /// start time matches, so a reused pid is never touched). Returns whether it was running.
     pub fn end_process(platform: &dyn Platform, pid: u32, started_at_ms: Option<f64>) -> bool {
+        if !still_recorded(platform, pid, started_at_ms) {
+            return false;
+        }
+        if let Err(err) = platform.processes().kill_tree(pid) {
+            tracing::warn!(pid, error = %err, "could not end a recorded CLI process");
+        }
+        true
+    }
+
+    /// Kills a recorded CLI process and its own process group alone, as [`end_process`] checks
+    /// it: what it started in groups of their own (a session's background commands, S31) goes
+    /// on. Returns whether it was running.
+    pub fn end_cli_alone(platform: &dyn Platform, pid: u32, started_at_ms: Option<f64>) -> bool {
+        if !still_recorded(platform, pid, started_at_ms) {
+            return false;
+        }
+        let processes = platform.processes();
+        // A CLI leads its own process group; where groups can't be signalled (Windows) or it
+        // doesn't, it is ended by itself.
+        if let Err(err) = processes.kill_group(pid) {
+            tracing::warn!(pid, error = %err, "could not end a recorded CLI process");
+        }
+        if processes.is_alive(pid)
+            && !processes.is_zombie(pid)
+            && let Err(err) = processes.terminate(pid)
+        {
+            tracing::warn!(pid, error = %err, "could not end a recorded CLI process");
+        }
+        true
+    }
+
+    /// Whether `pid` runs and is still the process recorded with `started_at_ms`.
+    fn still_recorded(platform: &dyn Platform, pid: u32, started_at_ms: Option<f64>) -> bool {
         let processes = platform.processes();
         if !processes.is_alive(pid) {
             return false;
         }
-        if let Some(recorded) = started_at_ms {
-            match processes.start_time_ms(pid) {
-                // Start times are reported to the millisecond or better.
-                Ok(actual) if (actual - recorded).abs() < 1_000.0 => {}
-                _ => return false,
-            }
+        match started_at_ms {
+            // Start times are reported to the millisecond or better.
+            Some(recorded) => processes
+                .start_time_ms(pid)
+                .is_ok_and(|actual| (actual - recorded).abs() < 1_000.0),
+            None => true,
         }
-        if let Err(err) = processes.kill_tree(pid) {
-            tracing::warn!(pid, error = %err, "could not end a recorded CLI process");
-        }
-        true
     }
 }
 

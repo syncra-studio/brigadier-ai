@@ -501,7 +501,8 @@ impl SessionManager {
                         // Commit-message writers, Brain jobs, raw sessions: alive while one of
                         // their processes still runs.
                         _ => artifacts.iter().any(|artifact| match artifact {
-                            Artifact::Process { pid, started_at_ms } => {
+                            Artifact::Process { pid, started_at_ms }
+                            | Artifact::KeptCli { pid, started_at_ms } => {
                                 processes.is_alive(*pid)
                                     && started_at_ms.is_none_or(|started| {
                                         processes
@@ -1859,7 +1860,9 @@ impl Scanner<'_> {
                 .filter(|artifact| {
                     !matches!(
                         artifact,
-                        Artifact::Process { .. } | Artifact::ProcessesIn { .. }
+                        Artifact::Process { .. }
+                            | Artifact::KeptCli { .. }
+                            | Artifact::ProcessesIn { .. }
                     )
                 })
                 .count();

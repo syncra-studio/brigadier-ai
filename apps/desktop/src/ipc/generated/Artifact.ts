@@ -10,6 +10,10 @@ export type Artifact = { "type": "process", pid: number,
 /**
  * Start time, to tell it apart from a later process that reused the pid.
  */
+startedAtMs: number | null, } | { "type": "keptCli", pid: number, 
+/**
+ * Start time, to tell it apart from a later process that reused the pid.
+ */
 startedAtMs: number | null, } | { "type": "claudeSession", sessionId: string, 
 /**
  * The config directory of the account it ran on; absent: the user's own.

@@ -1430,6 +1430,14 @@ pub enum Artifact {
         /// Start time, to tell it apart from a later process that reused the pid.
         started_at_ms: Option<f64>,
     },
+    /// A session's or a Chat's CLI process ([`SessionSpec::keeps_detached`]): what its commands
+    /// leave running outlives it, a daemon restart too (S31), so only it and its own process
+    /// group end, never what it started in groups of their own.
+    KeptCli {
+        pid: u32,
+        /// Start time, to tell it apart from a later process that reused the pid.
+        started_at_ms: Option<f64>,
+    },
     /// A Claude Code session: its transcript and per-session state under the config directory.
     ClaudeSession {
         session_id: String,

@@ -552,8 +552,11 @@ impl Runtime {
         spec: SessionSpec,
     ) -> Result<Started> {
         self.admit()?;
+        let ledger = self
+            .ledger
+            .cli_handle(owner.to_owned(), spec.keeps_detached);
         self.provider_for(account)?
-            .start(spec, self.ledger.handle(owner.to_owned()))
+            .start(spec, ledger)
             .await
             .map_err(provider_error)
     }
@@ -1395,9 +1398,13 @@ impl Runtime {
                 Ok(session) => session.provider,
                 Err(_) => return,
             };
+            let keeps_detached = spec.keeps_detached;
             let started = runtime
                 .provider(kind)
-                .start(spec, runtime.ledger.handle(id.0.clone()))
+                .start(
+                    spec,
+                    runtime.ledger.cli_handle(id.0.clone(), keeps_detached),
+                )
                 .await;
             match started {
                 Ok(Started { session, events }) => {
