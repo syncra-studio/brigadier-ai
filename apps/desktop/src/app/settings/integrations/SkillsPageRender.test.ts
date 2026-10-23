@@ -4,6 +4,8 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 type State = {
+  settingsColumn: boolean;
+  pagePadding: string;
   title: string;
   sections: string[];
   text: string;
@@ -15,6 +17,10 @@ type State = {
 test("skills: drawn states, separate project switches, folders and Claude always on", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "integrations.html?drive=skills", "integrations-result", 10000)) as Record<string, unknown> & Record<string, State>;
   assert.equal(seen.error, undefined);
+  for (const state of ["grill-me", "delegator", "claude-skill", "plugin-skill"]) {
+    assert.equal(seen[state]!.settingsColumn, true, state);
+    assert.equal(seen[state]!.pagePadding, seen.skills!.pagePadding, state);
+  }
   const catalog = seen.skills!;
   assert.equal(catalog.title, "Plugins");
   assert.equal(catalog.tiles.length, 20);

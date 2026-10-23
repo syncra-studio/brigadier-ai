@@ -735,6 +735,7 @@ function readState() {
   probe.remove();
   return {
     settingsColumn,
+    pagePadding: column ? getComputedStyle(column).paddingTop : null,
     title: text(document.querySelector("main h1")),
     sections: all("main h2").map(text),
     text: text(main()),

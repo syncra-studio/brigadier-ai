@@ -5,6 +5,7 @@ import { renderFixturePage } from "@/fixtures/headless";
 
 type State = {
   settingsColumn: boolean;
+  pagePadding: string;
   title: string;
   sections: string[];
   text: string;
@@ -21,6 +22,10 @@ test("plugins: drawn server states, switch, details, search and config refresh",
   assert.equal(catalog.title, "Plugins");
   // The same column and top padding every other Settings page uses (#581).
   assert.equal(catalog.settingsColumn, true);
+  for (const state of ["linear", "pencil", "unreadable"]) {
+    assert.equal(seen[state]!.settingsColumn, true, state);
+    assert.equal(seen[state]!.pagePadding, catalog.pagePadding, state);
+  }
   assert.deepEqual(catalog.sections, ["Yours", "brigadier-ai"]);
   assert.equal(catalog.tiles.length, 7);
   assert.equal(catalog.switches.length, 6, "an unreadable server has no switch");
