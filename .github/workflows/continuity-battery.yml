@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         provider: [claude, codex]
-        arm: [seam, plain]
+        arm: [seam, plain, zed]
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"

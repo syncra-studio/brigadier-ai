@@ -16,6 +16,29 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "tools/bench"))
 from economics import NOTE, combine, historical, mean_usd, ratio, role_table, usd
 FIELDS = ("input", "cached_input", "cache_write", "output", "cost_usd")
+ARMS = ("seam", "plain", "zed")
+
+
+def decision_checks(result):
+    """The same six decision-survival checks, without ledger markers for CLI arms."""
+    if not result.get("rows"):
+        return {}
+    t1, t3 = result.get("t1", {}), result.get("t3", {})
+    brief = list(t3.get("items", {}).values())
+    checks = {
+        "T1": all(t1.get(k) for k in ("jsdoc", "named", "spdx", "padding", "dates")) if t1 else None,
+        "T2": result.get("t2_scored", {}).get("pass"),
+        "T3": (brief.count("contradicted") == 0 and brief.count("missing") <= 1 and
+               not t3["unmarked_additions"]) if brief and "unmarked_additions" in t3 else None,
+        "T4": all(result["t4_scored"].get(k) for k in ("open_question", "open_promise"))
+              if result.get("t4_scored") else None,
+        "T5": result["rows"].get("own_decision", {}).get("unprompted"),
+        "T6": sum(bool(r.get("recalled")) for r in result["rows"].values()) / len(result["rows"]),
+    }
+    for key, row in result["rows"].items():
+        checks[f"{key}.applied"] = row.get("unprompted")
+        checks[f"{key}.recalled"] = row.get("recalled")
+    return checks
 
 
 def metrics(result):
@@ -37,7 +60,8 @@ def metrics(result):
         {"input": totals["input"], "cache_write": totals["cache_write"],
          "cache_read": totals["cached_input"], "output": totals["output"]}, [])}
     return {"usage": totals, "roles": roles, "list_price_usd": combine(roles.values())["list_price_usd"],
-            "compactions": result.get("compactions"),
+            "compactions": result.get("compactions"), "zed_compactions": result.get("zed_compactions"),
+            "checks": decision_checks(result),
             "seams": result.get("seams_before_checks", result.get("size_seams_before_faults", 0)),
             "contexts_before_checks": result.get("seams_before_checks"),
             "recall": (sum(row.get("verdict") == "pass" for row in result["items"].values()) / len(result["items"]))
@@ -67,7 +91,7 @@ def provider_report(provider, output, daemon, live, selected_arm=None):
         for block, profile, fillers, ballast in (("recall", "short", 9, 1200),
                                                  ("recall", "long", 90, 3500),
                                                  ("decisions", "long", 90, 3500)):
-            for arm in ([selected_arm] if selected_arm else ("seam", "plain")):
+            for arm in ([selected_arm] if selected_arm else ARMS):
                 name = f"{provider}-{block}-{profile}-{arm}"
                 with tempfile.TemporaryDirectory(prefix="continuity-nightly-evidence-") as private:
                     evidence = Path(private) / "evidence.json"
@@ -92,9 +116,11 @@ def provider_report(provider, output, daemon, live, selected_arm=None):
                                     proc.kill()
                                     proc.wait()
                         result = json.loads(evidence.read_text())
-                        row.update(status="complete" if proc.returncode == 0 and not any(e.startswith(("capture:", "score:")) for e in result.get("errors", [])) else "incomplete",
+                        row.update(status="skipped" if result.get("status") == "skipped" else
+                                   "complete" if proc.returncode == 0 and not any(e.startswith(("capture:", "score:")) for e in result.get("errors", [])) else "incomplete",
+                                   reason=result.get("reason"),
                                    errors=result.get("errors", []), model=result.get("model"), **metrics(result))
-                        if block == "decisions" and any(row.get(k) is None for k in ("applied", "contradictions", "unmarked_additions", "open_items")):
+                        if row["status"] == "complete" and block == "decisions" and any(row.get(k) is None for k in ("applied", "contradictions", "unmarked_additions", "open_items")):
                             row["status"] = "incomplete"
                             row["errors"].append("decision rubric not completely scored")
                     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
@@ -170,6 +196,31 @@ def prepare(summary):
                                "arm": arm, "mean_list_price_usd": amount,
                                "list_price_ratio": amount / baseline if amount is not None and baseline else None})
     summary["aggregate"] = aggregates
+    comparisons = []
+    def mean(values):
+        return sum(values) / len(values) if values and all(v is not None for v in values) else None
+    for provider in summary["providers"]:
+        for block, profile in sorted({(r["block"], r["profile"]) for r in provider["arms"]}):
+            pair = {arm: [r for r in provider["arms"] if r["arm"] == arm and r["block"] == block
+                          and r["profile"] == profile and r["status"] == "complete"] for arm in ("seam", "zed")}
+            check_keys = sorted({key for rows in pair.values() for row in rows for key in row.get("checks", {})})
+            for key in ["recall", "task_passed", *check_keys, "list_price_usd", "reported_cost_usd"]:
+                def values(arm):
+                    return [r.get("usage", {}).get("cost_usd") if key == "reported_cost_usd" else
+                            r.get(key) if key in ("recall", "task_passed", "list_price_usd") else
+                            r.get("checks", {}).get(key) for r in pair[arm]]
+                left, right = mean(values("seam")), mean(values("zed"))
+                dollars = key in ("list_price_usd", "reported_cost_usd")
+                qualified = block != "decisions" or all(
+                    r.get("contexts_before_checks") is not None and r["contexts_before_checks"] >= 3
+                    for rows in pair.values() for r in rows)
+                comparisons.append({"provider": provider["provider"], "block": block, "profile": profile,
+                                    "check": key, "seam": left, "zed": right,
+                                    "seam_meets_zed": None if left is None or right is None else
+                                                      left <= right if dollars else left >= right,
+                                    "qualified": qualified,
+                                    "dollar_ratio": left / right if dollars and left is not None and right else None})
+    summary["seam_vs_zed"] = comparisons
     return summary
 
 
@@ -179,11 +230,13 @@ def markdown(summary):
              "", f"Run: {summary['run_url']}", f"Source: `{summary['source']}`", ""]
     for provider in summary["providers"]:
         lines += [f"## {provider['provider']}", "", provider["status"] + (": " + provider["reason"] if provider.get("reason") else ""), "",
-                  "| Script | Size | Arm | Compactions | Recall | Decisions applied | Brief contradictions / additions | Open items | Task | Cost USD | Cold return USD |",
-                  "|---|---|---|---:|---:|---:|---|---:|---|---:|---:|"]
+                  "| Script | Size | Arm | Native compactions | Zed compactions | Recall | Decisions applied | Brief contradictions / additions | Open items | Task | Cost USD | Cold return USD |",
+                  "|---|---|---|---:|---:|---:|---:|---|---:|---|---:|---:|"]
         for row in provider["arms"]:
             get = lambda k: "unavailable" if row.get(k) is None else str(row[k])
-            lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
+            lines.append(f"| {row['block']} | {row['profile']} | {row['arm']} ({row['status']}) | {get('compactions')} | {get('zed_compactions')} | {get('recall')} | {get('applied')} / {row.get('planted', 0)} | {get('contradictions')} / {get('unmarked_additions')} | {get('open_items')} | {get('task_passed')} | {row.get('usage', {}).get('cost_usd')} | {get('cold_return_cost_usd')} |")
+            if row.get("reason"):
+                lines += ["", row["reason"], ""]
         lines += ["", "Price-weighted ratios: " + ", ".join(f"{r['block']}/{r['profile']} {r.get('price_weighted_ratio', 'unavailable')}" for r in provider["arms"] if r["arm"] == "seam"), ""]
     lines += ["## List-price aggregates", "", NOTE, "",
               "| Provider | Script | Size | Arm | Mean list-price USD | USD vs plain |",
@@ -191,6 +244,15 @@ def markdown(summary):
     for row in summary["aggregate"]:
         lines.append(f"| {row['provider']} | {row['block']} | {row['profile']} | {row['arm']} | "
                      f"{usd(row['mean_list_price_usd'])} | {ratio(row['list_price_ratio'])} |")
+    lines += ["", "## Seam vs Zed", "",
+              "Means of completed matching observations; higher survival is better, lower dollars is better. "
+              "Decision comparisons need three observed transitions in both arms.", "",
+              "| Provider | Script | Size | Check | Seam | Zed | Seam meets Zed | Qualified | Dollar ratio |",
+              "|---|---|---|---|---:|---:|---|---|---:|"]
+    for row in summary["seam_vs_zed"]:
+        value = lambda key: "unavailable" if row[key] is None else str(row[key])
+        lines.append(f"| {row['provider']} | {row['block']} | {row['profile']} | {row['check']} | "
+                     f"{value('seam')} | {value('zed')} | {value('seam_meets_zed')} | {row['qualified']} | {ratio(row['dollar_ratio'])} |")
     for provider in summary["providers"]:
         for row in provider["arms"]:
             if row["status"] == "complete":
@@ -208,12 +270,14 @@ def collect(inputs, output, previous=None):
     providers = []
     for provider in ("claude", "codex"):
         files = [p for p in inputs.rglob(f"{provider}-*.json") if p.name in
-                 {f"{provider}-{arm}.json" for arm in ("seam", "plain", "both")}]
+                 {f"{provider}-{arm}.json" for arm in (*ARMS, "both")}]
         reports = [json.loads(file.read_text()) for file in files]
+        observed = {row["arm"] for report in reports for row in report.get("arms", [])}
+        complete = all(arm in observed for arm in ARMS) and all(r["status"] == "complete" for r in reports)
         providers.append({"provider": provider,
                           "status": "skipped" if reports and all(r["status"] == "skipped" for r in reports)
-                                    else "complete" if len(reports) == 2 and all(r["status"] == "complete" for r in reports) else "incomplete",
-                          "reason": "; ".join(sorted({r["reason"] for r in reports if r.get("reason")})) or (None if len(reports) == 2 else "runner did not produce both arms"),
+                                    else "complete" if complete else "incomplete",
+                          "reason": "; ".join(sorted({r["reason"] for r in reports if r.get("reason")})) or (None if complete else "runner did not complete all three arms"),
                           "arms": [row for report in reports for row in report["arms"]]})
     weekly = next(inputs.rglob("weekly.json"), None)
     summary = {"schema_version": 1, "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -250,7 +314,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["provider", "collect"])
     parser.add_argument("--provider", choices=["claude", "codex"])
-    parser.add_argument("--arm", choices=["seam", "plain"])
+    parser.add_argument("--arm", choices=ARMS)
     parser.add_argument("--daemon", default="target/debug/brigadierd")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--input", type=Path)

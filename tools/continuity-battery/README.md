@@ -82,15 +82,15 @@ unchanged-commit build skip. To run only the battery (no app publication):
 gh workflow run continuity-battery.yml --repo syncra-studio/brigadier-ai --ref main
 ```
 
-The existing scripts now accept `--provider claude|codex` and `--arm seam|plain`.
+The existing scripts now accept `--provider claude|codex` and `--arm seam|plain|zed`.
 `plain.py` changes only the transport: the same plants, fixture, tasks and scorers go
 through `claude -p --resume` or `codex exec resume`, with automatic compaction at the
 CLI's own default. It installs no seam or standing ledger instructions. The decision
 block scores a plain CLI's own decision by its announced choice and applied separator;
 only Brigadier's arm is also checked for its ledger marker. No `/compact` is sent.
 
-The workflow runs both arms for short recall (nine filler turns), long recall (90),
-and decision survival (90), with matching filler schedules within each pair.
+The workflow runs all three arms for short recall (nine filler turns), long recall (90),
+and decision survival (90), with matching filler schedules within each provider.
 The long schedule supplies over 400k inert input tokens at ordinary tokenization;
 the metered usage and observed compactions/seams are reported rather than assumed.
 The three-context decision bar is unqualified if fewer than three native compactions
@@ -171,3 +171,30 @@ python3 -B -m unittest discover -s tools/continuity-battery -p 'test_*.py' -v
 pnpm --filter @brigadier/desktop test src/app/settings/ReportsPageRender.test.ts src/app/settings/pages.test.ts
 actionlint .github/workflows/continuity-battery.yml .github/workflows/nightly.yml
 ```
+
+## Zed text-compaction arm
+
+`--arm zed` runs the same tasks and scorers through the plain CLI on both providers,
+using Zed's text-compaction algorithm pinned to
+[`9f305aaf88370e8ca39c702242186e3d8f97ecca`](https://github.com/zed-industries/zed/blob/9f305aaf88370e8ca39c702242186e3d8f97ecca/crates/agent/src/thread.rs#L5152-L5222).
+At the battery's `--tokens` threshold (latest input, including cache reads/writes,
+plus output), it asks the same model for a summary on the old prefix. Claude can
+remove tools for that request (`--tools "" --strict-mcp-config`); Codex has no equivalent
+CLI switch, so it uses one ordinary plain turn. A fresh session receives the newest
+80,000 UTF-8 bytes of actual scenario user messages, then the summary with Zed's
+wrapper, then the pending request. Selection is newest-first, but replay is chronological
+(`thread.rs:5186–5220` reverses the selection); the oldest partial message retains its
+prefix at a character boundary (`thread.rs:5018–5079`). Previous summaries and synthetic
+bootstraps are never counted as user turns. The GPL prompt is fetched from its pinned
+raw GitHub URL into the run's scratch cache; it is never vendored. Fetch failure writes
+a **skipped: could not fetch** report row and cleans up normally.
+
+This measures the open text algorithm, not Delta's product or provider-native compaction.
+CLI boundaries fold the retained user messages and summary into one input turn, and the
+threshold is checked between CLI turns, rather than between internal tool requests.
+Claude's native auto-compaction is disabled for this arm; any native compactions still
+observed (including Codex defaults) are reported separately from explicit Zed compactions.
+Summary calls and every fresh session are included in per-role cache/list-price dollars.
+Nightly aggregates compare seam versus Zed on T1–T6, each decision item's application
+and recall, overall recall/task success, and reported/list-price dollars. Missing data
+is unavailable; decision comparisons with fewer than three transitions are unqualified.

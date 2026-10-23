@@ -464,6 +464,16 @@ def prepare_economics(result):
     return result
 
 
+def arm_markdown(result):
+    lines = ["", f"Arm status: {result.get('status', 'observed')}" +
+             (": " + result["reason"] if result.get("reason") else ""), ""]
+    if result.get("arm") == "zed":
+        lines += [f"Zed text compactions: {result.get('zed_compactions', 0)}; "
+                  f"native compactions: {result.get('compactions', 'unavailable')}.",
+                  "Summary calls and all fresh sessions are included in usage and role costs.", ""]
+    return lines
+
+
 def economics_markdown(result):
     prepare_economics(result)
     lines = ["", "## Cache economics by role", "", NOTE, ""] + role_table(result["roles"])
@@ -479,7 +489,7 @@ def write_report(result, text, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     public = {k: result[k] for k in ("source", "started_at", "provider", "model", "arm", "threshold",
-                                    "roles", "economics", "list_price_usd") if k in result}
+                                    "roles", "economics", "list_price_usd", "status", "reason", "zed_compactions", "zed_commit") if k in result}
     path.with_suffix(".json").write_text(json.dumps(public, indent=2) + "\n")
 
 
@@ -608,7 +618,7 @@ def report(result):
     lines += ["", f"Probe lookup calls observed: {len(lookup)}. Item search evidence means its marker appeared in a lookup result, or an explicit query attempted it; one result can serve several items.",
                             "Seam cost below includes all metered handoff calls; ordinary thread calls are separate (successor bootstrap is included in thread use)."]
     for kind in ("handoff", "thread"):
-        mine = [u for u in usage if u.get("step") == kind]
+        mine = [u for u in usage if (u.get("step") or u.get("kind")) == kind]
         total = {k: sum(u.get(k) or 0 for u in mine) for k in ("input", "cached_input", "cache_write", "output", "cost_usd")}
         total["cost_usd"] = round(total["cost_usd"], 6)
         missing_cost = sum(u.get("cost_usd") is None for u in mine)
@@ -625,6 +635,7 @@ def report(result):
         lines += ["Harness note: this first run spent a timeout waiting on the crash/restart requests after they "
                   "were already Failed. The waiter now accepts Failed as terminal. Subsequent requests completed; "
                   "these waits do not imply the session stayed stuck.", ""]
+    lines += arm_markdown(result)
     lines += economics_markdown(result)
     return "\n".join(lines)
 
@@ -634,7 +645,7 @@ def main():
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
-    parser.add_argument("--arm", choices=["seam", "plain"], default="seam")
+    parser.add_argument("--arm", choices=["seam", "plain", "zed"], default="seam")
     parser.add_argument("--ballast", type=int, default=1200)
     parser.add_argument("--min-fillers", type=int, default=9)
     parser.add_argument("--tokens", type=int, default=43750, help="the seam threshold (BRIGADIER_SEAM_TOKENS)")
@@ -657,6 +668,9 @@ def main():
     if args.arm == "plain":
         from plain import PlainBattery
         battery = PlainBattery(args)
+    elif args.arm == "zed":
+        from zed import ZedBattery
+        battery = ZedBattery(args)
     else:
         battery = Battery(args)
     def terminated(signum, frame):
@@ -666,7 +680,11 @@ def main():
         battery.run()
     except Exception as error:
         log(f"run problem: {error}")
-        battery.errors.append(str(error))
+        from zed import SkippedArm
+        if isinstance(error, SkippedArm):
+            battery.result.update(status="skipped", reason=str(error))
+        else:
+            battery.errors.append(str(error))
     finally:
         try:
             battery.capture()
@@ -676,7 +694,7 @@ def main():
         write_report(battery.result, report(battery.result), args.report)
         log("report: " + args.report)
     # A partial/infrastructure run is distinguishable; recall failures never affect exit.
-    return 0 if "items" in battery.result else 2
+    return 0 if "items" in battery.result or battery.result.get("status") == "skipped" else 2
 
 
 if __name__ == "__main__":

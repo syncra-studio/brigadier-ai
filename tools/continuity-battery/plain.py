@@ -19,6 +19,13 @@ class PlainBattery(battery.Battery):
         self.fixture()
         self.native_id = None
         self.raw_events = []
+        self.native_sessions = {}
+
+    def environment(self):
+        env = dict(os.environ)
+        for key in ("DISABLE_AUTO_COMPACT", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"):
+            env.pop(key, None)
+        return env
 
     def record(self):
         # Plain CLI has no Brigadier record. If explicitly asked for a ledger by the recall
@@ -43,7 +50,7 @@ class PlainBattery(battery.Battery):
                                "plain CLI comparison uses only its own automatic compaction"})
         return record
 
-    def send(self, name, text, fault=None):
+    def send(self, name, text, fault=None, *, tool_less=False):
         self.tick()
         battery.log(name)
         step = {"name": name, "sent_ms": battery.now()}
@@ -53,14 +60,13 @@ class PlainBattery(battery.Battery):
                        "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]
             if self.native_id:
                 command += ["--resume", self.native_id]
+            if tool_less:
+                command += ["--tools", "", "--strict-mcp-config"]
         else:
             command = ["codex", "exec"] + (["resume", self.native_id] if self.native_id else [])
             command += ["--model", self.args.model, "-c", 'model_reasoning_effort="high"',
                         "--dangerously-bypass-approvals-and-sandbox", "--json", "-"]
-        env = dict(os.environ)
-        for key in ("DISABLE_AUTO_COMPACT", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"):
-            env.pop(key, None)
-        proc = subprocess.Popen(command, cwd=self.repo, env=env, stdin=subprocess.PIPE,
+        proc = subprocess.Popen(command, cwd=self.repo, env=self.environment(), stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         self.processes.append(proc)
         if fault:
@@ -97,6 +103,11 @@ class PlainBattery(battery.Battery):
                     "input": max(0, u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)),
                     "cached_input": u.get("cached_input_tokens"), "output": u.get("output_tokens"), "cost_usd": None})
         step.update(ended_ms=battery.now(), settled=proc.returncode == 0, answer="\n".join(answer))
+        if self.native_id:
+            path = self.native_path()
+            if not hasattr(self, "native_sessions"):
+                self.native_sessions = {}
+            self.native_sessions[self.native_id] = str(path) if path else None
         if proc.returncode:
             self.errors.append(f"{name}: CLI exit {proc.returncode}: {stderr[-300:]}")
         if not self.native_id:
@@ -109,11 +120,16 @@ class PlainBattery(battery.Battery):
 
     def capture(self):
         path = self.native_path()
-        self.native_files = [str(path)] if path else []
-        if path:
-            self.result["roles"] = battery.capture_roles([{"entry": {"provider": self.args.provider,
-                "event": {"type": "sessionStarted", "file": str(path)}}}])
-        self.result.update(compactions=self.generations(), native_session_id=getattr(self, "native_id", None),
+        sessions = getattr(self, "native_sessions", {}) or {getattr(self, "native_id", None): str(path) if path else None}
+        self.native_files = [file for file in sessions.values() if file]
+        # Include every old session: summary requests belong to the session they compacted.
+        entries = [{"entry": {"provider": self.args.provider,
+                    "event": {"type": "sessionStarted", "file": file or str(self.root / f"missing-{sid}.jsonl")}}}
+                   for sid, file in sessions.items() if sid]
+        if entries:
+            self.result["roles"] = battery.capture_roles(entries)
+        self.result.update(compactions=sum(compactions(file, self.args.provider) for file in self.native_files),
+                           native_session_ids=list(sessions), native_session_id=getattr(self, "native_id", None),
                            plain_events=getattr(self, "raw_events", []), ledger=battery.read_text(self.repo / "ledger.md"))
 
     def cleanup(self):

@@ -135,7 +135,7 @@ class Decisions(battery.Battery):
         self.result["plant_replies"] = replies
         for i in range(self.args.max_fillers):
             before = self.generations()
-            if before >= (3 if self.args.arm == "plain" else 2) and i >= self.args.min_fillers:
+            if before >= (2 if self.args.arm == "seam" else 3) and i >= self.args.min_fillers:
                 break
             ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12]
                                for j in range(self.args.ballast))
@@ -260,7 +260,7 @@ def score(result, judge_model):
             "principle": ("T2", t2["pass"]),
             "decision_padding": ("T1", t1.get("padding")),
             "decision_dates": ("T1", t1.get("dates")),
-            "own_decision": ("T1+T5", bool(sep) and t1.get("separator_used") == sep and (own["marked"] or result.get("arm") == "plain")),
+            "own_decision": ("T1+T5", bool(sep) and t1.get("separator_used") == sep and (own["marked"] or result.get("arm") in ("plain", "zed"))),
             "open_question": ("T4", t4["open_question"]),
             "open_promise": ("T4", t4["open_promise"]),
             "worker_claim": ("—", None),
@@ -344,6 +344,7 @@ def report(result, judge_model):
               "T1's JSDoc and T2's answers are read by regular expressions; the evidence keeps the raw text.",
               "", "Run problems: " + ("; ".join(result["errors"]) or "none"),
               "Cleanup: " + ("; ".join(map(str, result.get("cleanup", []))) or "own session, project, daemon and scratch root removed"), ""]
+    lines += battery.arm_markdown(result)
     lines += battery.economics_markdown(result)
     return "\n".join(lines)
 
@@ -362,7 +363,7 @@ def main():
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--provider", choices=["claude", "codex"], default="claude")
-    parser.add_argument("--arm", choices=["seam", "plain"], default="seam")
+    parser.add_argument("--arm", choices=["seam", "plain", "zed"], default="seam")
     parser.add_argument("--min-fillers", type=int, default=0)
     parser.add_argument("--judge-model", default=None)
     parser.add_argument("--tokens", type=int, default=60000, help="the debug seam threshold (BRIGADIER_SEAM_TOKENS)")
@@ -389,6 +390,11 @@ def main():
         class PlainDecisions(Decisions, PlainBattery):
             pass
         run = PlainDecisions(args)
+    elif args.arm == "zed":
+        from zed import ZedBattery
+        class ZedDecisions(Decisions, ZedBattery):
+            pass
+        run = ZedDecisions(args)
     else:
         run = Decisions(args)
     run.result["block"] = "decisions"
@@ -399,7 +405,11 @@ def main():
         run.run()
     except Exception as error:
         battery.log(f"run problem: {error}")
-        run.errors.append(str(error))
+        from zed import SkippedArm
+        if isinstance(error, SkippedArm):
+            run.result.update(status="skipped", reason=str(error))
+        else:
+            run.errors.append(str(error))
     finally:
         try:
             run.capture()
@@ -414,7 +424,7 @@ def main():
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
         battery.write_report(run.result, report(run.result, args.judge_model), args.report)
         battery.log("report: " + args.report)
-    return 0 if "items" in run.result else 2
+    return 0 if "items" in run.result or run.result.get("status") == "skipped" else 2
 
 
 if __name__ == "__main__":
