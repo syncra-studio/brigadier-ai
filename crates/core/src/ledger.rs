@@ -908,6 +908,7 @@ impl CleanupLedger {
                     add(ProviderKind::Claude, home.clone(), artifact)
                 }
                 Artifact::ClaudeProjectDir { .. }
+                | Artifact::ClaudeMemoryDir { .. }
                 | Artifact::ClaudeStagingDir { .. }
                 | Artifact::ClaudeTempDir { .. } => add(ProviderKind::Claude, None, artifact),
                 Artifact::CodexThread { home, .. } => {
@@ -1445,6 +1446,7 @@ fn session_file(artifact: &Artifact) -> bool {
         artifact,
         Artifact::ClaudeSession { .. }
             | Artifact::ClaudeProjectDir { .. }
+            | Artifact::ClaudeMemoryDir { .. }
             | Artifact::CodexThread { .. }
             | Artifact::CodexGeneratedImages { .. }
     )

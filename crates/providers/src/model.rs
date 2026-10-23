@@ -1459,6 +1459,14 @@ pub enum Artifact {
     },
     /// A Claude Code project directory (`projects/<encoded cwd>`) that did not exist before.
     ClaudeProjectDir { path: String },
+    /// An empty repository memory folder absent before a linked-worktree CLI started and
+    /// observed to have been created during its life. Identities prevent deleting replacements.
+    ClaudeMemoryDir {
+        path: String,
+        identity: (u64, u64),
+        /// The enclosing project directory, only when it too was absent before the start.
+        project_identity: Option<(u64, u64)>,
+    },
     /// Claude Code's write-staging directory in the working directory (`.claude/.cc-writes`,
     /// or `.claude` itself when that did not exist). Removed only while it holds no files.
     ClaudeStagingDir { path: String },

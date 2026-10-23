@@ -2479,6 +2479,7 @@ fn artifact_path(artifact: &Artifact) -> Option<String> {
         | Artifact::PreviewDataDir { path, .. }
         | Artifact::ClaudeTempDir { path }
         | Artifact::ClaudeProjectDir { path }
+        | Artifact::ClaudeMemoryDir { path, .. }
         | Artifact::CodexGeneratedImages { path }
         | Artifact::Adopted { path, .. } => Some(path.clone()),
         _ => None,

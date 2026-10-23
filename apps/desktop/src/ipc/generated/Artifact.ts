@@ -23,7 +23,11 @@ home?: string,
  * The folder it ran in, so its files are known as Brigadier's for good (absent in
  * records older than this field).
  */
-cwd?: string, } | { "type": "claudeProjectDir", path: string, } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, 
+cwd?: string, } | { "type": "claudeProjectDir", path: string, } | { "type": "claudeMemoryDir", path: string, identity: [number, number], 
+/**
+ * The enclosing project directory, only when it too was absent before the start.
+ */
+projectIdentity: [number, number] | null, } | { "type": "claudeStagingDir", path: string, } | { "type": "codexThread", threadId: string, 
 /**
  * The `CODEX_HOME` of the account it ran on; absent: the user's own.
  */

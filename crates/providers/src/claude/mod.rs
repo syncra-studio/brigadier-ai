@@ -45,6 +45,7 @@
 //! follow only the user's model rules, passed in the session specification.
 
 pub(crate) mod files;
+mod memory;
 pub mod parse;
 pub mod session_file;
 
@@ -1182,7 +1183,17 @@ impl Provider for Claude {
 
             // Registered before it can start: a CLI of ours ending in this folder meanwhile leaves
             // its staging folders to this one.
-            let in_folder = files::cli_started(&cwd, staging);
+            let memory = Arc::new(MemoryRecord {
+                watch: tokio::sync::Mutex::new(self.history_dir().and_then(|config| {
+                    main_checkout(&cwd.join(".git"))
+                        .and_then(|repo| memory::Watch::start(&config, &repo))
+                })),
+                ledger: ledger.clone(),
+            });
+            let session_files = SessionFiles {
+                in_folder: files::cli_started(&cwd, staging),
+                memory: memory.clone(),
+            };
 
             let recorder = match &spec.record_to {
                 Some(path) => Some(Arc::new(Recorder::create(
@@ -1273,7 +1284,7 @@ impl Provider for Claude {
                     .iter()
                     .map(|server| server.name.clone())
                     .collect(),
-                in_folder,
+                session_files,
             ));
             let session = Arc::new(ClaudeSession {
                 native_id: native_id.clone(),
@@ -1283,6 +1294,7 @@ impl Provider for Claude {
                 process,
                 shared,
                 parser: parser_tx,
+                memory,
             });
 
             let mut initialize = Map::new();
@@ -1309,6 +1321,8 @@ impl Provider for Claude {
                     .display()
                     .to_string()
             });
+            // Capture memory made during initialize before the session is handed to its caller.
+            session.memory.record(false).await;
             session
                 .emit(ProviderEvent::SessionStarted {
                     native_id,
@@ -1614,6 +1628,7 @@ pub struct ClaudeSession {
     process: Arc<CliProcess>,
     shared: Arc<Shared>,
     parser: mpsc::UnboundedSender<ParserCommand>,
+    memory: Arc<MemoryRecord>,
 }
 
 impl ClaudeSession {
@@ -1773,12 +1788,38 @@ impl ProviderSession for ClaudeSession {
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             self.process.shutdown(EXIT_GRACE).await;
+            // Delete may snapshot the ledger as soon as close returns, before read_loop has
+            // drained stdout. Record the directory here as well as on an unexpected exit.
+            self.memory.record(true).await;
         })
     }
 
     fn is_running(&self) -> bool {
         self.process.is_running()
     }
+}
+
+struct MemoryRecord {
+    watch: tokio::sync::Mutex<Option<memory::Watch>>,
+    ledger: Arc<dyn Ledger>,
+}
+
+impl MemoryRecord {
+    async fn record(&self, ended: bool) {
+        let mut watch = self.watch.lock().await;
+        if let Some(watch) = &*watch {
+            watch.record(&*self.ledger).await;
+        }
+        if ended {
+            // Later closes cannot claim a folder created after this CLI's life.
+            *watch = None;
+        }
+    }
+}
+
+struct SessionFiles {
+    in_folder: files::CliInFolder,
+    memory: Arc<MemoryRecord>,
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps
@@ -1792,7 +1833,7 @@ async fn read_loop(
     mut commands: mpsc::UnboundedReceiver<ParserCommand>,
     refuses_compaction: bool,
     own_mcp: HashSet<String>,
-    in_folder: files::CliInFolder,
+    session_files: SessionFiles,
 ) {
     let mut parser = Parser::live();
     parser.refuses_compaction = refuses_compaction;
@@ -1861,7 +1902,8 @@ async fn read_loop(
     }
 
     let exit = process.exited().await;
-    drop(in_folder);
+    session_files.memory.record(true).await;
+    drop(session_files.in_folder);
     lock(&shared.pending).clear();
     shared.turn_active.store(false, Ordering::Release);
     shared
@@ -3554,6 +3596,125 @@ for line in sys.stdin:
         };
         std::fs::write(config.join("settings.json"), r#"{"disableAllHooks":false}"#).unwrap();
         assert!(layer(&untrusted)["hooks"]["PreCompact"].is_array());
+    }
+
+    /// #574: Claude's shared memory belongs to the main checkout, not its linked worktree.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deleting_a_worktree_workers_files_removes_only_its_new_empty_repo_memory() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Kept(Mutex<Vec<Artifact>>);
+        impl Ledger for Kept {
+            fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>> {
+                self.0.lock().unwrap().push(artifact);
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, _: &Artifact) -> bool {
+                false
+            }
+        }
+        let scratch = std::env::temp_dir().join(format!(
+            "20261022-0805-take-over-5-sessions-w170-memory-{}",
+            uuid::Uuid::new_v4()
+        ));
+        struct Clean(PathBuf);
+        impl Drop for Clean {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _clean = Clean(scratch.clone());
+        let repo = scratch.join("repo");
+        let cwd = scratch.join("worktree");
+        let admin = repo.join(".git/worktrees/worker");
+        let config = scratch.join("config");
+        let bin = scratch.join("bin");
+        for path in [&admin, &cwd, &config, &bin] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(cwd.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        let repo = repo.canonicalize().unwrap();
+        let memory = files::project_dir(&config, &repo).join("memory");
+        let binary = bin.join("claude");
+        std::fs::write(
+            &binary,
+            r#"#!/usr/bin/env python3
+import json, os, sys
+if "--version" in sys.argv:
+    print("2.1.309 (Claude Code)")
+    sys.exit(0)
+os.makedirs(os.environ["MEMORY"], exist_ok=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("type") == "control_request":
+        print(json.dumps({"type":"control_response", "response":{"subtype":"success",
+            "request_id":m["request_id"], "response":{}}}), flush=True)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(scratch.join("data")),
+        })
+        .unwrap();
+        let claude = Claude::new(
+            platform,
+            Arc::new(CliEnv::from_vars([
+                ("HOME".into(), scratch.as_os_str().to_owned()),
+                ("PATH".into(), path),
+                ("CLAUDE_CONFIG_DIR".into(), config.as_os_str().to_owned()),
+                ("MEMORY".into(), memory.as_os_str().to_owned()),
+            ])),
+        );
+        for (preexisting, populated) in [(false, false), (true, false), (false, true)] {
+            if preexisting {
+                std::fs::create_dir_all(&memory).unwrap();
+            }
+            let ledger = Arc::new(Kept(Mutex::new(Vec::new())));
+            let Started {
+                session,
+                mut events,
+            } = claude.start(spec(&cwd, &[]), ledger.clone()).await.unwrap();
+            assert!(memory.is_dir());
+            if populated {
+                std::fs::write(memory.join("MEMORY.md"), "keep").unwrap();
+            }
+            session.close().await;
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while let Some(event) = events.recv().await {
+                    if matches!(event, ProviderEvent::Exited { .. }) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let artifacts = ledger.0.lock().unwrap().clone();
+            // The cleanup still works from the durable artifact, after a daemon restart.
+            let artifacts =
+                serde_json::from_str(&serde_json::to_string(&artifacts).unwrap()).unwrap();
+            claude.remove(artifacts).await.unwrap();
+            assert_eq!(
+                memory.exists(),
+                preexisting || populated,
+                "preexisting={preexisting}, populated={populated}: {}",
+                memory.display()
+            );
+            if populated {
+                assert_eq!(
+                    std::fs::read_to_string(memory.join("MEMORY.md")).unwrap(),
+                    "keep"
+                );
+            }
+            if memory.exists() {
+                std::fs::remove_dir_all(&memory).unwrap();
+            }
+        }
     }
 
     /// A real provider start against a CLI stub: hooks off removes every Brigadier hook and

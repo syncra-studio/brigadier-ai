@@ -555,6 +555,16 @@ pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
         _ => None,
     });
     let staging = artifacts.iter().filter_map(|artifact| match artifact {
+        Artifact::ClaudeMemoryDir {
+            path,
+            identity,
+            project_identity,
+        } => Some(super::memory::remove(
+            config,
+            Path::new(path),
+            *identity,
+            *project_identity,
+        )),
         Artifact::ClaudeStagingDir { path } => Some(remove_staging_dir(Path::new(path))),
         Artifact::ClaudeTempDir { path } => Some(remove_temp_dir(Path::new(path))),
         _ => None,
