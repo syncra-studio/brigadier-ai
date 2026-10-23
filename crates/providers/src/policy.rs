@@ -153,11 +153,10 @@ fn wrapped_script(words: &[String]) -> Option<String> {
 }
 
 /// A here-document's first line, `<command> <<'END'` (or `"END"`): the command and the
-/// delimiter.
+/// delimiter. Not `<<-`, whose tab-indented delimiter line would end the text early.
 fn here_document(line: &str) -> Option<(&str, &str)> {
     let (head, rest) = line.rsplit_once("<<")?;
     let rest = rest.trim();
-    let rest = rest.strip_prefix('-').unwrap_or(rest).trim_start();
     let quote = rest.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
     let delimiter = rest.strip_prefix(quote)?.strip_suffix(quote)?;
     let plain = !delimiter.is_empty()
@@ -1086,6 +1085,8 @@ mod tests {
             "brigadier report save --title T <<'EOF'\ntext\nEOF\nls",
             "brigadier report save --title T <<'EOF'\ntext",
             "cat <<'EOF' | brigadier report save --title T\ntext\nEOF",
+            "brigadier report save --title T <<-'EOF'\n\tEOF\nls\nEOF",
+            "brigadier report save --title T <<-'EOF'\ntext\nEOF",
             "brigadier report save 'unclosed",
             "",
         ] {
