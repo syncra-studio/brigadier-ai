@@ -1588,7 +1588,9 @@ below is proposed unless tagged.
     hands off through the seam to the other installed, enabled CLI: the same thread, the divider "Fresh context ·
     hand-off note" with "Usage limit on *provider* · continued on *other*", the note, and the successor carrying
     on at once (S22, S23, D8). Its model and effort come from the rules file's `Fallback` row (S32) when that row
-    names the other CLI, else the other CLI's default (as landed). No extra moment line: the divider says why.
+    names the other CLI, else the other CLI's default, else each model it lists (as landed): the first the user's
+    rules allow through `brigadier start`'s own refusal; none allowed → the session waits as with the switch off
+    (D25). No extra moment line: the divider says why.
     When the out provider resets, the session stays where it is (as landed: a switch back would be a second
     seam). Sessions only: a Chat has no seam and keeps Q11.
   - **Off:** Q11, as built: the "Resumes at" card, then the same session continues at the reset.
