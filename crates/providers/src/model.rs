@@ -1197,13 +1197,15 @@ pub enum ToolSet {
     None,
     /// Web search and fetch only (a research one-shot).
     Web,
-    /// A Chat's: as [`Self::Web`], and Codex keeps its image generation (Q24).
+    /// A Chat's: as [`Self::Web`], and Codex keeps its image generation (Q24), with a shell
+    /// for `brigadier` (S16c): Claude's runs that and nothing else, Codex's runs in its
+    /// read-only sandbox with network on, for the daemon's socket.
     Chat,
     /// A one-shot reviewer's: reading files and running the read-only git commands that show
     /// a change, and nothing else (Claude; Codex runs its reviews through `codex exec review`).
     Review,
     /// A tab chat's, which reads its session's files: as [`Self::Review`], and Codex keeps its
-    /// image generation, as a Chat does.
+    /// image generation, as a Chat does, and both have a Chat's shell for `brigadier`.
     TabChat,
     /// A session's thread (THREAD-PLAN.md Q1): reading, searching, running commands, editing
     /// and the web, with no sub-agents and nothing that runs in the background. Codex: its

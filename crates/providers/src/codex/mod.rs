@@ -9,7 +9,8 @@
 //! - Accept edits: `on-request` in the `workspace-write` sandbox: commands run inside the
 //!   sandbox without asking; Codex asks to leave it.
 //! - Full access: `never` with `danger-full-access`: Codex never asks.
-//! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox.
+//! - Read-only (Brigadier's own readers): `untrusted` in the `read-only` sandbox. A Chat's and a
+//!   side chat's has network on, for `brigadier`'s socket ([`sandbox_policy`]).
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Codex setup: their
 //! config, `AGENTS.md`, plugins, hooks and MCP servers, beside Brigadier's. Threads keep the
@@ -92,15 +93,19 @@ const RESTRICTED_FEATURES: &[&str] = &[
 ];
 
 /// The same for a Chat ([`ToolSet::Chat`], [`ToolSet::TabChat`]), which keeps Codex's own image
-/// generation: its images show in the Chat as a thread's do.
+/// generation (its images show in the Chat as a thread's do) and its shell, for `brigadier`
+/// (STRIP-DOWN-PLAN S16c). Codex's exec policy can't hold a shell to one program: its rules
+/// match literal command prefixes only (no catch-all), a command no rule matches is left to
+/// Codex's own judgement of safe reads, and rules load only from `.rules` files in a Codex home
+/// or a trusted project. So a Chat's commands run in the read-only sandbox, and Brigadier
+/// declines every one Codex asks about but `brigadier` (`policy::runs_only_brigadier`); on
+/// 0.163.0 Codex asked about every command, `ls` and `cat` too (checked live).
 const CHAT_FEATURES: &[&str] = &[
     "view_image",
     "multi_agent",
     "multi_agent_v2",
     "goals",
     "sleep_tool",
-    "shell_tool",
-    "unified_exec",
 ];
 
 /// Built-ins switched off for a Brain job ([`ToolSet::Reader`]), which only reads.
@@ -926,6 +931,7 @@ impl Provider for Codex {
                 rpc,
                 shared,
                 access: spec.access,
+                tools: spec.tools,
                 writable_roots: writable_roots(&spec),
                 effort: spec.effort.clone(),
             });
@@ -1733,8 +1739,9 @@ fn thread_sandbox(access: Access) -> Option<p::SandboxMode> {
 /// Codex's own sandbox at `access`: `workspace-write` (the working directory and
 /// `writable_roots`, with the network) below Full access, none at Full access. The `brigadier`
 /// CLI reaches the daemon over a Unix socket; Codex's sandbox allows that only with network on
-/// (its `unix_sockets` allow-list needs network on too), so Ask and Accept edits keep network on.
-fn sandbox_policy(access: Access, writable_roots: &[PathBuf]) -> p::SandboxPolicy {
+/// (its `unix_sockets` allow-list needs network on too), so Ask and Accept edits keep network on,
+/// and so does a Chat's or side chat's read-only sandbox (`tools`).
+fn sandbox_policy(access: Access, tools: ToolSet, writable_roots: &[PathBuf]) -> p::SandboxPolicy {
     match access {
         Access::Ask | Access::AcceptEdits => p::SandboxPolicy::WorkspaceWrite {
             exclude_slash_tmp: false,
@@ -1746,7 +1753,7 @@ fn sandbox_policy(access: Access, writable_roots: &[PathBuf]) -> p::SandboxPolic
                 .collect(),
         },
         Access::ReadOnly => p::SandboxPolicy::ReadOnly {
-            network_access: false,
+            network_access: matches!(tools, ToolSet::Chat | ToolSet::TabChat),
         },
         Access::Full => p::SandboxPolicy::DangerFullAccess,
     }
@@ -2097,6 +2104,8 @@ pub struct CodexSession {
     rpc: Arc<Rpc>,
     shared: Arc<Shared>,
     access: Access,
+    /// Its tools: a Chat's read-only sandbox keeps network on ([`sandbox_policy`]).
+    tools: ToolSet,
     /// What its workspace sandbox writes besides its working directory.
     writable_roots: Vec<PathBuf>,
     effort: Option<String>,
@@ -2153,7 +2162,11 @@ impl CodexSession {
                     input: Self::input(input)?,
                     effort,
                     summary: Some(p::ReasoningSummary::Auto),
-                    sandbox_policy: Some(sandbox_policy(self.access, &self.writable_roots)),
+                    sandbox_policy: Some(sandbox_policy(
+                        self.access,
+                        self.tools,
+                        &self.writable_roots,
+                    )),
                     approval_policy: Some(approval_policy(self.access)),
                     approvals_reviewer: Some(REVIEWER),
                     ..Default::default()
@@ -2779,10 +2792,10 @@ mod tests {
         assert!(review.iter().any(|arg| arg == NO_SKILLS_CATALOG));
     }
 
-    /// A Chat and a tab chat generate images (Q24) and are otherwise locked down as before:
-    /// no shell, viewing of local files, sub-agents, goals or sleep tool, the web as it was.
-    /// Every one-shot role (a handoff note, a git job or escalation, research, a review) still
-    /// goes without image generation.
+    /// A Chat and a tab chat generate images (Q24) and have a shell, for `brigadier` (S16c), and
+    /// are otherwise locked down as before: no viewing of local files, sub-agents, goals or
+    /// sleep tool, the web as it was. Every one-shot role (a handoff note, a git job or
+    /// escalation, research, a review) still goes without image generation or a shell.
     #[test]
     fn only_a_chat_of_the_locked_down_sessions_generates_images() {
         let disabled = |args: &[String]| -> Vec<String> {
@@ -2799,7 +2812,12 @@ mod tests {
             let off = disabled(&args);
             assert!(!off.iter().any(|f| f == "image_generation"), "{args:?}");
             let mut before = disabled(&app_server_args(Some(&spec(locked_like, None))));
-            before.retain(|f| f != "image_generation");
+            before.retain(|f| {
+                !matches!(
+                    f.as_str(),
+                    "image_generation" | "shell_tool" | "unified_exec"
+                )
+            });
             assert_eq!(off, before, "{tools:?}");
             assert!(without_sub_agents(&args), "{args:?}");
             assert!(args.iter().any(|arg| arg == NO_SKILLS_CATALOG));
@@ -2823,6 +2841,55 @@ mod tests {
             let off = disabled(&app_server_args(Some(&spec(tools, None))));
             assert!(!off.iter().any(|f| f == "image_generation"), "{tools:?}");
         }
+    }
+
+    /// S16c: a Chat's and a side chat's commands run in Codex's read-only sandbox with network
+    /// on, so `brigadier` reaches the daemon's socket; Codex asks about every command not on
+    /// its own safe list (`untrusted`). A Brain job's read-only sandbox stays offline.
+    #[test]
+    fn a_chats_shell_runs_read_only_with_network_for_brigadiers_socket() {
+        for tools in [ToolSet::Chat, ToolSet::TabChat] {
+            let mut chat = spec(tools, None);
+            chat.access = Access::ReadOnly;
+            let off = disabled_features(&app_server_args(Some(&chat)));
+            for shell in ["shell_tool", "unified_exec"] {
+                assert!(!off.iter().any(|f| f == shell), "{tools:?}: {off:?}");
+            }
+            assert_eq!(thread_sandbox(chat.access), Some(p::SandboxMode::ReadOnly));
+            assert_eq!(
+                serde_json::to_value(approval_policy(chat.access)).unwrap(),
+                json!("untrusted")
+            );
+            let policy = sandbox_policy(chat.access, tools, &writable_roots(&chat));
+            assert!(
+                matches!(
+                    policy,
+                    p::SandboxPolicy::ReadOnly {
+                        network_access: true
+                    }
+                ),
+                "{tools:?}: {policy:?}"
+            );
+        }
+        for tools in [ToolSet::Reader, ToolSet::Review, ToolSet::Web] {
+            let policy = sandbox_policy(Access::ReadOnly, tools, &[]);
+            assert!(
+                matches!(
+                    policy,
+                    p::SandboxPolicy::ReadOnly {
+                        network_access: false
+                    }
+                ),
+                "{tools:?}: {policy:?}"
+            );
+        }
+    }
+
+    fn disabled_features(args: &[String]) -> Vec<String> {
+        args.windows(2)
+            .filter(|pair| pair[0] == "--disable")
+            .map(|pair| pair[1].clone())
+            .collect()
     }
 
     /// A thread's command timeouts are Codex's own (S2): Brigadier sets no ceiling of its own,
@@ -3113,7 +3180,7 @@ mod tests {
                     "{tools:?} {access:?}"
                 );
                 assert_eq!(thread_sandbox(access), None, "every turn sets it");
-                let policy = sandbox_policy(access, &writable_roots(&session));
+                let policy = sandbox_policy(access, tools, &writable_roots(&session));
                 match (&policy, sandbox) {
                     (p::SandboxPolicy::DangerFullAccess, "danger-full-access") => {}
                     (

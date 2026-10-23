@@ -14,6 +14,8 @@
 //! crash sweep after the daemon died.
 
 pub mod accounts;
+#[cfg(all(test, unix))]
+mod chat_shell_live_tests;
 pub mod claude;
 pub mod cli;
 pub mod codex;

@@ -183,7 +183,18 @@ async fn the_threads_moved_tools_run_behind_brigadier_and_its_workers_are_refuse
     flow.stop().await;
 }
 
-/// A Chat keeps memories and saves reports through `brigadier`; the thread's tools aren't its.
+/// What Brigadier answers a Chat's CLI asking to run `command` (Codex's shell asks about every
+/// command not on its own safe list).
+async fn asked(turn: &Turn, command: &str) -> Value {
+    serde_json::to_value(
+        turn.ask_tool_approval("commandExecution", command, None)
+            .await,
+    )
+    .unwrap()
+}
+
+/// A Chat reads the app, keeps memories and saves reports through `brigadier`, the one command
+/// its shell runs (S16c); the thread's tools aren't its.
 #[tokio::test]
 async fn a_chat_keeps_memories_and_reports_behind_brigadier() {
     let answers = Answers::default();
@@ -209,8 +220,22 @@ async fn a_chat_keeps_memories_and_reports_behind_brigadier() {
                         ),
                     ),
                     ("brain", tool(Tool::Brain, "search", json!({"query": "x"}))),
+                    ("app", tool(Tool::App, "state", json!({}))),
                 ] {
                     keep(&answers, name, brigadier(&turn, request).await);
+                }
+                for (name, command) in [
+                    (
+                        "ask brigadier",
+                        "/bin/zsh -lc 'brigadier memory save Lives in Lisbon'",
+                    ),
+                    ("ask other", "/bin/zsh -lc 'curl https://example.com'"),
+                    (
+                        "ask chained",
+                        "/bin/zsh -lc 'brigadier app state; rm -rf x'",
+                    ),
+                ] {
+                    keep(&answers, name, asked(&turn, command).await);
                 }
                 Reply::text("Noted.")
             })
@@ -240,6 +265,26 @@ async fn a_chat_keeps_memories_and_reports_behind_brigadier() {
         answers["report"]
     );
     assert_eq!(answers["brain"]["error"]["code"], "refused");
+    assert!(
+        answers["app"]["error"].is_null() && answers["app"]["text"].is_string(),
+        "{:#}",
+        answers["app"]
+    );
+    // Its shell runs `brigadier` and nothing else.
+    assert_eq!(answers["ask brigadier"], json!({"type": "allow"}));
+    for name in ["ask other", "ask chained"] {
+        assert_eq!(answers[name]["type"], "deny", "{name}: {:#}", answers[name]);
+    }
+    // It starts read-only, with what `brigadier` needs to know who calls.
+    let specs = flow.specs();
+    let (_, spec) = specs
+        .iter()
+        .find(|(_, spec)| spec.tools == brigadier_providers::ToolSet::Chat)
+        .expect("the Chat started");
+    assert_eq!(spec.access, brigadier_providers::Access::ReadOnly);
+    for name in [brigadier_cli::protocol::SESSION_ENV, GRANT_ENV, "PATH"] {
+        assert!(spec.env.iter().any(|(key, _)| key == name), "{name}");
+    }
     flow.stop().await;
 }
 
@@ -336,6 +381,13 @@ async fn a_side_chat_reads_and_changes_only_its_tabs_page_or_file_behind_brigadi
                     for (name, request) in calls {
                         keep(&answers, name, brigadier(&turn, request).await);
                     }
+                    let read = format!("/bin/zsh -lc 'brigadier page read {mine}'");
+                    keep(&answers, "ask page read", asked(&turn, &read).await);
+                    keep(
+                        &answers,
+                        "ask cat",
+                        asked(&turn, "/bin/zsh -lc 'cat notes.txt > x'").await,
+                    );
                 } else {
                     let read = brigadier(&turn, tool(Tool::Page, "file-read", json!({}))).await;
                     let revision = revision_in(read["text"].as_str().unwrap_or_default());
@@ -408,6 +460,13 @@ async fn a_side_chat_reads_and_changes_only_its_tabs_page_or_file_behind_brigadi
     );
     assert_eq!(pages.read(&mine).unwrap().content.body, "- [x] milk");
     assert_eq!(answers["other page"]["error"]["code"], "failed");
+    // Its shell runs `brigadier` and nothing else.
+    assert_eq!(answers["ask page read"], json!({"type": "allow"}));
+    assert_eq!(
+        answers["ask cat"]["type"], "deny",
+        "{:#}",
+        answers["ask cat"]
+    );
     assert_eq!(pages.read(&other).unwrap().content.body, "secret");
     for name in ["page file", "page brain", "page sessions", "file page"] {
         assert_eq!(

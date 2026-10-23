@@ -16,7 +16,8 @@
 //! The permission mode is the session's level, passed straight through ([`permission_mode`]):
 //! Ask runs in `default`, Accept edits in `acceptEdits`, Full access in `bypassPermissions`.
 //! Brigadier adds no sandbox and no rules of its own. A read-only session (`dontAsk`) never
-//! asks: what its allow rules don't cover is denied.
+//! asks: what its allow rules don't cover is denied. A Chat and a side chat always run so, and
+//! their shell's one allow rule is `brigadier` (a side chat's also the read-only git commands).
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Claude setup: their
 //! settings, and in a folder the user trusts the project's and their local ones too
@@ -103,6 +104,12 @@ const READER_TOOLS: &str = "Read,Grep,Glob";
 /// What a one-shot reviewer may run without asking (`--allowedTools`): under `dontAsk`
 /// everything else is denied, and nothing prompts.
 const REVIEW_ALLOWED: &str = "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*)";
+/// A Chat's built-in tools ([`ToolSet::Chat`]): research's, and a shell for `brigadier`.
+const CHAT_TOOLS: &str = "WebSearch,WebFetch,Bash";
+/// The only command a Chat or a side chat runs (`--allowedTools`, under `dontAsk`): `brigadier`
+/// (STRIP-DOWN-PLAN S16c). Claude Code still runs its own read-only commands (`ls`, `cat`) on
+/// files in the session's folders unasked, as its Read tool would (checked on 2.1.309).
+const BRIGADIER_ALLOWED: &str = "Bash(brigadier:*)";
 
 pub struct Claude {
     platform: Arc<dyn Platform>,
@@ -352,20 +359,34 @@ impl Claude {
                 args.push("--tools".into());
                 args.push(String::new());
             }
-            // Claude generates no images: a Chat's tools are research's.
-            ToolSet::Web | ToolSet::Chat => {
+            ToolSet::Web => {
                 args.push("--tools".into());
                 args.push("WebSearch,WebFetch".into());
+            }
+            // Claude generates no images: a Chat's tools are research's, and its shell runs
+            // only `brigadier`.
+            ToolSet::Chat => {
+                args.push("--tools".into());
+                args.push(CHAT_TOOLS.into());
+                args.push("--allowedTools".into());
+                args.push(BRIGADIER_ALLOWED.into());
             }
             ToolSet::Thread => {
                 args.push("--tools".into());
                 args.push(THREAD_TOOLS.into());
             }
-            ToolSet::Review | ToolSet::TabChat => {
+            ToolSet::Review => {
                 args.push("--tools".into());
                 args.push(REVIEW_TOOLS.into());
                 args.push("--allowedTools".into());
                 args.push(REVIEW_ALLOWED.into());
+            }
+            // A side chat reads as a reviewer does, and runs `brigadier` for its tab.
+            ToolSet::TabChat => {
+                args.push("--tools".into());
+                args.push(REVIEW_TOOLS.into());
+                args.push("--allowedTools".into());
+                args.push(format!("{REVIEW_ALLOWED} {BRIGADIER_ALLOWED}"));
             }
             ToolSet::Reader => {
                 args.push("--tools".into());
@@ -637,6 +658,10 @@ fn main_checkout(git_file: &Path) -> Option<PathBuf> {
 
 /// Claude's permission mode for a session (see the module docs).
 fn permission_mode(spec: &SessionSpec) -> &'static str {
+    // A Chat's or side chat's shell runs `brigadier` and nothing else, whatever its level.
+    if matches!(spec.tools, ToolSet::Chat | ToolSet::TabChat) {
+        return "dontAsk";
+    }
     match spec.access {
         Access::Ask => "default",
         Access::AcceptEdits => "acceptEdits",
@@ -2666,6 +2691,76 @@ for line in sys.stdin:
         assert!(!args.iter().any(|arg| arg == "--allowedTools"));
     }
 
+    /// S16c: a Chat's and a side chat's shell runs `brigadier` and nothing else (a side chat's
+    /// also the read-only git commands), never asking, whatever level they are given.
+    #[test]
+    fn a_chat_and_a_side_chat_run_only_brigadier_in_their_shell() {
+        let cwd = Temp::new();
+        let native_id = "00000000-0000-4000-8000-000000000000";
+        for (tools, built_in, allowed) in [
+            (
+                ToolSet::Chat,
+                "WebSearch,WebFetch,Bash",
+                "Bash(brigadier:*)",
+            ),
+            (
+                ToolSet::TabChat,
+                "Read,Grep,Glob,Bash",
+                "Read Grep Glob Bash(git diff:*) Bash(git log:*) Bash(git show:*) \
+                 Bash(brigadier:*)",
+            ),
+        ] {
+            for access in [Access::ReadOnly, Access::Ask, Access::Full] {
+                let chat = SessionSpec {
+                    access,
+                    tools,
+                    allowed_models: None,
+                    ..spec(cwd.path(), &[])
+                };
+                let args =
+                    Claude::session_args(&chat, cwd.path(), native_id, false, None).expect("args");
+                let after = |flag: &str| {
+                    args.windows(2)
+                        .find(|pair| pair[0] == flag)
+                        .map(|pair| pair[1].clone())
+                };
+                assert_eq!(after("--tools").as_deref(), Some(built_in), "{tools:?}");
+                assert_eq!(
+                    after("--allowedTools").as_deref(),
+                    Some(allowed),
+                    "{tools:?}"
+                );
+                assert_eq!(after("--permission-mode").as_deref(), Some("dontAsk"));
+                // The settings layer allows no other command.
+                let settings = settings(&chat, &SubAgents::Any, false);
+                let allow = settings["permissions"]["allow"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(
+                    allow
+                        .iter()
+                        .all(|rule| !rule.as_str().unwrap_or_default().starts_with("Bash")),
+                    "{allow:?}"
+                );
+            }
+        }
+        // A research one-shot keeps the web only.
+        let web = SessionSpec {
+            access: Access::ReadOnly,
+            tools: ToolSet::Web,
+            allowed_models: None,
+            ..spec(cwd.path(), &[])
+        };
+        let args = Claude::session_args(&web, cwd.path(), native_id, false, None).expect("args");
+        let tools = args
+            .windows(2)
+            .find(|pair| pair[0] == "--tools")
+            .map(|pair| pair[1].clone());
+        assert_eq!(tools.as_deref(), Some("WebSearch,WebFetch"));
+        assert!(!args.iter().any(|arg| arg == "--allowedTools"));
+    }
+
     #[test]
     fn a_thread_gets_its_tools_its_workspace_and_its_levels_mode() {
         let cwd = Temp::new();
@@ -2964,8 +3059,9 @@ for line in sys.stdin:
         }
     }
 
-    /// Claude generates no images: a Chat runs exactly as research does, a tab chat as a
-    /// reviewer, flags and settings alike.
+    /// Claude generates no images: a Chat runs as research does, a tab chat as a reviewer,
+    /// flags and settings alike, but for the shell each has for `brigadier` and its never
+    /// asking (S16c, [`a_chat_and_a_side_chat_run_only_brigadier_in_their_shell`]).
     #[test]
     fn a_chat_runs_with_researchs_tools_and_a_tab_chat_with_a_reviewers() {
         let cwd = Temp::new();
@@ -2979,7 +3075,19 @@ for line in sys.stdin:
                     tools,
                     ..spec(cwd, &[])
                 };
-                Claude::session_flags(&session, cwd, false, None)
+                let mut flags = Claude::session_flags(&session, cwd, false, None).into_iter();
+                let mut kept = Vec::new();
+                while let Some(flag) = flags.next() {
+                    if matches!(
+                        flag.as_str(),
+                        "--tools" | "--allowedTools" | "--permission-mode"
+                    ) {
+                        flags.next();
+                    } else {
+                        kept.push(flag);
+                    }
+                }
+                kept
             };
             assert_eq!(of(chat), of(like), "{chat:?}");
         }

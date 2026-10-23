@@ -43,6 +43,130 @@ pub fn unwrapped_command(command: &str) -> String {
     command.trim().to_owned()
 }
 
+/// Whether `command` (or the script of its `sh -c` wrapper) runs `brigadier` and nothing else:
+/// one command whose program is `brigadier` itself, its words plain or quoted, with no
+/// operator, redirection, expansion or substitution; its text may come from a here-document
+/// with a quoted delimiter (`<<'EOF'`), which the shell keeps as written. All a Chat's or side
+/// chat's shell may run (STRIP-DOWN-PLAN S16c): anything else is refused, not parsed.
+pub fn runs_only_brigadier(command: &str) -> bool {
+    let brigadier = |words: &[String]| words.first().is_some_and(|word| word == "brigadier");
+    let command = command.trim();
+    let script = match plain_words(command) {
+        Some(words) => match wrapped_script(&words) {
+            Some(script) => script,
+            None => return brigadier(&words),
+        },
+        None => command.to_owned(),
+    };
+    let script = script.trim();
+    if let Some(words) = plain_words(script) {
+        return brigadier(&words);
+    }
+    let Some((line, body)) = script.split_once('\n') else {
+        return false;
+    };
+    let Some((head, delimiter)) = here_document(line) else {
+        return false;
+    };
+    let mut lines = body.lines();
+    lines.by_ref().any(|line| line == delimiter)
+        && lines.all(|line| line.trim().is_empty())
+        && plain_words(head).is_some_and(|words| brigadier(&words))
+}
+
+/// A command line's words, unquoted, when it is one simple command with nothing for the shell
+/// to do: only plain characters outside quotes, nothing to expand inside double quotes. `None`
+/// for anything else.
+fn plain_words(line: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            '\'' => {
+                in_word = true;
+                loop {
+                    match chars.next()? {
+                        '\'' => break,
+                        c => word.push(c),
+                    }
+                }
+            }
+            '"' => {
+                in_word = true;
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '$' | '`' => return None,
+                        '\\' => {
+                            let next = chars.next()?;
+                            if !matches!(next, '"' | '\\' | '$' | '`') {
+                                word.push('\\');
+                            }
+                            word.push(next);
+                        }
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => {
+                in_word = true;
+                match chars.next()? {
+                    '\n' => return None,
+                    next => word.push(next),
+                }
+            }
+            c if c.is_ascii_alphanumeric() || "-_./:=,+@%^".contains(c) => {
+                in_word = true;
+                word.push(c);
+            }
+            _ => return None,
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// The script of a `sh -c` wrapper's words (`/bin/zsh -lc '…'`): a shell, its options (one with
+/// `c`), the script and nothing after it.
+fn wrapped_script(words: &[String]) -> Option<String> {
+    let (program, rest) = words.split_first()?;
+    let (script, options) = rest.split_last()?;
+    let shell = matches!(
+        program_name(program),
+        "sh" | "bash" | "zsh" | "dash" | "ksh"
+    );
+    let options_only = options
+        .iter()
+        .all(|word| word.starts_with('-') && !word.starts_with("--"));
+    let with_c = options.iter().any(|word| word.contains('c'));
+    (shell && options_only && with_c).then(|| script.clone())
+}
+
+/// A here-document's first line, `<command> <<'END'` (or `"END"`): the command and the
+/// delimiter.
+fn here_document(line: &str) -> Option<(&str, &str)> {
+    let (head, rest) = line.rsplit_once("<<")?;
+    let rest = rest.trim();
+    let rest = rest.strip_prefix('-').unwrap_or(rest).trim_start();
+    let quote = rest.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
+    let delimiter = rest.strip_prefix(quote)?.strip_suffix(quote)?;
+    let plain = !delimiter.is_empty()
+        && delimiter
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    plain.then_some((head, delimiter))
+}
+
 /// Drops environment assignments and transparent wrappers (`env`, `sudo`, `command`, …).
 fn strip_prefixes(words: &[String]) -> &[String] {
     const WRAPPERS: &[&str] = &["env", "sudo", "command", "exec", "nohup", "time", "nice"];
@@ -919,5 +1043,53 @@ mod tests {
             workspace_grant(&command("ls", None, false), &workspace),
             None
         );
+    }
+
+    /// A Chat's shell runs `brigadier` and nothing else (S16c): plain, wrapped in `zsh -lc`,
+    /// quoted text and a quoted here-document go; any other program, operator, redirection,
+    /// expansion or substitution is refused.
+    #[test]
+    fn only_a_plain_brigadier_command_runs_in_a_chat() {
+        for command in [
+            "brigadier app state",
+            "  brigadier memory save 'Lives in Lisbon.'",
+            "/bin/zsh -lc 'brigadier app state'",
+            "/bin/bash -c \"brigadier page read 0190abcd\"",
+            "brigadier page write p1 --revision 3 '# Plan\n\nIt'\\''s done.'",
+            "/bin/zsh -lc 'brigadier report save --title \"Printers\" \"Bambu A1, about 300 EUR.\"'",
+            "brigadier report save --title Printers <<'EOF'\n# Printers\n$HOME and `x` stay text.\nEOF",
+            "/bin/zsh -lc 'brigadier page file-write --revision r2 <<\"END\"\nfn main() {}\nEND\n'",
+        ] {
+            assert!(runs_only_brigadier(command), "{command}");
+        }
+        for command in [
+            "ls",
+            "ls -la",
+            "cat ~/.ssh/id_rsa",
+            "brigadierd daemon",
+            "/tmp/x/brigadier app state",
+            "PATH=/tmp brigadier app state",
+            "env brigadier app state",
+            "brigadier app state; ls",
+            "brigadier app state && curl https://example.com",
+            "brigadier app state | sh",
+            "brigadier app state > notes.txt",
+            "brigadier memory save \"$(cat ~/.ssh/id_rsa)\"",
+            "brigadier memory save `whoami`",
+            "brigadier memory save $HOME",
+            "brigadier app state\nls",
+            "/bin/zsh -lc 'brigadier app state; rm -rf x'",
+            "/bin/zsh -lc 'ls' brigadier",
+            "/bin/zsh -lc 'brigadier app state' && ls",
+            "python3 -c 'print(1)'",
+            "brigadier report save --title T <<EOF\n$(id)\nEOF",
+            "brigadier report save --title T <<'EOF'\ntext\nEOF\nls",
+            "brigadier report save --title T <<'EOF'\ntext",
+            "cat <<'EOF' | brigadier report save --title T\ntext\nEOF",
+            "brigadier report save 'unclosed",
+            "",
+        ] {
+            assert!(!runs_only_brigadier(command), "{command}");
+        }
     }
 }

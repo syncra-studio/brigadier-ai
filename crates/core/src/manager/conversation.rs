@@ -2625,7 +2625,7 @@ impl SessionManager {
             },
             // Resumed on the next message, rebirth or restart.
             ephemeral: false,
-            // A Chat only searches the web.
+            // A Chat searches the web and runs `brigadier`, read-only.
             access: launch
                 .as_ref()
                 .map_or(Access::ReadOnly, |launch| launch.access),
@@ -3354,7 +3354,7 @@ impl SessionManager {
                     Some(ProviderEvent::McpServerChanged { server }) => {
                         self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::One(server)).await;
                     }
-                    // Only a session's thread keeps what it read (a Chat only searches the web).
+                    // Only a session's thread keeps what it read (a Chat searches the web and runs `brigadier`).
                     Some(event @ ProviderEvent::Looked { .. }) => {
                         if conv.kind == ConversationKind::Session {
                             self.hold_looked(&conv, event).await;
@@ -3751,12 +3751,21 @@ impl SessionManager {
                 self.route_thread_approval(conv, cli, request.clone()).await;
             }
             ProviderEvent::ApprovalRequested { request } => {
-                // A Chat only searches the web.
-                let decision = if matches!(request.tool.as_str(), "WebSearch" | "WebFetch") {
+                // A Chat searches the web, and its shell runs `brigadier` and nothing else.
+                let brigadier = request.kind == brigadier_providers::ApprovalKind::Command
+                    && request
+                        .command
+                        .as_deref()
+                        .is_some_and(brigadier_providers::policy::runs_only_brigadier);
+                let decision = if brigadier
+                    || matches!(request.tool.as_str(), "WebSearch" | "WebFetch")
+                {
                     ApprovalDecision::Allow
                 } else {
                     ApprovalDecision::Deny {
-                        message: "Declined by Brigadier: a Chat only searches the web.".into(),
+                        message: "Declined by Brigadier: a Chat only searches the web and runs \
+                                  `brigadier` commands, one at a time."
+                            .into(),
                     }
                 };
                 if let Err(err) = cli

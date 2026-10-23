@@ -299,10 +299,10 @@ impl SessionManager {
     pub(super) fn tab_chat_context(&self, id: &ConversationId, tab: &TabChat) -> String {
         match &tab.target {
             TabTarget::Page { page_id } => format!(
-                "[This chat is beside the user's page {page_id}, in the same window. Read it with read_page and change it with write_page (page_id {page_id}) when the user asks; no other page.]"
+                "[This chat is beside the user's page {page_id}, in the same window. Read it with `brigadier page read {page_id}` and change it with `brigadier page write {page_id}` when the user asks; no other page.]"
             ),
             TabTarget::File { path } => format!(
-                "[This chat is beside the file {path} of the session's checkout, in the same window. Read it with read_tab_file and change it with write_tab_file when the user asks; every other file you may only read.]"
+                "[This chat is beside the file {path} of the session's checkout, in the same window. Read it with `brigadier page file-read` and change it with `brigadier page file-write` when the user asks; every other file you may only read.]"
             ),
             TabTarget::Browser => match self.tab_chats.pages_lock().get(id) {
                 Some(page) => browser_context(page),

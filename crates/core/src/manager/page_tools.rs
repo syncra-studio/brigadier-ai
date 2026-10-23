@@ -293,7 +293,7 @@ fn save_checked_with(
     let unreadable = |err: std::io::Error| Error::Invalid(format!("couldn't read {path}: {err}"));
     let conflict = |current: &str| {
         Error::Invalid(format!(
-            "not saved: {path} changed since revision {base_revision} (it is at revision {current} now). Read it again with read_tab_file and redo your change on what it holds now."
+            "not saved: {path} changed since revision {base_revision} (it is at revision {current} now). Read it again with `brigadier page file-read` and redo your change on what it holds now."
         ))
     };
     let now = std::fs::read(full).map_err(unreadable)?;
