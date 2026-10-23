@@ -30,6 +30,8 @@ export type Shortcut = {
   menu?: string;
   /** Only on macOS (its menu bar holds it). */
   macOnly?: boolean;
+  /** Where its keys work, when another place gives the same keys to something else ("In the composer"). */
+  where?: string;
 };
 
 export const SHORTCUTS: readonly Shortcut[] = [
@@ -37,7 +39,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "settings", name: "Settings", line: "Open Settings, or leave it", area: "General", keys: ["⌘,"] },
   { id: "search", name: "Search", line: "Search projects and conversations", area: "General", keys: ["⌘K"] },
   { id: "open-folder", name: "Open folder", line: "Add a folder as a project", area: "General", keys: ["⌘O"] },
-  { id: "sidebar", name: "Toggle sidebar", line: "Show or hide the sidebar", area: "General", keys: ["⌘B", "⇧⌘S"], menu: "sidebar" },
+  { id: "sidebar", name: "Toggle sidebar", line: "Show or hide the sidebar", area: "General", keys: ["⌘B"], menu: "sidebar" },
   { id: "back", name: "Back", line: "Go back to the place shown before", area: "General", keys: ["⌘["], menu: "back" },
   { id: "forward", name: "Forward", line: "Go forward again", area: "General", keys: ["⌘]"], menu: "forward" },
   { id: "inspector", name: "Inspector", line: "Show or hide the developer inspector", area: "General", keys: ["⌥⌘I"] },
@@ -61,7 +63,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     area: "Conversations",
     keys: ["⌘⌫"],
   },
-  { id: "clear-picked", name: "Clear picked", line: "Let go of the rows picked in the sidebar", area: "Conversations", keys: ["Esc"] },
+  { id: "clear-picked", name: "Clear picked", line: "Let go of the rows picked in the sidebar", area: "Conversations", keys: ["Esc"], where: "In the sidebar" },
   {
     id: "previous-message",
     name: "Previous message",
@@ -111,7 +113,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Composer
   // The follow-up's other way as with the default follow-up; `shortcutsFor` names it for the
   // one chosen in Settings › General › Composer.
-  { id: "send", name: "Send", line: "Send the message", area: "Composer", keys: ["⏎"] },
+  { id: "send", name: "Send", line: "Send the message", area: "Composer", keys: ["⏎"], where: "In the composer" },
   { id: "new-line", name: "New line", line: "Start a new line in the message", area: "Composer", keys: ["⇧⏎"] },
   {
     id: "follow-up-other",
@@ -126,6 +128,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     line: "Send the message as a new session in the background, and stay here",
     area: "Composer",
     keys: ["⌘⏎"],
+    where: "In the composer",
   },
   {
     id: "history",
@@ -140,8 +143,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "stop", name: "Stop", line: "Stop the reply that is running", area: "Composer", keys: ["Esc Esc"] },
 
   // Requests
-  { id: "allow", name: "Allow", line: "Answer the request card in front with its main choice", area: "Requests", keys: ["⏎"] },
-  { id: "decline", name: "Decline", line: "Turn down the request card in front", area: "Requests", keys: ["Esc"] },
+  { id: "allow", name: "Allow", line: "Answer the request card in front with its main choice", area: "Requests", keys: ["⏎"], where: "On a request card" },
+  { id: "decline", name: "Decline", line: "Turn down the request card in front", area: "Requests", keys: ["Esc"], where: "On a request card" },
   { id: "answer", name: "Pick an answer", line: "Choose one of a question's answers by its number", area: "Requests", keys: ["1–9"] },
 
   // Files and browser
@@ -166,10 +169,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "zoom-in", name: "Zoom in", line: "Make the web page larger", area: "Files and browser", keys: ["⌘="], menu: "zoom-in" },
   { id: "zoom-out", name: "Zoom out", line: "Make the web page smaller", area: "Files and browser", keys: ["⌘-"], menu: "zoom-out" },
   { id: "zoom-reset", name: "Actual size", line: "Show the web page at 100%", area: "Files and browser", keys: ["⌘0"], menu: "zoom-reset" },
-  { id: "commit", name: "Commit", line: "Commit with the message typed", area: "Files and browser", keys: ["⌘⏎"] },
-  { id: "review-keep", name: "Keep change", line: "Keep the change in view of the file under review", area: "Files and browser", keys: ["⌘Y"] },
-  { id: "review-undo", name: "Undo change", line: "Undo the change in view of the file under review", area: "Files and browser", keys: ["⌘N"] },
-  { id: "review-keep-file", name: "Keep file", line: "Keep every change of the file under review", area: "Files and browser", keys: ["⌘⏎"] },
+  { id: "commit", name: "Commit", line: "Commit with the message typed", area: "Files and browser", keys: ["⌘⏎"], where: "In the commit box" },
+  { id: "review-keep", name: "Keep change", line: "Keep the change in view of the file under review", area: "Files and browser", keys: ["⌘Y"], where: "In a file under review" },
+  { id: "review-undo", name: "Undo change", line: "Undo the change in view of the file under review", area: "Files and browser", keys: ["⌘N"], where: "In a file under review" },
+  { id: "review-keep-file", name: "Keep file", line: "Keep every change of the file under review", area: "Files and browser", keys: ["⌘⏎"], where: "In a file under review" },
   { id: "review-next-file", name: "Next file to review", line: "Open the next file with changes to review", area: "Files and browser", keys: ["⌥L"] },
   { id: "review-previous-file", name: "Previous file to review", line: "Open the previous file with changes to review", area: "Files and browser", keys: ["⌥H"] },
 ];
@@ -319,7 +322,7 @@ export function searchShortcuts(
   }
   const words = search.words.toLowerCase().split(/\s+/).filter(Boolean);
   return shortcuts.filter((shortcut) => {
-    const text = `${shortcut.name} ${shortcut.line} ${shortcut.area}`.toLowerCase();
+    const text = `${shortcut.name} ${shortcut.line} ${shortcut.where ?? ""} ${shortcut.area}`.toLowerCase();
     return words.every((word) => text.includes(word));
   });
 }

@@ -11,7 +11,8 @@ test("keyboard shortcuts search by words and by keystrokes", { timeout: 60000 },
     unknown
   >;
   assert.equal(seen.count, 69);
-  assert.deepEqual(seen.chips, ["⌘B", "⇧⌘S"]);
+  // ⌘B alone: ⇧⌘S is Save As (#565).
+  assert.deepEqual(seen.chips, ["⌘B"]);
   assert.deepEqual(seen.byWords, ["Dictate"]);
   assert.equal(seen.none, "No shortcuts match");
   assert.equal(seen.recording, "Press a shortcut… Esc cancels.");
@@ -20,7 +21,7 @@ test("keyboard shortcuts search by words and by keystrokes", { timeout: 60000 },
   // Recorded keys, the menu's copy of one, Esc and a lone modifier reach none of the app's handlers.
   assert.deepEqual(seen.reachedWhileRecording, []);
   assert.deepEqual(seen.afterEsc, { rows: 69, input: true });
-  assert.deepEqual(seen.clash, ["Toggle sidebar", "Save file as"]);
+  assert.deepEqual(seen.clash, ["Save file as"]);
   assert.deepEqual(seen.reachedAfterRecording, []);
   assert.deepEqual(seen.reachedLater, ["⌘["]);
   // The shell holds the menu's own items for each recording, and lets go after it.

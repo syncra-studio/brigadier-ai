@@ -16,7 +16,7 @@ import { createPeek, PEEK_EXIT_MS, type Peek, type PeekPhase, type PeekZone } fr
  * The sidebar panel: expanded to its width, collapsed to a strip of icons, or fully hidden.
  * It eases between these on a spring (the content beside it moves with it) while its contents
  * cross-fade. The expanded contents keep their full width, revealed rather than squeezed.
- * ⌘B or ⌘⇧S (Ctrl on Windows and Linux) toggle it, and its open state is remembered. The
+ * ⌘B (Ctrl on Windows and Linux) toggles it, and its open state is remembered. The
  * strip/hidden choice is remembered too, under brigadier.sidebarCollapseMode. Its edge can be
  * dragged to resize it; dragging it below half its smallest width collapses it. The width is
  * remembered too. In a narrow window it collapses by itself, and expands again once there is
@@ -194,9 +194,8 @@ function SidebarProvider({
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.isComposing) return;
-      const toggle =
-        (event.code === "KeyB" && !event.shiftKey) || (event.code === "KeyS" && event.shiftKey);
-      if (!toggle) return;
+      // ⌘B only: ⇧⌘S is Save As.
+      if (event.code !== "KeyB" || event.shiftKey) return;
       event.preventDefault();
       if (!event.repeat) toggleSidebar();
     };

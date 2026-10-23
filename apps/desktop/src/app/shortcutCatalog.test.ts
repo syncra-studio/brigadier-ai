@@ -60,6 +60,21 @@ test("every shortcut has its own id, and keys written ⌃⌥⇧⌘ then the key"
   }
 });
 
+// A key listed for two things only where each works in a place of its own, and the page says
+// where (#565): ⇧⌘S was both Toggle sidebar and Save file as.
+test("a key listed more than once says where each one works", () => {
+  const byKey = new Map<string, string[]>();
+  for (const shortcut of SHORTCUTS) {
+    for (const chip of shortcut.keys) byKey.set(chip, [...(byKey.get(chip) ?? []), shortcut.id]);
+  }
+  for (const [chip, owners] of byKey) {
+    if (owners.length < 2) continue;
+    const places = owners.map((id) => SHORTCUTS.find((s) => s.id === id)?.where);
+    assert.ok(places.every(Boolean), `${chip} (${owners.join(", ")}) says where each works`);
+    assert.equal(new Set(places).size, places.length, `${chip} (${owners.join(", ")}) works in places of their own`);
+  }
+});
+
 test("a menu-owned shortcut's keys are the keys its menu item sends", () => {
   for (const shortcut of SHORTCUTS.filter((s) => s.menu)) {
     const menu = MENU_KEYS[shortcut.menu ?? ""];
@@ -159,7 +174,7 @@ test("search finds shortcuts by words and by a key press", () => {
   assert.deepEqual(ids(searchShortcuts(SHORTCUTS, { words: "side chat" }, true)), ["new-side-chat"]);
   assert.deepEqual(ids(searchShortcuts(SHORTCUTS, { press: "⌘[" }, true)), ["back"]);
   assert.deepEqual(ids(searchShortcuts(SHORTCUTS, { press: "⌘5" }, true)), ["show-tab"]);
-  assert.deepEqual(ids(searchShortcuts(SHORTCUTS, { press: "⇧⌘S" }, true)), ["sidebar", "save-as"]);
+  assert.deepEqual(ids(searchShortcuts(SHORTCUTS, { press: "⇧⌘S" }, true)), ["save-as"]);
   assert.deepEqual(ids(searchShortcuts(SHORTCUTS, { press: "Esc" }, true)), ["clear-picked", "stop", "decline"]);
   assert.deepEqual(ids(searchShortcuts(SHORTCUTS, { press: "3" }, true)), ["answer"]);
   // Off macOS Ctrl is both ⌘ and ⌃.

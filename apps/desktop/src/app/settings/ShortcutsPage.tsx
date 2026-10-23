@@ -18,7 +18,7 @@ type Search = { type: "words"; words: string } | { type: "press"; press: string 
 
 /**
  * Settings › Keyboard shortcuts: every shortcut Brigadier has, in one card, each with what it
- * does and its keys. A search finds them by words, or by keystrokes: the keyboard button records
+ * does (and where, when another place gives its keys to something else) and its keys. A search finds them by words, or by keystrokes: the keyboard button records
  * the next key press (Esc cancels) and shows what it does.
  */
 export function ShortcutsPage() {
@@ -103,7 +103,10 @@ function ShortcutRow({ shortcut, mac }: { shortcut: Shortcut; mac: boolean }) {
     >
       <div className="flex min-w-0 flex-col gap-0.5">
         <div className="text-label font-medium break-words">{shortcut.name}</div>
-        <div className="text-foreground/65 text-xs break-words">{shortcut.line}</div>
+        <div className="text-foreground/65 text-xs break-words">
+          {shortcut.where && `${shortcut.where} · `}
+          {shortcut.line}
+        </div>
       </div>
       <div className="flex flex-col items-start gap-1.5">
         {shortcut.keys.map((keys) => (
