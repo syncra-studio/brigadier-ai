@@ -36,6 +36,8 @@ struct Known {
     request: String,
     /// When its start was captured.
     at_ms: i64,
+    /// When the session's next turn's start was, if one came.
+    next_ms: Option<i64>,
 }
 
 /// A worker of one of those sessions, with what its branch says.
@@ -106,6 +108,7 @@ impl SessionManager {
                         number: turn.number,
                         request: request.to_owned(),
                         at_ms: head.at_ms,
+                        next_ms: None,
                     });
                 }
             }
@@ -127,6 +130,10 @@ impl SessionManager {
             );
         }
         known.sort_by(|a, b| b.at_ms.cmp(&a.at_ms).then(b.number.cmp(&a.number)));
+        let mut next = std::collections::HashMap::new();
+        for turn in &mut known {
+            turn.next_ms = next.insert(turn.conversation.clone(), turn.at_ms);
+        }
         let turns: Vec<brigadier_git::why::WhyTurn> = known
             .iter()
             .map(|turn| brigadier_git::why::WhyTurn {
@@ -254,6 +261,7 @@ impl SessionManager {
                 Some(Which::Turn {
                     user_message: turn.map(|turn| turn.user_message.as_str()),
                     after_ms: known.at_ms,
+                    before_ms: ended_at_ms.or(known.next_ms),
                 }),
             )
         } else {
@@ -371,10 +379,12 @@ fn worker_branch(
 #[derive(Clone, Copy)]
 enum Which<'a> {
     /// The turn its user message (by item id) starts; else the first user message stamped
-    /// at or after `after_ms`.
+    /// at or after `after_ms` and, when known, before `before_ms` (the turn's end, else the
+    /// next turn's start): a later turn's message is never this one's.
     Turn {
         user_message: Option<&'a str>,
         after_ms: i64,
+        before_ms: Option<i64>,
     },
 }
 
@@ -411,27 +421,7 @@ fn said(record: &Path, which: Option<Which<'_>>) -> Spoken {
                 }
             )
     };
-    let start = match which {
-        None => entries.iter().position(from_user),
-        Some(Which::Turn {
-            user_message,
-            after_ms,
-        }) => user_message
-            .and_then(|id| {
-                entries.iter().position(|entry| {
-                    matches!(&entry.event, ProviderEvent::Message { item_id, role: CliRole::User, .. } if item_id == id)
-                })
-            })
-            .or_else(|| {
-                entries.iter().position(|entry| {
-                    from_user(entry)
-                        && entry
-                            .at_ms
-                            .is_some_and(|at| at >= after_ms - MESSAGE_SLACK_MS)
-                })
-            }),
-    };
-    let Some(start) = start else {
+    let Some(start) = turn_start(&entries, which) else {
         return Spoken {
             gone: Some("Its message is no longer in its CLI session file.".to_owned()),
             ..Spoken::default()
@@ -553,6 +543,44 @@ fn ledger_entries(record: &Path, keep: impl Fn(&Entry) -> bool) -> Vec<WhyLedger
 }
 
 /// An instant as a ledger stamp's `MM-DD HH:MM`, local time.
+/// Where in `entries` the turn `which` reads starts: at its user message.
+fn turn_start(entries: &[FileEntry], which: Option<Which<'_>>) -> Option<usize> {
+    let from_user = |entry: &FileEntry| {
+        entry.parent.is_none()
+            && !entry.steer
+            && matches!(
+                &entry.event,
+                ProviderEvent::Message {
+                    role: CliRole::User,
+                    ..
+                }
+            )
+    };
+    let Some(Which::Turn {
+        user_message,
+        after_ms,
+        before_ms,
+    }) = which
+    else {
+        return entries.iter().position(from_user);
+    };
+    user_message
+        .and_then(|id| {
+            entries.iter().position(|entry| {
+                matches!(&entry.event, ProviderEvent::Message { item_id, role: CliRole::User, .. } if item_id == id)
+            })
+        })
+        .or_else(|| {
+            entries.iter().position(|entry| {
+                from_user(entry)
+                    && entry.at_ms.is_some_and(|at| {
+                        at >= after_ms - MESSAGE_SLACK_MS
+                            && before_ms.is_none_or(|before| at < before)
+                    })
+            })
+        })
+}
+
 fn minute(at_ms: i64) -> Option<String> {
     let at = jiff::Timestamp::from_millisecond(at_ms).ok()?;
     Some(
@@ -574,6 +602,37 @@ mod tests {
             [3]
         );
         assert!(ledger_ids("Log saved").is_empty());
+    }
+
+    #[test]
+    fn a_turn_whose_message_is_gone_takes_no_later_turns_message() {
+        let user = |id: &str, at_ms: i64| FileEntry {
+            event: ProviderEvent::Message {
+                item_id: id.into(),
+                role: CliRole::User,
+                text: id.into(),
+            },
+            at_ms: Some(at_ms),
+            updated_at_ms: None,
+            parent: None,
+            steer: false,
+            images: Vec::new(),
+            phase: None,
+        };
+        // The turn's own generation's file is gone: only a later turn's message is left.
+        let entries = [user("later", 50_000)];
+        let turn = |before_ms| {
+            Some(Which::Turn {
+                user_message: Some("gone"),
+                after_ms: 10_000,
+                before_ms,
+            })
+        };
+        assert_eq!(turn_start(&entries, turn(Some(40_000))), None);
+        assert_eq!(turn_start(&entries, turn(None)), Some(0));
+        // Its own message, by time, before the bound.
+        let entries = [user("own", 10_500), user("later", 50_000)];
+        assert_eq!(turn_start(&entries, turn(Some(40_000))), Some(0));
     }
 
     #[test]
