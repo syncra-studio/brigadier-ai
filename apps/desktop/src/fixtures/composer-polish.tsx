@@ -100,6 +100,20 @@ mockIPC((command, payload) => {
       return new Promise((resolve, reject) => {
         finishInterrupt = (fail) => (fail ? reject(new Error("The turn would not stop.")) : resolve({ method: req.method }));
       });
+    case "sendMessage": {
+      sent.push(req);
+      const { text, attachments, mentions } = req;
+      // The daemon's outcome: a slot asked for waits in the queue, anything else is sent.
+      if (req.queueIndex !== null) {
+        const item = { id: `q-${sent.length}`, text, attachments, mentions, queuedAtMs: Date.now(), editedAtMs: null, deciding: false };
+        return { method: req.method, outcome: { type: "queued", item } };
+      }
+      const message = {
+        id: `sent-${sent.length}`, conversationId: req.conversationId, seq: 10 + sent.length, role: "user", text, blob: null,
+        attachments, mentions, createdAtMs: Date.now(), model: null, requestId: `sent-${sent.length}`, parentId: null,
+      };
+      return { method: req.method, outcome: { type: "sent", message } };
+    }
     case "getDictation":
       // Dictation is on offer, its speech model not yet downloaded (starting it downloads first).
       return { method: req.method, dictation: { available: true, installed: false, downloading: false, modelBytes: 1000 } };
