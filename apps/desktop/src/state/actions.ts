@@ -72,6 +72,7 @@ import {
   upsertRawSession,
   useApp,
 } from "@/state/store";
+import { trackCatalogChanges } from "@/state/catalogRefresh";
 import { migrateDrafts } from "@/state/pageTabs";
 import { pruneSideChats } from "@/state/sessionTabResources";
 import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
@@ -112,13 +113,22 @@ function reopenLastSelection(): void {
 }
 
 export async function loadCatalog(): Promise<void> {
-  const { catalog } = await request({ method: "getCatalog" });
-  replaceCatalog(catalog.projects, catalog.conversations, catalog.settings);
-  reopenLastSelection();
-  pruneRightSidebarTabs(catalog.conversations.map((conversation) => conversation.id));
-  pruneSideChats(catalog.conversations);
-  void keepTabChats().catch(console.error);
-  void migrateDrafts();
+  const changes = trackCatalogChanges();
+  try {
+    const { catalog } = await request({ method: "getCatalog" });
+    // A live creation can beat this older snapshot's answer. Replacing it outright would
+    // hide the row until another catalog read, even as its thread keeps receiving messages.
+    const { projects, conversations } = changes.merge(catalog);
+    changes.stop();
+    replaceCatalog(projects, conversations, catalog.settings);
+    reopenLastSelection();
+    pruneRightSidebarTabs(conversations.map((conversation) => conversation.id));
+    pruneSideChats(conversations);
+    void keepTabChats().catch(console.error);
+    void migrateDrafts();
+  } finally {
+    changes.stop();
+  }
 }
 
 /**
