@@ -14,7 +14,7 @@ through its MCP server, never as text.
 |---|---|
 | `README.pen` | The Read me board: the file map, how files link, naming, the design rules, how to save. Start here. |
 | `foundations.pen` | Every component, nothing else. The design system boards (Tokens & type, Icons, Primitives · Controls, Primitives · Menus, popovers & dialogs, Glyphs & indicators, Shared app parts), then one board per area of the main window under "Group · App", then one board per area of Settings under "Group · Settings". |
-| `app.pen` | The main window's screens only: 14 boards, one per surface, in four groups (App shell, Conversation, Side panel, Setup). No components of its own. |
+| `app.pen` | The main window's screens only: 15 boards, one per surface, in four groups (App shell, Conversation, Side panel, Setup). No components of its own. |
 | `settings.pen` | The Settings window's screens only, the Inspector (a page inside Settings) among them: one board per page in `pages.ts` order. No components of its own. |
 | `unused.pen` | Components nothing in the app renders today, each with a cleanup note (what to remove in the code, and how sure). Never build from it. |
 
@@ -32,8 +32,8 @@ through its MCP server, never as text.
 - `app.pen` and `settings.pen` boards hold screens only, about twelve at most per board: whole
   surfaces in real states, built from instances of foundations components. Hover, tooltips and
   pressed looks are component states on the foundations card, not screens.
-- `app.pen` boards: Window, sidebar & tabs, Onboarding & setup, App dialogs, Home & thread,
-  Composer, Summary pane, and the side panel's Files & source, Changes & review, Terminal,
+- `app.pen` boards: Window & sidebar, Top bar & tabs, Onboarding & setup, App dialogs, Home &
+  thread, Composer, Summary pane, and the side panel's Files & source, Changes & review, Terminal,
   Workers, Page, Job, mockup & new tab, Output, plan & side chat, Browser. `settings.pen` boards:
   Settings window, then one per page.
 - Boards sit in rows, not columns, left to right in app order, with a label above each group.
@@ -427,6 +427,7 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Settings · Inspector · Processes & providers | `RawComposer` | `app/inspector/providers/RawSessionComposer.tsx` | `RawSessionComposer` | |
 | — | `ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | not found in foundations (check) |
 | — | `Notices` | `app/conversation/Notices.tsx` | `Notices` | not found in foundations (check) |
+| — | `TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | code only (layout, no look of its own) |
 
 ## Icons
 
@@ -446,7 +447,6 @@ code name is its component's name:
 | Worker shapes | `icons/worker-shapes/` | `IdGlyph/<shape>` → `IdGlyph`'s shape of that name |
 | Page blocks | `icons/page-blocks/` | `BlockIcon/<label>` → `BLOCK_ICONS[<kind>]` of the block with that label |
 | Marks | `icons/marks/` | `BrigadierGlyph`, `ProviderGlyph/<agent>` → the same names |
-| — | — | `app/side-panel/TabPage.tsx` | `TabPage` | code only (layout, no look of its own) |
 
 An icon is drawn once, as a component on the Icons board; everything else (the Glyphs &
 indicators board, controls, the other files) places it as a ref.
