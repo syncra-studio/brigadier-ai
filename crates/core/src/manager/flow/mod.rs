@@ -1082,10 +1082,7 @@ impl ProviderSession for FakeSession {
                     None => self.prompt.clone(),
                 }
             };
-            let cwd = match self.add_dirs.first() {
-                Some(worktree) if worker => worktree.clone(),
-                _ => self.cwd.clone(),
-            };
+            let cwd = self.cwd.clone();
             let turn = Turn {
                 provider: self.kind,
                 tools: self.tools,

@@ -35,13 +35,26 @@ async fn a_thread_and_its_worker_get_the_projects_setup_in_a_trusted_folder() {
     assert!(!threads.is_empty());
     for thread in &threads {
         assert_eq!(thread.project.as_ref(), Some(&thread.cwd), "{thread:#?}");
-        assert!(thread.add_dirs.is_empty(), "it works in its workspace");
+        assert_eq!(
+            thread.add_dirs,
+            vec![flow.manager.session_dir(&flow.conversation).record()],
+            "it works in its workspace and writes its ledger"
+        );
     }
     let workers = of(&flow, ToolSet::Lean);
     assert!(!workers.is_empty(), "a worker ran");
     for worker in &workers {
         // It starts in its worktree, as a CLI started there would.
         assert_eq!(worker.project.as_ref(), Some(&worker.cwd), "{worker:#?}");
+        // It may write its own ledger, which sits outside its worktree (S17).
+        let ledger = worker
+            .env
+            .iter()
+            .find(|(key, _)| key == "BRIGADIER_LEDGER")
+            .map(|(_, value)| std::path::PathBuf::from(value))
+            .expect("its ledger");
+        assert_eq!(worker.add_dirs, vec![ledger.parent().unwrap().to_owned()]);
+        assert!(worker.add_dirs[0].is_dir());
     }
     // Every other run keeps the sealed setup.
     assert!(

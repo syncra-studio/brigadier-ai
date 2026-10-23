@@ -2576,8 +2576,15 @@ impl SessionManager {
                 }
                 ConversationKind::Chat => Default::default(),
             },
-            // A tab chat reads its session's checkout, never its own to clean up.
-            add_dirs: tab_checkout.clone().into_iter().collect(),
+            // A tab chat reads its session's checkout, never its own to clean up. A thread writes
+            // its ledger in its folder's `record/`, outside its workspace (S17).
+            add_dirs: match &tab_checkout {
+                Some(checkout) => vec![checkout.clone()],
+                None if conv.kind == ConversationKind::Session => {
+                    vec![self.session_dir(&conv.id).record()]
+                }
+                None => Vec::new(),
+            },
             // A thread runs with the project's own setup (its hooks, MCP servers, skills) when
             // the user trusts the folder.
             project: launch

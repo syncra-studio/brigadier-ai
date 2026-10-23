@@ -211,7 +211,10 @@ async fn the_self_edit_metric_counts_the_threads_uncommitted_and_trailerless_cha
         flow.repo.canonicalize().unwrap()
     );
     assert!(!spec.owned_cwd);
-    assert!(spec.add_dirs.is_empty(), "{:?}", spec.add_dirs);
+    assert_eq!(
+        spec.add_dirs,
+        vec![flow.manager.session_dir(&flow.conversation).record()]
+    );
     let before = std::fs::read_to_string(flow.repo.join("README.md")).unwrap();
     let removed = i64::try_from(before.lines().count()).unwrap();
     // Uncommitted before the request: the user's, not the thread's.

@@ -632,10 +632,16 @@ impl SessionManager {
         };
         let mut env = worker_env(&workspace.scratch);
         env.extend(self.cli_env(&task.id.0, &worker_grant));
-        // Its own folder and ledger, which the standing instructions name (S17).
-        env.extend(super::session_dir::standing_env(
-            &self.session_dir(&conversation_id).worker(task),
-        ));
+        // Its own folder and ledger, which the standing instructions name (S17). The ledger's
+        // `record/` is outside its workspace, so it is one of the folders it may write.
+        let worker_dir = self.session_dir(&conversation_id).worker(task);
+        env.extend(super::session_dir::standing_env(&worker_dir));
+        let record = worker_dir.join("record");
+        let made = record.clone();
+        let _ = blocking(move || {
+            std::fs::create_dir_all(&made).map_err(|err| Error::Invalid(err.to_string()))
+        })
+        .await;
         let redactor = secrets::redactor(secret_values);
         // Its sub-agents run on what its CLI allows (G18).
         let allowed_models = self.rules_models(provider)?;
@@ -678,7 +684,7 @@ impl SessionManager {
             skill_plugins: Vec::new(),
             installed_skills: Vec::new(),
             switched_off,
-            add_dirs: Vec::new(),
+            add_dirs: vec![record],
             // The project's own setup (its hooks, MCP servers, skills), in a folder the user
             // trusts.
             project: workspace

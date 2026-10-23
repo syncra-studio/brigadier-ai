@@ -80,7 +80,11 @@ async fn the_thread_works_in_its_workspace_with_the_levels_access() {
         let (provider, spec) = &specs[0];
         assert_eq!(*provider, thread);
         assert_eq!(spec.tools, ToolSet::Thread);
-        assert!(spec.add_dirs.is_empty(), "{:?}", spec.add_dirs);
+        // Only its ledger's folder besides its workspace (S17).
+        assert_eq!(
+            spec.add_dirs,
+            vec![flow.manager.session_dir(&flow.conversation).record()]
+        );
         assert_eq!(spec.cwd, worktree);
         assert!(spec.owned_cwd, "a New worktree is Brigadier's");
         let scratch = spec.sweep_dir.clone().expect("its sweep folder");
