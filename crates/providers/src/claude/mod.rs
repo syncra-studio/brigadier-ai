@@ -3574,7 +3574,7 @@ for line in sys.stdin:
                 assert!(layer.get("hooks").is_none(), "{layer}");
                 assert!(captured["env"].get("HOOK_ONLY").is_none());
             } else {
-                assert_eq!(layer["hooks"].as_object().map(Map::len), Some(5));
+                assert_eq!(layer["hooks"].as_object().map(Map::len), Some(4));
                 assert_eq!(captured["env"]["HOOK_ONLY"], "grant");
             }
             session.send(TurnInput::text("go")).await.unwrap();
