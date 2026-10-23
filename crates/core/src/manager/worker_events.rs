@@ -1002,7 +1002,7 @@ impl SessionManager {
     }
 
     /// Tests: how long a working worker may be quiet.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn set_worker_quiet(&self, after: Duration) {
         self.worker_quiet.after_ms.store(
             u64::try_from(after.as_millis()).unwrap_or(u64::MAX),
