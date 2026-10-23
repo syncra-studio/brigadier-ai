@@ -33,7 +33,7 @@ ITEMS = {
     "failed": ("failed check error", [r"row 17", r"tax_region", r"B-2291"]),
     "ruled_out": ("ruled-out approach and reason", [r"module.level", r"Map", r"test"]),
     "tool_only": ("only in one-time tool output", []),
-    "false_worker": ("false worker claim rejected", [r"false|unverified|not verified", r"writeFileSync"]),
+    "false_worker": ("false worker claim rejected", [r"false|invalid|unverified|not verified", r"writeFileSync"]),
     "absent_ledger": ("deliberately absent from ledger", []),
     "large_failure": ("middle of large failing output", []),
 }

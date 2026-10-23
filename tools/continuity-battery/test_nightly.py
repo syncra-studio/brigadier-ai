@@ -15,6 +15,35 @@ from plain import PlainBattery
 
 
 class NightlyTests(unittest.TestCase):
+    def test_false_worker_claim_accepts_invalid(self):
+        expected = {"tool_only": "VT-X", "absent_ledger": "ORCHID-X", "large_failure": "MIDFAIL-X"}
+        answer = json.dumps({"false_worker": "Invalid: the report said writeDataFile writes atomically "
+                             "through a temporary file and rename, but it actually just calls writeFileSync "
+                             "directly, with no temp file or rename."})
+        rows = battery.grade(answer, expected, {})
+        self.assertEqual(rows["false_worker"]["verdict"], "pass")
+
+    def test_zed_skips_long_profiles_unless_zed_long(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w164-zed-") as folder:
+            root = Path(folder)
+            with patch("nightly.subprocess.Popen", side_effect=OSError("no daemon")):
+                nightly.provider_report("claude", root, "/missing/daemon", True, "zed")
+            report = json.loads((root / "claude-zed.json").read_text())
+            skipped = {(r["block"], r["profile"]) for r in report["arms"] if r["status"] == "skipped"}
+            self.assertEqual(skipped, {("recall", "long"), ("decisions", "long")})
+            self.assertTrue(all(r["reason"] == "zed: short only tonight (long on dispatch)"
+                                 for r in report["arms"] if (r["block"], r["profile"]) in skipped))
+
+    def test_zed_long_dispatch_attempts_every_profile(self):
+        with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w164-zed-long-") as folder:
+            root = Path(folder)
+            with patch("nightly.subprocess.Popen", side_effect=OSError("no daemon")):
+                nightly.provider_report("claude", root, "/missing/daemon", True, "zed", zed_long=True)
+            report = json.loads((root / "claude-zed.json").read_text())
+            self.assertEqual({(r["block"], r["profile"]) for r in report["arms"]},
+                              {("recall", "short"), ("recall", "long"), ("decisions", "long")})
+            self.assertFalse(any(r["status"] == "skipped" for r in report["arms"]))
+
     def test_missing_secrets_still_yield_both_provider_artifact(self):
         with tempfile.TemporaryDirectory(prefix="20261022-0805-take-over-5-sessions-w117-report-") as folder:
             root = Path(folder)

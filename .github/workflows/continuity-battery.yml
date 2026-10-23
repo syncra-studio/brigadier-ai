@@ -5,6 +5,11 @@ name: Continuity battery
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      zed_long:
+        description: "Run the zed arm's long recall + decisions profiles too (default: short only)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -90,9 +95,11 @@ jobs:
           LIVE: ${{ steps.credentials.outputs.live }}
           PROVIDER: ${{ matrix.provider }}
           ARM: ${{ matrix.arm }}
+          ZED_LONG: ${{ github.event.inputs.zed_long == 'true' }}
         run: |
           args=()
           if [ "$LIVE" = true ]; then args+=(--live); fi
+          if [ "$ZED_LONG" = true ]; then args+=(--zed-long); fi
           python3 tools/continuity-battery/nightly.py provider --provider "$PROVIDER" --arm "$ARM" \
             --output "$RUNNER_TEMP/continuity-provider-$PROVIDER-$ARM" "${args[@]}"
       - uses: actions/upload-artifact@v7

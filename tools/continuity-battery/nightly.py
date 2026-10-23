@@ -86,7 +86,7 @@ def metrics(result):
                            if isinstance(result.get("items"), dict) and result["items"] else None}
 
 
-def provider_report(provider, output, daemon, live, selected_arm=None):
+def provider_report(provider, output, daemon, live, selected_arm=None, zed_long=False):
     output.mkdir(parents=True, exist_ok=True)
     report = {"provider": provider, "status": "complete", "reason": None, "arms": []}
     if not live:
@@ -97,6 +97,11 @@ def provider_report(provider, output, daemon, live, selected_arm=None):
                                                  ("recall", "long", 90, 3500),
                                                  ("decisions", "long", 90, 3500)):
             for arm in ([selected_arm] if selected_arm else ARMS):
+                if arm == "zed" and not zed_long and (block, profile) != ("recall", "short"):
+                    report["arms"].append({"block": block, "profile": profile, "arm": arm,
+                                            "status": "skipped",
+                                            "reason": "zed: short only tonight (long on dispatch)"})
+                    continue
                 name = f"{provider}-{block}-{profile}-{arm}"
                 with tempfile.TemporaryDirectory(prefix="continuity-nightly-evidence-") as private:
                     evidence = Path(private) / "evidence.json"
@@ -323,13 +328,14 @@ if __name__ == "__main__":
     parser.add_argument("--arm", choices=ARMS)
     parser.add_argument("--daemon", default="target/debug/brigadierd")
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--zed-long", action="store_true", help="run the zed arm's long recall + decisions profiles")
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--previous", type=Path)
     parser.add_argument("--issue", action="store_true")
     args = parser.parse_args()
     if args.mode == "provider":
-        provider_report(args.provider, args.output, str(Path(args.daemon).resolve()), args.live, args.arm)
+        provider_report(args.provider, args.output, str(Path(args.daemon).resolve()), args.live, args.arm, args.zed_long)
     else:
         summary = collect(args.input, args.output, json.loads(args.previous.read_text()) if args.previous and args.previous.exists() else None)
         if args.issue:

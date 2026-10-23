@@ -196,10 +196,41 @@ class ZedTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix=PREFIX) as folder, \
              patch("nightly.subprocess.Popen", FakeProcess):
-            nightly.provider_report("claude", Path(folder), "/unused", True, "zed")
+            nightly.provider_report("claude", Path(folder), "/unused", True, "zed", zed_long=True)
             report = json.loads((Path(folder) / "claude-zed.json").read_text())
             self.assertEqual([row["status"] for row in report["arms"]], ["skipped"] * 3)
             self.assertTrue(all("could not fetch" in row["reason"] for row in report["arms"]))
+
+    def test_nightly_zed_arm_skips_long_profiles_by_default(self):
+        class FakeProcess:
+            returncode = 0
+
+            def __init__(self, command, **kwargs):
+                evidence = Path(command[command.index("--evidence") + 1])
+                evidence.write_text(json.dumps({"status": "skipped", "errors": [],
+                    "reason": "skipped: could not fetch pinned Zed compaction prompt (offline)"}))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def wait(self, **kwargs):
+                return 0
+
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as folder, \
+             patch("nightly.subprocess.Popen", FakeProcess):
+            nightly.provider_report("claude", Path(folder), "/unused", True, "zed")
+            report = json.loads((Path(folder) / "claude-zed.json").read_text())
+            self.assertEqual([(row["block"], row["profile"]) for row in report["arms"]],
+                              [("recall", "short"), ("recall", "long"), ("decisions", "long")])
+            long_rows = [row for row in report["arms"] if row["profile"] == "long"]
+            self.assertEqual([row["status"] for row in long_rows], ["skipped", "skipped"])
+            self.assertTrue(all(row["reason"] == "zed: short only tonight (long on dispatch)" for row in long_rows))
+            short_row = next(row for row in report["arms"] if row["profile"] == "short")
+            self.assertEqual(short_row["status"], "skipped")
+            self.assertIn("could not fetch", short_row["reason"])
 
     def test_skipped_native_faults_need_no_daemon_timestamps_to_report(self):
         result = {"started_at": "2026-10-24", "source": "fixture", "daemon_sha256": "unused",
