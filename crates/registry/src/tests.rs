@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 
-/// A fresh folder for one test, its symlinks resolved (so paths compare with the catalog's).
-fn fixture(name: &str) -> PathBuf {
+/// A fresh folder for one test, its symlinks resolved (so paths compare with the catalog's),
+/// removed when the test ends.
+fn fixture(name: &str) -> Fixture {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "brigadier-registry-{name}-{}-{}",
@@ -13,7 +14,22 @@ fn fixture(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::canonicalize(dir).unwrap()
+    Fixture(std::fs::canonicalize(dir).unwrap())
+}
+
+struct Fixture(PathBuf);
+
+impl std::ops::Deref for Fixture {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn write(path: &Path, text: &str) {
