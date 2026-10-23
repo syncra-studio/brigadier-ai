@@ -585,11 +585,14 @@ export async function send(
     lane = "auto",
     queueIndex = null,
     to = null,
+    onTarget,
   }: {
     lane?: SendLane;
     queueIndex?: number | null;
     /** The conversation it goes to, when not the selected one (a side chat's). */
     to?: string | null;
+    /** Told the conversation it goes to once that is known (a draft's is made first). */
+    onTarget?: (conversationId: string) => void;
   } = {},
 ): Promise<void> {
   const { selection } = useApp.getState();
@@ -620,6 +623,7 @@ export async function send(
   } else {
     return;
   }
+  onTarget?.(conversationId);
 
   const prepared = prepareTabChatSend(conversationId);
   if (prepared) await prepared;
