@@ -1349,10 +1349,9 @@ pub struct SessionSpec {
     /// `.claude-plugin/plugin.json`). Claude loads each with `--plugin-dir`; Codex adds each
     /// one's `skills` folder as an extra skills root. The user's own skills are unaffected.
     pub skill_plugins: Vec<PathBuf>,
-    /// Brigadier's skill plugins installed where the CLI finds skills itself, for every
-    /// session of it (the `/brigade` skill, S15). Claude loads each with `--plugin-dir`, as
-    /// above; Codex copies each one's `skills/<name>` into its user skills folder
-    /// (`$CODEX_HOME/skills`), where a plain `codex` finds it too.
+    /// Brigadier's skill plugins every session and Chat gets (the `/brigade` skill, S15).
+    /// Claude loads each with `--plugin-dir`, Codex adds each one's `skills` folder as an extra
+    /// skills root, as above: a plain `claude` or `codex` never lists them.
     pub installed_skills: Vec<PathBuf>,
     /// What of the user's own setup a thread or worker goes without ([`ToolSet::user_setup`]):
     /// what they switched off for Brigadier.

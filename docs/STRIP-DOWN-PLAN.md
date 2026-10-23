@@ -974,8 +974,11 @@ and `run`.
       worktree. The worker copies or symlinks those files in, and says which tests skipped.
     - Review runs once, at the end, on the integrated tree, never mid-run. After the fix pass only focused
       checks run, with a stop rule: one review, one fix pass, then report what is left instead of looping.
-  - Every session and chat is a brigade (G20). The skill is installed for every one of them, in the Claude
-    skills folder and Codex's skills folder (§8, item 7), and the standing instructions point at it (§6, S17).
+  - Every session and chat is a brigade (G20). The skill is installed for every one of them, per process:
+    Claude's `--plugin-dir` and Codex's per-app-server skills root (`skills/extraRoots/set`), so a plain
+    `claude` or `codex` never lists it (§8, item 7), and the standing instructions point at it (§6, S17).
+    (Until 10-23 Codex got a copy in the user's `~/.codex/skills`, which every plain `codex` listed (the
+    w123 bench); one pass at the next Codex session removes that copy, and a marker keeps it to one pass.)
     No one has to invoke it and there is no "New brigade" UI. It stays lazily loaded: only its description
     costs context until the session uses it.
   - `BRIGADIER_BRIGADE_SKILL=1` is only the build gate: the skill and its pointer line ship behind it until the
@@ -1534,7 +1537,7 @@ refresh the routing for automatic choosing, which all these then go as the \"adv
   user's rows of the same Work replace them, and another CLI gets `fusion-<agent>`. The skill starts each consult
   with `brigadier start --lean --work fusion-<agent> --title "Fusion · <model>"`, overriding `--model` only when
   that model is out of quota or refused. `fusion/SKILL.md` ships in the brigade plugin folder beside `brigade`
-  (`skills/fusion/SKILL.md`): Claude loads both from the plugin, Codex copies both into its skills folder. It
+  (`skills/fusion/SKILL.md`): Claude loads both from the plugin, Codex adds the plugin's skills folder as a per-app-server skills root. It
   has no user copy of its own. `brigade/SKILL.md` sends an uncertain user to it. Live dev runs (10-23, an Opus parent): `/fusion` on a two-way question started a lean Claude consult (opus) and a
   lean Codex consult (its default model), ran the cross round, and replied with the pick, what they agreed on,
   where they differed and the models consulted. "I'm not sure whether A or B" without `/fusion` led the thread to
