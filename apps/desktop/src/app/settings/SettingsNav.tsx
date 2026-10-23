@@ -2,6 +2,7 @@ import { useIntegrations } from "@/app/settings/integrations/adapter";
 import { useState } from "react";
 
 import {
+  FOLDED_GROUPS,
   groupTitle,
   searchSettings,
   SETTINGS_GROUPS,
@@ -21,13 +22,16 @@ function openResult({ page, row }: SettingsSearchResult) {
 }
 
 /**
- * The sidebar panel while Settings is open: its title, a search field, then its pages in their groups. Typing replaces the pages with the settings found, each with its page's name.
+ * The sidebar panel while Settings is open: its title, a search field, then its pages in their groups, Developer's
+ * (Reports, Inspector) folded until opened. Typing replaces the pages with the settings found, each with its page's name.
  */
 export function SettingsNav() {
   // Catalog changes also refresh the integrations found by Settings search.
   useIntegrations((state) => state.snapshot);
   const current = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [query, setQuery] = useState("");
+  // Developer opens on a click, or by itself while one of its pages is open.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
   // The result Enter opens; the arrow keys move it.
   const [active, setActive] = useState(0);
   const pages = shownSettingsPages();
@@ -93,8 +97,19 @@ export function SettingsNav() {
             </NavList>
           )
         ) : (
-          SETTINGS_GROUPS.map((group) => (
-            <NavSection key={group} title={groupTitle(group)}>
+          SETTINGS_GROUPS.map((group) => {
+            const folds = FOLDED_GROUPS.has(group);
+            const holdsCurrent = pages.some((page) => page.group === group && page.id === current);
+            return (
+            <NavSection
+              key={group}
+              title={groupTitle(group)}
+              {...(folds && {
+                open: holdsCurrent || unfolded.has(group),
+                onOpenChange: (open: boolean) =>
+                  setUnfolded((was) => (open ? new Set([...was, group]) : new Set([...was].filter((held) => held !== group)))),
+              })}
+            >
               <NavList>
                 {pages.filter((page) => page.group === group).map((page) => {
                   const Icon = page.icon;
@@ -114,7 +129,8 @@ export function SettingsNav() {
                 })}
               </NavList>
             </NavSection>
-          ))
+            );
+          })
         )}
       </div>
     </>

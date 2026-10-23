@@ -188,7 +188,7 @@ test("search finds every Browser row; import finds Import Browser Data", async (
   }
 });
 
-// The navigation: Personal, Agents, Browser & Data and System, then Archived on its own,
+// The navigation: Personal, Agents, Browser & Data, System and a folded Developer, then Archived on its own,
 // set apart without a title. Searching a page's name, old or new, finds it in its new place.
 test("Settings lists its pages in their groups, Archived last and untitled", async () => {
   const globals = globalThis as Record<string, unknown>;
@@ -216,22 +216,27 @@ test("Settings lists its pages in their groups, Archived last and untitled", asy
       "Browser & Data: Browser",
       "Browser & Data: Import Browser Data",
       "System: Storage",
-      "System: Reports",
-      "System: Inspector",
+      "Developer: Reports",
+      "Developer: Inspector",
       "end: Archived",
     ]);
     const markup = ReactDOMServer.renderToStaticMarkup(React.createElement(SettingsNav));
-    const sections = [...markup.matchAll(/<section[^>]*>([\s\S]*?)<\/section>/g)].map((match) => ({
-      title: /<h2[^>]*>([^<]*)<\/h2>/.exec(match[1] ?? "")?.[1] ?? null,
-      pages: [...(match[1] ?? "").matchAll(/<span class="truncate">([^<]*)<\/span>/g)].map((page) => page[1]),
-    }));
+    const sections = [...markup.matchAll(/<section[^>]*>([\s\S]*?)<\/section>/g)].map((match) => {
+      // A folded group's title is its button's words.
+      const title = /<h2[^>]*>([^<]*)<\/h2>|aria-expanded="[a-z]+"[^>]*><span class="truncate">([^<]*)<\/span>/.exec(match[1] ?? "")?.slice(1).find(Boolean) ?? null;
+      const words = [...(match[1] ?? "").matchAll(/<span class="truncate">([^<]*)<\/span>/g)].map((page) => page[1]);
+      return { title, pages: words.filter((page) => page !== title) };
+    });
     assert.deepEqual(sections, [
       { title: "Personal", pages: ["General", "Voice", "Configuration", "Keyboard shortcuts"] },
       { title: "Agents", pages: ["Providers", "Plugins", "Routing", "Git", "Computer use"] },
       { title: "Browser &amp; Data", pages: ["Browser", "Import Browser Data"] },
-      { title: "System", pages: ["Storage", "Reports", "Inspector"] },
+      { title: "System", pages: ["Storage"] },
+      // Reports and Inspector are Developer's, folded until opened (#548).
+      { title: "Developer", pages: ["Reports", "Inspector"] },
       { title: null, pages: ["Archived"] },
     ]);
+    assert.match(markup, /aria-expanded="false"[^>]*><span class="truncate">Developer<\/span>/);
     type Result = { page: Page; row: unknown };
     for (const label of ["MCP servers", "Skills"]) {
       const result = (searchSettings(label) as { page: Page; row: { label: string } | null }[])[0];

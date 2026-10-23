@@ -55,7 +55,7 @@ export type SettingsRowCopy = {
 };
 
 /** A group of the navigation; "end" is the last, set apart by its gap alone, without a title. */
-export type SettingsGroup = "Personal" | "Agents" | "Browser & Data" | "System" | "end";
+export type SettingsGroup = "Personal" | "Agents" | "Browser & Data" | "System" | "Developer" | "end";
 
 export type SettingsPageEntry = {
   id: SettingsPageId;
@@ -91,7 +91,10 @@ const INSPECTOR_ROWS: readonly SettingsRowCopy[] = [
   { label: "Providers", description: "Raw provider sessions" },
 ];
 
-export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "Browser & Data", "System", "end"];
+export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "Browser & Data", "System", "Developer", "end"];
+
+/** The groups the navigation shows folded until opened: tools for working on Brigadier itself. */
+export const FOLDED_GROUPS: ReadonlySet<SettingsGroup> = new Set(["Developer"]);
 
 /** A group's title in the navigation; the last group has none. */
 export function groupTitle(group: SettingsGroup): string | undefined {
@@ -212,7 +215,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     id: "reports",
     label: "Reports",
     icon: Dock,
-    group: "System",
+    group: "Developer",
     component: ReportsPage,
     rows: REPORTS_ROWS,
   },
@@ -220,7 +223,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     id: "inspector",
     label: "Inspector",
     icon: Dock,
-    group: "System",
+    group: "Developer",
     component: inspector.View,
     rows: INSPECTOR_ROWS,
     prefetch: () => void inspector.preload().catch((error: unknown) => console.error("loading the Inspector failed", error)),
