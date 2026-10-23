@@ -456,8 +456,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     use OrchestratorCall as O;
     use WorkerCall as W;
     match name {
-        "query_brain" => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
-        "search_transcript" => ToolCall::Orchestrator(O::SearchTranscript(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
@@ -2202,6 +2200,8 @@ mod open_in_app_tests;
 #[cfg(unix)]
 mod personal_memory_tests;
 #[cfg(unix)]
+mod records_tests;
+#[cfg(unix)]
 mod standing_tests;
 #[cfg(unix)]
 mod terminal_run_tests;
@@ -2275,6 +2275,8 @@ mod tests;
 mod thread_items_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(unix)]
+mod older_context_tests;
+#[cfg(unix)]
 mod project_sessions_tests;
 #[cfg(unix)]
 mod session_dir_tests;
@@ -2287,8 +2289,6 @@ mod thread_overflow_tests;
 mod thread_scratch_tests;
 #[cfg(unix)]
 mod thread_tests;
-#[cfg(unix)]
-mod transcript_thread_tests;
 #[cfg(unix)]
 mod trim_tests;
 #[cfg(unix)]

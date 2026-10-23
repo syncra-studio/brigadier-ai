@@ -255,7 +255,7 @@ class Smoke:
 
     def setup(self):
         settings = self.ipc.call({"method": "getCatalog"})["catalog"]["settings"]
-        settings.update(onboarded=True, introSeen=True, enrichBrain=False, defaultPermission="full")
+        settings.update(onboarded=True, introSeen=True, defaultPermission="full")
         settings["hiddenModels"] = [{"provider": "claude", "id": i} for i in ("fable", "claude-fable-5", "claude-fable-5-1")]
         self.ipc.call({"method": "updateSettings", "settings": settings})
         missing, status = self.signed_in()

@@ -49,7 +49,7 @@ impl std::ops::Deref for TestBrain {
 
 fn provenance(session: Option<&str>) -> Provenance {
     Provenance {
-        origin: Origin::Enrichment,
+        origin: Origin::Skeleton,
         session_id: session.map(str::to_owned),
         task_id: None,
         job_id: None,
@@ -175,7 +175,7 @@ fn a_rewritten_rule_keeps_its_earlier_text_as_history() {
             since_ms,
         } => {
             assert_eq!(by, &id);
-            assert_eq!(reason.as_deref(), Some("rewritten by enrichment"));
+            assert_eq!(reason.as_deref(), Some("rewritten by the skeleton pass"));
             assert!(since_ms.is_some());
         }
         other => panic!("not superseded: {other:?}"),
@@ -218,7 +218,9 @@ fn a_rewritten_rule_keeps_its_earlier_text_as_history() {
         .unwrap()
         .text;
     assert!(
-        text.contains(&format!("SUPERSEDED by {id}: rewritten by enrichment")),
+        text.contains(&format!(
+            "SUPERSEDED by {id}: rewritten by the skeleton pass"
+        )),
         "{text}"
     );
 }
@@ -453,7 +455,7 @@ fn a_replacement_under_another_title_supersedes_the_old_node() {
                 "y",
             ),
             "key:convention:old",
-            "replaced by the enrichment job j1",
+            "replaced by the skeleton job j1",
         )
         .unwrap();
     let old_node = brain.node(&old).unwrap().unwrap();
@@ -461,7 +463,7 @@ fn a_replacement_under_another_title_supersedes_the_old_node() {
         old_node.state,
         NodeState::Superseded {
             by: new.clone(),
-            reason: Some("replaced by the enrichment job j1".into()),
+            reason: Some("replaced by the skeleton job j1".into()),
             since_ms: match old_node.state {
                 NodeState::Superseded { since_ms, .. } => since_ms,
                 _ => None,
@@ -865,9 +867,9 @@ fn forgetting_an_origin_keeps_what_another_confirmed() {
         .record(from(Origin::Index, None, None, module()))
         .unwrap();
     brain
-        .record(from(Origin::Enrichment, None, None, module()))
+        .record(from(Origin::Skeleton, None, None, module()))
         .unwrap();
-    // Rewritten by enrichment: only enrichment supports the new text.
+    // Rewritten by the skeleton pass: only it supports the new text.
     let other = brain
         .record(from(
             Origin::Index,
@@ -878,7 +880,7 @@ fn forgetting_an_origin_keeps_what_another_confirmed() {
         .unwrap();
     brain
         .record(from(
-            Origin::Enrichment,
+            Origin::Skeleton,
             None,
             None,
             node(NodeKind::Module, Some("module:ui"), "ui", "b"),
@@ -887,7 +889,7 @@ fn forgetting_an_origin_keeps_what_another_confirmed() {
     assert!(brain.holds_origin(Origin::Index).unwrap());
     assert_eq!(brain.forget_origins(&[Origin::Index]).unwrap(), 0);
     assert!(!brain.holds_origin(Origin::Index).unwrap());
-    assert_eq!(brain.forget_origins(&[Origin::Enrichment]).unwrap(), 2);
+    assert_eq!(brain.forget_origins(&[Origin::Skeleton]).unwrap(), 2);
     assert!(brain.node(&id).unwrap().is_none());
     assert!(brain.node(&other).unwrap().is_none());
 }
@@ -1144,110 +1146,191 @@ fn a_claim_confirming_a_user_decision_keeps_it_the_users_and_claims_come_last() 
     );
 }
 
-fn transcript_entry(stream: TranscriptStream, seq: i64, role: &str, text: &str) -> TranscriptEntry {
-    TranscriptEntry {
-        conversation_id: "c1".into(),
-        stream,
-        seq,
-        role: role.into(),
-        request_id: None,
-        at_ms: seq,
-        text: text.into(),
+fn record_file(session: &str, source: RecordSource, path: &str, stamp: &str) -> RecordFile {
+    RecordFile {
+        conversation_id: session.split('/').next().unwrap().into(),
+        session: session.into(),
+        source,
+        path: path.into(),
+        stamp: stamp.into(),
     }
 }
 
-/// The conversation and its thread number their events on their own: a message and a thread
-/// command with the same seq are both kept and found, each stream keeps its own watermark,
-/// and a hit carries its entry's first line.
+fn record_entry(position: i64, role: &str, text: &str) -> RecordEntry {
+    RecordEntry {
+        position,
+        role: role.into(),
+        at_ms: Some(position),
+        text: text.into(),
+        cited: None,
+    }
+}
+
+/// STRIP-DOWN-PLAN S18: a record file is indexed again from its first changed entry, so a
+/// grown file keeps what it had and a rewritten one drops what went; a search can stay
+/// within one session and its workers; a hit carries its entry's first line.
 #[test]
-fn a_message_and_a_thread_command_with_the_same_seq_are_both_found() {
+fn record_files_are_indexed_from_where_they_changed_and_searched_by_session() {
     let brain = TestBrain::new();
+    let transcript = record_file("s1", RecordSource::Transcript, "/r/s1/lineage.json", "a");
     brain
-        .index_transcript(vec![
-            transcript_entry(
-                TranscriptStream::Conversation,
-                12,
-                "user",
-                "Check the quokka build.",
-            ),
-            transcript_entry(
-                TranscriptStream::Thread,
-                12,
-                "command",
-                "Ran `make quokka` (exit 2)\nquokka: missing target",
-            ),
-            transcript_entry(
-                TranscriptStream::Thread,
-                30,
-                "read",
-                "Read src/a.rs\nfn a() {}",
-            ),
-        ])
-        .unwrap();
-    // Indexing again changes nothing.
-    brain
-        .index_transcript(vec![transcript_entry(
-            TranscriptStream::Thread,
-            12,
-            "command",
-            "Ran `make quokka` (exit 2)\nquokka: missing target",
-        )])
-        .unwrap();
-    let mut hits = brain.search_transcript("c1", "quokka", 10).unwrap();
-    hits.sort_by_key(|hit| hit.stream.as_str());
-    assert_eq!(hits.len(), 2, "{hits:?}");
-    assert_eq!(
-        (hits[0].stream, hits[0].seq, hits[0].role.as_str()),
-        (TranscriptStream::Conversation, 12, "user")
-    );
-    assert_eq!(
-        (hits[1].stream, hits[1].seq, hits[1].role.as_str()),
-        (TranscriptStream::Thread, 12, "command")
-    );
-    assert_eq!(hits[1].lead, "Ran `make quokka` (exit 2)");
-    assert_eq!(
-        brain
-            .transcript_watermark("c1", TranscriptStream::Conversation)
-            .unwrap(),
-        Some(12)
-    );
-    assert_eq!(
-        brain
-            .transcript_watermark("c1", TranscriptStream::Thread)
-            .unwrap(),
-        Some(30)
-    );
-    assert_eq!(brain.stats().unwrap().transcript_entries, 3);
-    // A page read through seq 50 that added nothing still moves its stream's watermark, and
-    // only that stream's.
-    brain
-        .index_transcript_through("c1", TranscriptStream::Thread, 50, Vec::new())
+        .sync_records(
+            transcript.clone(),
+            vec![
+                record_entry(0, "user", "Check the quokka build."),
+                record_entry(
+                    1,
+                    "command",
+                    "Ran `make quokka` (exit 2)\nquokka: missing target",
+                ),
+            ],
+        )
         .unwrap();
     assert_eq!(
-        brain
-            .transcript_watermark("c1", TranscriptStream::Thread)
-            .unwrap(),
-        Some(50)
+        brain.record_stamp("/r/s1/lineage.json").unwrap().as_deref(),
+        Some("a")
     );
+    // It grew, and its last item ended: the item is replaced, the first stays.
+    brain
+        .sync_records(
+            RecordFile {
+                stamp: "b".into(),
+                ..transcript.clone()
+            },
+            vec![
+                record_entry(0, "user", "Check the quokka build."),
+                record_entry(1, "command", "Ran `make quokka` (exit 0)\nbuilt quokka"),
+                record_entry(2, "assistant", "The quokka build passes now."),
+            ],
+        )
+        .unwrap();
+    let worker = record_file(
+        "s1/2-abcd1234",
+        RecordSource::Ledger,
+        "/r/s1/w/ledger.md",
+        "x",
+    );
+    brain
+        .sync_records(
+            worker,
+            vec![record_entry(1, "ledger", "- Decision: quokka stays")],
+        )
+        .unwrap();
+    let other = record_file("s2", RecordSource::Ledger, "/r/s2/ledger.md", "x");
+    brain
+        .sync_records(
+            other,
+            vec![record_entry(1, "ledger", "- Ruled out: quokka v2")],
+        )
+        .unwrap();
+    assert_eq!(brain.stats().unwrap().transcript_entries, 5);
+    let mut found: Vec<(String, i64)> = brain
+        .search_records("quokka", Some("s1"), 10)
+        .unwrap()
+        .into_iter()
+        .map(|hit| (hit.session, hit.position))
+        .collect();
+    found.sort();
     assert_eq!(
-        brain
-            .transcript_watermark("c1", TranscriptStream::Conversation)
-            .unwrap(),
-        Some(12)
+        found,
+        [
+            ("s1".into(), 0),
+            ("s1".into(), 1),
+            ("s1".into(), 2),
+            ("s1/2-abcd1234".into(), 1)
+        ]
     );
-    brain.forget_transcript("c1").unwrap();
+    let hit = brain
+        .search_records("built", Some("s1"), 10)
+        .unwrap()
+        .remove(0);
+    assert_eq!(hit.lead, "Ran `make quokka` (exit 0)");
     assert!(
         brain
-            .search_transcript("c1", "quokka", 10)
+            .search_records("missing target", None, 10)
             .unwrap()
             .is_empty()
     );
+    assert_eq!(brain.search_records("quokka", None, 10).unwrap().len(), 5);
+    // `s1` names no other session that starts with it.
+    let near = record_file("s10", RecordSource::Ledger, "/r/s10/ledger.md", "x");
+    brain
+        .sync_records(near, vec![record_entry(1, "ledger", "quokka in s10")])
+        .unwrap();
     assert_eq!(
         brain
-            .transcript_watermark("c1", TranscriptStream::Thread)
-            .unwrap(),
-        None
+            .search_records("quokka", Some("s1"), 10)
+            .unwrap()
+            .len(),
+        4
     );
+    // Rewritten shorter: what went is gone.
+    brain
+        .sync_records(
+            RecordFile {
+                stamp: "c".into(),
+                ..transcript
+            },
+            vec![record_entry(0, "user", "Check the quokka build.")],
+        )
+        .unwrap();
+    assert_eq!(
+        brain
+            .search_records("quokka", Some("s1"), 10)
+            .unwrap()
+            .len(),
+        2
+    );
+    brain.forget_records("s1").unwrap();
+    assert!(
+        brain
+            .search_records("quokka", Some("s1"), 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(brain.record_stamp("/r/s1/lineage.json").unwrap(), None);
+    assert_eq!(brain.search_records("quokka", None, 10).unwrap().len(), 2);
+}
+
+/// A cited file's hash stays with the entry that cites it: indexed again, or moved to the
+/// archive, it keeps the hash first taken, so a change since still reads as stale.
+#[test]
+fn a_cited_hash_stays_with_its_entry_through_a_move_to_the_archive() {
+    let brain = TestBrain::new();
+    let line = "- Learned from reading: src/a.rs:3 the parser skips blank lines";
+    let cited = |hash: &str| RecordEntry {
+        cited: Some(Cited {
+            path: "/repo/src/a.rs".into(),
+            line: Some(3),
+            hash: Some(hash.into()),
+        }),
+        ..record_entry(1, "ledger", line)
+    };
+    let ledger = record_file("s1", RecordSource::Ledger, "/r/s1/ledger.md", "a");
+    brain
+        .sync_records(ledger.clone(), vec![cited("h1")])
+        .unwrap();
+    let archive = record_file(
+        "s1",
+        RecordSource::LedgerArchive,
+        "/r/s1/ledger-archive.md",
+        "a",
+    );
+    brain.sync_records(archive, vec![cited("h2")]).unwrap();
+    brain
+        .sync_records(
+            RecordFile {
+                stamp: "b".into(),
+                ..ledger
+            },
+            Vec::new(),
+        )
+        .unwrap();
+    let hits = brain.search_records("parser blank", None, 10).unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].source, RecordSource::LedgerArchive);
+    assert_eq!(hits[0].cited.as_ref().unwrap().hash.as_deref(), Some("h1"));
+    assert_eq!(hits[0].cited.as_ref().unwrap().line, Some(3));
 }
 
 /// The user's edit of a memory changes it in place, keeps no earlier text, and deleting it

@@ -1535,7 +1535,7 @@ async fn a_cold_thread_over_150k_is_reborn_with_every_decision_whole() {
     flow.stop().await;
 }
 
-/// A checkpoint's note fork of a `thread` session, whose model asks for `query_brain`: the
+/// A checkpoint's note fork of a `thread` session, whose model asks for `project_map`: the
 /// fork's spec, the thread's first spec, the note and what the call was answered.
 async fn note_fork(name: &str, thread: ProviderKind) -> (Flow, SessionSpec, SessionSpec, String) {
     let answers: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -1550,9 +1550,7 @@ async fn note_fork(name: &str, thread: ProviderKind) -> (Flow, SessionSpec, Sess
             let log = log.clone();
             async move {
                 if turn.input.contains("Write the handoff note") {
-                    let reply = turn
-                        .call("query_brain", json!({ "query": "the plan" }))
-                        .await;
+                    let reply = turn.call("project_map", json!({})).await;
                     log.lock().unwrap().push(reply.text);
                     return Reply::text("Goal and open threads: the first ask.");
                 }

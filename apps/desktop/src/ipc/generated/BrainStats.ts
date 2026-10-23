@@ -12,6 +12,6 @@ updatedMs: number | null,
  */
 unembedded: number, kinds: Array<KindCount>, 
 /**
- * Transcript entries indexed.
+ * Record entries indexed (transcripts, ledgers, hand-off notes).
  */
 transcriptEntries: number, bytesOnDisk: number, };

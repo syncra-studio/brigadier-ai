@@ -50,7 +50,7 @@ const BRIEFING_MAX: usize = 25_000 * BYTES_PER_TOKEN;
 struct Exchange {
     text: String,
     messages: u32,
-    /// Its first message's number (`#N`, as search_transcript shows it).
+    /// Its first message's number (`#N`).
     first: i64,
     /// The user's message it starts with, as carried when the rest of it isn't (issue #216).
     words: Option<String>,
@@ -69,7 +69,7 @@ const MESSAGE_BYTES: usize = 6_000;
 const USER_MESSAGE_BYTES: usize = 16_000;
 /// Past the verbatim exchanges, the user's own messages of older ones are carried without the
 /// replies, up to this much of the target: what the user said can't be looked up as easily as
-/// what the thread read, ran or wrote, which the replies hold and search_transcript finds
+/// what the thread read, ran or wrote, which the replies hold and `brigadier transcript search` finds
 /// (issue #216). They come before more verbatim exchanges beyond [`MIN_EXCHANGES`] …
 const WORDS_BUDGET: usize = 3_000 * BYTES_PER_TOKEN;
 /// … each up to this size.
@@ -603,7 +603,7 @@ impl SessionManager {
             .any(|constraint| constraint.words.len() > super::constraints::WORDS_MAX);
         let search = Part::new(
             "search",
-            "[Older context] Not all of this conversation is carried here: before you answer that something from it is unknown or ask the user again, look it up. `brigadier transcript search` searches its whole transcript, your earlier commands, reads and tool calls too; `brigadier brain search` finds decisions (by id or words), reports and findings.".into(),
+            "[Older context] Not all of this conversation is carried here: before you answer that something from it is unknown or ask the user again, look it up. `brigadier transcript search` searches its whole transcript, your earlier commands, reads and tool calls too, and your ledger; `brigadier brain search` searches every session's records in this project.".into(),
             0,
         );
         let mut brain = self.brain_part(id, carried).await;
@@ -666,7 +666,7 @@ impl SessionManager {
                 String::new()
             } else {
                 format!(
-                    "[The user's earlier messages, verbatim; the replies between them aren't carried, `brigadier transcript search` finds them by number]\n{}",
+                    "[The user's earlier messages, verbatim; the replies between them aren't carried, `brigadier transcript search` finds them]\n{}",
                     said.join("\n")
                 )
             },
@@ -1416,7 +1416,7 @@ fn decision_text(nodes: &[Node]) -> String {
 /// <status>[ · replaces <ids>] · <title>`.
 fn decision_index(nodes: &[Node]) -> String {
     let mut text = String::from(
-        "[Decision index: every decision, convention and contract of this conversation, oldest first, replaced ones too. Id · scope · status · what it replaced · what it is. The active ones follow in full; `brigadier brain search <id>` gives a replaced one]\n",
+        "[Decision index: every decision, convention and contract of this conversation, oldest first, replaced ones too. Id · scope · status · what it replaced · what it is. The active ones follow in full]\n",
     );
     for node in nodes {
         let scope = match node.kind {

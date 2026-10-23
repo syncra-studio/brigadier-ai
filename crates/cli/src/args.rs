@@ -558,16 +558,32 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             }
             Tool::Page
         }
-        "brain" => {
-            put("query", Some(json!(args.text("query"))));
-            put("history", args.switch("history").then_some(json!(true)));
-            put("page", number("page"));
-            Tool::Brain
-        }
-        "transcript" => {
-            put("query", Some(json!(args.text("query"))));
-            put("limit", number("limit"));
-            Tool::Transcript
+        "brain" | "transcript" => {
+            if action == "read" {
+                let [session, from, to] = words.as_slice() else {
+                    return Err(error("read takes <session> <from> <to>"));
+                };
+                let position = |what: &str, word: &str| {
+                    word.trim_start_matches('#')
+                        .parse::<u32>()
+                        .map(|n| json!(n))
+                        .map_err(|_| error(&format!("<{what}> is a position, from 0: {word:?}")))
+                };
+                put("session", Some(json!(session)));
+                put("from", Some(position("from", from)?));
+                put("to", Some(position("to", to)?));
+            } else {
+                if text.trim().is_empty() {
+                    return Err(error("missing <query>"));
+                }
+                put("query", Some(json!(text)));
+                put("session", flag("session"));
+                put("limit", number("limit"));
+            }
+            match command.name {
+                "brain" => Tool::Brain,
+                _ => Tool::Transcript,
+            }
         }
         "code" => {
             match action.as_str() {
@@ -903,25 +919,42 @@ mod tests {
             tool(&[
                 "brain",
                 "search",
-                "--history",
-                "--page",
-                "2",
+                "--session",
+                "a1b2c3d4",
+                "--limit",
+                "5",
                 "sidebar",
                 "modes"
             ]),
             (
                 Tool::Brain,
                 "search".into(),
-                json!({"query": "sidebar modes", "history": true, "page": 2})
+                json!({"query": "sidebar modes", "session": "a1b2c3d4", "limit": 5})
             )
         );
         assert_eq!(tool(&["brain", "search", "x"]).2, json!({"query": "x"}));
+        assert_eq!(
+            tool(&["brain", "read", "a1b2c3d4/2-abcd1234", "#40", "44"]),
+            (
+                Tool::Brain,
+                "read".into(),
+                json!({"session": "a1b2c3d4/2-abcd1234", "from": 40, "to": 44})
+            )
+        );
         assert_eq!(
             tool(&["transcript", "search", "--limit", "3", "the", "budget"]),
             (
                 Tool::Transcript,
                 "search".into(),
                 json!({"query": "the budget", "limit": 3})
+            )
+        );
+        assert_eq!(
+            tool(&["transcript", "read", "a1b2c3d4", "0", "3"]),
+            (
+                Tool::Transcript,
+                "read".into(),
+                json!({"session": "a1b2c3d4", "from": 0, "to": 3})
             )
         );
         assert_eq!(
@@ -1016,7 +1049,9 @@ mod tests {
         );
         assert!(fails(&["brain", "search"]).contains("missing <query>"));
         assert!(fails(&["brain", "find", "x"]).contains("not one of"));
-        assert!(fails(&["brain", "search", "--page", "0", "x"]).contains("whole number"));
+        assert!(fails(&["brain", "search", "--limit", "0", "x"]).contains("whole number"));
+        assert!(fails(&["brain", "read", "s1", "4"]).contains("<session> <from> <to>"));
+        assert!(fails(&["transcript", "read", "s1", "x", "4"]).contains("a position"));
         assert!(fails(&["code", "search"]).contains("missing <query>"));
         assert!(fails(&["code", "refs"]).contains("missing <symbol>"));
         assert!(fails(&["code", "map", "x"]).contains("unexpected argument"));

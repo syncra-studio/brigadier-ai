@@ -448,40 +448,56 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "brain",
-        summary: "Search what Brigadier knows about this project.",
-        details: "`search <query…>` asks the Project Brain: modules, earlier findings, \
-                  decisions, conventions and contracts, and the user's preferences, each with \
-                  where it came from. Fast and cheap: ask it first; when it has nothing or \
-                  marks a line stale, read the code yourself. It answers with what holds now.",
+        summary: "Search the project's records: every session's transcript, ledger and notes.",
+        details: "`search <query…>` finds the best-matching entries of the records the \
+                  project's sessions keep: their CLI transcripts across every fresh context \
+                  (with the whole outputs the CLI saved), their workers', their ledgers, \
+                  ledger archives and hand-off notes. Each hit names its session, its \
+                  position or file and line, and a text window; a ledger entry learned from \
+                  reading points at the file it cites, marked STALE once that file changed. \
+                  `read <session> <from> <to>` gives that session's transcript items from \
+                  <from> to <to> (at most 50) verbatim, a saved output whole.",
         args: &[
-            action(&["search"], "What to do."),
-            switch(
-                "history",
-                "Also earlier versions of decisions, conventions and contracts (what held \
-                 before and why it changed).",
+            action(&["search", "read"], "What to do."),
+            flag(
+                "session",
+                "ID",
+                "search: only this session and its workers (as hits name them).",
             ),
             flag(
-                "page",
+                "limit",
                 "N",
-                "The next page of results, when an answer says there are more.",
+                "search: at most this many hits (8 by default).",
             ),
-            rest("query", "What you want to know about the project.", true),
+            rest(
+                "args",
+                "search: what to look for; read: <session> <from> <to>.",
+                false,
+            ),
         ],
         available: true,
         schema: include_str!("../schemas/brain.schema.json"),
     },
     Command {
         name: "transcript",
-        summary: "Search this session's full transcript.",
-        details: "`search <words…>` finds the best-matching passages of this conversation (the \
-                  user's messages, your answers, reports and decisions, and the commands you \
-                  ran, files you read and tools you called), including what is no longer in \
-                  your context, with their dates. A message shows its number (#N); a step of \
-                  your own work shows as a thread step, with where its whole output is kept.",
+        summary: "Search and read this session's own records.",
+        details: "`search <words…>` is `brain search` within this session and its workers: \
+                  your transcript across every fresh context, including what is no longer in \
+                  your context, your ledger, its archive and your hand-off notes. `read \
+                  <session> <from> <to>` gives items of this session's transcript (or a \
+                  worker's) verbatim.",
         args: &[
-            action(&["search"], "What to do."),
-            flag("limit", "N", "At most this many passages (8 by default)."),
-            rest("query", "Words to look for.", true),
+            action(&["search", "read"], "What to do."),
+            flag(
+                "limit",
+                "N",
+                "search: at most this many hits (8 by default).",
+            ),
+            rest(
+                "args",
+                "search: words to look for; read: <session> <from> <to>.",
+                false,
+            ),
         ],
         available: true,
         schema: include_str!("../schemas/transcript.schema.json"),

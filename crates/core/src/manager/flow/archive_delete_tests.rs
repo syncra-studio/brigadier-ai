@@ -2,7 +2,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use brigadier_brain::{NewNode, NodeKind, Origin, Provenance, TranscriptEntry, TranscriptStream};
+use brigadier_brain::{
+    NewNode, NodeKind, Origin, Provenance, RecordEntry, RecordFile, RecordSource,
+};
 use brigadier_cli::protocol::CliRequest;
 use brigadier_providers::{Artifact, ProviderKind};
 
@@ -193,15 +195,22 @@ async fn retention(delete_directly: bool) {
                 .iter()
                 .map(|session| {
                     brain
-                        .index_transcript(vec![TranscriptEntry {
-                            conversation_id: session.clone(),
-                            stream: TranscriptStream::Thread,
-                            seq: 1,
-                            role: "assistant".into(),
-                            request_id: None,
-                            at_ms: crate::now_ms(),
-                            text: "retention evidence".into(),
-                        }])
+                        .sync_records(
+                            RecordFile {
+                                conversation_id: session.clone(),
+                                session: session.clone(),
+                                source: RecordSource::Ledger,
+                                path: format!("/r/{session}/ledger.md"),
+                                stamp: "1".into(),
+                            },
+                            vec![RecordEntry {
+                                position: 1,
+                                role: "ledger".into(),
+                                at_ms: Some(crate::now_ms()),
+                                text: "retention evidence".into(),
+                                cited: None,
+                            }],
+                        )
                         .unwrap();
                     brain
                         .record(NewNode {
@@ -272,9 +281,10 @@ async fn retention(delete_directly: bool) {
         for session in &sessions {
             assert_eq!(
                 brain
-                    .transcript_watermark(session, TranscriptStream::Thread)
-                    .unwrap(),
-                Some(1)
+                    .record_stamp(&format!("/r/{session}/ledger.md"))
+                    .unwrap()
+                    .as_deref(),
+                Some("1")
             );
         }
         let saved = flow.core.tasks(&id).await.unwrap().remove(0).outputs;
@@ -344,16 +354,17 @@ async fn retention(delete_directly: bool) {
     for session in &sessions[..2] {
         assert_eq!(
             brain
-                .transcript_watermark(session, TranscriptStream::Thread)
+                .record_stamp(&format!("/r/{session}/ledger.md"))
                 .unwrap(),
             None
         );
     }
     assert_eq!(
         brain
-            .transcript_watermark(&sessions[2], TranscriptStream::Thread)
-            .unwrap(),
-        Some(1)
+            .record_stamp(&format!("/r/{}/ledger.md", sessions[2]))
+            .unwrap()
+            .as_deref(),
+        Some("1")
     );
     flow.stop().await;
 }

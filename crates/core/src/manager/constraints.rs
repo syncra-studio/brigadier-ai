@@ -42,7 +42,7 @@ pub(crate) enum ConstraintScope {
 pub(crate) struct Constraint {
     pub id: String,
     pub scope: ConstraintScope,
-    /// The user's message it was said in (`#N`, as `brigadier transcript search` shows it).
+    /// The user's message it was said in (`#N`).
     pub seq: i64,
     /// The user's words, exactly.
     pub words: String,
@@ -69,7 +69,7 @@ fn parse_key(key: &str) -> Option<(ConstraintScope, &str, i64)> {
 
 /// `words` as a brief carries it: whole up to [`WORDS_MAX`] bytes, else cut with the message
 /// and the byte range left out named.
-fn carried(words: &str, seq: i64, id: &str) -> String {
+fn carried(words: &str, seq: i64) -> String {
     if words.len() <= WORDS_MAX {
         return words.to_owned();
     }
@@ -78,7 +78,7 @@ fn carried(words: &str, seq: i64, id: &str) -> String {
         end -= 1;
     }
     format!(
-        "{}\n[cut here: message #{seq}, bytes {end}–{} not shown; `brigadier brain search {id}` gives it whole]",
+        "{}\n[cut here: message #{seq}, bytes {end}–{} not shown; `brigadier transcript search` finds the rest]",
         &words[..end],
         words.len()
     )
@@ -96,7 +96,7 @@ fn line(constraint: &Constraint) -> String {
         ConstraintScope::Session => "this session",
         ConstraintScope::Project => "every session of this project",
     };
-    let words = carried(&constraint.words, constraint.seq, &constraint.id);
+    let words = carried(&constraint.words, constraint.seq);
     format!(
         "- {} (for {scope}; the user's message #{}{replaces}):\n  \"{}\"",
         constraint.id,

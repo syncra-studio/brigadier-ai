@@ -230,9 +230,14 @@ To report a security problem, see [SECURITY.md](SECURITY.md).
 Each project has a Brain: what Brigadier knows about it, so a question answered once is not
 investigated again. It is a graph of modules, file summaries, decisions, conventions, reports and
 research, each with where it came from (the code index, a worker's report, the thread, you), and
-from which session, model and commit. The thread searches it (`brigadier brain search`), using
-full-text search plus local embeddings, then one hop along the graph. It also keeps what you
-settle. Reports, plan decisions and your answers on cards are recorded without being asked.
+from which session, model and commit. It also keeps what you settle. Reports, plan decisions and
+your answers on cards are recorded without being asked.
+
+- **Records search.** `brigadier brain search` searches what the project's sessions already keep:
+  their CLI transcripts across every fresh context (with the whole outputs the CLI saved), their
+  workers', their ledgers and hand-off notes. `brigadier brain read` gives a transcript span
+  verbatim. A ledger entry learned from reading points at its file and reads as stale once the
+  file changed.
 
 - **Code index.** The repository is scanned (tree-sitter symbols and references, manifests,
   scripts) and kept current by a file watcher. The thread and its workers search it

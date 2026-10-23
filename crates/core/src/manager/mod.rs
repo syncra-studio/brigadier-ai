@@ -80,6 +80,7 @@ mod pull_request;
 mod quiet;
 pub(crate) mod reads;
 mod rebirth;
+mod records;
 mod refcheck;
 mod review;
 mod routing;

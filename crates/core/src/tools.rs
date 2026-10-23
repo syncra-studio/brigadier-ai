@@ -215,32 +215,6 @@ pub struct PreviewLog {
     pub wait_secs: Option<u32>,
 }
 
-/// `query_brain`: ask the Project Brain.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QueryBrain {
-    /// What you want to know about the project.
-    pub query: String,
-    /// Also show earlier versions of decisions, conventions and contracts (what held before
-    /// and why it changed). Off by default: answers give what holds now.
-    #[serde(default)]
-    pub history: Option<bool>,
-    /// The next page of results, when an answer says there are more (from 1).
-    #[serde(default)]
-    pub page: Option<u32>,
-}
-
-/// `search_transcript`: search this conversation's full transcript.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SearchTranscript {
-    /// Words to look for.
-    pub query: String,
-    /// At most this many passages (default 8).
-    #[serde(default)]
-    pub limit: Option<u32>,
-}
-
 /// `code_search`: find symbols and files in the repository's code index.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -354,8 +328,6 @@ pub struct OfferFeedback {
 /// A tool call from an orchestrator.
 #[derive(Debug, Clone)]
 pub enum OrchestratorCall {
-    QueryBrain(QueryBrain),
-    SearchTranscript(SearchTranscript),
     RequestApproval(RequestApproval),
     OfferFeedback(OfferFeedback),
     CodeSearch(CodeSearch),
@@ -373,8 +345,6 @@ impl OrchestratorCall {
     /// The tool's name.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::QueryBrain(_) => "query_brain",
-            Self::SearchTranscript(_) => "search_transcript",
             Self::RequestApproval(_) => "request_approval",
             Self::OfferFeedback(_) => "offer_feedback",
             Self::CodeSearch(_) => "code_search",

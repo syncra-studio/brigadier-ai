@@ -1,6 +1,6 @@
 //! A rebirth briefing ranks what it carries by how hard it is to look up again (issue #216):
 //! past the verbatim exchanges, the user's own messages of older ones are carried word for
-//! word without the replies, which search_transcript still finds by number.
+//! word without the replies, which `brigadier transcript search` still finds.
 
 use std::sync::{Arc, Mutex};
 

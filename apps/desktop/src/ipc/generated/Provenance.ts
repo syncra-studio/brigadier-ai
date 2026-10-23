@@ -12,7 +12,7 @@ export type Provenance = { origin: Origin,
  */
 sessionId: string | null, taskId: string | null, 
 /**
- * The Brain job (skeleton pass, enrichment) that wrote it.
+ * The Brain job (a skeleton pass) that wrote it.
  */
 jobId: string | null, worker: WorkerRef | null, 
 /**
@@ -21,7 +21,7 @@ jobId: string | null, worker: WorkerRef | null,
 commit: string | null, recordedAtMs: number, 
 /**
  * A claim's evidence state and source details (BUILD-PLAN A11): what a worker reported,
- * what the thread kept on its own, what enrichment wrote. `None` for the user's own
+ * what the thread kept on its own, what a skeleton pass wrote. `None` for the user's own
  * decisions and for what the code index read from the code.
  */
 claim?: Claim, };

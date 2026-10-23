@@ -166,7 +166,7 @@ fn migrations() -> Migrations<'static> {
         )
         .comment("file evidence belongs to each supporting source"),
         // BUILD-PLAN A11: what a worker reported and what the thread kept on its own become
-        // unverified claims, with their provenance kept; enrichment is unverified too; a
+        // unverified claims, with their provenance kept; a skeleton pass is unverified too; a
         // check that passed stays verified; the user's own decisions are untouched. A node a
         // user source supports shows that source. Nothing is deleted.
         M::up(
@@ -181,7 +181,7 @@ fn migrations() -> Migrations<'static> {
                 json(iif(key LIKE 'checks:%', '{\"evidence\":\"verified\",\"cites\":[]}',
                          '{\"evidence\":\"unverified\",\"cites\":[]}')))
             WHERE provenance ->> '$.claim' IS NULL
-              AND (provenance ->> '$.origin' IN ('skeleton', 'enrichment')
+              AND (provenance ->> '$.origin' = 'skeleton'
                    OR (provenance ->> '$.origin' IN ('report', 'orchestrator')
                        AND kind IN ('decision', 'convention', 'contract')));
             UPDATE node_sources SET provenance = json_set(provenance, '$.claim',
@@ -189,7 +189,7 @@ fn migrations() -> Migrations<'static> {
                          '{\"evidence\":\"verified\",\"cites\":[]}',
                          '{\"evidence\":\"unverified\",\"cites\":[]}')))
             WHERE provenance ->> '$.claim' IS NULL
-              AND (origin IN ('skeleton', 'enrichment')
+              AND (origin = 'skeleton'
                    OR (origin IN ('report', 'orchestrator')
                        AND (SELECT kind FROM nodes WHERE id = node_id)
                            IN ('decision', 'convention', 'contract')));",
@@ -225,6 +225,66 @@ fn migrations() -> Migrations<'static> {
         END;",
         )
         .comment("transcript entries are known by their stream: the conversation or its thread"),
+        // STRIP-DOWN-PLAN S18: the event-store transcript gives way to the records sessions
+        // already keep (their CLI files, ledgers and hand-off notes). Dropped, not migrated:
+        // the records index fills from the files when it is first searched.
+        M::up(
+            "DROP TRIGGER transcript_fts_insert;
+        DROP TRIGGER transcript_fts_delete;
+        DROP TABLE transcript_fts;
+        DROP TABLE transcript;
+        DELETE FROM meta WHERE key LIKE 'transcript_read:%';
+        CREATE TABLE records (
+            rid              INTEGER PRIMARY KEY,
+            conversation_id  TEXT    NOT NULL,
+            session          TEXT    NOT NULL,
+            source           TEXT    NOT NULL CHECK (source IN
+                                 ('transcript', 'tool-output', 'ledger', 'ledger-archive', 'handoff')),
+            path             TEXT    NOT NULL,
+            position         INTEGER NOT NULL,
+            role             TEXT    NOT NULL,
+            at_ms            INTEGER,
+            text             TEXT    NOT NULL,
+            fingerprint      TEXT    NOT NULL,
+            cited_path       TEXT,
+            cited_line       INTEGER,
+            cited_hash       TEXT,
+            UNIQUE (path, source, position)
+        ) STRICT;
+        CREATE INDEX records_by_conversation ON records (conversation_id);
+        CREATE TABLE record_files (
+            path             TEXT    PRIMARY KEY,
+            conversation_id  TEXT    NOT NULL,
+            stamp            TEXT    NOT NULL
+        ) STRICT;
+        CREATE VIRTUAL TABLE records_fts USING fts5 (
+            text,
+            content = 'records', content_rowid = 'rid',
+            tokenize = 'porter unicode61'
+        );
+        CREATE TRIGGER records_fts_insert AFTER INSERT ON records BEGIN
+            INSERT INTO records_fts (rowid, text) VALUES (new.rid, new.text);
+        END;
+        CREATE TRIGGER records_fts_delete AFTER DELETE ON records BEGIN
+            INSERT INTO records_fts (records_fts, rowid, text)
+                VALUES ('delete', old.rid, old.text);
+        END;",
+        )
+        .comment("the records sessions keep replace the event-store transcript"),
+        // STRIP-DOWN-PLAN S18: the idle-time background passes are gone; what they wrote reads
+        // as the skeleton pass's, the other background pass over the code, so forgetting a
+        // repository's background knowledge still finds it.
+        M::up(
+            "UPDATE node_sources SET origin = 'skeleton',
+                provenance = json_set(provenance, '$.origin', 'skeleton')
+            WHERE origin NOT IN ('index', 'skeleton', 'report', 'orchestrator', 'user');
+            UPDATE nodes SET provenance = json_set(provenance, '$.origin', 'skeleton')
+            WHERE json_valid(provenance)
+              AND provenance ->> '$.origin' IS NOT NULL
+              AND provenance ->> '$.origin' NOT IN
+                  ('index', 'skeleton', 'report', 'orchestrator', 'user');",
+        )
+        .comment("retired background-pass origins read as the skeleton pass"),
     ])
 }
 
@@ -267,7 +327,7 @@ mod tests {
             "INSERT INTO nodes (id, kind, title, body, provenance, created_ms, updated_ms)
              VALUES ('n', 'convention', 'Rule', '', '{}', 1, 1);
              INSERT INTO node_sources (node_id, source, origin, provenance, recorded_ms)
-             VALUES ('n', 's1', 'enrichment', '{}', 1), ('n', 's2', 'enrichment', '{}', 2);
+             VALUES ('n', 's1', 'skeleton', '{}', 1), ('n', 's2', 'skeleton', '{}', 2);
              INSERT INTO node_files (node_id, path, hash) VALUES ('n', 'a.rs', 'h1');",
         )
         .unwrap();
@@ -296,87 +356,88 @@ mod tests {
     /// BUILD-PLAN D2.4's migration: indexed lines stay, as the conversation's, still found by
     /// search and dropped by forgetting, and a thread entry with the same seq is kept beside
     /// them.
+    /// STRIP-DOWN-PLAN S18: the event-store transcript and its read marks are dropped, not
+    /// migrated, and the records index starts empty and whole.
     #[test]
-    fn transcript_rows_migrate_as_the_conversations_and_a_thread_row_may_share_a_seq() {
+    fn the_transcript_is_dropped_for_the_records() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_writer(&conn).unwrap();
-        migrations().to_version(&mut conn, 5).unwrap();
+        migrations().to_version(&mut conn, 6).unwrap();
         conn.execute_batch(
-            "INSERT INTO transcript (conversation_id, seq, role, request_id, at_ms, text)
-             VALUES ('c1', 7, 'user', 'r1', 10, 'the zebra plan'),
-                    ('c1', 8, 'assistant', 'r1', 11, 'noted'),
-                    ('c2', 7, 'user', NULL, 12, 'another zebra');",
+            "INSERT INTO transcript (conversation_id, stream, seq, role, request_id, at_ms, text)
+             VALUES ('c1', 'thread', 7, 'command', NULL, 10, 'the zebra plan');
+             INSERT INTO meta (key, value) VALUES ('transcript_read:thread:c1', '9');",
         )
         .unwrap();
         migrate(&mut conn).unwrap();
-        let streams: Vec<(String, String, i64)> = conn
-            .prepare("SELECT conversation_id, stream, seq FROM transcript ORDER BY rid")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'transcript%'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(
-            streams,
-            [
-                ("c1".to_owned(), "conversation".to_owned(), 7),
-                ("c1".to_owned(), "conversation".to_owned(), 8),
-                ("c2".to_owned(), "conversation".to_owned(), 7),
-            ]
-        );
-        // The same seq from the thread's stream is a row of its own.
-        let thread = crate::TranscriptEntry {
-            conversation_id: "c1".into(),
-            stream: crate::TranscriptStream::Thread,
-            seq: 7,
-            role: "command".into(),
-            request_id: None,
-            at_ms: 13,
-            text: "Ran `grep zebra notes.txt` (exit 0)\nzebra crossing".into(),
-        };
-        let tx = conn.transaction().unwrap();
-        crate::transcript::index(&tx, &[thread]).unwrap();
-        tx.commit().unwrap();
-        let hits = crate::transcript::search(&conn, "c1", "zebra", 10).unwrap();
-        let mut found: Vec<(crate::TranscriptStream, i64)> =
-            hits.iter().map(|hit| (hit.stream, hit.seq)).collect();
-        found.sort_by_key(|(stream, seq)| (stream.as_str(), *seq));
-        assert_eq!(
-            found,
-            [
-                (crate::TranscriptStream::Conversation, 7),
-                (crate::TranscriptStream::Thread, 7)
-            ]
-        );
-        assert_eq!(
-            crate::transcript::watermark(&conn, "c1", crate::TranscriptStream::Conversation)
-                .unwrap(),
-            Some(8)
-        );
-        // Forgetting still clears the full-text index of every stream's rows.
-        let tx = conn.transaction().unwrap();
-        crate::transcript::forget(&tx, "c1").unwrap();
-        tx.commit().unwrap();
-        assert!(
-            crate::transcript::search(&conn, "c1", "zebra", 10)
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            crate::transcript::search(&conn, "c2", "zebra", 10)
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(tables, 0);
+        let marks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE key LIKE 'transcript_read:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(marks, 0);
+        assert_eq!(crate::records::count(&conn).unwrap(), 0);
         conn.execute(
-            "INSERT INTO transcript_fts (transcript_fts) VALUES ('integrity-check')",
+            "INSERT INTO records_fts (records_fts) VALUES ('integrity-check')",
             [],
         )
         .unwrap();
     }
 
+    /// STRIP-DOWN-PLAN S18: an origin no longer known (the retired idle passes') reads as the
+    /// skeleton pass, in the rows and in their provenance, so `forget_origins` still finds it.
+    #[test]
+    fn retired_origins_fold_into_the_skeleton_pass() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_writer(&conn).unwrap();
+        migrations().to_version(&mut conn, 7).unwrap();
+        conn.execute_batch(
+            "INSERT INTO nodes (id, kind, title, body, provenance, created_ms, updated_ms)
+             VALUES ('n', 'module', 'core', '', '{\"origin\":\"idlePass\"}', 1, 1);
+             INSERT INTO node_sources (node_id, source, origin, provenance, recorded_ms)
+             VALUES ('n', 'idlePass|||', 'idlePass', '{\"origin\":\"idlePass\"}', 1),
+                    ('n', 'user|||', 'user', '{\"origin\":\"user\"}', 2);",
+        )
+        .unwrap();
+        migrate(&mut conn).unwrap();
+        let origins: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT origin, provenance ->> '$.origin' FROM node_sources ORDER BY recorded_ms",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            origins,
+            [
+                ("skeleton".to_owned(), "skeleton".to_owned()),
+                ("user".to_owned(), "user".to_owned())
+            ]
+        );
+        let node: String = conn
+            .query_row("SELECT provenance ->> '$.origin' FROM nodes", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(node, "skeleton");
+        let read: crate::Origin = serde_json::from_str("\"idlePass\"").unwrap();
+        assert_eq!(read, crate::Origin::Skeleton);
+    }
+
     /// BUILD-PLAN A11's migration: report and thread rules become unverified claims with
-    /// their provenance kept, enrichment is unverified, a passed check stays verified, the
+    /// their provenance kept, a skeleton pass is unverified, a passed check stays verified, the
     /// user's decisions are untouched (a user-supported node shows its user source), and
     /// nothing is deleted.
     #[test]
@@ -398,7 +459,7 @@ mod tests {
                 "module",
                 "module",
                 Some("module:a"),
-                "enrichment",
+                "skeleton",
                 None,
                 false,
             ),
@@ -486,8 +547,8 @@ mod tests {
         assert_eq!(label("rule"), "thread claim, unverified");
         assert_eq!(label("asked"), "user decision");
         assert_eq!(label("both"), "user decision");
-        assert_eq!(label("module"), "enrichment, unverified");
-        assert_eq!(label("stack"), "enrichment, unverified");
+        assert_eq!(label("module"), "skeleton pass, unverified");
+        assert_eq!(label("stack"), "skeleton pass, unverified");
         assert_eq!(label("checks"), "worker claim, verified");
         assert_eq!(label("found"), "worker report");
         assert_eq!(label("index"), "code index");

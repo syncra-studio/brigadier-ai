@@ -36,7 +36,6 @@ export const KINDS: Record<NodeKind, { label: string; swatch: string; token: `--
 export const ORIGIN_LABELS: Record<Origin, string> = {
   index: "code index",
   skeleton: "skeleton pass",
-  enrichment: "enrichment",
   report: "worker report",
   orchestrator: "orchestrator",
   user: "user",

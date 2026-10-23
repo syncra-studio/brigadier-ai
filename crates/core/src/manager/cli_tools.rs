@@ -143,8 +143,6 @@ fn tool_call(
             ToolCall::TabChat(TabChatCall::WriteFile(args(given)?))
         }
         (Tool::Page, "file-read" | "file-write") => return Err(not_theirs()),
-        (Tool::Brain, "search") => ToolCall::Orchestrator(O::QueryBrain(args(given)?)),
-        (Tool::Transcript, "search") => ToolCall::Orchestrator(O::SearchTranscript(args(given)?)),
         (Tool::Code, "search") => ToolCall::Orchestrator(O::CodeSearch(args(given)?)),
         (Tool::Code, "refs") => ToolCall::Orchestrator(O::CodeRefs(args(given)?)),
         (Tool::Code, "map") => ToolCall::Orchestrator(O::ProjectMap),
@@ -196,12 +194,48 @@ impl SessionManager {
         given: Value,
     ) -> CliReply {
         let role = self.grants.resolve(&caller.grant);
+        if matches!(tool, Tool::Brain | Tool::Transcript) {
+            return crate::heap(|| self.cli_records(caller, role.as_ref(), tool, action, given))
+                .await;
+        }
         let call = match tool_call(tool, action, given, role.as_ref()) {
             Ok(call) => call,
             Err(reply) => return reply,
         };
         let reply = crate::heap(|| ToolHost::call(self, &caller.grant, call)).await;
         tool_reply(action, reply)
+    }
+
+    /// `brigadier brain search|read` and `transcript search|read` (S18): the records, as the
+    /// thread's own; workers, Chats and tab chats don't have them.
+    async fn cli_records(
+        &self,
+        caller: &CliCaller,
+        role: Option<&Role>,
+        tool: Tool,
+        action: &str,
+        given: Value,
+    ) -> CliReply {
+        if !matches!(role, Some(Role::Orchestrator { .. })) || caller.task_id.is_some() {
+            return not_theirs();
+        }
+        let id = &caller.conversation_id;
+        let own = matches!(tool, Tool::Transcript).then(|| id.short().to_owned());
+        let answer = match action {
+            "search" => match args(given) {
+                Ok(search) => self.records_search(id, own, search).await,
+                Err(reply) => return reply,
+            },
+            "read" => match args(given) {
+                Ok(read) => self.records_read(id, own, read).await,
+                Err(reply) => return reply,
+            },
+            other => return usage(format!("no action {other:?}")),
+        };
+        match answer {
+            Ok(text) => tool_reply(action, ToolReply::ok(text)),
+            Err(err) => CliReply::error(ErrorCode::Failed, err.to_string()),
+        }
     }
 
     /// `brigadier ask`: a card for the user, and their answer once they give it.

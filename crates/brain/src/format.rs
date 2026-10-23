@@ -162,7 +162,6 @@ pub(crate) fn origin_label(origin: Origin) -> &'static str {
     match origin {
         Origin::Index => "the code index",
         Origin::Skeleton => "the skeleton pass",
-        Origin::Enrichment => "enrichment",
         Origin::Report => "report",
         Origin::Orchestrator => "the thread",
         Origin::User => "the user",

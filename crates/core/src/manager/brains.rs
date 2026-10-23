@@ -19,24 +19,21 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use brigadier_brain::{
-    Brain, BrainAnswer, BrainCaps, BrainGraph, BrainQuery, Claim, Edge, EdgeKind, Embedder,
-    EmbedderState, FileRef, NewNode, Node, NodeFilter, NodeKind, NodeState, Origin, Provenance,
-    Route, Scope, TranscriptEntry, TranscriptStream,
+    Brain, BrainAnswer, BrainGraph, BrainQuery, Claim, Edge, EdgeKind, Embedder, EmbedderState,
+    FileRef, NewNode, Node, NodeFilter, NodeKind, Origin, Provenance, Scope,
 };
 use brigadier_index::{
     CodeHit, CodeIndex, CodeQuery, FileChange, IndexConfig, ScanHelper, SearchKind,
 };
-use brigadier_providers::{ItemStatus, ProviderEvent};
 use brigadier_sandbox::removal;
 
 use super::{SessionManager, blocking};
 use crate::knowledge::{BrainOverview, ConventionsExport};
-use crate::model::{ConversationId, DomainEvent, MessageRole, Project, ProjectId, Setup, streams};
-use crate::tools::{CodeRefs, CodeSearch, SearchTranscript};
-use crate::work::{Report, Task};
+use crate::model::{ConversationId, DomainEvent, MessageRole, Project, ProjectId, Setup};
+use crate::tools::{CodeRefs, CodeSearch};
 use crate::{Error, Result, now_ms};
 
 /// Removing a project waits at most this long for its code index scan to end.
@@ -50,18 +47,6 @@ const EMBEDDER_IDLE: Duration = Duration::from_secs(10 * 60);
 const QUERY_SAMPLES: usize = 1_000;
 /// Nodes embedded per maintenance round, once the model is loaded.
 const EMBED_BATCH: u32 = 256;
-/// The answer budget of one `query_brain` call, in tokens (each kind of result is capped too,
-/// with the rest by page).
-const QUERY_TOKENS: u32 = 1_000;
-/// Definitions and references `query_brain` shows per name it finds in the code index.
-const CODE_LOOKUP: u32 = 10;
-/// Transcript events read per page while indexing a conversation's transcript.
-const TRANSCRIPT_PAGE: u32 = 500;
-/// Most of a thread step's command or call shown in its entry's first line, which leads its
-/// search hits.
-const STEP_LEAD_BYTES: usize = 200;
-/// Most of a thread step's command or call input indexed (its output is already cut at 8 KiB).
-const STEP_INPUT_BYTES: usize = 8 * 1024;
 /// The markers around the conventions Brigadier writes into an AGENTS.md.
 const EXPORT_START: &str = "<!-- brigadier:conventions:start -->";
 const EXPORT_END: &str = "<!-- brigadier:conventions:end -->";
@@ -172,7 +157,7 @@ impl Brains {
         self.projects.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn note_query(&self, ms: f64) {
+    pub(super) fn note_query(&self, ms: f64) {
         let mut samples = self.query_ms.lock().unwrap_or_else(|p| p.into_inner());
         if samples.len() == QUERY_SAMPLES {
             samples.pop_front();
@@ -253,14 +238,14 @@ impl SessionManager {
         };
         if let Some(old) = old {
             stop_watchers(old.take_watcher().into_iter().collect()).await;
-            // What the index (and the skeleton passes and enrichment of older Brigadiers)
+            // What the index and the skeleton passes (older Brigadiers' idle passes too)
             // learned describes the old repository: it goes before the new one is scanned.
             // Sessions' decisions and reports stay.
             if old.root.is_some() {
                 let brain = old.brain.clone();
                 let forgotten = blocking(move || {
                     brain
-                        .forget_origins(&[Origin::Index, Origin::Skeleton, Origin::Enrichment])
+                        .forget_origins(&[Origin::Index, Origin::Skeleton])
                         .map_err(brain_error)
                 })
                 .await;
@@ -645,422 +630,6 @@ impl SessionManager {
     }
 
     // ----- the orchestrator's tools --------------------------------------------------------
-
-    /// `query_brain`: the project's knowledge, then the user's preferences that match.
-    pub(crate) async fn query_brain_tool(
-        &self,
-        id: &ConversationId,
-        worktree: Option<&std::path::Path>,
-        text: String,
-        history: bool,
-        page: Option<u32>,
-    ) -> Result<String> {
-        let started = Instant::now();
-        // Each claim's sources are re-read for this answer (BUILD-PLAN E1).
-        let reader = self.sources_for(id, worktree);
-        let project = match self.project_of(id) {
-            Some(project) => Some(self.project_brain(&project).await?),
-            None => None,
-        };
-        let personal = self.personal_brain().await.ok();
-        // A node id (from a briefing's decision lines): that node in full.
-        if let Ok(node_id) = uuid::Uuid::parse_str(text.trim()) {
-            let (node_id, brains) = (
-                node_id.to_string(),
-                project
-                    .iter()
-                    .map(|project| project.brain.clone())
-                    .chain(personal.clone())
-                    .collect::<Vec<_>>(),
-            );
-            let reader = reader.clone();
-            let found = blocking(move || {
-                for brain in brains {
-                    if let Some(mut node) = brain.node(&node_id).map_err(brain_error)? {
-                        brigadier_brain::check_sources(&mut [&mut node], &|source| {
-                            reader.check(source)
-                        });
-                        return Ok(Some(node));
-                    }
-                }
-                Ok(None)
-            })
-            .await?;
-            self.brains
-                .note_query(started.elapsed().as_secs_f64() * 1000.0);
-            return Ok(match found {
-                Some(node) => node_text(&node),
-                None => format!("No Brain node has the id {}.", text.trim()),
-            });
-        }
-        let query = text.clone();
-        // Names only code has also go to the code index (once, on the first page); the Brain
-        // still answers the whole question.
-        let names = match brigadier_brain::route(&text) {
-            Route::Code { names } if page.unwrap_or(1) <= 1 => names,
-            _ => Vec::new(),
-        };
-        let index = project.as_ref().and_then(|project| project.index.clone());
-        let (code, answer, preferences) = blocking(move || {
-            let code: Vec<String> = match &index {
-                Some(index) => names
-                    .iter()
-                    .filter_map(|name| {
-                        let found = index.lookup(name, CODE_LOOKUP).ok()?;
-                        (!found.is_empty()).then(|| format!("`{name}`\n{}", found.trim_end()))
-                    })
-                    .collect(),
-                None => Vec::new(),
-            };
-            let answer = match &project {
-                Some(project) => Some(
-                    project
-                        .brain
-                        .query_with(
-                            &BrainQuery {
-                                text: query.clone(),
-                                kinds: Vec::new(),
-                                limit: None,
-                                max_tokens: Some(QUERY_TOKENS),
-                                files: true,
-                                history,
-                                caps: Some(BrainCaps::default()),
-                                page,
-                            },
-                            &|source| reader.check(source),
-                        )
-                        .map_err(brain_error)?,
-                ),
-                None => None,
-            };
-            let preferences = match &personal {
-                Some(personal) => personal
-                    .query(&BrainQuery {
-                        text: query,
-                        kinds: vec![NodeKind::Preference],
-                        limit: Some(4),
-                        max_tokens: Some(300),
-                        files: false,
-                        history,
-                        caps: None,
-                        page: None,
-                    })
-                    .ok(),
-                None => None,
-            };
-            Ok((code, answer, preferences))
-        })
-        .await?;
-        let mut reply = String::new();
-        if !code.is_empty() {
-            reply.push_str("[Code index]\n");
-            reply.push_str(&code.join("\n"));
-            reply.push_str("\n\n");
-        }
-        match &answer {
-            Some(answer) if !answer.hits.is_empty() => {
-                reply.push_str("[Project Brain]\n");
-                reply.push_str(&answer.text);
-            }
-            _ if !code.is_empty() => reply.push_str("[Project Brain]\nNothing more on this."),
-            // The thread reads the code itself too (BUILD-PLAN B3): a scout is for a big look
-            // around, not a missing Brain line.
-            _ => reply.push_str(
-                "The Project Brain has nothing on this yet: read the code yourself (`brigadier code search`, `code refs`, `code map`, then the lines you need).",
-            ),
-        }
-        if let Some(preferences) = preferences.filter(|found| !found.hits.is_empty()) {
-            reply.push_str("\n\n[The user's preferences]\n");
-            reply.push_str(&preferences.text);
-        }
-        self.brains
-            .note_query(started.elapsed().as_secs_f64() * 1000.0);
-        Ok(reply)
-    }
-
-    /// `search_transcript`: passages of this conversation's full transcript.
-    pub(crate) async fn search_transcript_tool(
-        &self,
-        id: &ConversationId,
-        args: SearchTranscript,
-    ) -> Result<String> {
-        let project = self
-            .project_of(id)
-            .ok_or_else(|| Error::Invalid("this conversation has no transcript index".into()))?;
-        let project = self.project_brain(&project).await?;
-        self.sync_transcript(id, &project.brain).await?;
-        let (brain, conversation, limit) = (
-            project.brain.clone(),
-            id.0.clone(),
-            args.limit.unwrap_or(8).clamp(1, 30),
-        );
-        let query = args.query;
-        let hits = blocking(move || {
-            brain
-                .search_transcript(&conversation, &query, limit)
-                .map_err(brain_error)
-        })
-        .await?;
-        if hits.is_empty() {
-            return Ok("Nothing in this conversation's transcript matches.".into());
-        }
-        let mut text = String::new();
-        for hit in hits {
-            let date = crate::manager::prompts::date_of(hit.at_ms);
-            let snippet = hit.snippet.trim();
-            match hit.stream {
-                // `#N` is how a user's message is cited (remember's `user_message`).
-                TranscriptStream::Conversation => {
-                    text.push_str(&format!("[{} · {date} · #{}]\n", hit.role, hit.seq));
-                }
-                // A step of the thread's own work is never shown as `#N`; its first line (the
-                // command or call, and where a whole output is kept) leads, as the passage
-                // may not reach it.
-                TranscriptStream::Thread => {
-                    text.push_str(&format!(
-                        "[{} · {date} · thread step {}]\n",
-                        hit.role, hit.seq
-                    ));
-                    if !hit.lead.is_empty() && !snippet.contains(hit.lead.trim()) {
-                        text.push_str(hit.lead.trim());
-                        text.push_str(if snippet.starts_with('…') {
-                            "\n"
-                        } else {
-                            "\n…"
-                        });
-                    }
-                }
-            }
-            text.push_str(snippet);
-            text.push_str("\n\n");
-        }
-        Ok(text.trim_end().to_owned())
-    }
-
-    /// Adds what the conversation and its thread did since each stream's last indexed or read
-    /// event to the Brain's transcript index. Each stream keeps its own watermark: a
-    /// conversation indexed before the thread's stream was still has its thread's whole stream
-    /// indexed from the start.
-    pub(crate) async fn sync_transcript(&self, id: &ConversationId, brain: &Brain) -> Result<()> {
-        for stream in [TranscriptStream::Conversation, TranscriptStream::Thread] {
-            self.sync_transcript_stream(id, brain, stream).await?;
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn sync_transcript_stream(
-        &self,
-        id: &ConversationId,
-        brain: &Brain,
-        stream: TranscriptStream,
-    ) -> Result<()> {
-        let conversation = id.0.clone();
-        let mut after = {
-            let (brain, conversation) = (brain.clone(), conversation.clone());
-            blocking(move || {
-                brain
-                    .transcript_watermark(&conversation, stream)
-                    .map_err(brain_error)
-            })
-            .await?
-            .unwrap_or(0)
-        };
-        let name = match stream {
-            TranscriptStream::Conversation => streams::conversation(id),
-            TranscriptStream::Thread => streams::orchestrator(id),
-        };
-        loop {
-            let page = self
-                .core
-                .store()
-                .read_stream_since(name.clone(), after, TRANSCRIPT_PAGE)
-                .await?;
-            let Some(last) = page.last() else {
-                return Ok(());
-            };
-            after = last.stream_seq;
-            let full = page.len() as u32 == TRANSCRIPT_PAGE;
-            let mut entries = Vec::new();
-            for stored in page {
-                let found = match stream {
-                    TranscriptStream::Conversation => {
-                        match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
-                            Ok(event) => self.transcript_text(event).await,
-                            Err(_) => None,
-                        }
-                    }
-                    TranscriptStream::Thread => match super::export::thread_event(&stored) {
-                        super::export::Decoded::Event(event) => self
-                            .thread_step_text(&event)
-                            .map(|(role, text)| (role, None, text)),
-                        _ => None,
-                    },
-                };
-                if let Some((role, request_id, text)) = found {
-                    entries.push(TranscriptEntry {
-                        conversation_id: conversation.clone(),
-                        stream,
-                        seq: stored.stream_seq,
-                        role: role.into(),
-                        request_id,
-                        at_ms: stored.at_ms,
-                        text,
-                    });
-                }
-            }
-            let (brain, conversation) = (brain.clone(), conversation.clone());
-            blocking(move || {
-                brain
-                    .index_transcript_through(&conversation, stream, after, entries)
-                    .map_err(brain_error)
-            })
-            .await?;
-            if !full {
-                return Ok(());
-            }
-        }
-    }
-
-    /// What a finished command or tool call of the thread adds to the searchable transcript:
-    /// its role (`command`, `read` for reads and searches, `tool`), and a first line with the
-    /// call and where its whole output is kept, then the call in full when that line cuts it,
-    /// then its output as recorded (cut at 8 KiB). A kept output is named, never copied in.
-    /// The thread's own `search_transcript` calls are left out: their passages would only
-    /// repeat what they found.
-    fn thread_step_text(&self, event: &ProviderEvent) -> Option<(&'static str, String)> {
-        let finished =
-            |status: &ItemStatus| matches!(status, ItemStatus::Completed | ItemStatus::Failed);
-        let (role, mut lead, call, output, kept) = match event {
-            ProviderEvent::Command {
-                command,
-                status,
-                exit_code,
-                output,
-                kept,
-                ..
-            } if finished(status) => {
-                let mut lead = format!("Ran `{}`", lead_part(command));
-                match exit_code {
-                    Some(code) => lead.push_str(&format!(" (exit {code})")),
-                    None if matches!(status, ItemStatus::Failed) => lead.push_str(" (failed)"),
-                    None => {}
-                }
-                (command_role(command), lead, command.as_str(), output, kept)
-            }
-            ProviderEvent::ToolCall {
-                name,
-                input,
-                status,
-                output,
-                kept,
-                ..
-            } if finished(status) => {
-                if name.ends_with("search_transcript") {
-                    return None;
-                }
-                let input = input.as_deref().unwrap_or_default();
-                let args = serde_json::from_str::<serde_json::Value>(input).ok();
-                let arg = |key: &str| {
-                    args.as_ref()
-                        .and_then(|args| args.get(key))
-                        .and_then(serde_json::Value::as_str)
-                        .map(lead_part)
-                };
-                let path = arg("file_path").or_else(|| arg("notebook_path"));
-                let (role, mut lead) = match (name.as_str(), path, arg("pattern")) {
-                    ("Read" | "NotebookRead", Some(path), _) => ("read", format!("Read {path}")),
-                    ("Grep" | "Glob", _, Some(pattern)) => {
-                        let within = arg("path").map(|path| format!(" in {path}"));
-                        (
-                            "read",
-                            format!("{name} `{pattern}`{}", within.unwrap_or_default()),
-                        )
-                    }
-                    ("Read" | "NotebookRead" | "Grep" | "Glob" | "LS", ..) => {
-                        ("read", format!("{name} {}", lead_part(input)))
-                    }
-                    _ if matches!(input.trim(), "" | "{}") => ("tool", format!("Called {name}")),
-                    _ => ("tool", format!("Called {name} with {}", lead_part(input))),
-                };
-                if matches!(status, ItemStatus::Failed) {
-                    lead.push_str(" (failed)");
-                }
-                (role, lead, input, output, kept)
-            }
-            _ => return None,
-        };
-        let blobs = self.core.store().blobs();
-        let kept_file = |hash: &str| {
-            hash.parse::<brigadier_store::BlobHash>()
-                .ok()
-                .map(|hash| blobs.file_of(&hash).display().to_string())
-        };
-        if let Some(kept) = kept.as_deref() {
-            if let Some(path) = kept.blob.as_deref().and_then(kept_file) {
-                lead.push_str(&format!("; whole output ({} bytes): {path}", kept.bytes));
-            }
-            if let Some(file) = &kept.file
-                && let Some(path) = file.blob.as_deref().and_then(kept_file)
-            {
-                lead.push_str(&format!(
-                    "; the CLI's saved copy ({} bytes): {path}",
-                    file.bytes
-                ));
-            }
-        }
-        let mut text = lead;
-        if lead_part(call) != call.trim() {
-            text.push('\n');
-            text.push_str(&cut(call.trim(), STEP_INPUT_BYTES));
-        }
-        if let Some(output) = output.as_deref().filter(|output| !output.trim().is_empty()) {
-            text.push('\n');
-            text.push_str(output);
-        }
-        Some((role, text))
-    }
-
-    /// What a conversation event adds to the searchable transcript.
-    async fn transcript_text(
-        &self,
-        event: DomainEvent,
-    ) -> Option<(&'static str, Option<String>, String)> {
-        match event {
-            DomainEvent::MessageAppended { message } => {
-                let role = match message.role {
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::System => "brigadier",
-                    MessageRole::Peer => "peer",
-                };
-                let text = crate::sessions::display_text(
-                    &self.full_words(&message).await,
-                    &message.attachments,
-                );
-                Some((role, message.request_id, text))
-            }
-            DomainEvent::TaskUpdated { task } => {
-                let report = task.report.as_ref()?;
-                if !matches!(task.state, crate::work::TaskState::Reported) {
-                    return None;
-                }
-                Some((
-                    "report",
-                    task.request_id.clone(),
-                    report_text(&task, report),
-                ))
-            }
-            DomainEvent::QuestionUpdated { question } => {
-                let answer = question.answer.as_ref()?;
-                Some((
-                    "decision",
-                    question.request_id.clone(),
-                    format!("Asked the user: {}\nThey answered: {answer}", question.text),
-                ))
-            }
-            _ => None,
-        }
-    }
 
     // ----- the workers' code-index tools ---------------------------------------------------
 
@@ -1632,36 +1201,6 @@ impl SessionManager {
     }
 }
 
-/// A node in full, as `query_brain` returns one asked for by id.
-fn node_text(node: &Node) -> String {
-    let state = match &node.state {
-        NodeState::Fresh => String::new(),
-        NodeState::Stale { reason, .. } => format!(" [may be outdated: {reason}]"),
-        NodeState::Superseded { by, reason, .. } => match reason {
-            Some(reason) => format!(" [replaced by {by}: {reason}]"),
-            None => format!(" [replaced by {by}]"),
-        },
-    };
-    let files: Vec<&str> = node.files.iter().map(|file| file.path.as_str()).collect();
-    let mut text = format!(
-        "[{}] {:?}: {}{state}\n{}",
-        node.id,
-        node.kind,
-        node.title,
-        node.body.trim()
-    );
-    if !files.is_empty() {
-        text.push_str(&format!("\nFiles: {}", files.join(", ")));
-    }
-    text.push_str(&format!(
-        "\n({}, {})",
-        brigadier_brain::source_words(node.kind, &node.provenance),
-        crate::manager::prompts::date_of(node.provenance.recorded_at_ms)
-    ));
-    text
-}
-
-/// Hands changed files to the Brain (on the index's threads).
 fn files_changed(brain: &Brain, changes: &[FileChange]) {
     if changes.is_empty() {
         return;
@@ -1707,7 +1246,7 @@ fn is_manifest(path: &str) -> bool {
 }
 
 /// The index's modules and services as Brain nodes (origin `index`). A node a model has
-/// described since (skeleton pass, enrichment) keeps its description.
+/// described since (a skeleton pass) keeps its description.
 fn learn_structure(brain: &Brain, index: &CodeIndex) {
     let map = match index.project_map() {
         Ok(map) => map,
@@ -1844,32 +1383,6 @@ fn learn_structure(brain: &Brain, index: &CodeIndex) {
     }
 }
 
-/// A report as the Brain keeps it: the question it answered, then the answer.
-pub(crate) fn report_text(task: &Task, report: &Report) -> String {
-    let mut text = format!(
-        "Task: {}\n{}\n\nAnswer: {}",
-        task.title,
-        cut(&task.spec, 800),
-        report.summary
-    );
-    for (title, items) in [
-        ("Decisions", &report.decisions),
-        ("Changes", &report.changes),
-        ("Verification", &report.verification),
-        ("Done when", &report.done_when),
-        ("Open questions", &report.open_questions),
-        ("Risks", &report.risks),
-    ] {
-        if !items.is_empty() {
-            text.push_str(&format!("\n{title}:"));
-            for item in items {
-                text.push_str(&format!("\n- {item}"));
-            }
-        }
-    }
-    text
-}
-
 /// The user's messages a handoff note's decisions are checked against, at most.
 const USER_TEXTS_MAX: usize = 2_000;
 /// A quoted span shorter than this ("yes") proves nothing.
@@ -1924,26 +1437,6 @@ pub(super) fn blake_key(text: &str) -> String {
 /// The first line of `text`, at most `max` bytes (on a character boundary).
 pub(crate) fn one_line(text: &str, max: usize) -> String {
     cut(text.trim().lines().next().unwrap_or_default().trim(), max)
-}
-
-/// `text` on one line with its whitespace collapsed, cut at [`STEP_LEAD_BYTES`]: a thread
-/// step's call in its entry's first line.
-/// A Codex command's role in the thread's transcript index: `read` for one that only reads,
-/// lists or searches files (`sed -n`, `rg`, `ls`…), as Claude's `Read` and `Grep` are, else
-/// `command`.
-fn command_role(command: &str) -> &'static str {
-    if brigadier_providers::only_looks(&brigadier_providers::policy::unwrapped_command(command)) {
-        "read"
-    } else {
-        "command"
-    }
-}
-
-fn lead_part(text: &str) -> String {
-    cut(
-        &text.split_whitespace().collect::<Vec<_>>().join(" "),
-        STEP_LEAD_BYTES,
-    )
 }
 
 /// `text` cut to at most `max` bytes on a character boundary, with an ellipsis if cut.
@@ -2066,21 +1559,4 @@ async fn code_refs_found(index: CodeIndex, args: CodeRefs) -> Result<(String, Ve
 /// `project_map`, answered from `index`.
 pub(crate) async fn project_map(index: CodeIndex) -> Result<String> {
     blocking(move || index.digest(24_000).map_err(index_error)).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A Codex read (a command that only reads or searches, wrapped in its shell) is indexed
-    /// as a read; any other command as a command.
-    #[test]
-    fn a_codex_read_is_indexed_as_a_read() {
-        assert_eq!(
-            command_role("/bin/zsh -lc \"sed -n '1,80p' src/a.rs\""),
-            "read"
-        );
-        assert_eq!(command_role("rg -n thread_items crates"), "read");
-        assert_eq!(command_role("/bin/zsh -lc 'cargo test -p core'"), "command");
-    }
 }

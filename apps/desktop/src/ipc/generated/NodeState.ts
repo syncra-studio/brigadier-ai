@@ -5,6 +5,6 @@
  */
 export type NodeState = { "type": "fresh" } | { "type": "stale", reason: string, sinceMs: number, } | { "type": "superseded", by: string, 
 /**
- * Why it was replaced ("rewritten by enrichment", "replaced by …").
+ * Why it was replaced ("rewritten by the skeleton pass", "replaced by …").
  */
 reason: string | null, sinceMs: number | null, };

@@ -46,21 +46,6 @@ impl SessionManager {
         call: OrchestratorCall,
     ) -> Result<String> {
         match call {
-            OrchestratorCall::QueryBrain(args) => {
-                crate::heap(|| {
-                    self.query_brain_tool(
-                        id,
-                        None,
-                        args.query,
-                        args.history.unwrap_or(false),
-                        args.page,
-                    )
-                })
-                .await
-            }
-            OrchestratorCall::SearchTranscript(args) => {
-                crate::heap(|| self.search_transcript_tool(id, args)).await
-            }
             OrchestratorCall::RequestApproval(args) => {
                 crate::heap(|| {
                     self.open_approval(

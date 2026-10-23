@@ -10,7 +10,8 @@
   "properties": {
     "action": {
       "enum": [
-        "search"
+        "search",
+        "read"
       ]
     },
     "text": {

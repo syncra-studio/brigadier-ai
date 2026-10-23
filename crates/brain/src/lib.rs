@@ -1,6 +1,6 @@
 //! Project Brain: the knowledge graph, its retrieval (SQLite FTS5 plus local embeddings),
-//! staleness by file content hashes, the Personal Brain, and the full-transcript index rebirth
-//! searches (PLAN.md §6 Phase 4).
+//! staleness by file content hashes, the Personal Brain, and the records index `brigadier brain
+//! search` reads (STRIP-DOWN-PLAN S18).
 //!
 //! One [`Brain`] per project (`<data>/brains/<project>/brain.sqlite`) and one Personal Brain
 //! (`<data>/brains/personal.sqlite`), never in a repository. Every node records its
@@ -32,12 +32,12 @@ mod db;
 mod download;
 mod embed;
 mod format;
+mod records;
 mod retrieve;
 mod route;
 mod schema;
 #[cfg(test)]
 mod tests;
-mod transcript;
 mod vectors;
 mod write;
 
@@ -106,7 +106,7 @@ pub enum NodeState {
     /// A newer node replaces it: history, shown only when asked for.
     Superseded {
         by: String,
-        /// Why it was replaced ("rewritten by enrichment", "replaced by …").
+        /// Why it was replaced ("rewritten by the skeleton pass", "replaced by …").
         reason: Option<String>,
         since_ms: Option<i64>,
     },
@@ -118,16 +118,17 @@ pub enum NodeState {
 pub enum Origin {
     /// The static code index (no model).
     Index,
-    /// The skeleton pass on project add.
-    Skeleton,
-    /// Idle-quota enrichment.
-    Enrichment,
     /// A worker's report.
     Report,
     /// The orchestrator (`remember`).
     Orchestrator,
     /// The user: a card they answered, or a Chat memory.
     User,
+    /// A model's background pass over the code (the skeleton pass on project add, and the
+    /// idle-time passes of older Brigadiers, read as this). Last: any origin no longer known
+    /// reads as this.
+    #[serde(other)]
+    Skeleton,
 }
 
 /// The CLI model that produced a node.
@@ -147,14 +148,14 @@ pub struct Provenance {
     /// The conversation (session or Chat) it was learned in.
     pub session_id: Option<String>,
     pub task_id: Option<String>,
-    /// The Brain job (skeleton pass, enrichment) that wrote it.
+    /// The Brain job (a skeleton pass) that wrote it.
     pub job_id: Option<String>,
     pub worker: Option<WorkerRef>,
     /// The repository commit the knowledge was read at, or landed as.
     pub commit: Option<String>,
     pub recorded_at_ms: i64,
     /// A claim's evidence state and source details (BUILD-PLAN A11): what a worker reported,
-    /// what the thread kept on its own, what enrichment wrote. `None` for the user's own
+    /// what the thread kept on its own, what a skeleton pass wrote. `None` for the user's own
     /// decisions and for what the code index read from the code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -245,8 +246,8 @@ impl Claim {
 }
 
 /// Where a node's knowledge came from and whether it was checked, in a few words: "user
-/// decision", "worker claim, unverified", "thread claim, unverified", "enrichment,
-/// unverified", "code index".
+/// decision", "worker claim, unverified", "thread claim, unverified", "skeleton
+/// pass, unverified", "code index".
 pub fn source_label(kind: NodeKind, provenance: &Provenance) -> &'static str {
     let verified = provenance
         .claim
@@ -256,8 +257,8 @@ pub fn source_label(kind: NodeKind, provenance: &Provenance) -> &'static str {
         Origin::User if kind == NodeKind::Preference => "user preference",
         Origin::User => "user decision",
         Origin::Index => "code index",
-        Origin::Skeleton | Origin::Enrichment if verified => "enrichment, verified",
-        Origin::Skeleton | Origin::Enrichment => "enrichment, unverified",
+        Origin::Skeleton if verified => "skeleton pass, verified",
+        Origin::Skeleton => "skeleton pass, unverified",
         // A thread-kept preference from before claims: the user's, as the thread noted it.
         Origin::Orchestrator if kind == NodeKind::Preference && provenance.claim.is_none() => {
             "user preference"
@@ -271,7 +272,7 @@ pub fn source_label(kind: NodeKind, provenance: &Provenance) -> &'static str {
     }
 }
 
-/// The node is a claim (or enrichment) nobody checked yet: briefs say so, and list it after
+/// The node is a claim (or a skeleton pass's) nobody checked yet: briefs say so, and list it after
 /// what is settled.
 pub fn unverified(kind: NodeKind, provenance: &Provenance) -> bool {
     source_label(kind, provenance).ends_with("unverified")
@@ -560,71 +561,101 @@ pub struct BrainStats {
     /// Nodes without an embedding from the current model.
     pub unembedded: u64,
     pub kinds: Vec<KindCount>,
-    /// Transcript entries indexed.
+    /// Record entries indexed (transcripts, ledgers, hand-off notes).
     pub transcript_entries: u64,
     pub bytes_on_disk: u64,
 }
 
-/// Which of a conversation's event streams a transcript entry came from. Each numbers its
-/// events on its own, so an entry is known by its stream and seq together.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum TranscriptStream {
-    /// The conversation: messages, reports, decisions.
-    #[default]
-    Conversation,
-    /// The thread's own work: the commands it ran, the files it read, the tools it called.
-    Thread,
+/// What a record entry was read from (STRIP-DOWN-PLAN S18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RecordSource {
+    /// A CLI session file of the session's lineage: one entry per item, numbered across its
+    /// generations.
+    Transcript,
+    /// A whole output the CLI saved under `tool-results/`, at the position of the call that
+    /// made it.
+    ToolOutput,
+    /// `record/ledger.md`, by line.
+    Ledger,
+    /// `record/ledger-archive.md`, by line.
+    LedgerArchive,
+    /// A hand-off note under `record/handoff/`, by line.
+    Handoff,
 }
 
-impl TranscriptStream {
+impl RecordSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Conversation => "conversation",
-            Self::Thread => "thread",
+            Self::Transcript => "transcript",
+            Self::ToolOutput => "tool-output",
+            Self::Ledger => "ledger",
+            Self::LedgerArchive => "ledger-archive",
+            Self::Handoff => "handoff",
         }
     }
 
     pub(crate) fn parse(text: &str) -> Self {
         match text {
-            "thread" => Self::Thread,
-            _ => Self::Conversation,
+            "tool-output" => Self::ToolOutput,
+            "ledger" => Self::Ledger,
+            "ledger-archive" => Self::LedgerArchive,
+            "handoff" => Self::Handoff,
+            _ => Self::Transcript,
         }
     }
 }
 
-/// A line of a conversation's transcript, for full-transcript search.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct TranscriptEntry {
-    pub conversation_id: String,
-    #[serde(default)]
-    pub stream: TranscriptStream,
-    /// The event store sequence it came from (entries are idempotent by conversation, stream
-    /// and seq).
-    pub seq: i64,
-    /// `user`, `assistant`, `report`, `decision`, `brigadier`; a thread entry's `command`,
-    /// `read` or `tool`.
-    pub role: String,
-    pub request_id: Option<String>,
-    pub at_ms: i64,
-    pub text: String,
+/// The file a ledger entry cites ("Learned from reading: <path>:<line> …"), and its content
+/// hash when the entry was first indexed: a change since reads as stale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cited {
+    pub path: String,
+    pub line: Option<u32>,
+    /// `None` when the file couldn't be read then.
+    pub hash: Option<String>,
 }
 
-/// A transcript search result.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct TranscriptHit {
-    pub stream: TranscriptStream,
-    pub seq: i64,
+/// One file of a session's records, as the reader found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordFile {
+    /// The conversation whose folder holds it (a worker's: its session's).
+    pub conversation_id: String,
+    /// How hits name the session: its folder's short id, a worker's `<short>/<n>-<task8>`.
+    pub session: String,
+    pub source: RecordSource,
+    /// The file (a transcript's: its `record/lineage.json`).
+    pub path: String,
+    /// Its size and time when read: an unchanged stamp is not read again.
+    pub stamp: String,
+}
+
+/// One entry of a record file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordEntry {
+    /// The transcript item's number, or the file's line (from 1).
+    pub position: i64,
+    /// `user`, `assistant`, `command`, `tool`, `output`; a ledger line's `ledger`.
     pub role: String,
-    pub request_id: Option<String>,
-    pub at_ms: i64,
+    pub at_ms: Option<i64>,
+    pub text: String,
+    pub cited: Option<Cited>,
+}
+
+/// A records search result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordHit {
+    pub session: String,
+    pub source: RecordSource,
+    pub path: String,
+    pub position: i64,
+    pub role: String,
+    pub at_ms: Option<i64>,
     /// The matching passage, with some context (at most about 600 bytes).
     pub snippet: String,
-    /// The entry's first line (a thread entry's command or call), which the snippet may not
-    /// reach.
+    /// The entry's first line (a command or call), which the snippet may not reach.
     pub lead: String,
+    /// The file it cites, with the hash taken when it was indexed.
+    pub cited: Option<Cited>,
 }
 
 /// The local embedding model's state.
@@ -927,7 +958,7 @@ impl Brain {
         self.write(move |tx, changes| write::delete(tx, &id, now, changes))
     }
 
-    /// Forgets what the Brain learned in `session_id`, and its transcript ("forget what the
+    /// Forgets what the Brain learned in `session_id`, and its records ("forget what the
     /// Brain learned from this session" on delete): nodes only this session supports go,
     /// nodes another session, task or job also supports stay. Returns how many nodes went.
     pub fn forget_session(&self, session_id: &str) -> Result<u64> {
@@ -935,13 +966,13 @@ impl Brain {
         let now = db::now_ms();
         self.write(move |tx, changes| {
             let gone = write::forget(tx, &write::Sources::Session(&session), now, changes)?;
-            transcript::forget(tx, &session)?;
+            records::forget(tx, &session)?;
             Ok(gone)
         })
     }
 
-    /// Forgets what came from one of `origins` (what the code index, the skeleton pass or
-    /// enrichment learned of a repository the project no longer uses): nodes no other origin
+    /// Forgets what came from one of `origins` (what the code index or a skeleton pass
+    /// learned of a repository the project no longer uses): nodes no other origin
     /// supports go, and their latest earlier versions are current again. Returns how many
     /// went.
     pub fn forget_origins(&self, origins: &[Origin]) -> Result<u64> {
@@ -1232,7 +1263,7 @@ impl Brain {
                     &[embed::MODEL_ID],
                 )?,
                 kinds,
-                transcript_entries: count("SELECT COUNT(*) FROM transcript", &[])?,
+                transcript_entries: records::count(conn)?,
                 bytes_on_disk: 0,
             })
         })?;
@@ -1246,52 +1277,32 @@ impl Brain {
         Ok(stats)
     }
 
-    /// Adds transcript entries (idempotent by conversation, stream and seq).
-    pub fn index_transcript(&self, entries: Vec<TranscriptEntry>) -> Result<()> {
-        self.write(move |tx, _| transcript::index(tx, &entries))
+    /// What record file `path` was when it was last indexed ([`RecordFile::stamp`]).
+    pub fn record_stamp(&self, path: &str) -> Result<Option<String>> {
+        self.read(|conn| records::stamp(conn, path))
     }
 
-    /// Adds the entries of a page read from one of a conversation's streams, and records that
-    /// the stream was read through `through_seq`.
-    pub fn index_transcript_through(
-        &self,
-        conversation_id: &str,
-        stream: TranscriptStream,
-        through_seq: i64,
-        entries: Vec<TranscriptEntry>,
-    ) -> Result<()> {
-        let conversation = conversation_id.to_owned();
-        self.write(move |tx, _| {
-            transcript::index(tx, &entries)?;
-            transcript::mark_read(tx, &conversation, stream, through_seq)
-        })
+    /// Indexes record file `file` as it is now (its `entries`, in order), from the first entry
+    /// that differs from what was indexed.
+    pub fn sync_records(&self, file: RecordFile, entries: Vec<RecordEntry>) -> Result<()> {
+        self.write(move |tx, _| records::sync(tx, &file, &entries))
     }
 
-    /// The highest seq indexed or read from one of a conversation's streams, to resume its
-    /// backfill.
-    pub fn transcript_watermark(
+    /// Full-text search over the records, best matches first (then the most recent): every
+    /// session's, or only `session`'s and its workers'.
+    pub fn search_records(
         &self,
-        conversation_id: &str,
-        stream: TranscriptStream,
-    ) -> Result<Option<i64>> {
-        self.read(|conn| transcript::watermark(conn, conversation_id, stream))
-    }
-
-    /// Full-text search over one conversation's transcript, best matches first (then the most
-    /// recent).
-    pub fn search_transcript(
-        &self,
-        conversation_id: &str,
         query: &str,
+        session: Option<&str>,
         limit: u32,
-    ) -> Result<Vec<TranscriptHit>> {
-        self.read(|conn| transcript::search(conn, conversation_id, query, limit))
+    ) -> Result<Vec<RecordHit>> {
+        self.read(|conn| records::search(conn, query, session, limit))
     }
 
-    /// Drops a conversation's transcript entries, from every stream.
-    pub fn forget_transcript(&self, conversation_id: &str) -> Result<()> {
+    /// Drops what was indexed from a conversation's records, its workers' too.
+    pub fn forget_records(&self, conversation_id: &str) -> Result<()> {
         let conversation = conversation_id.to_owned();
-        self.write(move |tx, _| transcript::forget(tx, &conversation))
+        self.write(move |tx, _| records::forget(tx, &conversation))
     }
 }
 

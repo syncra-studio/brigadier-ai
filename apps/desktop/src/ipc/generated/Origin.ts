@@ -3,4 +3,4 @@
 /**
  * Where a node's knowledge came from.
  */
-export type Origin = "index" | "skeleton" | "enrichment" | "report" | "orchestrator" | "user";
+export type Origin = "index" | "report" | "orchestrator" | "user" | "skeleton";

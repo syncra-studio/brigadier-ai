@@ -22,7 +22,6 @@ export const MEMORY_ROWS = {
 const ORIGINS: Record<Origin, string> = {
   index: "the code index",
   skeleton: "a skeleton pass",
-  enrichment: "an enrichment job",
   report: "a worker's report",
   orchestrator: "a session",
   user: "you",

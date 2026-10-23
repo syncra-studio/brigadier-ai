@@ -135,7 +135,7 @@ class Battery:
     def setup(self):
         self.start()
         settings = self.ipc.call({"method": "getCatalog"})["catalog"]["settings"]
-        settings.update(onboarded=True, introSeen=True, enrichBrain=False, defaultPermission="full")
+        settings.update(onboarded=True, introSeen=True, defaultPermission="full")
         settings["hiddenModels"] = [{"provider": "claude", "id": "fable"}]
         self.ipc.call({"method": "updateSettings", "settings": settings})
         def signed_in():
