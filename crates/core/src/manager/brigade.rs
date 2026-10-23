@@ -134,6 +134,13 @@ mod tests {
             "{} lines",
             SKILL.lines().count()
         );
+        // A session that reads it keeps it in context for every later call (the w152 bench:
+        // about 3.1k tokens written once, then read again on each call).
+        assert!(SKILL.len() <= 8_800, "{} bytes", SKILL.len());
+        // Said once: the standing instructions already hold a worker's claim, and the Waves
+        // list holds the events.
+        assert!(!SKILL.contains("A worker's claim is not a fact"));
+        assert_eq!(SKILL.matches("usage limit").count(), 1);
         assert!(SKILL.starts_with("---\nname: brigade\ndescription: "));
         for command in [
             "brigadier models",
