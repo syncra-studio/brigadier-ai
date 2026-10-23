@@ -81,7 +81,7 @@ class Accounting(unittest.TestCase):
             base = dict(provider="claude", status="complete", task="t1", run=1, grade={"passed": True},
                         wall_s=1, raw_tokens=64, cost_units=parent["cost_units"], api_calls=1,
                         usage=parent["usage"], models=parent["models"], brigadier_commands=0,
-                        ledger_adds=0, injected_messages=0, injected_bytes=0)
+                        ledger_adds=0, injected_messages=0, injected_bytes=0, worker_usage=None)
             report = dict(source="fixture", fixture_version=1, effort="low", runs=[
                 dict(base, arm="A", economics=parent["economics"]), dict(base, arm="W", roles=roles)])
             bench.write(report, root / "report")

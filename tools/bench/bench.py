@@ -419,7 +419,7 @@ def prepare(report):
         if "roles" not in row:
             row["roles"] = {"parent": row.get("economics") or historical(
                 row.get("parent_usage", row["usage"]), row.get("models", []))}
-            if any(row.get("worker_usage", {}).values()):
+            if any((row.get("worker_usage") or {}).values()):
                 row["roles"]["worker"] = historical(row["worker_usage"], row.get("worker_models", []))
         row["economics"] = combine(row["roles"].values())
         row["list_price_usd"] = row["economics"]["list_price_usd"]
