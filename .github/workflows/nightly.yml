@@ -76,6 +76,10 @@ jobs:
     name: macOS app, clippy, smoke, signing
     needs: gate
     if: needs.gate.outputs.run == 'true'
+    # If this is ever cancelled with zero steps after ~15 minutes queued, that's GitHub failing
+    # to hand out a hosted macOS runner (its own check-run annotation says so), not our workflow
+    # or code; `gh workflow run nightly.yml --ref main` again once it clears. See the `report`
+    # job below, which calls this out instead of implying a real regression.
     runs-on: macos-latest
     timeout-minutes: 120
     outputs:
@@ -670,6 +674,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+      MACOS_CANCELLED: ${{ needs.macos.result == 'cancelled' }}
       PASSED: ${{ needs.macos.result == 'success' && needs.others.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
@@ -679,6 +684,9 @@ jobs:
           open="$(gh issue list -R "$repo" --label nightly --state open --limit 1 --json number --jq '.[0].number // ""')"
           if [ "$FAILED" = true ]; then
             body="The nightly build of $GITHUB_SHA failed: $RUN_URL"
+            if [ "$MACOS_CANCELLED" = true ]; then
+              body="$body"$'\n\n'"macOS job was cancelled, likely GitHub failing to hand out a hosted macOS runner (capacity), not a code regression. Re-run with: gh workflow run nightly.yml --ref main"
+            fi
             if [ -n "$open" ]; then
               gh issue comment "$open" -R "$repo" --body "$body"
             else
