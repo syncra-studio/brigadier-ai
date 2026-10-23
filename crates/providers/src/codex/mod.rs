@@ -99,7 +99,9 @@ const RESTRICTED_FEATURES: &[&str] = &[
 /// Codex's own judgement of safe reads, and rules load only from `.rules` files in a Codex home
 /// or a trusted project. So a Chat's commands run in the read-only sandbox, and Brigadier
 /// declines every one Codex asks about but `brigadier` (`policy::runs_only_brigadier`); on
-/// 0.163.0 Codex asked about every command, `ls` and `cat` too (checked live).
+/// 0.163.0 Codex asked about every command, `ls` and `cat` too (checked live). An approved command
+/// the model asked to run outside the sandbox runs unsandboxed, so that answer is the guard; the
+/// network proxy (`features.network_proxy`) has no effect over the per-turn sandbox policy.
 const CHAT_FEATURES: &[&str] = &[
     "view_image",
     "multi_agent",

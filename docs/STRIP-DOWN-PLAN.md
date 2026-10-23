@@ -950,7 +950,10 @@ and `run`.
   - Chats and side chats had no shell, so they run `brigadier` through one limited to it: on Claude, `Bash` with
     `dontAsk` and only `Bash(brigadier:*)` allowed (Claude's own read-only commands still run in the session's
     folder); on Codex, a read-only sandboxed shell with network on for the daemon's socket, where Brigadier
-    approves only a plain `brigadier` command (Codex's rules can't forbid everything else).
+    approves only a plain `brigadier` command (Codex's rules can't forbid everything else). Codex asks about
+    every command, and runs an approved one outside its sandbox when the model asked for that, so Brigadier's
+    approval is the guard. Codex's network proxy (`features.network_proxy`) would hold the sandbox to the
+    socket, but has no effect over the app-server's per-turn sandbox policy (checked on 0.163.0).
 - Each sub-step closes the §3.6 issues it obsoletes, and re-checks #382 and #296.
 
 ### Stage 4: long sessions (G12) and Brain (G14)
@@ -995,8 +998,8 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
     When the file changes, they read as stale.
   - Commands: `brigadier brain search <query> [--session …]` returns hits with session, position and a text
     window. `brigadier brain read <session> <from> <to>` returns a verbatim span.
-  - Delete §3.8's Brain-first rule, the `learn_report` and `record_job_nodes` writers, the `remember` tool and
-    `brain_jobs.rs` enrichment. `constraints.rs`, `keep_note_decisions` and the event-store sync stay for
+  - Delete §3.8's Brain-first rule. The `learn_report` and `record_job_nodes` writers, the `remember` tool and
+    `brain_jobs.rs` enrichment already went in S16c. `constraints.rs`, `keep_note_decisions` and the event-store sync stay for
     `rebirth.rs` until S23 (§4 table).
   - The code index stays as optional commands: `brigadier code search|refs|map`.
   - These commands, and `brigadier transcript search`, already exist as thin wrappers since S16c.
