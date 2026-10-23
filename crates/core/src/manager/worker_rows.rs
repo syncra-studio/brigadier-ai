@@ -426,7 +426,7 @@ impl SessionManager {
     }
 
     /// Drops every worker's CLI and git reads held in memory, as a daemon restart does.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn forget_worker_reads(&self) {
         self.worker_rows.cli.lock().unwrap().clear();
         self.worker_rows.git.lock().unwrap().clear();
