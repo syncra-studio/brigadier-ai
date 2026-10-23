@@ -32,8 +32,8 @@
 > line the writer adds says "proposed". Older text is not re-tagged. The known drifts are in the run's audit
 > (`workers/w95/report.md`, run `20261022-0805-take-over-5-sessions`).
 > Amended again on 10-23 with the user's answers to that audit: the plan restores the grill's decisions where
-> they live, and Stage 6 (S28–S36) builds them. A changed line carries `(user, 2026-10-23: "…")`; the four
-> answers still open carry "default, user may reverse" (§9.6 lists all 20).
+> they live, and Stage 6 (S28–S37) builds them. A changed line cites the user or the Delegator's judgement;
+> all 20 answers are decided (§9.6), including the four defaults settled on 10-23.
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -70,8 +70,8 @@ default. It trims only its own additions: the short standing instructions (§6),
 one `brigadier --help` pointer, and the always-installed `/brigade` skill, which costs only its description
 until used (G20). The one thing it turns off is the few CLI tools that cannot work inside a Brigadier tab (S17),
 never anything of the user's. Stripping comes back only with measured evidence on our own tasks (§8, item 13).
-One override stays: when the user's settings say `disableAllHooks: true`, Brigadier sets it false so its own
-hooks run, and the user's hooks run too (§8, item 17; default, user may reverse, 2026-10-23).
+The user's `disableAllHooks` applies inside Brigadier too, including to Brigadier's own hooks (S37, §8 item 17)
+(Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
 The one exception is a research worker the thread starts with `brigadier start --lean` (G23, S13): the thread's
 choice per worker, never the user's own sessions.
 
@@ -1205,8 +1205,8 @@ worse than today's rebirth.
   the `orch:<id>` log, `export.rs` and the Brain's event-store sync.
   - A usage limit shows the "Resumes at" card, then the session continues visibly at the reset — a divider +
     the same turn resumed (MA5) — like the plain CLI (Q11, §9).
-  - An account switch or a model change continues the same CLI session; it never starts a successor (default,
-    user may reverse, 2026-10-23).
+  - An account switch or a model change continues the same CLI session; it never starts a successor
+    (user, 2026-10-23: "sure, continue the same session, don't start a fresh one").
   - Sessions open at upgrade are archived.
 - **Done when:** `git grep -n 'rebirth\|briefing\|BRIGADIER_REBIRTH_TOKENS\|OrchestratorLogged'` finds only
   docs, and the S22 tests pass with no flag.
@@ -1215,15 +1215,17 @@ worse than today's rebirth.
 - If S22b has landed, the seam-versus-rebirth comparison includes its decision-survival block, with the same
   planted items on both arms.
 
-**S24. Cold-cache rule.** Dropped (default, user may reverse, 2026-10-23): a session the user returns to after
-the cache TTL resumes as the plain CLI does. There is no idle nudge (Q2).
+**S24. Cold-cache rule.** Dropped (Delegator's judgement, 2026-10-23: the research's saving is one uncached
+read per cold return; plain Claude Code never restarts on a cold cache; S24 stays dropped; the nightly
+battery reports cold-return cost, never gates).
+A session the user returns to after the cache TTL resumes as the plain CLI does. There is no idle nudge (Q2).
 
 **S25. Battery nightly (Q7).** Codex.
 - **Scope:**
   - The battery runs nightly on both providers, as a CI artifact and a Reports page. The decision-survival block
     (S22b) runs with it, next to a plain-CLI arm that compacts on its own (L9).
   - A weekly sample is drawn from real lineages.
-  - A regression becomes a GitHub issue, never a hold.
+  - A regression becomes a GitHub issue, never a hold. Cold-return cost is reported, never a gate (S24).
 - **Done when:** the first nightly artifact exists.
 
 **S26. Codex parity.** Codex.
@@ -1430,6 +1432,18 @@ the how is proposed unless tagged. Steps on disjoint files carry ∥.
     so it is a report, never a gate.
 - After S30 (shared skill file).
 
+**S37. Hooks parity (w95 item 15).** Codex.
+(Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
+- **Scope:** delete the `disableAllHooks: false` override. A user who disabled all hooks gets none inside
+  Brigadier, including Brigadier's own. Read the CLI's own event stream for hook-backed features (G2); rebuild
+  no hook layer. If the stream cannot provide a feature, degrade silently and record exactly why in a GitHub
+  issue here; never prompt the user to turn hooks on. With hooks enabled or unset, keep today's behaviour.
+- **Files:** `P/claude/mod.rs`, its settings-layer tests, this plan.
+- **Done when:** a provider test starts Claude with the user's `disableAllHooks: true`, no override and no
+  Brigadier hooks; false and absent keep today's settings. Existing feature tests pass with hooks off; list
+  those tests and each hook-dependent feature in the report. Workspace clippy is clean.
+- ∥ anything; rebase after S22/S23 land if they touch the same hook code.
+
 ### Order and parallel runs, in one view
 
 ```
@@ -1437,9 +1451,9 @@ S1 → S2 → S3 → S4 → S5 → S6 → S7 ─┬→ S8 → S9 → S10 → S12
                                   └→ S11 (∥ S7–S10; merged files go under worker cards once S13 is on)
 after S10:  S17 → S18 → S19 → S20      (∥ Stage 3; S17 rebases after S16)
 after S8:  S21 (∥ anything)
-after S18 + S21:  S22 → S22b → S23 → S25 → S26 → S27      (S24 dropped, default, user may reverse, 2026-10-23)
+after S18 + S21:  S22 → S22b → S23 → S25 → S26 → S27      (S24 dropped, decided 2026-10-23)
 Stage 6, now (user, 2026-10-23):  S28 → S29 → S30 → S36 · S28 → S35 · S33 → S32 (after S28)
-                                  ∥ S31, S33, S34 with anything
+                                  ∥ S31, S33, S34, S37 with anything (S37 rebases after S22/S23 hook changes)
 any time:  MA1, X1 (bounded Codex tasks, §9)
 after Stage 2, one run per capability (§9):  O1–O5 with S13–S15 · MA2–MA7 with S13–S14 and S23
                                              L1–L9 with S18–S27 · BR1–BR8 after S13 · X2–X9 after X1
@@ -1537,7 +1551,10 @@ For anything else from before, search the record (`brigadier brain search`, `bri
    sandbox if the user turns it on). S13 probes this on both CLIs before anything depends on it. If it is refused,
    the fix is the CLI's own setting (an allowed socket or path in its sandbox config), never a Brigadier sandbox.
    As built, Codex keeps network on at Ask and Accept edits so `brigadier` reaches the daemon's socket
-   (`P/codex/mod.rs`), where plain Codex keeps it off. That stays (default, user may reverse, 2026-10-23).
+   (`P/codex/mod.rs`), where plain Codex keeps it off. That stays (Delegator's judgement with the user's
+   trust, 2026-10-23: "do as u thinnk it's best, i'll trust your judgement").
+   [#538](https://github.com/syncra-studio/brigadier-ai/issues/538) tracks reaching that one socket with network
+   access off, using the CLI's own per-socket exemption if supported.
 6. **Repo instructions on Codex.** After S17, Codex reads AGENTS.md along root → cwd only, as plain Codex does.
    A project that has only CLAUDE.md, or rules in a subfolder's AGENTS.md below the cwd, gives a Codex session
    less than `instructions.rs` gives it today. Taken as is ("take, don't rebuild"); a project that wants both
@@ -1593,10 +1610,10 @@ For anything else from before, search the record (`brigadier brain search`, `bri
     entries written with file tools have none, and `ledger check` lists them. The take-over line costs about
     100 tokens per seam: if the battery shows no gain in "applied without being asked", it goes. The derived-brief
     check is a model reading a fixed rubric, so it is a report, not proof.
-17. **Brigadier overrides `disableAllHooks`.** Brigadier's own hooks (the PreCompact refusal and the others)
-    need hooks on, so when the user's settings say `disableAllHooks: true`, a session gets `false`
-    (`P/claude/mod.rs`), and the user's own hooks run inside Brigadier too. A plain CLI would run none. This
-    stays, and this item is where it is said (default, user may reverse, 2026-10-23).
+17. **Hooks follow the CLI's own settings.** S37 removes the `disableAllHooks: false` override and registers no
+    Brigadier hooks when the user has disabled them. Hook-backed features read the CLI's own event stream
+    instead (G2); an unavailable event degrades silently and is recorded as an issue, never a prompt to turn
+    hooks on (Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
 
 ## 9. Excel at what we keep
 
@@ -1779,8 +1796,10 @@ sessions with token economy. Each has a measurable bar against the best rival to
 - **Our bar:**
   - **No compaction:** 0 in Claude sessions of any length (Codex's are counted, no bar). **Fewer tokens:**
     price-weighted ≤ 0.95× the plain CLI on the long battery (past 400k), ≤ 1.01× on the short one (< 150k).
-  - **Recall** ≥ 90% of planted items across forced seams. The **cold return** bar went with S24 (default, user may
-    reverse, 2026-10-23).
+  - **Recall** ≥ 90% of planted items across forced seams. The **cold return** bar went with S24; the nightly
+    battery reports cold-return cost, never gates (Delegator's judgement, 2026-10-23: the research's saving
+    is one uncached read per cold return; plain Claude Code never restarts on a cold cache; S24 stays
+    dropped; the nightly battery reports cold-return cost, never gates).
     **Done:** each scripted task still passes its test command.
   - **Decisions survive** (CONTINUITY §3.7) (user, 2026-10-23: "find a fix for this"): after three seams, ≥ 9 of 10
     planted items applied without being asked where they apply; a brief derived from them has 0 contradictions and
@@ -1793,8 +1812,9 @@ sessions with token economy. Each has a measurable bar against the best rival to
   2. **L2** (into S22): bootstrap order: map, ledger, note, the session's first user message and the latest
      exchange verbatim, a newest-first tail of ≈15k tokens, one line per omitted range with its exact read
      command. Done: a test asserts the order and that every omitted range's command works. Opus, S.
-  3. **L3** dropped with S24 (default, user may reverse, 2026-10-23): a cold cache, an account switch or a model
-     change continues the same session; none starts a successor.
+  3. **L3** dropped with S24: a cold cache continues the same session (S24's decision). An account switch or a
+     model change also continues the same session; none starts a successor
+     (user, 2026-10-23: "sure, continue the same session, don't start a fresh one").
   4. **L4** (into S21, S25): a token A/B arm, the same scripts in the plain CLI and Brigadier, both providers.
      Done: the nightly artifact shows all five bars per provider; the first run is the baseline. Codex, M.
   5. **L5** (into S23): a compaction counter in the weekly scan of real sessions. Done when the report lists
@@ -1819,8 +1839,10 @@ sessions with token economy. Each has a measurable bar against the best rival to
   one batched message: "Worker *title*: finished · *excerpt*", a result of what the thread started (G1), never
   twice. (O1) Not built in S13; S29 builds it, for questions, prompts and stops too (user, 2026-10-23: "The parent
   should know everything").
-- **Q10. A warm note before the cache expires?** No. Revisit only if the nightly battery shows it pays off on
-  cold seams. (L3, now dropped (default, user may reverse, 2026-10-23))
+- **Q10. A warm note before the cache expires?** No. S24 stays dropped; cold-return cost is reported, never
+  gates (Delegator's judgement, 2026-10-23: the research's saving is one uncached read per cold return;
+  plain Claude Code never restarts on a cold cache; S24 stays dropped; the nightly battery reports
+  cold-return cost, never gates).
 - **Q11. Resume visibly at the reset when every account is out?** Yes (MA5). The "Resumes at" card, then the
   session continues visibly at the reset — a divider + the same turn resumed — like the plain CLI. This
   replaces "a usage limit stops the turn … never restarts quietly" everywhere.
@@ -1841,14 +1863,19 @@ sessions with token economy. Each has a measurable bar against the best rival to
 4. The context ring in Chats → stays as it is (§1 Context card) (user: "ok").
 5. Computer use reaches no session → fixed (§1, S13, S35; #529) (user: "fix this!").
 6. PR row words and colours → the grill's list (§1, S14, S34) (user: "fix this").
-7. Codex network at Ask and Accept edits → stays on so `brigadier` reaches its socket (§8 item 5; default, user may
-   reverse).
+7. Codex network at Ask and Accept edits → stays on so `brigadier` reaches its socket (§8 item 5;
+   [#538](https://github.com/syncra-studio/brigadier-ai/issues/538))
+   (Delegator's judgement with the user's trust, 2026-10-23: "do as u thinnk it's best, i'll trust your judgement").
 8. An idle parent isn't told → the parent knows everything about its workers (§1, S13, O1, Q9, S29) (user:
    "The parent should know everything").
 9. The successor waits → it starts at once from the note (§1, S22, S23) (user: "Why wait? See how delegator
    works").
-10. A successor on account switch or model change → the same session continues (S23, L3; default, user may reverse).
-11. The cold-cache rule → dropped (S24, L3, the cold-return bar; default, user may reverse).
+10. A successor on account switch or model change → the same session continues (S23, L3)
+    (user, 2026-10-23: "sure, continue the same session, don't start a fresh one").
+11. The cold-cache rule → dropped (S24, L3, the cold-return bar)
+    (Delegator's judgement, 2026-10-23: the research's saving is one uncached read per cold return; plain
+    Claude Code never restarts on a cold cache; S24 stays dropped; the nightly battery reports cold-return
+    cost, never gates).
 12. No session-to-session messages, "read anything" in one project → sessions message each other when asked
     or truly needed, and read every project (§1, §2, S13, S30) (user: "Sessions should be able to message
     eachother").
@@ -1856,7 +1883,8 @@ sessions with token economy. Each has a measurable bar against the best rival to
     (§1 Folders, S31; #532).
 14. No Settings page for routing → Settings › Routing comes back as the rules editor, and `brigadier start` takes
     model and effort from those rules (§1, S13b, S32) (user: "user should've been able to apply his rules").
-15. Brigadier overrides `disableAllHooks` → kept, and said so (§1, §8 item 17; default, user may reverse).
+15. Brigadier overrides `disableAllHooks` → removed (S37, §1, §8 item 17)
+    (Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
 16. The shipped rules file carries the user's personal rules → a neutral shipped default; those rules live in
     the user's own file (§1, S13b, S33).
 17. Only one session may use the Local checkout → stays as built.
@@ -1866,6 +1894,5 @@ sessions with token economy. Each has a measurable bar against the best rival to
     (S16c, S28).
 
 **Waiting on you:**
-- Items 7, 10, 11 and 15 above are the Delegator's defaults; each is yours to reverse.
 - A terms check of multi-account auto-switch before marketing it.
 - Bench sign-ins for Superset and Orca (the orchestration and model-advice benches need them).
