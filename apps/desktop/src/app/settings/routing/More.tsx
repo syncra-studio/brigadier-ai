@@ -27,7 +27,7 @@ export const MORE_ROWS = {
   refresh: {
     label: "Refresh models",
     description:
-      "Asks each agent for the models it offers, checks every account's usage and reset times, and reads the latest ratings and automatic advice again, so the advice the thread reads is up to date. Your own rows and rules stay as they are.",
+      "Asks each agent for the models it offers, checks every account's usage and reset times, and reads the latest ratings and automatic advice again, so the advice your sessions and chats read is up to date. Your own rows and rules stay as they are.",
   },
 } as const;
 

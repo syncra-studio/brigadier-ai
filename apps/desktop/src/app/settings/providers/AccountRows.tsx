@@ -550,7 +550,7 @@ function WindowUsage({ window, now }: { window: QuotaWindow; now: number }) {
     >
       <span className="text-foreground/65">{SHORT_WINDOW[window.label] ?? window.label}</span>
       <UsageBar value={percent} fill={usage.fill} className="w-16" />
-      <span className={usage.text}>{percent}%</span>
+      <span className={usage.text}>{percent}% used</span>
     </span>
   );
 }
