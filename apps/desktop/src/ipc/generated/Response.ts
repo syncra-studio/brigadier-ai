@@ -112,7 +112,8 @@ truncated: boolean, } | { "method": "readFile", file: CheckoutFile, } | { "metho
  */
 problem: string | null, } | { "method": "stopComputerSession" } | { "method": "getDictation", dictation: DictationStatus, } | { "method": "downloadDictationModel" } | { "method": "cancelDictationDownload" } | { "method": "startDictation", dictationId: string, } | { "method": "appendDictation" } | { "method": "finishDictation" } | { "method": "cancelDictation" } | { "method": "rateMessage" } | { "method": "getSessionDiff", 
 /**
- * Absent for Chats and local-checkout sessions.
+ * A worktree session's branch with its uncommitted work, a Local checkout's uncommitted
+ * changes. Absent for Chats.
  */
 stat: DiffStat | null, 
 /**

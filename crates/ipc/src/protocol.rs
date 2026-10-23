@@ -1437,7 +1437,8 @@ pub enum Response {
     CancelDictation,
     RateMessage,
     GetSessionDiff {
-        /// Absent for Chats and local-checkout sessions.
+        /// A worktree session's branch with its uncommitted work, a Local checkout's uncommitted
+        /// changes. Absent for Chats.
         stat: Option<DiffStat>,
         /// The branch's commits its base lacks: what a merge would take, even when their sum
         /// changes nothing. 0 without a stat.

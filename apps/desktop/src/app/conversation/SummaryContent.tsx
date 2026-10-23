@@ -63,12 +63,13 @@ function useEntries(conversationId: string): readonly FileEntry[] {
 }
 
 /**
- * The branch's +N −N against its base, read again whenever a turn of its CLI ends and whenever a
- * git command of its thread finishes (a commit, a merge).
+ * A worktree session's +N −N against its base, a Local checkout's uncommitted changes, read
+ * again whenever a turn of its CLI ends and whenever a git command of its thread finishes (a
+ * commit, a merge).
  */
 function useSessionDiff(
   conversationId: string,
-  worktree: boolean,
+  session: boolean,
 ): { stat: DiffStat; commits: number } | null {
   const turns = useCliThread((s) => {
     const all = s.views[conversationId]?.turns ?? [];
@@ -78,7 +79,7 @@ function useSessionDiff(
   const git = useMemo(() => gitCommandsKey(entries), [entries]);
   const [stat, setStat] = useState<{ stat: DiffStat; commits: number } | null>(null);
   useEffect(() => {
-    if (!worktree) return;
+    if (!session) return;
     let current = true;
     getSessionDiff(conversationId)
       .then((next) => current && setStat(next))
@@ -89,8 +90,8 @@ function useSessionDiff(
     };
     // Each turn's end and each git command may move the branch: read it again.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [conversationId, worktree, turns, git]);
-  return worktree ? stat : null;
+  }, [conversationId, session, turns, git]);
+  return session ? stat : null;
 }
 
 /** A Chat's sources: links in the user's messages (as soon as they are sent), first seen first. */
@@ -416,8 +417,7 @@ function SessionSummaryContent({
   );
   const setup =
     conversation.setup?.type === "session" ? conversation.setup : null;
-  const worktree = setup?.environment.type === "newWorktree";
-  const sessionDiff = useSessionDiff(conversation.id, worktree);
+  const sessionDiff = useSessionDiff(conversation.id, setup !== null);
   const diff = sessionDiff?.stat ?? null;
   const { pullRequest, authRequired } = prStatus;
   // Before a session has its folder and branch, its card is a chat's: never an empty space.

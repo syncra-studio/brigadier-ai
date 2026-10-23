@@ -565,9 +565,9 @@ impl SessionManager {
 
     /// What a worktree session's branch changed since it left its base, with what its worktree
     /// holds uncommitted (as its Changes card counts it, #552), and how many commits it has that
-    /// its base lacks (what "Merge into main" merges, even when they change nothing in sum).
-    /// Absent for Chats, local-checkout sessions (their commits are on the picked branch) and a
-    /// session whose branch or base does not exist (yet).
+    /// its base lacks (what "Merge into main" merges, even when they change nothing in sum). A
+    /// Local checkout's: what git shows uncommitted there, with no commits. Absent for Chats and
+    /// a session whose branch or base does not exist (yet).
     pub async fn session_diff_stat(&self, id: &ConversationId) -> Result<Option<(DiffStat, u32)>> {
         let conversation = self.core.conversation(id)?;
         let git = self.git.clone();
