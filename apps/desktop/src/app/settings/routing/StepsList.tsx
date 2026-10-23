@@ -4,9 +4,9 @@ import { cn } from "@/lib/utils";
 /** The steps a worker's agent, model and effort are settled by, in order. */
 const STEPS: readonly [string, string][] = [
   ["Your choice", "An agent, model or effort the thread names for a worker is used as given"],
-  ["Your row", "Otherwise the row you set for its kind of work picks the rest"],
-  ["Shipped row", "Otherwise the shipped row for that kind of work"],
-  ["Your rules", "Last, a choice your rules forbid is refused, quoting the rule"],
+  ["Your order", "Otherwise the first model of your order for its kind of work that your rules allow"],
+  ["Automatic", "Otherwise the shipped advice for that kind of work, the same way"],
+  ["Your rules", "Last, a choice a rule forbids, everywhere or for that work, is refused, quoting the rule"],
 ];
 
 /** How a model is picked, opened: the steps a worker's model is settled by, numbered. */

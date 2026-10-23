@@ -149,22 +149,47 @@ impl SessionManager {
                 ));
             }
         };
-        // S32: `--work` names a row of the rules file; the flags given win field by field, the
+        // S32: `--work` names a kind of work of the rules file, whose rows are an order: the
+        // first the user's rules let start is the row. The flags given win field by field, the
         // row fills in the rest, and only then do the user's rules judge the whole choice.
         let row = match start.work.as_deref() {
             None => None,
-            Some(work) => match self.work_row(work)? {
-                Some(row) => Some(row),
-                None => {
-                    return Ok(CliReply::error(
-                        ErrorCode::NotFound,
-                        format!(
-                            "no row for the work \"{work}\"; `brigadier models` lists each kind \
-                             of work"
-                        ),
-                    ));
+            Some(work) => {
+                let rows = self.work_rows(work)?;
+                let mut fit = None;
+                for row in &rows {
+                    let provider = match row.agent {
+                        cli::Agent::Claude => ProviderKind::Claude,
+                        cli::Agent::Codex => ProviderKind::Codex,
+                    };
+                    let model =
+                        (row.model != "default").then(|| self.listed_model(provider, &row.model));
+                    if self
+                        .model_refusal(
+                            provider,
+                            model.as_deref(),
+                            row.effort.as_deref(),
+                            Some(work),
+                        )?
+                        .is_none()
+                    {
+                        fit = Some(row.clone());
+                        break;
+                    }
                 }
-            },
+                match fit.or_else(|| rows.into_iter().next()) {
+                    Some(row) => Some(row),
+                    None => {
+                        return Ok(CliReply::error(
+                            ErrorCode::NotFound,
+                            format!(
+                                "no row for the work \"{work}\"; `brigadier models` lists each \
+                                 kind of work"
+                            ),
+                        ));
+                    }
+                }
+            }
         };
         let mut picked = Vec::new();
         let agent = start.agent.or_else(|| {
@@ -192,7 +217,12 @@ impl SessionManager {
             picked.push("effort".to_owned());
             Some(effort)
         });
-        if let Some(rule) = self.model_refusal(provider, model.as_deref(), effort.as_deref())? {
+        if let Some(rule) = self.model_refusal(
+            provider,
+            model.as_deref(),
+            effort.as_deref(),
+            start.work.as_deref(),
+        )? {
             return Ok(refused(rule));
         }
         // Q8: the session's own level unless `--permission` says.

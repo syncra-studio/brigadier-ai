@@ -16,40 +16,66 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/overlays";
-import { Check, DotsHorizontal, ProviderGlyph } from "@/components/icons";
+import { Check, DotsHorizontal, GripIcon, ProviderGlyph } from "@/components/icons";
+import type { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { GuidanceRow, ModelRule, OverrideTarget } from "@/ipc/generated";
+import { cn } from "@/lib/utils";
 
 /** The efforts a row may ask for when its model doesn't list its own. */
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
-/** The levels the row's model takes, up to your effort ceiling if you set one. */
+/** The levels the row's model takes, up to the lowest effort ceiling your rules set for its work. */
 function effortLevels(row: GuidanceRow, groups: readonly ModelGroup[], rules: readonly ModelRule[]): readonly string[] {
   const model = groups.find((group) => group.provider === row.agent)?.models.find((found) => found.id === row.model);
-  const ceiling = rules.find((rule) => rule.type === "effortCeiling");
+  const work = row.work.trim().toLowerCase();
+  const ceilings = rules.flatMap((rule) =>
+    rule.type === "effortCeiling" && (!rule.work || rule.work.trim().toLowerCase() === work) ? [effortRank(rule.effort)] : [],
+  );
   const levels = model && model.efforts.length > 0 ? model.efforts : EFFORTS;
-  return ceiling?.type === "effortCeiling" ? levels.filter((level) => effortRank(level) <= effortRank(ceiling.effort)) : levels;
+  return ceilings.length > 0 ? levels.filter((level) => effortRank(level) <= Math.min(...ceilings)) : levels;
 }
 
-/** Your row of a kind of work: its model, its effort, and its menu. */
+/** One model of your order: grip and place, the model, its effort, and its menu. */
 export function OrderPlace({
   row,
+  position,
+  count,
+  taken,
   rules,
   groups,
+  dragging,
+  grip,
   onEffort,
   onModel,
   onRemove,
 }: {
   row: GuidanceRow;
+  position: number;
+  count: number;
+  /** The models of the order, offered disabled when changing this one. */
+  taken: readonly OverrideTarget[];
   rules: readonly ModelRule[];
   groups: readonly ModelGroup[];
+  dragging: boolean;
+  grip: ReturnType<ReturnType<typeof useDragReorder>["grip"]>;
   onEffort: (effort: string | null) => void;
   onModel: (target: OverrideTarget) => void;
   onRemove: () => void;
 }) {
   const name = rowModelName(groups, row.agent, row.model);
-  const taken: OverrideTarget[] = [rowTarget(groups, row.agent, row.model)];
   return (
-    <li data-slot="ranked-place" className="flex h-11 items-center gap-3 rounded-lg">
+    <li data-slot="ranked-place" className={cn("flex h-11 items-center gap-3 rounded-lg", dragging && "bg-foreground/8")}>
+      <button
+        type="button"
+        aria-label={`Move ${name} (${position} of ${count}); drag, or press up and down`}
+        title="Drag to reorder, or focus and press ↑ ↓"
+        disabled={count < 2}
+        className="flex h-full cursor-grab touch-none items-center gap-3 active:cursor-grabbing disabled:cursor-default"
+        {...grip}
+      >
+        <GripIcon className="text-muted-foreground" />
+        <span className="text-xs text-muted-foreground w-2 font-mono">{position}</span>
+      </button>
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <ProviderGlyph provider={row.agent} className="shrink-0 size-3.5" />
         <span className="text-label text-foreground truncate">{name}</span>
@@ -66,7 +92,7 @@ export function OrderPlace({
             </DropdownMenuRadioItem>
             {effortLevels(row, groups, rules).map((level) => (
               <DropdownMenuRadioItem key={level} value={level} indicator={<Check className="size-icon-md" />}>
-                {effortLabel(level)}
+                {effortLabel(level)} effort
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
@@ -87,7 +113,7 @@ export function OrderPlace({
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>Change model</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="max-h-96 w-xs overflow-y-auto">
-              <TargetItems onPick={onModel} taken={taken} />
+              <TargetItems onPick={onModel} taken={[rowTarget(groups, row.agent, row.model), ...taken]} />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSeparator />

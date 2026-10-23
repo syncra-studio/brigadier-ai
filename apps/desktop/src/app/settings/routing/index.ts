@@ -7,6 +7,7 @@ export * from "./KindRow";
 export * from "./LoadingLine";
 export * from "./MoreRowHead";
 export * from "./NowPick";
+export * from "./OrderList";
 export * from "./OrderPlace";
 export * from "./RatingsFooter";
 export * from "./StepsList";

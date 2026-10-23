@@ -851,6 +851,7 @@ impl SessionManager {
             choice.provider,
             choice.model.as_deref(),
             choice.effort.as_deref(),
+            None,
         )? {
             return Err(Error::Invalid(rule));
         }

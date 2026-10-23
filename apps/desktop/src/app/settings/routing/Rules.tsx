@@ -2,13 +2,12 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { BanIcon, Badge, Note, PreferIcon } from "@/app/settings/routing/parts";
-import { TargetItems } from "@/app/settings/routing/pickers";
+import { TargetItems, useListedModels } from "@/app/settings/routing/pickers";
 import {
   type Draft,
   type DraftEffect,
   draftRules,
   EFFORT_LEVELS,
-  type ListedModel,
   type Names,
   previewDraft,
   ruleLine,
@@ -24,12 +23,14 @@ import { DotsHorizontal, Info, Plus, Warning } from "@/components/icons";
 import type { ModelRule, ModelRules, OverrideTarget, ProviderKind } from "@/ipc/generated";
 import { saveModelRules } from "@/state/modelRules";
 import { toast } from "@/state/toasts";
-import { useUsage } from "@/state/usage";
 
 export const RULES = {
   label: "Rules",
-  description: "Keep a model out, allow only some models, or cap the effort",
+  description: "Keep a model away from all work or one kind of work, allow only some models, or cap the effort",
 } as const;
+
+/** The "for" select's choice of every kind of work. */
+const ANY_WORK = "";
 
 const EFFECTS: { value: DraftEffect; label: string }[] = [
   { value: "never", label: "Never" },
@@ -57,11 +58,21 @@ function useNames(groups: readonly ModelGroup[]): Names {
 }
 
 /**
- * Rules: each as a sentence with where it applies, removed from its menu. Add rule opens a
- * sentence to complete at the top of the card, which says what it would change before it is
- * added; an added rule is marked New and a toast offers Undo.
+ * Rules: each as a sentence naming its model, then where it applies and what it does; removed
+ * from its menu. Add rule opens a sentence to complete at the top of the card ("Never use [a
+ * model] for [any work]"), which says what it would change before it is added and opens a kind
+ * of work it would stop from starting; an added rule is marked New and a toast offers Undo.
  */
-export function Rules({ rules: file, groups }: { rules: ModelRules | null; groups: readonly ModelGroup[] }) {
+export function Rules({
+  rules: file,
+  groups,
+  onOpenKind,
+}: {
+  rules: ModelRules | null;
+  groups: readonly ModelGroup[];
+  /** Opens a kind of work in Who does what. */
+  onOpenKind: (work: string) => void;
+}) {
   const rules = file?.rules ?? [];
   const [adding, setAdding] = useState(false);
   const [fresh, setFresh] = useState<string | null>(null);
@@ -89,7 +100,9 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
     >
       {file && (shown.length > 0 || adding) && (
         <SettingsCard inset data-slot="routing-rules">
-          {adding && <DraftRow file={file} names={names} onCancel={() => setAdding(false)} onAdded={onAdded} />}
+          {adding && (
+            <DraftRow file={file} names={names} onCancel={() => setAdding(false)} onAdded={onAdded} onOpenKind={onOpenKind} />
+          )}
           {shown.map((rule) => (
             <div
               key={ruleText(rule)}
@@ -136,25 +149,31 @@ export function Rules({ rules: file, groups }: { rules: ModelRules | null; group
   );
 }
 
-/** A new rule as a sentence to complete: "[Never] use [a model]", "[Cap effort] at [High]", then what it would change. */
+/**
+ * A new rule as a sentence to complete: "[Never] use [a model] for [Any work]", "[Cap effort] at
+ * [High] for [Any work]", then what it would change.
+ */
 function DraftRow({
   file,
   names,
   onCancel,
   onAdded,
+  onOpenKind,
 }: {
   file: ModelRules;
   names: Names;
   onCancel: () => void;
   onAdded: (rule: ModelRule | undefined, before: readonly ModelRule[]) => void;
+  onOpenKind: (work: string) => void;
 }) {
-  const view = useUsage((s) => s.view);
-  const [draft, setDraft] = useState<Draft>({ effect: "never", target: null, effort: "high" });
+  const models = useListedModels();
+  const [draft, setDraft] = useState<Draft>({ effect: "never", target: null, effort: "high", work: null });
   const add = useAction();
   const target = draft.target;
   const capping = draft.effect === "cap";
-  const models: ListedModel[] = (view?.models ?? []).map((model) => ({ provider: model.provider, id: model.id, resolved: model.resolved, name: model.displayName }));
-  const preview = previewDraft(draft, { rules: file.rules, rows: workRows(file), models, names });
+  const kinds = workRows(file);
+  const preview = previewDraft(draft, { rules: file.rules, rows: kinds, models, names });
+  const works = [{ value: ANY_WORK, label: "Any work" }, ...kinds.map((kind) => ({ value: kind.work, label: kind.work }))];
   const submit = () => {
     if (!capping && !target) return;
     const next = draftRules(draft, file.rules);
@@ -192,6 +211,14 @@ function DraftRow({
               </DropdownMenu>
             </>
           )}
+          for
+          <SettingsSelect
+            align="start"
+            label="The work the rule is for"
+            value={draft.work ?? ANY_WORK}
+            options={works}
+            onChange={(work) => set({ work: work === ANY_WORK ? null : work })}
+          />
         </div>
         <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button size="sm" disabled={(!capping && !target) || add.busy} onClick={submit}>
@@ -201,6 +228,11 @@ function DraftRow({
       {preview && (
         <Note tone={preview.tone} icon={preview.tone === "info" ? <Info aria-hidden /> : <Warning aria-hidden />}>
           {preview.text}
+          {preview.works?.map((work) => (
+            <Button key={work} variant="link-blue" size="inline" className="ms-1.5 inline-flex" onClick={() => onOpenKind(work)}>
+              Open {work}
+            </Button>
+          ))}
         </Note>
       )}
       {add.error && (

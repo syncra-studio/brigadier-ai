@@ -1,6 +1,8 @@
 import { useEffect, useMemo } from "react";
 
 import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/overlays";
+import type { ListedModel } from "@/app/settings/routing/ruleWords";
+import { capital } from "@/app/settings/routing/words";
 import type { OverrideTarget } from "@/ipc/generated";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
 import { useAvailableModelGroups } from "@/lib/setup";
@@ -16,6 +18,15 @@ import { loadUsage, useUsage } from "@/state/usage";
 export function sameTarget(a: OverrideTarget, b: OverrideTarget): boolean {
   if (a.type !== b.type || a.provider !== b.provider) return false;
   return a.type === "model" ? a.id === (b as typeof a).id : a.type === "family" ? a.family === (b as typeof a).family : true;
+}
+
+/** The models the agents list now, as the rules judge them. */
+export function useListedModels(): ListedModel[] {
+  const models = useUsage((s) => s.view?.models);
+  return useMemo(
+    () => (models ?? []).map((model) => ({ provider: model.provider, id: model.id, resolved: model.resolved, name: model.displayName })),
+    [models],
+  );
 }
 
 /** Each provider's family words, from the merged model list (read on opening). */
@@ -80,7 +91,7 @@ export function TargetItems({
               const target: OverrideTarget = { type: "family", provider, family };
               return (
                 <DropdownMenuItem key={family} disabled={listed(target)} onSelect={() => onPick(target)}>
-                  Newest {VENDOR_LABELS[provider]} {family}
+                  Newest {capital(family)} family
                   <span className="text-muted-foreground ms-auto text-xs">follows releases</span>
                 </DropdownMenuItem>
               );
@@ -95,8 +106,8 @@ export function TargetItems({
         );
       })}
       {error && (
-        <p className="text-muted-foreground px-2 py-1.5 text-xs">
-          Families appear once the model list can be read ({error}).
+        <p role="alert" className="text-destructive px-2 py-1.5 text-xs">
+          Couldn't read the model families: {error}
         </p>
       )}
     </>

@@ -1521,7 +1521,8 @@ async fn models_rules_are_the_only_gate_on_start() {
 }
 
 /// A rule and a row saved through Settings › Routing (S32) land in the rules file in its own
-/// format: `brigadier models` lists them and `brigadier start` refuses by the rule.
+/// format: `brigadier models` lists them (a kind's order first to last, a rule for one kind of
+/// work as written) and `brigadier start` refuses by the rule.
 #[tokio::test]
 async fn models_page_rules_show_in_models_and_refuse_start() {
     let answers = Answers::default();
@@ -1551,22 +1552,46 @@ async fn models_page_rules_show_in_models_and_refuse_start() {
         effort: Some("medium".into()),
         reason: "My preference.".into(),
     };
+    let next = crate::GuidanceRow {
+        agent: ProviderKind::Codex,
+        model: "gpt-6".into(),
+        effort: None,
+        reason: "Then this.".into(),
+        ..row.clone()
+    };
     let page = flow
         .manager
         .set_model_rules(
-            std::slice::from_ref(&row),
-            &[crate::ModelRule::Forbid {
-                names: vec!["fable".into()],
-            }],
+            &[row.clone(), next.clone()],
+            &[
+                crate::ModelRule::Forbid {
+                    names: vec!["fable".into()],
+                    work: None,
+                },
+                crate::ModelRule::Forbid {
+                    names: vec!["haiku".into()],
+                    work: Some("Bounded implementation".into()),
+                },
+            ],
         )
         .unwrap();
-    assert_eq!(page.rows, vec![row]);
+    assert_eq!(page.rows, vec![row, next]);
+    assert_eq!(
+        page.rules[1],
+        crate::ModelRule::Forbid {
+            names: vec!["haiku".into()],
+            work: Some("Bounded implementation".into())
+        }
+    );
     let text = std::fs::read_to_string(flow.manager.models_rules_path()).unwrap();
     assert!(text.starts_with(super::super::models::DEFAULT_RULES.trim_end()));
-    assert!(text.contains("\n- forbid: fable\n"), "{text}");
     assert!(
-        text.contains("| Bounded implementation | claude | sonnet | medium | My preference. |")
+        text.contains("\n- forbid: fable\n- forbid for Bounded implementation: haiku\n"),
+        "{text}"
     );
+    assert!(text.contains(
+        "| Bounded implementation | claude | sonnet | medium | My preference. |\n| Bounded implementation | codex | gpt-6 |  | Then this. |\n"
+    ));
     flow.say("Try the model.").await;
     flow.settled().await;
     let seen = answers.lock().unwrap().clone();
@@ -1579,22 +1604,32 @@ async fn models_page_rules_show_in_models_and_refuse_start() {
     );
     assert_eq!(
         seen["models"]["rules"],
-        json!([{ "rule": "forbid: fable" }])
+        json!([
+            { "rule": "forbid: fable" },
+            { "rule": "forbid for Bounded implementation: haiku" }
+        ])
     );
     let guidance = seen["models"]["guidance"].as_array().unwrap();
-    let mine = guidance
+    let mine: Vec<_> = guidance
         .iter()
-        .find(|g| g["work"] == "Bounded implementation")
-        .unwrap();
-    assert_eq!(mine["model"], "sonnet");
-    assert_eq!(mine["source"], "user");
+        .filter(|g| g["work"] == "Bounded implementation")
+        .map(|g| (g["model"].clone(), g["source"].clone()))
+        .collect();
+    assert_eq!(
+        mine,
+        [
+            (json!("sonnet"), json!("user")),
+            (json!("gpt-6"), json!("user"))
+        ]
+    );
     assert!(flow.board().await.tasks.is_empty());
     flow.stop().await;
 }
 
 /// `brigadier start --work` (S32): with no flags the row of that work (the user's, else the
-/// shipped one) picks agent, model and effort, even the other provider's; each flag given wins
-/// over its field; the user's rules judge the choice that results; the receipt names the row.
+/// shipped one) picks agent, model and effort, even the other provider's; of a work's order, the
+/// first row its rules allow; each flag given wins over its field; the user's rules (for every
+/// work, or that one) judge the choice that results; the receipt names the row.
 #[tokio::test]
 async fn start_by_work_follows_the_row_and_the_flags_win() {
     let answers = Answers::default();
@@ -1639,6 +1674,15 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
                         },
                     ),
                     ("unknown", by("Nothing like it")),
+                    ("order", by("docs")),
+                    (
+                        "work rule",
+                        StartRequest {
+                            agent: Some(brigadier_cli::protocol::Agent::Claude),
+                            model: Some("claude-sonnet-5-5".into()),
+                            ..by("Docs")
+                        },
+                    ),
                 ];
                 for (name, request) in starts {
                     let result = brigadier(&turn, CliRequest::Start(Box::new(request))).await;
@@ -1651,12 +1695,12 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
     let flow = Flow::start("cli-start-by-work", Options::default(), script).await;
     std::fs::write(
         flow.manager.models_rules_path(),
-        "- effort-ceiling: high\n\n| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Review | codex | astra | medium | Mine. |\n",
+        "- effort-ceiling: high\n- forbid for Docs: sonnet\n\n| Work | Agent | Model | Effort | Reason |\n| --- | --- | --- | --- | --- |\n| Review | codex | astra | medium | Mine. |\n| Docs | claude | sonnet | low | First. |\n| Docs | codex | gpt-6-luna | low | Next. |\n",
     )
     .unwrap();
     flow.say("Start by work.").await;
     flow.until("the started workers reported", |b| {
-        b.tasks.len() == 4
+        b.tasks.len() == 5
             && b.tasks
                 .values()
                 .all(|t| t.state == crate::work::TaskState::Reported)
@@ -1709,6 +1753,21 @@ async fn start_by_work_follows_the_row_and_the_flags_win() {
             .contains("\"effort-ceiling: high\"")
     );
     assert_eq!(seen["unknown"]["error"]["code"], "not-found");
+    // The work's order: its first row is kept out by the rule for that work, so the next starts.
+    assert_eq!(
+        worker("order"),
+        (json!("codex"), json!("gpt-6-luna"), json!("low"))
+    );
+    assert_eq!(seen["order"]["row"]["work"], "Docs");
+    assert_eq!(seen["order"]["row"]["source"], "user");
+    // A rule for that work refuses the model a flag asks for; it holds for that work only.
+    assert_eq!(seen["work rule"]["error"]["code"], "refused");
+    assert!(
+        seen["work rule"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("\"forbid for Docs: sonnet\"")
+    );
     let specs = flow.specs();
     assert!(
         specs

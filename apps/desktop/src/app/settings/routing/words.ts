@@ -31,22 +31,33 @@ export const ROUTED_KINDS: readonly TaskCategory[] = [
   "gitText",
 ];
 
-/** A kind of work in Who does what: its row in force, the shipped one and the user's own. */
-export type WorkRow = { work: string; row: GuidanceRow; shipped: GuidanceRow | null; mine: GuidanceRow | null };
+/**
+ * A kind of work in Who does what: its rows in force (an order: the first that can run takes
+ * it), the shipped ones and the user's own (empty: Automatic, the shipped rows).
+ */
+export type WorkRow = { work: string; rows: GuidanceRow[]; shipped: GuidanceRow[]; mine: GuidanceRow[] };
 
-/** The rows in force: the shipped ones in order, each replaced by the user's row of the same work; then the user's own kinds. */
+/** The kinds of work: the shipped ones in order, each in force as the user's order if they set one; then the user's own kinds. */
 export function workRows(rules: ModelRules | null): WorkRow[] {
   if (!rules) return [];
-  const mine = (work: string) => rules.rows.find((row) => row.work === work) ?? null;
-  const shipped = rules.shipped.map((row) => ({ work: row.work, row: mine(row.work) ?? row, shipped: row, mine: mine(row.work) }));
-  const own = rules.rows
-    .filter((row) => !rules.shipped.some((found) => found.work === row.work))
-    .map((row) => ({ work: row.work, row, shipped: null, mine: row }));
-  return [...shipped, ...own];
+  const works = [...new Set([...rules.shipped, ...rules.rows].map((row) => row.work))];
+  return works.map((work) => {
+    const shipped = rules.shipped.filter((row) => row.work === work);
+    const mine = rules.rows.filter((row) => row.work === work);
+    return { work, rows: mine.length > 0 ? mine : shipped, shipped, mine };
+  });
+}
+
+/** The user's rows with `work`'s order replaced by `order`, in the place of its first row (a new kind's last; empty drops it). */
+export function withOrder(rows: readonly GuidanceRow[], work: string, order: readonly GuidanceRow[]): GuidanceRow[] {
+  const at = rows.findIndex((row) => row.work === work);
+  const rest = rows.filter((row) => row.work !== work);
+  const place = at < 0 ? rest.length : rows.slice(0, at).filter((row) => row.work !== work).length;
+  return [...rest.slice(0, place), ...order, ...rest.slice(place)];
 }
 
 /** "Opus" from "opus": a family word as a name. */
-const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+export const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 
 /** A row's model in a few words: a listed model's name ("Opus 5.5"), a family ("Opus"), or "Default model". */
 export function rowModelName(groups: readonly ModelGroup[], agent: ProviderKind, model: string): string {
@@ -74,13 +85,13 @@ export function targetModel(target: OverrideTarget): string {
   }
 }
 
-/** A model of a rule or a row in a few words: "Opus 5.5", "Newest Claude opus", "Claude's default". */
+/** A model of a rule or a row in a few words: "Opus 5.5", "Newest Opus", "Claude's default". */
 export function shortPlaceName(target: OverrideTarget, groups: readonly ModelGroup[]): string {
   switch (target.type) {
     case "vendor":
       return `${VENDOR_LABELS[target.provider]}'s default`;
     case "family":
-      return `Newest ${VENDOR_LABELS[target.provider]} ${target.family}`;
+      return `Newest ${capital(target.family)}`;
     case "model":
       return rowModelName(groups, target.provider, target.id);
   }

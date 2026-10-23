@@ -4,4 +4,9 @@ import type { ProviderKind } from "./ProviderKind";
 /**
  * A directive of the user's rules file (S13b): what restricts model choice.
  */
-export type ModelRule = { "type": "forbid", names: Array<string>, } | { "type": "allow", agent: ProviderKind | null, names: Array<string>, } | { "type": "effortCeiling", effort: string, };
+export type ModelRule = { "type": "forbid", names: Array<string>, 
+/**
+ * `forbid for Independent review: sonnet`: only for that kind of work (a row's Work),
+ * so only a `brigadier start --work` of it. Absent: everywhere.
+ */
+work?: string, } | { "type": "allow", agent: ProviderKind | null, names: Array<string>, work?: string, } | { "type": "effortCeiling", effort: string, work?: string, };

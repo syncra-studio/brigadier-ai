@@ -23,8 +23,9 @@ export const ROUTING_PAGE_ROWS = {
 
 /**
  * Settings › Routing, the editor of the user's rules file (`~/.brigadier/models.md`): who does
- * what (a row per kind of work, which opens in place to the shipped row or your own), the rules,
- * then More: the models' strength for a kind of work and how a model is picked.
+ * what (a row per kind of work, which opens in place to the shipped rows or your own order), the
+ * rules (everywhere or for one kind of work), then More: the models' strength for a kind of work
+ * and how a model is picked.
  */
 export function RoutingPage() {
   useUsageRefresh();
@@ -35,6 +36,14 @@ export function RoutingPage() {
   const now = useNow(30_000);
   const [more, setMore] = useState<MoreRow>(null);
   const [kind, setKind] = useState<TaskCategory>("review");
+  // The kind of work open in Who does what; a rule's note opens one it would stop from starting.
+  const [work, setWork] = useState<string | null>(null);
+  const openWork = (name: string) => {
+    setWork(name);
+    requestAnimationFrame(() =>
+      document.querySelector(`[data-slot="routing-kind"][data-work="${CSS.escape(name)}"]`)?.scrollIntoView({ block: "nearest" }),
+    );
+  };
   // Settings search bringing one of More's rows into view opens it.
   const revealing = useReveal((s) => s.label);
   const asked =
@@ -60,8 +69,8 @@ export function RoutingPage() {
           {error}
         </p>
       )}
-      <WhoDoesWhat rules={rules} groups={groups} />
-      <Rules rules={rules} groups={groups} />
+      <WhoDoesWhat rules={rules} groups={groups} open={work} onOpen={setWork} />
+      <Rules rules={rules} groups={groups} onOpenKind={openWork} />
       <More
         open={more}
         onOpen={setMore}

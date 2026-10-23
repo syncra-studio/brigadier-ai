@@ -1,35 +1,39 @@
+import { useState } from "react";
+
 import { useAction } from "@/app/conversation/useAction";
 import { AutoPicks } from "@/app/settings/routing/AutoPicks";
-import { OrderPlace } from "@/app/settings/routing/OrderPlace";
+import { OrderList } from "@/app/settings/routing/OrderList";
 import { HAIRLINE_TOP } from "@/app/settings/routing/parts";
-import { targetModel, type WorkRow } from "@/app/settings/routing/words";
+import { withOrder, type WorkRow } from "@/app/settings/routing/words";
 import { type ModelGroup, RowText } from "@/components/shared";
 import { Segmented } from "@/components/controls";
 import type { GuidanceRow, ModelRules } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { saveModelRules } from "@/state/modelRules";
 
-/** The reason a row of yours gives once you pick its model here. */
-const YOUR_CHOICE = "Your choice.";
-
-/** An opened kind: Who picks (the shipped row, or yours), then its model. */
+/**
+ * An opened kind: Who picks (Automatic, the shipped rows; or My order, your rows), then its
+ * models. My order starts from the shipped rows; removing its last model goes back to Automatic.
+ */
 export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRules; groups: readonly ModelGroup[] }) {
   const action = useAction();
+  // My order with nothing to start it from (a kind of your own): an empty order, Add model there to fill it.
+  const [starting, setStarting] = useState(false);
   const name = row.work;
-  // Your row replaces the one of its work, in its place; a new one goes last.
-  const save = (next: GuidanceRow | null) =>
-    action.run(() => {
-      const rest = rules.rows.filter((found) => found.work !== row.work);
-      const at = rules.rows.findIndex((found) => found.work === row.work);
-      const rows = next === null ? rest : at < 0 ? [...rest, next] : [...rest.slice(0, at), next, ...rest.slice(at)];
-      return saveModelRules(rows, rules.rules);
-    });
-  // Shipped drops your row (a kind of your own goes with it); Mine starts yours from the shipped one.
-  const choose = (mode: "shipped" | "mine") => {
-    if (mode === "shipped") return save(null);
-    if (!row.mine && row.shipped) return save({ ...row.shipped });
+  const save = (order: GuidanceRow[]) => {
+    setStarting(false);
+    return action.run(() => saveModelRules(withOrder(rules.rows, row.work, order), rules.rules));
   };
-  const mine = row.mine;
+  const choose = (mode: "automatic" | "order") => {
+    if (mode === "automatic") {
+      setStarting(false);
+      // Automatic drops your order (a kind of your own goes with it).
+      return row.mine.length > 0 ? save([]) : undefined;
+    }
+    if (row.shipped.length > 0) return save(row.shipped.map((shipped) => ({ ...shipped })));
+    setStarting(true);
+  };
+  const ordering = row.mine.length > 0 || starting;
   return (
     <div data-slot="who-picks" className="flex flex-col ps-7.5 pb-1">
       <div className={cn(HAIRLINE_TOP, "flex items-center gap-6 py-3.5")}>
@@ -37,32 +41,23 @@ export function WhoPicks({ row, rules, groups }: { row: WorkRow; rules: ModelRul
           truncate
           quiet
           title="Who picks"
-          line={mine ? "Your row, in ~/.brigadier/models.md" : "The shipped row, updated with each release"}
+          line={ordering ? "Your order: the first model your rules allow takes it" : "The shipped advice, updated with each release"}
         />
         <Segmented
-          label={`Whose row ${name} follows`}
-          value={mine ? "mine" : "shipped"}
+          label={`How ${name} picks a model`}
+          value={ordering ? "order" : "automatic"}
           options={[
-            { value: "shipped", label: "Shipped" },
-            { value: "mine", label: "Mine" },
+            { value: "automatic", label: "Automatic" },
+            { value: "order", label: "My order" },
           ]}
           disabled={action.busy}
           onChange={choose}
         />
       </div>
-      {mine ? (
-        <ul aria-label={`What ${name} runs on`} className={cn(HAIRLINE_TOP, "flex flex-col pt-1 pb-2")}>
-          <OrderPlace
-            row={mine}
-            rules={rules.rules}
-            groups={groups}
-            onEffort={(effort) => save({ ...mine, effort })}
-            onModel={(target) => save({ ...mine, agent: target.provider, model: targetModel(target), effort: null, reason: YOUR_CHOICE })}
-            onRemove={() => save(null)}
-          />
-        </ul>
+      {ordering ? (
+        <OrderList work={row.work} order={row.mine} rules={rules.rules} groups={groups} onSave={save} />
       ) : (
-        row.shipped && <AutoPicks row={row.shipped} groups={groups} />
+        <AutoPicks row={row} rules={rules.rules} groups={groups} />
       )}
       {action.error && (
         <p role="alert" className="text-destructive text-xs pb-3">

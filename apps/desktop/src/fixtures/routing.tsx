@@ -22,8 +22,9 @@ import { useToasts } from "@/state/toasts";
 
 /*
  * ?drive=1 reads who does what and the rules from the fixture's rules file, opens a shipped kind
- * and makes it yours, changes its effort and removes it, adds a rule (its preview, a clash, Add,
- * Undo), edits the file by hand and opens the page again, then opens How a model is picked
+ * and makes it My order, changes its effort, adds a model, moves it up and removes both, adds a
+ * rule (a clash whose note opens the kind, its preview, for one kind of work, Add, Undo), edits
+ * the file by hand and opens the page again (an order, a rule for one work), then opens How a model is picked
  * through search and presses Refresh models, writing what it saw (and what the page wrote to the file) to #routing-result
  * (RoutingPageRender.test.ts reads it). Without it the page stays as it opens, for screenshots:
  * ?kind=<name> opens a kind, ?more=strength|steps opens a row of More, ?rule=1|2|3 shows a rule
@@ -185,6 +186,7 @@ function Fixture() {
         () => {
           seen.note = text(document.querySelector('[data-slot="settings-page"] header'));
           seen.sections = all("section h2").map(text);
+          seen.rulesDescription = text(document.querySelector('[data-slot="routing-rules"]')?.closest("section")?.querySelector("p"));
           seen.kinds = kinds();
           seen.rules = ruleRows();
           seen.openAtStart = all('[data-slot="routing-kind"][data-open]').length;
@@ -195,11 +197,12 @@ function Fixture() {
           seen.mode = text(openKind()?.querySelector('[data-state="on"]'));
           seen.whoPicks = text(openKind()?.querySelector('[data-slot="who-picks"] > div'));
           seen.shipped = text(openKind()?.querySelector('[data-slot="auto-picks"]'));
-          button("Mine", openKind() ?? document)?.click();
+          button("My order", openKind() ?? document)?.click();
         },
         () => {
           seen.afterMine = lastWrite()?.rows;
           seen.mine = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
+          seen.aloneGripDisabled = all<HTMLButtonElement>('[data-slot="ranked-place"] button', openKind() ?? document)[0]?.disabled;
           press(button("Opus 5.5: effort"));
         },
         () => {
@@ -209,13 +212,32 @@ function Fixture() {
         },
         () => {
           seen.afterEffort = lastWrite()?.rows.find((row) => row.work === "Architecture and broad changes");
+          press(button("Add model", openKind() ?? document));
+        },
+        () => {
+          seen.addModelItems = all('[role="menuitem"]').map(text);
+          menuItem("GPT-6")?.click();
+        },
+        () => {
+          seen.order = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
           seen.kindLine = text(kindButton("Architecture and broad changes"));
-          press(button("Opus 5.5: actions"));
+          // GPT-6 moved up a place from its grip, by the keyboard.
+          button("Move GPT-6 (2 of 2); drag, or press up and down")?.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+          );
+        },
+        () => {
+          seen.afterMove = lastWrite()?.rows.filter((row) => row.work === "Architecture and broad changes").map((row) => row.model);
+          press(button("GPT-6: actions"));
         },
         () => menuItem("Remove")?.click(),
+        () => press(button("Opus 5.5: actions")),
+        () => menuItem("Remove")?.click(),
         () => {
+          // Its last model removed, the kind is Automatic again.
           seen.afterRemove = lastWrite()?.rows.map((row) => row.work);
           seen.modeAfterRemove = text(openKind()?.querySelector('[data-state="on"]'));
+          kindButton("Architecture and broad changes")?.click();
           (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.click();
         },
         () => {
@@ -226,10 +248,20 @@ function Fixture() {
         ...pick("The model the rule is about", "Opus 5.5"),
         () => {
           seen.clash = note();
+          seen.openAfterClash = all('[data-slot="routing-kind"][data-open]').length;
+          button("Open Architecture and broad changes", form() ?? document)?.click();
+        },
+        () => {
+          // The note opens the kind it names in Who does what.
+          seen.openedByNote = openKind()?.getAttribute("data-work");
         },
         ...pick("The model the rule is about", "GPT-6"),
         () => {
           seen.preview = note();
+        },
+        ...pick("The work the rule is for", "Independent review"),
+        () => {
+          seen.scoped = note();
           button("Add rule", form() ?? document)?.click();
         },
         () => {
@@ -243,14 +275,23 @@ function Fixture() {
         () => {
           seen.rulesAfterUndo = ruleRows();
           // A hand edit of the file while the page is away, then the page opened again.
-          file.rows = [...file.rows, { work: "Docs", agent: "claude", model: "sonnet", effort: "low", reason: "Hand edit." }];
-          file.rules = [...file.rules, { type: "allow", agent: "codex", names: ["gpt-6"] }];
+          file.rows = [
+            ...file.rows,
+            { work: "Docs", agent: "claude", model: "sonnet", effort: "low", reason: "Hand edit." },
+            { work: "Docs", agent: "codex", model: "gpt-6", effort: null, reason: "Hand edit." },
+          ];
+          file.rules = [...file.rules, { type: "allow", agent: "codex", names: ["gpt-6"] }, { type: "forbid", names: ["opus"], work: "Architecture and broad changes" }];
           openSettings("general");
         },
         () => openSettings("routing"),
         () => {
           seen.kindsAfterHandEdit = kinds();
           seen.rulesAfterHandEdit = ruleRows();
+          kindButton("Architecture and broad changes")?.click();
+        },
+        () => {
+          // Your rule for that work keeps the shipped model out: Automatic says so.
+          seen.skipped = text(openKind()?.querySelector('[data-slot="auto-picks"]'));
           revealSetting(ROUTING_PAGE_ROWS.steps.label);
         },
         () => {

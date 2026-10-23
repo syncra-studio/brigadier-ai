@@ -22,7 +22,7 @@ export const MORE_ROWS = {
   strength: { label: "Model strength", description: "How good each model is at a kind of work, out of 10" },
   steps: {
     label: "How a model is picked",
-    description: "Your choice, then your row, the shipped row and finally your rules",
+    description: "Your choice, then your order, the shipped advice and finally your rules",
   },
   refresh: {
     label: "Refresh models",

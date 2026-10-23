@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 import { KindRow } from "@/app/settings/routing/KindRow";
 import { workRows } from "@/app/settings/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
@@ -8,15 +6,25 @@ import type { ModelRules } from "@/ipc/generated";
 
 export const WHO_DOES_WHAT = {
   label: "Who does what",
-  description: "Shipped advice for each kind of work. Open one to set your own agent, model and effort.",
+  description: "Shipped advice for each kind of work. Open one to set your own order of models and their effort.",
 } as const;
 
 /**
- * Who does what: a row per kind of work of the rules file with whose row it follows and the
- * model it names; a row opens in place to Shipped (the shipped row) or Mine (your own).
+ * Who does what: a row per kind of work of the rules file with who picks and the model it
+ * starts on; a row opens in place to Automatic (the shipped rows) or My order (your own).
  */
-export function WhoDoesWhat({ rules, groups }: { rules: ModelRules | null; groups: readonly ModelGroup[] }) {
-  const [open, setOpen] = useState<string | null>(null);
+export function WhoDoesWhat({
+  rules,
+  groups,
+  open,
+  onOpen,
+}: {
+  rules: ModelRules | null;
+  groups: readonly ModelGroup[];
+  /** The kind of work open, by its name. */
+  open: string | null;
+  onOpen: (work: string | null) => void;
+}) {
   return (
     <SettingsSection title={WHO_DOES_WHAT.label} description={WHO_DOES_WHAT.description}>
       <SettingsCard inset data-slot="who-does-what">
@@ -28,7 +36,7 @@ export function WhoDoesWhat({ rules, groups }: { rules: ModelRules | null; group
               rules={rules}
               open={open === row.work}
               groups={groups}
-              onToggle={() => setOpen(open === row.work ? null : row.work)}
+              onToggle={() => onOpen(open === row.work ? null : row.work)}
             />
           ))}
       </SettingsCard>

@@ -3,7 +3,8 @@ import type { ProviderKind } from "./ProviderKind";
 
 /**
  * A row of model guidance: which agent, model and effort suit a kind of work (S13b). `work`
- * is the key a user row replaces a shipped row by.
+ * is the key a user row replaces a shipped row by; several rows of one work are an order, the
+ * first that can run takes it.
  */
 export type GuidanceRow = { work: string, agent: ProviderKind, 
 /**

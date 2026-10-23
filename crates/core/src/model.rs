@@ -2770,7 +2770,8 @@ pub mod streams {
 }
 
 /// A row of model guidance: which agent, model and effort suit a kind of work (S13b). `work`
-/// is the key a user row replaces a shipped row by.
+/// is the key a user row replaces a shipped row by; several rows of one work are an order, the
+/// first that can run takes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GuidanceRow {
@@ -2787,14 +2788,40 @@ pub struct GuidanceRow {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ModelRule {
     /// `forbid: fable`: no matching model.
-    Forbid { names: Vec<String> },
+    Forbid {
+        names: Vec<String>,
+        /// `forbid for Independent review: sonnet`: only for that kind of work (a row's Work),
+        /// so only a `brigadier start --work` of it. Absent: everywhere.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        work: Option<String>,
+    },
     /// `allow claude: opus, sonnet`: only matching models, for one agent or (`None`) every agent.
     Allow {
         agent: Option<ProviderKind>,
         names: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        work: Option<String>,
     },
     /// `effort-ceiling: high`: no effort above it.
-    EffortCeiling { effort: String },
+    EffortCeiling {
+        effort: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        work: Option<String>,
+    },
+}
+
+impl ModelRule {
+    /// The kind of work the rule is for; `None`, everywhere.
+    pub fn work(&self) -> Option<&str> {
+        match self {
+            Self::Forbid { work, .. }
+            | Self::Allow { work, .. }
+            | Self::EffortCeiling { work, .. } => work.as_deref(),
+        }
+    }
 }
 
 /// Settings › Routing (S32): the user's rules file, `~/.brigadier/models.md`, read as rows and
