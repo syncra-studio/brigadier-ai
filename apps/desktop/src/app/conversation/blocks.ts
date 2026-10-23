@@ -193,6 +193,9 @@ export function anchorMessage(block: Pick<Block, "user">): Message | null {
 
 export type BlockState = RequestState["type"];
 
+/** The CLI's own line for a background job's end it took up, before its reply. */
+export type BlockTaskNotice = { position: number; text: string };
+
 export type Block = {
   key: string;
   /**
@@ -217,6 +220,8 @@ export type Block = {
   seams: BlockSeam[];
   /** Brigadier's one message of a seam in its turn ("write your hand-off note"), where it came. */
   nudges: number[];
+  /** The CLI's own lines for background jobs that ended ("Background command … completed"), where they came. */
+  taskNotices: BlockTaskNotice[];
   /** The requests it shows: its own (the key), then the steered ones. */
   requestIds: string[];
   state: BlockState;
@@ -497,6 +502,7 @@ export type SequenceSource = {
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
   nudges?: readonly number[];
+  taskNotices?: readonly BlockTaskNotice[];
   orchestratorSteps: readonly BlockOrchestratorStep[];
   thinking?: readonly ThinkingSegment[];
   state?: BlockState;
@@ -513,6 +519,8 @@ export type SequenceEntry =
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
   /** Brigadier asked the thread for its hand-off note (G12): its line, not a user's bubble. */
   | { kind: "nudge"; position: number }
+  /** The CLI's line for a background job's end ("Background command … completed"), as the CLI shows it. */
+  | { kind: "taskNotice"; text: string; position: number }
   | { kind: "row"; row: BlockRow; position: number }
   /** More than an hour passed in the turn before what follows, which came at `atMs` (#130). */
   | { kind: "gap"; atMs: number; position: number };
@@ -554,6 +562,7 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
       .filter((compaction) => compaction.inTurn)
       .map((compaction) => ({ kind: "compaction" as const, compaction, position: compaction.position })),
     ...(source.nudges ?? []).map((position) => ({ kind: "nudge" as const, position })),
+    ...(source.taskNotices ?? []).map((notice) => ({ kind: "taskNotice" as const, ...notice })),
     // A proof shows with the merge message, under the answer, not in the work.
     ...source.orchestratorSteps.filter((step) => step.kind.type !== "proof").map((step) => ({
       kind: "orchestrator" as const,
@@ -729,6 +738,8 @@ export function updateIndices(texts: readonly unknown[], answer: number | null):
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
+  // The CLI's line for the background job its reply is about stays with the reply, as in the CLI.
+  if (entry.kind === "taskNotice") return false;
   if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "feedbackOffered" || step.kind.type === "moment")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
@@ -754,6 +765,7 @@ export function blockShows(block: Block): boolean {
     block.compactions.length > 0 ||
     block.seams.length > 0 ||
     block.nudges.length > 0 ||
+    block.taskNotices.length > 0 ||
     block.state !== "done"
   );
 }

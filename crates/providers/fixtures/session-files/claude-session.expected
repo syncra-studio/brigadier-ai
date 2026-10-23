@@ -25,6 +25,7 @@ command text 45 Completed
 turn end Interrupted
 User: text 52
 error: text 53
+notice: text 54
 Assistant: text 55
 tool mcp__pencil__execute Completed [4 image]
 tool Agent Completed

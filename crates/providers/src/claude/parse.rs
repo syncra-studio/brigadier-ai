@@ -540,10 +540,16 @@ impl Parser {
             if text.starts_with("<local-command-") {
                 return;
             }
-            // A background job's end the CLI answers in a turn of its own: its notice, not the
-            // user's message (the session file's line of it is skipped the same way).
+            // A background job's end the CLI answers in a turn of its own: the CLI's notice
+            // line before its reply, not the user's message.
             if text.starts_with("<task-notification>") {
                 self.begin_turn(out);
+                if let Some(text) = task_notice(&text) {
+                    out.push(Output::Event(ProviderEvent::TaskNotice {
+                        item_id: str_of(value, "uuid").unwrap_or_default().to_owned(),
+                        text,
+                    }));
+                }
                 return;
             }
             self.begin_turn(out);
@@ -1730,6 +1736,21 @@ fn content_text(value: &Value) -> String {
     }
 }
 
+/// The line Claude Code shows for a background job's end (`Background command "…" completed
+/// (exit code 0)`, `Monitor event: "…"`): the notice's `<summary>`, as the CLI escaped it.
+fn task_notice(text: &str) -> Option<String> {
+    let start = text.find("<summary>")? + "<summary>".len();
+    let end = start + text[start..].find("</summary>")?;
+    let summary = text[start..end]
+        .trim()
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    (!summary.is_empty()).then_some(summary)
+}
+
 /// A slash command as the user typed it (`/fusion Which store?`), from the markup Claude keeps
 /// it as (`<command-name>/brigade:fusion</command-name><command-args>…`). Brigadier's own
 /// skills are typed without their plugin's name.
@@ -2828,15 +2849,18 @@ mod tests {
     }
 
     #[test]
-    fn a_background_jobs_notice_is_no_user_message() {
+    fn a_background_jobs_notice_is_the_clis_line_not_a_user_message() {
         let mut parser = Parser::live();
         let echo = json!({"type":"user", "isReplay":true, "uuid":"n1", "message":{"role":"user",
-            "content":"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>sleep 20</summary>\n</task-notification>"}});
+            "content":"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command &quot;sleep 20 &amp;&amp; echo done&quot; completed (exit code 0)</summary>\n</task-notification>"}});
         let events = parser.feed(&echo.to_string());
         assert!(
             matches!(
                 &events[..],
-                [Output::Event(ProviderEvent::TurnStarted { .. })]
+                [
+                    Output::Event(ProviderEvent::TurnStarted { .. }),
+                    Output::Event(ProviderEvent::TaskNotice { item_id, text }),
+                ] if item_id == "n1" && text == r#"Background command "sleep 20 && echo done" completed (exit code 0)"#
             ),
             "{events:?}"
         );

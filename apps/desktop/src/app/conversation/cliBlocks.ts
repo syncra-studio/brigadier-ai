@@ -284,6 +284,7 @@ function emptyBlock(key: string, startedAtMs: number, requestIds: readonly strin
     compactions: [],
     seams: [],
     nudges: [],
+    taskNotices: [],
     requestIds: requestIds.length > 0 ? [...requestIds] : [key],
     state: "working",
     error: null,
@@ -465,6 +466,9 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
         });
         return;
       }
+      case "taskNotice":
+        current.taskNotices.push({ position, text: event.text });
+        return;
       case "compactionEnded": {
         const atMs = entry.atMs ?? current.startedAtMs;
         current.compactions.push({

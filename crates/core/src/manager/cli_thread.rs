@@ -486,6 +486,7 @@ fn shown_live(event: &ProviderEvent) -> bool {
             | ProviderEvent::FileChanges { .. }
             | ProviderEvent::Image { .. }
             | ProviderEvent::CompactionEnded { .. }
+            | ProviderEvent::TaskNotice { .. }
     )
 }
 
@@ -588,5 +589,14 @@ mod tests {
         assert_eq!(last_line(&file), None);
         std::fs::remove_file(&file).unwrap();
         assert_eq!(last_line(&file), None);
+    }
+
+    /// The CLI's notice line for a background job's end is in the live thread, as in its file.
+    #[test]
+    fn a_background_jobs_notice_line_shows_live() {
+        assert!(shown_live(&ProviderEvent::TaskNotice {
+            item_id: "n1".into(),
+            text: r#"Background command "sleep 20" completed (exit code 0)"#.into(),
+        }));
     }
 }

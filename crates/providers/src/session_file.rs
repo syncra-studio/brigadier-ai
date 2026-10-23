@@ -107,7 +107,8 @@ pub fn item_id(event: &ProviderEvent) -> Option<&str> {
         | ProviderEvent::Command { item_id, .. }
         | ProviderEvent::CommandOutputDelta { item_id, .. }
         | ProviderEvent::FileChanges { item_id, .. }
-        | ProviderEvent::Image { item_id, .. } => Some(item_id),
+        | ProviderEvent::Image { item_id, .. }
+        | ProviderEvent::TaskNotice { item_id, .. } => Some(item_id),
         _ => None,
     }
 }
@@ -255,6 +256,7 @@ pub(crate) fn shown(event: &ProviderEvent) -> bool {
             | ProviderEvent::Error { .. }
             | ProviderEvent::TurnCompleted { .. }
             | ProviderEvent::CompactionEnded { .. }
+            | ProviderEvent::TaskNotice { .. }
     )
 }
 
@@ -262,6 +264,7 @@ pub(crate) fn shown(event: &ProviderEvent) -> bool {
 mod tests {
     use super::*;
     use crate::model::{Role, TextPhase};
+    use serde_json::{Value, json};
 
     /// A session file's items, one line each (`BRIGADIER_SESSION_FILE=claude:<path>` or
     /// `codex:<path>`): for comparing a real session with its CLI's own resume view.
@@ -356,6 +359,59 @@ mod tests {
                         ..
                     }
                 ))
+        );
+    }
+
+    /// A background job's end Claude took up reads as the CLI's notice line before its reply,
+    /// in a turn of its own or folded into a running one, as the live stream's echo of it.
+    #[test]
+    fn a_background_jobs_end_reads_as_the_clis_notice_line() {
+        let notice = |id: &str| {
+            format!(
+                "<task-notification>\n<task-id>{id}</task-id>\n<status>completed</status>\n<summary>Background command &quot;sleep {id}&quot; completed (exit code 0)</summary>\n</task-notification>"
+            )
+        };
+        let lines = [
+            json!({"type":"user", "uuid":"u1", "message":{"role":"user", "content":"Wait for it."}}),
+            json!({"type":"attachment", "uuid":"a1", "attachment":{"type":"queued_command",
+                "prompt": notice("b1"), "source_uuid":"n1", "commandMode":"task-notification"}}),
+            json!({"type":"assistant", "uuid":"r1", "message":{"id":"m1", "role":"assistant",
+                "content":[{"type":"text", "text":"Done waiting."}]}}),
+            json!({"type":"user", "uuid":"n2", "origin":{"kind":"task-notification"},
+                "message":{"role":"user", "content": notice("b2")}}),
+            json!({"type":"assistant", "uuid":"r2", "message":{"id":"m2", "role":"assistant",
+                "content":[{"type":"text", "text":"The second one ended."}]}}),
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "brigadier-task-notice-{}.jsonl",
+            std::process::id()
+        ));
+        let text: Vec<String> = lines.iter().map(Value::to_string).collect();
+        std::fs::write(&path, text.join("\n")).unwrap();
+        let entries = read(ProviderKind::Claude, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let shown: Vec<String> = entries.iter().map(summary).collect();
+        assert_eq!(
+            shown,
+            [
+                "User: Wait for it.",
+                r#"notice: Background command "sleep b1" completed (exit code 0)"#,
+                "Assistant: Done waiting.",
+                r#"notice: Background command "sleep b2" completed (exit code 0)"#,
+                "Assistant: The second one ended.",
+            ]
+        );
+        // The live echo of the same line is the same item.
+        let echo = json!({"type":"user", "isReplay":true, "uuid":"n2",
+            "message":{"role":"user", "content": notice("b2")}});
+        let live = crate::claude::parse::Parser::live().feed(&echo.to_string());
+        let file = entries
+            .iter()
+            .find(|entry| item_id(&entry.event) == Some("n2"));
+        assert!(
+            live.iter().any(|output| matches!(output,
+                crate::claude::parse::Output::Event(event) if Some(event) == file.map(|entry| &entry.event))),
+            "{live:?}"
         );
     }
 
@@ -470,6 +526,7 @@ mod tests {
             ProviderEvent::Error { error } => format!("error: {}", clip(&error.message)),
             ProviderEvent::TurnCompleted { status, .. } => format!("turn end {status:?}"),
             ProviderEvent::CompactionEnded { .. } => "compacted".into(),
+            ProviderEvent::TaskNotice { text, .. } => format!("notice: {}", clip(text)),
             other => format!("{other:?}"),
         };
         let parent = entry.parent.as_ref().map_or("", |_| "  ↳ ");

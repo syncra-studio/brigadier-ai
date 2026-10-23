@@ -27,6 +27,7 @@ import {
   type BlockCard,
   type BlockCompaction,
   type BlockSeam,
+  type BlockTaskNotice,
   type BlockOrchestratorStep,
   type BlockRow,
   type BlockState,
@@ -81,6 +82,8 @@ export type BlockMeta = {
   seams: BlockSeam[];
   /** Brigadier's seam message in its turn, by position. */
   nudges: number[];
+  /** The CLI's lines for background jobs that ended, by position. */
+  taskNotices: BlockTaskNotice[];
   state: BlockState;
   startedAtMs: number;
   endedAtMs: number | null;

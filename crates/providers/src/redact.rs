@@ -623,7 +623,9 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
             r(&mut error.message);
             opt(&mut error.code);
         }
-        ProviderEvent::Notice { message, .. } => r(message),
+        ProviderEvent::Notice { message, .. } | ProviderEvent::TaskNotice { text: message, .. } => {
+            r(message)
+        }
         ProviderEvent::CompactionEnded { error, .. } => opt(error),
         ProviderEvent::Exited { stderr_tail, .. } => opt(stderr_tail),
     }

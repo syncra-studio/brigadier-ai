@@ -170,12 +170,6 @@ fn translate(mut value: Value, subagent: bool) -> Line {
                     steer: false,
                 };
             }
-            // A background task's end that the CLI took as a turn of its own: its notice, not
-            // the user's message (its resume view shows no prompt for it, and the live stream
-            // echoes none).
-            if value.pointer("/origin/kind").and_then(Value::as_str) == Some("task-notification") {
-                return Line::Skip;
-            }
             let text = content.map(text_of).unwrap_or_default();
             if text.starts_with(INTERRUPTED) {
                 return Line::Interrupted;
@@ -223,7 +217,7 @@ fn translate(mut value: Value, subagent: bool) -> Line {
             }
         }
         // A message the user sent while a turn ran: Claude took it into that turn. A
-        // background job's notice ("<task-notification>…") is the CLI's, not the user's.
+        // background job's notice ("<task-notification>…") is the CLI's line, not the user's.
         Some("attachment")
             if value.pointer("/attachment/type").and_then(Value::as_str)
                 == Some("queued_command") =>
@@ -233,7 +227,8 @@ fn translate(mut value: Value, subagent: bool) -> Line {
                 .cloned()
                 .unwrap_or(Value::Null);
             let text = text_of(&prompt);
-            if text.is_empty() || text.starts_with('<') {
+            let notice = text.starts_with("<task-notification>");
+            if text.is_empty() || (text.starts_with('<') && !notice) {
                 return Line::Skip;
             }
             let uuid = value
@@ -249,7 +244,7 @@ fn translate(mut value: Value, subagent: bool) -> Line {
                     "uuid": uuid,
                     "message": {"role": "user", "content": prompt},
                 }),
-                steer: true,
+                steer: !notice,
             }
         }
         _ => Line::Skip,

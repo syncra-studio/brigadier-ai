@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { cliBlocks, cliThreadTree, exitOf, stepDetail, toolItem } from "@/app/conversation/cliBlocks";
 import { INTERRUPTED } from "@/app/conversation/turnError";
-import { type BoardDigest, foldTurns } from "@/app/conversation/blocks";
+import { blockSequence, type BoardDigest, foldsAway, foldTurns } from "@/app/conversation/blocks";
 import type { FileEntry, Message, ProviderEvent, ThreadTurn, ThreadView } from "@/ipc/generated";
 
 const at = (event: ProviderEvent, atMs: number, more: Partial<FileEntry> = {}): FileEntry => ({ event, atMs, ...more });
@@ -180,6 +180,31 @@ test("a compaction in a turn shows in it, and images in the user's message are i
   const [block] = blocks;
   assert.deepEqual(block?.compactions, [{ id: "compaction:1", inTurn: true, automatic: true, state: "done", error: null, position: 1, startedAtMs: 1500, endedAtMs: 1500 }]);
   assert.deepEqual(block?.user?.kind === "message" && block.user.message.attachments.map((ref) => [ref.name, ref.mime]), [["Image", "image/png"]]);
+});
+
+test("a background job's end Claude took up shows the CLI's notice line before its reply, in view once the work folds", () => {
+  const line = 'Background command "sleep 20 && echo bg-finished" completed (exit code 0)';
+  const [block] = cliBlocks(
+    {
+      entries: [
+        user("u1", "Start it in the background", 1000),
+        at({ type: "message", itemId: "a1", role: "assistant", text: "Started." }, 1100),
+        at({ type: "taskNotice", itemId: "n1", text: line }, 21000),
+        at({ type: "message", itemId: "a2", role: "assistant", text: "It finished: bg-finished." }, 21100),
+      ],
+      turns: [turn("u1", 1000, 21200, "done")],
+    },
+    "conv",
+  );
+  assert.ok(block);
+  assert.equal(block.user?.kind, "message");
+  assert.deepEqual(block.steers, []);
+  assert.deepEqual(block.taskNotices, [{ position: 2, text: line }]);
+  const sequence = blockSequence({ ...block, steers: [] });
+  const notice = sequence.findIndex((entry) => entry.kind === "taskNotice");
+  const reply = sequence.findIndex((entry) => entry.kind === "text" && entry.index === 1);
+  assert.ok(notice >= 0 && notice < reply, JSON.stringify(sequence));
+  assert.equal(foldsAway(sequence[notice]!, 1), false);
 });
 
 const stored = (id: string, createdAtMs: number): Message => ({

@@ -307,6 +307,7 @@ function useItems(
           compactions: block.compactions,
           seams: block.seams,
           nudges: block.nudges,
+          taskNotices: block.taskNotices,
           steers: block.steers.map((steer) => {
             const peer = peerOf(steer.message);
             return {

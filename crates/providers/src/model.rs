@@ -971,6 +971,12 @@ pub enum ProviderEvent {
         tokens_after: Option<i64>,
         error: Option<String>,
     },
+    /// The CLI's own line for a background task's end that it took up in a turn of its own
+    /// (Claude Code: `Background command "…" completed (exit code 0)`), shown before its reply.
+    TaskNotice {
+        item_id: String,
+        text: String,
+    },
     RateLimits {
         quota: QuotaSnapshot,
     },
