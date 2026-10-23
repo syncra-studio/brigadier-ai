@@ -545,7 +545,8 @@ Several steps edit `M/tools.rs`, `crates/mcp-server/src/catalog.rs`, `M/prompts.
 | `M/requests.rs`, request spans in `work.rs` | turn scheduling in `M/conversation.rs`, `M/workers.rs` | S16b |
 | `M/decisions.rs` | `board.rs`, `requests.rs`, `watchdog.rs`, `overnight/report.rs`, `rebirth.rs` `briefing()` | S23 |
 | `M/constraints.rs` (+ the `remember` writer) | `phases.rs`, `workers.rs`, `rebirth.rs` | `remember` in S18; the module in S23 |
-| `orch:<id>` log, `M/export.rs` | `rebirth.rs` briefing exchanges, Brain transcript sync (`brains.rs:1218`) | S23, after S18 re-points the index |
+| `M/export.rs` | `rebirth.rs` briefing exchanges, Brain transcript sync (`brains.rs:1218`) | S23 (done) |
+| `orch:<id>` log (`OrchestratorLogged`) | the resume id (`read_native_id`, `forget_native_session`), the context size (`Core::context_usage`), the thread rows (`thread_items.rs`), the Inspector's log, injections and context chart | a later step, from the CLI's own session files or `record/` (G11), never a Brigadier copy (#540) |
 | `keep_note_decisions`, the rebirth Brain section | `rebirth.rs` | S23 |
 | `M/context_pack.rs`, `M/worker_handoff.rs` | `M/workers.rs` | S16b |
 | `M/background_runs.rs` | Brigadier's `run` and `run_check` (gone in S4, S6) | S12 |
@@ -1220,6 +1221,21 @@ worse than today's rebirth.
     `git grep -n BRIGADIER_SEAM_CARRY_ON` finds nothing (user, 2026-10-23: "Why wait? See how delegator works").
 - If S22b has landed, the seam-versus-rebirth comparison includes its decision-survival block, with the same
   planted items on both arms.
+- **As landed (w108, 2026-10-23):**
+  - The `orch:<id>` log stays, so the done-when grep still finds `OrchestratorLogged` in code. Its last
+    consumers were not only rebirth: the resume id, the context size, the thread rows and the Inspector still
+    read it (§4 table). A later step takes all four from the CLI's own session files or `record/` (G11), never
+    a Brigadier copy, and deletes the log (#540). The variant was not renamed to pass the grep.
+  - The stand-in is deleted whole (`Conversation.fallback`, `ModelFallback`, its event, pill and usage row): a
+    usage limit with no other account waits for the reset (MA5). Old stand-in events read as retired.
+  - MA5: the wait after a reset is spread at random over a minute; at most 4 resumes in a row go by
+    themselves, then the wait says "goes when you choose Continue now"; a turn the CLI had begun goes on with a
+    carry-on note, never the message again. All of it survives a restart.
+  - A generation that dies of "prompt is too long" keeps its request working: the successor that carries on
+    serves it (rebirth did the same).
+  - `decisions.rs` is deleted; old decisions show their stored words.
+  - L5 has no weekly scan to go into yet: it moves to S25's weekly sample.
+  - The continuity battery and `tools/ab/v2` are seam-only; the rebirth-only A/B scripts are deleted.
 
 **S24. Cold-cache rule.** Dropped (Delegator's judgement, 2026-10-23: the research's saving is one uncached
 read per cold return; plain Claude Code never restarts on a cold cache; S24 stays dropped; the nightly
@@ -1909,7 +1925,7 @@ sessions with token economy. Each has a measurable bar against the best rival to
      (user, 2026-10-23: "sure, continue the same session, don't start a fresh one").
   4. **L4** (into S21, S25): a token A/B arm, the same scripts in the plain CLI and Brigadier, both providers.
      Done: the nightly artifact shows all five bars per provider; the first run is the baseline. Codex, M.
-  5. **L5** (into S23): a compaction counter in the weekly scan of real sessions. Done when the report lists
+  5. **L5** (into S25, no weekly scan existed at S23): a compaction counter in the weekly scan of real sessions. Done when the report lists
      any compaction with its session id. Codex, S.
   6. **L6** (into S26): the Codex 1M-window probe, and the divider on Codex's compacted events. Done when the
      probe is written up and a recorded rollout shows the divider. Codex, S.
