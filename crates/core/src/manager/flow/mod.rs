@@ -2201,6 +2201,7 @@ mod engine_tests;
 mod open_in_app_tests;
 #[cfg(unix)]
 mod personal_memory_tests;
+#[cfg(unix)]
 mod standing_tests;
 #[cfg(unix)]
 mod terminal_run_tests;
