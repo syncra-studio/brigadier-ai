@@ -7,6 +7,7 @@ import { agentState } from "@/app/setup/onboarding/SetupTerminal";
 
 import { footMenuPlacement } from "@/app/shell/sidebar/nav";
 import { ProviderUsage } from "@/app/shell/ProviderUsage";
+import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 
 import { BarChart, ChevronRight, Lightbulb } from "@/components/icons";
 
@@ -149,7 +150,7 @@ function usageEntries(
   return entries.toSorted((a, b) => rank(b) - rank(a));
 }
 
-/** How the tightest provider stands, for the Usage icon: its name, and whether to warn. */
+/** How the tightest provider stands, for the Usage icon ("Usage · Codex 82% used"), and whether to warn. */
 function barStatus(entries: readonly UsageEntry[]): {
   label: string;
   alert: "text-destructive" | "text-warning" | null;
@@ -157,11 +158,13 @@ function barStatus(entries: readonly UsageEntry[]): {
   const shown = entries.flatMap((entry) => (entry.needs ? [] : [entry]));
   if (shown.length === 0) return { label: "Usage", alert: null };
   if (shown.some((entry) => entry.limitReached)) return { label: "Usage · limit reached", alert: "text-destructive" };
-  // Coloured by how much is used, like the agents' own CLIs: from 80% and from 90%.
-  const most = Math.max(...shown.map((entry) => used(entry.top)));
+  // Coloured by how much is used, like the agents' own CLIs: from 80% and from 90%. Said as
+  // used, as its list and the Providers page say it, with the agent it is about.
+  const first = shown.reduce((top, entry) => (used(entry.top) > used(top.top) ? entry : top));
+  const most = used(first.top);
   const level = usageLevel(most);
   const alert = level === "danger" ? "text-destructive" : level === "warning" ? "text-warning" : null;
-  return { label: `Usage · ${100 - most}% left`, alert };
+  return { label: `Usage · ${PROVIDER_LABELS[first.provider]} ${most}% used`, alert };
 }
 
 /** Who `provider`'s account in use is, masked, for its row's tip; `null` with only one account. */

@@ -17,8 +17,8 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   // The page's column is the one every Settings page has (#259).
   assert.equal(seen.settingsColumn, true);
   assert.deepEqual(seen.agents, [
-    { name: "Claude", state: "Ready · 3 accounts · v2.1.0", meter: "Weekly · in use69%" },
-    { name: "Codex", state: "Ready · 1 account · v2.1.0", meter: "Weekly · in use69%" },
+    { name: "Claude", state: "Ready · 3 accounts · v2.1.0", meter: "Weekly · in use69% used" },
+    { name: "Codex", state: "Ready · 1 account · v2.1.0", meter: "Weekly · in use69% used" },
   ]);
   // "Switch to another agent automatically" is back on the overview (S38, D23): off, and its
   // switch writes the setting.
@@ -42,19 +42,19 @@ test("Providers lists the agents, and an agent's page has its installation, acco
     {
       title: masked[0],
       inUse: true,
-      meters: ["5-hour32%Resets in 3h", "Weekly69%Resets in 1d 23h"],
+      meters: ["5-hour32% usedResets in 3h", "Weekly69% usedResets in 1d 23h"],
       order: "First · weekly limit resets soonest, in 1d 23h",
     },
     {
       title: masked[1],
       inUse: false,
-      meters: ["5-hour84%Resets in 3h", "Weekly93%Resets in 1d 23h"],
+      meters: ["5-hour84% usedResets in 3h", "Weekly93% usedResets in 1d 23h"],
       order: "Second · nearest its weekly limit, 93% used",
     },
     {
       title: masked[2],
       inUse: false,
-      meters: ["5-hour32%Resets in 3h", "Weekly69%Resets in 1d 23h"],
+      meters: ["5-hour32% usedResets in 3h", "Weekly69% usedResets in 1d 23h"],
       order: "Third · after the others",
     },
   ]);

@@ -217,6 +217,7 @@ function Fixture() {
         feedbackIcon: buttons.some((button) => button.getAttribute("aria-label") === "Send feedback"),
       };
 
+      seen.tip = usageButton()?.getAttribute("aria-label");
       usageButton()?.click();
       await wait(200);
       seen.header = text(q('[data-slot="usage-popover"] > div'));

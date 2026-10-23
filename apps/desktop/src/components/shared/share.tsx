@@ -11,7 +11,7 @@ function shareTone(percent: number, limitReached = false): UsageLevel {
   return percent > USAGE_AMBER_PAST ? "warning" : "normal";
 }
 
-/** A limit's thin bar and its share, amber past 75% used, in usage's shared colours. */
+/** A limit's thin bar and its share ("61% used"), amber past 75% used, in usage's shared colours. */
 export function Share({ percent, limitReached = false }: { percent: number; limitReached?: boolean }) {
   const level = shareTone(percent, limitReached);
   const look = levelTone(level, percent === 0 ? { text: "text-muted-foreground" } : {});
@@ -21,9 +21,9 @@ export function Share({ percent, limitReached = false }: { percent: number; limi
       <span
         data-slot="usage-value"
         data-level={level}
-        className={cn("w-8.5 shrink-0 text-end text-xs font-medium tabular-nums", look.text)}
+        className={cn("w-16 shrink-0 text-end text-xs font-medium tabular-nums", look.text)}
       >
-        {percent}%
+        {percent}% used
       </span>
     </>
   );

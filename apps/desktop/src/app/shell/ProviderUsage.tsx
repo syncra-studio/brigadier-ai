@@ -8,8 +8,8 @@ import { used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 
 /**
- * One provider: its mark and name, then its account in use's tightest limit ("Weekly · 1d 8h",
- * a bar and the share), saying so when its limit is reached; clicking it opens the provider's
+ * One provider: its mark and name, then its account in use's tightest limit ("Weekly · resets in
+ * 1d 8h", a bar and the share used), saying so when its limit is reached; clicking it opens the provider's
  * page. Needing a sign-in, that and Sign in.
  */
 export function ProviderUsage({
@@ -50,7 +50,7 @@ export function ProviderUsage({
     );
   }
   const { top, limitReached } = entry;
-  const resets = top.resetsAtMs === null ? null : formatCountdown(top.resetsAtMs, now);
+  const resets = top.resetsAtMs === null ? null : `resets in ${formatCountdown(top.resetsAtMs, now)}`;
   return (
     <button
       type="button"

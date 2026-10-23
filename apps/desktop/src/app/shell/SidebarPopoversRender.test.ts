@@ -11,9 +11,11 @@ test("sidebar: usage list, a provider's page, and the help menu", { timeout: 600
   const seen = JSON.parse(await renderFixtureLive(t, "sidebar-popovers.html?drive=1", "popovers-result")) as Record<string, unknown>;
   assert.deepEqual(seen.foot, { last: "Help", flushRight: true, feedbackIcon: false });
   assert.equal(seen.header, "UsageProviders");
+  // The icon's words name the agent and say used, as its list does (#547).
+  assert.equal(seen.tip, "Usage · Codex 82% used");
   assert.deepEqual(seen.rows, [
-    { words: ["Codex", "5-hour · 3h", "82%"], amber: true },
-    { words: ["Claude Code", "Weekly · 1d 8h", "61%"], amber: false },
+    { words: ["Codex", "5-hour · resets in 3h", "82% used"], amber: true },
+    { words: ["Claude Code", "Weekly · resets in 1d 8h", "61% used"], amber: false },
   ]);
   // Several accounts: the tip names the one in use (new work starts on it), masked; never the
   // one only picked with Use.
@@ -28,15 +30,15 @@ test("sidebar: usage list, a provider's page, and the help menu", { timeout: 600
   assert.deepEqual(seen.codexPage, { ask: { provider: "codex", signIn: false }, closed: true });
   // The account in use at its limit: said in its row, red, and on the icon.
   assert.deepEqual(seen.limitRows, [
-    ["Claude Code", "At limit · 3h 38m", "100%"],
-    ["Codex", "5-hour · 3h", "82%"],
+    ["Claude Code", "At limit · resets in 3h 38m", "100% used"],
+    ["Codex", "5-hour · resets in 3h", "82% used"],
   ]);
   assert.deepEqual(seen.limitDot, { tip: "Usage · limit reached", red: true });
   assert.deepEqual(seen.providers, { selection: { type: "settings", page: "providers" }, closed: true });
   // A provider that needs signing in comes first, as the Providers page says it.
   assert.deepEqual(seen.signInRows, [
     ["Codex", "Not signed in", "Sign in"],
-    ["Claude Code", "Weekly · 1d 8h", "61%"],
+    ["Claude Code", "Weekly · resets in 1d 8h", "61% used"],
   ]);
   assert.deepEqual(seen.signIn, { ask: { provider: "codex", signIn: true }, closed: true });
   assert.deepEqual(seen.help, ["Send feedback…", "Keyboard shortcuts"]);

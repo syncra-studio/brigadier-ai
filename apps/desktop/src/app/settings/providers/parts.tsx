@@ -67,7 +67,7 @@ export function UsageMeter({
           {label ?? windowTitle(window)}
         </span>
         <span data-slot="usage-value" className={cn("font-medium", colors.text)}>
-          {percent}%
+          {percent}% used
         </span>
       </span>
       <UsageBar value={percent} fill={colors.fill} />
