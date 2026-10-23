@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/overlays/dropdown-menu";
 import { ArrowRight, ChevronDown, ChevronUp, Code, DotsHorizontal, ExpandLg, Spinner, X } from "@/components/icons";
+import { useFindSearching } from "@/lib/findSearching";
 import type { Token } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 
@@ -210,6 +211,12 @@ function sideFade(more: Edges, gutter?: string): CSSProperties | undefined {
 const FOLD_OVER = 14;
 /** How many rows a folded block shows (visual rows: a wrapped line takes several). */
 const FOLDED_ROWS = 10;
+/**
+ * The lines a folded block mounts: its rows and the one under them that its fade covers. The rest
+ * mount on Show more, or while Find has a text, so they are found: a long output's lines held in
+ * the page, unseen, weighed tens of MB each (#569).
+ */
+const FOLDED_LINES = FOLDED_ROWS + 1;
 
 /**
  * Whether each block shows all its lines, kept by the block (its language, place in its text and
@@ -314,6 +321,8 @@ const CodeCard: FC<Pick<SyntaxHighlighterProps, "code" | "language" | "node">> =
   const more = useMoreSideways(preRef, !wrap);
   const firstHidden = useFirstHidden(preRef, folded);
   const stuck = useStuck(markerRef, foldable && expanded);
+  const searched = useFindSearching();
+  const shown = folded && !searched ? lines.slice(0, FOLDED_LINES) : lines;
   const name = languageName(language);
   const diff = isDiff(language) ? diffCounts(text) : null;
   const fold = (next: boolean) => {
@@ -395,7 +404,7 @@ const CodeCard: FC<Pick<SyntaxHighlighterProps, "code" | "language" | "node">> =
           )}
           style={sideFade(more, foldable ? "var(--spacing-code-gutter)" : undefined)}
         >
-          <Lines lines={lines} gutter={foldable ? "card" : null} wrap={wrap} />
+          <Lines lines={shown} gutter={foldable ? "card" : null} wrap={wrap} />
         </pre>
         {folded && (
           <div aria-hidden className="from-code-surface pointer-events-none absolute inset-x-0 bottom-0 h-11.5 bg-linear-to-t" />

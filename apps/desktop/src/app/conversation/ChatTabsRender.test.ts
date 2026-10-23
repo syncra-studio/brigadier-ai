@@ -7,6 +7,6 @@ test("a Chat whose agent opens a Browser tab shows it in the session tab bar, wh
   assert.equal(seen.error, undefined, String(seen.error));
   assert.deepEqual(seen.before, { bar: false }, "a Chat without tabs keeps its own top bar");
   assert.deepEqual(seen.opened, [{ selected: true, id: "chat" }, { selected: false, id: "browser" }], "the agent's tab opens behind the Chat");
-  assert.deepEqual(seen.front, { tabs: [{ selected: false, id: "chat" }, { selected: true, id: "browser" }], panel: true });
+  assert.deepEqual(seen.front, { tabs: [{ selected: false, id: "chat" }, { selected: true, id: "browser" }], panel: true, thread: "hidden" });
   assert.deepEqual(seen.closed, { tabs: 0, active: true });
 });

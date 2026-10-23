@@ -50,6 +50,9 @@ function Fixture() {
       await frame();
       await frame();
       seen.behind = showing();
+      // Behind, its layout and layers are skipped too, not only left undrawn (#569).
+      const panel = document.querySelector<HTMLElement>("[role=tabpanel]");
+      seen.skipped = panel ? getComputedStyle(panel).contentVisibility : null;
       setResult(JSON.stringify(seen));
     })();
   }, []);

@@ -210,3 +210,13 @@ test("Find counts a match only in a closed work group inside opened work, and En
   // Closed: the group gone to stays open, and nothing is kept for Find any more.
   assert.deepEqual(seen.closed, { group: "true", kept: false });
 });
+
+// #569: a folded code block mounts only the lines it shows, the rest while Find has a text, so a
+// word on a hidden line is still found.
+test("Find counts a match on a folded code block's hidden lines, which mount only while it searches", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=code", "thread-find-result", 150000)) as Record<string, unknown>;
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen.before, { lines: 11, shown: false });
+  assert.deepEqual(seen.typed, { label: "1 / 1 result", lines: 30, more: "Show more· lines 11–30" });
+  assert.deepEqual(seen.closed, { lines: 11 });
+});

@@ -6,7 +6,9 @@
  * settles it (Escape), presses Enter with the focus off its button and writes what Continue did
  * to #onboarding-intro-result. With ?corners=1 it settles the intro and writes how opaque the
  * canvas is in the window's corner pixels, in the middle of each edge and at its centre to
- * #onboarding-corners-result; ?platform= names the platform (macOS unless given).
+ * #onboarding-corners-result; ?platform= names the platform (macOS unless given). With ?leave=1
+ * the intro goes as onboarding ends and it writes what its canvas still holds to
+ * #onboarding-leave-result.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -91,7 +93,28 @@ async function driveCorners(): Promise<string> {
   });
 }
 
+let leave: () => void = () => {};
+
+/** Takes the intro away once it draws, then reads its canvas: its buffers given back, not held until it is collected (#569). */
+async function driveLeave(): Promise<string> {
+  for (let tries = 0; !document.querySelector(".welcome-canvas") && tries < 50; tries++) await wait(50);
+  await wait(300);
+  const canvas = document.querySelector<HTMLCanvasElement>(".welcome-canvas");
+  const context = canvas?.getContext("webgl2");
+  if (!canvas || !context) return JSON.stringify({ drawn: false });
+  const drawn = canvas.width > 1;
+  leave();
+  // The dialog fades out before it goes.
+  for (let tries = 0; canvas.isConnected && tries < 100; tries++) await wait(50);
+  return JSON.stringify({ drawn, mounted: canvas.isConnected, size: [canvas.width, canvas.height], lost: context.isContextLost() });
+}
+
 function Fixture() {
+  const [shown, setShown] = useState(true);
+  useEffect(() => {
+    leave = () => setShown(false);
+  }, []);
+  const [leaveResult, setLeaveResult] = useState("");
   const [result, setResult] = useState("");
   const [nameResult, setNameResult] = useState("");
   const [introResult, setIntroResult] = useState("");
@@ -99,6 +122,10 @@ function Fixture() {
   useEffect(() => {
     if (params.has("corners")) {
       void driveCorners().then(setCornersResult);
+      return;
+    }
+    if (params.has("leave")) {
+      void driveLeave().then(setLeaveResult);
       return;
     }
     if (step === "name" && params.has("drive")) void driveName().then(setNameResult);
@@ -122,7 +149,7 @@ function Fixture() {
   }, []);
   return (
     <>
-      <Dialog open>
+      <Dialog open={shown}>
         <DialogContent
           showCloseButton={false}
           className="bg-background start-0 top-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none p-0 ring-0"
@@ -144,6 +171,7 @@ function Fixture() {
       {nameResult && <pre id="onboarding-name-result">{nameResult}</pre>}
       {introResult && <pre id="onboarding-intro-result">{introResult}</pre>}
       {cornersResult && <pre id="onboarding-corners-result">{cornersResult}</pre>}
+      {leaveResult && <pre id="onboarding-leave-result">{leaveResult}</pre>}
     </>
   );
 }

@@ -8,6 +8,7 @@
  * - "marmalade" at the end of a long message of the user's, clipped behind "Show more".
  * With `?drive=folds`, turns 51 and 53 did work, folded away: "wombat" only in turn 51's.
  * With `?drive=groups`, turn 51 did three steps, one group: "ocelot" only in its third.
+ * With `?drive=code`, answer 49 holds a 30-line code block, folded: "pangolin" only on its line 25.
  * With `?drive=older`, the older pages load, five turns a page: "kiwi" in turn 18 (a page not
  * loaded) and turn 46; "quokka" in turn 4, the oldest page. The engine's search is answered here.
  *
@@ -40,6 +41,8 @@ const LATE_EDITOR = new URLSearchParams(location.search).get("drive") === "late-
 const FOLDS = new URLSearchParams(location.search).get("drive") === "folds";
 /** `?drive=groups`: a turn did three steps, grouped in one row. */
 const GROUPS = new URLSearchParams(location.search).get("drive") === "groups";
+/** `?drive=code`: an answer holds a long code block, folded. */
+const CODE = new URLSearchParams(location.search).get("drive") === "code";
 /** `?drive=older`: older pages load, `OLDER_PAGE` messages each. */
 const CAPPED = new URLSearchParams(location.search).get("drive") === "older-capped";
 const OLDER = CAPPED || new URLSearchParams(location.search).get("drive") === "older";
@@ -80,6 +83,7 @@ function answerText(turn: number): string {
   if (turn === 22) words.push("A zephyr in a folded turn.");
   if (turn === 3) words.push("A quokka in a page never loaded.");
   if (turn === 17 || turn === 45) words.push("A kiwi here.");
+  if (CODE && turn === 48) words.push("```text\n" + Array.from({ length: 30 }, (_, index) => (index === 24 ? "a pangolin" : `row ${index + 1}`)).join("\n") + "\n```");
   words.push(`Second paragraph of answer ${turn + 1}.`);
   return words.join("\n\n");
 }
@@ -683,6 +687,20 @@ async function drive(): Promise<void> {
       result["manualExpanded"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
       root.unmount();
       host.remove();
+    } else if (CODE) {
+      // A word only in a folded code block's hidden lines: those lines mount for Find, and it counts the word (#569).
+      await select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      const block = () => viewport().querySelector('[data-slot="code-block"]');
+      result["before"] = { lines: block()?.querySelectorAll("[data-line]").length ?? null, shown: block()?.textContent?.includes("pangolin") ?? null };
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      const typed = await find("pangolin");
+      result["typed"] = { label: typed.label, lines: block()?.querySelectorAll("[data-line]").length ?? null, more: block()?.querySelector("button[aria-expanded=false]")?.textContent ?? null };
+      press(field()!, "Escape");
+      await until(() => bar() === null);
+      await settle(100);
+      result["closed"] = { lines: block()?.querySelectorAll("[data-line]").length ?? null };
     } else if (FOLDS) {
       // A word only in a closed work fold: counted, its fold left closed while typing; Enter opens it and goes there.
       await select({ type: "conversation", id: "long" });

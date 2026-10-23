@@ -895,7 +895,7 @@ export function ConversationView({
                             {/* Its own stack, under the tabs: the composer's blurred layers stay under them too. */}
                             <div
                               inert={covered}
-                              className={cn("isolate flex min-h-0 flex-1 flex-col", covered && "invisible")}
+                              className={cn("isolate flex min-h-0 flex-1 flex-col", covered && "behind")}
                             >
                               <SummaryPane summary={summary}>
                                 {summary && <PinnedSummary conversation={conversation}

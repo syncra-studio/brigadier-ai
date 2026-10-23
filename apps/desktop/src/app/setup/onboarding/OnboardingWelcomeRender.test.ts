@@ -45,3 +45,10 @@ for (const [platform, corner] of [["macos", 0], ["windows", 255]] as const) {
     assert.deepEqual(seen, { corners: [corner, corner, corner, corner], edges: [255, 255, 255, 255], centre: 255 });
   });
 }
+
+// #569: as onboarding ends, the intro gives its window-sized buffers back at once, where they
+// stayed in the web process until the canvas was collected.
+test("onboarding: the intro's canvas lets go of its buffers as it goes", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "onboarding-welcome.html?leave=1", "onboarding-leave-result", 20000)) as Record<string, unknown>;
+  assert.deepEqual(seen, { drawn: true, mounted: false, size: [1, 1], lost: true });
+});

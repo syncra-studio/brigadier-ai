@@ -397,6 +397,10 @@ export function IntroCanvas({
       cancelAnimationFrame(raf);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
+      // Its window-sized buffers go now, not whenever the canvas is collected (#569).
+      element.width = 1;
+      element.height = 1;
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
     };
   }, []);
 

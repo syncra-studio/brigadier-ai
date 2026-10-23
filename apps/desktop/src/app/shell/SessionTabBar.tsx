@@ -402,7 +402,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
             inert={!shown}
             // Behind, nothing in it transitions: a button's `transition-all` would keep it
             // visible over the thread a moment longer (#417).
-            className={cn("bg-background absolute inset-0 flex flex-col", !shown && "invisible [&_*]:transition-none!")}
+            className={cn("bg-background absolute inset-0 flex flex-col", !shown && "behind [&_*]:transition-none!")}
           >
             <Suspense fallback={null}>
               {tab.kind === "file" ? (

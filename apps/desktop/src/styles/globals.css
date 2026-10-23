@@ -363,6 +363,14 @@
   }
 }
 
+/* What waits behind what is in front (a session's tabs, its chat under a tab): not drawn, and its
+   layout and layers skipped too, where `invisible` alone kept a long page's tiles in memory (#569).
+   Scroll positions and what was typed stay. */
+@utility behind {
+  visibility: hidden;
+  content-visibility: hidden;
+}
+
 /* A row that scrolls sideways without showing a scrollbar (the composer's utility bar). */
 @utility hide-scrollbar {
   scrollbar-width: none;

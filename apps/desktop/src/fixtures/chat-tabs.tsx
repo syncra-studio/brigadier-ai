@@ -74,7 +74,8 @@ async function drive() {
     bar()!.querySelector<HTMLButtonElement>(`[data-tab-id="${CSS.escape(tab)}"] [role=tab]`)!.click();
     await until("the tab in front", () => sessionTabs(id).active === tab);
     const panel = [...document.querySelectorAll<HTMLElement>("[role=tabpanel]")].find((each) => !each.inert);
-    seen.front = { tabs: tabNames(), panel: panel !== undefined && !panel.classList.contains("invisible") };
+    const under = document.querySelector("[data-slot=aui_thread-viewport]")?.closest("[inert]");
+    seen.front = { tabs: tabNames(), panel: panel !== undefined && getComputedStyle(panel).visibility === "visible", thread: under ? getComputedStyle(under).contentVisibility : null };
 
     bar()!.querySelector<HTMLButtonElement>(`[data-tab-id="${CSS.escape(tab)}"] button[aria-label^="Close"]`)!.click();
     await until("the bar gone with the tab", () => bar() === null);

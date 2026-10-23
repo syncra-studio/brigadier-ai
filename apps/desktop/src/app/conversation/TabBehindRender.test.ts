@@ -9,7 +9,10 @@ test("a tab put behind hides every button of its toolbar at once", { timeout: 90
   const seen = JSON.parse(await renderFixtureLive(t, "tab-behind.html?drive=1", "tab-behind-result", 60000)) as {
     front: number;
     behind: string[];
+    skipped: string | null;
   };
   assert.ok(seen.front >= 4, `the toolbar's buttons show in front (${seen.front})`);
   assert.deepEqual(seen.behind, []);
+  // #569: skipped, so a page behind holds no layers.
+  assert.equal(seen.skipped, "hidden");
 });

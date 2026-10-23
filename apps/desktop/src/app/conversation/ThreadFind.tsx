@@ -1,9 +1,10 @@
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { ThreadHistoryContext, type ThreadOverlayProps } from "@/components/conversation";
 import { TooltipIconButton } from "@/components/controls";
 import { ChevronLeft, ChevronRight, Search, X } from "@/components/icons";
 import type { MessageMatch } from "@/ipc/generated";
+import { startSearching } from "@/lib/findSearching";
 import { showHighlight } from "@/lib/highlightRules";
 import { useApp } from "@/state/store";
 import { PLAIN_FIELD } from "@/lib/plainTyping";
@@ -62,24 +63,8 @@ const SKIP = [
 /** Text in different ones of these never runs together into one match. */
 const BLOCK = "p, li, pre, h1, h2, h3, h4, h5, h6, td, th, tr, blockquote, dt, dd, div, button, summary, label";
 
-/** The find bars open with a text: while there is one, a turn's closed work keeps its rows, hidden, for them. */
-const searching = new Set<object>();
-const searchingHeard = new Set<() => void>();
-
-function subscribeSearching(heard: () => void): () => void {
-  searchingHeard.add(heard);
-  return () => searchingHeard.delete(heard);
-}
-
-/** Whether a find bar searches now: a closed work fold mounts its rows, hidden, so they are found. */
-export function useFindSearching(): boolean {
-  // The same read serves a server render, as worker history renders on the server in tests.
-  return useSyncExternalStore(subscribeSearching, findSearching, findSearching);
-}
-
-function findSearching(): boolean {
-  return searching.size > 0;
-}
+// While a bar has a text, a turn's closed work keeps its rows, hidden, for it (lib/findSearching.ts).
+export { useFindSearching } from "@/lib/findSearching";
 
 /** The closed work fold holding `range`, if one does. */
 function closedFold(range: Range): Element | null {
@@ -768,13 +753,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const hasText = open && query !== "";
   useEffect(() => {
     if (!hasText) return;
-    const me = {};
-    searching.add(me);
-    for (const heard of searchingHeard) heard();
-    return () => {
-      searching.delete(me);
-      for (const heard of searchingHeard) heard();
-    };
+    return startSearching();
   }, [hasText]);
 
   useLayoutEffect(() => {
