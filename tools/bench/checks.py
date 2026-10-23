@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench
-from bench import Daemon, cleanup_native, keep
+from bench import Daemon, cleanup_native, keep, remove_empty_project
 from metrics import parse
 from tasks import TASKS, fixture, grade
 from nightly import collect, issue, regressions
@@ -68,6 +68,21 @@ class Accounting(unittest.TestCase):
             cleanup_native(transcript, root)
             self.assertFalse(own.exists())
             self.assertTrue(keep.exists())
+
+    def test_only_an_empty_project_folder_of_the_repo_goes(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            home = Path(tmp)
+            repo = home / "scratch_1" / "repo"
+            folder = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(repo))
+            (folder / "memory").mkdir(parents=True)
+            (folder / "memory" / "note.md").write_text("kept")
+            with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(home)}):
+                remove_empty_project(repo)
+                self.assertTrue((folder / "memory" / "note.md").is_file())
+                (folder / "memory" / "note.md").unlink()
+                remove_empty_project(repo)
+                self.assertFalse(folder.exists())
+                remove_empty_project(repo)
 
     def test_a_worker_transcript_written_after_its_start_is_kept(self):
         with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:

@@ -73,6 +73,17 @@ def cleanup_native(path, scratch):
             pass
 
 
+def remove_empty_project(repo):
+    """Removes the Claude project folder of `repo` when it holds only an empty memory/: the
+    sessions' CLIs make one there and leave it (#574)."""
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+    folder = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(repo))
+    memory = folder / "memory"
+    if folder.is_dir() and [p.name for p in folder.iterdir()] == ["memory"] and memory.is_dir() and not any(memory.iterdir()):
+        memory.rmdir()
+        folder.rmdir()
+
+
 def keep(paths, dest):
     """Copies the native transcripts to `dest` (--keep-transcripts) before cleanup removes them."""
     if dest:
@@ -297,6 +308,7 @@ class Daemon:
             keep([saved for _, saved in self.kept.values()], self.keep_to)
             for original in self.kept:
                 cleanup_native(original, self.root)
+            remove_empty_project(self.root / "repo")
         if errors:
             raise RuntimeError("Cleanup: " + "; ".join(map(str, errors)))
 
