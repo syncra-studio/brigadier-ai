@@ -152,6 +152,9 @@ pub(crate) struct SeamEnd {
     /// Why it ended without a note; none when it wrote one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub death: Option<String>,
+    /// The user stopped its last turn: the successor waits for their next message.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
 }
 
 /// A completed seam.

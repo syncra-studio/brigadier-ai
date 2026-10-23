@@ -390,6 +390,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         nudged_at_ms: Some(1),
         closed_at_ms: 2,
         death: death.map(str::to_owned),
+        stopped: false,
     };
     let seam = |n: u32, death: Option<&str>| Seam {
         n,

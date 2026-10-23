@@ -10,7 +10,8 @@
 //! - **Close.** The turn that read the nudge ends: with a note or without, the seam closes
 //!   (`closed`) and the predecessor's CLI goes.
 //! - **Successor.** It starts at once, carrying the messages that waited (or, with none, told
-//!   to carry on from the note): the turn writes `starting` with a session id reserved for it
+//!   to carry on from the note; after the user's Stop in the note turn, their next message
+//!   starts it): the turn writes `starting` with a session id reserved for it
 //!   and those messages, starts a fresh CLI under that id, and sends the hand-off with them;
 //!   once sent, the seam is complete and the generation one more.
 //! - **Death.** "Prompt is too long", or a CLI that can't be resumed, ends the generation
@@ -82,6 +83,7 @@ const HELD_TOO_LONG: &str = "it was still working a minute after a message came"
 const RESTARTED: &str = "Brigadier restarted before it wrote one";
 const NOT_RESUMED: &str = "its CLI session could not be resumed";
 const TOO_LONG: &str = "its context was too long for the model";
+const USER_STOPPED: &str = "the user stopped it";
 
 impl SessionManager {
     /// Whether conversation `conv` goes on at seams: a session's thread (a Chat compacts).
@@ -283,18 +285,19 @@ impl SessionManager {
         match file.phase {
             Phase::Nudged { at_ms, .. } => {
                 let note = note_path(&self.session_dir(&conv.id).record(), file.generation);
-                let (seen, force, why) = {
+                let (seen, force, stopped, why) = {
                     let state = conv.state.lock().await;
+                    let stopped = state.interrupted && !state.seam.force;
                     let why = if state.limit_hit.is_some() {
                         "it hit its usage limit".to_owned()
                     } else if let Some(error) = &state.turn_error {
                         format!("its turn failed: {error}")
-                    } else if state.interrupted && !state.seam.force {
-                        "the user stopped it".to_owned()
+                    } else if stopped {
+                        USER_STOPPED.to_owned()
                     } else {
                         NO_NOTE.to_owned()
                     };
-                    (state.seam.seen, state.seam.force, why)
+                    (state.seam.seen, state.seam.force, stopped, why)
                 };
                 let written = note.is_file();
                 if !(written || seen || force) {
@@ -303,7 +306,8 @@ impl SessionManager {
                     return false;
                 }
                 let death = (!written).then(|| if force { HELD_TOO_LONG.into() } else { why });
-                self.close_seam(conv, file, Some(at_ms), death).await
+                self.close_seam(conv, file, Some(at_ms), death, stopped)
+                    .await
             }
             Phase::Live => {
                 let (used, base) = {
@@ -321,13 +325,16 @@ impl SessionManager {
         }
     }
 
-    /// Ends generation `file.generation`: `closed`, with `death` when it left no note.
+    /// Ends generation `file.generation`: `closed`, with `death` when it left no note. Its
+    /// successor starts at once, unless the user `stopped` the turn: then their next message
+    /// starts it.
     async fn close_seam(
         &self,
         conv: &Arc<ConvLive>,
         mut file: SeamFile,
         nudged_at_ms: Option<i64>,
         death: Option<String>,
+        stopped: bool,
     ) -> bool {
         let predecessor = match &file.phase {
             Phase::Nudged { predecessor, .. } => predecessor.clone(),
@@ -345,6 +352,7 @@ impl SessionManager {
                 nudged_at_ms,
                 closed_at_ms: now_ms(),
                 death,
+                stopped,
             },
         };
         if let Err(err) = self.write_seam_of(&conv.id, file).await {
@@ -358,7 +366,7 @@ impl SessionManager {
         state.seam.force = false;
         state.seam.hold_armed = false;
         state.seam.hold_timer += 1;
-        state.seam.carry_on = true;
+        state.seam.carry_on = !stopped;
         true
     }
 
@@ -436,7 +444,8 @@ impl SessionManager {
             _ => None,
         };
         if matches!(file.phase, Phase::Live | Phase::Nudged { .. }) {
-            self.close_seam(conv, file, nudged, Some(death)).await;
+            self.close_seam(conv, file, nudged, Some(death), false)
+                .await;
         }
         let stopped = {
             let mut state = conv.state.lock().await;
@@ -472,7 +481,7 @@ impl SessionManager {
             state.seam.carried_request = state.request.clone();
         }
         // The turn's end looks for the next turn, which retires the CLI first.
-        self.close_seam(conv, file, nudged, Some(TOO_LONG.into()))
+        self.close_seam(conv, file, nudged, Some(TOO_LONG.into()), false)
             .await;
     }
 
@@ -515,7 +524,10 @@ impl SessionManager {
                             .is_file();
                     let death = (!written).then(|| HELD_TOO_LONG.to_owned());
                     // The next turn retires the CLI first.
-                    if manager.close_seam(&conv, file, Some(at_ms), death).await {
+                    if manager
+                        .close_seam(&conv, file, Some(at_ms), death, false)
+                        .await
+                    {
                         manager.kick(&conv);
                     }
                 }
@@ -607,6 +619,7 @@ impl SessionManager {
             nudged_at_ms: None,
             closed_at_ms: now_ms(),
             death: Some(NOT_RESUMED.into()),
+            stopped: false,
         };
         let messages: Vec<String> = users.iter().map(|message| message.id.clone()).collect();
         file.phase = Phase::Starting {
@@ -763,8 +776,8 @@ impl SessionManager {
         let mut file = self.read_seam_of(id).await;
         match file.phase.clone() {
             Phase::Live => {}
-            // Its successor starts at once.
-            Phase::Closed { .. } => conv.state.lock().await.seam.carry_on = true,
+            // Its successor starts at once, unless the user stopped the turn that ended it.
+            Phase::Closed { end } => conv.state.lock().await.seam.carry_on = !end.stopped,
             Phase::Nudged {
                 at_ms, predecessor, ..
             } => {
@@ -775,6 +788,7 @@ impl SessionManager {
                         nudged_at_ms: Some(at_ms),
                         closed_at_ms: now_ms(),
                         death: (!written).then(|| RESTARTED.into()),
+                        stopped: false,
                     },
                 };
                 if self.write_seam_of(id, file).await.is_ok() {

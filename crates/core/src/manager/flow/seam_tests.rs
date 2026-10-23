@@ -345,6 +345,61 @@ async fn a_note_turn_still_working_a_minute_after_a_message_is_stopped() {
 }
 
 #[tokio::test]
+async fn a_stop_in_the_note_turn_leaves_the_successor_to_the_users_next_message() {
+    let inputs: Inputs = Arc::default();
+    let base = thread(inputs.clone(), Arc::default());
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let at_note = reached.clone();
+    let mut flow = Flow::start(
+        "seam-stop",
+        options(),
+        script(move |turn| {
+            let (base, at_note) = (base.clone(), at_note.clone());
+            async move {
+                if turn.input.starts_with(NUDGE_MARK) {
+                    at_note.notify_one();
+                    turn.stopped().await;
+                    return Reply::text("");
+                }
+                base(turn).await
+            }
+        }),
+    )
+    .await;
+    seam_on(&mut flow, Duration::from_secs(60));
+    flow.say("Grow.").await;
+    reached.notified().await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    let file = until_seam(&flow, "the close", closed).await;
+    flow.idle().await;
+    let Phase::Closed { end } = &file.phase else {
+        unreachable!()
+    };
+    assert!(end.stopped);
+    assert_eq!(end.death.as_deref(), Some("the user stopped it"));
+    // Nothing carries on by itself, after a restart either.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(given(&inputs, HANDOFF_MARK).is_empty());
+    flow.restart().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(given(&inputs, HANDOFF_MARK).is_empty());
+    assert!(closed(&seam_file(&flow)));
+    // The user's next message starts the successor, once.
+    flow.say("Go on.").await;
+    let file = until_seam(&flow, "the successor", |file| file.generation == 2).await;
+    flow.idle().await;
+    let go = given(&inputs, "Go on.");
+    assert_eq!(go.len(), 1, "{go:?}");
+    assert_eq!(go[0].0, file.seams[0].successor);
+    assert!(go[0].1.starts_with(HANDOFF_MARK));
+    assert!(given(&inputs, CARRY_ON).is_empty());
+    flow.stop().await;
+}
+
+#[tokio::test]
 async fn a_context_too_long_ends_the_generation_without_a_note() {
     let inputs: Inputs = Arc::default();
     let base = thread(inputs.clone(), Arc::default());
