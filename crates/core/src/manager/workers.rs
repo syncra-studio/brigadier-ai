@@ -697,9 +697,10 @@ impl SessionManager {
             // Resumed when its session sends it more.
             ephemeral: false,
             access,
-            // The standing instructions, as every session gets them (S17).
+            // The standing instructions, as every session gets them (S17), but for the line on
+            // running workers, which a worker can't.
             append_system_prompt: Some(super::prompts::with_session_paths(
-                &super::prompts::session_instructions(&self.core.settings(), provider),
+                &super::prompts::worker_instructions(&self.core.settings(), provider),
                 &worker_dir,
             )),
             mcp_servers: computer.iter().map(|kit| kit.server.clone()).collect(),

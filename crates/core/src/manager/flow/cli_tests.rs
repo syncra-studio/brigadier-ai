@@ -805,7 +805,8 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
         assert_eq!(seen["first on path"], json!(bin));
         let prompt = &answers[&format!("worker prompt {}", task.id.0)];
         assert_eq!(prompt["input"], task.spec.as_str(), "{prompt:#}");
-        // Brigadier's instructions are the standing ones alone, with its own paths (S17).
+        // Brigadier's instructions are the standing ones alone, with its own paths (S17), less
+        // the line on running workers.
         let given = prompt["prompt"].as_str().unwrap_or_default();
         let own = flow.manager.session_dir(&flow.conversation).worker(task);
         assert!(
@@ -814,7 +815,7 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
                 .any(|provider| {
                     given
                         == crate::manager::prompts::with_session_paths(
-                            &crate::manager::prompts::session_instructions(
+                            &crate::manager::prompts::worker_instructions(
                                 &flow.core.settings(),
                                 *provider,
                             ),
@@ -842,7 +843,7 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     assert_eq!(
         spec.append_system_prompt,
         Some(crate::manager::prompts::with_session_paths(
-            &crate::manager::prompts::session_instructions(
+            &crate::manager::prompts::worker_instructions(
                 &flow.core.settings(),
                 ProviderKind::Codex
             ),

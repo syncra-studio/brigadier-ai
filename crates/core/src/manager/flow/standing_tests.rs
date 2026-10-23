@@ -9,7 +9,8 @@ use brigadier_providers::{ProviderKind, SessionSpec, ToolSet};
 use super::chat_thread_tests::new_chat;
 use super::{Flow, Options, Reply, Script};
 use crate::manager::prompts::{
-    LEDGER_ENV, NO_AI_COAUTHORS, SESSION_DIR_ENV, STANDING_INSTRUCTIONS, with_session_paths,
+    LEDGER_ENV, NO_AI_COAUTHORS, SESSION_DIR_ENV, STANDING_INSTRUCTIONS, WORKERS_LINE,
+    with_session_paths,
 };
 
 /// A thread that starts one worker, and a worker that answers.
@@ -101,13 +102,18 @@ async fn every_session_worker_and_chat_starts_with_the_standing_instructions_and
             env(&thread, LEDGER_ENV),
             Some(&*folder.record().join("ledger.md").display().to_string())
         );
-        // A worker gets the same file, with its own folder and ledger.
+        // A worker gets the same file, with its own folder and ledger, but without the line on
+        // running workers of its own, which it can't.
         let worker = of(&specs, ToolSet::Lean);
         let own = env(&worker, SESSION_DIR_ENV).expect("its folder");
         assert_eq!(
             worker.append_system_prompt.as_deref(),
-            Some(&*with_session_paths(&template, std::path::Path::new(own)))
+            Some(&*with_session_paths(
+                &template.replacen(&format!("\n{WORKERS_LINE}"), "", 1),
+                std::path::Path::new(own)
+            ))
         );
+        assert!(expected.contains(WORKERS_LINE));
         assert!(
             own.starts_with(&*folder.root().join("workers").display().to_string()),
             "{own}"

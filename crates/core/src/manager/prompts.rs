@@ -42,6 +42,15 @@ pub(crate) fn session_instructions(settings: &Settings, provider: ProviderKind) 
     text
 }
 
+/// The standing instructions' line on workers. A worker goes without it: `brigadier start`
+/// refuses a worker's own workers, and it has no brigade skill.
+pub(crate) const WORKERS_LINE: &str = "You may run workers of your own through `brigadier start` when the job calls for them; the brigade skill says how.";
+
+/// A worker's instructions: a session's ([`session_instructions`]) without [`WORKERS_LINE`].
+pub(crate) fn worker_instructions(settings: &Settings, provider: ProviderKind) -> String {
+    session_instructions(settings, provider).replacen(&format!("\n{WORKERS_LINE}"), "", 1)
+}
+
 /// How every thread, Chat and tab chat writes (PLAN.md §7): brief, plain and lossless. The 10-04
 /// voice, restored whole (Q79): terse without slang, with the rules against over-compression. A
 /// macro, so the notes that restate it are built from the same words.
@@ -473,6 +482,25 @@ mod tests {
         assert!(text.starts_with(&format!("{file}\n\nGit writing")));
         assert!(text.contains(CONVENTIONAL_COMMITS));
         assert!(text.ends_with(BROWSER_OFF));
+    }
+
+    /// A worker gets the file without the line on running workers, which it can't (w152), and
+    /// still everything the user's settings add.
+    #[test]
+    fn a_workers_instructions_are_the_file_without_the_workers_line() {
+        assert!(STANDING_INSTRUCTIONS.contains(WORKERS_LINE));
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let session = session_instructions(&Settings::default(), provider);
+            let worker = worker_instructions(&Settings::default(), provider);
+            assert_eq!(
+                worker,
+                session.replacen(&format!("\n{WORKERS_LINE}"), "", 1)
+            );
+            assert_eq!(session.len() - worker.len(), WORKERS_LINE.len() + 1);
+            assert!(!worker.contains("brigadier start"), "{worker}");
+            // The ledger stays (Q3).
+            assert!(worker.contains("Keep a ledger at $BRIGADIER_LEDGER."));
+        }
     }
 
     /// Side chats and Chats start with the same file (G20), then their own lines.

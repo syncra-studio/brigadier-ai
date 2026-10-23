@@ -1675,6 +1675,8 @@ Brigadier removes none of it; a `--lean` research worker (S13) is the thread's o
 holds only what every turn of every session needs; text that matters only at a seam travels in the seam
 message instead (`research/POCOCK.md` §3.1). The entry ids, the Decision and Open kinds, absolute paths and the
 "cites entry ids" line were added on 10-23 (S22b, `research/CONTINUITY.md` §3.1–§3.6) (user, 2026-10-23: "find a fix for this").
+A worker gets the file without its last line: `brigadier start` refuses a worker's own workers, and it has no
+brigade skill (the w152 bench, 10-23).
 
 ```
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
