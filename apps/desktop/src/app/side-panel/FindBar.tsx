@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { ChevronDown, ChevronUp, Search, X } from "@/components/icons";
 import { TooltipIconButton } from "@/components/controls";
 import { findInPage, findLabel, NO_FIND, useBrowserFind } from "@/state/browserFind";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /**
  * The page's find bar, under the toolbar at its end (the page, drawn over the window, would hide
@@ -29,9 +30,7 @@ export function FindBar({ id, input, onClose }: { id: string; input: RefObject<H
           value={find.query}
           placeholder="Find in page…"
           aria-label="Find in page"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
+          {...PLAIN_FIELD}
           onChange={(event) => void findInPage(id, event.target.value, "type")}
           onFocus={(event) => event.target.select()}
           onKeyDown={(event) => {

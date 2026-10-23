@@ -2,6 +2,7 @@ import type { RefObject } from "react";
 
 import { TooltipIconButton } from "@/components/controls";
 import { ArrowDown, ArrowUp, Search, X } from "@/components/icons";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /** Matches marked at most; past that, finding says so. */
 export const MAX_MATCHES = 10_000;
@@ -43,6 +44,7 @@ export function FindLineBox({
         <>
           <Search className="text-muted-foreground size-icon-sm shrink-0" />
           <input
+            {...PLAIN_FIELD}
             ref={inputRef}
             // ⌘F opens it to type in at once.
             // oxlint-disable-next-line jsx-a11y/no-autofocus
@@ -90,6 +92,7 @@ export function FindLineBox({
         </>
       ) : (
         <input
+          {...PLAIN_FIELD}
           // ⌃G opens it to type in at once.
           // oxlint-disable-next-line jsx-a11y/no-autofocus
           autoFocus

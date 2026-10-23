@@ -5,6 +5,7 @@ import { Picker } from "@/app/inspector/providers/Picker";
 import { Search, Spinner } from "@/components/icons";
 import { Button, Input } from "@/components/controls";
 import type { NodeKind } from "@/ipc/generated";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 export const ALL_KINDS = "all";
 
@@ -31,7 +32,7 @@ export function QueryBar({
         onChange={(event) => onTextChange(event.target.value)}
         placeholder="Ask the Brain, as the orchestrator would"
         aria-label="Brain query"
-        spellCheck={false}
+        {...PLAIN_FIELD}
         className="h-control-sm text-xs"
       />
       <Picker

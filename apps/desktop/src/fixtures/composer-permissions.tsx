@@ -80,6 +80,8 @@ async function drive() {
     // Set up: the editor shows a moment before its plugins wire it to the composer (one of them turns
     // autocorrect off), and a / typed in between is lost.
     const field = await until("the composer", () => document.querySelector<HTMLElement>("[data-slot=aui_composer-shell] [contenteditable=true][autocorrect=off]"));
+    // What's typed is what's sent: no text checking, and no inline predictions (#546).
+    seen.plainTyping = ["spellcheck", "autocorrect", "autocapitalize", "writingsuggestions"].map((name) => field.getAttribute(name));
     field.focus();
     document.execCommand("insertText", false, "/");
     const option = await until("the Permissions command", () =>

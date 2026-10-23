@@ -26,6 +26,7 @@ import {
   setSearchForm, stopSearch, useWorkspaceSearch,
 } from "@/state/workspaceSearch";
 import { SettingsSearch } from "@/components/shared";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /**
  * The right sidebar's Search (⇧⌘F): text or a pattern across the checkout, with match case,
@@ -245,7 +246,7 @@ const Glob: FC<{ label: string; placeholder: string; value: string; onChange: (v
 }) => (
   <label className="flex flex-col gap-0.5">
     <span className="text-muted-foreground px-1 text-xs">{label}</span>
-    <input value={value} placeholder={placeholder} aria-label={label} spellCheck={false}
+    <input value={value} placeholder={placeholder} aria-label={label} {...PLAIN_FIELD}
       onChange={(event) => onChange(event.target.value)}
       className="border-border rounded-control focus:border-ring placeholder:text-muted-foreground h-control-md border bg-transparent px-2 text-sm outline-none" />
   </label>

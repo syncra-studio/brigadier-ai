@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { updateProject } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { folderTrust, setFolderTrust } from "@/state/trust";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 export type ProjectDialogProps = {
   open: boolean;
@@ -188,8 +189,7 @@ function SettingsForm({
               <li key={index} className="flex items-center gap-1">
                 <Input
                   value={file}
-                  spellCheck={false}
-                  autoComplete="off"
+                  {...PLAIN_FIELD}
                   placeholder=".env.local"
                   aria-label={`Secret file ${index + 1}`}
                   aria-invalid={badRow === index || undefined}

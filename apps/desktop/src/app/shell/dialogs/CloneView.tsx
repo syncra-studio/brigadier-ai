@@ -7,6 +7,7 @@ import { Button, ErrorLine } from "@/components/controls";
 import { cn } from "@/lib/utils";
 import { closeAddProject, cloneProject, showProject } from "@/state/addProject";
 import { toast } from "@/state/toasts";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /** `owner/name` is a GitHub repository; anything else is taken as typed. */
 function cloneUrl(typed: string): string {
@@ -88,8 +89,7 @@ export function CloneView({ onBack }: { onBack: () => void }) {
               id={`${id}-url`}
               value={url}
               autoFocus
-              spellCheck={false}
-              autoComplete="off"
+              {...PLAIN_FIELD}
               disabled={busy}
               placeholder="https://github.com/owner/repo.git"
               aria-invalid={invalid || undefined}

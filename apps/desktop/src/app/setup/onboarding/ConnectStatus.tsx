@@ -15,6 +15,7 @@ import {
   useConnectCodePage,
   useConnectProgress,
 } from "@/state/connect";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /*
  * Connect's line for an agent while it installs or signs in (with Cancel), or why it failed
@@ -168,8 +169,7 @@ export function ConnectCode({ provider, className }: { provider: ProviderKind; c
         <Input
           aria-label={`Code for ${PROVIDER_LABELS[provider]}`}
           placeholder="Paste the code from the page"
-          autoComplete="off"
-          spellCheck={false}
+          {...PLAIN_FIELD}
           value={code}
           disabled={busy}
           aria-invalid={error !== null || undefined}

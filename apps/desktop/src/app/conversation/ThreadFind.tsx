@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Search, X } from "@/components/icons";
 import type { MessageMatch } from "@/ipc/generated";
 import { showHighlight } from "@/lib/highlightRules";
 import { useApp } from "@/state/store";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /*
  * Find in the chat (⌘F with the chat in front): a bar at the top right of the thread finds text
@@ -814,9 +815,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         value={query}
         placeholder="Search chat…"
         aria-label="Find in chat"
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
+        {...PLAIN_FIELD}
         onChange={(event) => {
           // A new text is searched at once.
           setQuery(event.target.value);

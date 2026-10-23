@@ -327,6 +327,8 @@ export function TerminalView({
       <div
         ref={host}
         data-slot="terminal"
+        // What's typed reaches the shell as typed: no macOS inline predictions in xterm's field.
+        writingsuggestions="false"
         className="font-terminal text-terminal min-h-0 flex-1 ps-4 pe-2 pt-2 pb-3"
       />
     </div>

@@ -17,7 +17,8 @@ test("the field shown while the composer loads turns off the system's text subst
     }
     const html = ReactDOMServer.renderToStaticMarkup(React.createElement(Page));
     assert.match(html, /<textarea[^>]*aria-label="Message input"/);
-    for (const attribute of ['spellcheck="false"', 'autocorrect="off"', 'autocapitalize="off"']) assert.ok(html.toLowerCase().includes(attribute), `${attribute}: ${html}`);
+    // No macOS inline predictions either (#546): `seq` became `sequence`.
+    for (const attribute of ['spellcheck="false"', 'autocorrect="off"', 'autocapitalize="off"', 'autocomplete="off"', 'writingsuggestions="false"']) assert.ok(html.toLowerCase().includes(attribute), `${attribute}: ${html}`);
 
     // macOS's double-space period: ". " in place of the space before the caret, or of that space selected.
     const typed = (value: string, start: number, end: number, data: string, inputType = "insertReplacementText") => {

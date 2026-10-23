@@ -9,6 +9,7 @@ import { pickFolder } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { startRawSession } from "@/state/actions";
 import { useApp } from "@/state/store";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /** Model choices for a provider: the CLI's default, then its live list. */
 function modelOptions(overview: ProviderOverview | undefined) {
@@ -109,7 +110,7 @@ export function StartSessionForm() {
             value={cwd}
             onChange={(event) => setCwd(event.target.value)}
             className="h-control-sm min-w-0 flex-1 font-mono text-xs"
-            spellCheck={false}
+            {...PLAIN_FIELD}
           />
           <Button
             type="button"

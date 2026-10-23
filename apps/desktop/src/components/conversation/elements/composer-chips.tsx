@@ -196,8 +196,11 @@ function $unwrapChipBeforeCaret(): boolean {
 }
 
 
-/** What turns off the webview's text checking (smart quotes and dashes, auto-correct, capitals). */
-const PLAIN_TYPING = { spellcheck: "false", autocorrect: "off", autocapitalize: "off" };
+/**
+ * What turns off the webview's text checking (smart quotes and dashes, auto-correct, capitals)
+ * and macOS's inline predictions, which ended up in the text (`seq` → `sequence`, #546).
+ */
+const PLAIN_TYPING = { spellcheck: "false", autocorrect: "off", autocapitalize: "off", writingsuggestions: "false" };
 
 function plainTyping(root: HTMLElement) {
   for (const [name, value] of Object.entries(PLAIN_TYPING)) {
@@ -249,7 +252,8 @@ function ChipsPlugin({
     return mergeRegister(
       // What's typed is what's sent: macOS turns "..." into "…", quotes into curly ones,
       // "--" into a dash and capitalizes words as part of its text checking, which only
-      // `spellcheck="false"` turns off in the webview (`autocorrect="off"` does nothing there).
+      // `spellcheck="false"` turns off in the webview (`autocorrect="off"` does nothing there);
+      // its inline predictions ("sequence" for `seq`) only `writingsuggestions="false"` does.
       // Lexical's focus() drops `autocapitalize`, so the field sets them again when one goes.
       editor.registerRootListener((root, previous) => {
         previous?.removeEventListener("beforeinput", keepDoubleSpace, true);

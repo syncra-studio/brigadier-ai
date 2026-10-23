@@ -3,6 +3,7 @@ import { type FC, useEffect, useMemo, useRef, useState } from "react";
 import { Branch } from "@/components/icons";
 import type { SourceBranch } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /**
  * A quick pick of branches over the Source panel: the merge's "Select a branch to merge from"
@@ -44,6 +45,7 @@ export const BranchPicker: FC<{
       className="bg-popover text-popover-foreground border-border rounded-surface shadow-menu absolute inset-x-2 top-1 z-20 flex max-h-96 flex-col border p-1"
     >
       <input
+        {...PLAIN_FIELD}
         autoFocus
         value={query}
         aria-label={placeholder}
@@ -146,6 +148,7 @@ export const BranchNameBox: FC<{
       className="bg-popover text-popover-foreground border-border rounded-surface shadow-menu absolute inset-x-2 top-1 z-20 flex flex-col border p-1"
     >
       <input
+        {...PLAIN_FIELD}
         autoFocus
         value={name}
         aria-label={placeholder}

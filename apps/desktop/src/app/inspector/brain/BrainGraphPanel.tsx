@@ -16,6 +16,7 @@ import {
 import type { BrainGraph, BrainOverview, NodeFilter, NodeKind } from "@/ipc/generated";
 import { getBrainGraph } from "@/state/brain";
 import { useApp } from "@/state/store";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 // sigma and graphology load only once the Brain tab is open (see `preloadGraphCanvas`).
 const loadGraphCanvas = () => import("@/components/views/brain-graph");
@@ -162,7 +163,7 @@ export function BrainGraphPanel({ brainKey, overview }: { brainKey: string; over
           onChange={(event) => setTyped(event.target.value)}
           placeholder="Title or body contains…"
           aria-label="Filter by text"
-          spellCheck={false}
+          {...PLAIN_FIELD}
           className="h-control-xs w-auto min-w-0 flex-1 text-xs"
         />
         <span className="flex items-center gap-1.5">

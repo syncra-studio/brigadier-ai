@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/controls";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 export function RawSessionComposer({
   disabled,
@@ -23,6 +24,7 @@ export function RawSessionComposer({
   return (
     <div className="flex shrink-0 flex-col gap-2 border-t p-2">
       <textarea
+        {...PLAIN_FIELD}
         aria-label="Message"
         value={text}
         disabled={disabled}

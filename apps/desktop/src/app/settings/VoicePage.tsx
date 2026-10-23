@@ -16,6 +16,7 @@ import {
 import { setSetting } from "@/state/settings";
 import { removeSpeechModel } from "@/state/storage";
 import { useApp } from "@/state/store";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /** The Voice page's rows, for the page and for Settings search. */
 export const VOICE_ROWS = {
@@ -163,8 +164,7 @@ function WordList() {
                 value={word}
                 aria-label={`Word ${index + 1}`}
                 placeholder="Jane Doe"
-                spellCheck={false}
-                autoComplete="off"
+                {...PLAIN_FIELD}
                 className="border-foreground/16 bg-foreground/5 placeholder:text-foreground/40 rounded-nav h-8 min-w-0 flex-1 border px-3 text-sm outline-none focus:border-ring"
                 onChange={(event) => setWords(words.map((old, at) => (at === index ? event.target.value : old)))}
                 onBlur={() => commit(words)}

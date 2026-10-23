@@ -25,6 +25,7 @@ import { builtInDefault, useAvailableModelGroups, useModelGroups, withChoice } f
 import { cn } from "@/lib/utils";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 const WRITER_LABEL = "Write with";
 const COMMIT_LABEL = "Commit messages";
@@ -360,9 +361,7 @@ function BranchPrefixRow() {
       <Input
         id={id}
         value={text}
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
+        {...PLAIN_FIELD}
         placeholder="No prefix"
         aria-invalid={problem ? true : undefined}
         className="border-input bg-popover h-control-md rounded-control text-label w-56 px-2.5"

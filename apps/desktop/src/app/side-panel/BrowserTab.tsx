@@ -34,6 +34,7 @@ import { useApp } from "@/state/store";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
 import { TabChatToolbarButton } from "./TabChat";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /**
  * A browser main tab (⌘⇧B): one page, such as the app a worker is
@@ -393,9 +394,7 @@ export function BrowserTab({
               aria-expanded={suggestionsOpen}
               aria-controls={suggestionsOpen ? "browser-suggestions" : undefined}
               aria-activedescendant={suggestionsOpen && highlight >= 0 ? `browser-suggestion-${highlight}` : undefined}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
+              {...PLAIN_FIELD}
               onChange={(event) => {
                 setTyped(event.target.value);
                 setHighlight(-1);

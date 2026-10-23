@@ -9,6 +9,7 @@ import {
 
 import { MagnifyingGlassSearch, XCircleFilled } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 const LOOKS = {
   // The Settings look: a filled capsule with a hairline, taking the row's free width.
@@ -95,8 +96,7 @@ export function SettingsSearch({
           value={value}
           placeholder={placeholder}
           aria-label={label}
-          spellCheck={false}
-          autoComplete="off"
+          {...PLAIN_FIELD}
           className={cn(
             "min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden",
             LOOKS[variant].placeholder,

@@ -6,6 +6,7 @@ import { Plus, Spinner } from "@/components/icons";
 import { Button, ErrorLine } from "@/components/controls";
 import { cn } from "@/lib/utils";
 import { addProject, closeAddProject, showProject } from "@/state/addProject";
+import { PLAIN_FIELD } from "@/lib/plainTyping";
 
 /** Add project › New repository: its name and where it goes; Brigadier starts git in it. */
 export function NewRepoView({
@@ -62,8 +63,7 @@ export function NewRepoView({
               id={`${id}-name`}
               value={name}
               autoFocus
-              spellCheck={false}
-              autoComplete="off"
+              {...PLAIN_FIELD}
               maxLength={200}
               disabled={busy}
               placeholder="my-project"
