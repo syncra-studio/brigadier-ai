@@ -172,7 +172,7 @@ export function PluginsView({ snapshot, adapter, error, initialTab = "servers", 
       } else if (scope.kind === "skill") toggleSkill(item.id, value);
       else toggleServer(item.id, value);
     };
-    page = <SettingsPage title="Plugins" description={<><span className="hidden @lg:block">{PLUGINS_DESCRIPTION}</span><span className="@lg:hidden">MCP servers and skills Brigadier found on this Mac. It only reads them: change them in each agent's own setup.</span></>} className="max-w-plugins pt-0" sectionsClassName="gap-8 pt-2" actions={adapter && !error ? <span className="text-muted-foreground flex items-center gap-1.5 text-label"><StateDot tone="ready" />Up to date</span> : undefined}>
+    page = <SettingsPage title="Plugins" description={<><span className="hidden @lg:block">{PLUGINS_DESCRIPTION}</span><span className="@lg:hidden">MCP servers and skills Brigadier found on this Mac. It only reads them: change them in each agent's own setup.</span></>} actions={adapter && !error ? <span className="text-muted-foreground flex items-center gap-1.5 text-label"><StateDot tone="ready" />Up to date</span> : undefined}>
       <div className="flex items-center justify-between gap-3 pt-1 @lg:gap-4">
         <div role="tablist" aria-label="Plugins" className="flex shrink-0 items-center gap-1">
           {(["servers", "skills"] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={tab === value} data-setting={value === "servers" ? "MCP servers" : "Skills"} aria-controls="integrations-list" className={cn("rounded-capsule flex h-7 items-center gap-1.5 px-3 text-label", tab === value ? "bg-foreground/10" : "text-foreground/65")} onClick={() => { setTab(value); setQuery(""); setHighlight(null); }} onKeyDown={(event) => {

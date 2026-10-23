@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 type State = {
+  settingsColumn: boolean;
   title: string;
   sections: string[];
   text: string;
@@ -18,6 +19,8 @@ test("plugins: drawn server states, switch, details, search and config refresh",
   assert.equal(seen.error, undefined);
   const catalog = seen.servers!;
   assert.equal(catalog.title, "Plugins");
+  // The same column and top padding every other Settings page uses (#581).
+  assert.equal(catalog.settingsColumn, true);
   assert.deepEqual(catalog.sections, ["Yours", "brigadier-ai"]);
   assert.equal(catalog.tiles.length, 7);
   assert.equal(catalog.switches.length, 6, "an unreadable server has no switch");

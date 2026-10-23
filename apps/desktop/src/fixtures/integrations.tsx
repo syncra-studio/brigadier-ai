@@ -728,7 +728,13 @@ function readSignIn() {
 function readState() {
   const tile = document.querySelector('[data-slot="integration-tile"]');
   const style = tile ? getComputedStyle(tile) : null;
+  // The same column every other Settings page uses, not a wider one of its own (#581).
+  const column = document.querySelector('[data-slot="settings-page"] h1')?.closest(".mx-auto");
+  const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
+  const settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
+  probe.remove();
   return {
+    settingsColumn,
     title: text(document.querySelector("main h1")),
     sections: all("main h2").map(text),
     text: text(main()),
