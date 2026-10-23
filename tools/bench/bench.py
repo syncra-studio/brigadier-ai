@@ -93,6 +93,49 @@ def keep(paths, dest):
             shutil.copyfile(path, dest / Path(path).name)
 
 
+def models_file(root, worker_model):
+    """The daemon's models-rules file: empty when pinned; with `auto`, a path not yet made, so the
+    daemon writes the shipped default there and its advice picks the worker's model and effort."""
+    path = root / "models.md"
+    if worker_model == "pinned":
+        path.write_text("")
+    return path
+
+
+def task_prompt(task, arm, provider, model, args):
+    prompt = TASKS[task] + " Run node --test test/*.test.js. Do not push or publish."
+    if arm != "W":
+        return prompt + " Do the work yourself without workers or subagents. Do not commit."
+    if args.worker_model == "auto":
+        flags = f"--agent {provider} --permission full-access --local"
+        pick = " Give no --model or --effort; take the worker's model and effort from Brigadier's advice."
+    else:
+        flags = f"--agent {provider} --effort {args.effort} --permission full-access --local" + (f" --model {model}" if model else "")
+        pick = ""
+    return prompt + f" Delegate all implementation and tests to exactly one worker using brigadier start {flags}.{pick} Wait for that worker using brigadier wait, inspect the result and report it. Keep it in this checkout. Do not delegate to any other worker or subagent."
+
+
+def worker_start(path):
+    """The worker `brigadier start`'s receipt in a parent transcript: what it started with
+    ("claude, claude-sonnet-5-5, medium effort") and which rules row picked it, if any."""
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for v in value.values():
+                yield from strings(v)
+        elif isinstance(value, list):
+            for v in value:
+                yield from strings(v)
+    for row in records(path):
+        for text in strings(row):
+            started = re.search(r"Started worker \S+ \(([^)]*)\)", text)
+            if started:
+                picked = re.search(r"^(?:Your|The shipped) row .*$", text, re.M)
+                return {"started": started.group(1), "row": picked.group(0) if picked else None}
+    return None
+
+
 def plain(repo, provider, prompt, model, args, scratch, kept=None):
     sid = str(uuid.uuid4())
     command = (["claude", "-p", "--verbose", "--output-format", "stream-json", "--include-partial-messages",
@@ -152,8 +195,7 @@ class Daemon:
 
     def start(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith("BRIGADIER_") and k != "CLAUDECODE"}
-        models = self.root / "models.json"
-        models.write_text("")
+        models = models_file(self.root, self.args.worker_model)
         env.update(BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_MODELS_FILE=str(models),
                    TMPDIR=str(self.root), SHELL=shutil.which("zsh") or "/bin/bash")
         with (self.root / "daemon.log").open("w") as out:
@@ -280,10 +322,12 @@ class Daemon:
                         "output": sum(r.get("output", 0) for r in workers)}
         # Commands/injections include each captured child, but token totals use the daemon meter
         # for workers so a worker's provider-native stream is never counted twice.
+        worker_models = set()
         for original, (p, saved) in self.kept.items():
             if original in parent_files:
                 continue
             child = parse(saved, p, prompt)
+            worker_models.update(child["models"])
             for key in ("brigadier_commands", "ledger_adds", "injected_messages", "injected_bytes", "api_calls", "tools"):
                 metrics[key] += child[key]
         metrics["parent_usage"] = dict(metrics["usage"])
@@ -295,6 +339,8 @@ class Daemon:
                  "cache_write": sum(r["cache_write"] for r in rows), "output": sum(r["output"] for r in rows)}
         metrics.update(wall_s=wall, first_output_s=first, worktree_s=worktree_s,
                        parent_transcripts=[self.kept[f][1].name for f in parent_files],
+                       worker_models=sorted(worker_models),
+                       worker_start=next(filter(None, (worker_start(self.kept[f][1]) for f in parent_files)), None),
                        worker_usage=worker_usage, worker_turns=len(workers), daemon_usage=meter,
                        delegated=(len({r["task_id"] for r in workers}) == 1) if arm == "W" else None,
                        request_state=next(r["state"]["type"] for r in view["requests"] if r["id"] == request))
@@ -327,7 +373,7 @@ class Daemon:
 
 def markdown(report):
     lines = ["# CLI bench", "", "Report only; regressions never gate CI or releases.", "",
-             f"Source: `{report['source']}`; fixture v{report['fixture_version']}; effort {report['effort']}", "",
+             f"Source: `{report['source']}`; fixture v{report['fixture_version']}; effort {report['effort']}; worker model {report.get('worker_model', 'pinned')}", "",
              "| Arm | Task/run | Status | Pass | Wall s | First output s | Worktree s | API calls | Input / cache write / cache read / output | Cost units | CLI commands | Ledger adds | Injected msgs / bytes |",
              "|---|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|---|"]
     for r in report["runs"]:
@@ -344,6 +390,12 @@ def markdown(report):
         if rows:
             avg = lambda k: sum(r[k] for r in rows) / len(rows)
             lines.append(f"| {provider} {arm} | {sum(r['grade']['passed'] for r in rows)}/{len(rows)} | {avg('wall_s'):.2f} | {avg('raw_tokens'):.0f} | {avg('cost_units'):.2f} |")
+    workers = [r for r in report["runs"] if r["arm"] == "W" and r["status"] == "complete"]
+    if workers:
+        lines += ["", "## Workers", "", "| Task/run | Started as | Rules row | Transcript models |", "|---|---|---|---|"]
+        for r in workers:
+            start = r.get("worker_start") or {}
+            lines.append(f"| {r['task']}/{r['run']} | {start.get('started', 'unseen')} | {start.get('row') or '—'} | {', '.join(r.get('worker_models', [])) or 'unseen'} |")
     lines += ["", "W totals include worker turns from turn_usage; parent usage is also retained in JSON.",
               "Injected messages count transcript-visible user/developer text other than the typed prompt and tool results. Provider-private system prompts are unavailable; standing instruction bytes are recorded separately in JSON.", ""]
     return "\n".join(lines)
@@ -366,6 +418,8 @@ def run_main():
     p.add_argument("--codex-model", default=None)
     p.add_argument("--worker-provider", choices=["claude", "codex"], default="claude")
     p.add_argument("--effort", choices=["low", "medium", "high"], default="low")
+    p.add_argument("--worker-model", choices=["pinned", "auto"], default="pinned",
+                   help="auto: W's worker gets no --model/--effort and the daemon has the shipped rules file, so Brigadier's advice picks them")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--scratch-prefix", default="brigadier-bench-" + os.environ.get("GITHUB_RUN_ID", "local") + "-", help="Unique run/worker prefix for /tmp scratch")
     p.add_argument("--keep-transcripts", type=Path, default=None, help="Copy each run's native transcripts to DIR/<arm>-<task>-<run>/")
@@ -379,6 +433,7 @@ def run_main():
               "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "effort": args.effort,
               "requested_models": {"claude": args.claude_model, "codex": args.codex_model},
+              "worker_model": args.worker_model,
               "standing_instruction_bytes": (ROOT / "crates/core/src/manager/standing_instructions.md").stat().st_size,
               "runs": []}
     if args.skip:
@@ -401,12 +456,7 @@ def run_main():
                     kept = args.keep_transcripts and args.keep_transcripts.resolve() / f"{arm}-{task}-{run}"
                     try:
                         fixture(repo, task)
-                        prompt = TASKS[task] + " Run node --test test/*.test.js. Do not push or publish."
-                        if arm == "W":
-                            flags = f"--agent {provider} --effort {args.effort} --permission full-access --local" + (f" --model {model}" if model else "")
-                            prompt += f" Delegate all implementation and tests to exactly one worker using brigadier start {flags}. Wait for that worker using brigadier wait, inspect the result and report it. Keep it in this checkout. Do not delegate to any other worker or subagent."
-                        else:
-                            prompt += " Do the work yourself without workers or subagents. Do not commit."
+                        prompt = task_prompt(task, arm, provider, model, args)
                         if arm in ("A", "B"):
                             result, checkout = plain(repo, provider, prompt, model, args, scratch, kept)
                         else:

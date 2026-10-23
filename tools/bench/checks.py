@@ -6,6 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ from unittest.mock import patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench
-from bench import Daemon, cleanup_native, keep, remove_empty_project
+from bench import Daemon, cleanup_native, keep, models_file, remove_empty_project, task_prompt, worker_start
 from metrics import parse
 from tasks import TASKS, fixture, grade
 from nightly import collect, issue, regressions
@@ -123,6 +124,38 @@ class Accounting(unittest.TestCase):
                 transcript.write_text("{}\n{}\n")
                 daemon.events()
             self.assertEqual(daemon.kept[str(transcript)][1].read_text(), "{}\n{}\n")
+
+
+class WorkerModel(unittest.TestCase):
+    def test_auto_leaves_model_and_effort_to_the_shipped_advice(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            root = Path(tmp)
+            args = SimpleNamespace(effort="low", worker_model="pinned")
+            pinned = task_prompt("t1", "W", "claude", "opus", args)
+            self.assertIn("--effort low", pinned)
+            self.assertIn("--model opus", pinned)
+            self.assertEqual(models_file(root, "pinned").read_text(), "")
+            args.worker_model = "auto"
+            auto = task_prompt("t1", "W", "claude", "opus", args)
+            self.assertIn("brigadier start --agent claude --permission full-access --local.", auto)
+            self.assertNotIn("--model opus", auto)
+            self.assertNotIn("--effort low", auto)
+            self.assertEqual(task_prompt("t1", "A", "claude", "opus", args), task_prompt("t1", "A", "claude", "opus", SimpleNamespace(effort="low", worker_model="pinned")))
+            (root / "models.md").unlink()
+            # Not made: the daemon writes the shipped default there on first read.
+            self.assertFalse(models_file(root, "auto").exists())
+
+    def test_the_start_receipt_says_what_the_worker_got(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            path = Path(tmp) / "parent.jsonl"
+            receipt = ("w-1\nStarted worker 1 (claude, claude-sonnet-5-5, medium effort), in this session's checkout, permission full access.\n"
+                       "The shipped row \"Mechanical changes and search\" picked its model and effort.\nKeep `brigadier wait` running.\n")
+            rows = [{"type": "user", "message": {"content": [{"type": "tool_result", "content": [{"type": "text", "text": receipt}]}]}}]
+            path.write_text("\n".join(map(json.dumps, rows)))
+            self.assertEqual(worker_start(path), {"started": "claude, claude-sonnet-5-5, medium effort",
+                                                  "row": "The shipped row \"Mechanical changes and search\" picked its model and effort."})
+            path.write_text("{}\n")
+            self.assertIsNone(worker_start(path))
 
 
 class Graders(unittest.TestCase):

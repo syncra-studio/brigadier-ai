@@ -38,7 +38,10 @@ exactly one metered worker. A, B, CC and CX explicitly forbid workers/subagents.
 
 Claude defaults to `opus`; Codex uses its configured default. Override with `--claude-model`
 or `--codex-model`. Every parent and worker gets the same model, `--effort low` and full
-permissions. `--effort medium` or `high` is available for a separate baseline. Actual model
+permissions. `--effort medium` or `high` is available for a separate baseline.
+`--worker-model auto` measures W as a user runs it: the parent stays pinned, its worker gets no
+`--model`/`--effort`, and the daemon's models-rules file is the shipped default, so Brigadier's
+advice picks them. The worker's start receipt and transcript models are recorded per run. Actual model
 identifiers are recorded from native transcripts. Runs execute sequentially in task/run/arm
 order; this avoids competing arms on a shared host, but short-task variance remains substantial.
 
