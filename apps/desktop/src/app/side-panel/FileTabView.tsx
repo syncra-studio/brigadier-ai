@@ -116,7 +116,8 @@ export function FileTabView({
   const review = useFileReview(conversationId, tab.path, again, active);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const mac = useApp((s) => s.info?.platform === "macos");
-  const absolute = root ? `${root.replace(/\/$/, "")}/${tab.path}` : tab.path;
+  // A file outside the checkout (the session's ledger) is opened by its absolute path.
+  const absolute = root && !/^(\/|[A-Za-z]:[\\/])/.test(tab.path) ? `${root.replace(/\/$/, "")}/${tab.path}` : tab.path;
   const file = read.state === "read" ? read.file : null;
   return (
     <div data-slot="file-tab" className="flex min-h-0 flex-1 flex-col">
