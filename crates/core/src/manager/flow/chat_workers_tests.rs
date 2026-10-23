@@ -311,6 +311,16 @@ async fn a_chats_cli_runs_as_a_sessions_at_its_level() {
 /// session removes its workers' (G15).
 #[tokio::test]
 async fn deleting_a_chat_removes_its_repo_workers_session_files() {
+    deleting_a_chat_removes_its_repo_workers_files(false).await;
+}
+
+/// The cleanup ledger survives a daemon restart even though a Chat has no project of its own.
+#[tokio::test]
+async fn deleting_a_chat_after_restart_removes_its_repo_workers_session_files() {
+    deleting_a_chat_removes_its_repo_workers_files(true).await;
+}
+
+async fn deleting_a_chat_removes_its_repo_workers_files(restart: bool) {
     let answers = Answers::default();
     let script: Script = {
         let answers = answers.clone();
@@ -338,7 +348,7 @@ async fn deleting_a_chat_removes_its_repo_workers_session_files() {
             })
         })
     };
-    let flow = Flow::start(
+    let mut flow = Flow::start(
         "chat-workers-delete",
         Options {
             behavior: Arc::new(super::FakeBehavior {
@@ -362,6 +372,13 @@ async fn deleting_a_chat_removes_its_repo_workers_session_files() {
         .flat_map(|task| super::fake_files(&own, task.native_session.as_ref().unwrap()))
         .collect();
     assert!(files.iter().all(|file| file.exists()), "{files:#?}");
+    if restart {
+        flow.restart().await;
+        assert!(
+            files.iter().all(|file| file.exists()),
+            "restart keeps transcripts"
+        );
+    }
     flow.manager.delete(chat.clone()).await.unwrap();
     flow.manager.cleanup_finished(&chat).await;
     for file in files {
