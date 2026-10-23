@@ -4,6 +4,7 @@
   "type": "object",
   "required": [
     "models",
+    "agents",
     "accounts",
     "guidance",
     "rules"
@@ -50,6 +51,28 @@
         }
       }
     },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "agent",
+          "switchAccounts"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "switchAccounts": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "accounts": {
       "type": "array",
       "items": {
@@ -63,7 +86,9 @@
           "you",
           "loggedIn",
           "ageS",
-          "fit"
+          "fit",
+          "place",
+          "why"
         ],
         "additionalProperties": false,
         "properties": {
@@ -150,6 +175,16 @@
             ]
           },
           "fit": {
+            "type": "string"
+          },
+          "place": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "why": {
             "type": "string"
           }
         }

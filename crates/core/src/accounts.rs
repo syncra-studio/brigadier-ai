@@ -118,38 +118,39 @@ pub fn select(
     model: Option<&str>,
     candidates: &[Candidate],
     avoid: &[AccountRef],
+    now: i64,
 ) -> AccountRef {
-    ready(settings, provider, model, candidates, avoid)
+    ready(settings, provider, model, candidates, avoid, now)
         .unwrap_or_else(|| default_account(settings, provider))
 }
 
-/// The account work goes to among those that can take it, `None` when none can. With
-/// switching off, the account picked with Use (the default) while it can; once it can't, or
-/// with switching on, [`soonest_ready`]'s choice: another account of the provider goes before
-/// another provider (#505).
+/// The account work goes to among those that can take it, `None` when none can: the first of
+/// [`order`]. With switching off, the account picked with Use (the default) while it can;
+/// once it can't, or with switching on, the first of the smart order: another account of the
+/// provider goes before another provider (#505).
 pub fn ready(
     settings: &Settings,
     provider: ProviderKind,
     model: Option<&str>,
     candidates: &[Candidate],
     avoid: &[AccountRef],
+    now: i64,
 ) -> Option<AccountRef> {
     if !settings.switches_accounts(provider) {
         let default = default_account(settings, provider);
-        let pinned: Vec<Candidate> = candidates
-            .iter()
-            .filter(|candidate| candidate.account == default)
-            .cloned()
-            .collect();
-        if let Some(account) = soonest_ready(settings, provider, model, &pinned, avoid) {
-            return Some(account);
+        if candidates.iter().any(|candidate| {
+            candidate.account == default && can_take(candidate, provider, model, avoid)
+        }) {
+            return Some(default);
         }
     }
-    soonest_ready(settings, provider, model, candidates, avoid)
+    smart_order(settings, provider, model, candidates, avoid, now)
+        .into_iter()
+        .next()
 }
 
 /// The account picked as `provider`'s default: an extra one, else the user's own login.
-fn default_account(settings: &Settings, provider: ProviderKind) -> AccountRef {
+pub fn default_account(settings: &Settings, provider: ProviderKind) -> AccountRef {
     AccountRef::new(
         provider,
         settings
@@ -158,47 +159,211 @@ fn default_account(settings: &Settings, provider: ProviderKind) -> AccountRef {
     )
 }
 
-/// Of the accounts that can take work (signed in, not in `avoid`, room left for `model`, every
-/// window that limits it under the share routing counts as used up), the one whose weekly
-/// window resets soonest, so the quota that is lost first is used first. An unknown reset sorts
-/// last; a tie goes to the most left, then to the earliest added. `None` when none can.
-pub fn soonest_ready(
+/// Whether `candidate` can take work for `model` now: signed in, not in `avoid`, no limit hit
+/// and no window that limits it at the share routing counts as used up.
+fn can_take(
+    candidate: &Candidate,
+    provider: ProviderKind,
+    model: Option<&str>,
+    avoid: &[AccountRef],
+) -> bool {
+    candidate.account.provider == provider
+        && candidate.logged_in
+        && !avoid.contains(&candidate.account)
+        && candidate
+            .quota
+            .as_ref()
+            .is_none_or(|quota| headroom(quota, model).is_some() && !used_up(quota, model))
+}
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// What decides a ready account's place: the day its weekly window resets (counted from now;
+/// unknown last), then how much is left in its tightest window (5-hour or weekly; unknown
+/// counts as full).
+fn rank(candidate: &Candidate, model: Option<&str>, now: i64) -> (Option<i64>, f64) {
+    let day = candidate
+        .quota
+        .as_ref()
+        .and_then(|quota| weekly_reset(quota, model))
+        .map(|at| (at - now).max(0) / DAY_MS);
+    let left = candidate
+        .quota
+        .as_ref()
+        .and_then(|quota| headroom(quota, model))
+        .unwrap_or(100.0);
+    (day, left)
+}
+
+/// The accounts that can take work, in the order work goes to them (switching on, D23): the
+/// one whose weekly window resets on the soonest day first, since its quota is lost first;
+/// within a day, the one nearest its limit (least left in its tightest window, 5-hour or
+/// weekly), so it drains while the other stays whole; then the earliest added. An unknown
+/// reset sorts last.
+pub fn smart_order(
     settings: &Settings,
     provider: ProviderKind,
     model: Option<&str>,
     candidates: &[Candidate],
     avoid: &[AccountRef],
-) -> Option<AccountRef> {
-    let ready = |candidate: &&Candidate| {
-        candidate.account.provider == provider
-            && candidate.logged_in
-            && !avoid.contains(&candidate.account)
-            && candidate
-                .quota
-                .as_ref()
-                .is_none_or(|quota| headroom(quota, model).is_some() && !used_up(quota, model))
-    };
-    candidates
+    now: i64,
+) -> Vec<AccountRef> {
+    let mut ready: Vec<&Candidate> = candidates
         .iter()
-        .filter(ready)
-        .min_by(|a, b| {
-            let reset = |c: &Candidate| c.quota.as_ref().and_then(|q| weekly_reset(q, model));
-            // Unknown quota counts as full.
-            let left = |c: &Candidate| {
-                c.quota
-                    .as_ref()
-                    .and_then(|q| headroom(q, model))
-                    .unwrap_or(100.0)
-            };
-            let (a_reset, b_reset) = (reset(a), reset(b));
-            a_reset
-                .is_none()
-                .cmp(&b_reset.is_none())
-                .then_with(|| a_reset.cmp(&b_reset))
-                .then_with(|| left(b).total_cmp(&left(a)))
-                .then_with(|| order(settings, &a.account).cmp(&order(settings, &b.account)))
-        })
+        .filter(|candidate| can_take(candidate, provider, model, avoid))
+        .collect();
+    ready.sort_by(|a, b| {
+        let ((a_day, a_left), (b_day, b_left)) = (rank(a, model, now), rank(b, model, now));
+        a_day
+            .is_none()
+            .cmp(&b_day.is_none())
+            .then_with(|| a_day.cmp(&b_day))
+            .then_with(|| a_left.total_cmp(&b_left))
+            .then_with(|| added(settings, &a.account).cmp(&added(settings, &b.account)))
+    });
+    ready
+        .into_iter()
         .map(|candidate| candidate.account.clone())
+        .collect()
+}
+
+/// Why an account stands where it does in [`order`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum OrderReason {
+    /// Picked with Use (switching off): work goes here while it can take it.
+    Picked,
+    /// Its weekly window resets on an earlier day than the next one's: its quota is lost first.
+    ResetsSooner { resets_at_ms: i64 },
+    /// Its weekly window resets the same day as the next one's, and it has less left in its
+    /// tightest window (`window`, the window's label): it drains first.
+    NearerLimit { window: String, used_percent: f64 },
+    /// Level with the next one: it was added first.
+    Added,
+    /// The last one that can take work.
+    Last,
+    /// It can't take work now (a limit, or a window used up): until `ready_at_ms`, when known.
+    AtLimit {
+        #[ts(optional)]
+        ready_at_ms: Option<i64>,
+    },
+    /// Not signed in.
+    SignedOut,
+}
+
+/// One account's place in the order work goes to its provider's accounts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountOrder {
+    pub account: AccountRef,
+    /// 1 for the account work goes to first; `None` for one that can't take work now.
+    pub place: Option<u32>,
+    pub reason: OrderReason,
+}
+
+/// Every account of `provider` in the order work goes to them, each with why: the picked one
+/// first with switching off, then [`smart_order`]'s, then those that can't take work now.
+pub fn order(
+    settings: &Settings,
+    provider: ProviderKind,
+    model: Option<&str>,
+    candidates: &[Candidate],
+    now: i64,
+) -> Vec<AccountOrder> {
+    let mut accounts = smart_order(settings, provider, model, candidates, &[], now);
+    let picked = !settings.switches_accounts(provider);
+    let default = default_account(settings, provider);
+    if picked && let Some(at) = accounts.iter().position(|account| *account == default) {
+        let first = accounts.remove(at);
+        accounts.insert(0, first);
+    }
+    let find = |account: &AccountRef| {
+        candidates
+            .iter()
+            .find(|candidate| candidate.account == *account)
+    };
+    let count = accounts.len();
+    let mut placed: Vec<AccountOrder> = accounts
+        .iter()
+        .enumerate()
+        .map(|(at, account)| {
+            let reason = if picked && *account == default {
+                OrderReason::Picked
+            } else if at + 1 == count {
+                OrderReason::Last
+            } else {
+                let (this, next) = (find(account), find(&accounts[at + 1]));
+                match (this, next) {
+                    (Some(this), Some(next)) => ahead(this, next, model, now),
+                    _ => OrderReason::Added,
+                }
+            };
+            AccountOrder {
+                account: account.clone(),
+                place: Some(at as u32 + 1),
+                reason,
+            }
+        })
+        .collect();
+    let mut out: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.account.provider == provider && !accounts.contains(&candidate.account)
+        })
+        .collect();
+    out.sort_by_key(|candidate| added(settings, &candidate.account));
+    placed.extend(out.into_iter().map(|candidate| AccountOrder {
+        account: candidate.account.clone(),
+        place: None,
+        reason: if candidate.logged_in {
+            OrderReason::AtLimit {
+                ready_at_ms: candidate
+                    .quota
+                    .as_ref()
+                    .and_then(|quota| ready_again_at(quota, model)),
+            }
+        } else {
+            OrderReason::SignedOut
+        },
+    }));
+    placed
+}
+
+/// Why `this` goes before `next` in [`smart_order`].
+fn ahead(this: &Candidate, next: &Candidate, model: Option<&str>, now: i64) -> OrderReason {
+    let ((this_day, this_left), (next_day, _)) = (rank(this, model, now), rank(next, model, now));
+    if let Some(day) = this_day
+        && next_day.is_none_or(|next| day < next)
+        && let Some(at) = this
+            .quota
+            .as_ref()
+            .and_then(|quota| weekly_reset(quota, model))
+    {
+        return OrderReason::ResetsSooner { resets_at_ms: at };
+    }
+    let (_, next_left) = rank(next, model, now);
+    if this_left < next_left
+        && let Some(window) = this.quota.as_ref().and_then(|quota| tightest(quota, model))
+    {
+        return OrderReason::NearerLimit {
+            window: window.label.clone(),
+            used_percent: window.used_percent,
+        };
+    }
+    OrderReason::Added
+}
+
+/// The window that applies to `model` with the least left.
+fn tightest<'a>(quota: &'a QuotaSnapshot, model: Option<&str>) -> Option<&'a QuotaWindow> {
+    quota
+        .windows
+        .iter()
+        .filter(|window| applies(window, model))
+        .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
 }
 
 /// Whether a window limits `model`: a window of every model, or one scoped to it.
@@ -314,7 +479,7 @@ pub fn mask_email(email: &str) -> String {
 
 /// Where an account stands in the list: the user's own login first, then the extra ones as
 /// added.
-fn order(settings: &Settings, account: &AccountRef) -> usize {
+fn added(settings: &Settings, account: &AccountRef) -> usize {
     match &account.account {
         None => 0,
         Some(id) => {
@@ -395,7 +560,7 @@ mod tests {
     }
 
     fn pick(settings: &Settings, candidates: &[Candidate]) -> Option<String> {
-        select(settings, ProviderKind::Claude, None, candidates, &[]).account
+        select(settings, ProviderKind::Claude, None, candidates, &[], 0).account
     }
 
     /// `candidate` with a weekly window that resets in `hours` (unknown when `None`).
@@ -414,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn the_account_whose_week_resets_soonest_takes_work() {
+    fn the_account_whose_week_resets_on_the_soonest_day_takes_work() {
         let all = [
             weekly(None, 0.0, Some(90)),
             weekly(Some("work"), 60.0, Some(20)),
@@ -426,13 +591,106 @@ mod tests {
             pick(&settings(Some("home"), true), &all),
             Some("work".into())
         );
-        // A tie goes to the most left, then to the earliest added.
+        // Within the same day, the one nearest its limit (D23), then the earliest added.
         let tied = [
-            weekly(None, 40.0, Some(20)),
-            weekly(Some("work"), 30.0, Some(20)),
-            weekly(Some("home"), 30.0, Some(20)),
+            weekly(None, 30.0, Some(20)),
+            weekly(Some("work"), 40.0, Some(23)),
+            weekly(Some("home"), 40.0, Some(21)),
         ];
         assert_eq!(pick(&settings(None, true), &tied), Some("work".into()));
+        // A day later is later, however near its limit.
+        let days = [
+            weekly(None, 90.0, Some(30)),
+            weekly(Some("work"), 10.0, Some(20)),
+        ];
+        assert_eq!(pick(&settings(None, true), &days), Some("work".into()));
+    }
+
+    #[test]
+    fn the_order_says_why_each_account_stands_where_it_does() {
+        let mut signed_out = weekly(Some("home"), 0.0, Some(1));
+        signed_out.logged_in = false;
+        let mut limited = candidate(Some("spare"), 100.0, true);
+        let spent = limited.quota.as_mut().unwrap();
+        spent.limit.as_mut().unwrap().resets_at_ms = Some(7_000);
+        spent.windows[0].resets_at_ms = Some(7_000);
+        let mut settings = settings(None, true);
+        settings.accounts.push(AccountEntry {
+            id: "spare".into(),
+            provider: ProviderKind::Claude,
+            name: "spare".into(),
+            default: false,
+            added_at_ms: 0,
+        });
+        let all = [
+            weekly(None, 80.0, Some(20)),
+            weekly(Some("work"), 10.0, Some(22)),
+            signed_out,
+            limited,
+            weekly(Some("other"), 50.0, Some(60)),
+        ];
+        let order = order(&settings, ProviderKind::Claude, None, &all, 0);
+        let seen: Vec<_> = order
+            .iter()
+            .map(|entry| {
+                (
+                    entry.account.account.as_deref(),
+                    entry.place,
+                    entry.reason.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    None,
+                    Some(1),
+                    OrderReason::NearerLimit {
+                        window: "5-hour".into(),
+                        used_percent: 80.0
+                    }
+                ),
+                (
+                    Some("work"),
+                    Some(2),
+                    OrderReason::ResetsSooner {
+                        resets_at_ms: 22 * 3_600_000
+                    }
+                ),
+                (Some("other"), Some(3), OrderReason::Last),
+                (Some("home"), None, OrderReason::SignedOut),
+                (
+                    Some("spare"),
+                    None,
+                    OrderReason::AtLimit {
+                        ready_at_ms: Some(7_000)
+                    }
+                ),
+            ]
+        );
+        // Switching off: the picked account first, then the order.
+        let mut off = settings.clone();
+        off.manual_accounts = vec![ProviderKind::Claude];
+        off.accounts[1].default = true;
+        // Picked but signed out: the order goes on without it (#505).
+        let order = super::order(&off, ProviderKind::Claude, None, &all, 0);
+        assert_eq!(order[0].account.account, None);
+        let home = order
+            .iter()
+            .find(|entry| entry.account.account.as_deref() == Some("home"));
+        assert_eq!(
+            home.map(|entry| (entry.place, &entry.reason)),
+            Some((None, &OrderReason::SignedOut))
+        );
+        off.accounts[1].default = false;
+        off.accounts[0].default = true;
+        let order = super::order(&off, ProviderKind::Claude, None, &all, 0);
+        assert_eq!(
+            (order[0].account.account.as_deref(), &order[0].reason),
+            (Some("work"), &OrderReason::Picked)
+        );
+        assert_eq!(order[1].account.account, None);
     }
 
     #[test]
@@ -532,15 +790,15 @@ mod tests {
     }
 
     #[test]
-    fn with_no_reset_known_the_account_with_the_most_left_takes_work() {
+    fn with_no_reset_known_the_account_nearest_its_limit_takes_work() {
         let all = [
             candidate(None, 100.0, true),
             candidate(Some("work"), 60.0, false),
             candidate(Some("home"), 20.0, false),
         ];
-        assert_eq!(pick(&settings(None, true), &all), Some("home".into()));
+        assert_eq!(pick(&settings(None, true), &all), Some("work".into()));
         // Switching off with the default limited: another account that can take it (#505).
-        assert_eq!(pick(&settings(None, false), &all), Some("home".into()));
+        assert_eq!(pick(&settings(None, false), &all), Some("work".into()));
         // Every account used up: the default.
         let spent = [
             candidate(None, 100.0, true),
@@ -566,7 +824,8 @@ mod tests {
                 ProviderKind::Claude,
                 None,
                 &all,
-                &avoid
+                &avoid,
+                0
             )
             .account,
             None
@@ -616,17 +875,22 @@ mod tests {
         ];
         // The picked one while it has room, though another has more.
         assert_eq!(pick(&off, &all), Some("work".into()));
-        // At its limit, another account of the provider before another provider (#505).
+        // At its limit, another account of the provider before another provider (#505), in
+        // the order: the one nearest its limit.
         all[1] = candidate(Some("work"), 100.0, true);
-        assert_eq!(pick(&off, &all), Some("home".into()));
+        assert_eq!(pick(&off, &all), None);
         let moved = ready(
             &off,
             ProviderKind::Claude,
             None,
             &all,
-            &[AccountRef::new(ProviderKind::Claude, Some("home".into()))],
+            &[AccountRef::own(ProviderKind::Claude)],
+            0,
         );
-        assert_eq!(moved.and_then(|account| account.account), None);
+        assert_eq!(
+            moved.and_then(|account| account.account),
+            Some("home".into())
+        );
         // None ready: the picked one, read as limited.
         let spent = [
             candidate(None, 100.0, true),
@@ -634,7 +898,10 @@ mod tests {
             candidate(Some("home"), 100.0, true),
         ];
         assert_eq!(pick(&off, &spent), Some("work".into()));
-        assert_eq!(ready(&off, ProviderKind::Claude, None, &spent, &[]), None);
+        assert_eq!(
+            ready(&off, ProviderKind::Claude, None, &spent, &[], 0),
+            None
+        );
     }
 
     #[test]
@@ -701,20 +968,28 @@ mod tests {
             bucket: None,
             model: Some("opus".into()),
         });
-        let all = [own, candidate(Some("work"), 50.0, false)];
+        let all = [own, candidate(Some("work"), 5.0, false)];
         let settings = settings(None, true);
         assert_eq!(
-            select(&settings, ProviderKind::Claude, Some("opus"), &all, &[]).account,
+            select(&settings, ProviderKind::Claude, Some("opus"), &all, &[], 0).account,
             Some("work".into())
         );
         assert_eq!(
-            select(&settings, ProviderKind::Claude, Some("sonnet"), &all, &[]).account,
+            select(
+                &settings,
+                ProviderKind::Claude,
+                Some("sonnet"),
+                &all,
+                &[],
+                0
+            )
+            .account,
             None
         );
         // The same window limits the family under its other names.
         for name in ["opus[1m]", "claude-opus-5-5", "Opus"] {
             assert_eq!(
-                select(&settings, ProviderKind::Claude, Some(name), &all, &[]).account,
+                select(&settings, ProviderKind::Claude, Some(name), &all, &[], 0).account,
                 Some("work".into()),
                 "{name}"
             );
@@ -725,7 +1000,8 @@ mod tests {
                 ProviderKind::Claude,
                 Some("claude-sonnet-5-5"),
                 &all,
-                &[]
+                &[],
+                0
             )
             .account,
             None

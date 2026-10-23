@@ -258,6 +258,7 @@ export type { OrchestratorLogEntry } from "./OrchestratorLogEntry";
 export type { OrchestratorPage } from "./OrchestratorPage";
 export type { OrchestratorStep } from "./OrchestratorStep";
 export type { OrchestratorStepKind } from "./OrchestratorStepKind";
+export type { OrderReason } from "./OrderReason";
 export type { Origin } from "./Origin";
 export type { Outcome } from "./Outcome";
 export type { OutputOf } from "./OutputOf";

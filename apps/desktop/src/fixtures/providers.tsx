@@ -323,6 +323,7 @@ function Fixture() {
           title: text(row.querySelector('[data-slot="account-title"]')),
           inUse: Boolean(row.querySelector('[data-slot="in-use"]')),
           meters: all('[data-slot="account-usage"]', row).map(text),
+          order: text(row.querySelector('[data-slot="account-order"]')),
         }));
         seen.eyes = all("button").filter((element) => element.getAttribute("aria-label") === "Show email").length;
         seen.models = all('[data-slot="provider-model"]').map(text);

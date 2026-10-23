@@ -319,6 +319,7 @@ impl Runtime {
             model,
             &self.account_candidates(provider),
             &[],
+            now_ms(),
         )
     }
 
@@ -410,6 +411,7 @@ impl Runtime {
             model,
             &candidates,
             std::slice::from_ref(from),
+            now_ms(),
         )
     }
 
@@ -467,6 +469,16 @@ impl Runtime {
         for kind in ProviderKind::ALL {
             let own = AccountRef::own(kind);
             let lead = self.monitor.lead(kind);
+            let order =
+                crate::accounts::order(&settings, kind, None, &self.account_candidates(kind), now);
+            let placed = |account: &AccountRef| {
+                order
+                    .iter()
+                    .find(|entry| entry.account == *account)
+                    .map_or((None, None), |entry| {
+                        (entry.place, Some(entry.reason.clone()))
+                    })
+            };
             let overview = self.overview(kind);
             let checking = self.state().refreshing.contains(&kind);
             accounts.push(AccountView {
@@ -484,6 +496,8 @@ impl Runtime {
                 checking,
                 error: overview.and_then(|overview| overview.error),
                 checked_generation: self.checked_generation(kind),
+                place: placed(&own).0,
+                reason: placed(&own).1,
                 account: own,
             });
             let live = self.accounts();
@@ -505,6 +519,8 @@ impl Runtime {
                     checking: live.is_some_and(|live| live.checking),
                     error: live.and_then(|live| live.error.clone()),
                     checked_generation: live.map_or(0, |live| live.checked_generation),
+                    place: placed(&account).0,
+                    reason: placed(&account).1,
                     account,
                 });
             }

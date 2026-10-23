@@ -24,7 +24,7 @@ export const OVERVIEW_ROWS = {
   switchAccounts: {
     label: "Switch accounts automatically",
     description:
-      "New work starts on the account whose weekly limit resets soonest. Use picks one account and turns this off. Either way, work moves to another account when its account hits its limit.",
+      "Work goes first to the account whose weekly limit resets soonest, then to the one nearest its limit, so quota is used before it resets. Use picks one account and turns this off. Either way, work moves to another account when its account hits its limit.",
   },
   notSetUp: "Agents Brigadier can run that aren't installed yet",
 } as const;

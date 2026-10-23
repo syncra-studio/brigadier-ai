@@ -141,7 +141,38 @@ fn sample(request: &CliRequest) -> CliReply {
     match request {
         CliRequest::Models => CliReply::ok(&brigadier_cli::models::ModelsOutput {
             models: vec![],
-            accounts: vec![],
+            agents: vec![brigadier_cli::models::AgentAccounts {
+                agent: Agent::Claude,
+                switch_accounts: true,
+            }],
+            accounts: vec![
+                brigadier_cli::models::Account {
+                    id: "own".into(),
+                    name: String::new(),
+                    agent: Agent::Claude,
+                    current: true,
+                    you: false,
+                    logged_in: true,
+                    age_s: Some(30),
+                    fit: "ok".into(),
+                    usage: vec![],
+                    place: Some(1),
+                    why: "nearest its limit (5-hour 80% used)".into(),
+                },
+                brigadier_cli::models::Account {
+                    id: "acct-b".into(),
+                    name: "Work".into(),
+                    agent: Agent::Claude,
+                    current: false,
+                    you: false,
+                    logged_in: true,
+                    age_s: None,
+                    fit: "out until 14:10".into(),
+                    usage: vec![],
+                    place: None,
+                    why: "at its limit until 14:10".into(),
+                },
+            ],
             guidance: vec![],
             rules: vec![brigadier_cli::models::Rule {
                 rule: "forbid: fable".into(),

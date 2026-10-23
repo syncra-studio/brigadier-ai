@@ -13,7 +13,7 @@ import {
 } from "@/components/overlays";
 import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
 import { SettingsCard, UsageBar, SettingsRow } from "@/components/shared";
-import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
+import type { AccountView, OrderReason, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { formatCountdown } from "@/lib/format";
@@ -405,6 +405,7 @@ function AccountRow({
     if (ownLogin) lines.push("This computer's login");
     else if (shownEmail !== title) lines.push(title);
     const pageWindows = signedIn && view.quota ? ordered(view.quota) : [];
+    const order = signedIn ? orderLine(view.place, view.reason, now) : null;
     return (
       <div data-slot="account-row" className="flex items-center gap-6 px-4 py-3">
         <div className="flex min-w-48 flex-1 flex-col gap-1.25">
@@ -428,6 +429,11 @@ function AccountRow({
           <span className={cn(ROW_LINE, "truncate")}>
             {lines.join(" · ")}
           </span>
+          {order && (
+            <span data-slot="account-order" className={cn(ROW_LINE, "truncate")}>
+              {order}
+            </span>
+          )}
           {view.error && <span className="text-destructive text-xs">{view.error}</span>}
           <ErrorLine error={action.error} />
         </div>
@@ -500,6 +506,35 @@ function AccountRow({
       {menu}
     </div>
   );
+}
+
+const PLACES = ["First", "Second", "Third"];
+
+/**
+ * Where an account stands in the order work goes to its agent's accounts, and why, as the
+ * engine ordered them (D23); `null` when there is nothing to say.
+ */
+export function orderLine(place: number | null, reason: OrderReason | null, now: number): string | null {
+  if (reason === null) return null;
+  const nth = place === null ? null : (PLACES[place - 1] ?? `${place}th`);
+  switch (reason.kind) {
+    case "picked":
+      return "Picked with Use: work goes here first";
+    case "resetsSooner":
+      return `${nth} · weekly limit resets soonest, in ${formatCountdown(reason.resetsAtMs, now)}`;
+    case "nearerLimit":
+      return `${nth} · nearest its ${reason.window.toLowerCase()} limit, ${Math.round(reason.usedPercent)}% used`;
+    case "added":
+      return `${nth} · added earlier`;
+    case "last":
+      return place === 1 ? "First" : `${nth} · after the others`;
+    case "atLimit":
+      return reason.readyAtMs === undefined
+        ? "At its limit: waits for its reset"
+        : `At its limit: back in ${formatCountdown(reason.readyAtMs, now)}`;
+    case "signedOut":
+      return null;
+  }
 }
 
 /** A usage window: its short name, a bar of how much is used, and the share. */

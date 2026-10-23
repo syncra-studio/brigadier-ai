@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct ModelsOutput {
     pub models: Vec<Model>,
+    /// Each agent's account switch (Settings › Providers › the agent's page).
+    pub agents: Vec<AgentAccounts>,
     pub accounts: Vec<Account>,
     pub guidance: Vec<Guidance>,
     pub rules: Vec<Rule>,
@@ -21,6 +23,13 @@ pub struct Model {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentAccounts {
+    pub agent: Agent,
+    /// On: Brigadier orders the accounts (`place`, `why`); off: the account picked with Use first.
+    pub switch_accounts: bool,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Account {
     pub id: String,
     pub name: String,
@@ -31,6 +40,11 @@ pub struct Account {
     pub age_s: Option<i64>,
     pub fit: String,
     pub usage: Vec<Usage>,
+    /// Its place in the order work goes to its agent's accounts (1 first); null while it can't
+    /// take work.
+    pub place: Option<u32>,
+    /// Why it stands there, in words.
+    pub why: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

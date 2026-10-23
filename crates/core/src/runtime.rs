@@ -295,6 +295,7 @@ impl Runtime {
                 window.model.as_deref(),
                 &candidates,
                 std::slice::from_ref(&lead),
+                now,
             ) else {
                 continue;
             };

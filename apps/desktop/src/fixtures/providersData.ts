@@ -25,11 +25,21 @@ const signedIn = (provider: ProviderKind, id: string | undefined, email: string,
 
 const efforts = { efforts: ["low", "medium", "high"] };
 
+const DAY = 86_400_000;
+
 export const accounts: AccountView[] = [
-  signedIn("claude", undefined, "stephen.golban@example.com"),
-  signedIn("claude", "acct-work", "work.person@corp.example.io", { name: "work.person@corp.example.io", quota: quota("claude", 84, 93) }),
-  signedIn("claude", "acct-side", "side@example.org", { name: "Side project" }),
-  signedIn("codex", undefined, "stephen@example.com"),
+  signedIn("claude", undefined, "stephen.golban@example.com", {
+    place: 1,
+    reason: { kind: "resetsSooner", resetsAtMs: Date.now() + DAY + 23 * 3_600_000 + 30 * 60_000 },
+  }),
+  signedIn("claude", "acct-work", "work.person@corp.example.io", {
+    name: "work.person@corp.example.io",
+    quota: quota("claude", 84, 93),
+    place: 2,
+    reason: { kind: "nearerLimit", window: "Weekly", usedPercent: 93 },
+  }),
+  signedIn("claude", "acct-side", "side@example.org", { name: "Side project", place: 3, reason: { kind: "last" } }),
+  signedIn("codex", undefined, "stephen@example.com", { place: 1, reason: { kind: "last" } }),
 ];
 
 export const overviews: ProviderOverview[] = [

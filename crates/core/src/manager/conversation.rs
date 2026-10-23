@@ -318,6 +318,9 @@ struct ConvState {
     waited_request: Option<String>,
     /// The account that hit the limit the messages wait for (#277).
     waited_account: Option<crate::accounts::AccountRef>,
+    /// The account picked with Use for its provider (`Some(None)`: switching on) when its
+    /// last turn began; `None` before its first. A new pick moves it ([`SessionManager::follow_pick`]).
+    pick_seen: Option<Option<crate::accounts::AccountRef>>,
     /// The kind of limit it waits for: a spend control or credits never resumes on its own.
     waited_limit: Option<brigadier_providers::LimitKind>,
     /// The orchestrator's last model request, for knowing when its prompt cache expires
@@ -2052,6 +2055,7 @@ impl SessionManager {
             self.retry_conversation(&conv).await;
             return;
         }
+        self.follow_pick(&conv).await;
         self.retire_changed_cli(&conv).await;
         self.retire_moved_thread(&conv).await;
         self.stop_moved_previews(&conv.id).await;
@@ -2437,6 +2441,61 @@ impl SessionManager {
     /// The user changed the model, effort, Fast or account since the CLI started: close it
     /// while nothing runs, so the next turn resumes the conversation on the new choice, taking
     /// effect on the next message.
+    /// Use picked another account of the conversation's provider since its last turn began
+    /// (switching off, D23): it moves there now, its CLI session resumed on that account, and
+    /// says so. Not while a stand-in runs, nor to an account that can't take work (a limit
+    /// there moves it on as usual).
+    async fn follow_pick(&self, conv: &Arc<ConvLive>) {
+        let Ok(conversation) = self.core.conversation(&conv.id) else {
+            return;
+        };
+        let Some(choice) = setup_choice(&conversation) else {
+            return;
+        };
+        let settings = self.core.settings();
+        let picked = (!settings.switches_accounts(choice.provider))
+            .then(|| crate::accounts::default_account(&settings, choice.provider));
+        let running = {
+            let mut state = conv.state.lock().await;
+            if state.busy || state.closing || state.hand_over.is_some() {
+                return;
+            }
+            let seen = state.pick_seen.replace(picked.clone());
+            if seen.is_none() || seen.as_ref() == Some(&picked) {
+                return;
+            }
+            state.cli.as_ref().map(|cli| cli.account.clone())
+        };
+        let Some(picked) = picked else {
+            return;
+        };
+        if conversation.fallback.is_some()
+            || self
+                .runtime
+                .launch_account(choice.provider, choice.model.as_deref())
+                != picked
+        {
+            return;
+        }
+        let current = running.unwrap_or_else(|| self.runtime.account_for(&choice));
+        if current == picked {
+            return;
+        }
+        if let Err(err) = self.run_on_account(&conv.id, &choice, &picked).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not record the picked account"; conversation = %conv.id, error = %err);
+            return;
+        }
+        self.moment(
+            &conv.id,
+            format!(
+                "{} continues on {}, picked in Settings.",
+                choice.provider.label(),
+                self.runtime.account_label(&picked)
+            ),
+        )
+        .await;
+    }
+
     async fn retire_changed_cli(&self, conv: &Arc<ConvLive>) {
         let Ok(conversation) = self.core.conversation(&conv.id) else {
             return;

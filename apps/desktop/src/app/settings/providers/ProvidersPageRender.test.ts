@@ -33,10 +33,26 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   assert.equal(seen.updateEnabled, true);
   assert.equal(seen.location, "Location/usr/local/bin/claudeChange");
   const masked = ["ste•••••@•••••.com", "wor•••••@•••••.io", "sid•••••@•••••.org"];
+  // Each account says where it stands in the order work goes to them, and why (D23).
   assert.deepEqual(seen.accounts, [
-    { title: masked[0], inUse: true, meters: ["5-hour32%Resets in 3h", "Weekly69%Resets in 1d 23h"] },
-    { title: masked[1], inUse: false, meters: ["5-hour84%Resets in 3h", "Weekly93%Resets in 1d 23h"] },
-    { title: masked[2], inUse: false, meters: ["5-hour32%Resets in 3h", "Weekly69%Resets in 1d 23h"] },
+    {
+      title: masked[0],
+      inUse: true,
+      meters: ["5-hour32%Resets in 3h", "Weekly69%Resets in 1d 23h"],
+      order: "First · weekly limit resets soonest, in 1d 23h",
+    },
+    {
+      title: masked[1],
+      inUse: false,
+      meters: ["5-hour84%Resets in 3h", "Weekly93%Resets in 1d 23h"],
+      order: "Second · nearest its weekly limit, 93% used",
+    },
+    {
+      title: masked[2],
+      inUse: false,
+      meters: ["5-hour32%Resets in 3h", "Weekly69%Resets in 1d 23h"],
+      order: "Third · after the others",
+    },
   ]);
   assert.equal(seen.eyes, 3);
   assert.deepEqual(seen.models, [
@@ -99,6 +115,8 @@ const view = (name: string, email: string): AccountView => ({
   checking: false,
   checkedGeneration: 0,
   error: null,
+  place: null,
+  reason: null,
 });
 
 // Renaming never shows an email the row hides: the editor starts empty for an account named by
@@ -211,6 +229,24 @@ test("an account's sign-in is done once it reads signed in since it started", as
     assert.equal(signInFinished(again, signedIn(12_000)), false);
     assert.equal(signInFinished({ ...again, exitedAtMs: 15_000 }, signedIn(14_000)), true);
     assert.equal(signInFinished({ ...again, exitedAtMs: 15_000 }, signedIn(12_000)), false);
+  } finally {
+    await server.close();
+  }
+});
+
+// The order line of an account picked with Use, one at its limit, and one signed out (D23).
+test("an account's order line says why it stands where it does", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { orderLine } = await server.ssrLoadModule("/src/app/settings/providers/AccountRows.tsx");
+    const now = 1_000_000;
+    assert.equal(orderLine(1, { kind: "picked" }, now), "Picked with Use: work goes here first");
+    assert.equal(orderLine(2, { kind: "added" }, now), "Second · added earlier");
+    assert.equal(orderLine(1, { kind: "last" }, now), "First");
+    assert.equal(orderLine(null, { kind: "atLimit", readyAtMs: now + 2 * 3_600_000 }, now), "At its limit: back in 2h");
+    assert.equal(orderLine(null, { kind: "atLimit" }, now), "At its limit: waits for its reset");
+    assert.equal(orderLine(null, { kind: "signedOut" }, now), null);
+    assert.equal(orderLine(null, null, now), null);
   } finally {
     await server.close();
   }

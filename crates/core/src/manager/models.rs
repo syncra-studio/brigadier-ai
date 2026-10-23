@@ -2,7 +2,7 @@
 use super::SessionManager;
 use crate::{Error, Result, now_ms};
 use crate::{GuidanceRow, ModelRule, ModelRules};
-use brigadier_cli::models::{Account, Guidance, Model, ModelsOutput, Rule, Usage};
+use brigadier_cli::models::{Account, AgentAccounts, Guidance, Model, ModelsOutput, Rule, Usage};
 use brigadier_cli::protocol::Agent;
 use brigadier_providers::{AllowedModels, ProviderKind};
 use std::path::PathBuf;
@@ -475,7 +475,13 @@ impl SessionManager {
                         .and_then(|q| q.limit.as_ref())
                         .map(|l| l.resets_at_ms),
                 );
+                let why = a.reason.as_ref().map_or_else(
+                    || "not ordered yet".into(),
+                    |reason| order_words(reason, now),
+                );
                 Account {
+                    place: a.place,
+                    why,
                     id: a.account.account.clone().unwrap_or_else(|| "own".into()),
                     name: a.name,
                     agent: agent(a.account.provider),
@@ -488,8 +494,17 @@ impl SessionManager {
                 }
             })
             .collect();
+        let settings = self.core.settings();
+        let agents = ProviderKind::ALL
+            .into_iter()
+            .map(|provider| AgentAccounts {
+                agent: agent(provider),
+                switch_accounts: settings.switches_accounts(provider),
+            })
+            .collect();
         Ok(ModelsOutput {
             models,
+            agents,
             accounts,
             guidance: guidance(shipped, &user),
             rules: policy
@@ -498,6 +513,35 @@ impl SessionManager {
                 .map(|(rule, _)| Rule { rule })
                 .collect(),
         })
+    }
+}
+/// Why an account stands where it does in its agent's order, in words.
+fn order_words(reason: &crate::accounts::OrderReason, now: i64) -> String {
+    use crate::accounts::OrderReason;
+    let within = |at: i64| {
+        let minutes = ((at - now).max(0) + 59_999) / 60_000;
+        match minutes {
+            m if m < 60 => format!("{m}m"),
+            m if m < 48 * 60 => format!("{}h", m / 60),
+            m => format!("{}d", m / (24 * 60)),
+        }
+    };
+    match reason {
+        OrderReason::Picked => "picked with Use".into(),
+        OrderReason::ResetsSooner { resets_at_ms } => {
+            format!("weekly resets first (in {})", within(*resets_at_ms))
+        }
+        OrderReason::NearerLimit {
+            window,
+            used_percent,
+        } => format!("nearest its limit ({window} {used_percent:.0}% used)"),
+        OrderReason::Added => "added first".into(),
+        OrderReason::Last => "last".into(),
+        OrderReason::AtLimit { ready_at_ms } => match ready_at_ms {
+            Some(at) => format!("at its limit, back in {}", within(*at)),
+            None => "at its limit".into(),
+        },
+        OrderReason::SignedOut => "not signed in".into(),
     }
 }
 fn fit(windows: &[Usage], limited: Option<Option<i64>>) -> String {

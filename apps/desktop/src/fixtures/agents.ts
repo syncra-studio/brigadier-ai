@@ -87,6 +87,8 @@ export function account(
     checking: false,
     checkedGeneration: 0,
     error: null,
+    place: null,
+    reason: null,
     ...fields,
     // New work starts on the default unless the fixture says otherwise (switching picked another).
     inUse: fields.inUse ?? fields.default ?? id === undefined,

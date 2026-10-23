@@ -1100,8 +1100,8 @@ pub struct AccountView {
     /// Its provider's default: with switching off, work on that provider runs here.
     pub default: bool,
     /// New work of its provider starts on it now, as the engine chooses (switching on: the
-    /// soonest weekly reset among those that can take work): the provider's lead account,
-    /// whose quota the Usage menu shows.
+    /// first of [`crate::accounts::order`]): the provider's lead account, whose quota the
+    /// Usage menu shows.
     pub in_use: bool,
     /// Its login, as the CLI last reported it; unknown until first checked.
     pub status: Option<ProviderStatus>,
@@ -1118,6 +1118,11 @@ pub struct AccountView {
     /// The check generation its last finished check began in: a refresh answers a generation,
     /// and the account is checked afresh for it once this reaches it.
     pub checked_generation: u32,
+    /// Its place in the order work goes to its provider's accounts (1 first), `None` while it
+    /// can't take work ([`crate::accounts::order`]).
+    pub place: Option<u32>,
+    /// Why it stands there; `None` before its provider's accounts are ordered.
+    pub reason: Option<crate::accounts::OrderReason>,
 }
 
 /// The binary the user chose for an agent (Settings › Providers › its page › Location).

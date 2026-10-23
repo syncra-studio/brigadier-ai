@@ -411,6 +411,24 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             }
         ));
     }
+    if !output.agents.is_empty() {
+        let switches: Vec<_> = output
+            .agents
+            .iter()
+            .map(|a| {
+                format!(
+                    "{} {}",
+                    a.agent.word(),
+                    if a.switch_accounts {
+                        "automatic"
+                    } else {
+                        "picked with Use"
+                    }
+                )
+            })
+            .collect();
+        lines.push(format!("Account switching: {}", switches.join(", ")));
+    }
     for account in &output.accounts {
         let usage: Vec<_> = account
             .usage
@@ -436,7 +454,7 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             })
             .collect();
         lines.push(format!(
-            "{} / {}{}{}: {} · {} · age {}s",
+            "{} / {}{}{}: {} · {} · {} · age {}s",
             account.agent.word(),
             if account.name.is_empty() {
                 &account.id
@@ -445,6 +463,10 @@ pub fn models(output: &crate::models::ModelsOutput) -> String {
             },
             if account.current { " (current)" } else { "" },
             if account.you { " (you)" } else { "" },
+            account.place.map_or_else(
+                || account.why.clone(),
+                |place| format!("#{place} {}", account.why)
+            ),
             account.fit,
             if usage.is_empty() {
                 "usage unknown".into()

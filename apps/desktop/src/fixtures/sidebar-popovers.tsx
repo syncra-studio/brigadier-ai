@@ -58,6 +58,8 @@ function account(id: string | undefined, email: string, inUse: boolean, picked: 
     checking: false,
     error: null,
     checkedGeneration: 0,
+    place: null,
+    reason: null,
   };
 }
 // Picked with Use is the computer's login; new work starts on the second, whose week ends first.

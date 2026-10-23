@@ -784,14 +784,15 @@ async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
     flow.manager.runtime.sync_accounts().await;
     assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
     // With room again, work runs there, though another account's week ends sooner.
-    report_weekly(&flow, Some("acct-c"), 20.0, 40).await;
+    report_weekly(&flow, Some("acct-c"), 20.0, 60).await;
     assert_eq!(
         in_use(&flow).await,
         (vec![Some("acct-c".into())], Some(20.0))
     );
     assert_eq!(published_in_use(&flow).await, vec![Some("acct-c".into())]);
 
-    // Its switch on again hands the choice back: the soonest reset that can take work.
+    // Its switch on again hands the choice back to the order: the week that ends on the
+    // soonest day, among those that can take work.
     let mut settings = flow.core.settings();
     settings.manual_accounts.clear();
     flow.core.update_settings(settings).await.unwrap();
@@ -1860,5 +1861,188 @@ async fn weekly_quota_about_to_be_lost_is_told_once_and_nothing_starts() {
     assert_eq!(told(&flow).await.len(), 1);
     // Nothing started on its own.
     assert!(seen(&log).is_empty());
+    flow.stop().await;
+}
+
+/// Notes `account`'s quota as a live report would: its 5-hour window `five_hour` % used and
+/// resetting in `five_hour_min` minutes, its weekly one `weekly` % used and resetting in
+/// `weekly_hours`.
+async fn report_usage(
+    flow: &Flow,
+    account: Option<&str>,
+    (five_hour, five_hour_min): (f64, i64),
+    (weekly, weekly_hours): (f64, i64),
+) {
+    use brigadier_providers::{QuotaSnapshot, QuotaSource, QuotaWindow};
+
+    let now = crate::now_ms();
+    let window =
+        |id: &str, label: &str, minutes: i64, used_percent: f64, resets_at_ms: i64| QuotaWindow {
+            id: id.into(),
+            label: label.into(),
+            used_percent,
+            resets_at_ms: Some(resets_at_ms),
+            window_minutes: Some(minutes),
+            bucket: None,
+            model: None,
+        };
+    let provider = ProviderKind::Claude;
+    flow.manager
+        .runtime
+        .note_quota_snapshot(
+            &crate::accounts::AccountRef::new(provider, account.map(Into::into)),
+            QuotaSnapshot {
+                provider,
+                windows: vec![
+                    window(
+                        "five_hour",
+                        "5-hour",
+                        300,
+                        five_hour,
+                        now + five_hour_min * 60_000,
+                    ),
+                    window(
+                        "seven_day",
+                        "Weekly",
+                        7 * 24 * 60,
+                        weekly,
+                        now + weekly_hours * 3_600_000,
+                    ),
+                ],
+                limit: None,
+                observed_at_ms: now,
+                source: QuotaSource::Event,
+            },
+        )
+        .await;
+}
+
+/// S38 (D23): two Claude accounts whose weeks end the same day; the one nearer its limit
+/// (its 5-hour window) takes the work first. Its limit moves the session to the other, the
+/// same CLI session, with one "carry on" line; with both out, the message waits for the reset
+/// (no provider fallback).
+#[tokio::test]
+async fn the_account_nearest_its_limit_works_first_and_both_out_waits() {
+    let log = Log::default();
+    let own_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let out = own_out.clone();
+    let flow = Flow::start(
+        "accounts-order",
+        Options::default(),
+        logging(&log, move |turn| match turn.account.as_deref() {
+            Some("acct-b") => Reply::limited(),
+            _ if out.load(std::sync::atomic::Ordering::SeqCst) => Reply::limited(),
+            _ => Reply::text("Done."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    report_usage(&flow, None, (20.0, 240), (30.0, 30)).await;
+    report_usage(&flow, Some("acct-b"), (85.0, 120), (30.0, 28)).await;
+    let view = flow.manager.runtime.accounts_view();
+    let places: Vec<_> = view
+        .accounts
+        .iter()
+        .filter(|view| view.account.provider == ProviderKind::Claude)
+        .map(|view| (view.account.account.clone(), view.place))
+        .collect();
+    assert_eq!(places, [(None, Some(2)), (Some("acct-b".into()), Some(1))]);
+    assert_eq!(
+        view.accounts[1].reason,
+        Some(crate::accounts::OrderReason::NearerLimit {
+            window: "5-hour".into(),
+            used_percent: 85.0
+        })
+    );
+
+    flow.say("Do the thing.").await;
+    flow.until("a second turn", |_| seen(&log).len() >= 2).await;
+    flow.settled().await;
+    let turns = seen(&log);
+    assert_eq!(turns[0].account.as_deref(), Some("acct-b"));
+    assert_eq!(turns[1].account, None);
+    assert_eq!(turns[1].native_id, turns[0].native_id);
+    assert_eq!(
+        turns
+            .iter()
+            .filter(|turn| turn.input.contains(CONTINUE_ON_ACCOUNT))
+            .count(),
+        1
+    );
+    assert_eq!(
+        moments(&flow).await,
+        ["Claude Code hit its usage limit on Account acct-b; continuing on this computer's login."]
+    );
+
+    // Both out: the message waits for the reset; Codex isn't asked.
+    own_out.store(true, std::sync::atomic::Ordering::SeqCst);
+    flow.say("Next.").await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !moments(&flow)
+        .await
+        .iter()
+        .any(|text| text.contains("Your message waits"))
+    {
+        assert!(tokio::time::Instant::now() < deadline, "no wait");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        seen(&log)
+            .iter()
+            .all(|turn| turn.provider == ProviderKind::Claude),
+        "{:#?}",
+        seen(&log)
+    );
+    flow.stop().await;
+}
+
+/// S38 (D23): Use picks another account while a chat runs: its next request runs there, the
+/// same CLI session resumed, and the thread says so once.
+#[tokio::test]
+async fn use_moves_a_running_session_to_the_picked_account_at_its_next_request() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-pick-now",
+        Options::default(),
+        logging(&log, |_| Reply::text("Done.")),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    report_usage(&flow, None, (50.0, 120), (30.0, 30)).await;
+    report_usage(&flow, Some("acct-b"), (10.0, 120), (30.0, 30)).await;
+    flow.say("First.").await;
+    flow.settled().await;
+    assert_eq!(seen(&log)[0].account, None);
+
+    let before = flow.core.settings();
+    let mut settings = before.clone();
+    for entry in &mut settings.accounts {
+        entry.default = entry.id == "acct-b";
+    }
+    let settings = crate::accounts::edited(&before, settings);
+    assert!(!settings.switches_accounts(ProviderKind::Claude));
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+
+    flow.say("Second.").await;
+    flow.until("the next turn", |_| seen(&log).len() >= 2).await;
+    flow.settled().await;
+    let turns = seen(&log);
+    assert_eq!(turns[1].account.as_deref(), Some("acct-b"));
+    assert_eq!(turns[1].native_id, turns[0].native_id);
+    assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-b"));
+    assert_eq!(
+        moments(&flow).await,
+        ["Claude Code continues on Account acct-b, picked in Settings."]
+    );
+    // A third request stays there, with nothing more said.
+    flow.say("Third.").await;
+    flow.until("the third turn", |_| seen(&log).len() >= 3)
+        .await;
+    flow.settled().await;
+    assert_eq!(seen(&log)[2].account.as_deref(), Some("acct-b"));
+    assert_eq!(moments(&flow).await.len(), 1);
     flow.stop().await;
 }
