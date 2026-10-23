@@ -147,6 +147,17 @@ impl Fold {
         let Ok(text) = std::fs::read_to_string(file) else {
             return fold;
         };
+        // A crash cut the last line short: cut it off, so the next line starts on its own.
+        if !text.is_empty() && !text.ends_with('\n') {
+            let whole = text.rfind('\n').map_or(0, |end| end + 1);
+            let cut = std::fs::OpenOptions::new()
+                .write(true)
+                .open(file)
+                .and_then(|kept| kept.set_len(whole as u64));
+            if let Err(err) = cut {
+                tracing::warn!(file = %file.display(), error = %err, "could not cut a torn worker event line");
+            }
+        }
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             match serde_json::from_str(line) {
                 Ok(line) => fold.apply(line),
@@ -1177,5 +1188,36 @@ mod tests {
         let text = std::fs::read_to_string(record.join(FILE)).unwrap();
         assert_eq!(text.lines().count(), 1, "{text}");
         assert_eq!(events.kept(&me, &record)[0].event.event, EventKind::Gone);
+    }
+
+    #[test]
+    fn a_line_a_crash_cut_short_does_not_swallow_the_next() {
+        let dir = Scratch::new();
+        let me = ConversationId("c1".into());
+        let task = TaskId("t-a".into());
+        let record = dir.0.as_path().to_owned();
+        {
+            let events = WorkerEvents::default();
+            events.push(&me, &record, &task, None, event(EventKind::TurnEnded));
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(record.join(FILE))
+            .unwrap();
+        file.write_all(br#"{"line":"event","id":"ev-0"#).unwrap();
+        drop(file);
+        {
+            let events = WorkerEvents::default();
+            events.recover(&me, &record);
+            events.push(&me, &record, &task, None, event(EventKind::Gone));
+        }
+        let events = WorkerEvents::default();
+        events.recover(&me, &record);
+        let kinds: Vec<EventKind> = events
+            .kept(&me, &record)
+            .into_iter()
+            .map(|kept| kept.event.event)
+            .collect();
+        assert_eq!(kinds, [EventKind::TurnEnded, EventKind::Gone]);
     }
 }
