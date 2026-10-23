@@ -34,6 +34,8 @@
 > Amended again on 10-23 with the user's answers to that audit: the plan restores the grill's decisions where
 > they live, and Stage 6 (S28–S37) builds them. A changed line cites the user or the Delegator's judgement;
 > all 20 answers are decided (§9.6), including the four defaults settled on 10-23.
+> Amended again on 10-23 with the user's D22 (S32: model-fit rows and Refresh) and D23 (S38: the account
+> auto-switch order and the provider fallback).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -160,7 +162,10 @@ forbids. The shipped default of that file is neutral and forbids nothing; the us
 never Fable, effort ≤ high) live in the user's own file (S33) (user, 2026-10-23, w95 item 16).
 Settings › Routing is the editor of that same file, with the user's preferences; `brigadier start` and the
 skill pass the model and effort those rules name (S32) (user, 2026-10-23: "user should've been able to apply
-his rules"). The old task router and its fallback rerouting go. Account auto-switch stays.
+his rules"). The old task router and its task rerouting go. Account auto-switch stays, ordered smartly, and
+"Switch to another agent automatically" comes back: when every account of a provider is out, a running session
+seams to another CLI (S38) (user, 2026-10-23, D23: "if all the claude quota is done, it should fallback to
+another provider if enabled").
 
 **Permissions pass straight through (G5).** The composer offers Ask, Accept edits and Full access. These map to
 Claude Code's and Codex's own modes. The CLI's own permission prompts show as cards. Brigadier runs no sandbox
@@ -875,7 +880,8 @@ and `run`.
   - `brigadier start` refuses a model or effort only when the user's file forbids it, and quotes the rule.
     Brigadier enforces nothing else; there is no built-in list.
   - The `/brigade` skill tells the thread to consult `brigadier models` before `brigadier start` (S15).
-  - Account auto-switch stays as it is.
+  - Account auto-switch stays; S38 orders the accounts smartly and adds the order and both toggles to
+    `brigadier models` (D23).
 - **Files:** `crates/cli` (the subcommand), the daemon handler, the guidance file, `crates/core/src/routing/*`
   (read only), the account usage reader.
 - **Done when:**
@@ -1337,7 +1343,12 @@ the how is proposed unless tagged. Steps on disjoint files carry ∥.
 - **Closes:** #532. ∥ S28–S30, S32–S36.
 
 **S32. Settings › Routing comes back as the rules editor (w95 item 14).** Opus.
-(user, 2026-10-23: "user should've been able to apply his rules there")
+(user, 2026-10-23: "user should've been able to apply his rules there"; D22: "routing becomes advice not a
+gate, but we should still fucking let the user interactively add his rules, pick which model is best at what, or
+refresh the routing for automatic choosing, which all these then go as the \"advice\" to the brigadier cli")
+- **D22's part:** the page also lets the user pick which model is best at what (the model-fit rows) and refresh
+  the routing for automatic choosing (Refresh re-reads each CLI's models and the shipped guidance into those
+  rows). All of it is advice `brigadier models` and `brigadier start` read; nothing becomes a gate (G18).
 - **Scope:**
   - Settings › Routing returns under Agents. It edits the same file `brigadier models` reads,
     `~/.brigadier/models.md`: the user's preferences (Work / Agent / Model / Effort / Reason rows) and rules
@@ -1454,6 +1465,76 @@ the how is proposed unless tagged. Steps on disjoint files carry ∥.
   those tests and each hook-dependent feature in the report. Workspace clippy is clean.
 - ∥ anything; rebase after S22/S23 land if they touch the same hook code.
 
+**S38. Account auto-switch and the provider fallback (D23).** Opus.
+(user, 2026-10-23, D23: "that auto-switch, it was for auto-switching automatically between provider accounts, for
+example if all the claude quota is done, it should fallback to another provider if enabled, and then inside the
+actual provider page, we should have the account auto switch toggle as well, where user can pick which one to use
+now (the auto switch toggle goes to disabled) and if enabled it should prioritize and use the correct account as
+we discussed that the one which is soon to be hitting the usage limit should be used first and then go to the
+other one, it should smartly use the correct accounts based on their reset times, usage limits, weekly limits, 5
+hour limits, weekly reset time")
+**Take, don't rebuild:** the account switching Brigadier has (`switch_account` continues the same CLI session on
+a limit, D14; the per-agent "Switch accounts automatically" row and Use in `D/app/settings/providers/AgentPage.tsx`;
+`crates/core/src/accounts.rs`), MA1's limit signals and the seam (S22, S23). No router comes back: the user's
+toggles decide, the engine switches accounts, and the provider fallback is a seam to the other CLI. The how
+below is proposed unless tagged.
+- **Scope, 2a: the account toggle, pick-now and the smart order.**
+  - **Per provider, on its page:** the "Switch accounts automatically" row stays where it is (D23). Use on an
+    account turns it off and makes that account the one to use now (D23: "the auto switch toggle goes to
+    disabled"). The pick is immediate: new sessions start there, and a running session moves at its next
+    request, through `switch_account`, with Q12's one "carry on" line (proposed).
+  - **Off:** work stays on the picked account. Its limit still moves work to another account of the same
+    provider before anything else, as built (#505; proposed: kept, since D23's fallback starts only once all of
+    a provider's quota is done).
+  - **On, the order (proposed):** an account can take work when it is signed in, has hit no limit, and no window
+    that applies to the model (5-hour, weekly, per-model) is used up. Among those, the account whose weekly
+    window resets soonest goes first, counted in whole days from now, because its quota is lost first; within the
+    same day, the account nearest to its limit goes first (the least left in its tightest window, 5-hour or
+    weekly), so it drains and the other stays whole; then the earliest added. An unknown quota sorts last. An
+    account in a limit waits for its reset (MA1's `resets_at_ms`, else the window's reset) and rejoins the order
+    then. A running session keeps its account until that account is out (a switch re-reads the whole context
+    uncached); new work and every switch follow the order. Usage and reset times come only from each CLI's own
+    signals (MA1, §9.2). The Delegator's own rule (switch at 99–100% of a 5-hour window, go back at its reset)
+    is the hint for this order, not a product rule.
+  - **The page shows the order, read only:** with the toggle on, one line per account under the toggle, in
+    order: its place and the reason ("1 · weekly resets Fri, 82% used", "2 · 5-hour limit until 14:10"). Off, the
+    picked account reads "In use, picked". It reuses the page's existing rows (no new look).
+  - **`brigadier models --json`:** per provider `switch_accounts` (bool) and the account `order` (account id,
+    place, reason, `ready_at` when in a limit); top level `switch_providers` (bool). The text view adds one
+    line per provider. Advice only (G18).
+- **Scope, 2b: "Switch to another agent automatically" (D23).**
+  - The row S16b removed (`ec0e74408`, `AgentsOverview.tsx` "Fallback" section, setting `switchProviders`)
+    comes back where it was, with its words, on the Providers overview.
+  - **On:** when every account of a provider is out (none can take work by the order above), a running session
+    hands off through the seam to the other installed, enabled CLI: the same thread, the divider "Fresh context ·
+    hand-off note" with "Usage limit on *provider* · continued on *other*", the note, and the successor carrying
+    on at once (S22, S23, D8). Its model and effort come from the user's rules rows (S32) for the session's work,
+    else the other CLI's default. When the out provider resets, the session stays where it is (proposed: a
+    switch back would be a second seam).
+  - **Off:** Q11, as built: the "Resumes at" card, then the same session continues at the reset.
+  - A death with no note (the limit hit mid-note) uses S22's "start from the ledger and tail" path.
+  - New sessions and `brigadier start` pick the other provider's model through the rules rows (S32) when the
+    switch is on and a provider is out; `brigadier models` says so. Advice, never a gate (G18).
+  - Behind `BRIGADIER_PROVIDER_FALLBACK=1` until the flow test and a live dev check pass; the flag goes in the
+    step that turns it on.
+- **Files:** `crates/core/src/accounts.rs` (the order and its reasons), `crates/core/src/model.rs` (`switch_providers`
+  back), `M/conversation.rs` (pick-now at the next request, the out-provider branch), `M/models.rs` and its schema
+  (`order`, the two toggles), `D/app/settings/providers/{AgentPage,AgentsOverview,AccountRows,ProvidersPage}.tsx`,
+  their render tests, the seam module (2b).
+- **Done when:**
+  - App tests: the provider page's toggle, Use turning it off and picking the account, the order lines with
+    reasons; the overview's "Switch to another agent automatically" row reads and writes `switchProviders`.
+  - Unit tests of the order: weekly reset day first; within a day the nearer-to-limit first; a 5-hour limit
+    waits for its reset and rejoins; unknown quota last.
+  - A flow test with fake CLIs: two Claude accounts with different 5-hour usage and resets → the nearer-to-limit
+    one takes the work; a limit on it switches to the other with one "carry on" line, the same CLI session id;
+    with both out the session waits with the "Resumes at" card (fallback off) or seams to Codex with the divider
+    and the note (fallback on).
+  - A flow test: Use on a running session's provider moves its next request to the picked account.
+  - `brigadier models --json` shows the order and both toggles (schema test).
+- **Order:** 2a ∥ anything (rebase after S32 if it touches `M/models.rs` first). 2b after S23 lands (Stage 5,
+  w108); it rebases on it.
+
 ### Order and parallel runs, in one view
 
 ```
@@ -1464,6 +1545,7 @@ after S8:  S21 (∥ anything)
 after S18 + S21:  S22 → S22b → S23 → S25 → S26 → S27      (S24 dropped, decided 2026-10-23)
 Stage 6, now (user, 2026-10-23):  S28 → S29 → S30 → S36 · S28 → S35 · S33 → S32 (after S28)
                                   ∥ S31, S33, S34, S37 with anything (S37 rebases after S22/S23 hook changes)
+                                  S38: 2a ∥ anything; 2b after S23 (D23)
 any time:  MA1, X1 (bounded Codex tasks, §9)
 after Stage 2, one run per capability (§9):  O1–O5 with S13–S15 · MA2–MA7 with S13–S14 and S23
                                              L1–L9 with S18–S27 · BR1–BR8 after S13 · X2–X9 after X1
