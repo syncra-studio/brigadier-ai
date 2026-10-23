@@ -3245,11 +3245,18 @@ mod tests {
         let plugin = dir.join("brigade");
         std::fs::create_dir_all(plugin.join("skills/brigade")).unwrap();
         std::fs::write(plugin.join("skills/brigade/SKILL.md"), "one").unwrap();
+        std::fs::create_dir_all(plugin.join("skills/fusion")).unwrap();
+        std::fs::write(plugin.join("skills/fusion/SKILL.md"), "fuse").unwrap();
         let skills = dir.join("codex-home/skills");
         std::fs::create_dir_all(skills.join("theirs")).unwrap();
         install_skills(&skills, std::slice::from_ref(&plugin)).unwrap();
         let installed = skills.join("brigade/SKILL.md");
         assert_eq!(std::fs::read_to_string(&installed).unwrap(), "one");
+        // Each skill of the plugin, `/fusion` beside `/brigade` (S36).
+        assert_eq!(
+            std::fs::read_to_string(skills.join("fusion/SKILL.md")).unwrap(),
+            "fuse"
+        );
         std::fs::write(plugin.join("skills/brigade/SKILL.md"), "two").unwrap();
         install_skills(&skills, std::slice::from_ref(&plugin)).unwrap();
         assert_eq!(std::fs::read_to_string(&installed).unwrap(), "two");

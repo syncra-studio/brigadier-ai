@@ -27,6 +27,7 @@ In a Chat, a worker works in the repository `--repo <path>` names (a worktree of
 - Default: do it yourself. A worker costs a fresh context and a merge.
 - Workers pay for: parts that can truly run at once on **disjoint files**; a very long job (hours, or more than your context should carry); a second vendor's view; research you want kept out of your context.
 - Small reads go to your CLI's own subagents first. Bigger research goes to a **lean** worker (`--lean`: just the goal and the repo, none of the user's MCP servers or skills, no memory writes; add `--with computer-use` when it must look at an app). It reports conclusions with file:line.
+- The user is uncertain (says they're unsure, or asks which of several ways to take): run the fusion skill, as `/fusion` does, and answer from it.
 - Unclear ask: ask the user **once** (`brigadier ask`). If the options need evidence, one lean researcher. Build competing prototypes only when the user must compare them, never by default.
 - Overnight or "until 07:00" is the same skill with a deadline: plan the waves to end 20 minutes early and leave a report.
 

@@ -12,6 +12,10 @@ use crate::{Error, Result};
 /// The skill as shipped.
 pub(crate) const SKILL: &str = include_str!("brigade/SKILL.md");
 
+/// The `/fusion` skill (S36), shipped beside it in the same plugin: one consult per CLI when
+/// the user is uncertain, then one merged answer.
+pub(crate) const FUSION: &str = include_str!("fusion/SKILL.md");
+
 /// Whether the user's copy overrides the shipped skill, and where it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrigadeSkill {
@@ -75,11 +79,12 @@ fn user_copy(path: &Path) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
 }
 
-/// Writes `<dir>/.claude-plugin/plugin.json` and `<dir>/skills/brigade/SKILL.md`.
+/// Writes `<dir>/.claude-plugin/plugin.json`, `<dir>/skills/brigade/SKILL.md` and
+/// `<dir>/skills/fusion/SKILL.md`.
 fn write_plugin(dir: &Path, skill: &str) -> std::io::Result<PathBuf> {
     let manifest = serde_json::json!({
         "name": "brigade",
-        "description": "How a Brigadier session runs workers of its own.",
+        "description": "How a Brigadier session runs workers of its own, and fuses models' advice.",
         "version": env!("CARGO_PKG_VERSION"),
     });
     write_if_changed(
@@ -87,6 +92,7 @@ fn write_plugin(dir: &Path, skill: &str) -> std::io::Result<PathBuf> {
         &serde_json::to_string_pretty(&manifest).unwrap_or_default(),
     )?;
     write_if_changed(&dir.join("skills/brigade/SKILL.md"), skill)?;
+    write_if_changed(&dir.join("skills/fusion/SKILL.md"), FUSION)?;
     Ok(dir.to_path_buf())
 }
 
@@ -131,6 +137,23 @@ mod tests {
             "When the user writes after a gap, raise the oldest open question first",
         ] {
             assert!(SKILL.contains(line), "{line}");
+        }
+        assert!(SKILL.contains("the fusion skill"));
+    }
+
+    #[test]
+    fn the_fusion_skill_consults_each_cli_through_its_own_row() {
+        assert!(FUSION.starts_with("---\nname: fusion\ndescription: "));
+        assert!(FUSION.lines().count() <= 150);
+        for line in [
+            "/fusion <question>",
+            "`fusion-claude`, `fusion-codex`",
+            "brigadier start \"<brief>\" --lean --work fusion-claude",
+            "Answer only; change no file.",
+            "One cross round.",
+            "You judge; never count votes.",
+        ] {
+            assert!(FUSION.contains(line), "{line}");
         }
     }
 }

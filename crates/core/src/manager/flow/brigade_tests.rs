@@ -5,7 +5,7 @@ use brigadier_providers::{ProviderKind, SessionSpec, ToolSet};
 
 use super::chat_thread_tests::new_chat;
 use super::{Flow, Options, Reply};
-use crate::manager::brigade::SKILL;
+use crate::manager::brigade::{FUSION, SKILL};
 
 async fn flow(name: &str, thread: ProviderKind) -> Flow {
     Flow::start(
@@ -29,6 +29,11 @@ fn installed(spec: &SessionSpec) -> String {
     );
     let plugin = &spec.installed_skills[0];
     assert!(plugin.join(".claude-plugin/plugin.json").is_file());
+    // `/fusion` ships beside it, in the same plugin (S36).
+    assert_eq!(
+        std::fs::read_to_string(plugin.join("skills/fusion/SKILL.md")).unwrap(),
+        FUSION
+    );
     std::fs::read_to_string(plugin.join("skills/brigade/SKILL.md")).unwrap()
 }
 

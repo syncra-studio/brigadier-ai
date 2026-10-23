@@ -1507,6 +1507,17 @@ refresh the routing for automatic choosing, which all these then go as the \"adv
   - A live dev run: "I'm not sure whether A or B" without `/fusion` leads the thread to a fusion. Judgement,
     so it is a report, never a gate.
 - After S30 (shared skill file).
+- **As built:** the rows are per CLI, since a rules row holds one Agent/Model/Effort and is keyed by its Work:
+  the shipped guidance has `fusion-claude` (claude · opus · high) and `fusion-codex` (codex · default · high); the
+  user's rows of the same Work replace them, and another CLI gets `fusion-<agent>`. The skill starts each consult
+  with `brigadier start --lean --work fusion-<agent> --title "Fusion · <model>"`, overriding `--model` only when
+  that model is out of quota or refused. `fusion/SKILL.md` ships in the brigade plugin folder beside `brigade`
+  (`skills/fusion/SKILL.md`): Claude loads both from the plugin, Codex copies both into its skills folder. It
+  has no user copy of its own. `brigade/SKILL.md` sends an uncertain user to it. Live dev runs (10-23, an Opus parent): `/fusion` on a two-way question started a lean Claude consult (opus) and a
+  lean Codex consult (its default model), ran the cross round, and replied with the pick, what they agreed on,
+  where they differed and the models consulted. "I'm not sure whether A or B" without `/fusion` led the thread to
+  the same fusion. With `brigadier` unusable (an older CLI on `PATH`), the thread ran the two CLIs' one-off modes
+  itself and still merged.
 
 **S37. Hooks parity (w95 item 15).** Codex.
 (Delegator's judgement, 2026-10-23: parity wins; Brigadier stops overriding disableAllHooks).
