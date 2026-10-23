@@ -769,7 +769,7 @@ impl SessionManager {
         } = self.worker_session(task, origin, &owner).await?;
         // Stopped while its new worktree's setup script ran (#457): its CLI never starts.
         if self.stopped_meanwhile(task).await {
-            self.grants.revoke_owner(&owner);
+            self.grants.revoke(&[grant]);
             return Err(stopped_as_it_started(task));
         }
         let provider = task.route.choice.provider;
@@ -779,7 +779,7 @@ impl SessionManager {
             match self.runtime.start_hosted(&owner, &account, spec).await {
                 Ok(started) => started,
                 Err(err) => {
-                    self.grants.revoke_owner(&owner);
+                    self.grants.revoke(&[grant]);
                     return Err(err);
                 }
             };
@@ -808,7 +808,7 @@ impl SessionManager {
             model: task.route.choice.clone(),
             chosen: None,
             session,
-            owner,
+            grants: vec![grant],
             ended: CancellationToken::new(),
             launch: None,
         });
@@ -843,7 +843,7 @@ impl SessionManager {
         .await?;
         if stopped {
             live.close_cli().await;
-            self.grants.revoke_owner(&cli.owner);
+            self.grants.revoke(&cli.grants);
             return Err(stopped_as_it_started(task));
         }
         cli.session
@@ -1397,7 +1397,7 @@ impl SessionManager {
             }
         }
         self.record_worker_events(&live.id, deltas).await;
-        self.grants.revoke_owner(&cli.owner);
+        self.grants.revoke(&cli.grants);
         let (stopping, replaced) = {
             let mut state = live.state.lock().await;
             if state.cli.as_ref().is_some_and(|c| Arc::ptr_eq(c, &cli)) {

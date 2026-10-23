@@ -150,8 +150,9 @@ pub(crate) struct Cli {
     /// the default model): a different one in the setup means the user changed it since.
     pub chosen: Option<ModelChoice>,
     pub session: Arc<dyn ProviderSession>,
-    /// The cleanup-ledger owner (`orch:…`, `chat:…`, `task:…`).
-    pub owner: String,
+    /// The grants issued for it, which its end revokes: a newer CLI of the same owner (a
+    /// seam's successor) keeps its own (#555).
+    pub grants: Vec<String>,
     /// Cancelled once the session's pump has stored its last event.
     pub ended: CancellationToken,
     /// What each of its turns used, from the CLI's running totals.
@@ -853,6 +854,13 @@ impl ConvLive {
                     && of.as_deref() == request
             })
             .count()
+    }
+
+    /// Takes the CLI out of the state without waiting for its end, as a close still under way
+    /// leaves it while the next CLI starts.
+    #[cfg(test)]
+    pub(super) async fn detach_cli(&self) -> Option<Arc<Cli>> {
+        self.state.lock().await.cli.take()
     }
 
     /// Whether no turn runs and nothing waits for one.
@@ -2810,7 +2818,7 @@ impl SessionManager {
             model: choice,
             chosen,
             session,
-            owner,
+            grants: grant_values,
             ended: CancellationToken::new(),
             launch,
         });
@@ -3463,7 +3471,7 @@ impl SessionManager {
         }
         self.store_deltas(&conv, deltas).await;
         self.record_held_looked(&conv).await;
-        self.grants.revoke_owner(&cli.owner);
+        self.grants.revoke(&cli.grants);
         conv.items().cli_ended();
         let (was_busy, closing, failed, jobs, current) = {
             let mut state = conv.state.lock().await;

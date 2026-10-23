@@ -2105,3 +2105,43 @@ async fn a_closed_workers_thread_still_reads_from_its_session() {
         .count();
     assert_eq!(sessions, 2, "the session's own and its worker's: {held:#?}");
 }
+
+/// A CLI whose end comes after the next CLI of its session started (a seam's predecessor still
+/// closing as its successor takes the waiting message) revokes only its own grant: the
+/// successor's `brigadier` calls still work (#555).
+#[tokio::test]
+async fn a_cli_that_ends_after_the_next_one_started_leaves_it_its_grant() {
+    let grants: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let seen = grants.clone();
+    let flow = Flow::start(
+        "cli-late-end",
+        Options::default(),
+        Arc::new(move |turn| {
+            seen.lock().unwrap().push((
+                turn.env(SESSION_ENV).unwrap().to_owned(),
+                turn.env(GRANT_ENV).unwrap().to_owned(),
+            ));
+            Box::pin(async { Reply::text("Noted.") })
+        }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.idle().await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    let old = conv.detach_cli().await.expect("its CLI");
+    flow.say("Second.").await;
+    flow.idle().await;
+    let (session, grant) = grants.lock().unwrap().last().cloned().unwrap();
+    assert!(
+        !old.grants.contains(&grant),
+        "the second turn ran on a new CLI"
+    );
+    old.session.close().await;
+    old.ended.cancelled().await;
+    assert!(
+        flow.manager.cli_caller(&session, &grant).is_some(),
+        "the new CLI's grant was revoked with the old one's"
+    );
+    assert!(flow.manager.cli_caller(&session, &old.grants[0]).is_none());
+    flow.stop().await;
+}
