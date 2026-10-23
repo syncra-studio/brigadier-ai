@@ -315,6 +315,10 @@ impl Claude {
         // ([`SessionSpec::project`]): a thread works in the checkout itself (S2), where Claude
         // reads them whether or not they are linked.
         let user_setup = spec.tools.user_setup();
+        let hooks_off = hooks_disabled(spec, cwd, user_config);
+        // A note fork must stay read-only even without its PreToolUse hook. Removing its
+        // tools costs the shared cache prefix, but never lets a disabled hook permit writes.
+        let without_tools = hooks_off && spec.deny_tools.is_some();
         let mut args: Vec<String> = if user_setup {
             let sources = if spec.project.is_some() {
                 "user,project,local"
@@ -329,18 +333,29 @@ impl Claude {
         };
         // A lean worker (G23) loads only the servers Brigadier gives it, none of the user's,
         // with the user's settings and instruction files still read.
-        if user_setup && spec.lean_worker {
+        if user_setup && (spec.lean_worker || without_tools) {
             args.push("--strict-mcp-config".into());
         }
         args.push("--mcp-config".into());
-        args.push(mcp_config(&spec.mcp_servers).to_string());
+        args.push(
+            mcp_config(if without_tools {
+                &[]
+            } else {
+                &spec.mcp_servers
+            })
+            .to_string(),
+        );
         // Decided once, for both the tools and the settings.
         let sub_agents = sub_agents(spec, cwd, user_config.filter(|_| user_setup));
         if let Some(denied) = denied_tools(spec, &sub_agents) {
             args.push("--disallowedTools".into());
             args.push(denied);
         }
-        match spec.tools {
+        match if without_tools {
+            ToolSet::None
+        } else {
+            spec.tools
+        } {
             // A thread or worker has the CLI's own tools less the few dead in a tab
             // ([`TAB_DENIED_TOOLS`]).
             ToolSet::Default | ToolSet::Lean | ToolSet::Thread => {}
@@ -375,6 +390,12 @@ impl Claude {
             }
         }
         let mut layer = settings(spec, &sub_agents, home_login);
+        if hooks_off {
+            layer
+                .as_object_mut()
+                .expect("settings object")
+                .remove("hooks");
+        }
         // A Chat or a raw session loads no user settings, so it is given the user's own memory
         // setting, as set.
         if !user_setup
@@ -420,17 +441,17 @@ impl Claude {
 
 /// The session's own variables on top of the CLI environment: its env, what its MCP config
 /// refers to by name, what the output hook reads, its MCP time limits and auto-compaction.
-fn session_env(spec: &SessionSpec) -> Vec<(String, String)> {
+fn session_env(spec: &SessionSpec, hooks_on: bool) -> Vec<(String, String)> {
     let mut env = spec.env.clone();
     // What the output hook reads.
     if let Some(hook) = spec
         .output_hook
         .as_ref()
-        .filter(|_| spec.tools == ToolSet::Thread)
+        .filter(|_| hooks_on && spec.tools == ToolSet::Thread)
     {
         env.extend(hook.env.iter().cloned());
     }
-    if let Some(hook) = &spec.stop_hook {
+    if let Some(hook) = spec.stop_hook.as_ref().filter(|_| hooks_on) {
         env.extend(hook.env.iter().cloned());
     }
     if !spec.auto_compact {
@@ -718,10 +739,6 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     if !spec.auto_compact {
         settings["hooks"]["PreCompact"] = refuse_compaction_hook();
     }
-    // The user's `disableAllHooks` would switch Brigadier's own hooks off with theirs.
-    if spec.tools.user_setup() && settings.get("hooks").is_some() {
-        settings["disableAllHooks"] = json!(false);
-    }
     // A session that calls `brigadier` reaches the daemon's socket under Claude's own sandbox
     // too, when the user turns that on: Claude's sandbox refuses every Unix socket it isn't told
     // of ("Operation not permitted"). This allows that one socket; it turns nothing on.
@@ -767,6 +784,42 @@ fn auto_memory(file: &Path) -> Option<bool> {
         .ok()?
         .get("autoMemoryEnabled")?
         .as_bool()
+}
+
+/// Whether the settings sources this session loads disable hooks. Read only this switch:
+/// Claude still loads the files itself, and Brigadier never sets `disableAllHooks`. Local
+/// overrides project, which overrides user (code.claude.com/docs/en/settings). For a worker
+/// whose setup is not linked yet, read its trusted project's files at their source.
+fn hooks_disabled(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> bool {
+    let read = |path: &Path| -> Option<bool> {
+        serde_json::from_str::<Value>(&std::fs::read_to_string(path).ok()?)
+            .ok()?
+            .get("disableAllHooks")?
+            .as_bool()
+    };
+    let user_setup = spec.tools.user_setup();
+    let mut off = user_config
+        .filter(|_| user_setup)
+        .and_then(|dir| read(&dir.join("settings.json")));
+    let project = if user_setup {
+        spec.project.as_deref()
+    } else {
+        Some(cwd)
+    };
+    if let Some(project) = project {
+        let dirs = project_dirs(project);
+        for name in ["settings.json", "settings.local.json"]
+            .into_iter()
+            .take(if user_setup { 2 } else { 1 })
+        {
+            for dir in dirs.iter().rev() {
+                if let Some(value) = read(&dir.join(".claude").join(name)) {
+                    off = Some(value);
+                }
+            }
+        }
+    }
+    off.unwrap_or(false)
 }
 
 /// The daemon's socket, for a session given `brigadier` (its environment names its session): in
@@ -1139,7 +1192,8 @@ impl Provider for Claude {
             let mut process_spec = self.env.spec(&binary);
             process_spec.args = args.into_iter().map(Into::into).collect();
             process_spec.cwd = Some(cwd.clone());
-            let mut env = session_env(&spec);
+            let hooks_on = !hooks_disabled(&spec, &cwd, user_config.as_deref());
+            let mut env = session_env(&spec, hooks_on);
             // Claude keeps its own temp files, and points sandboxed commands' TMPDIR, under
             // `CLAUDE_CODE_TMPDIR` (`/tmp` by default). A session with a TMPDIR of its own
             // gets a short folder of its own there, removed with it.
@@ -1204,7 +1258,7 @@ impl Provider for Claude {
                 stdout,
                 shared.clone(),
                 parser_rx,
-                !spec.auto_compact,
+                !spec.auto_compact && hooks_on,
                 spec.mcp_servers
                     .iter()
                     .map(|server| server.name.clone())
@@ -1295,7 +1349,12 @@ impl Provider for Claude {
             args.push("--resume".into());
             args.push(native_id.clone());
             let mut process = self.env.spec(&program);
-            crate::cli::apply_session_env(&mut process, &session_env(&spec), &spec.unset_env);
+            let hooks_on = !hooks_disabled(&spec, &cwd, user_config.as_deref());
+            crate::cli::apply_session_env(
+                &mut process,
+                &session_env(&spec, hooks_on),
+                &spec.unset_env,
+            );
             Ok(TerminalCommand {
                 program,
                 args,
@@ -1862,7 +1921,7 @@ mod tests {
             env: vec![("TMPDIR".into(), "/tmp/brigadier-t".into())],
             ..spec(Path::new("/tmp"), &[])
         };
-        let env = session_env(&thread);
+        let env = session_env(&thread, true);
         for name in [
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
             "BASH_DEFAULT_TIMEOUT_MS",
@@ -2862,7 +2921,7 @@ for line in sys.stdin:
             }]}])
         );
         assert!(
-            session_env(&worker)
+            session_env(&worker, true)
                 .iter()
                 .any(|(name, value)| name == "BRIGADIER_STOP_GRANT" && value == "brg_stop")
         );
@@ -3058,7 +3117,7 @@ for line in sys.stdin:
                 .map(|pair| &pair[1])
                 .collect();
             assert_eq!(given, [text], "{tools:?}");
-            let set = session_env(&session);
+            let set = session_env(&session, true);
             for pair in &env {
                 assert!(set.contains(pair), "{tools:?}: {pair:?}");
             }
@@ -3591,27 +3650,238 @@ for line in sys.stdin:
         assert_eq!(linked_project(&at_home, &cwd_canon), None);
     }
 
-    /// The user's `disableAllHooks` can't switch Brigadier's own hooks off in a session that
-    /// loads their settings.
+    /// S37: omit our registrations using the same user/project/local sources the CLI loads,
+    /// without putting our own disableAllHooks value above theirs.
     #[test]
-    fn brigadier_hooks_stay_on_under_the_users_settings() {
+    fn hooks_follow_the_settings_sources_without_an_override() {
         let cwd = Temp::new();
-        let worker = SessionSpec {
+        let config = cwd.path().parent().unwrap().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let project = cwd.path().parent().unwrap().join("checkout");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        let session = SessionSpec {
+            tools: ToolSet::Thread,
+            project: Some(project.clone()),
             auto_compact: false,
+            mcp_servers: vec![McpServer {
+                name: "probe".into(),
+                transport: McpTransport::Stdio {
+                    command: PathBuf::from("must-never-run"),
+                    args: Vec::new(),
+                    cwd: None,
+                },
+                env: Vec::new(),
+                tool_timeout_secs: None,
+                trusted: true,
+                always_load: true,
+            }],
             ..spec(cwd.path(), &[])
         };
-        let models = sub_agents(&worker, cwd.path(), None);
-        let on = settings(&worker, &models, false);
-        assert_eq!(on["disableAllHooks"], json!(false));
-        let reviewer = SessionSpec {
-            tools: ToolSet::Review,
-            ..worker
+        let layer = |spec: &SessionSpec| {
+            let args = Claude::session_flags(spec, cwd.path(), false, Some(&config));
+            let at = args.iter().position(|arg| arg == "--settings").unwrap();
+            serde_json::from_str::<Value>(&args[at + 1]).unwrap()
         };
-        assert!(
-            settings(&reviewer, &models, false)
-                .get("disableAllHooks")
-                .is_none()
+        std::fs::write(config.join("settings.json"), r#"{"disableAllHooks":true}"#).unwrap();
+        let off = layer(&session);
+        assert!(off.get("hooks").is_none());
+        assert!(off.get("disableAllHooks").is_none());
+        // Project overrides user, and local overrides project, as in the CLI.
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            r#"{"disableAllHooks":false}"#,
+        )
+        .unwrap();
+        assert!(layer(&session)["hooks"]["PreCompact"].is_array());
+        std::fs::write(
+            project.join(".claude/settings.local.json"),
+            r#"{"disableAllHooks":true}"#,
+        )
+        .unwrap();
+        assert!(layer(&session).get("hooks").is_none());
+        // A raw session loads project only, with no local or user settings.
+        let raw = SessionSpec {
+            tools: ToolSet::None,
+            ..session.clone()
+        };
+        std::fs::create_dir_all(cwd.path().join(".claude")).unwrap();
+        std::fs::write(
+            cwd.path().join(".claude/settings.local.json"),
+            r#"{"disableAllHooks":true}"#,
+        )
+        .unwrap();
+        assert!(layer(&raw)["hooks"]["PreCompact"].is_array());
+        // Taking folder trust away leaves only the user's settings.
+        let untrusted = SessionSpec {
+            project: None,
+            ..session.clone()
+        };
+        std::fs::write(config.join("settings.json"), r#"{"disableAllHooks":false}"#).unwrap();
+        assert!(layer(&untrusted)["hooks"]["PreCompact"].is_array());
+        let fork = SessionSpec {
+            deny_tools: Some("no tools".into()),
+            ..session
+        };
+        let args = Claude::session_flags(&fork, cwd.path(), false, Some(&config));
+        assert!(args.windows(2).any(|pair| pair == ["--tools", ""]));
+        assert!(args.iter().any(|arg| arg == "--strict-mcp-config"));
+        let at = args.iter().position(|arg| arg == "--mcp-config").unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&args[at + 1]).unwrap(),
+            json!({"mcpServers":{}})
         );
+        assert!(layer(&fork).get("hooks").is_none());
+    }
+
+    /// A real provider start against a CLI stub: hooks off removes every Brigadier hook and
+    /// its environment, while command output, completion and compaction still come from stdout.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_started_claude_respects_disabled_hooks_and_keeps_stream_events() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Kept;
+        impl Ledger for Kept {
+            fn record(&self, _: Artifact) -> BoxFuture<'_, Result<()>> {
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, _: &Artifact) -> bool {
+                false
+            }
+        }
+        let dir = Temp::new();
+        let bin = dir.path().join("bin");
+        let config = dir.path().join("config");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        let binary = bin.join("claude");
+        std::fs::write(
+            &binary,
+            r#"#!/usr/bin/env python3
+import json, os, sys
+if "--version" in sys.argv:
+    print("2.1.309 (Claude Code)")
+    sys.exit(0)
+with open(os.environ["CAPTURE"], "w") as f:
+    json.dump({"args": sys.argv[1:], "env": dict(os.environ)}, f)
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("type") == "control_request":
+        print(json.dumps({"type":"control_response", "response":{"subtype":"success",
+            "request_id":message["request_id"], "response":{}}}), flush=True)
+    elif message.get("type") == "user":
+        message["isReplay"] = True
+        print(json.dumps(message), flush=True)
+        for event in [
+            {"type":"assistant", "message":{"id":"m1", "content":[
+                {"type":"tool_use", "id":"t1", "name":"Bash", "input":{"command":"echo stream"}}]}},
+            {"type":"user", "message":{"role":"user", "content":[
+                {"type":"tool_result", "tool_use_id":"t1", "content":"stream", "is_error":False}]}},
+            {"type":"system", "subtype":"status", "status":"compacting"},
+            {"type":"system", "subtype":"status", "status":None},
+            {"type":"result", "subtype":"success", "is_error":False, "result":"done", "usage":{}}
+        ]:
+            print(json.dumps(event), flush=True)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let capture = dir.path().join("capture.json");
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.path().join("data")),
+        })
+        .unwrap();
+        let claude = Claude::new(
+            platform,
+            Arc::new(CliEnv::from_vars([
+                ("HOME".into(), dir.path().as_os_str().to_owned()),
+                ("PATH".into(), path),
+                ("CLAUDE_CONFIG_DIR".into(), config.as_os_str().to_owned()),
+                ("CAPTURE".into(), capture.as_os_str().to_owned()),
+            ])),
+        );
+        let hook = OutputHook {
+            command: PathBuf::from("must-never-run"),
+            args: Vec::new(),
+            env: vec![("HOOK_ONLY".into(), "grant".into())],
+            timeout_secs: 60,
+        };
+        // Every kind of Brigadier hook would be registered in this session when enabled.
+        let spec = SessionSpec {
+            tools: ToolSet::Thread,
+            allowed_models: None,
+            auto_compact: false,
+            output_hook: Some(hook.clone()),
+            stop_hook: Some(hook),
+            deny_tools: Some("no tools".into()),
+            ..spec(dir.path(), &[])
+        };
+        for (user, off) in [
+            (json!({"disableAllHooks":true}), true),
+            (json!({"disableAllHooks":false}), false),
+            (json!({}), false),
+        ] {
+            std::fs::write(config.join("settings.json"), user.to_string()).unwrap();
+            let Started {
+                session,
+                mut events,
+            } = claude.start(spec.clone(), Arc::new(Kept)).await.unwrap();
+            let captured: Value =
+                serde_json::from_str(&std::fs::read_to_string(&capture).unwrap()).unwrap();
+            let args = captured["args"].as_array().unwrap();
+            let at = args.iter().position(|arg| arg == "--settings").unwrap();
+            let layer: Value = serde_json::from_str(args[at + 1].as_str().unwrap()).unwrap();
+            assert!(layer.get("disableAllHooks").is_none(), "{layer}");
+            if off {
+                assert!(layer.get("hooks").is_none(), "{layer}");
+                assert!(captured["env"].get("HOOK_ONLY").is_none());
+            } else {
+                assert_eq!(layer["hooks"].as_object().map(Map::len), Some(5));
+                assert_eq!(captured["env"]["HOOK_ONLY"], "grant");
+            }
+            session.send(TurnInput::text("go")).await.unwrap();
+            let seen = tokio::time::timeout(Duration::from_secs(10), async {
+                let mut seen = Vec::new();
+                while let Some(event) = events.recv().await {
+                    let ended = matches!(event, ProviderEvent::TurnCompleted { .. });
+                    seen.push(event);
+                    if ended {
+                        break;
+                    }
+                }
+                seen
+            })
+            .await;
+            session.close().await;
+            let seen = seen.expect("the CLI stream completes the turn");
+            assert!(
+                seen.iter()
+                    .any(|event| matches!(event, ProviderEvent::Command {
+                status: ItemStatus::Completed, output: Some(output), ..
+            } if output == "stream")),
+                "{seen:?}"
+            );
+            assert!(
+                seen.iter()
+                    .any(|event| matches!(event, ProviderEvent::TurnCompleted { .. })),
+                "{seen:?}"
+            );
+            assert_eq!(
+                seen.iter()
+                    .any(|event| matches!(event, ProviderEvent::CompactionRefused)),
+                !off,
+                "{seen:?}"
+            );
+            assert_eq!(
+                seen.iter()
+                    .any(|event| matches!(event, ProviderEvent::CompactionStarted { .. })),
+                off,
+                "{seen:?}"
+            );
+        }
     }
 
     /// Missing or signed out, the status points at Connect in plain words: no command to run,

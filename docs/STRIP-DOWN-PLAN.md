@@ -1438,6 +1438,16 @@ the how is proposed unless tagged. Steps on disjoint files carry ∥.
   Brigadier, including Brigadier's own. Read the CLI's own event stream for hook-backed features (G2); rebuild
   no hook layer. If the stream cannot provide a feature, degrade silently and record exactly why in a GitHub
   issue here; never prompt the user to turn hooks on. With hooks enabled or unset, keep today's behaviour.
+- **Stream behaviour:** command results, saved-output paths/excerpts, usage, background tasks, turn completion
+  and compaction use the existing CLI stream parser. There is no Brigadier `UserPromptSubmit` hook. The worker
+  launch already supplies no `Stop` hook: completion comes from the CLI's result, with no report gate.
+- **Hookless gaps:** [#539](https://github.com/syncra-studio/brigadier-ai/issues/539). A later stream event cannot
+  rewrite the model's Bash result into Brigadier's custom digest/`out-*` alias, block an already completed turn,
+  or veto recovery compaction. The CLI's own saved output remains readable. `DISABLE_AUTO_COMPACT=1`, idle
+  compaction off and the usage-driven seam stay; a real compaction is reported as such, never as a refused
+  hook. A note fork with hooks off uses the CLI's empty built-in tool list and strict empty MCP config: still
+  read-only, but the changed tool schema loses its shared cache prefix. These gaps degrade silently; no hook
+  replacement or request to enable hooks.
 - **Files:** `P/claude/mod.rs`, its settings-layer tests, this plan.
 - **Done when:** a provider test starts Claude with the user's `disableAllHooks: true`, no override and no
   Brigadier hooks; false and absent keep today's settings. Existing feature tests pass with hooks off; list
