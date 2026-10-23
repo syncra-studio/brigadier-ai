@@ -550,3 +550,49 @@ async fn archive_never_removes_build_output_through_a_replaced_worktree_link() {
     std::fs::rename(&outside, &work).unwrap();
     flow.stop().await;
 }
+
+/// #563: a worker that had reported reads so after Archive and Restore. Kept with its
+/// worktree, its session can still send it more; one whose worktree went with the archive
+/// (merged and clean) is closed.
+#[tokio::test]
+async fn a_reported_worker_reads_reported_after_archive_and_restore() {
+    for unmerged in [true, false] {
+        let flow = Flow::start(
+            &format!("20261022-0805-take-over-5-sessions-w139-restore-{unmerged}"),
+            Options::default(),
+            script(),
+        )
+        .await;
+        flow.say("Start worker").await;
+        flow.settled().await;
+        let id = flow.conversation.clone();
+        super::eventually_async("worker to report", || async {
+            flow.core
+                .tasks(&id)
+                .await
+                .unwrap()
+                .first()
+                .is_some_and(|t| t.state == crate::work::TaskState::Reported)
+        })
+        .await;
+        let task = flow.core.tasks(&id).await.unwrap().remove(0);
+        let worker = flow.manager.session_dir(&id).worker(&task).join("work");
+        if unmerged {
+            std::fs::write(worker.join("work.txt"), "unmerged work").unwrap();
+            git(&worker, &["add", "work.txt"]);
+            git(&worker, &["commit", "-m", "unmerged"]);
+        }
+        flow.manager.archive(id.clone()).await.unwrap();
+        flow.manager.cleanup_finished(&id).await;
+        assert_eq!(worker.exists(), unmerged);
+        flow.manager.restore(id.clone()).await.unwrap();
+        let task = flow.core.tasks(&id).await.unwrap().remove(0);
+        assert_eq!(task.state, crate::work::TaskState::Reported, "{unmerged}");
+        assert_eq!(
+            task.plain.as_ref().unwrap().closed,
+            !unmerged,
+            "`brigadier workers` lists it while its worktree is kept"
+        );
+        flow.stop().await;
+    }
+}

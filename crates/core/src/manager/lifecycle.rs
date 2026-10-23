@@ -1018,10 +1018,15 @@ impl SessionManager {
         self.keep_saved_files(&task.id).await;
         let _ = self
             .update_task(&task.conversation_id, &task.id, |current| {
-                if !current.state.is_final() {
+                // A worker that had reported reads so after a restore. Its session can send it
+                // more while its worktree is kept; one that went with the archive is closed.
+                let reported = current.state == TaskState::Reported && current.plain.is_some();
+                if !current.state.is_final() && !reported {
                     current.state = TaskState::Stopped;
                 }
-                if let Some(plain) = &mut current.plain {
+                if let Some(plain) = &mut current.plain
+                    && !(reported && !remove_worktree)
+                {
                     plain.closed = true;
                 }
                 current.quota_wait = None;

@@ -2164,6 +2164,11 @@ impl SessionManager {
             return (None, false);
         };
         let (git, path) = (self.git.clone(), PathBuf::from(path));
+        // Its worktree went already (an archive removed it, merged and clean): nothing is
+        // left to keep.
+        if !path.join(".git").exists() {
+            return (None, false);
+        }
         let message = self.commit_message(format!(
             "WIP: task-{} {} (unfinished, kept by Brigadier)",
             task.number, task.title
