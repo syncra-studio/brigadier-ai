@@ -540,11 +540,17 @@ impl Parser {
             if text.starts_with("<local-command-") {
                 return;
             }
+            // A background job's end the CLI answers in a turn of its own: its notice, not the
+            // user's message (the session file's line of it is skipped the same way).
+            if text.starts_with("<task-notification>") {
+                self.begin_turn(out);
+                return;
+            }
             self.begin_turn(out);
             out.push(Output::Event(ProviderEvent::Message {
                 item_id: str_of(value, "uuid").unwrap_or_default().to_owned(),
                 role: Role::User,
-                text,
+                text: slash_command(&text).unwrap_or(text),
             }));
             return;
         }
@@ -1724,6 +1730,25 @@ fn content_text(value: &Value) -> String {
     }
 }
 
+/// A slash command as the user typed it (`/fusion Which store?`), from the markup Claude keeps
+/// it as (`<command-name>/brigade:fusion</command-name><command-args>…`). Brigadier's own
+/// skills are typed without their plugin's name.
+fn slash_command(text: &str) -> Option<String> {
+    let tag = |name: &str| {
+        let open = format!("<{name}>");
+        let start = text.find(&open)? + open.len();
+        let end = start + text[start..].find(&format!("</{name}>"))?;
+        Some(text[start..end].trim())
+    };
+    let name = tag("command-name")?;
+    let name = name.strip_prefix('/').unwrap_or(name);
+    let name = name.strip_prefix("brigade:").unwrap_or(name);
+    Some(match tag("command-args").filter(|args| !args.is_empty()) {
+        Some(args) => format!("/{name} {args}"),
+        None => format!("/{name}"),
+    })
+}
+
 /// Claude's usage windows: the 5-hour session window, the weekly one, and weekly windows that
 /// meter one model family (`seven_day_opus`). Other `rate_limits` entries (overage, extra
 /// usage, internal buckets) are not windows work waits on.
@@ -2781,6 +2806,39 @@ mod tests {
                 read("/r/b.rs", Some((9, None))),
                 read("/r/c.rs", None),
             ]
+        );
+    }
+
+    #[test]
+    fn a_slash_command_reads_as_typed() {
+        let mut parser = Parser::live();
+        let echo = json!({"type":"user", "isReplay":true, "uuid":"u1", "message":{"role":"user",
+            "content":"<command-message>brigade:fusion</command-message>\n<command-name>/brigade:fusion</command-name>\n<command-args>JSON or SQLite?</command-args>"}});
+        let events = parser.feed(&echo.to_string());
+        assert!(
+            events.iter().any(|event| matches!(event, Output::Event(ProviderEvent::Message { role: Role::User, text, .. }) if text == "/fusion JSON or SQLite?")),
+            "{events:?}"
+        );
+        assert_eq!(
+            slash_command("<command-name>/review</command-name>\n<command-args></command-args>")
+                .as_deref(),
+            Some("/review")
+        );
+        assert_eq!(slash_command("plain words"), None);
+    }
+
+    #[test]
+    fn a_background_jobs_notice_is_no_user_message() {
+        let mut parser = Parser::live();
+        let echo = json!({"type":"user", "isReplay":true, "uuid":"n1", "message":{"role":"user",
+            "content":"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>sleep 20</summary>\n</task-notification>"}});
+        let events = parser.feed(&echo.to_string());
+        assert!(
+            matches!(
+                &events[..],
+                [Output::Event(ProviderEvent::TurnStarted { .. })]
+            ),
+            "{events:?}"
         );
     }
 
