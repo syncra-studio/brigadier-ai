@@ -161,7 +161,7 @@ pub const COMMANDS: &[Command] = &[
                   branch in a new worktree by default. A Chat's worker works in the repository \
                   `--repo` names, or in a folder of its own with no git. It shows only inside \
                   this session, never in the sidebar. Prints its id; `brigadier wait` hears \
-                  when its turn ends.",
+                  what it does: keep one running in the background.",
         args: &[
             flag(
                 "title",
@@ -255,8 +255,10 @@ pub const COMMANDS: &[Command] = &[
         name: "wait",
         summary: "Wait for an event from this session's workers.",
         details: "Returns at the first: a turn ended (with its last message), needs input, \
-                  gone, usage limit, fresh context. Without ids, any of them. Each event is \
-                  returned once. Run long waits in the background.",
+                  failed, interrupted, gone, usage limit, fresh context, quiet (20 minutes \
+                  without a word while it works). Without ids, any of them. Each event is \
+                  heard once, kept across a restart. Keep one running in the background while \
+                  workers run: it wakes you when it returns.",
         args: &[
             rest("id", "The workers to wait for.", false),
             flag("timeout", "SECONDS", "Give up after this long."),

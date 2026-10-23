@@ -9,7 +9,7 @@ use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{Name, Stream};
 use serde::Serialize;
 
-use crate::protocol::{CliCall, CliReply, ErrorCode, GRANT_ENV, PROTOCOL, SESSION_ENV};
+use crate::protocol::{CliCall, CliReply, ErrorCode, GRANT_ENV, Heard, PROTOCOL, SESSION_ENV};
 
 /// The largest reply read (the daemon's frames are capped well under it).
 const MAX_REPLY_BYTES: usize = 64 * 1024 * 1024;
@@ -60,13 +60,36 @@ pub fn daemon_paths() -> Result<AppPaths, CliReply> {
     AppPaths::resolve(dir).map_err(|err| unreachable(&err))
 }
 
-/// Makes `call` for `caller`: one frame each way.
-pub fn call(paths: &AppPaths, caller: &Caller, call: &CliCall) -> CliReply {
+/// An answer, with the connection it came on while it is open.
+pub struct Answered {
+    pub reply: CliReply,
+    stream: Option<Stream>,
+}
+
+impl Answered {
+    fn closed(reply: CliReply) -> Self {
+        Self {
+            reply,
+            stream: None,
+        }
+    }
+
+    /// Tells Brigadier the events of a `wait`'s answer were printed: they were heard. Without
+    /// it, they are its workers' events again for the next `wait`.
+    pub fn heard(self) {
+        if let Some(mut stream) = self.stream {
+            let _ = write_frame(&mut stream, &Heard { heard: true });
+        }
+    }
+}
+
+/// Makes `call` for `caller`: one frame each way (and [`Answered::heard`] after a `wait`).
+pub fn call(paths: &AppPaths, caller: &Caller, call: &CliCall) -> Answered {
     let unreachable = |err: io::Error| {
-        CliReply::error(
+        Answered::closed(CliReply::error(
             ErrorCode::Unreachable,
             format!("cannot reach Brigadier (is the app running?): {err}"),
-        )
+        ))
     };
     let mut stream = match endpoint_name(&paths.ipc_endpoint).and_then(Stream::connect) {
         Ok(stream) => stream,
@@ -83,15 +106,18 @@ pub fn call(paths: &AppPaths, caller: &Caller, call: &CliCall) -> CliReply {
             err.kind(),
             io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
         ) {
-            return refused();
+            return Answered::closed(refused());
         }
         return unreachable(err);
     }
     match read_frame(&mut stream) {
-        Ok(Some(reply)) => reply,
+        Ok(Some(reply)) => Answered {
+            reply,
+            stream: Some(stream),
+        },
         // Closed without a word: the grant was refused.
-        Ok(None) => refused(),
-        Err(err) if err.kind() == io::ErrorKind::ConnectionReset => refused(),
+        Ok(None) => Answered::closed(refused()),
+        Err(err) if err.kind() == io::ErrorKind::ConnectionReset => Answered::closed(refused()),
         Err(err) => unreachable(err),
     }
 }

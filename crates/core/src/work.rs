@@ -2931,6 +2931,9 @@ pub enum InjectionKind {
     /// The one message at a seam (G12): write the hand-off note; or the hand-off a successor
     /// starts from.
     Seam,
+    /// What its workers did that no `brigadier wait` of its took, once its turn ended (S29;
+    /// its label is `worker events <message id>`).
+    WorkerEvents,
 }
 
 /// An injection's kind as stored, older names included: an earlier run's per-phase `phase`
@@ -2957,6 +2960,7 @@ enum StoredInjectionKind {
     PeerMessage,
     BackgroundRun,
     Seam,
+    WorkerEvents,
     #[serde(other)]
     Retired,
 }
@@ -2980,6 +2984,7 @@ impl<'de> Deserialize<'de> for InjectionKind {
             StoredInjectionKind::PeerMessage => Self::PeerMessage,
             StoredInjectionKind::BackgroundRun => Self::BackgroundRun,
             StoredInjectionKind::Seam | StoredInjectionKind::Retired => Self::Seam,
+            StoredInjectionKind::WorkerEvents => Self::WorkerEvents,
         })
     }
 }

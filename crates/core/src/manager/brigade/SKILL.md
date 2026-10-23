@@ -13,7 +13,7 @@ Everything goes through `brigadier` (`brigadier <command> --help` for details; `
 |---|---|
 | `brigadier models` | Before each start: which provider, model and effort fits, what's left on each account, the user's rules. |
 | `brigadier start "<brief>" --title T [--work KIND] [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean [--with computer-use]]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
-| `brigadier wait [<id>…] [--timeout S]` | Block until a worker event: turn ended (with its last message), needs input, gone, usage limit, fresh context. Workers send you nothing on their own: this is how you hear from them. |
+| `brigadier wait [<id>…] [--timeout S]` | Block until a worker event: turn ended (with its last message), needs input, failed, interrupted, gone, usage limit, fresh context, quiet. Events reach you; keep a `brigadier wait` running in the background (both CLIs). |
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one when its work is in. |
@@ -51,14 +51,15 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope." The wo
 ## Waves
 
 1. Start the wave (≤ 3 workers unless the user said more).
-2. Wait right after starting them; never end your turn with workers running and no wait on them. In Claude Code run `brigadier wait` as a background command and end your turn: you are woken when it returns. In Codex run it in the foreground. Each event returns the wait; handle it, then wait again until every worker's work is in:
+2. Wait right after starting them; never end your turn with workers running and no wait on them. Run `brigadier wait` as a background command and end your turn: you are woken when it returns. With none running, what they did comes to you in one message once your turn ends. Each event returns the wait; handle it, then wait again until every worker's work is in:
    - **turn ended:** read the last message. If done: check its claims yourself (`git log`, run its acceptance commands). If it asks something: answer it if the plan and the user's words settle it, else ask the user once and relay with `brigadier send`.
    - **needs input** (a permission prompt): allow it with `brigadier send <id> --allow` if it is inside the brief and harmless. Otherwise ask the user, or deny and send a note.
    - **usage limit:** let it wait for the reset, or close it and restart its rest on the other provider.
    - **fresh context:** its CLI compacted; check that its next message still knows the brief, or resend the brief's five lines.
+   - **failed** or **interrupted:** read why (`brigadier read <id> --last 10`); send it on, or close it.
    - **gone:** read its branch, then start a successor with "continue from branch X; `git log` first".
-3. A worker that is quiet for 20 minutes with nothing running: `brigadier read <id> --last 10`, then nudge it or close it.
-4. Next wave when this one is integrated.
+   - **quiet** (20 minutes without a word; it names what runs): `brigadier read <id> --last 10`, then nudge it or close it.
+3. Next wave when this one is integrated.
 
 ## Integrate small and often
 

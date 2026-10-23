@@ -15,24 +15,27 @@
 //!   permission prompt of its CLI opens the usual card under Waiting on you, and reaches the
 //!   session as a `needs-input` event; `brigadier send <id> --allow|--deny` answers it through
 //!   the CLI's own permission protocol.
-//! - What `brigadier wait` hears: a turn's end with its last message, a permission prompt, its
-//!   CLI ending, a usage limit, and its CLI compacting its context. Each event is handed out
-//!   once; they live in memory, so a restart forgets the ones nobody took.
+//! - What its parent hears (S29, O1): a turn's end with its last message, a permission prompt,
+//!   a question or a sign-in, a failed or stopped turn, its CLI ending, a usage limit, its CLI
+//!   compacting its context, and 20 minutes without a word while it works. Each event is kept
+//!   until heard, once: through a `brigadier wait` the parent keeps running in the background,
+//!   or the safety net's message once its turn ended ([`super::worker_events`]).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use brigadier_cli::protocol::{
     self as cli, Answer, Capability, CliReply, CloseOutput, ErrorCode, EventKind, SendOutput,
-    StartOutput, StartRequest, TurnEnd, WaitEvent, WaitOutput,
+    StartOutput, StartRequest, WaitEvent, WaitOutput,
 };
 use brigadier_git::WorktreeSpec;
 use brigadier_providers::{ApprovalDecision, ProviderKind, TurnStatus};
 
 use super::cli::{CliCaller, Target, short, worker_row};
 use super::session_dir::{WorkspaceRecord, write_atomic};
+use super::worker_events::HeldEvents;
 use super::workers::{TaskLive, Workspace, task_branch};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{
@@ -49,73 +52,13 @@ const TITLE_MAX: usize = 60;
 /// How long a message sent to a worker still starting waits for its CLI.
 const CLI_START: Duration = Duration::from_secs(60);
 
-/// What a plain worker's CLI did that its session's `brigadier wait` hasn't taken yet.
-#[derive(Default)]
-pub(crate) struct WorkerEvents {
-    queue: Mutex<Vec<Pending>>,
-    /// Wakes every waiting `brigadier wait`.
-    added: tokio::sync::Notify,
-}
-
-struct Pending {
-    conversation: ConversationId,
-    task: TaskId,
-    /// The card a `needs-input` event stands for: once it is answered, the event is stale.
-    card: Option<CardId>,
-    event: WaitEvent,
-}
-
-impl WorkerEvents {
-    fn push(
-        &self,
-        conversation: &ConversationId,
-        task: &TaskId,
-        card: Option<CardId>,
-        event: WaitEvent,
-    ) {
-        self.queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(Pending {
-                conversation: conversation.clone(),
-                task: task.clone(),
-                card,
-                event,
-            });
-        self.added.notify_waiters();
-    }
-
-    /// Takes `conversation`'s events of `tasks` (all of its workers' when empty), oldest first.
-    fn take(&self, conversation: &ConversationId, tasks: &HashSet<TaskId>) -> Vec<Pending> {
-        let mut queue = self
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (taken, kept) = std::mem::take(&mut *queue)
-            .into_iter()
-            .partition(|pending| {
-                pending.conversation == *conversation
-                    && (tasks.is_empty() || tasks.contains(&pending.task))
-            });
-        *queue = kept;
-        taken
-    }
-
-    /// Drops what a closed worker left untaken.
-    fn forget(&self, task: &TaskId) {
-        self.queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|pending| pending.task != *task);
-    }
-}
-
-fn event(task: &TaskId, kind: EventKind) -> WaitEvent {
+/// A new event of worker `task`'s (its own id given when it is kept).
+pub(super) fn event(task: &TaskId, kind: EventKind) -> WaitEvent {
     WaitEvent {
         id: short(&task.0),
+        event_id: String::new(),
         event: kind,
         message: None,
-        status: None,
         asks: None,
         resets_at_ms: None,
         at_ms: now_ms(),
@@ -557,13 +500,15 @@ impl SessionManager {
     ) {
         let cutoff = live.take_cutoff().await;
         let message = live.last_message().await;
-        let (state, blocked, kind) = match &cutoff {
-            Some(AttemptEnd::Limit { .. }) => (
+        let (state, blocked, kind) = match (&cutoff, status) {
+            (Some(AttemptEnd::Limit { .. }), _) => (
                 TaskState::Paused,
                 Some("Its model hit a usage limit.".to_owned()),
                 EventKind::UsageLimit,
             ),
-            _ => (TaskState::Reported, None, EventKind::TurnEnded),
+            (None, TurnStatus::Completed) => (TaskState::Reported, None, EventKind::TurnEnded),
+            (_, TurnStatus::Interrupted) => (TaskState::Reported, None, EventKind::Interrupted),
+            _ => (TaskState::Reported, None, EventKind::Failed),
         };
         let error = match &cutoff {
             Some(AttemptEnd::Error { message, .. }) => Some(message.clone()),
@@ -590,40 +535,46 @@ impl SessionManager {
                 });
                 event.resets_at_ms = limit.resets_at_ms;
             }
-            _ => {
-                event.message = error.or(message);
-                event.status = Some(match status {
-                    TurnStatus::Completed if cutoff.is_none() => TurnEnd::Completed,
-                    TurnStatus::Interrupted => TurnEnd::Interrupted,
-                    _ => TurnEnd::Failed,
-                });
-            }
+            _ => event.message = error.or(message),
         }
-        self.worker_events
-            .push(&task.conversation_id, &task.id, None, event);
+        self.worker_event(&task.conversation_id, &task.id, None, event);
     }
 
     /// A plain worker's CLI asks permission: the card under Waiting on you is open, and its
     /// session hears it.
     pub(super) fn plain_needs_input(&self, live: &TaskLive, card: &Approval, what: &str) {
-        let mut event = event(&live.id, EventKind::NeedsInput);
+        self.plain_asks(&live.conversation_id, &live.id, Some(card.id.clone()), what);
+    }
+
+    /// A plain worker asks something of the user (`card`: its question's card), or one of its
+    /// MCP servers wants a sign-in: its session hears it.
+    pub(super) fn plain_asks(
+        &self,
+        conversation: &ConversationId,
+        task: &TaskId,
+        card: Option<CardId>,
+        what: &str,
+    ) {
+        let mut event = event(task, EventKind::NeedsInput);
         event.asks = Some(what.to_owned());
-        self.worker_events.push(
-            &live.conversation_id,
-            &live.id,
-            Some(card.id.clone()),
-            event,
-        );
+        self.worker_event(conversation, task, card, event);
     }
 
     /// A plain worker's CLI compacted its context.
     pub(super) fn plain_fresh_context(&self, live: &TaskLive) {
-        self.worker_events.push(
+        self.worker_event(
             &live.conversation_id,
             &live.id,
             None,
             event(&live.id, EventKind::FreshContext),
         );
+    }
+
+    /// A plain worker's CLI was working when Brigadier quit: its session hears it stopped.
+    pub(super) fn plain_cut_off(&self, task: &Task) {
+        let mut event = event(&task.id, EventKind::Interrupted);
+        event.message = Some("Brigadier restarted while it worked.".into());
+        self.worker_event(&task.conversation_id, &task.id, None, event);
     }
 
     /// A plain worker's CLI ended on its own: the worker is gone, and its session hears why.
@@ -648,8 +599,7 @@ impl SessionManager {
         // nothing queued ends empty and would miss it.
         let mut event = event(&task.id, EventKind::Gone);
         event.message = Some(reason);
-        self.worker_events
-            .push(&task.conversation_id, &task.id, None, event);
+        self.worker_event(&task.conversation_id, &task.id, None, event);
         self.dispose_task(task, TaskState::Failed).await;
     }
 
@@ -750,15 +700,19 @@ impl SessionManager {
     }
 
     /// `brigadier wait`: the caller's workers' next events, as soon as there is one, or none
-    /// when the time is up or no worker waited for can send one any more.
+    /// when the time is up or no worker waited for can send one any more. The events are held
+    /// for it until its `brigadier` printed them ([`HeldEvents`]).
     pub(super) async fn cli_wait(
         &self,
         caller: &CliCaller,
         ids: &[String],
         timeout_secs: Option<u32>,
-    ) -> Result<CliReply> {
+    ) -> Result<(CliReply, Option<HeldEvents>)> {
         if caller.task_id.is_some() {
-            return Ok(refused("refused: a worker has no workers to wait for"));
+            return Ok((
+                refused("refused: a worker has no workers to wait for"),
+                None,
+            ));
         }
         let mut tasks = HashSet::new();
         for id in ids {
@@ -766,63 +720,56 @@ impl SessionManager {
                 Ok(task) => {
                     tasks.insert(task.id);
                 }
-                Err(reply) => return Ok(reply),
+                Err(reply) => return Ok((reply, None)),
             }
         }
+        let parent = &caller.conversation_id;
         let deadline = timeout_secs
             .map(|secs| tokio::time::Instant::now() + Duration::from_secs(u64::from(secs)));
-        loop {
+        let holder = self.worker_events.wait_holder();
+        let waiter = self.events_waiter(parent);
+        let ended = loop {
             let added = self.worker_events.added.notified();
             tokio::pin!(added);
             added.as_mut().enable();
-            let board = self.core.board(&caller.conversation_id).await?;
-            let events: Vec<WaitEvent> = self
-                .worker_events
-                .take(&caller.conversation_id, &tasks)
-                .into_iter()
-                // A prompt answered meanwhile, on its card, asks nothing any more.
-                .filter(|pending| {
-                    pending.card.as_ref().is_none_or(|card| {
-                        board
-                            .approvals
-                            .get(card)
-                            .is_some_and(|card| card.state == CardState::Pending)
-                    })
-                })
-                .map(|pending| pending.event)
-                .collect();
+            // Held and answered with no await in between: a wait cut off takes nothing.
+            let events = self.hold_for_wait(parent, &tasks, &holder).await?;
             if !events.is_empty() {
-                return Ok(CliReply::ok(&WaitOutput {
-                    events,
-                    timed_out: false,
-                }));
+                return Ok((
+                    CliReply::ok(&WaitOutput {
+                        events,
+                        timed_out: false,
+                    }),
+                    Some(self.held_events(parent, holder)),
+                ));
             }
+            let board = self.core.board(parent).await?;
             let can_send = board.tasks.values().any(|task| {
                 task.plain.as_ref().is_some_and(|plain| !plain.closed)
                     && !task.state.is_final()
                     && (tasks.is_empty() || tasks.contains(&task.id))
             });
             if !can_send {
-                return Ok(CliReply::ok(&WaitOutput {
-                    events: Vec::new(),
-                    timed_out: false,
-                }));
+                break false;
             }
             match deadline {
                 Some(deadline) => {
                     tokio::select! {
                         () = added => {}
-                        () = tokio::time::sleep_until(deadline) => {
-                            return Ok(CliReply::ok(&WaitOutput {
-                                events: Vec::new(),
-                                timed_out: true,
-                            }));
-                        }
+                        () = tokio::time::sleep_until(deadline) => break true,
                     }
                 }
                 None => added.await,
             }
-        }
+        };
+        drop(waiter);
+        Ok((
+            CliReply::ok(&WaitOutput {
+                events: Vec::new(),
+                timed_out: ended,
+            }),
+            None,
+        ))
     }
 
     /// `brigadier close`: stops one of the caller's workers for good. Unfinished changes are
@@ -852,7 +799,7 @@ impl SessionManager {
                 }
             })
             .await?;
-            self.worker_events.forget(&task.id);
+            self.forget_worker_events(&task.conversation_id, &task.id);
         }
         Ok(CliReply::ok(&CloseOutput {
             id: short(&task.id.0),
@@ -878,23 +825,5 @@ mod tests {
             "{title}"
         );
         assert_eq!(title_of("   "), "Worker");
-    }
-
-    #[test]
-    fn events_are_taken_once_and_only_by_their_session() {
-        let events = WorkerEvents::default();
-        let (mine, other) = (ConversationId("c1".into()), ConversationId("c2".into()));
-        let (a, b) = (TaskId("t-aaaaaaaa".into()), TaskId("t-bbbbbbbb".into()));
-        events.push(&mine, &a, None, event(&a, EventKind::TurnEnded));
-        events.push(&mine, &b, None, event(&b, EventKind::NeedsInput));
-        events.push(&other, &b, None, event(&b, EventKind::Gone));
-        let only_a: HashSet<TaskId> = [a.clone()].into();
-        assert_eq!(events.take(&mine, &only_a).len(), 1);
-        assert!(events.take(&mine, &only_a).is_empty(), "taken once");
-        let all = events.take(&mine, &HashSet::new());
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].event.event, EventKind::NeedsInput);
-        events.forget(&b);
-        assert!(events.take(&other, &HashSet::new()).is_empty());
     }
 }

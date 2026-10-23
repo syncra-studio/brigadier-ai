@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use std::time::Duration;
 
-use brigadier_cli::protocol::{CliCall, CliReply, ErrorCode};
+use brigadier_cli::protocol::{CliCall, CliReply, ErrorCode, Heard};
 use brigadier_core::manager::{HookOutput, OUTPUT_MAX_BYTES};
 use brigadier_core::tools::{Role, ToolHost};
 use brigadier_ipc::protocol::{HookOutput as HookFrame, HookReply};
@@ -120,15 +120,15 @@ pub async fn serve_cli(
             return;
         }
     };
-    let reply = match serde_json::from_value::<CliCall>(call) {
+    let (reply, held) = match serde_json::from_value::<CliCall>(call) {
         Ok(call) => {
             tokio::select! {
-                reply = brigadier_core::heap(|| daemon.sessions.cli_call(&caller, call)) => reply,
+                answer = brigadier_core::heap(|| daemon.sessions.cli_call_held(&caller, call)) => answer,
                 () = daemon.closing.cancelled() => {
-                    CliReply::error(ErrorCode::Unreachable, "Brigadier is quitting")
+                    (CliReply::error(ErrorCode::Unreachable, "Brigadier is quitting"), None)
                 }
-                // `brigadier` sends nothing after its call: anything read means it hung up (a
-                // `brigadier wait` stopped), and its call ends unanswered, so a wait takes no
+                // `brigadier` sends nothing before its answer: anything read means it hung up
+                // (a `brigadier wait` stopped), and its call ends unanswered, so a wait takes no
                 // event nobody reads.
                 _ = reader.read::<serde_json::Value>() => {
                     tracing::debug!("a brigadier caller hung up before its answer");
@@ -137,14 +137,29 @@ pub async fn serve_cli(
             }
         }
         // A newer `brigadier` than this app, most likely.
-        Err(err) => CliReply::error(
-            ErrorCode::Version,
-            format!(
-                "Brigadier doesn't know this request ({err}): use the brigadier that came with the app"
+        Err(err) => (
+            CliReply::error(
+                ErrorCode::Version,
+                format!(
+                    "Brigadier doesn't know this request ({err}): use the brigadier that came with the app"
+                ),
             ),
+            None,
         ),
     };
     if let Err(err) = writer.write(&reply).await {
         tracing::debug!(error = %err, "a brigadier answer could not be sent");
     }
+    // A wait's events are heard once its `brigadier` says it printed them; one that ends
+    // before frees them for the next wait, or the net.
+    if let Some(held) = held {
+        let heard = tokio::time::timeout(HEARD_WITHIN, reader.read::<Heard>()).await;
+        match heard {
+            Ok(Ok(Some(Heard { heard: true }))) => daemon.sessions.events_heard(held),
+            _ => daemon.sessions.events_unheard(held),
+        }
+    }
 }
+
+/// How long a `brigadier wait` has to say it printed the events it got.
+const HEARD_WITHIN: Duration = Duration::from_secs(30);

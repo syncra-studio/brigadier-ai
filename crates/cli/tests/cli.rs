@@ -112,6 +112,12 @@ fn stand_in_daemon(
             let call: CliCall = serde_json::from_value(read_frame(&mut stream).unwrap()).unwrap();
             assert_eq!(call.protocol, PROTOCOL);
             write_frame(&mut stream, &answer(&call.request));
+            // A wait says its events were heard once it printed them.
+            if let CliRequest::Wait { .. } = call.request
+                && let Some(heard) = read_frame(&mut stream)
+            {
+                firsts.push(heard);
+            }
         }
         firsts
     })
@@ -336,27 +342,27 @@ fn sample(request: &CliRequest) -> CliReply {
             events: vec![
                 WaitEvent {
                     id: "a1b2c3d4".into(),
+                    event_id: "ev-0000aaaa".into(),
                     event: EventKind::TurnEnded,
                     message: Some("Wrote the file.".into()),
-                    status: Some(TurnEnd::Completed),
                     asks: None,
                     resets_at_ms: None,
                     at_ms: 3,
                 },
                 WaitEvent {
                     id: "e5f6a7b8".into(),
+                    event_id: String::new(),
                     event: EventKind::NeedsInput,
                     message: None,
-                    status: None,
                     asks: Some("rm -rf build".into()),
                     resets_at_ms: None,
                     at_ms: 4,
                 },
                 WaitEvent {
                     id: "e5f6a7b8".into(),
+                    event_id: String::new(),
                     event: EventKind::UsageLimit,
                     message: Some("weekly limit".into()),
-                    status: None,
                     asks: None,
                     resets_at_ms: Some(5),
                     at_ms: 5,
@@ -694,7 +700,7 @@ fn text_output_reads_well() {
     assert!(local.contains(", in this session's checkout, "), "{local}");
     let wait = stdout(&brigadier(Some(&dir.0), Some(GRANT), &["wait"]));
     assert!(
-        wait.starts_with("a1b2c3d4 turn-ended (completed)\nWrote the file.\n"),
+        wait.starts_with("a1b2c3d4 turn-ended (ev-0000aaaa)\nWrote the file.\n"),
         "{wait}"
     );
     assert!(
@@ -734,7 +740,11 @@ fn text_output_reads_well() {
         &["ask", "--option", "Yes", "--option", "No", "Ship", "it?"],
     ));
     assert_eq!(asked, "Yes\n");
-    daemon.join().unwrap();
+    let heard = daemon.join().unwrap();
+    assert!(
+        heard.contains(&serde_json::json!({"heard": true})),
+        "the wait said its events were heard: {heard:#?}"
+    );
 }
 
 #[test]

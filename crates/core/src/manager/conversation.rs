@@ -3538,7 +3538,26 @@ impl SessionManager {
         if task.is_some() {
             self.workers_changed(id, false);
         }
+        let worker = task;
         let task = task.map(|task| task.0.as_str());
+        // Which of a worker's servers want a sign-in, before and after.
+        let signing = |board: Option<crate::board::Board>| -> HashSet<String> {
+            board
+                .and_then(|board| board.mcp_servers.get(&task.map(str::to_owned)).cloned())
+                .map(|(_, agent)| {
+                    agent
+                        .servers
+                        .into_iter()
+                        .filter(|server| server.status == brigadier_providers::McpStatus::NeedsAuth)
+                        .map(|server| server.name)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let before = match worker {
+            Some(_) => signing(self.core.board(id).await.ok()),
+            None => HashSet::new(),
+        };
         if let Err(err) = self
             .core
             .record_mcp_servers(id, task, provider, update)
@@ -3546,20 +3565,35 @@ impl SessionManager {
         {
             tracing::warn!(conversation = %id, task = ?task, error = %err, "could not record an agent's MCP servers");
         }
+        // A worker's server that newly wants a sign-in is something its parent hears (S29).
+        if let Some(worker) = worker {
+            let mut wanted: Vec<String> = signing(self.core.board(id).await.ok())
+                .difference(&before)
+                .cloned()
+                .collect();
+            wanted.sort();
+            for server in wanted {
+                self.plain_asks(id, worker, None, &format!("sign in to MCP server {server}"));
+            }
+        }
     }
 
     /// A Codex shell command of the thread's started or ended. One that ended after its turn
-    /// (a job of its CLI's) tells the thread, in the request that started it.
+    /// (a job of its CLI's) tells the thread, in the request that started it: Codex starts no
+    /// turn of its own for it, so this is how a background `brigadier wait` wakes its parent
+    /// (S29). `own_shell`: a session's, or a Chat's with its CLI's own shell (S28).
+    #[allow(clippy::too_many_arguments)]
     async fn command_seen(
         &self,
         conv: &Arc<ConvLive>,
+        own_shell: bool,
         item: &str,
         command: &str,
         status: ItemStatus,
         exit: Option<i32>,
         output: Option<&str>,
     ) {
-        if conv.kind != ConversationKind::Session {
+        if !own_shell {
             return;
         }
         let ended = {
@@ -3914,6 +3948,7 @@ impl SessionManager {
                 .await;
                 self.command_seen(
                     conv,
+                    conv.kind == ConversationKind::Session || cli.launch.is_some(),
                     item_id,
                     command,
                     *status,
@@ -4005,9 +4040,16 @@ impl SessionManager {
                     let state = conv.state.lock().await;
                     state.awaiting_start && state.interrupted
                 };
-                let started = {
+                let (started, nets) = {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
+                    // The CLI took the turn: the net's messages in it were heard (S29).
+                    let nets: Vec<String> = state
+                        .in_turn_envelopes
+                        .iter()
+                        .filter(|(envelope, _)| envelope.kind == InjectionKind::WorkerEvents)
+                        .map(|(envelope, _)| envelope.label.clone())
+                        .collect();
                     let own =
                         !state.busy && state.background.as_ref().is_some_and(|jobs| jobs.of(cli));
                     let adopted = match &mut state.background {
@@ -4034,11 +4076,18 @@ impl SessionManager {
                         state.outcomes.remove(&request);
                         state.stopped_open.remove(&request);
                         state.request = Some(request.clone());
-                        Some(Some(request))
+                        (Some(Some(request)), nets)
                     } else {
-                        std::mem::take(&mut state.awaiting_start).then(|| state.request.clone())
+                        (
+                            std::mem::take(&mut state.awaiting_start)
+                                .then(|| state.request.clone()),
+                            nets,
+                        )
                     }
                 };
+                for label in &nets {
+                    self.net_heard(&conv.id, label);
+                }
                 if let Some(request) = started {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
                         .await;
@@ -4279,7 +4328,9 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             // A Codex command still running when its turn ended goes on as its CLI's job.
             let words = std::mem::take(&mut state.command_words);
-            if status == TurnStatus::Completed && conv.kind == ConversationKind::Session {
+            if status == TurnStatus::Completed
+                && (conv.kind == ConversationKind::Session || cli.launch.is_some())
+            {
                 for (item, words) in words {
                     if state.commands.contains(&item) {
                         state.lingering.insert(item, words);
@@ -4374,6 +4425,8 @@ impl SessionManager {
                 unshown,
             )
         };
+        // Its workers' events no wait took reach it now, once (S29).
+        self.net_soon(&conv.id);
         if let Some(text) = unshown {
             self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, &text)
                 .await;

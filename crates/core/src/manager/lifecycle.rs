@@ -132,6 +132,10 @@ impl SessionManager {
             crate::heap(|| self.recover_seam(&conversation.id)).await;
             self.mark_cut_off_turn(&conversation.id).await;
             self.recover_unheard_envelopes(&conversation.id).await;
+            // What its workers did that it hadn't heard yet (S29).
+            if conversation.lifecycle != Lifecycle::Archived {
+                self.recover_worker_events(&conversation.id).await;
+            }
             // Merge cards are retired: open ones close, and no card answer merges.
             if conversation.lifecycle != Lifecycle::Archived {
                 self.retire_merge_cards(&conversation.id).await;
@@ -168,6 +172,16 @@ impl SessionManager {
                                     Some("Brigadier restarted while it worked.".into());
                             })
                             .await;
+                        // Its parent hears it stopped (S29), unless it was already between
+                        // turns.
+                        if task.plain.is_some()
+                            && matches!(
+                                task.state,
+                                TaskState::Running | TaskState::Starting | TaskState::Blocked
+                            )
+                        {
+                            self.plain_cut_off(&task);
+                        }
                         continue;
                     }
                     // A read task that reported is done.

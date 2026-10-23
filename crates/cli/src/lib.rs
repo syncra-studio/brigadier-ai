@@ -99,18 +99,44 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             return fail(ErrorCode::Usage, &message, json, stdout, stderr);
         }
     };
-    let reply = match (client::Caller::from_env(), client::daemon_paths()) {
-        (Err(refused), _) => refused,
-        (_, Err(unreachable)) => unreachable,
+    let answered = match (client::Caller::from_env(), client::daemon_paths()) {
+        (Err(refused), _) => return print(refused, command.name, &args, json, stdout, stderr),
+        (_, Err(unreachable)) => {
+            return print(unreachable, command.name, &args, json, stdout, stderr);
+        }
         (Ok(caller), Ok(paths)) => client::call(&paths, &caller, &client::wrap(request)),
     };
+    let code = print(
+        answered.reply.clone(),
+        command.name,
+        &args,
+        json,
+        stdout,
+        stderr,
+    );
+    // A wait's events count as heard once they are printed.
+    if command.name == "wait" && code == 0 && stdout.flush().is_ok() {
+        answered.heard();
+    }
+    code
+}
+
+/// Prints `reply` to `command`, as text or as JSON; returns the exit code.
+fn print(
+    reply: CliReply,
+    command: &str,
+    args: &args::Parsed,
+    json: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> u8 {
     let output = match reply {
         CliReply::Ok { output } => output,
         CliReply::Error {
             error: CliError { code, message },
         } => return fail(code, &message, json, stdout, stderr),
     };
-    let rendered = match command.name {
+    let rendered = match command {
         "sessions" => present(output, json, render::sessions),
         "models" => present(output, json, render::models),
         "workers" => present(output, json, render::workers),

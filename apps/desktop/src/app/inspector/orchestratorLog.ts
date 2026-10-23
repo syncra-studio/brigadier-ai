@@ -43,6 +43,7 @@ export const KIND_LABELS: Record<InjectionKind, string> = {
   peerMessage: "session message",
   backgroundRun: "background run",
   seam: "hand-off",
+  workerEvents: "worker events",
 };
 
 export function groupOf(kind: InjectionKind): InjectionGroup {
@@ -57,6 +58,7 @@ export function groupOf(kind: InjectionKind): InjectionGroup {
     case "peerMessage":
       return "messages";
     case "report":
+    case "workerEvents":
       return "reports";
     default:
       return "other";

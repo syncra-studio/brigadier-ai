@@ -1,6 +1,8 @@
 //! What `brigadier` and the daemon say to each other, after the connection's first frame
 //! (`ClientFrame::Cli`, which carries the calling session and its grant): one length-prefixed
-//! [`CliCall`], answered by one length-prefixed [`CliReply`], then the connection closes.
+//! [`CliCall`], answered by one length-prefixed [`CliReply`], then the connection closes. A
+//! `wait` that got events says so once it printed them, with one more frame ([`Heard`]): until
+//! then they are only held for it, and a `wait` that ends before frees them again.
 //!
 //! The `--json` output of each subcommand is the [`CliReply::Ok`] output as is, or
 //! `{"error": …}` ([`ErrorOutput`]). Their shapes are the checked-in schemas
@@ -10,7 +12,13 @@ use serde::{Deserialize, Serialize};
 
 /// The version of this protocol. The daemon refuses a call of another version, saying which
 /// it speaks.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
+
+/// What `brigadier wait` sends once it printed the events of its answer: they were heard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Heard {
+    pub heard: bool,
+}
 
 /// The calling session's id, set by Brigadier in each session's environment.
 pub const SESSION_ENV: &str = "BRIGADIER_SESSION";
@@ -661,14 +669,16 @@ pub struct WaitOutput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WaitEvent {
+    /// The worker's id.
     pub id: String,
+    /// The event's own id: the same each time it is shown, and heard once.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub event_id: String,
     pub event: EventKind,
-    /// A turn's last message; a usage limit's or a gone worker's reason.
+    /// A turn's last message; why it failed, stopped or is gone; a usage limit; what runs
+    /// while it is quiet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// A turn's end: completed, interrupted or failed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<TurnEnd>,
     /// What a permission prompt asks to do: the command, or the tool and its target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asks: Option<String>,
@@ -683,14 +693,21 @@ pub struct WaitEvent {
 pub enum EventKind {
     /// Its turn ended, with its last message.
     TurnEnded,
-    /// Its CLI asks permission: `brigadier send <id> --allow|--deny` answers.
+    /// Its CLI asks permission (`brigadier send <id> --allow|--deny` answers), asks a
+    /// question, or one of its MCP servers wants the user to sign in.
     NeedsInput,
-    /// Its CLI ended, or it was closed.
+    /// Its turn ended on an error.
+    Failed,
+    /// Its turn was stopped (by the user, or by Brigadier quitting while it worked).
+    Interrupted,
+    /// Its CLI ended.
     Gone,
     /// Its model hit a usage limit.
     UsageLimit,
     /// Its CLI compacted its context.
     FreshContext,
+    /// Its CLI said nothing for 20 minutes while it worked.
+    Quiet,
 }
 
 impl EventKind {
@@ -698,19 +715,14 @@ impl EventKind {
         match self {
             Self::TurnEnded => "turn-ended",
             Self::NeedsInput => "needs-input",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
             Self::Gone => "gone",
             Self::UsageLimit => "usage-limit",
             Self::FreshContext => "fresh-context",
+            Self::Quiet => "quiet",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TurnEnd {
-    Completed,
-    Interrupted,
-    Failed,
 }
 
 /// `brigadier close`.

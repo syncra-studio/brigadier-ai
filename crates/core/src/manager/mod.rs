@@ -102,6 +102,7 @@ mod usage_view;
 mod user_rebase;
 pub mod warm;
 mod watchdog;
+mod worker_events;
 mod worker_rows;
 mod workers;
 pub mod workspace;
@@ -134,6 +135,7 @@ pub use side_chat::BrowserPage;
 pub use terminal_host::{HostedTerminal, TerminalHost, TerminalSnapshot};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES};
 pub use uninstall::TearDown;
+pub use worker_events::HeldEvents;
 
 use self::cards::Waiters;
 use self::conversation::ConvLive;
@@ -163,8 +165,10 @@ pub struct SessionManager {
     mcp_auth: Arc<mcp_auth::McpAuth>,
     convs: Mutex<HashMap<ConversationId, Arc<ConvLive>>>,
     tasks: Mutex<HashMap<TaskId, Arc<TaskLive>>>,
-    /// What plain workers' CLIs did that their sessions' `brigadier wait` hasn't taken yet.
-    worker_events: plain_workers::WorkerEvents,
+    /// What plain workers' CLIs did that their parents haven't heard yet, kept (S29).
+    worker_events: worker_events::WorkerEvents,
+    /// When each working worker's CLI last said anything, for its `quiet` event.
+    worker_quiet: Arc<worker_events::Quiet>,
     /// Its sessions' worker rows: their CLIs and git (S14).
     worker_rows: worker_rows::WorkerRows,
     /// The cards a `brigadier ask` waits on: their answers go back to it, not into the thread.
@@ -371,6 +375,7 @@ impl SessionManager {
             convs: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
             worker_events: Default::default(),
+            worker_quiet: Default::default(),
             worker_rows: Default::default(),
             cli_asks: Default::default(),
             session_worktrees: tokio::sync::Mutex::new(()),
@@ -435,6 +440,7 @@ impl SessionManager {
         manager.start_hibernation_timer();
         manager.start_computer_watchdog();
         manager.retry_waiting_on_provider_checks();
+        manager.start_quiet_timer();
         Ok(manager)
     }
 

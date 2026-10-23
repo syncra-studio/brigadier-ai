@@ -1339,6 +1339,7 @@ impl SessionManager {
                     Some(event @ (ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. })) => {
                         live.note_event(&cli, &event).await;
                         self.note_worker_cli(&live.conversation_id, &live.id, &event);
+                        self.watch_worker(&live.conversation_id, &live.id, &event);
                     }
                     // Kept on the conversation's board while the CLI runs, never in its log.
                     Some(ProviderEvent::McpServers { servers, at_start }) => {
@@ -1353,12 +1354,14 @@ impl SessionManager {
                     Some(event) if is_delta(&event) => {
                         live.note_event(&cli, &event).await;
                         self.note_worker_cli(&live.conversation_id, &live.id, &event);
+                        self.watch_worker(&live.conversation_id, &live.id, &event);
                         merge_delta(&mut deltas, event);
                         deadline.get_or_insert_with(|| tokio::time::Instant::now() + DELTA_WINDOW);
                     }
                     Some(mut event) => {
                         live.note_event(&cli, &event).await;
                         self.note_worker_cli(&live.conversation_id, &live.id, &event);
+                        self.watch_worker(&live.conversation_id, &live.id, &event);
                         deadline = None;
                         self.record_worker_events(&live.id, std::mem::take(&mut deltas)).await;
                         // A CLI that starts (again) tells its MCP servers anew.

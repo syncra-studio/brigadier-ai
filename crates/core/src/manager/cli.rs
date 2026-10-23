@@ -21,6 +21,7 @@ use brigadier_providers::session_file::FileEntry;
 use brigadier_providers::{ProviderEvent, ProviderKind};
 
 use super::SessionManager;
+use super::worker_events::HeldEvents;
 use crate::model::{Conversation, ConversationId, Environment, Lifecycle, Setup, TaskId};
 use crate::tools::Role;
 use crate::work::{ConversationActivity, DiffStat, RunState, Task, TaskState};
@@ -325,8 +326,39 @@ impl SessionManager {
         }
     }
 
-    /// Answers one `brigadier` call of `caller`.
+    /// Answers one `brigadier` call of `caller`; a `wait`'s events count as heard at once.
     pub async fn cli_call(&self, caller: &CliCaller, call: CliCall) -> CliReply {
+        let (reply, held) = self.cli_call_held(caller, call).await;
+        if let Some(held) = held {
+            self.events_heard(held);
+        }
+        reply
+    }
+
+    /// Answers one `brigadier` call of `caller`. The events a `wait` got come with their hold:
+    /// [`Self::events_heard`] once its `brigadier` printed them, else
+    /// [`Self::events_unheard`].
+    pub async fn cli_call_held(
+        &self,
+        caller: &CliCaller,
+        call: CliCall,
+    ) -> (CliReply, Option<HeldEvents>) {
+        if let CliRequest::Wait { ids, timeout_secs } = &call.request
+            && call.protocol == cli::PROTOCOL
+            && !matches!(
+                self.grants.resolve(&caller.grant),
+                Some(Role::TabChat { .. })
+            )
+        {
+            return match self.cli_wait(caller, ids, *timeout_secs).await {
+                Ok(answer) => answer,
+                Err(err) => (failed(err), None),
+            };
+        }
+        (self.cli_answer(caller, call).await, None)
+    }
+
+    async fn cli_answer(&self, caller: &CliCaller, call: CliCall) -> CliReply {
         if call.protocol != cli::PROTOCOL {
             return CliReply::error(
                 ErrorCode::Version,
@@ -373,9 +405,15 @@ impl SessionManager {
             CliRequest::Read { id, last, screen } => self.cli_read(caller, &id, last, screen).await,
             CliRequest::Start(start) => self.cli_start(caller, *start).await,
             CliRequest::Send { id, text, answer } => self.cli_send(caller, &id, text, answer).await,
-            CliRequest::Wait { ids, timeout_secs } => {
-                self.cli_wait(caller, &ids, timeout_secs).await
-            }
+            CliRequest::Wait { ids, timeout_secs } => self
+                .cli_wait(caller, &ids, timeout_secs)
+                .await
+                .map(|(reply, held)| {
+                    if let Some(held) = held {
+                        self.events_heard(held);
+                    }
+                    reply
+                }),
             CliRequest::Close { id } => self.cli_close(caller, &id).await,
             CliRequest::Tool { tool, action, args } => {
                 Ok(self.cli_tool(caller, tool, &action, args).await)

@@ -1319,6 +1319,23 @@ the how is proposed unless tagged. Steps on disjoint files carry ∥.
   - A flow test: an event survives a daemon restart and is delivered once after it.
   - The Codex probe is written up in the step's report; a live dev check on each CLI shows a parent woken by
     a finished worker.
+- **Probe (10-23), as built:**
+  - Claude Code 2.1.309 (`-p`, stream-json in and out): an idle session **is** re-invoked. Its turn ended at
+    6.1 s; the background Bash task ended at 29.8 s; Claude sent `task_updated` (completed), `task_notification`
+    (with the output file), `background_tasks_changed []`, a new `init`, then a new turn and `result` at
+    31.8 s.
+  - Codex 0.163.0 (`app-server`): an idle thread **is not** re-invoked. Its turn completed at 8.6 s; the
+    background command's `item/completed` came at 30.6 s, and no `turn/started` followed through 120 s. So
+    Brigadier's lingering-command message (`[your background command … finished after your turn]`) starts
+    the turn, now for a Chat as well as a session. The skill tells both CLIs the same: keep `wait` running in
+    the background.
+  - Each event has an id (`ev-…`) and is held by one holder (a `wait`, or the net's message `wn-…`) until
+    heard: a wait's hold is done once its `brigadier` printed the events and said so (`PROTOCOL` 2's `Heard`
+    frame; a client that hangs up first frees them), the net's once the parent's CLI took the turn. After a
+    restart wait holds are freed, and a net hold is done if the parent's own CLI session file holds the
+    message, else freed. The net waits 1.5 s (O1's ≤ 2 s) and sends nothing while a `wait` runs or the parent
+    works. `failed` and `interrupted` are event kinds (no `status` field); `quiet` is env-settable
+    (`BRIGADIER_WORKER_QUIET_SECS`) and never fires while the worker waits on a permission prompt.
 
 **S30. Sessions message each other and read every project (w95 item 12).** Opus.
 (user, 2026-10-23: "Sessions should be able to message eachother when asked")

@@ -31,7 +31,7 @@ fn with_session_files() -> Options {
 pub(super) type Answers = Arc<Mutex<HashMap<String, Value>>>;
 
 /// The id `brigadier` shows for a full id.
-fn short(id: &str) -> String {
+pub(super) fn short(id: &str) -> String {
     id[id.len() - 8..].to_owned()
 }
 
@@ -549,7 +549,7 @@ fn send(id: &str, text: Option<&str>, answer: Option<Answer>) -> CliRequest {
     }
 }
 
-fn wait(ids: &[&str], timeout_secs: Option<u32>) -> CliRequest {
+pub(super) fn wait(ids: &[&str], timeout_secs: Option<u32>) -> CliRequest {
     CliRequest::Wait {
         ids: ids.iter().map(|id| (*id).to_owned()).collect(),
         timeout_secs,
@@ -622,8 +622,12 @@ fn starting(answers: Answers) -> Script {
             }
             if !turn.input.contains("Start them.") {
                 let mut answers = answers.lock().unwrap();
-                let other = answers.get("other thread turns").and_then(Value::as_u64);
-                answers.insert("other thread turns".into(), json!(other.unwrap_or(0) + 1));
+                let mut other = answers
+                    .get("other thread turns")
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
+                other.as_array_mut().unwrap().push(json!(turn.input));
+                answers.insert("other thread turns".into(), other);
                 return Reply::text("Noted.");
             }
             let a = brigadier(
@@ -898,7 +902,12 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     };
     let a_end = of(&short(&a.id.0));
     assert_eq!(a_end["event"], "turn-ended");
-    assert_eq!(a_end["status"], "completed");
+    assert!(
+        a_end["eventId"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("ev-")),
+        "{a_end:#}"
+    );
     assert_eq!(a_end["message"], "Counted: 1 2 3. Heard: And stop.");
     let asks = of(&short(&b.id.0));
     assert_eq!(asks["event"], "needs-input");
@@ -973,8 +982,15 @@ async fn start_send_wait_and_close_a_sessions_own_plain_workers() {
     assert_eq!(answers["wait idle"]["timedOut"], true);
     assert_eq!(answers["wait idle"]["events"], json!([]));
 
-    // Nothing of theirs was pushed into the thread: it heard them only through `wait`.
-    assert_eq!(answers.get("other thread turns"), None);
+    // What `wait` took was not sent again; the one event no wait took (Docs's worker said hi)
+    // reached Docs's thread once, from the safety net (S29).
+    let others = answers["other thread turns"].as_array().unwrap();
+    assert_eq!(others.len(), 1, "{others:#?}");
+    let net = others[0].as_str().unwrap();
+    assert!(
+        net.contains("[worker events wn-") && net.contains("finished · Hi."),
+        "{net}"
+    );
     flow.stop().await;
 }
 

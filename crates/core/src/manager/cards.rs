@@ -395,6 +395,11 @@ impl SessionManager {
             )
             .await?;
         self.settle_requests(conversation_id).await;
+        // A worker's question is something its parent hears (S29).
+        if let Some(task) = &question.task_id {
+            let what = question.text.lines().next().unwrap_or_default();
+            self.plain_asks(conversation_id, task, Some(question.id.clone()), what);
+        }
         Ok((question, rx))
     }
 

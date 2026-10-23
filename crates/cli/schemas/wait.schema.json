@@ -25,30 +25,29 @@
           "id": {
             "type": "string"
           },
+          "eventId": {
+            "type": "string",
+            "description": "The event's own id: the same each time it is shown, and heard once."
+          },
           "event": {
             "enum": [
               "turn-ended",
               "needs-input",
+              "failed",
+              "interrupted",
               "gone",
               "usage-limit",
-              "fresh-context"
+              "fresh-context",
+              "quiet"
             ]
-          },
-          "status": {
-            "enum": [
-              "completed",
-              "interrupted",
-              "failed"
-            ],
-            "description": "A turn's end."
           },
           "message": {
             "type": "string",
-            "description": "A turn's last message; a usage limit's or a gone worker's reason."
+            "description": "A turn's last message; why it failed, stopped or is gone; a usage limit; what runs while it is quiet."
           },
           "asks": {
             "type": "string",
-            "description": "What a permission prompt asks to do."
+            "description": "What a permission prompt, a question or a sign-in asks."
           },
           "resetsAtMs": {
             "type": "integer"

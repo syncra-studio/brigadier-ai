@@ -257,8 +257,8 @@ pub fn start(output: &StartOutput) -> String {
         format!("{whose} \"{}\" picked {picked}.\n", row.work)
     });
     format!(
-        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}`brigadier wait {}` \
-         hears when its turn ends.\n",
+        "{}\nStarted worker {} ({}, {}{}), {place}, permission {}.\n{row}Keep `brigadier wait` \
+         running in the background: it returns with its events and wakes you.\n",
         worker.id,
         worker.number,
         worker.agent.word(),
@@ -268,7 +268,6 @@ pub fn start(output: &StartOutput) -> String {
             .as_deref()
             .map_or(String::new(), |effort| format!(", {effort} effort")),
         output.permission.word(),
-        worker.id,
     )
 }
 
@@ -295,13 +294,8 @@ pub fn wait(output: &WaitOutput) -> String {
             out.push('\n');
         }
         let mut head = format!("{} {}", event.id, event.event.word());
-        if let Some(status) = event.status {
-            let word = match status {
-                crate::protocol::TurnEnd::Completed => "completed",
-                crate::protocol::TurnEnd::Interrupted => "interrupted",
-                crate::protocol::TurnEnd::Failed => "failed",
-            };
-            head.push_str(&format!(" ({word})"));
+        if !event.event_id.is_empty() {
+            head.push_str(&format!(" ({})", event.event_id));
         }
         out.push_str(&head);
         out.push('\n');
