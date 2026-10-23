@@ -45,6 +45,25 @@ advice picks them. The worker's start receipt and transcript models are recorded
 identifiers are recorded from native transcripts. Runs execute sequentially in task/run/arm
 order; this avoids competing arms on a shared host, but short-task variance remains substantial.
 
+Two opt-in cache experiments change Claude startup and are report only:
+`--claude-flag-exclude-dynamic` passes `--exclude-dynamic-system-prompt-sections` to plain
+Claude and to Brigadier parents and workers. It moves cwd/environment/memory/git sections into
+the first user message, allowing more of the system prefix to be shared across directories.
+`--worker-cache-ttl 5m` (or `1h`) sets `CLAUDE_CODE_PROMPT_CACHE_TTL` for Claude workers only;
+parents keep the CLI's default or inherited TTL. Both options are off by default; Codex is
+unaffected. The isolated daemon selects a bench-only Claude launcher through `agentPaths`;
+no provider or nightly behavior changes. JSON and Markdown record the requested options;
+wrapped runs also record `claude_launches` with the actual per-role overrides. Confirm TTLs
+from native `usage.cache_creation` in `--keep-transcripts`, since settings or other environment
+overrides may affect the CLI. These require a CLI supporting the flag and TTL override
+(TTL requires v2.1.242+); see [Claude's CLI reference](https://code.claude.com/docs/en/cli-reference)
+and [prompt caching](https://code.claude.com/docs/en/prompt-caching).
+
+```sh
+tools/bench/run.sh --arms W --runs 1 --worker-model auto \
+  --claude-flag-exclude-dynamic --worker-cache-ttl 5m
+```
+
 Each run creates a dependency-free ESM repository in its own temporary directory:
 
 | Task | Change | Hidden grader |
