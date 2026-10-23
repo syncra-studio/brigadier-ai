@@ -2,12 +2,16 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use brigadier_sandbox::removal::{self, Identity};
 
 use super::files;
 use crate::{Artifact, Error, Ledger, Result};
+
+/// Linux stamps a new directory from the kernel's coarse clock, which trails
+/// `SystemTime::now()` by up to a tick: one made just after the watch began can read as older.
+const CLOCK_SLACK: Duration = Duration::from_secs(1);
 
 pub(super) struct Watch {
     root: PathBuf,
@@ -27,7 +31,9 @@ impl Watch {
         Some(Self {
             root: config.join("projects"),
             path,
-            since: SystemTime::now(),
+            since: SystemTime::now()
+                .checked_sub(CLOCK_SLACK)
+                .unwrap_or(SystemTime::UNIX_EPOCH),
             project_absent: absent(&project),
         })
     }
@@ -151,7 +157,7 @@ mod tests {
         std::fs::create_dir_all(fixture.memory()).unwrap();
         assert!(watch.artifact().is_some());
         assert!(Watch::start(&fixture.0, Path::new("/repo")).is_none());
-        watch.since = SystemTime::now() + std::time::Duration::from_secs(60);
+        watch.since = SystemTime::now() + Duration::from_secs(60);
         assert!(
             watch.artifact().is_none(),
             "a directory older than this CLI stays"
