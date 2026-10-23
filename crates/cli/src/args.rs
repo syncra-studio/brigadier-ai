@@ -401,6 +401,13 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
             timeout_secs: number("timeout")?,
         },
         "close" => CliRequest::Close { id: id() },
+        "continue-on" => CliRequest::ContinueOn {
+            agent: match args.one("agent") {
+                Some("codex") => Agent::Codex,
+                _ => Agent::Claude,
+            },
+            after_turn: args.switch("after-turn"),
+        },
         "ask" => {
             let question = args.text("question");
             if question.trim().is_empty() {
@@ -929,6 +936,14 @@ mod tests {
             run(&["close", "ab12"]).0,
             CliRequest::Close { id: "ab12".into() }
         );
+        assert_eq!(
+            run(&["continue-on", "codex", "--after-turn"]).0,
+            CliRequest::ContinueOn {
+                agent: Agent::Codex,
+                after_turn: true,
+            }
+        );
+        assert!(parse(["continue-on", "gemini"]).is_err());
         assert!(fails(&["start", "--local", "--worktree", "go"]).contains("don't go together"));
         assert!(fails(&["start", "--local", "--base", "main", "go"]).contains("--base is for"));
         assert!(fails(&["start", "--skill", "a", "go"]).contains("goes with --lean"));

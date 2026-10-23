@@ -101,6 +101,7 @@ export type { ConnectStep } from "./ConnectStep";
 export type { ConnectView } from "./ConnectView";
 export type { ContextInjection } from "./ContextInjection";
 export type { ContextUsage } from "./ContextUsage";
+export type { ContinueWhen } from "./ContinueWhen";
 export type { ConventionsExport } from "./ConventionsExport";
 export type { Conversation } from "./Conversation";
 export type { ConversationActivity } from "./ConversationActivity";

@@ -18,6 +18,7 @@ import type { ForkPlace } from "./ForkPlace";
 import type { GuidanceRow } from "./GuidanceRow";
 import type { InjectedError } from "./InjectedError";
 import type { Mention } from "./Mention";
+import type { ModelChoice } from "./ModelChoice";
 import type { ModelRule } from "./ModelRule";
 import type { NodeFilter } from "./NodeFilter";
 import type { PageContent } from "./PageContent";
@@ -82,7 +83,7 @@ audio: string, } | { "method": "finishDictation", dictationId: string, } | { "me
 /**
  * A message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */
-subject: string, rating: Rating | null, } | { "method": "getSessionDiff", id: ConversationId, } | { "method": "getWorkerDiffs", conversationId: ConversationId, } | { "method": "createConversation", kind: ConversationKind, projectId: ProjectId | null, title: string | null, setup: SetupRequest | null, } | { "method": "startSession", from: ConversationId, setup: SetupRequest | null, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, } | { "method": "forkConversation", conversationId: ConversationId, messageId: string, place: ForkPlace, } | { "method": "updateSetup", id: ConversationId, setup: Setup, } | { "method": "getConversation", id: ConversationId, limit: number, } | { "method": "sendMessage", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, steer: boolean, 
+subject: string, rating: Rating | null, } | { "method": "getSessionDiff", id: ConversationId, } | { "method": "getWorkerDiffs", conversationId: ConversationId, } | { "method": "createConversation", kind: ConversationKind, projectId: ProjectId | null, title: string | null, setup: SetupRequest | null, } | { "method": "startSession", from: ConversationId, setup: SetupRequest | null, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, } | { "method": "forkConversation", conversationId: ConversationId, messageId: string, place: ForkPlace, } | { "method": "updateSetup", id: ConversationId, setup: Setup, } | { "method": "continueOn", id: ConversationId, provider: ProviderKind, model: ModelChoice | null, } | { "method": "getConversation", id: ConversationId, limit: number, } | { "method": "sendMessage", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, steer: boolean, 
 /**
  * Queue it at this slot whenever it would wait (a turn runs, an answer works, or the
  * queue is paused): a queued message pulled into the composer to edit, or a deleted

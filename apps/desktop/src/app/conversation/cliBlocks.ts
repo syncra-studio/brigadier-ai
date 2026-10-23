@@ -514,7 +514,7 @@ export function cliBlocks(view: ThreadView, conversationId: string, board?: Boar
     const next = seam.at === null ? blocks.length : blocks.findIndex((each) => each.key === seam.at);
     const before = blocks[next < 0 ? -1 : next - 1];
     if (next < 0 || !before) continue;
-    before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death });
+    before.seams.push({ n: seam.n, note: seam.note, start: seam.start, death: seam.death, movedTo: seam.movedTo });
   }
   return blocks;
 }

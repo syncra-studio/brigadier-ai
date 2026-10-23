@@ -146,6 +146,7 @@ fn print(
         "send" => present(output, json, render::send),
         "wait" => present(output, json, render::wait),
         "close" => present(output, json, render::close),
+        "continue-on" => present(output, json, render::continue_on),
         "ask" => present(output, json, render::ask),
         "why" => present(output, json, render::why),
         "ledger" => present(output, json, |output: &protocol::LedgerOutput| {

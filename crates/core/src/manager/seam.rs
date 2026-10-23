@@ -88,7 +88,7 @@ impl SeamConfig {
 }
 
 /// `record/seam.json`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SeamFile {
     /// The CLI generation now: 1 for the session's first, one more at each seam. Seam `n`
@@ -98,6 +98,10 @@ pub(crate) struct SeamFile {
     /// Every completed seam, oldest first.
     #[serde(default)]
     pub seams: Vec<Seam>,
+    /// The other CLI the session was asked to continue on (S38c, D46): the seam comes once no
+    /// turn runs, and its successor starts there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moving: Option<crate::model::ModelChoice>,
 }
 
 impl Default for SeamFile {
@@ -106,6 +110,7 @@ impl Default for SeamFile {
             generation: 1,
             phase: Phase::Live,
             seams: Vec::new(),
+            moving: None,
         }
     }
 }
@@ -159,6 +164,9 @@ pub(crate) struct SeamEnd {
     /// move to another agent, S38): its first message is no bubble of the user's twice.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shown: Vec<String>,
+    /// The other CLI its successor starts on, as asked (S38c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<ProviderKind>,
 }
 
 /// A completed seam.
@@ -650,6 +658,7 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
             note: existing(note_path(record, seam.n)),
             start: existing(PathBuf::from(&seam.start)),
             death: seam.end.death.clone().filter(|_| seam.note.is_none()),
+            moved_to: seam.end.moved_to,
         })
         .collect();
     match &file.phase {
@@ -663,6 +672,7 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
             note: None,
             start: None,
             death: None,
+            moved_to: None,
         }),
         Phase::Closed { end } | Phase::Starting { end, .. } => marks.push(SeamMark {
             n: file.generation,
@@ -673,6 +683,7 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
             note: existing(note_path(record, file.generation)),
             start: None,
             death: end.death.clone(),
+            moved_to: end.moved_to,
         }),
     }
     // Each nudge goes with the next seam: the one its successor starts after.

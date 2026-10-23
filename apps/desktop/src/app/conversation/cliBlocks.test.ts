@@ -399,7 +399,7 @@ test("a call's kind, detail and exit read as the engine's", () => {
 });
 
 test("a seam: Brigadier's message is its line in the turn, and the divider stands before the successor's first turn", () => {
-  const seam = { n: 1, open: false, at: "u3", carried: false, nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null };
+  const seam = { n: 1, open: false, at: "u3", carried: false, nudge: "n1", note: "/s/record/handoff/1.md", start: "/s/record/handoff/1-start.md", death: null, movedTo: null };
   const steered: ThreadView = {
     entries: [
       user("u1", "Grow", 1000),
@@ -414,7 +414,7 @@ test("a seam: Brigadier's message is its line in the turn, and the divider stand
   assert.ok(first && second);
   assert.deepEqual(first.steers, []);
   assert.deepEqual(first.nudges, [1]);
-  assert.deepEqual(first.seams, [{ n: 1, note: seam.note, start: seam.start, death: null }]);
+  assert.deepEqual(first.seams, [{ n: 1, note: seam.note, start: seam.start, death: null, movedTo: null }]);
   assert.deepEqual(second.seams, []);
 
   // Sent as a turn of its own: that turn has no user bubble; the successor not started yet, the

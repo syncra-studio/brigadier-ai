@@ -1642,6 +1642,27 @@ below is proposed unless tagged.
 - **Order:** 2a ∥ anything (rebase after S32 if it touches `M/models.rs` first). 2b after S23 lands (Stage 5,
   w108); it rebases on it.
 
+**S38c. "Continue on <other CLI>" on request (D46).** Opus. (as landed)
+(user, 2026-10-23 23:46, D46: "i guess sure, why not", to: should a session move to the other CLI when you ask,
+the same seam, divider and hand-off note as the quota fallback, or only when quota runs out?)
+**Take, don't rebuild:** S38 2b's seam (`seam_to_agent`), S22's nudge and S22b's bootstrap, D25's model pick
+(`successor_model`, shared with `fallback_agent`). No router, no new mechanism; D23's switch is unchanged, and a
+model or account change within one CLI still continues the same session (D14).
+- **Ask:** `brigadier continue-on <claude|codex> [--after-turn]` from the session's own thread, or the composer's
+  model picker: the other CLI's list opens with "Continue on Codex" ("Fresh context, with a hand-off note"), and
+  picking one of its models moves there on that model (IPC `continueOn`). The successor runs on the named model,
+  else the first the user's rules allow there (D25).
+- **How:** the request is kept in `record/seam.json` (`moving`) until no turn runs. The CLI it runs on still
+  works: the seam's own nudge asks it for the note, and the seam that closes moves the session's model, so the
+  successor starts there from the note at once. The CLI it runs on is at its limit: it moves at once without a
+  note, as 2b (the divider: "usage limit on … · continued on …"). A limit in the turn that asked goes there too.
+  The divider reads "Fresh context · hand-off note · continued on Codex" (`SeamMark.movedTo`).
+- **Refused** (exit 3, plain words): a turn runs without `--after-turn` (the app always passes it); a worker
+  ("moved by its session"); that CLI turned off, not signed in, or every account at its limit; the rules allow
+  no model there (the rule's words); a Chat; a hand-off already under way. Asked for the CLI it runs on:
+  "already", and a pending move is dropped.
+- **Skill:** no line: the brigade skill is at its byte budget; `brigadier --help` lists the command.
+
 **S39. `brigadier why <file>:<line>` (D51).** Opus.
 (user, 2026-10-24, D51: "sure, do the brigadier why", answering: make "why was this line written" (`brigadier why
 <file>:<line>`: walks the per-turn snapshot refs to the turn that wrote it, prints that turn's message, reply and

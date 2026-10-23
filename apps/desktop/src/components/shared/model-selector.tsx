@@ -7,6 +7,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -128,6 +129,7 @@ const FLYOUT =
  * provider with its model in use, opening to the side on its latest models and a Legacy row
  * opening on the older ones. `defaultChoice`, what a new conversation starts with when nothing
  * is picked, is marked Default, on its model and on its provider while that's the one in use.
+ * With `continueOn` (a started session), another provider's list opens with "Continue on" it.
  */
 export function ModelSelector({
   groups,
@@ -141,6 +143,7 @@ export function ModelSelector({
   onOpenChange,
   automatic,
   refused,
+  continueOn,
 }: {
   groups: readonly ModelGroup[];
   value: ModelChoice;
@@ -160,6 +163,8 @@ export function ModelSelector({
   automatic?: { chosen: boolean; hint: string; onChoose: () => void; label?: string } | undefined;
   /** What the user's rules keep out: shown, but it can't be picked, with the rule's words. */
   refused?: Refused | undefined;
+  /** Moves a started session to another provider, on the model its rules allow there (S38c). */
+  continueOn?: ((provider: ProviderKind) => void) | undefined;
 }) {
   const auto = automatic?.chosen === true;
   const [own, setOwn] = useState(false);
@@ -334,6 +339,18 @@ export function ModelSelector({
                   )}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent sideOffset={tokenPx("--spacing")} className={FLYOUT}>
+                  {continueOn && group.provider !== value.provider && (
+                    <>
+                      <DropdownMenuItem
+                        data-slot="model-selector-continue"
+                        className={TALL_ROW}
+                        onSelect={() => continueOn(group.provider)}
+                      >
+                        <MenuRow twoLine title={`Continue on ${group.label}`} detail="Fresh context, with a hand-off note" />
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
                   {models(group)}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>

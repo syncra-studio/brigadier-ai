@@ -233,6 +233,18 @@ pub struct ModelChoice {
     pub account: Option<String>,
 }
 
+/// When a session asked to continue on another CLI moves there (S38c, D46).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ContinueWhen {
+    /// It runs there already.
+    Already,
+    /// Now: it writes its hand-off note, and the new session starts there.
+    Now,
+    /// Once the running turn ends.
+    AfterTurn,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum EnvironmentKind {

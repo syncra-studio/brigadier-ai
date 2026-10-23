@@ -1433,6 +1433,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::UpdateSetup { id, setup } => Response::UpdateSetup {
             conversation: Box::new(heap(|| sessions.set_setup(id, setup)).await?),
         },
+        Request::ContinueOn {
+            id,
+            provider,
+            model,
+        } => Response::ContinueOn {
+            when: heap(|| sessions.continue_on(&id, provider, model, true))
+                .await
+                .map_err(brigadier_core::Error::Invalid)?
+                .0,
+        },
         Request::GetConversation { id, limit } => Response::GetConversation {
             view: Box::new(heap(|| core.conversation_view(id, limit)).await?),
         },

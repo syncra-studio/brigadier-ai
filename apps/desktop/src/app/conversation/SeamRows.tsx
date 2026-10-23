@@ -2,13 +2,15 @@ import type { FC } from "react";
 
 import type { BlockSeam } from "@/app/conversation/blocks";
 import { useViewConversation } from "@/app/conversation/viewContext";
+import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ROW } from "@/components/conversation";
 import { LabeledDivider } from "@/components/shared";
 import { openFileTab } from "@/state/sessionTabs";
 
 /**
  * A seam (G12): "Fresh context · hand-off note", the note opening in a tab. A session that
- * ended with no note says why, and opens what its successor started from.
+ * ended with no note says why, and opens what its successor started from. One moved to another
+ * CLI as asked says where (S38c).
  */
 export const SeamDivider: FC<{ seam: BlockSeam }> = ({ seam }) => {
   const conversationId = useViewConversation()?.id ?? null;
@@ -25,6 +27,7 @@ export const SeamDivider: FC<{ seam: BlockSeam }> = ({ seam }) => {
         ) : (
           label
         )}
+        {seam.movedTo && !seam.death && ` · continued on ${PROVIDER_LABELS[seam.movedTo]}`}
       </span>
     </LabeledDivider>
   );

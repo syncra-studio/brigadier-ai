@@ -336,6 +336,30 @@ pub fn wait(output: &WaitOutput) -> String {
     out
 }
 
+pub fn continue_on(output: &crate::protocol::ContinueOnOutput) -> String {
+    use crate::protocol::ContinueWhen;
+    let agent = match output.agent {
+        crate::protocol::Agent::Claude => "Claude Code",
+        crate::protocol::Agent::Codex => "Codex",
+    };
+    let on = match (&output.model, &output.effort) {
+        (Some(model), Some(effort)) => format!(" ({model}, {effort})"),
+        (Some(model), None) => format!(" ({model})"),
+        (None, Some(effort)) => format!(" (its default model, {effort})"),
+        (None, None) => " (its default model)".to_owned(),
+    };
+    match output.when {
+        ContinueWhen::Already => format!("This session runs on {agent} already.\n"),
+        ContinueWhen::Now => {
+            format!("Continuing on {agent}{on}: the hand-off note first, then the new session.\n")
+        }
+        ContinueWhen::AfterTurn => format!(
+            "Continues on {agent}{on} once this turn ends: the hand-off note first, then the \
+             new session.\n"
+        ),
+    }
+}
+
 pub fn close(output: &CloseOutput) -> String {
     if output.closed {
         format!("Closed {}.\n", output.id)

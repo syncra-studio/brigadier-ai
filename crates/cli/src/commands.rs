@@ -284,6 +284,28 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/close.schema.json"),
     },
     Command {
+        name: "continue-on",
+        summary: "Move this session to another CLI, when the user asks.",
+        details: "Its CLI writes the hand-off note, then a new session starts on the other CLI \
+                  at once, on the first model the user's rules allow there, and carries on: \
+                  the same thread, with a fresh context. Called from your own turn, pass \
+                  --after-turn: it moves once that turn ends. Refused when that CLI isn't \
+                  signed in or the rules allow no model on it. A worker is moved by its \
+                  session.",
+        args: &[
+            Arg::Positional {
+                name: "agent",
+                help: "The CLI to continue on.",
+                required: true,
+                rest: false,
+                choices: &["claude", "codex"],
+            },
+            switch("after-turn", "Move once the running turn ends."),
+        ],
+        available: true,
+        schema: include_str!("../schemas/continue-on.schema.json"),
+    },
+    Command {
         name: "preview",
         summary: "Start, stop or read a preview the user can watch.",
         details: "`start <command…>` runs a dev server, app, simulator, PDF or test run as a \

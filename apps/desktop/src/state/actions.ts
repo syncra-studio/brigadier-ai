@@ -7,6 +7,7 @@ import type {
   ApprovalDecision,
   AttachmentRef,
   BranchChoice,
+  ContinueWhen,
   Conversation,
   ConversationStatus,
   DiffStat,
@@ -16,6 +17,7 @@ import type {
   Mention,
   MessageMatches,
   MessageQueue,
+  ModelChoice,
   QueuedMessage,
   Project,
   ProjectPatch,
@@ -740,6 +742,16 @@ function turnStarting(conversationId: string): boolean {
 export async function updateSetup(id: string, setup: Setup): Promise<void> {
   const { conversation } = await request({ method: "updateSetup", id, setup });
   storeConversation(conversation);
+}
+
+/**
+ * "Continue on <other CLI>" (S38c): the session's CLI writes its hand-off note, then a new
+ * session starts on `provider` (on `model`, else the first model the user's rules allow there)
+ * and carries on; while a turn runs, once it ends.
+ */
+export async function continueOn(id: string, provider: ProviderKind, model: ModelChoice | null): Promise<ContinueWhen> {
+  const { when } = await request({ method: "continueOn", id, provider, model });
+  return when;
 }
 
 /**

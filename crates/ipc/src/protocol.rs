@@ -16,17 +16,17 @@ use brigadier_core::storage::{
 use brigadier_core::{
     AccountEntry, AccountsView, AppAnswer, AppCall, AttachmentRef, BrainOverview, CardId, Catalog,
     CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConflictFile, ConnectView,
-    ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
-    ConversationStatus, ConversationView, DiffStat, FeedbackFiled, FeedbackFiling, FeedbackWriteUp,
-    FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitHubSignIn, GitState, GuidanceRow,
-    Mention, MergeUndo, Message, MessageMatches, MessagePage, MessageQueue, ModelRule, ModelRules,
-    OrchestratorPage, PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId,
-    ProjectPatch, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage,
-    RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion,
-    RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings, SettledTab,
-    Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope,
-    SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    ContinueWhen, ConventionsExport, Conversation, ConversationActivity, ConversationId,
+    ConversationKind, ConversationStatus, ConversationView, DiffStat, FeedbackFiled,
+    FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport, ForkPlace,
+    GitHubSignIn, GitState, GuidanceRow, Mention, MergeUndo, Message, MessageMatches, MessagePage,
+    MessageQueue, ModelChoice, ModelRule, ModelRules, OrchestratorPage, PendingChanges, ProbeBurst,
+    Project, ProjectCandidate, ProjectId, ProjectPatch, ProvidersView, PullRequest, QueuedMessage,
+    Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo,
+    RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope, SearchQuery, SearchUpdate, Settings,
+    SettledTab, Setup, SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun,
+    SourceScope, SourceState, StoredCopy, TaskId, ThreadMetrics, TurnRevert, UndoOutcome,
+    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
     WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
@@ -456,6 +456,14 @@ pub enum Request {
     UpdateSetup {
         id: ConversationId,
         setup: Setup,
+    },
+    /// "Continue on <other CLI>" (S38c): the session's CLI writes its hand-off note and a new
+    /// session starts on `provider`, on `model` when given, else on the first model the
+    /// user's rules allow there. While a turn runs, once it ends.
+    ContinueOn {
+        id: ConversationId,
+        provider: ProviderKind,
+        model: Option<ModelChoice>,
     },
     /// Messages (newest `limit`), tasks, cards, queue and run state in one read.
     GetConversation {
@@ -1460,6 +1468,9 @@ pub enum Response {
     },
     UpdateSetup {
         conversation: Box<Conversation>,
+    },
+    ContinueOn {
+        when: ContinueWhen,
     },
     GetConversation {
         view: Box<ConversationView>,

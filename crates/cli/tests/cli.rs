@@ -377,6 +377,18 @@ fn sample(request: &CliRequest) -> CliReply {
             id: id.clone(),
             closed: true,
         }),
+        CliRequest::ContinueOn { agent, after_turn } => {
+            CliReply::ok(&brigadier_cli::protocol::ContinueOnOutput {
+                agent: *agent,
+                model: None,
+                effort: Some("high".into()),
+                when: if *after_turn {
+                    brigadier_cli::protocol::ContinueWhen::AfterTurn
+                } else {
+                    brigadier_cli::protocol::ContinueWhen::Now
+                },
+            })
+        }
         CliRequest::Tool { action, .. } if action == "screenshot" => CliReply::ok(&ToolOutput {
             action: action.clone(),
             text: "The tab browser:agent-1 at https://example.com.".into(),
@@ -578,6 +590,7 @@ fn every_subcommands_json_output_fits_its_schema() {
         &["wait", "--json"],
         &["wait", "a1b2", "--timeout", "1", "--json"],
         &["close", "a1b2", "--json"],
+        &["continue-on", "codex", "--after-turn", "--json"],
         &["preview", "start", "--name", "web", "--json", "pnpm", "dev"],
         &["preview", "log", "preview-1", "--tail", "5", "--json"],
         &["preview", "stop", "--json"],

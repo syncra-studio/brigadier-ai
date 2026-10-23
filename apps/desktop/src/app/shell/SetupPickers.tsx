@@ -41,7 +41,7 @@ import {
   withChoice,
 } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { openSettings, updateSetup } from "@/state/actions";
+import { continueOn, openSettings, updateSetup } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 import { folderTrust } from "@/state/trust";
@@ -359,9 +359,19 @@ export function ConversationModelPicker({
         onOpenChange={onOpenChange}
         label="Model"
         refused={refusals.refused}
+        // A started session moves to another CLI at a seam, never by a setup change (S38c).
+        continueOn={
+          setup?.type === "session"
+            ? (provider) => action.run(() => continueOn(conversation.id, provider, null))
+            : undefined
+        }
         onChange={(picked) => {
           // A model whose efforts the rules cap starts at the highest they allow.
           const choice = refusals.allowed(picked);
+          if (setup?.type === "session" && choice.provider !== current.provider) {
+            action.run(() => continueOn(conversation.id, choice.provider, choice));
+            return;
+          }
           action.run(() =>
             updateSetup(
               conversation.id,

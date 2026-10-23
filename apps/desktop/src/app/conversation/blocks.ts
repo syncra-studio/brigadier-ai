@@ -14,6 +14,7 @@ import type {
   OrchestratorStep,
   OrchestratorStepKind,
   PeerMessage,
+  ProviderKind,
   Question,
   RequestState,
   Task,
@@ -149,6 +150,8 @@ export type BlockSeam = {
   note: string | null;
   start: string | null;
   death: string | null;
+  /** The other CLI it continued on, as asked (S38c). */
+  movedTo: ProviderKind | null;
 };
 
 /**

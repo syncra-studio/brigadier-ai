@@ -53,6 +53,7 @@ pub(super) async fn brigadier(turn: &Turn, request: CliRequest) -> Value {
         CliRequest::Send { .. } => "send",
         CliRequest::Wait { .. } => "wait",
         CliRequest::Close { .. } => "close",
+        CliRequest::ContinueOn { .. } => "continue-on",
         CliRequest::Tool { tool, .. } => tool.command(),
         CliRequest::Ask { .. } => "ask",
         CliRequest::Why { .. } => "why",

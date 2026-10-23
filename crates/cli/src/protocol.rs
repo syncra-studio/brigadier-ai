@@ -79,6 +79,13 @@ pub enum CliRequest {
     },
     /// Closes one of the caller's workers.
     Close { id: String },
+    /// Moves the calling session to another CLI, with a fresh context and a hand-off note
+    /// (S38c); while a turn runs, only with `after_turn`, once it ends.
+    ContinueOn {
+        agent: Agent,
+        #[serde(default)]
+        after_turn: bool,
+    },
     /// One of the tools a session keeps: `action` with the tool's own arguments, as its
     /// subcommand took them.
     Tool {
@@ -249,7 +256,7 @@ pub enum Answer {
 pub enum CliReply {
     /// The request's output: [`SessionsOutput`], [`WorkersOutput`], [`ShowOutput`],
     /// [`ReadOutput`], [`StartOutput`], [`SendOutput`], [`WaitOutput`], [`CloseOutput`],
-    /// [`ToolOutput`], [`AskOutput`] or [`WhyOutput`], by request.
+    /// [`ContinueOnOutput`], [`ToolOutput`], [`AskOutput`] or [`WhyOutput`], by request.
     Ok {
         output: serde_json::Value,
     },
@@ -741,6 +748,29 @@ impl EventKind {
             Self::Quiet => "quiet",
         }
     }
+}
+
+/// `brigadier continue-on`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinueOnOutput {
+    pub agent: Agent,
+    /// Absent: the CLI's own default.
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub when: ContinueWhen,
+}
+
+/// When `brigadier continue-on` moves the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContinueWhen {
+    /// It runs there already.
+    Already,
+    /// Now: its hand-off note first, then the new session there.
+    Now,
+    /// Once the running turn ends.
+    AfterTurn,
 }
 
 /// `brigadier close`.

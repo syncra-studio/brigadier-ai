@@ -76,6 +76,8 @@ pub struct SeamMark {
     pub start: Option<String>,
     /// Why the session ended without a note.
     pub death: Option<String>,
+    /// The other CLI the session continued on, as asked (S38c).
+    pub moved_to: Option<ProviderKind>,
 }
 
 /// One of a session's own workers, as its CLI and git show it: what the session's Workers

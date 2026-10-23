@@ -175,6 +175,14 @@ go above High effort"; Send, refused by the daemon, shows the rule in those word
 keeps the typed message. It writes what it saw as JSON into `#composer-rules-result`;
 `ComposerRulesRender.test.ts` checks it. This entry is absent from the production build.
 
+# Continue on the other CLI
+
+`/fixtures/composer-continue-on.html` is a started session's composer on Claude Code with Codex installed
+too (S38c). The model picker's Codex list opens with "Continue on Codex", which asks the daemon to move the
+session there on the model the rules allow; picking a Codex model asks the same with that model; Claude
+Code's own list has only its models. It writes what it saw as JSON into `#composer-continue-on-result`;
+`ComposerContinueOnRender.test.ts` checks it. This entry is absent from the production build.
+
 # Source panel menu
 
 `/fixtures/source-menu.html` is the Source panel on a project's folder with More Actions' Branch ›

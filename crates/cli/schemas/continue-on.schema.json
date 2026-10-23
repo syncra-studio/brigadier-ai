@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier continue-on --json",
+  "type": "object",
+  "required": [
+    "agent",
+    "model",
+    "effort",
+    "when"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "agent": {
+      "enum": [
+        "claude",
+        "codex"
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Null: the CLI's own default."
+    },
+    "effort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "when": {
+      "enum": [
+        "already",
+        "now",
+        "after-turn"
+      ],
+      "description": "already: it runs there; now: its hand-off note, then the new session; after-turn: once the running turn ends."
+    }
+  }
+}

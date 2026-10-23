@@ -420,6 +420,9 @@ impl SessionManager {
                     reply
                 }),
             CliRequest::Close { id } => self.cli_close(caller, &id).await,
+            CliRequest::ContinueOn { agent, after_turn } => {
+                Ok(self.cli_continue_on(caller, agent, after_turn).await)
+            }
             CliRequest::Tool { tool, action, args } => {
                 Ok(self.cli_tool(caller, tool, &action, args).await)
             }
@@ -431,6 +434,48 @@ impl SessionManager {
             CliRequest::Why { path, line } => self.cli_why(&path, line).await,
         };
         reply.unwrap_or_else(failed)
+    }
+
+    /// `brigadier continue-on`: the calling session's thread moves it to another CLI (S38c).
+    /// A worker is moved by its session.
+    async fn cli_continue_on(
+        &self,
+        caller: &CliCaller,
+        agent: cli::Agent,
+        after_turn: bool,
+    ) -> CliReply {
+        if caller.task_id.is_some()
+            || !matches!(
+                self.grants.resolve(&caller.grant),
+                Some(Role::Orchestrator { .. })
+            )
+        {
+            return CliReply::error(
+                ErrorCode::Refused,
+                "refused: only a session's own thread moves it to another CLI; a worker is \
+                 moved by its session",
+            );
+        }
+        let to = match agent {
+            cli::Agent::Claude => ProviderKind::Claude,
+            cli::Agent::Codex => ProviderKind::Codex,
+        };
+        match self
+            .continue_on(&caller.conversation_id, to, None, after_turn)
+            .await
+        {
+            Ok((when, choice)) => CliReply::ok(&cli::ContinueOnOutput {
+                agent,
+                model: choice.model,
+                effort: choice.effort,
+                when: match when {
+                    crate::model::ContinueWhen::Already => cli::ContinueWhen::Already,
+                    crate::model::ContinueWhen::Now => cli::ContinueWhen::Now,
+                    crate::model::ContinueWhen::AfterTurn => cli::ContinueWhen::AfterTurn,
+                },
+            }),
+            Err(why) => CliReply::error(ErrorCode::Refused, format!("refused: {why}")),
+        }
     }
 
     /// The caller's project's sidebar sessions, the caller's own when it is outside one.

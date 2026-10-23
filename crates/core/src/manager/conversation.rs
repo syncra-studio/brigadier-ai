@@ -137,6 +137,7 @@ pub(crate) struct Envelope {
     pub text: String,
 }
 
+mod continue_on;
 mod seam;
 mod watchdog;
 
@@ -4201,7 +4202,7 @@ impl SessionManager {
             // The CLI would compact: the seam comes now.
             ProviderEvent::CompactionRefused if self.seam_on(conv) => {
                 let used = conv.state.lock().await.context.map_or(0, |(used, _)| used);
-                self.seam_nudge(conv, cli, used, true).await;
+                self.seam_nudge(conv, Some(cli), used, true).await;
             }
             ProviderEvent::CompactionStarted { automatic }
                 if conv.kind == ConversationKind::Session =>
@@ -4513,6 +4514,17 @@ impl SessionManager {
                     reached.notify_one();
                     release.notified().await;
                 }
+            }
+            // A move to another CLI asked for in this turn goes on there (S38c).
+            if let Some(to) = self.take_move(conv, cli.provider).await {
+                // Not from inside the CLI's own event pump: closing the CLI waits for it.
+                let (manager, conv, from) = (self.arc(), conv.clone(), cli.provider);
+                self.spawn(async move {
+                    manager
+                        .seam_to_agent(&conv, from, to, carried, landed)
+                        .await;
+                });
+                return;
             }
             // Another account of the provider first, with switching on.
             if let Some(next) = self

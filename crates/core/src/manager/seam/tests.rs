@@ -392,6 +392,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         death: death.map(str::to_owned),
         stopped: false,
         shown: Vec::new(),
+        moved_to: None,
     };
     let seam = |n: u32, death: Option<&str>| Seam {
         n,
@@ -410,6 +411,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
             generation: 3,
             phase: Phase::Live,
             seams: vec![seam(1, None), seam(2, Some(TOO_LONG_TEST))],
+            moving: None,
         },
     )
     .unwrap();
@@ -458,6 +460,7 @@ fn a_successor_given_only_shown_messages_draws_no_bubble_again() {
             death: Some("usage limit on Claude Code · continued on Codex".into()),
             stopped: false,
             shown: shown.iter().map(|id| (*id).to_owned()).collect(),
+            moved_to: None,
         },
         successor: format!("s{n}"),
         provider: ProviderKind::Codex,
@@ -473,6 +476,7 @@ fn a_successor_given_only_shown_messages_draws_no_bubble_again() {
             generation: 3,
             phase: Phase::Live,
             seams: vec![seam(1, &["m1"], &["m1"]), seam(2, &["m2", "m3"], &["m2"])],
+            moving: None,
         },
     )
     .unwrap();

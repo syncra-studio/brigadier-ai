@@ -98,7 +98,11 @@ impl SessionManager {
             .unwrap_or_default()
     }
 
-    async fn write_seam_of(&self, id: &ConversationId, file: SeamFile) -> crate::Result<()> {
+    pub(super) async fn write_seam_of(
+        &self,
+        id: &ConversationId,
+        file: SeamFile,
+    ) -> crate::Result<()> {
         let record = self.session_dir(id).record();
         crate::manager::blocking(move || write_seam(&record, &file)).await
     }
@@ -113,7 +117,7 @@ impl SessionManager {
     ) {
         let base = self.seam_base(conv, used).await;
         if used >= self.seam_config().threshold(window, base) {
-            self.seam_nudge(conv, cli, used, true).await;
+            self.seam_nudge(conv, Some(cli), used, true).await;
         }
     }
 
@@ -148,7 +152,7 @@ impl SessionManager {
     pub(super) async fn seam_nudge(
         &self,
         conv: &Arc<ConvLive>,
-        cli: &Arc<Cli>,
+        cli: Option<&Arc<Cli>>,
         used: i64,
         steer: bool,
     ) {
@@ -172,7 +176,7 @@ impl SessionManager {
     async fn send_nudge(
         &self,
         conv: &Arc<ConvLive>,
-        cli: &Arc<Cli>,
+        cli: Option<&Arc<Cli>>,
         used: i64,
         steer: bool,
     ) -> Option<bool> {
@@ -190,10 +194,17 @@ impl SessionManager {
         {
             crate::logging::private_trace!(conv.private_logs, warn, "could not make the hand-off folder"; conversation = %conv.id, error = %err);
         }
+        // With no CLI up (a move asked for after a restart), the one the lineage ends with.
+        let predecessor = match cli {
+            Some(cli) => Some(cli.session.native_id()),
+            None => read_lineage(&record)
+                .last()
+                .map(|session| session.session_id.clone()),
+        };
         file.phase = Phase::Nudged {
             at_ms: now_ms(),
             tokens: used,
-            predecessor: Some(cli.session.native_id()),
+            predecessor,
         };
         // Held before the file says so: a message that finds the seam nudged waits for the
         // successor, at most a minute.
@@ -214,12 +225,15 @@ impl SessionManager {
         }
         let text = nudge(&note);
         let mut state = conv.state.lock().await;
-        let running = state.cli.as_ref().is_some_and(|now| Arc::ptr_eq(now, cli))
+        let running = cli
+            .zip(state.cli.as_ref())
+            .is_some_and(|(cli, now)| Arc::ptr_eq(now, cli))
             && state.busy
             && !state.interrupted
             && !state.compacting;
         if steer
             && running
+            && let Some(cli) = cli
             && cli
                 .session
                 .steer(TurnInput::text(text.clone()))
@@ -322,14 +336,24 @@ impl SessionManager {
                     .await
             }
             Phase::Live => {
-                let (used, base) = {
+                let (used, base, limited) = {
                     let state = conv.state.lock().await;
-                    (state.context, state.seam.base.flatten())
+                    (
+                        state.context,
+                        state.seam.base.flatten(),
+                        state.limit_hit.is_some(),
+                    )
                 };
-                if let Some((used, window)) = used
+                // A move to another CLI asked for in this turn comes now; one cut by a limit
+                // goes with the limit's own hand-over.
+                if file.moving.is_some() {
+                    if !limited {
+                        self.begin_move(conv, Some(cli)).await;
+                    }
+                } else if let Some((used, window)) = used
                     && used >= self.seam_config().threshold(window, base)
                 {
-                    self.seam_nudge(conv, cli, used, false).await;
+                    self.seam_nudge(conv, Some(cli), used, false).await;
                 }
                 false
             }
@@ -348,6 +372,10 @@ impl SessionManager {
         death: Option<String>,
         stopped: bool,
     ) -> bool {
+        let moved_to = match file.moving.take() {
+            Some(to) => self.move_setup(conv, to).await,
+            None => None,
+        };
         let predecessor = match &file.phase {
             Phase::Nudged { predecessor, .. } => predecessor.clone(),
             _ => conv
@@ -366,6 +394,7 @@ impl SessionManager {
                 death,
                 stopped,
                 shown: Vec::new(),
+                moved_to,
             },
         };
         if let Err(err) = self.write_seam_of(&conv.id, file).await {
@@ -385,9 +414,8 @@ impl SessionManager {
 
     /// The agent another one goes on with when every account of `from`'s is at its limit,
     /// with "Switch to another agent automatically" on (S38, D23): another agent that is on
-    /// and has an account that can take work, on the first model the user's rules allow: the
-    /// rules file's `Fallback` row's when it names that agent, else its CLI's own, else another
-    /// it lists. `None`: the session waits for the reset (Q11).
+    /// and has an account that can take work, on the first model the user's rules allow
+    /// ([`Self::successor_model`]). `None`: the session waits for the reset (Q11).
     pub(super) fn fallback_agent(
         &self,
         conv: &ConvLive,
@@ -413,30 +441,45 @@ impl SessionManager {
                     )
                     .is_some()
             })
-            .find_map(|provider| {
-                // The rules file's `Fallback` row first, then the CLI's own default, then each
-                // model it lists: the first the user's rules allow, through the same refusal
-                // `brigadier start` uses. None allowed: the next agent, else the wait.
-                let listed = self
-                    .runtime
-                    .overview(provider)
-                    .and_then(|overview| overview.models)
-                    .map(|catalog| catalog.models)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|model| !model.legacy)
-                    .map(|model| (Some(model.id), None));
-                std::iter::once(self.fallback_row(provider))
-                    .chain(std::iter::once((None, None)))
-                    .chain(listed)
-                    .map(|(model, effort)| ModelChoice {
-                        provider,
-                        model,
-                        effort,
-                        fast: None,
-                        account: None,
-                    })
-                    .find(|choice| self.check_choice(choice).is_ok())
+            .find_map(|provider| self.successor_model(provider).ok())
+    }
+
+    /// The model a session goes on with on another agent, `provider` (D25): the rules file's
+    /// `Fallback` row's when it names that agent, else its CLI's own, else each model it lists:
+    /// the first the user's rules allow, through the same refusal `brigadier start` uses. None
+    /// allowed: the first rule's words.
+    pub(super) fn successor_model(&self, provider: ProviderKind) -> Result<ModelChoice, String> {
+        let listed = self
+            .runtime
+            .overview(provider)
+            .and_then(|overview| overview.models)
+            .map(|catalog| catalog.models)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|model| !model.legacy)
+            .map(|model| (Some(model.id), None));
+        let mut refused = None;
+        std::iter::once(self.fallback_row(provider))
+            .chain(std::iter::once((None, None)))
+            .chain(listed)
+            .map(|(model, effort)| ModelChoice {
+                provider,
+                model,
+                effort,
+                fast: None,
+                account: None,
+            })
+            .find(|choice| match self.check_choice(choice) {
+                Ok(()) => true,
+                Err(err) => {
+                    refused.get_or_insert_with(|| err.to_string());
+                    false
+                }
+            })
+            .ok_or_else(|| {
+                refused.unwrap_or_else(|| {
+                    format!("{} lists no model to continue on", provider.label())
+                })
             })
     }
 
@@ -686,6 +729,7 @@ impl SessionManager {
             death: Some(NOT_RESUMED.into()),
             stopped: false,
             shown: Vec::new(),
+            moved_to: None,
         };
         let messages: Vec<String> = users.iter().map(|message| message.id.clone()).collect();
         file.phase = Phase::Starting {
@@ -841,6 +885,10 @@ impl SessionManager {
         let record = self.session_dir(id).record();
         let mut file = self.read_seam_of(id).await;
         match file.phase.clone() {
+            // A move to another CLI asked for in the turn the restart cut off comes now, from its
+            // note: the accounts' state isn't read yet, and a limit hit in the note turn moves it
+            // without one.
+            Phase::Live if file.moving.is_some() => self.seam_nudge(&conv, None, 0, false).await,
             Phase::Live => {}
             // Its successor starts at once, unless the user stopped the turn that ended it.
             Phase::Closed { end } => conv.state.lock().await.seam.carry_on = !end.stopped,
@@ -848,6 +896,10 @@ impl SessionManager {
                 at_ms, predecessor, ..
             } => {
                 let written = note_path(&record, file.generation).is_file();
+                let moved_to = match file.moving.take() {
+                    Some(to) => self.move_setup(&conv, to).await,
+                    None => None,
+                };
                 file.phase = Phase::Closed {
                     end: SeamEnd {
                         predecessor,
@@ -856,6 +908,7 @@ impl SessionManager {
                         death: (!written).then(|| RESTARTED.into()),
                         stopped: false,
                         shown: Vec::new(),
+                        moved_to,
                     },
                 };
                 if self.write_seam_of(id, file).await.is_ok() {
