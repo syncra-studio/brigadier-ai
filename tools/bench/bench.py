@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""Compare the wrapped CLIs with isolated headless Brigadier sessions."""
+import argparse
+from collections import Counter
+import datetime as dt
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+sys.dont_write_bytecode = True
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE))
+from metrics import FIELDS, cost, parse, records
+from tasks import TASKS, VERSION, fixture, grade
+
+spec = importlib.util.spec_from_file_location("bench_ipc", ROOT / "tools/live-smoke/smoke.py")
+ipc_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ipc_module)
+ARMS = {"A": "claude", "B": "codex", "CC": "claude", "CX": "codex", "W": "claude"}
+
+
+def wait(fn, timeout):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        result = fn()
+        if result:
+            return result
+        time.sleep(.1)
+    raise TimeoutError(f"Timed out after {timeout}s")
+
+
+def stop(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(10)
+
+
+def native_files(provider, sid):
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) if provider == "claude" else Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    pattern = f"projects/*/{sid}.jsonl" if provider == "claude" else f"sessions/*/*/*/rollout-*{sid}.jsonl"
+    return list(home.glob(pattern))
+
+
+def plain(repo, provider, prompt, model, args, scratch):
+    sid = str(uuid.uuid4())
+    command = (["claude", "-p", "--verbose", "--output-format", "stream-json", "--include-partial-messages",
+                "--dangerously-skip-permissions", "--effort", args.effort, "--session-id", sid]
+               if provider == "claude" else
+               ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "-c", f'model_reasoning_effort="{args.effort}"'])
+    if model:
+        command += ["--model", model]
+    command += [prompt]
+    stream, err = scratch / "stdout.jsonl", scratch / "stderr.log"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BRIGADIER_") and k != "CLAUDECODE"}
+    proc = None
+    start = time.monotonic()
+    first = None
+    try:
+        with stream.open("w") as out, err.open("w") as errors:
+            proc = subprocess.Popen(command, cwd=repo, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=errors)
+            def ended():
+                nonlocal sid, first
+                for row in records(stream):
+                    if row.get("type") == "thread.started":
+                        sid = row["thread_id"]
+                    if first is None and (row.get("type") in ("assistant", "item.started", "item.completed") or
+                                          row.get("event", {}).get("type") in ("content_block_start", "content_block_delta")):
+                        first = time.monotonic() - start
+                return proc.poll() is not None
+            wait(ended, args.timeout)
+        wall = time.monotonic() - start
+        paths = wait(lambda: native_files(provider, sid), 10)
+        metrics = parse(paths[0], provider, prompt)
+        return dict(metrics, wall_s=wall, first_output_s=first, worktree_s=0,
+                    worker_usage=None, process_exit=proc.returncode), repo
+    finally:
+        stop(proc)
+        for path in native_files(provider, sid):
+            path.unlink(missing_ok=True)
+            # Only this invocation's explicit session id, never neighboring sessions.
+            sidecar = path.with_suffix("")
+            if sidecar.is_dir():
+                shutil.rmtree(sidecar)
+            try:
+                path.parent.rmdir()
+            except OSError:
+                pass
+
+
+class Daemon:
+    def __init__(self, args, root):
+        self.args, self.root = args, root
+        self.data = root / "data"
+        self.proc = None
+        self.ipc = ipc_module.Ipc(str(self.data))
+        self.conv = self.project = None
+        self.kept = {}
+        self.after = 0
+        self.data.mkdir()
+        self.saved = root / "native"
+        self.saved.mkdir()
+
+    def call(self, method, **fields):
+        return self.ipc.call(dict(method=method, **fields))
+
+    def start(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("BRIGADIER_") and k != "CLAUDECODE"}
+        models = self.root / "models.json"
+        models.write_text("")
+        env.update(BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_MODELS_FILE=str(models),
+                   TMPDIR=str(self.root), SHELL=shutil.which("zsh") or "/bin/bash")
+        with (self.root / "daemon.log").open("w") as out:
+            self.proc = subprocess.Popen([self.args.daemon, "--foreground", "--data-dir", str(self.data)], env=env,
+                                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        def ready():
+            if self.proc.poll() is not None:
+                raise RuntimeError("Daemon exited: " + (self.root / "daemon.log").read_text()[-2000:])
+            try:
+                return self.call("getCatalog")
+            except (OSError, RuntimeError):
+                return None
+        catalog = wait(ready, 60)["catalog"]
+        settings = catalog["settings"]
+        settings.update(onboarded=True, introSeen=True, defaultPermission="full")
+        self.call("updateSettings", settings=settings)
+
+    def save_native(self, provider, path):
+        path = Path(path)
+        if path.is_file() and str(path) not in self.kept:
+            dest = self.saved / f"{provider}-{path.name}"
+            # Keep before a worker closes and deletes its CLI transcript.
+            os.link(path, dest)
+            self.kept[str(path)] = (provider, dest)
+
+    def events(self):
+        while True:
+            events = self.call("eventsSince", afterSeq=self.after, limit=500)["events"]
+            for env in events:
+                self.after = max(self.after, env["seq"])
+                e = env.get("event") or {}
+                if not isinstance(e, dict):
+                    continue
+                if e.get("type") == "cleanupRecorded":
+                    artifact = e["artifact"]
+                    provider = {"claudeSession": "claude", "codexThread": "codex"}.get(artifact.get("type"))
+                    if provider:
+                        sid = artifact.get("sessionId") or artifact.get("threadId")
+                        for path in native_files(provider, sid):
+                            self.save_native(provider, path)
+                if e.get("type") == "workerEvent":
+                    event = e.get("event") or {}
+                    if event.get("type") == "sessionStarted" and event.get("file"):
+                        self.save_native(self.provider, event["file"])
+            if len(events) < 500:
+                break
+
+    def logs(self):
+        entries, before = [], None
+        while True:
+            page = self.call("listOrchestratorLog", conversationId=self.conv, before=before, limit=500)["page"]
+            entries.extend(page["entries"])
+            if not page["hasMore"] or not page["entries"]:
+                return entries
+            before = min(e["streamSeq"] for e in page["entries"])
+
+    def run(self, repo, arm, provider, model, prompt):
+        self.provider = provider
+        self.start()
+        self.project = self.call("addProject", path=str(repo), name="bench", init=False)["project"]["id"]
+        self.call("setFolderTrust", id=self.project, path=None, trusted=True)
+        setup = {"type": "session", "repo": str(repo), "environment": {"type": "newWorktree", "base": "main", "branch": None},
+                 "permission": "full", "orchestrator": {"provider": provider, "model": model, "effort": self.args.effort}, "planMode": False}
+        start = time.monotonic()
+        self.conv = self.call("createConversation", kind="session", projectId=self.project, title="Bench", setup=setup)["conversation"]["id"]
+        created = start
+        start = time.monotonic()
+        outcome = self.call("sendMessage", conversationId=self.conv, text=prompt, attachments=[], mentions=[], steer=False)["outcome"]
+        worktree = wait(lambda: (self.ipc.view(self.conv)["conversation"].get("setup") or {}).get("environment", {}).get("path"), 60)
+        worktree_s = time.monotonic() - created
+        msg = outcome.get("message") or {}
+        request = msg.get("requestId") or msg.get("id")
+        first = None
+        def ended():
+            nonlocal first
+            self.events()
+            view = self.ipc.view(self.conv)
+            if first is None and (view.get("orchestratorSteps") or any(m["role"] == "assistant" for m in view["messages"]["messages"])):
+                first = time.monotonic() - start
+            req = next((r for r in view["requests"] if r["id"] == request), None)
+            return view if req and req["state"]["type"] not in ("working", "queued", "deciding") and view["run"] in ("idle", "hibernated", "failed") else None
+        view = wait(ended, self.args.timeout)
+        wall = time.monotonic() - start
+        self.events()
+        for entry in self.logs():
+            e = entry["entry"]
+            event = e.get("event") or {}
+            if event.get("type") == "sessionStarted" and event.get("file"):
+                self.save_native(e.get("provider", provider), event["file"])
+        # The first native session belongs to the parent, not its worker.
+        parent_files = [e["entry"]["event"]["file"] for e in self.logs()
+                        if (e["entry"].get("event") or {}).get("type") == "sessionStarted" and e["entry"]["event"].get("file")]
+        if not parent_files:
+            raise RuntimeError("No parent native session recorded")
+        parent_files = list(dict.fromkeys(parent_files))
+        metrics = parse(self.kept[parent_files[0]][1], provider, prompt)
+        for filename in parent_files[1:]:
+            other = parse(self.kept[filename][1], provider, prompt)
+            metrics["usage"] = dict(Counter(metrics["usage"]) + Counter(other["usage"]))
+            for key in ("raw_tokens", "cost_units", "brigadier_commands", "ledger_adds", "injected_messages", "injected_bytes", "api_calls", "tools"):
+                metrics[key] += other[key]
+            metrics["models"] = sorted(set(metrics["models"] + other["models"]))
+        import sqlite3
+        with sqlite3.connect(f"file:{self.data}/routing.sqlite?mode=ro", uri=True) as db:
+            db.row_factory = sqlite3.Row
+            rows = [dict(r) for r in db.execute("SELECT * FROM turn_usage WHERE conversation_id=?", (self.conv,))]
+        workers = [r for r in rows if r.get("task_id") is not None]
+        worker_usage = {"input": sum(r.get("input", 0) for r in workers),
+                        "cache_write": sum(r.get("cache_write", 0) for r in workers),
+                        "cache_read": sum(r.get("cached_input", 0) for r in workers),
+                        "output": sum(r.get("output", 0) for r in workers)}
+        # Commands/injections include each captured child, but token totals use the daemon meter
+        # for workers so a worker's provider-native stream is never counted twice.
+        for original, (p, saved) in self.kept.items():
+            if original in parent_files:
+                continue
+            child = parse(saved, p, prompt)
+            for key in ("brigadier_commands", "ledger_adds", "injected_messages", "injected_bytes", "api_calls", "tools"):
+                metrics[key] += child[key]
+        metrics["parent_usage"] = dict(metrics["usage"])
+        metrics["parent_cost_units"] = metrics["cost_units"]
+        metrics["usage"] = dict(Counter(metrics["usage"]) + Counter(worker_usage))
+        metrics["raw_tokens"] = sum(metrics["usage"].values())
+        metrics["cost_units"] += sum(cost({"input": r["input"], "cache_read": r["cached_input"], "cache_write": r["cache_write"], "output": r["output"]}, r["provider"]) for r in workers)
+        meter = {"input": sum(r["input"] for r in rows), "cache_read": sum(r["cached_input"] for r in rows),
+                 "cache_write": sum(r["cache_write"] for r in rows), "output": sum(r["output"] for r in rows)}
+        metrics.update(wall_s=wall, first_output_s=first, worktree_s=worktree_s,
+                       worker_usage=worker_usage, worker_turns=len(workers), daemon_usage=meter,
+                       delegated=(len({r["task_id"] for r in workers}) == 1) if arm == "W" else None,
+                       request_state=next(r["state"]["type"] for r in view["requests"] if r["id"] == request))
+        return metrics, Path(worktree)
+
+    def cleanup(self):
+        errors = []
+        try:
+            if self.proc and self.proc.poll() is None:
+                if self.conv:
+                    self.call("interrupt", conversationId=self.conv)
+                    self.call("delete", ids=[self.conv])
+                    wait(lambda: self.conv not in {c["id"] for c in self.call("getCatalog")["catalog"]["conversations"]}, 30)
+                if self.project:
+                    report = self.call("removeProject", id=self.project, deleteBranches=[], keepBrain=False)["report"]
+                    errors.extend(report.get("failures", []))
+                self.call("shutdown")
+                self.proc.wait(15)
+        except Exception as error:
+            errors.append(str(error))
+        finally:
+            stop(self.proc)
+            for original in self.kept:
+                path = Path(original)
+                path.unlink(missing_ok=True)
+                sidecar = path.with_suffix("")
+                if sidecar.is_dir():
+                    shutil.rmtree(sidecar)
+                try:
+                    path.parent.rmdir()
+                except OSError:
+                    pass
+        if errors:
+            raise RuntimeError("Cleanup: " + "; ".join(map(str, errors)))
+
+
+def markdown(report):
+    lines = ["# CLI bench", "", "Report only; regressions never gate CI or releases.", "",
+             f"Source: `{report['source']}`; fixture v{report['fixture_version']}; effort {report['effort']}", "",
+             "| Arm | Task/run | Status | Pass | Wall s | First output s | Worktree s | API calls | Input / cache write / cache read / output | Cost units | CLI commands | Ledger adds | Injected msgs / bytes |",
+             "|---|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|---|"]
+    for r in report["runs"]:
+        label = r["provider"] + " " + r["arm"]
+        if r["status"] != "complete":
+            lines.append(f"| {label} | — | {r['status']}: {r.get('reason', '')} | — | — | — | — | — | — | — | — | — | — |")
+            continue
+        number = lambda k: f"{r[k]:.2f}" if r.get(k) is not None else "unavailable"
+        tokens = " / ".join(str(r["usage"].get(k, 0)) for k in FIELDS)
+        lines.append(f"| {label} | {r['task']}/{r['run']} | complete | {r['grade']['passed']} | {number('wall_s')} | {number('first_output_s')} | {number('worktree_s')} | {r['api_calls']} | {tokens} | {number('cost_units')} | {r['brigadier_commands']} | {r['ledger_adds']} | {r['injected_messages']} / {r['injected_bytes']} |")
+    lines += ["", "## Aggregate", "", "| Arm | Passed/runs | Mean wall s | Mean raw tokens | Mean cost units |", "|---|---:|---:|---:|---:|"]
+    for provider, arm in sorted({(r["provider"], r["arm"]) for r in report["runs"]}):
+        rows = [r for r in report["runs"] if r["provider"] == provider and r["arm"] == arm and r["status"] == "complete"]
+        if rows:
+            avg = lambda k: sum(r[k] for r in rows) / len(rows)
+            lines.append(f"| {provider} {arm} | {sum(r['grade']['passed'] for r in rows)}/{len(rows)} | {avg('wall_s'):.2f} | {avg('raw_tokens'):.0f} | {avg('cost_units'):.2f} |")
+    lines += ["", "W totals include worker turns from turn_usage; parent usage is also retained in JSON.",
+              "Injected messages count transcript-visible user/developer text other than the typed prompt and tool results. Provider-private system prompts are unavailable; standing instruction bytes are recorded separately in JSON.", ""]
+    return "\n".join(lines)
+
+
+def write(report, output):
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+    (output / "report.md").write_text(markdown(report))
+
+
+def run_main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--arms", default="A,B,CC,CX,W")
+    p.add_argument("--tasks", default=",".join(TASKS))
+    p.add_argument("--runs", type=int, default=2)
+    p.add_argument("--output", type=Path, default=Path("bench-report"))
+    p.add_argument("--daemon", default=str(ROOT / "target/debug/brigadierd"))
+    p.add_argument("--claude-model", default="opus")
+    p.add_argument("--codex-model", default=None)
+    p.add_argument("--worker-provider", choices=["claude", "codex"], default="claude")
+    p.add_argument("--effort", choices=["low", "medium", "high"], default="low")
+    p.add_argument("--timeout", type=int, default=600)
+    p.add_argument("--scratch-prefix", default="brigadier-bench-" + os.environ.get("GITHUB_RUN_ID", "local") + "-", help="Unique run/worker prefix for /tmp scratch")
+    p.add_argument("--skip", action="store_true", help="Write explicit skipped rows without calling a CLI or daemon")
+    args = p.parse_args()
+    arms, tasks = args.arms.split(","), args.tasks.split(",")
+    if not set(arms) <= ARMS.keys() or not set(tasks) <= TASKS.keys() or args.runs < 1:
+        p.error("Unknown arm/task, or runs < 1")
+    args.daemon = str(Path(args.daemon).resolve())
+    report = {"schema_version": 1, "fixture_version": VERSION,
+              "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+              "created_at": dt.datetime.now(dt.timezone.utc).isoformat(), "effort": args.effort,
+              "requested_models": {"claude": args.claude_model, "codex": args.codex_model},
+              "standing_instruction_bytes": (ROOT / "crates/core/src/manager/standing_instructions.md").stat().st_size,
+              "runs": []}
+    if args.skip:
+        report["runs"] = [{"arm": arm, "provider": args.worker_provider if arm == "W" else ARMS[arm], "status": "skipped", "reason": "needs the user: secrets"} for arm in arms]
+        write(report, args.output)
+        return
+    errors = []
+    for task in tasks:
+        for run in range(1, args.runs + 1):
+            for arm in arms:
+                provider = args.worker_provider if arm == "W" else ARMS[arm]
+                model = args.claude_model if provider == "claude" else args.codex_model
+                row = {"arm": arm, "provider": provider, "task": task, "run": run, "status": "incomplete"}
+                print(f"{arm} {task}/{run}", flush=True)
+                # The prefix is unique to the invoking session on shared hosts.
+                with tempfile.TemporaryDirectory(prefix=args.scratch_prefix, dir="/tmp") as tmp:
+                    scratch = Path(tmp).resolve()
+                    repo = scratch / "repo"
+                    daemon = None
+                    try:
+                        fixture(repo, task)
+                        prompt = TASKS[task] + " Run node --test test/*.test.js. Do not push or publish."
+                        if arm == "W":
+                            flags = f"--agent {provider} --effort {args.effort} --permission full-access --local" + (f" --model {model}" if model else "")
+                            prompt += f" Delegate all implementation and tests to exactly one worker using brigadier start {flags}. Wait for that worker using brigadier wait, inspect the result and report it. Keep it in this checkout. Do not delegate to any other worker or subagent."
+                        else:
+                            prompt += " Do the work yourself without workers or subagents. Do not commit."
+                        if arm in ("A", "B"):
+                            result, checkout = plain(repo, provider, prompt, model, args, scratch)
+                        else:
+                            daemon = Daemon(args, scratch)
+                            result, checkout = daemon.run(repo, arm, provider, model, prompt)
+                        row.update(result, grade=grade(checkout, task), status="complete")
+                        if arm == "W" and not row["delegated"]:
+                            row["grade"]["passed"] = False
+                            row["grade"]["delegation"] = "Expected exactly one metered worker"
+                    except Exception as error:
+                        row.update(status="incomplete", reason=str(error))
+                        if daemon and daemon.conv:
+                            try:
+                                row["last_state"] = daemon.ipc.view(daemon.conv)["run"]
+                            except Exception:
+                                pass
+                        errors.append(f"{arm} {task}/{run}: {error}")
+                    finally:
+                        if daemon:
+                            try:
+                                daemon.cleanup()
+                            except Exception as error:
+                                row.update(status="incomplete", reason=str(error))
+                                errors.append(str(error))
+                    report["runs"].append(row)
+                    write(report, args.output)
+    if errors:
+        raise SystemExit("Harness broke: " + "; ".join(errors))
+
+
+def main():
+    # Existing credentials only. No login, writes to the real CLI home, or shared trust edits.
+    prefix = "brigadier-bench-" + os.environ.get("GITHUB_RUN_ID", "local") + "-codex-"
+    for i, arg in enumerate(sys.argv[:-1]):
+        if arg == "--scratch-prefix":
+            prefix = sys.argv[i + 1] + "codex-"
+    if "--skip" in sys.argv:
+        run_main()
+        return
+    source = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    with tempfile.TemporaryDirectory(prefix=prefix, dir="/tmp") as tmp:
+        home = Path(tmp)
+        for name in ("auth.json", "config.toml", "AGENTS.md"):
+            if (source / name).is_file():
+                shutil.copyfile(source / name, home / name)
+                (home / name).chmod(0o600)
+        if (source / "skills").is_dir():
+            shutil.copytree(source / "skills", home / "skills", symlinks=False)
+        old = os.environ.get("CODEX_HOME")
+        os.environ["CODEX_HOME"] = str(home)
+        try:
+            run_main()
+        finally:
+            if old is None:
+                os.environ.pop("CODEX_HOME", None)
+            else:
+                os.environ["CODEX_HOME"] = old
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Focused offline checks: transcript accounting, graders, and non-gating comparisons."""
+from copy import deepcopy
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from metrics import parse
+from tasks import TASKS, fixture, grade
+from nightly import collect, issue, regressions
+
+PREFIX = os.environ.get("BENCH_SCRATCH_PREFIX", "brigadier-bench-check-" + os.environ.get("GITHUB_RUN_ID", "local") + "-")
+
+
+class Accounting(unittest.TestCase):
+    def test_claude_final_usage_deduplicates_streaming(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            path = Path(tmp) / "native.jsonl"
+            rows = [{"type": "assistant", "message": {"id": "m", "model": "opus", "usage": {
+                "input_tokens": 10, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30, "output_tokens": n},
+                "content": [{"type": "tool_use", "id": "tool", "input": {"command": "brigadier ledger add decision ok"}}]}} for n in (1, 4)]
+            rows += [{"type": "user", "message": {"content": "task"}},
+                     {"type": "user", "message": {"content": [{"type": "tool_result", "content": "not an injection"}]}},
+                     {"type": "user", "message": {"content": [{"type": "text", "text": "skill"}]}}]
+            path.write_text("\n".join(map(json.dumps, rows)))
+            result = parse(path, "claude", "task")
+            self.assertEqual(result["usage"], {"input": 10, "cache_write": 20, "cache_read": 30, "output": 4})
+            self.assertEqual((result["api_calls"], result["tools"], result["ledger_adds"], result["injected_messages"], result["injected_bytes"]), (1, 1, 1, 1, 5))
+
+    def test_codex_cache_subset_and_repeated_token_event(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            token = lambda n: {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": n, "cached_input_tokens": 20, "output_tokens": 5}}}}
+            rows = [token(50), token(50), token(80), {"type": "turn_context", "payload": {"model": "default"}},
+                    {"type": "response_item", "payload": {"type": "function_call", "call_id": "1", "arguments": json.dumps({"code": 'await tools.exec_command({cmd: "brigadier ledger add decision ok"})'})}}]
+            path.write_text("\n".join(map(json.dumps, rows)))
+            result = parse(path, "codex", "task")
+            self.assertEqual(result["usage"], {"input": 60, "cache_write": 0, "cache_read": 20, "output": 5})
+            self.assertEqual(result["api_calls"], 2)
+            self.assertEqual(result["ledger_adds"], 1)
+            path.write_text('{}\n')
+            with self.assertRaises(RuntimeError):
+                parse(path, "codex", "task")
+
+
+class Graders(unittest.TestCase):
+    def test_rejects_incomplete_and_accepts_each_implementation(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            for task in TASKS:
+                with self.subTest(task=task):
+                    repo = Path(tmp) / task
+                    fixture(repo, task)
+                    self.assertFalse(grade(repo, task)["passed"])
+                    if task == "t1":
+                        with (repo / "src/text.js").open("a") as f:
+                            f.write(r"export const stripColor = s => s.replace(/\x1b\[[0-9;]*m/g, '');" + "\n")
+                        with (repo / "src/index.js").open("a") as f:
+                            f.write("export {stripColor} from './text.js';\n")
+                    if task == "t2":
+                        text = repo / "src/text.js"
+                        text.write_text(text.read_text().replace("text.split('\\n')", "text.split(/\\r?\\n/)"))
+                    if task == "t3":
+                        (repo / "src/text.js").rename(repo / "src/strings.js")
+                        (repo / "src/index.js").write_text("export {splitLines,upper} from './strings.js';\n")
+                    if task == "t4":
+                        (repo / "src/cli.js").write_text("import {upper} from './index.js'; let s=''; for await(const c of process.stdin) s+=c; process.stdout.write(upper(s));\n")
+                    if task == "t5":
+                        (repo / "src/gradient.js").write_text("export const gradient=(a,b,n)=>Array.from({length:n},(_,i)=>n===1?a:a+(b-a)*i/(n-1));\n")
+                        (repo / "src/slug.js").write_text("export const slug=s=>s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');\n")
+                        with (repo / "src/index.js").open("a") as f:
+                            f.write("export {gradient} from './gradient.js'; export {slug} from './slug.js';\n")
+                    if task != "t2":
+                        (repo / "test/new.test.js").write_text("import test from 'node:test'; test('feature',()=>{});\n")
+                    result = grade(repo, task)
+                    self.assertTrue(result["passed"], result["detail"])
+                    if task == "t2":
+                        (repo / "test/base.test.js").write_text("import test from 'node:test'; test('removed repro',()=>{});\n")
+                        self.assertFalse(grade(repo, task)["passed"])
+
+
+def sample():
+    rows = []
+    for provider, arms in (("claude", ("A", "CC", "W")), ("codex", ("B", "CX", "W"))):
+        for arm in arms:
+            rows.append({"provider": provider, "arm": arm, "task": "t1", "run": 1, "status": "complete", "grade": {"passed": True},
+                         "wall_s": 10, "raw_tokens": 100, "models": [provider]})
+    return {"fixture_version": 1, "effort": "low", "runs": rows}
+
+
+class Reports(unittest.TestCase):
+    def test_normalized_threshold_and_pass_regression(self):
+        old = sample()
+        new = deepcopy(old)
+        new["runs"][1]["wall_s"] = 13
+        new["runs"][1]["raw_tokens"] = 130
+        new["runs"][1]["grade"]["passed"] = False
+        self.assertEqual(len(regressions(new, old)), 3)
+        self.assertFalse(regressions(new, None))
+        # Slower whole host with the same wrapper ratio is not a regression.
+        for row in new["runs"]:
+            row["wall_s"] = 30
+            row["raw_tokens"] = 300
+            row["grade"]["passed"] = True
+        self.assertFalse(regressions(new, old))
+        new["runs"][1].update(raw_tokens=1000, models=["changed"])
+        self.assertFalse(regressions(new, old))
+
+    def test_skips_collect_green_missing_arm_is_harness_failure(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            root = Path(tmp)
+            report = dict(sample(), schema_version=1, source="sha", created_at="now", requested_models={}, standing_instruction_bytes=1990)
+            for row in report["runs"]:
+                row.update(status="skipped", reason="needs the user: secrets")
+            for provider in ("claude", "codex"):
+                folder = root / f"bench-{provider}"
+                folder.mkdir()
+                (folder / "report.json").write_text(json.dumps(dict(report, runs=[r for r in report["runs"] if r["provider"] == provider])))
+            result = collect(root, root / "out", None)
+            self.assertEqual(len(result["runs"]), 6)
+            self.assertFalse(result["regressions"])
+            self.assertTrue((root / "out/report.md").is_file())
+            (root / "bench-codex/report.json").unlink()
+            with self.assertRaises(RuntimeError):
+                collect(root, root / "out", None)
+
+    def test_regression_only_updates_one_issue(self):
+        report = dict(sample(), run_url="https://example.test/run", regressions=["claude CC t1: wall_s 10 → 13"])
+        with patch('nightly.subprocess.check_output', return_value='[{"title":"Bench regression","number":42}]'), patch('nightly.subprocess.run') as call:
+            issue(report)
+            self.assertEqual(call.call_args.args[0][:4], ["gh", "issue", "edit", "42"])
+        with patch('nightly.subprocess.run') as call:
+            issue(dict(report, regressions=[]))
+            call.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

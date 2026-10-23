@@ -1,0 +1,162 @@
+name: Bench
+
+# Separate report, after the 01:30 nightly. No push/release event, no required check.
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+    inputs:
+      live:
+        description: Use existing provider secrets (false verifies the skip path)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  arms:
+    name: ${{ matrix.provider }} arm set (report only)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: claude
+            arms: A,CC,W
+          - provider: codex
+            arms: B,CX,W
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Existing credentials only
+        id: credentials
+        env:
+          PROVIDER: ${{ matrix.provider }}
+          ENABLED: ${{ github.event_name == 'schedule' || inputs.live }}
+        run: |
+          live=false
+          if [ "$ENABLED" = true ]; then
+            if { [ "$PROVIDER" = claude ] && { [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ -n "$ANTHROPIC_API_KEY" ]; }; } ||
+               { [ "$PROVIDER" = codex ] && [ -n "$CODEX_AUTH_JSON" ]; }; then
+              live=true
+            fi
+          fi
+          echo "live=$live" >> "$GITHUB_OUTPUT"
+          if [ "$live" = false ]; then echo '::notice::Bench arms skipped; live disabled or needs the user: secrets'; fi
+      - uses: actions/setup-node@v7
+        if: steps.credentials.outputs.live == 'true'
+        with:
+          node-version: 24
+      - name: Provider CLI
+        if: steps.credentials.outputs.live == 'true'
+        env:
+          PROVIDER: ${{ matrix.provider }}
+        run: |
+          if [ "$PROVIDER" = claude ]; then
+            npm install -g @anthropic-ai/claude-code
+          else
+            npm install -g @openai/codex
+            python3 - <<'PY'
+          import os
+          from pathlib import Path
+          home = Path(os.environ['RUNNER_TEMP']) / 'bench-codex'
+          home.mkdir(mode=0o700)
+          auth = home / 'auth.json'
+          auth.write_text(os.environ['CODEX_AUTH_JSON'])
+          auth.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'CODEX_HOME={home}\n')
+          PY
+          fi
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.credentials.outputs.live == 'true'
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+        if: steps.credentials.outputs.live == 'true'
+        with:
+          shared-key: bench
+      - name: Headless dev daemon
+        if: steps.credentials.outputs.live == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libclang-dev cmake
+          cargo build --locked -p brigadier-daemon --bin brigadierd -p brigadier-cli --bin brigadier
+      - name: Harness checks
+        run: python3 -I tools/bench/checks.py
+      - name: Measure or record skipped arms
+        env:
+          LIVE: ${{ steps.credentials.outputs.live }}
+          ARMS: ${{ matrix.arms }}
+          PROVIDER: ${{ matrix.provider }}
+        run: |
+          args=()
+          if [ "$LIVE" != true ]; then args+=(--skip); fi
+          tools/bench/run.sh --arms "$ARMS" --worker-provider "$PROVIDER" \
+            --output "$RUNNER_TEMP/bench-$PROVIDER" "${args[@]}"
+          cat "$RUNNER_TEMP/bench-$PROVIDER/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-${{ matrix.provider }}
+          path: |
+            ${{ runner.temp }}/bench-${{ matrix.provider }}/report.md
+            ${{ runner.temp }}/bench-${{ matrix.provider }}/report.json
+          if-no-files-found: error
+          retention-days: 30
+
+  report:
+    name: Trend and issue (never a gate)
+    needs: arms
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bench-*
+          path: ${{ runner.temp }}/bench-input
+      - name: Previous report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=bench-report&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main")] | sort_by(.id) | last | .workflow_run.id // empty')"
+          if [ -n "$run" ]; then
+            gh run download "$run" -R "$GITHUB_REPOSITORY" -n bench-report -D "$RUNNER_TEMP/bench-previous"
+          fi
+      - name: Compare measurements
+        run: |
+          python3 -I tools/bench/nightly.py --input "$RUNNER_TEMP/bench-input" \
+            --output "$RUNNER_TEMP/bench-report" --previous "$RUNNER_TEMP/bench-previous/report.json"
+          cat "$RUNNER_TEMP/bench-report/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-report
+          path: ${{ runner.temp }}/bench-report
+          if-no-files-found: error
+          retention-days: 90
+      - name: Open or update Bench regression
+        # Only reporting permissions/API failures are soft failures. Broken measurement stays red.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I tools/bench/nightly.py --issue "$RUNNER_TEMP/bench-report/report.json"
