@@ -2236,3 +2236,87 @@ async fn turning_the_switch_on_moves_a_waiting_session_to_another_agent() {
     assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
     flow.stop().await;
 }
+
+/// The messages a session's last seam gave its successor, and those of them the thread shows
+/// already.
+fn moved(flow: &Flow) -> (Vec<String>, Vec<String>) {
+    let file =
+        crate::manager::seam::read_seam(&flow.manager.session_dir(&flow.conversation).record());
+    let seam = file.seams.last().expect("a seam");
+    (seam.messages.clone(), seam.end.shown.clone())
+}
+
+/// S38 (#562): the message whose turn the limit cut moves to the other agent, which is given it
+/// again; the seam records the thread shows it already, so it isn't drawn twice.
+#[tokio::test]
+async fn a_message_moved_to_another_agent_is_shown_already() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agent-fallback-once",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+
+    flow.say("Do the thing.").await;
+    flow.until("a turn on Codex", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let codex = seen(&log).into_iter().last().unwrap();
+    assert!(codex.input.contains("Do the thing."), "{}", codex.input);
+    let (messages, shown) = moved(&flow);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(shown, messages);
+    flow.stop().await;
+}
+
+/// S38 (#562): a session waiting for its reset moves to the other agent when the switch turns
+/// on; the message it waited with is recorded as shown already.
+#[tokio::test]
+async fn a_waiting_message_moved_to_another_agent_is_shown_already() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agent-fallback-later-once",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    flow.say("Do the thing.").await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !moments(&flow)
+        .await
+        .iter()
+        .any(|text| text.contains("Your message waits"))
+    {
+        assert!(tokio::time::Instant::now() < deadline, "no wait");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let mut settings = flow.core.settings();
+    settings.switch_providers = true;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.retry_waiting_work().await;
+    flow.until("a turn on Codex", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let (messages, shown) = moved(&flow);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(shown, messages);
+    flow.stop().await;
+}

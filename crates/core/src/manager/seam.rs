@@ -155,6 +155,10 @@ pub(crate) struct SeamEnd {
     /// The user stopped its last turn: the successor waits for their next message.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stopped: bool,
+    /// Messages the thread already shows that the successor is given again (a usage limit's
+    /// move to another agent, S38): its first message is no bubble of the user's twice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shown: Vec<String>,
 }
 
 /// A completed seam.
@@ -622,6 +626,18 @@ fn said_by_user(entry: &FileEntry) -> bool {
 pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
     let file = read_seam(record);
     let existing = |path: PathBuf| path.is_file().then(|| path.display().to_string());
+    // Per mark: its successor's first input carried only messages the thread already shows.
+    let again = |end: &SeamEnd, messages: &[String]| {
+        !messages.is_empty() && messages.iter().all(|id| end.shown.contains(id))
+    };
+    let mut shown: Vec<bool> = file
+        .seams
+        .iter()
+        .map(|seam| again(&seam.end, &seam.messages))
+        .collect();
+    if let Phase::Starting { end, messages, .. } = &file.phase {
+        shown.push(again(end, messages));
+    }
     let mut marks: Vec<SeamMark> = file
         .seams
         .iter()
@@ -683,8 +699,12 @@ pub(crate) fn marks(record: &Path, entries: &mut [FileEntry]) -> Vec<SeamMark> {
             .and_then(|n| n.parse::<u32>().ok());
         let own = without_handoff(text).to_owned();
         *text = own;
-        if let Some(mark) = marks.iter_mut().find(|mark| Some(mark.n) == n) {
-            mark.carried = text == CARRY_ON;
+        if let Some((mark, shown)) = marks
+            .iter_mut()
+            .zip(shown.iter().chain(std::iter::repeat(&false)))
+            .find(|(mark, _)| Some(mark.n) == n)
+        {
+            mark.carried = text == CARRY_ON || *shown;
             mark.at = Some(item_id.clone());
             mark.nudge = nudge.take();
         }

@@ -391,6 +391,7 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         closed_at_ms: 2,
         death: death.map(str::to_owned),
         stopped: false,
+        shown: Vec::new(),
     };
     let seam = |n: u32, death: Option<&str>| Seam {
         n,
@@ -438,6 +439,64 @@ fn marks_strip_the_handoff_and_place_the_dividers() {
         unreachable!()
     };
     assert_eq!(text, "next");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A successor given again only messages the thread shows already (a usage limit's move to
+/// another agent, S38) draws no bubble of the user's twice (#562); one with a new message does.
+#[test]
+fn a_successor_given_only_shown_messages_draws_no_bubble_again() {
+    let dir = std::env::temp_dir().join(format!("brigadier-seam-{}", uuid::Uuid::new_v4()));
+    let record = dir.as_path();
+    std::fs::create_dir_all(record).unwrap();
+    let seam = |n: u32, messages: &[&str], shown: &[&str]| Seam {
+        n,
+        end: SeamEnd {
+            predecessor: Some("p".into()),
+            nudged_at_ms: None,
+            closed_at_ms: 2,
+            death: Some("usage limit on Claude Code · continued on Codex".into()),
+            stopped: false,
+            shown: shown.iter().map(|id| (*id).to_owned()).collect(),
+        },
+        successor: format!("s{n}"),
+        provider: ProviderKind::Codex,
+        started_at_ms: 3,
+        note: None,
+        start: start_path(record, n).display().to_string(),
+        messages: messages.iter().map(|id| (*id).to_owned()).collect(),
+        first_context: None,
+    };
+    write_seam(
+        record,
+        &SeamFile {
+            generation: 3,
+            phase: Phase::Live,
+            seams: vec![seam(1, &["m1"], &["m1"]), seam(2, &["m2", "m3"], &["m2"])],
+        },
+    )
+    .unwrap();
+    let mut entries = vec![
+        message("u0", Role::User, "Do the thing."),
+        message(
+            "u1",
+            Role::User,
+            &format!(
+                "{}\nmap{HANDOFF_END}\n\nDo the thing.",
+                handoff_line(1, "k")
+            ),
+        ),
+        message(
+            "u2",
+            Role::User,
+            &format!("{}\nmap{HANDOFF_END}\n\nMore.", handoff_line(2, "k")),
+        ),
+    ];
+    let marks = marks(record, &mut entries);
+    assert_eq!(marks[0].at.as_deref(), Some("u1"));
+    assert!(marks[0].carried);
+    assert_eq!(marks[1].at.as_deref(), Some("u2"));
+    assert!(!marks[1].carried);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

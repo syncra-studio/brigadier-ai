@@ -365,6 +365,7 @@ impl SessionManager {
                 closed_at_ms: now_ms(),
                 death,
                 stopped,
+                shown: Vec::new(),
             },
         };
         if let Err(err) = self.write_seam_of(&conv.id, file).await {
@@ -449,6 +450,7 @@ impl SessionManager {
         from: ProviderKind,
         to: ModelChoice,
         carried: Vec<Message>,
+        landed: bool,
     ) {
         let Ok(conversation) = self.core.conversation(&conv.id) else {
             return;
@@ -486,6 +488,27 @@ impl SessionManager {
         if matches!(file.phase, Phase::Live | Phase::Nudged { .. }) {
             self.close_seam(conv, file, nudged, Some(death), stopped)
                 .await;
+        }
+        // The messages the old CLI had taken are in the thread already: the successor is given
+        // them again, and its first message doesn't show them twice (#562). Those of a turn
+        // the limit cut (`landed`), or those that waited for the reset after one.
+        let shown: Vec<String> = {
+            let state = conv.state.lock().await;
+            carried
+                .iter()
+                .filter(|_| landed)
+                .map(|message| message.id.clone())
+                .chain(state.continuing.iter().cloned())
+                .collect()
+        };
+        let mut file = self.read_seam_of(&conv.id).await;
+        if !shown.is_empty()
+            && let Phase::Closed { end } = &mut file.phase
+        {
+            end.shown = shown;
+            if let Err(err) = self.write_seam_of(&conv.id, file).await {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not record what the thread shows already"; conversation = %conv.id, error = %err);
+            }
         }
         let stopped = {
             let mut state = conv.state.lock().await;
@@ -662,6 +685,7 @@ impl SessionManager {
             closed_at_ms: now_ms(),
             death: Some(NOT_RESUMED.into()),
             stopped: false,
+            shown: Vec::new(),
         };
         let messages: Vec<String> = users.iter().map(|message| message.id.clone()).collect();
         file.phase = Phase::Starting {
@@ -831,6 +855,7 @@ impl SessionManager {
                         closed_at_ms: now_ms(),
                         death: (!written).then(|| RESTARTED.into()),
                         stopped: false,
+                        shown: Vec::new(),
                     },
                 };
                 if self.write_seam_of(id, file).await.is_ok() {

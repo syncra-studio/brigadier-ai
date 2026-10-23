@@ -4535,7 +4535,9 @@ impl SessionManager {
                 // Not from inside the CLI's own event pump: closing the CLI waits for it.
                 let (manager, conv, from) = (self.arc(), conv.clone(), cli.provider);
                 self.spawn(async move {
-                    manager.seam_to_agent(&conv, from, to, carried).await;
+                    manager
+                        .seam_to_agent(&conv, from, to, carried, landed)
+                        .await;
                 });
                 return;
             }
@@ -4879,7 +4881,7 @@ impl SessionManager {
             // "Switch to another agent automatically" turned on while it waits (S38).
             if let Some(to) = self.fallback_agent(conv, &from) {
                 self.stop_waiting(conv).await;
-                self.seam_to_agent(conv, from.provider, to, Vec::new())
+                self.seam_to_agent(conv, from.provider, to, Vec::new(), false)
                     .await;
                 return;
             }
