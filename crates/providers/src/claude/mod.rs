@@ -430,7 +430,18 @@ impl Claude {
 /// refers to by name, what the output hook reads, its MCP time limits and auto-compaction.
 fn session_env(spec: &SessionSpec, hooks_on: bool) -> Vec<(String, String)> {
     let mut env = spec.env.clone();
-    // What the output hook reads.
+    // What the MCP config of Brigadier's servers (the computer-use driver's, S35) refers to by
+    // name, each under its server's own alias, and what the output hook reads. The user's own
+    // servers load from their setup, untouched.
+    for (index, server) in spec.mcp_servers.iter().enumerate() {
+        env.extend(
+            server
+                .env
+                .iter()
+                .enumerate()
+                .map(|(key, (_, value))| (mcp_alias(index, key), value.clone())),
+        );
+    }
     if let Some(hook) = spec
         .output_hook
         .as_ref()
@@ -441,26 +452,52 @@ fn session_env(spec: &SessionSpec, hooks_on: bool) -> Vec<(String, String)> {
     if let Some(hook) = spec.stop_hook.as_ref().filter(|_| hooks_on) {
         env.extend(hook.env.iter().cloned());
     }
+    if let Some(secs) = spec
+        .mcp_servers
+        .iter()
+        .filter_map(|server| server.tool_timeout_secs)
+        .max()
+    {
+        // The overall limit, and the limit on a stdio call that sends nothing back while it
+        // waits (30 minutes by default): a computer-use call may wait for the helper to start
+        // and for a permission the user is granting.
+        let ms = (secs * 1000).to_string();
+        env.push(("MCP_TOOL_TIMEOUT".into(), ms.clone()));
+        env.push(("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT".into(), ms));
+    }
     if !spec.auto_compact {
         env.push(("DISABLE_AUTO_COMPACT".into(), "1".into()));
     }
     env
 }
 
+/// The variable that holds value `key` of the session's server `server` in Claude's
+/// environment: each server's own, so two servers can give one name different values.
+fn mcp_alias(server: usize, key: usize) -> String {
+    format!("BRIGADIER_MCP_{server}_{key}")
+}
+
 /// Claude's `--mcp-config` for the session's servers.
 ///
-/// The config is on Claude's command line, which any process of the user can read, and so are
-/// a server's values (`env`, `headers`). Claude ignores a stdio server's `cwd` (2.1.306,
+/// The config is on Claude's command line, which any process of the user can read, so a
+/// server's values (a grant, a token, a header) are not in it: they are in Claude's own
+/// environment under aliases ([`mcp_alias`]), and the config names them (`${ALIAS}`, expanded
+/// by Claude in `env` and `headers`). Claude ignores a stdio server's `cwd` (2.1.306,
 /// docs/research/phase7-probes.md (g)), so on Unix a server with a folder of its own starts
 /// through a shell that changes to it first.
 fn mcp_config(servers: &[McpServer]) -> Value {
     let servers: Map<String, Value> = servers
         .iter()
-        .map(|server| {
+        .enumerate()
+        .map(|(index, server)| {
             let values: Map<String, Value> = server
                 .env
                 .iter()
-                .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                .enumerate()
+                .map(|(key, (name, _))| {
+                    let alias = mcp_alias(index, key);
+                    (name.clone(), Value::String(format!("${{{alias}}}")))
+                })
                 .collect();
             let mut config = match &server.transport {
                 McpTransport::Stdio { command, args, cwd } => {
@@ -3656,10 +3693,12 @@ for line in sys.stdin:
         }
     }
 
-    /// A server's values are in its config entry (an HTTP server's as headers), and a server
-    /// with a folder of its own starts in it (Claude ignores `cwd`, phase7-probes.md (g)).
+    /// Two servers may give one variable different values: each value is in Claude's
+    /// environment under its server's own alias, the config names the alias, and no value is
+    /// on the command line. An HTTP server's headers come the same way, and a server with a
+    /// folder of its own starts in it (Claude ignores `cwd`, phase7-probes.md (g)).
     #[test]
-    fn a_servers_config_carries_its_values_and_starts_in_its_folder() {
+    fn each_servers_values_have_their_own_aliases() {
         let dir = std::env::temp_dir();
         let server = |name: &str, transport: McpTransport, env: &[(&str, &str)]| McpServer {
             name: name.into(),
@@ -3703,27 +3742,50 @@ for line in sys.stdin:
             tools: ToolSet::Lean,
             ..spec(&dir, &[])
         };
+        let env = session_env(&spec, true);
+        let value = |name: &str| {
+            env.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("BRIGADIER_MCP_0_0"), Some("first-secret"));
+        assert_eq!(value("BRIGADIER_MCP_1_0"), Some("second-secret"));
+        assert_eq!(value("BRIGADIER_MCP_1_1"), Some("dev"));
+        assert_eq!(value("BRIGADIER_MCP_2_0"), Some("Bearer third-secret"));
+        assert_eq!(value("TOKEN"), None);
+        // No server asks for longer calls: Claude's own limits hold.
+        assert_eq!(value("MCP_TOOL_TIMEOUT"), None);
+        let mut long = spec.clone();
+        long.mcp_servers[1].tool_timeout_secs = Some(120);
+        let env = session_env(&long, true);
+        for name in ["MCP_TOOL_TIMEOUT", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"] {
+            assert!(env.contains(&(name.into(), "120000".into())), "{env:?}");
+        }
+
         let args = Claude::session_flags(&spec, &dir, false, None);
+        for secret in ["first-secret", "second-secret", "third-secret"] {
+            assert!(!args.iter().any(|arg| arg.contains(secret)), "{args:?}");
+        }
         let at = args.iter().position(|arg| arg == "--mcp-config").unwrap();
         let config: Value = serde_json::from_str(&args[at + 1]).unwrap();
         let servers = &config["mcpServers"];
         assert_eq!(
             servers["one"],
             json!({"type": "stdio", "command": "/bin/one", "args": ["--x"],
-                   "env": {"TOKEN": "first-secret"}})
+                   "env": {"TOKEN": "${BRIGADIER_MCP_0_0}"}})
         );
         if cfg!(unix) {
             assert_eq!(
                 servers["two"],
                 json!({"type": "stdio", "command": "/bin/sh",
                        "args": ["-c", r#"cd "$0" && exec "$@""#, "/srv/two", "/bin/two", "serve"],
-                       "env": {"TOKEN": "second-secret", "MODE": "dev"}})
+                       "env": {"TOKEN": "${BRIGADIER_MCP_1_0}", "MODE": "${BRIGADIER_MCP_1_1}"}})
             );
         }
         assert_eq!(
             servers["web"],
             json!({"type": "http", "url": "https://mcp.example.com/mcp",
-                   "headers": {"Authorization": "Bearer third-secret"}})
+                   "headers": {"Authorization": "${BRIGADIER_MCP_2_0}"}})
         );
     }
 

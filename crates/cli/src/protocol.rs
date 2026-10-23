@@ -171,7 +171,29 @@ pub struct StartRequest {
     pub lean: bool,
     /// With `lean`, the only skills it keeps.
     pub skills: Vec<String>,
+    /// With `lean`, what it has beyond the goal and the repository (`--with`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub with: Vec<Capability>,
     pub prompt: String,
+}
+
+/// What a lean worker may be given (`brigadier start --lean --with`). Every other worker has
+/// them as its session does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Capability {
+    /// The computer tools, while Settings › Computer use is on.
+    ComputerUse,
+}
+
+impl Capability {
+    pub const ALL: [Self; 1] = [Self::ComputerUse];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::ComputerUse => "computer-use",
+        }
+    }
 }
 
 /// A CLI's own permission mode.

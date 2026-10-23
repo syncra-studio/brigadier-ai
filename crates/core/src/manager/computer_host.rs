@@ -283,7 +283,7 @@ impl SessionManager {
         match self.core.conversation(&conversation) {
             Ok(found) => {
                 let title = if found.title.trim().is_empty() {
-                    "A thread".to_owned()
+                    "A session".to_owned()
                 } else {
                     found.title
                 };

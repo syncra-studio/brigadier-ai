@@ -223,6 +223,14 @@ pub const COMMANDS: &[Command] = &[
                 choices: &[],
                 repeat: true,
             },
+            Arg::Flag {
+                long: "with",
+                value: Some("WHAT"),
+                help: "With --lean: computer-use gives it the computer tools while Settings › \
+                       Computer use is on (every other worker has them then).",
+                choices: &["computer-use"],
+                repeat: true,
+            },
             rest("prompt", "Its task.", true),
         ],
         available: true,

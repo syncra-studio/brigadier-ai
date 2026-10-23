@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use crate::commands::{self, Arg, Command};
 use serde_json::{Map, Value, json};
 
-use crate::protocol::{Agent, Answer, CliRequest, Permission, StartRequest, Tool};
+use crate::protocol::{Agent, Answer, Capability, CliRequest, Permission, StartRequest, Tool};
 
 /// What the command line asks for.
 #[derive(Debug)]
@@ -293,6 +293,21 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                     "--skill goes with --lean; a worker without it has your skills".into(),
                 ));
             }
+            let with: Vec<Capability> = args
+                .all("with")
+                .iter()
+                .filter_map(|word| {
+                    Capability::ALL
+                        .into_iter()
+                        .find(|capability| capability.word() == word)
+                })
+                .collect();
+            if !with.is_empty() && !args.switch("lean") {
+                return Err(error(
+                    "--with goes with --lean; a worker without it has computer use while it is on"
+                        .into(),
+                ));
+            }
             let prompt = args.text("prompt");
             if prompt.trim().is_empty() {
                 return Err(error("missing <prompt>".into()));
@@ -322,6 +337,7 @@ pub fn request(command: &Command, args: &Parsed) -> Result<Option<CliRequest>, U
                 }),
                 lean: args.switch("lean"),
                 skills,
+                with,
                 prompt,
             }))
         }
@@ -743,8 +759,21 @@ mod tests {
     fn the_worker_commands_parse_into_their_requests() {
         assert_eq!(
             run(&[
-                "start", "--agent", "codex", "--model", "m", "--lean", "--skill", "a", "--skill",
-                "b", "write", "a", "file",
+                "start",
+                "--agent",
+                "codex",
+                "--model",
+                "m",
+                "--lean",
+                "--skill",
+                "a",
+                "--skill",
+                "b",
+                "--with",
+                "computer-use",
+                "write",
+                "a",
+                "file",
             ])
             .0,
             CliRequest::Start(Box::new(StartRequest {
@@ -759,6 +788,7 @@ mod tests {
                 permission: None,
                 lean: true,
                 skills: vec!["a".into(), "b".into()],
+                with: vec![Capability::ComputerUse],
                 prompt: "write a file".into(),
             }))
         );
@@ -833,6 +863,11 @@ mod tests {
         assert!(fails(&["start", "--local", "--worktree", "go"]).contains("don't go together"));
         assert!(fails(&["start", "--local", "--base", "main", "go"]).contains("--base is for"));
         assert!(fails(&["start", "--skill", "a", "go"]).contains("goes with --lean"));
+        assert!(fails(&["start", "--with", "computer-use", "go"]).contains("goes with --lean"));
+        assert!(
+            fails(&["start", "--lean", "--with", "screens", "go"])
+                .contains("must be one of: computer-use")
+        );
         assert!(fails(&["start", "--lean"]).contains("missing <prompt>"));
         assert!(fails(&["send", "ab12"]).contains("missing <text>"));
         assert!(fails(&["send", "ab12", "--allow", "--deny"]).contains("don't go together"));

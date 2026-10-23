@@ -279,7 +279,7 @@ async fn an_agent_waiting_for_setup_opens_the_setup_window_once() {
 
 /// A helper bundled where Brigadier.app keeps it, signed (ad hoc) so it passes the signature
 /// check when placed: computer use is then really available to agents.
-fn bundle_helper(flow: &Flow) {
+pub(super) fn bundle_helper(flow: &Flow) {
     let app = flow
         .manager
         .config
@@ -310,36 +310,4 @@ fn bundle_helper(flow: &Flow) {
         .output()
         .unwrap();
     assert!(signed.status.success(), "{signed:?}");
-}
-
-/// The thread has no computer tools, while computer use is on and its helper is ready: no
-/// `computer` server, no skill plugin and no word of them in its instructions. Given them, a
-/// Claude thread ran a long command as its own background job more often than through `run`.
-#[tokio::test]
-async fn the_thread_has_no_computer_tools() {
-    let flow = flow("thread-no-computer").await;
-    bundle_helper(&flow);
-    assert!(flow.manager.core.settings().computer_use);
-    let kit = flow
-        .manager
-        .computer_use_kit("a-worker", false)
-        .await
-        .expect("computer use is available to agents");
-    // A worker's server gives one line of instructions, not the standalone pitch (#23).
-    assert!(
-        kit.server
-            .env
-            .iter()
-            .any(|(name, value)| name == "BRIGADIER_CU_AUDIENCE" && value == "brigadier"),
-        "{:?}",
-        kit.server.env
-    );
-    flow.say("Is the build green?").await;
-    flow.settled().await;
-    let specs = flow.thread_specs();
-    let (_, spec) = specs.first().expect("the thread started");
-    assert!(spec.mcp_servers.is_empty(), "{:?}", spec.mcp_servers);
-    assert!(spec.skill_plugins.is_empty());
-    let prompt = spec.append_system_prompt.as_deref().unwrap();
-    assert!(!prompt.contains("computer tools"), "{prompt}");
 }

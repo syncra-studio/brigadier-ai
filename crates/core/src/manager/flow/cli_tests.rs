@@ -536,6 +536,7 @@ pub(super) fn start(prompt: &str) -> StartRequest {
         permission: None,
         lean: false,
         skills: Vec::new(),
+        with: Vec::new(),
         prompt: prompt.into(),
     }
 }

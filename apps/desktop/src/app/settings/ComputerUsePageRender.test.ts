@@ -18,7 +18,7 @@ type Seen = Record<States, Look> & { sections: string[]; rows: string[]; listing
 test("computer use settings: enable, menu bar, permissions and setup, in every state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "computer-use.html?drive=1", "computer-use-result", 15000)) as Seen;
   assert.deepEqual(seen.sections, ["Enable", "Menu bar", "Permissions", "Setup"]);
-  assert.deepEqual(seen.rows, ["Let agents use apps on this Mac", "Show in menu bar", "Accessibility", "Screen Recording", "Setup"]);
+  assert.deepEqual(seen.rows, ["Let sessions use apps on this Mac", "Show in menu bar", "Accessibility", "Screen Recording", "Setup"]);
   // Listing the page only reads: it starts no helper.
   assert.deepEqual(seen.listingCalls, ["getComputerUse"]);
 

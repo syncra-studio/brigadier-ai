@@ -20,10 +20,10 @@ import { useApp } from "@/state/store";
 /** The Computer use page's rows, for the page and for Settings search. */
 export const COMPUTER_USE_ROWS = {
   enable: {
-    label: "Let agents use apps on this Mac",
-    description: "Agents can see and control apps in the background. The first time an agent needs this, setup starts by itself.",
+    label: "Let sessions use apps on this Mac",
+    description: "Sessions, Chats and their workers can see and control apps in the background. The first time one needs this, setup starts by itself.",
   },
-  menuBar: { label: "Show in menu bar", description: "See which agents are using apps, and stop them" },
+  menuBar: { label: "Show in menu bar", description: "See which sessions are using apps, and stop them" },
   accessibility: { label: "Accessibility", description: "Read what's in app windows and use their controls" },
   screenRecording: { label: "Screen Recording", description: "See app windows, to check what happened" },
   setup: { label: "Setup", description: "Where setting up computer use stands" },
@@ -35,8 +35,9 @@ export function computerUseAvailable(): boolean {
 }
 
 /**
- * Settings › Computer use: whether agents may use apps on this Mac, the menu-bar item, the two
- * macOS permissions the helper needs, and where setup stands. Showing it starts nothing.
+ * Settings › Computer use: whether sessions, Chats and workers may use apps on this Mac, the
+ * menu-bar item, the two macOS permissions the helper needs, and where setup stands. Showing it
+ * starts nothing.
  */
 export function ComputerUsePage() {
   const status = useComputerUse();

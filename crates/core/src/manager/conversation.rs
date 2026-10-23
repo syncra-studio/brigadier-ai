@@ -2531,10 +2531,20 @@ impl SessionManager {
             }
         };
 
-        // The thread has no computer tools: a live look at an app goes to a worker, which has
-        // them. Given them, a Claude thread ran a long command as its own background job more
-        // often than through `run`, whose result then never reached the request.
-        let grant_redactor = super::secrets::redactor(grant_values.clone());
+        // The computer tools, while the setting is on (S35); a side or tab chat is its
+        // session's read-only helper and goes without.
+        let computer = match side || tab_checkout.is_some() {
+            false => self.computer_use_kit(&conv.id.0, false).await,
+            true => None,
+        };
+        // Its socket token is a secret too.
+        let grant_redactor = super::secrets::redactor(
+            grant_values
+                .iter()
+                .cloned()
+                .chain(computer.as_ref().map(|kit| kit.token.clone()))
+                .collect(),
+        );
         let (fresh, reserved) = {
             let mut state = conv.state.lock().await;
             (std::mem::take(&mut state.fresh), state.seam.reserved.take())
@@ -2585,8 +2595,9 @@ impl SessionManager {
                 &prompt,
                 self.session_dir(&conv.id).root(),
             )),
-            // Brigadier gives no MCP server: the user's own load from their setup.
-            mcp_servers: Vec::new(),
+            // Brigadier's own MCP server is gone (G16): the user's load from their setup, the
+            // computer-use driver's beside them.
+            mcp_servers: computer.iter().map(|kit| kit.server.clone()).collect(),
             tools: match conv.kind {
                 ConversationKind::Session => ToolSet::Thread,
                 // A tab chat reads its session's files.
@@ -2595,7 +2606,7 @@ impl SessionManager {
                 // A Chat acts as a session (S28): the same tools and the user's own setup.
                 ConversationKind::Chat => ToolSet::Thread,
             },
-            skill_plugins: Vec::new(),
+            skill_plugins: computer.iter().map(|kit| kit.plugin.clone()).collect(),
             // Every session and Chat is a brigade (G20); a tab chat is its session's helper.
             installed_skills: match tab_checkout {
                 Some(_) => Vec::new(),

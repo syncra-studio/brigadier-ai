@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brigadier_cli::protocol::{
-    self as cli, Answer, CliReply, CloseOutput, ErrorCode, EventKind, SendOutput, StartOutput,
-    StartRequest, TurnEnd, WaitEvent, WaitOutput,
+    self as cli, Answer, Capability, CliReply, CloseOutput, ErrorCode, EventKind, SendOutput,
+    StartOutput, StartRequest, TurnEnd, WaitEvent, WaitOutput,
 };
 use brigadier_git::WorktreeSpec;
 use brigadier_providers::{ApprovalDecision, ProviderKind, TurnStatus};
@@ -282,6 +282,7 @@ impl SessionManager {
             base: base.clone(),
             lean: start.lean,
             skills: start.skills,
+            computer_use: start.with.contains(&Capability::ComputerUse),
             closed: false,
         };
         let task = crate::heap(|| {

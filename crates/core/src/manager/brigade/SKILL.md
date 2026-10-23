@@ -12,7 +12,7 @@ Everything goes through `brigadier` (`brigadier <command> --help` for details; `
 | Command | Use |
 |---|---|
 | `brigadier models` | Before each start: which provider, model and effort fits, what's left on each account, the user's rules. |
-| `brigadier start "<brief>" --title T [--work KIND] [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
+| `brigadier start "<brief>" --title T [--work KIND] [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean [--with computer-use]]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
 | `brigadier wait [<id>…] [--timeout S]` | Block until a worker event: turn ended (with its last message), needs input, gone, usage limit, fresh context. Workers send you nothing on their own: this is how you hear from them. |
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
@@ -25,7 +25,7 @@ In a Chat, a worker works in the repository `--repo <path>` names (a worktree of
 
 - Default: do it yourself. A worker costs a fresh context and a merge.
 - Workers pay for: parts that can truly run at once on **disjoint files**; a very long job (hours, or more than your context should carry); a second vendor's view; research you want kept out of your context.
-- Small reads go to your CLI's own subagents first. Bigger research goes to a **lean** worker (`--lean`: just the goal and the repo, none of the user's MCP servers or skills, no memory writes). It reports conclusions with file:line.
+- Small reads go to your CLI's own subagents first. Bigger research goes to a **lean** worker (`--lean`: just the goal and the repo, none of the user's MCP servers or skills, no memory writes; add `--with computer-use` when it must look at an app). It reports conclusions with file:line.
 - Unclear ask: ask the user **once** (`brigadier ask`). If the options need evidence, one lean researcher. Build competing prototypes only when the user must compare them, never by default.
 - Overnight or "until 07:00" is the same skill with a deadline: plan the waves to end 20 minutes early and leave a report.
 

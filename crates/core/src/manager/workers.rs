@@ -653,6 +653,18 @@ impl SessionManager {
             std::fs::create_dir_all(&made).map_err(|err| Error::Invalid(err.to_string()))
         })
         .await;
+        // The computer tools, while the setting is on (S35); a lean worker only when the thread
+        // asked (`--with computer-use`), and then loaded from the start.
+        let computer = match task.plain.as_ref() {
+            Some(plain) if plain.lean && !plain.computer_use => None,
+            plain => {
+                self.computer_use_kit(&task.id.0, plain.is_some_and(|plain| plain.lean))
+                    .await
+            }
+        };
+        if let Some(kit) = &computer {
+            secret_values.push(kit.token.clone());
+        }
         let redactor = secrets::redactor(secret_values);
         // Its sub-agents run on what its CLI allows (G18).
         let allowed_models = self.rules_models(provider)?;
@@ -690,9 +702,9 @@ impl SessionManager {
                 &super::prompts::session_instructions(&self.core.settings(), provider),
                 &worker_dir,
             )),
-            mcp_servers: Vec::new(),
+            mcp_servers: computer.iter().map(|kit| kit.server.clone()).collect(),
             tools: ToolSet::Lean,
-            skill_plugins: Vec::new(),
+            skill_plugins: computer.into_iter().map(|kit| kit.plugin).collect(),
             installed_skills: Vec::new(),
             switched_off,
             add_dirs: vec![record],

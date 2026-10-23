@@ -224,6 +224,7 @@ impl Turn {
             permission: None,
             lean: false,
             skills: Vec::new(),
+            with: Vec::new(),
             prompt: prompt.into(),
         }));
         let call = CliCall {
@@ -2214,6 +2215,8 @@ mod cli_thread_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[cfg(unix)]
 mod computer_host_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod computer_use_tests;
 #[cfg(unix)]
 mod engine_tests;
 #[cfg(unix)]

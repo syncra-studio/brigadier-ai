@@ -1018,6 +1018,10 @@ pub struct PlainWorker {
     /// With `lean`, the only skills it keeps (`--skill`).
     #[serde(default)]
     pub skills: Vec<String>,
+    /// With `lean`, it has the computer tools while Settings › Computer use is on (`--with
+    /// computer-use`, S35); every other worker has them then anyway.
+    #[serde(default)]
+    pub computer_use: bool,
     /// `brigadier close` ended it: `brigadier workers` lists it no more.
     #[serde(default)]
     pub closed: bool,
