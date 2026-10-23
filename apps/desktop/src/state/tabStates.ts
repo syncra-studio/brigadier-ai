@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { PULL_REQUEST_STATE_WORDS } from "@/app/conversation/pullRequestWords";
 import { request } from "@/ipc/client";
 import type { Conversation, EventEnvelope, PullRequestState, TabState } from "@/ipc/generated";
 import { type RowActivity, rowActivity, stoppedOf, useActivity, useRowActivity } from "@/state/activity";
@@ -127,10 +128,14 @@ export const TAB_STATE_WORDS: Record<TabState, { one: string; many: string }> = 
   reverted: { one: "Reverted", many: "reverted" },
 };
 
-/** Display words preserve the engine's state ordering while naming failures and open PRs. */
+/**
+ * Display words preserve the engine's state ordering while naming failures and pull requests,
+ * a PR's in the context card's words (a draft is "Draft" there and here).
+ */
 export const SESSION_STATUS_WORDS = {
   ...Object.fromEntries(Object.entries(TAB_STATE_WORDS).map(([state, words]) => [state, words.one])) as Record<TabState, string>,
-  prOpen: "PR open",
+  prOpen: PULL_REQUEST_STATE_WORDS.open,
+  prDraft: PULL_REQUEST_STATE_WORDS.draft,
   failed: "Failed",
   stopped: "Stopped",
 };
@@ -148,7 +153,7 @@ function clock(ms: number): string {
 
 /**
  * Its state with the reason its row's tip names: Working · waiting for reset HH:MM, Needs you ·
- * approval / · question / · sign-in, Failed, Stopped, PR open · proof attached. How many
+ * approval / · question / · sign-in, Failed, Stopped, PR open (or Draft) · proof attached. How many
  * workers it runs is never a reason: workers show in the session itself, not its row or tab.
  * `quotaWait`: its messages wait for a limit, which resets at the time given (null: unknown).
  */
@@ -162,7 +167,8 @@ export function sessionStatus(
   if (state === "needsYou" && activity.awaiting === "failed") state = "failed";
   if (state !== "needsYou" && state !== "working" && state !== "failed") {
     if (stopped) state = "stopped";
-    else if (state !== "merged" && state !== "reverted" && (settled?.pullRequest === "open" || settled?.pullRequest === "draft")) state = "prOpen";
+    else if (state !== "merged" && state !== "reverted" && settled?.pullRequest === "open") state = "prOpen";
+    else if (state !== "merged" && state !== "reverted" && settled?.pullRequest === "draft") state = "prDraft";
   }
   if (!state) return null;
   let reason: string | null = null;
@@ -179,7 +185,7 @@ export function sessionStatus(
     if (quotaWait && !activity.running) {
       reason = quotaWait.resetsAtMs === null ? "waiting for a usage limit" : `waiting for reset ${clock(quotaWait.resetsAtMs)}`;
     }
-  } else if ((state === "ready" || state === "prOpen") && settled?.proof) {
+  } else if ((state === "ready" || state === "prOpen" || state === "prDraft") && settled?.proof) {
     reason = "proof attached";
   }
   return { state, reason };

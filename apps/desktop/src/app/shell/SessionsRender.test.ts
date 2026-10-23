@@ -16,6 +16,8 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     rowsAfter: string[];
     projectHeaderAfter: { text: string; icons: number };
     workers: string[];
+    cut: { overflows: boolean; ellipsis: string; mask: string; clear: boolean | null; word: string | null };
+    cutStopped: { overflows: boolean; ellipsis: string; mask: string; clear: boolean | null; word: string | null };
   };
   // A row shows its state's keyword only; why it is in that state shows on hover.
   assert.deepEqual(
@@ -34,6 +36,8 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
       ["Old fix", "reverted:Reverted", "Reverted"],
       ["Ready to review", "ready:Ready", "Ready"],
       ["Paused task", "stopped:Stopped", "Stopped"],
+      // A draft PR in the context card's word (issue 551).
+      ["Draft the notes", "prDraft:Draft", "Draft"],
     ],
   );
   for (const row of seen.rows) {
@@ -43,7 +47,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     assert.equal(row.plain, true, `${row.title}: no chip`);
   }
   // The title tells sessions apart: the state takes at most two fifths of the row.
-  assert.equal(seen.widths.length, 12);
+  assert.equal(seen.widths.length, 13);
   for (const row of seen.widths) {
     assert.ok(row.titleShare >= 55, `${row.title}: the title keeps most of the row (${row.titleShare}%)`);
     assert.ok(row.stateWhole, `${row.title}: the state's words show whole`);
@@ -53,10 +57,15 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(seen.activeAfter, ["Header"]);
   assert.deepEqual(
     seen.rowsAfter,
-    ["Deploy the site", "Broken build", "Old fix", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Ready to review", "Paused task"],
+    ["Deploy the site", "Broken build", "Old fix", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Ready to review", "Paused task", "Draft the notes"],
     "a session that starts needing the user moves up",
   );
   assert.deepEqual(seen.projectHeaderAfter, seen.projectHeader, "sessions needing the user add no badge to the header");
+  // A long title beside its state word ends in "…" before the word, never faded under it (issue 551).
+  for (const cut of [seen.cut, seen.cutStopped]) {
+    assert.deepEqual(cut, { overflows: true, ellipsis: "ellipsis", mask: "none", clear: true, word: cut.word }, JSON.stringify(cut));
+  }
+  assert.equal(seen.cut.word, "Draft");
   // A session's workers show in the session itself (context card, Workers panel, thread), never
   // under its row, though "Header" runs two.
   assert.deepEqual(seen.workers, [], "no worker rows in the sidebar");
@@ -68,7 +77,7 @@ test("the Projects flyout shows a folder and name without a count, preserving it
     sessions: string[];
   };
   assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 });
-  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Ready to review", "Paused task"]);
+  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Ship the release", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Ready to review", "Paused task", "Draft the notes"]);
 });
 
 test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
@@ -97,7 +106,9 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
     const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}${unread ? "&unread=1" : ""}`, "sessions-result", 20000)) as {
       title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
     }[];
-    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Ready", "Merged", "PR open", "Failed", "Stopped", "Reverted"].toSorted());
+    assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Ready", "Merged", "PR open", "Draft", "Failed", "Stopped", "Reverted"].toSorted());
+    // A draft PR's tab says Draft too, as its row and context card do (issue 551).
+    assert.equal(seen.find((row) => row.title === "Draft the notes")?.tip, "Draft the notes · Draft");
     for (const row of seen) {
       const busy = row.state === "working";
       assert.equal(row.beforeMark, busy ? "spinner" : unread ? "unread" : null, `${row.title}: closed row mark`);

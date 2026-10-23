@@ -73,7 +73,9 @@ test("a session's state comes with the reason its row names", () => {
   assert.deepEqual(sessionStatus(quiet, null, { state: "merged", proof: true }), { state: "merged", reason: null });
   assert.deepEqual(sessionStatus(quiet, null, { state: "reverted" }), { state: "reverted", reason: null });
   assert.deepEqual(sessionStatus(quiet, null, { pullRequest: "open" }), { state: "prOpen", reason: null });
-  assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "draft" }), { state: "prOpen", reason: null });
+  // A draft reads "Draft", as its context card says (issue 551).
+  assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "draft" }), { state: "prDraft", reason: null });
+  assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "draft", proof: true }), { state: "prDraft", reason: "proof attached" });
   assert.deepEqual(sessionStatus(quiet, null, undefined, true), { state: "stopped", reason: null });
   assert.deepEqual(sessionStatus({ ...quiet, running: true }, null, undefined, true), { state: "working", reason: null });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "approval" }, null, undefined, true), { state: "needsYou", reason: "approval" });

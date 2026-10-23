@@ -27,6 +27,9 @@ export type RowActions = {
 const roomForActions =
   "group-hover/row:pe-14 group-focus-within/row:pe-14 group-has-data-[state=open]/row:pe-14";
 
+/** A title beside its row's state word: cut with an ellipsis, not faded into the word. */
+const besideStatus = "group-has-data-[slot=status-word]/row:mask-none group-has-data-[slot=status-word]/row:text-ellipsis";
+
 /** Hides a row's trailing status while its actions show. */
 const hideOnRowHover =
   "group-hover/row:invisible group-focus-within/row:invisible group-has-data-[state=open]/row:invisible";
@@ -104,7 +107,9 @@ export const ConversationRow = memo(function ConversationRow({
             }}
           >
             <SidebarError conversationId={conversation.id} />
-            <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+            {/* A title too long for its row fades out at the end; beside a state word it ends in "…"
+                 instead, so the word never reads as covering it. */}
+            <span data-slot="row-title" className={cn("mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap", besideStatus)}>
               {title}
             </span>
             <RowStatus conversationId={conversation.id} />

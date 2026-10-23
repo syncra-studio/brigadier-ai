@@ -52,6 +52,7 @@ const conversations = [
   session("w5-a", "Lone worker", 5),
   session("w10-a", "Ready to review", 1),
   session("w11-a", "Paused task", 0),
+  session("w13-a", "Draft the notes", -2),
 ];
 if (params.has("unread")) for (const conversation of conversations) conversation.finishedAtMs = 1;
 if (params.has("unreadOnly")) conversations.push(session("w12-a", "Unread reply", -1, { finishedAtMs: 1 }));
@@ -79,7 +80,7 @@ useActivity.setState({
 });
 let seq = 0;
 const envelope = (stream: string, event: EventEnvelope["event"]): EventEnvelope => ({ seq: ++seq, stream, streamSeq: seq, atMs: seq, event });
-useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" }, "w10-a": { state: "ready" } } });
+useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" }, "w10-a": { state: "ready" }, "w13-a": { state: "ready", pullRequest: "draft" } } });
 applySettledTabEvents([
   envelope("conversation:w2-a", { type: "requestReady", conversationId: "w2-a", requestId: "r-1", head: "abc" }),
   envelope("conversation:w2-a", { type: "pullRequestSeen", conversationId: "w2-a", pullRequest: { number: 7, title: "Login", url: "https://github.com/o/n/pull/7", state: "open" } }),
@@ -147,6 +148,21 @@ const rowWidths = () => [...document.querySelectorAll<HTMLElement>('[data-slot="
       stateWhole: words.scrollWidth <= words.clientWidth,
     };
   });
+/** A row's title cut for a long title: whether it overflows, how it ends, and whether it stays clear of the state word. */
+const cut = (title: string) => {
+  const button = [...document.querySelectorAll<HTMLButtonElement>("li li button")].find((each) => each.querySelector('[data-slot="row-title"]')?.textContent === title)!;
+  const text = button.querySelector<HTMLElement>('[data-slot="row-title"]')!;
+  const word = button.querySelector<HTMLElement>('[data-slot="status-word"]');
+  const style = getComputedStyle(text);
+  return {
+    overflows: text.scrollWidth > text.clientWidth,
+    ellipsis: style.textOverflow,
+    mask: style.maskImage,
+    clear: word ? text.getBoundingClientRect().right <= word.getBoundingClientRect().left : null,
+    word: word?.textContent ?? null,
+  };
+};
+
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
 /** The toasts on screen, by their text. */
@@ -279,9 +295,17 @@ function Fixture() {
         seen.activeAfter = rows().filter((row) => row.active).map((row) => row.title);
         // "Old fix" asks for an approval: it moves up among those that need the user.
         useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w8-a", { approvals: ["a-2"] })]) } }));
-        setTimeout(() => {
+        setTimeout(async () => {
           seen.rowsAfter = rows().map((row) => row.title);
           seen.projectHeaderAfter = projectHeader();
+          // A title too long for its row, beside a state word (issue 551): cut with "…" before the
+          // word, never faded under it; with no word, it fades out as before.
+          const long = "Add a line at the end of hello.txt that says: checked by w124";
+          useApp.setState((state) => ({ conversations: { ...state.conversations, "w13-a": { ...state.conversations["w13-a"]!, title: long }, "w11-a": { ...state.conversations["w11-a"]!, title: `${long}, again` } } }));
+          await until(() => rowButton(long) !== undefined);
+          seen.cut = cut(long);
+          // "Paused task" with its Stopped word, as any row with one.
+          seen.cutStopped = cut(`${long}, again`);
           setResult(JSON.stringify(seen));
         }, 100);
       }, 100);
