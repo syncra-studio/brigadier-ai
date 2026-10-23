@@ -136,11 +136,14 @@ mod tests {
         );
         // A session that reads it keeps it in context for every later call (the w152 bench:
         // about 3.1k tokens written once, then read again on each call).
-        assert!(SKILL.len() <= 8_800, "{} bytes", SKILL.len());
+        assert!(SKILL.len() <= 8_900, "{} bytes", SKILL.len());
         // Said once: the standing instructions already hold a worker's claim, and the Waves
         // list holds the events.
         assert!(!SKILL.contains("A worker's claim is not a fact"));
         assert_eq!(SKILL.matches("usage limit").count(), 1);
+        // Waits in proportion (the w152 bench): a background wait and the turn it ends cost a
+        // small job's parent about 9 cost units more than a foreground one.
+        assert!(SKILL.contains("One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn"));
         assert!(SKILL.starts_with("---\nname: brigade\ndescription: "));
         for command in [
             "brigadier models",

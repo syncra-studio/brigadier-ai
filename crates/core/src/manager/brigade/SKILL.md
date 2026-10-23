@@ -13,7 +13,7 @@ Everything goes through `brigadier` (`brigadier <command> --help` for details; `
 |---|---|
 | `brigadier models` | Which provider, model and effort fits, what's left on each account, the user's rules. |
 | `brigadier start "<brief>" --title T [--work KIND] [--agent claude\|codex] [--model M] [--effort E] [--base B] [--local] [--repo PATH] [--permission P] [--lean [--with computer-use]]` | Start a worker. It gets its own worktree on a branch from your current branch (`--base` to change) and your permission level. Prints its id. |
-| `brigadier wait [<id>…] [--timeout S]` | Block until a worker's next event (the list is under Waves). |
+| `brigadier wait [<id>…] [--timeout S]` | Block until a worker's next event (see Waves). |
 | `brigadier read <id> [--last N]` | Its last message, or its last N items. |
 | `brigadier send <id> "<text>"` / `--allow` / `--deny` | Message a worker (queued mid-turn), or answer its permission prompt. |
 | `brigadier workers` / `brigadier close <id>` | List yours; close one when its work is in. |
@@ -53,7 +53,7 @@ Add "Ask me (your parent) if something blocks you; don't guess on scope."
 ## Waves
 
 1. Start the wave (≤ 3 workers unless the user said more).
-2. Wait right after starting them; never end your turn with workers running and no wait on them. Run `brigadier wait` as a background command and end your turn: you are woken when it returns (both CLIs). With none running, what they did comes to you in one message once your turn ends. Each event returns the wait; handle it, then wait again until every worker's work is in:
+2. Wait right after starting them; never end your turn with workers running and no wait on them. One short job (minutes) and nothing else to do: run `brigadier wait <id>` in the foreground; it returns with the event. Longer: run `brigadier wait` as a background command and end your turn: you are woken when it returns (both CLIs). With none running, what they did comes to you in one message once your turn ends. Each event returns the wait; handle it, then wait again until every worker's work is in:
    - **turn ended** (with its last message): if done, check its claims yourself (`git log`, its acceptance commands). If it asks something the plan and the user's words settle, answer it; else ask the user once and relay with `brigadier send`.
    - **needs input** (a permission prompt): `brigadier send <id> --allow` if it is inside the brief and harmless; else ask the user, or deny and send a note.
    - **usage limit:** let it wait for the reset, or close it and restart its rest on the other provider.
