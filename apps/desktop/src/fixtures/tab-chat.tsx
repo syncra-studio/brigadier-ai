@@ -30,7 +30,7 @@ const start = Date.now() - 86_400_000;
 const conversation = {
   id: ID, kind: "session", projectId: "tab-chat-project", title: "Plan the launch",
   pinnedAtMs: null, createdAtMs: start, updatedAtMs: start, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
   setup: {
     type: "session", repo: "/tmp/tab-chat-fixture",
     environment: { type: "newWorktree", branch: "brigadier/tab-chat/session", base: "main" },

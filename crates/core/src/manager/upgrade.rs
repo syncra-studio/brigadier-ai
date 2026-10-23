@@ -3,13 +3,15 @@
 //! open Chat's CLI session is forgotten, so its next turn starts over without the old
 //! instructions. A marker file in the data folder keeps it to one launch. S7's session folders
 //! (`session_dir`) ran it again once: sessions and Chats then move to folders of their own.
+//! S23's seam runs it once more: a session open then was built for the context restarts it no
+//! longer gets.
 
 use super::SessionManager;
 use crate::model::{ConversationKind, Lifecycle};
 
 /// The markers of [`SessionManager::archive_open_at_upgrade`], in the data folder: the pass
 /// runs once more for each new one.
-pub(super) const MARKERS: [&str; 2] = ["strip-down-1", "session-folders"];
+pub(super) const MARKERS: [&str; 3] = ["strip-down-1", "session-folders", "seam-on"];
 
 impl SessionManager {
     pub(super) async fn archive_open_at_upgrade(&self) {

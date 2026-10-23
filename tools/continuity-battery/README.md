@@ -7,12 +7,12 @@ tools/continuity-battery/run.sh
 ```
 
 This builds the checkout's debug daemon and CLI, then writes
-`tools/continuity-battery/reports/<date>-claude.md`. It uses a separate headless daemon,
+`tools/continuity-battery/reports/<date>-claude-seam.md`. It uses a separate headless daemon,
 scratch data and throwaway git project. It never connects to the installed app. The
 model is `opus`, high effort. This spends real subscription tokens. The whole run is
 bounded to 25 minutes, each request to 100 seconds, and filler requests to 18.
 
-The script measures today's `manager/rebirth.rs`; it supplies no new continuity path.
+The script measures the seam, which is always on for sessions; it supplies no new continuity path.
 Twelve items are planted before inert filler requests. The final request recalls them,
 and a preceding edit applies the standing documentation rule and its correction.
 The false claim is a labelled injected worker report, checked against the fixture's
@@ -21,25 +21,21 @@ ticket exists only in a one-time command's output after its script is removed. A
 second command fails with more than 250 KB of output and a marker in the middle.
 One user item is deliberately excluded from the ledger.
 
-`BRIGADIER_REBIRTH_TOKENS=35000` prepares the existing note fork, with its normal
-swap threshold a quarter higher. `BRIGADIER_BRIEFING_TOKENS=4000` keeps the baseline
-short. The script asks for at least nine filler turns and two recorded size rebirths,
-then injects the existing debug context-window error, kills its own session's Claude
-CLI, restarts its own daemon at a foreground-command wait point, and injects a
-one-minute usage limit. It waits for that window to reset before probing Claude.
-If a seam fails to happen, the report says so; a successful injection alone is not
-proof of recovery. Repeated answers aren't fed back between seams.
+`BRIGADIER_SEAM_TOKENS=43750` (the `--tokens` default) sets the debug seam threshold. The script
+asks for at least nine filler turns and two closed seams, then injects the existing debug
+context-window error, kills its own session's Claude CLI, restarts its own daemon at a
+foreground-command wait point, and injects a one-minute usage limit. It waits for that window to
+reset before probing Claude. If a forced fault fails to happen, the report says so; a successful
+injection alone is not proof of recovery. Repeated answers aren't fed back between faults.
 
-`--seam` measures the seam (S22) instead: `BRIGADIER_SEAM=1` with `BRIGADIER_SEAM_TOKENS` a
-quarter past `--tokens`, where rebirth would swap, so both arms take their fresh context at the same
-size. Its report reads each seam from the session's `record/seam.json`, its note from
-`record/handoff/<n>.md` and what the successor started from from `<n>-start.md`. Both arms plant
-into, exclude from and measure the session's ledger, `record/ledger.md` (the one the standing
+The report reads each seam from the session's `record/seam.json`, its note from
+`record/handoff/<n>.md` and what the successor started from from `<n>-start.md`. The battery plants
+into, excludes from and measures the session's ledger, `record/ledger.md` (the one the standing
 instructions name), not a ledger in the repo.
 
-Overrides pass through `run.sh`, for example `--tokens 60000 --max-fillers 24`.
+Overrides pass through `run.sh`, for example `--tokens 75000 --max-fillers 24`.
 `--report PATH` chooses the text report. `--evidence /absolute/private/path.json`
-keeps detailed input/output, provider events, briefings and metering outside git.
+keeps detailed input/output, provider events, hand-offs and metering outside git.
 The evidence contains the planted answers and is written before scratch cleanup.
 Without this option, only the text report remains. Exit 0 means the probe ran,
 even when recall fails; exit 2 means the run ended before the probe. This is a report,

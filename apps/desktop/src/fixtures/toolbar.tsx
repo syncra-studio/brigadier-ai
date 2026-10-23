@@ -29,7 +29,7 @@ import { emitWorkspaceChanged } from "@/state/workspaceCache";
 const id = "toolbar-fixture";
 const conversation: Conversation = { id, kind: "chat", title: "Toolbar", projectId: null,
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
+  forkedFrom: null, sideOf: null, quotaWait: null };
 useApp.setState({ conversations: { [id]: { ...conversation, kind: "session" } }, selection: { type: "conversation", id }, summaryShown: { [id]: true },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 } });
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { preview: {

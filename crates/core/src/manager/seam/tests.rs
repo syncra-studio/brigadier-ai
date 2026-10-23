@@ -235,7 +235,6 @@ const TOO_LONG_TEST: &str = "its context was too long for the model";
 #[test]
 fn the_threshold_leaves_room_in_a_small_window() {
     let config = SeamConfig {
-        on: true,
         tokens: 200_000,
         hold: HOLD,
     };

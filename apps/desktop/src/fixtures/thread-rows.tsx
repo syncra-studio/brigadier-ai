@@ -78,7 +78,7 @@ useApp.setState((state) => ({
   conversations: {
     [CHAT]: {
       id: CHAT, kind: "session", title: "Rows", projectId: null, pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active",
-      forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+      forkedFrom: null, sideOf: null, quotaWait: null,
       setup: { type: "session", repo: ROOT, environment: { type: "local" }, permission: "full", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "codex", model: null, effort: null } },
     } as unknown as Conversation,
   },

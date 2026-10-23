@@ -1,5 +1,5 @@
 import { taskWaitWords } from "@/app/conversation/taskActivity";
-import type { Decision, DecisionWords, GateOwner, GateRole, MachineStepKind, MachineStepReason, Task } from "@/ipc/generated";
+import type { Decision, GateOwner, GateRole, MachineStepKind, MachineStepReason, Task } from "@/ipc/generated";
 
 /**
  * The words of a worker's row in the thread ("Router: quota penalty · Landed · checked by
@@ -131,15 +131,6 @@ export function checkRounds(checkers: readonly Task[]): Task[][] {
 /** A decision's line without the markdown it was written in. */
 export function plainLine(text: string): string {
   return text.replace(/[`*]/g, "");
-}
-
-/**
- * A decision as the user reads it: the short words the daemon gives it when it reads the board
- * (the morning report's words, also for one recorded in an earlier version's longer ones), or
- * its own words for one that arrived since (recorded in the short words already).
- */
-export function decisionWords(decision: Decision): DecisionWords {
-  return decision.short ?? { what: decision.what, why: decision.why };
 }
 
 /** The decisions made about a task (landed, sent back, held), oldest first. */

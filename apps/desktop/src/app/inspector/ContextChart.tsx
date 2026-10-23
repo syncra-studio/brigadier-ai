@@ -8,7 +8,6 @@ import {
   sumOf,
 } from "@/app/inspector/orchestratorLog";
 import { useSize } from "@/hooks/use-size";
-import type { RebirthThresholds } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 
 /** A round upper bound for the y axis: 1, 2 or 5 times a power of ten. */
@@ -23,16 +22,8 @@ function niceMax(value: number): number {
  * Cumulative estimated tokens Brigadier put into the orchestrator's context, one step per
  * injection, stacked by what it was; the CLI's own reported context size is drawn on the same
  * token axis. If the context grows only by messages and reports, the dots ride the stack.
- * The rebirth thresholds are drawn across it, and each rebirth is a marker where the new CLI
- * generation's stack starts afresh.
  */
-export function ContextChart({
-  log,
-  thresholds,
-}: {
-  log: DerivedLog;
-  thresholds: RebirthThresholds | null;
-}) {
+export function ContextChart({ log }: { log: DerivedLog }) {
   const { ref, size } = useSize();
   const [hover, setHover] = useState<number | null>(null);
 
@@ -50,7 +41,6 @@ export function ContextChart({
     Math.max(
       ...log.cumulative.map(sumOf),
       ...log.context.map((point) => point.usedTokens),
-      thresholds?.swapTokens ?? 0,
     ),
   );
   const x = (step: number) => padLeft + (n === 0 ? 0 : (step / n) * plotWidth);
@@ -96,7 +86,7 @@ export function ContextChart({
         {size.width > 0 && (
           <svg
             role="img"
-            aria-label={`Orchestrator context: ${formatTokens(sumOf(log.totals))} tokens injected over ${n} injections and ${log.generations.length} CLI generations`}
+            aria-label={`Orchestrator context: ${formatTokens(sumOf(log.totals))} tokens injected over ${n} injections`}
             viewBox={`0 0 ${size.width} ${size.height}`}
             className="absolute inset-0 size-full overflow-visible"
           >
@@ -137,48 +127,6 @@ export function ContextChart({
                 className="stroke-foreground/40 stroke-1"
               />
             )}
-            {thresholds &&
-              [
-                { id: "prepare", tokens: thresholds.prepareTokens, stroke: "stroke-warning", fill: "fill-warning" },
-                { id: "swap", tokens: thresholds.swapTokens, stroke: "stroke-destructive", fill: "fill-destructive" },
-              ].map((line) => (
-                <g key={line.id}>
-                  <line
-                    x1={padLeft}
-                    x2={padLeft + plotWidth}
-                    y1={y(line.tokens)}
-                    y2={y(line.tokens)}
-                    strokeDasharray={`${unit} ${unit}`}
-                    className={`${line.stroke} stroke-1`}
-                  />
-                  <text
-                    x={padLeft + plotWidth}
-                    y={y(line.tokens) - unit / 2}
-                    textAnchor="end"
-                    className={`${line.fill} text-2xs`}
-                  >
-                    {line.id} {formatTokens(line.tokens)}
-                  </text>
-                </g>
-              ))}
-            {log.rebirths.map((rebirth) => (
-              <g key={rebirth.streamSeq}>
-                <line
-                  x1={x(rebirth.after)}
-                  x2={x(rebirth.after)}
-                  y1={padTop}
-                  y2={padTop + plotHeight}
-                  className="stroke-link stroke-1"
-                />
-                <text
-                  x={x(rebirth.after) + unit / 2}
-                  y={padTop + unit * 2}
-                  className="fill-link text-2xs"
-                >
-                  G{rebirth.record.generation}
-                </text>
-              </g>
-            ))}
             {log.context.map((point) => (
               <circle
                 key={`${point.atMs}-${point.after}`}
@@ -211,7 +159,7 @@ export function ContextChart({
             </span>
             <span className="text-muted-foreground truncate">{hovered.injection.label}</span>
             <span className="tabular-nums">
-              Injected into generation {log.generationOf[hover] ?? 0}:{" "}
+              Injected so far:{" "}
               {formatTokens(sumOf(hoveredTotals))} tokens
             </span>
           </div>
@@ -231,21 +179,6 @@ export function ContextChart({
           <span aria-hidden className="bg-foreground size-2 rounded-full" />
           <span>Context the CLI reported</span>
         </li>
-        {thresholds && (
-          <li className="flex items-center gap-1.5">
-            <span aria-hidden className="border-warning w-3 border-t border-dashed" />
-            <span>Prepare</span>
-            <span aria-hidden className="border-destructive w-3 border-t border-dashed" />
-            <span>Swap</span>
-          </li>
-        )}
-        {log.rebirths.length > 0 && (
-          <li className="flex items-center gap-1.5">
-            <span aria-hidden className="bg-link h-3 w-px" />
-            <span>Rebirth</span>
-            <span className="text-muted-foreground tabular-nums">{log.rebirths.length}×</span>
-          </li>
-        )}
       </ul>
     </div>
   );

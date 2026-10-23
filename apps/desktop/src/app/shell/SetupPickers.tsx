@@ -2,7 +2,6 @@ import { type FC, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
-import { StandInPill } from "@/app/shell/StandInPill";
 import { WaitingPill } from "@/app/shell/WaitingPill";
 import {
   ModelSelector,
@@ -346,9 +345,6 @@ export function ConversationModelPicker({
         <span role="alert" className="text-destructive max-w-xs truncate text-xs" title={action.error}>
           {action.error}
         </span>
-      )}
-      {conversation.fallback && (
-        <StandInPill fallback={conversation.fallback} groups={all} />
       )}
       {conversation.quotaWait && <WaitingPill wait={conversation.quotaWait} />}
       <ModelSelector

@@ -11,7 +11,7 @@ export type Claim = { evidence: Evidence,
  */
 reportVersion?: number, 
 /**
- * The rebirth whose hand-off note named it.
+ * The generation whose hand-off note named it (older records).
  */
 generation?: number, 
 /**

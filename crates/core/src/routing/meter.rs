@@ -318,7 +318,7 @@ pub fn tools_key(spec: &brigadier_providers::SessionSpec) -> String {
 /// version is an upgrade, another tool set a tool change. A cause Brigadier set on purpose
 /// (a reroute, a fork…) stands.
 fn refined(cause: WriteCause, last: Option<&LastSession>, key: &str) -> WriteCause {
-    if !matches!(cause, WriteCause::Resume | WriteCause::ColdResume) {
+    if cause != WriteCause::Resume {
         return cause;
     }
     let Some((version, tools)) = last
@@ -443,7 +443,7 @@ mod tests {
         );
         // The same CLI with another tool set.
         let tools = TokenMeter::new(false)
-            .starting(WriteCause::ColdResume)
+            .starting(WriteCause::Resume)
             .with_tools("Thread brigadier,computer".into());
         tools.session_started(Some("2.1.290"));
         assert_eq!(
@@ -453,11 +453,11 @@ mod tests {
             Some(WriteCause::ToolSetChange)
         );
         // A cause set on purpose stands, and a fork's live origin wins over the stored one.
-        let fork = TokenMeter::new(false).starting_from(WriteCause::NoteFork, Some(60_000));
+        let fork = TokenMeter::new(false).starting_from(WriteCause::Handoff, Some(60_000));
         let trace = fork.trace(&used, &[call(61_000, 60_000, None)], Some(&last));
         assert_eq!(
             (trace.cause, trace.cause_missed),
-            (Some(WriteCause::NoteFork), 0)
+            (Some(WriteCause::Handoff), 0)
         );
         // After a compaction: reported apart, not estimated.
         let compacted = TokenMeter::new(false).starting(WriteCause::Resume);

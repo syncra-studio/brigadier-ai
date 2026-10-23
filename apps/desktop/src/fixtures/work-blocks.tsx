@@ -61,7 +61,7 @@ const begun = Date.now() - 30_000;
 function conversation(id: string, title: string, kind: "chat" | "session"): Conversation {
   return {
     id, kind, projectId: null, title, pinnedAtMs: null, createdAtMs: begun, updatedAtMs: begun, lifecycle: "active",
-    forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+    forkedFrom: null, sideOf: null, quotaWait: null,
     setup: kind === "chat"
       ? { type: "chat", model: { provider: "codex", model: null, effort: null, fast: false }, permission: "acceptEdits" }
       : {

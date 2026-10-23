@@ -212,6 +212,10 @@ pub(crate) const SESSION_RESET: &str = "brigadier: CLI session reset";
 /// another account: the CLI already holds the user's message and what the turn did.
 pub(crate) const CONTINUE_ON_ACCOUNT: &str = "[Your last turn stopped early: its account hit a usage limit. You now run on another account, in the same session. Carry on from where you stopped. Don't redo anything you already did.]";
 
+/// A turn's input when the session goes on after its usage limit reset, and the CLI had begun
+/// the turn the limit stopped: it already holds the user's message and what the turn did.
+pub(crate) const CONTINUE_AFTER_LIMIT: &str = "[Your last turn stopped early at a usage limit, which has reset. Carry on from where you stopped. Don't redo anything you already did.]";
+
 /// Today's date (UTC). Development builds take `BRIGADIER_FAKE_TODAY` instead when it is set,
 /// so a check can start a session on another day.
 pub(crate) fn today() -> String {

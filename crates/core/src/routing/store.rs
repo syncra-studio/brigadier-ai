@@ -166,8 +166,6 @@ pub enum StepKind {
     Thread,
     /// A Chat's turn.
     Chat,
-    /// The fork of a thread that writes its rebirth handoff.
-    Handoff,
     /// A task's worker.
     Worker,
     /// A one-shot review.
@@ -184,10 +182,9 @@ pub enum StepKind {
 }
 
 impl StepKind {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 8] = [
         Self::Thread,
         Self::Chat,
-        Self::Handoff,
         Self::Worker,
         Self::Review,
         Self::Guardian,
@@ -201,7 +198,6 @@ impl StepKind {
         match self {
             Self::Thread => "thread",
             Self::Chat => "chat",
-            Self::Handoff => "handoff",
             Self::Worker => "worker",
             Self::Review => "review",
             Self::Guardian => "guardian",
@@ -292,12 +288,8 @@ pub enum WriteCause {
     FreshStart,
     /// The same session resumed while its cache should still live.
     Resume,
-    /// The same session resumed after its cache's lifetime.
-    ColdResume,
-    /// A thread reborn: a new session from a briefing.
-    Rebirth,
-    /// The fork of a thread that writes its checkpoint or hand-off note.
-    NoteFork,
+    /// A seam's successor: a new session from its hand-off.
+    Seam,
     /// A worker handed on to a new session.
     Handoff,
     /// The same session moved to another model or account.
@@ -311,12 +303,10 @@ pub enum WriteCause {
 }
 
 impl WriteCause {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 8] = [
         Self::FreshStart,
         Self::Resume,
-        Self::ColdResume,
-        Self::Rebirth,
-        Self::NoteFork,
+        Self::Seam,
         Self::Handoff,
         Self::Reroute,
         Self::EffortChange,
@@ -329,9 +319,7 @@ impl WriteCause {
         match self {
             Self::FreshStart => "fresh start",
             Self::Resume => "resume",
-            Self::ColdResume => "cold resume",
-            Self::Rebirth => "rebirth",
-            Self::NoteFork => "note fork",
+            Self::Seam => "seam",
             Self::Handoff => "hand-off",
             Self::Reroute => "reroute",
             Self::EffortChange => "effort change",
@@ -347,7 +335,7 @@ impl WriteCause {
     /// Whether the session carries on an earlier one's conversation: its first call is
     /// compared with that session's last prompt.
     pub fn continues(self) -> bool {
-        !matches!(self, Self::FreshStart | Self::Rebirth | Self::Handoff)
+        !matches!(self, Self::FreshStart | Self::Seam | Self::Handoff)
     }
 }
 
@@ -1157,7 +1145,7 @@ mod tests {
                 missed: 25_000,
                 missed_calls: 1,
                 unestimated_calls: 0,
-                cause: Some(WriteCause::ColdResume),
+                cause: Some(WriteCause::Resume),
                 cause_write: 1_000,
                 cause_missed: 25_000,
                 session_key: Some("2.1.300|Thread brigadier".into()),

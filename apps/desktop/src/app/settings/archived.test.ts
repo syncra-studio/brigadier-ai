@@ -25,7 +25,7 @@ function conversation(id: string, fields: Partial<Conversation>): Conversation {
     lifecycle: "archived",
     forkedFrom: null,
     sideOf: null,
-    fallback: null,
+   
     quotaWait: null,
     ...fields,
   };

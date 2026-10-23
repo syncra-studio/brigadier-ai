@@ -10,8 +10,6 @@
 //! stands ([`Phase`]) and every completed seam. Each phase is written before what it leads to
 //! happens, so a restart at any point goes on from the file and never sends a message twice
 //! or starts two successors ([`SessionManager::recover_seam`]).
-//!
-//! S22 runs behind `BRIGADIER_SEAM=1`; without it the session is reborn as before.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -25,8 +23,6 @@ use super::session_dir::{LineageEntry, write_atomic};
 use crate::thread_view::{HANDOFF_END, HANDOFF_MARK, NUDGE_MARK, SeamMark};
 use crate::{Error, Result};
 
-/// Turns the seam on, in place of rebirth (S22; on by default from S23).
-pub(crate) const SEAM_ENV: &str = "BRIGADIER_SEAM";
 /// The hot context the seam comes at, in tokens: an env default, never a cap (Q1).
 pub(crate) const TOKENS_ENV: &str = "BRIGADIER_SEAM_TOKENS";
 /// What the successor is told after its hand-off when no message of the user's waits for it: it
@@ -46,7 +42,6 @@ const LATEST_TOOL_BYTES: usize = 4_000;
 /// What the seam runs with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SeamConfig {
-    pub on: bool,
     pub tokens: i64,
     pub hold: Duration,
 }
@@ -54,7 +49,6 @@ pub(crate) struct SeamConfig {
 impl SeamConfig {
     pub(crate) fn from_env() -> Self {
         Self {
-            on: std::env::var(SEAM_ENV).is_ok_and(|value| value.trim() == "1"),
             tokens: std::env::var(TOKENS_ENV)
                 .ok()
                 .and_then(|value| value.trim().parse::<i64>().ok())

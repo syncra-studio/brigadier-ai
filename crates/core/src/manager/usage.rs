@@ -15,8 +15,6 @@ use crate::work::TaskId;
 pub(crate) enum TokenOwner<'a> {
     /// A conversation's model (a session's thread, or a Chat).
     Conversation(&'a ConversationId),
-    /// The fork of a session's thread that writes its rebirth handoff.
-    Handoff(&'a ConversationId),
     /// A task's worker, or a review (counted under `review:<id>`).
     Task(&'a ConversationId, &'a TaskId),
 }
@@ -79,7 +77,7 @@ impl SessionManager {
         turn.cache = self.cache_trace(meter, &owner, &used, calls).await;
         if let Err(err) = store.add_turn(turn).await {
             crate::logging::private_trace!(
-                matches!(&owner, TokenOwner::Conversation(id) | TokenOwner::Handoff(id) | TokenOwner::Task(id, _) if self.tab_chat_logs(id)),
+                matches!(&owner, TokenOwner::Conversation(id) | TokenOwner::Task(id, _) if self.tab_chat_logs(id)),
                 warn, "could not record a turn's token use"; error = %err
             );
         }
@@ -110,7 +108,6 @@ impl SessionManager {
                     };
                     Some((id.0.clone(), step, None))
                 }
-                TokenOwner::Handoff(id) => Some((id.0.clone(), StepKind::Thread, None)),
                 TokenOwner::Task(id, task) => {
                     Some((id.0.clone(), StepKind::Worker, Some(task.0.clone())))
                 }
@@ -150,15 +147,6 @@ impl SessionManager {
                     self.thread_request(id).await,
                 )
             }
-            // The fork writes the note of the thread's latest request, idle or not: its use
-            // is that request's, counted through settlement (BUILD-PLAN B0, research V1).
-            TokenOwner::Handoff(id) => (
-                Some(id.0.clone()),
-                conversation(id).and_then(|c| c.project_id).map(|p| p.0),
-                None,
-                StepKind::Handoff,
-                self.latest_request(id).await,
-            ),
             TokenOwner::Task(id, task) => {
                 let review = task.0.starts_with("review:");
                 (
@@ -205,12 +193,6 @@ impl SessionManager {
             opens_turn: false,
             cache: CacheTrace::default(),
         }
-    }
-
-    /// A conversation's newest request, from its board.
-    async fn latest_request(&self, id: &ConversationId) -> Option<String> {
-        let board = self.core.board(id).await.ok()?;
-        board.latest_request().map(|request| request.id.clone())
     }
 
     /// The request a conversation's running turn serves, without making its live state.

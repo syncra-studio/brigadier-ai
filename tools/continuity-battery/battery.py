@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S21/S22: measure rebirth or the seam (`--seam`); never implement continuity or gate on recall."""
+"""S21/S22: measure the seam; never implement continuity or gate on recall."""
 import argparse
 import hashlib
 import importlib.util
@@ -93,7 +93,7 @@ class Battery:
         self.result = {"started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                        "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=SRC, text=True).strip(),
                        "daemon_sha256": hashlib.sha256(Path(args.daemon).read_bytes()).hexdigest(),
-                       "model": args.model, "threshold": args.tokens, "arm": "seam" if args.seam else "rebirth",
+                       "model": args.model, "threshold": args.tokens, "arm": "seam",
                        "steps": self.steps,
                        "seams": self.seams, "errors": self.errors, "expected": self.expected}
 
@@ -115,11 +115,7 @@ class Battery:
         self.data.mkdir(exist_ok=True)
         env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH") if k in os.environ}
         env.update(SHELL="/bin/zsh", TMPDIR="/tmp", LANG="en_US.UTF-8",
-                   BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_REBIRTH_TOKENS=str(self.args.tokens),
-                   BRIGADIER_BRIEFING_TOKENS="4000")
-        if self.args.seam:
-            # The seam comes where rebirth swaps: a quarter past its prepare threshold.
-            env.update(BRIGADIER_SEAM="1", BRIGADIER_SEAM_TOKENS=str(seam_tokens(self.args.tokens)))
+                   BRIGADIER_DATA_DIR=str(self.data), BRIGADIER_SEAM_TOKENS=str(self.args.tokens))
         with (self.root / "daemon.log").open("a") as out:
             self.proc = subprocess.Popen([self.args.daemon, "--foreground", "--data-dir", str(self.data)],
                                          env=env, stdout=out, stderr=subprocess.STDOUT,
@@ -178,9 +174,6 @@ class Battery:
                 return sorted(entries, key=lambda e: e["streamSeq"])
             before = min(e["streamSeq"] for e in page["entries"])
 
-    def rebirths(self):
-        return [e["entry"]["record"] for e in self.entries() if e["entry"].get("type") == "rebirth"]
-
     def record(self):
         """The session's `record/` folder (data in /tmp: its sessions folder is `<data>-s`)."""
         return self.root / "data-s" / self.conversation[-8:] / "record"
@@ -192,9 +185,7 @@ class Battery:
             return {}
 
     def generations(self):
-        """Fresh contexts so far: rebirths, or closed seams."""
-        if not self.args.seam:
-            return len(self.rebirths())
+        """Fresh contexts so far: closed seams."""
         file = self.seam_file()
         return len(file.get("seams", [])) + (file.get("phase", {}).get("phase") in ("closed", "starting"))
 
@@ -310,10 +301,10 @@ class Battery:
             # Distinct inert text displaces the early plants from a bounded verbatim tail.
             ballast = " ".join(hashlib.sha256(f"{i}-{j}".encode()).hexdigest()[:12] for j in range(1200))
             self.send(f"ballast-{i:02}", f"Ignore this inert fixture batch {i}; reply only 'batch {i} read'.\n" + ballast)
-            # Existing rebirth prepares a fork asynchronously; allow its note to finish.
+            # The seam's note is written asynchronously; allow it to finish.
             self.wait(lambda: "handoff note written" in (self.root / "daemon.log").read_text(errors="replace") or
                       self.generations() > before, 3)
-        self.result["size_rebirths_before_faults"] = self.generations()
+        self.result["size_seams_before_faults"] = self.generations()
         for kind in ("context", "crash", "restart", "limit"):
             command = (f"touch {kind}.waiting; sleep 18; printf 'wait finished\\n'" if kind in ("crash", "restart")
                        else "printf 'fault tick 1\\n'; sleep 2")
@@ -348,16 +339,6 @@ class Battery:
         if not self.conversation or not self.proc or self.proc.poll() is not None:
             return
         entries = self.entries()
-        records = self.rebirths()
-        self.result["rebirths"] = records
-        texts = []
-        for r in records:
-            text = {"generation": r["generation"]}
-            for key in ("briefingBlob", "handoffBlob"):
-                if r.get(key):
-                    text[key] = self.ipc.call({"method": "readBlobText", "hash": r[key]})["text"]
-            texts.append(text)
-        self.result["briefings"] = texts
         self.result["provider_events"] = entries
         self.native_files = sorted({event["file"] for e in entries
                                     if (event := e["entry"].get("event") or {}).get("type") == "sessionStarted"
@@ -433,10 +414,6 @@ class Battery:
             shutil.rmtree(self.root)
 
 
-def seam_tokens(tokens):
-    return tokens * 5 // 4
-
-
 def read_text(path):
     try:
         return path.read_text()
@@ -498,34 +475,26 @@ def seam_observations(result):
 
 def report(result):
     rows = result.get("items", {})
-    rebirths = result.get("rebirths", [])
     usage = result.get("usage", [])
     probe = next((s for s in result["steps"] if s["name"] == "probe"), None)
     events = result.get("provider_events", [])
     lookup = {e["entry"]["event"]["itemId"]: e["entry"]["event"] for e in events if probe and
               e["atMs"] >= probe["sent_ms"] and is_lookup(e["entry"].get("event") or {})}.values()
-    seam_arm = result.get("arm") == "seam"
-    lines = [("# Claude continuity, seam arm — " if seam_arm else "# Claude continuity baseline — ") + result["started_at"][:10], "",
+    lines = ["# Claude continuity, seam arm — " + result["started_at"][:10], "",
              "Report only; no recall result gates a session or changes continuity.", "",
              f"Source: `{result['source']}`; daemon SHA-256: `{result['daemon_sha256']}`.",
              f"Claude `{result['model']}`, high effort; headless dev daemon; one session, several requests.",
-             (f"Seam (`BRIGADIER_SEAM=1`) at {seam_tokens(result['threshold'])} tokens, where rebirth would swap; "
-              "the bootstrap's tail budget is about 15k tokens." if seam_arm else
-              f"Prepare threshold {result['threshold']} tokens; swap at 1.25×; briefing cap 4000 estimated tokens."),
-             "Mandatory sections and the minimum tail can exceed that briefing budget; observed sizes follow below.",
+             f"Seam (`BRIGADIER_SEAM_TOKENS={result['threshold']}`); the bootstrap's tail budget is about 15k tokens.",
+             "Mandatory sections and the minimum tail can exceed that budget; observed sizes follow below.",
              "A labelled, injected unverified worker report supplies the false claim; no real worker is spawned.",
              "Random one-time facts are removed from the fixture after observation. Inert batches displace the early items.", "",
              "| Item | Result | In final verbatim tail? | Successor searched? | Answer / evidence |", "|---|---|---|---|---|"]
     if rows:
         passed = sum(row["verdict"] == "pass" for row in rows.values())
         lines.insert(4, f"{passed}/{len(ITEMS)} planted items passed. The final probe was allowed to search existing records.\n")
-    if seam_arm:
-        # The successor's verbatim part: the first message, the latest exchange and the tail.
-        last = (result.get("handoffs") or [{}])[-1].get("start", "")
-        recent = last.partition("## The session's first message")[2].partition("## Left out")[0]
-    else:
-        last = (result.get("briefings") or [{}])[-1].get("briefingBlob", "")
-        recent = last.partition("[The conversation's latest messages, verbatim]")[2].partition("[Older context]")[0]
+    # The successor's verbatim part: the first message, the latest exchange and the tail.
+    last = (result.get("handoffs") or [{}])[-1].get("start", "")
+    recent = last.partition("## The session's first message")[2].partition("## Left out")[0]
     markers = {"rule": "Since 0.5:", "exception": "Exporter since 0.5:", "decision": "accounting import rejects",
                "hash": "4e1d9b7c2a03", "path": "src/invoice.ts:57", "units": "4500 ms",
                "failed": "B-2291", "ruled_out": "module-level Map", "false_worker": "writes atomically through"}
@@ -544,33 +513,23 @@ def report(result):
     lines += ["", "Observed session providers/models: " + ", ".join(f"`{p}/{m}`" for p, m in models) + ".",
               "The usage-limit injection may use today's stand-in path; the requested Claude model returns after its window resets."]
     lines += ["", "| Forced seam | Observed |", "|---|---|",
-              f"| Size ×2 | {result.get('size_rebirths_before_faults', 0)} "
-              f"{'closed seams' if seam_arm else 'rebirth records'} before fault injections |"]
+              f"| Size ×2 | {result.get('size_seams_before_faults', 0)} "
+              "closed seams before fault injections |"]
     observations = seam_observations(result)
     for seam, observed in zip(result["seams"], observations):
         lines.append("| " + seam["kind"] + " | `" + json.dumps({**seam, **observed}, sort_keys=True) + "` |")
     lines += ["", f"Session ledger (`record/ledger.md`): {result.get('ledger_bytes', 'unavailable')} bytes; deliberate item absent: "
               f"{result.get('absent_from_ledger', 'unavailable')}; a repo `ledger.md` written too: {result.get('ledger_in_repo', 'unavailable')}.",
-              "Note and briefing token estimates use the runtime's bytes/4 convention; first-call sizes use metering.", "",
-              "| Generation / trigger | Note bytes | Briefing tokens | Prepare→swap ms | Successor first context | Calls to first work tool |",
-              "|---|---:|---:|---:|---:|---:|"]
-    if seam_arm:
-        lines[-2:] = ["| Seam | Note bytes | Hand-off tokens | Nudge→close ms | Close→successor ms | Successor first context | Death |",
-                      "|---|---:|---:|---:|---:|---:|---|"]
-        for handoff in result.get("handoffs", []):
-            calls = result.get("native_calls", {}).get(handoff.get("successor"), [])
-            first = sum(calls[0]["usage"].get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")) if calls else None
-            nudged, closed, started = handoff.get("nudged_at_ms"), handoff.get("closed_at_ms"), handoff.get("started_at_ms")
-            lines.append(f"| {handoff['n']} | {len(handoff['note'].encode())} | {len(handoff['start'].encode()) // 4} | "
-                         f"{closed - nudged if nudged and closed else 'no nudge'} | {started - closed if started and closed else ''} | "
-                         f"{first} | {handoff.get('death') or ''} |")
-    for record, texts in zip([] if seam_arm else rebirths, result.get("briefings", [])):
-        calls = result.get("native_calls", {}).get(record.get("newNativeId"), [])
+              "Note and hand-off token estimates use the runtime's bytes/4 convention; first-call sizes use metering.", "",
+              "| Seam | Note bytes | Hand-off tokens | Nudge→close ms | Close→successor ms | Successor first context | Death |",
+              "|---|---:|---:|---:|---:|---:|---|"]
+    for handoff in result.get("handoffs", []):
+        calls = result.get("native_calls", {}).get(handoff.get("successor"), [])
         first = sum(calls[0]["usage"].get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")) if calls else None
-        productive = next((i for i, call in enumerate(calls, 1) if any(
-            name in ("Bash", "Write", "Edit", "Read") for name in call["tools"])), "not reached" if calls else "unavailable")
-        lines.append(f"| {record['generation']} / {record['trigger']} | {len(texts.get('handoffBlob', '').encode())} | "
-                     f"{record['briefingTokens']} | {record['swappedAtMs'] - record['prepareStartedAtMs']} | {first} | {productive} |")
+        nudged, closed, started = handoff.get("nudged_at_ms"), handoff.get("closed_at_ms"), handoff.get("started_at_ms")
+        lines.append(f"| {handoff['n']} | {len(handoff['note'].encode())} | {len(handoff['start'].encode()) // 4} | "
+                     f"{closed - nudged if nudged and closed else 'no nudge'} | {started - closed if started and closed else ''} | "
+                     f"{first} | {handoff.get('death') or ''} |")
     during_probe = [e["entry"] for e in events if probe and probe["sent_ms"] <= e["atMs"] <= probe["ended_ms"] and
                     (e["entry"].get("event") or {}).get("type") == "sessionStarted"]
     prior_probe = [e["entry"] for e in events if probe and e["atMs"] < probe["sent_ms"] and
@@ -578,8 +537,7 @@ def report(result):
     probe_start = (during_probe[:1] or prior_probe[-1:] or [{}])[0]
     lines += ["", f"Final probe provider/model: `{probe_start.get('provider', 'unavailable')}/{(probe_start.get('event') or {}).get('model', 'unavailable')}`."]
     lines += ["", f"Probe lookup calls observed: {len(lookup)}. Item search evidence means its marker appeared in a lookup result, or an explicit query attempted it; one result can serve several items.",
-              "Calls to first work tool count native assistant API message ids, including prior ballast acknowledgements; work tools are Bash, Read, Write or Edit. Missing native files are unavailable, never zero.",
-              "Seam cost below includes all metered handoff calls; ordinary thread calls are separate (successor bootstrap is included in thread use)."]
+                            "Seam cost below includes all metered handoff calls; ordinary thread calls are separate (successor bootstrap is included in thread use)."]
     for kind in ("handoff", "thread"):
         mine = [u for u in usage if u.get("step") == kind]
         total = {k: sum(u.get(k) or 0 for u in mine) for k in ("input", "cached_input", "cache_write", "output", "cost_usd")}
@@ -605,17 +563,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--daemon", required=True)
     parser.add_argument("--model", default="opus")
-    parser.add_argument("--tokens", type=int, default=35000)
+    parser.add_argument("--tokens", type=int, default=43750, help="the seam threshold (BRIGADIER_SEAM_TOKENS)")
     parser.add_argument("--max-fillers", type=int, default=18)
     parser.add_argument("--timeout", type=int, default=1500)
     parser.add_argument("--turn-timeout", type=int, default=100)
-    parser.add_argument("--report", help="the text report (default reports/<date>-claude[-seam].md)")
+    parser.add_argument("--report", help="the text report (default reports/<date>-claude-seam.md)")
     parser.add_argument("--evidence", help="optional private JSON evidence, outside the repo")
-    parser.add_argument("--seam", action="store_true", help="measure the seam (S22) instead of rebirth")
     parser.add_argument("--scratch-prefix", default="continuity-battery", help="names the /tmp scratch root")
     args = parser.parse_args()
     if not args.report:
-        args.report = str(Path(__file__).parent / "reports" / (time.strftime("%Y-%m-%d") + ("-claude-seam.md" if args.seam else "-claude.md")))
+        args.report = str(Path(__file__).parent / "reports" / (time.strftime("%Y-%m-%d") + "-claude-seam.md"))
     if "fable" in args.model.lower() or args.tokens <= 0 or args.max_fillers < 9:
         parser.error("use a permitted model, positive threshold and at least nine fillers")
     if str(Path(args.daemon).resolve()).startswith("/Applications/"):

@@ -172,13 +172,6 @@ impl SessionManager {
     async fn routing_activity(&self, now: i64) -> Vec<RoutingActivity> {
         let mut activity = Vec::new();
         for conversation in self.core.catalog().conversations {
-            if let Some(fallback) = &conversation.fallback {
-                activity.push(RoutingActivity::Fallback {
-                    conversation_id: conversation.id.clone(),
-                    title: conversation.title.clone(),
-                    fallback: fallback.clone(),
-                });
-            }
             if conversation.setup.is_none() {
                 continue;
             }
@@ -234,6 +227,5 @@ fn activity_at(item: &RoutingActivity) -> i64 {
     match item {
         RoutingActivity::Handoff { at_ms, .. } => *at_ms,
         RoutingActivity::Waiting { since_ms, .. } => *since_ms,
-        RoutingActivity::Fallback { fallback, .. } => fallback.since_ms,
     }
 }

@@ -4,7 +4,7 @@
 //! A preview is the daemon's own process, not the CLI's:
 //! - It leads its own process group and is recorded under its own cleanup-ledger owner,
 //!   `preview:<conversation>`, never under the thread's (`orch:<id>`). Ending the thread's CLI
-//!   (provider teardown on hibernation, rebirth or a vendor fallback) and ending the thread
+//!   (provider teardown on hibernation, a seam or an account switch) and ending the thread
 //!   owner's processes (`end_processes`, whose `end_in_dir` sweeps only the thread's scratch
 //!   folder) never reach it: the workspace it runs in is never recorded under the thread's
 //!   owner (see [`super::thread`]).

@@ -5,7 +5,7 @@
 # BRIG_CLAUDE_HOME, when set, is passed on as CLAUDE_CONFIG_DIR: the
 # arm's Claude login is that home's (the same path string, so the CLI finds its Keychain entry).
 # BRIG_DEBUG_ENV, when set, is a space-separated list of BRIGADIER_*=value development settings passed
-# on to the daemon (the V2 battery's seams: BRIGADIER_REBIRTH_TOKENS).
+# on to the daemon (for example BRIGADIER_SEAM_TOKENS).
 # Never point this at the installed app's daemon or its data.
 set -euo pipefail
 D=${1:?data dir}; : "${BRIGD:?set BRIGD to a dev brigadierd}"

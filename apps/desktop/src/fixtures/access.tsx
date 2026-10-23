@@ -32,7 +32,7 @@ const conversation = {
   lifecycle: "active",
   forkedFrom: null,
   sideOf: null,
-  fallback: null,
+ 
   quotaWait: null,
   setup: {
     type: "session",

@@ -88,7 +88,7 @@ showRows(id, [rowOf(task)]);
 const conversation: Conversation = {
   id, kind: "session", projectId: "fixture-project", title: "Independent panes",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
 };
 useApp.setState({
   conversations: { [id]: conversation },

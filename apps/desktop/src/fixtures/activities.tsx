@@ -33,7 +33,7 @@ const now = Date.now();
 const MIN = 60_000;
 const conversation: Conversation = { id, kind: "session", title: "Fix the demo pages", projectId: null,
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } }, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
+  forkedFrom: null, sideOf: null, quotaWait: null };
 const base = Object.values(night.tasks)[0] as unknown as Task;
 const worker = { ...base, id: "task-2", number: 2, title: "Demo of the fixes", conversationId: id, state: "running", kind: "implement", role: null,
   phase: null, run: null, attempts: [], requestId: "r1", gateLink: null, candidate: null, report: null,

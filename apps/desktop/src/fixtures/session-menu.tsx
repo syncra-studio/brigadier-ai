@@ -18,7 +18,7 @@ import { useApp } from "@/state/store";
 const base: Conversation = {
   id: "worktree", kind: "session", projectId: "project", title: "Tidy the release notes",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
 };
 const setup = (environment: Environment) => ({
   type: "session", repo: "/tmp/session-menu-fixture", environment, permission: "full", planMode: false,

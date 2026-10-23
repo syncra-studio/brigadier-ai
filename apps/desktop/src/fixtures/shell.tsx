@@ -63,7 +63,7 @@ for (let turn = 0; turn < 24; turn++) {
 const conversation = {
   id: ID, kind: "session", projectId: "shell-project", title: "Tidy the release notes",
   pinnedAtMs: null, createdAtMs: start, updatedAtMs: start, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
   setup: {
     type: "session", repo: "/tmp/shell-fixture",
     environment: { type: "newWorktree", branch: "brigadier/shell/session", base: "main" },

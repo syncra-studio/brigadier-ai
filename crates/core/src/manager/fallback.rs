@@ -16,6 +16,8 @@ use crate::work::{Attempt, AttemptEnd, Task};
 const WAIT_RETRY: Duration = Duration::from_secs(30 * 60);
 /// A reset is past this long before the work looks again.
 const AFTER_RESET: Duration = Duration::from_secs(45);
+/// Up to this much more, at random, so the work waiting for one reset doesn't all go at once.
+const RESET_SPREAD_MS: u64 = 60_000;
 /// Provider checks this close together make one retry of the work waiting for quota.
 const PROVIDER_CHECK_SETTLE: Duration = Duration::from_secs(2);
 
@@ -87,10 +89,13 @@ impl SessionManager {
 }
 
 /// How long work waiting for quota sleeps before it looks again: until just after the reset
-/// that could free it, and at most [`WAIT_RETRY`].
+/// that could free it (spread at random over the minute after it), and at most [`WAIT_RETRY`].
 pub(super) fn retry_delay(resets_at_ms: Option<i64>) -> Duration {
     match resets_at_ms {
-        Some(at) => Duration::from_millis(u64::try_from(at - now_ms()).unwrap_or(0)) + AFTER_RESET,
+        Some(at) => {
+            let spread = getrandom::u64().unwrap_or(0) % RESET_SPREAD_MS;
+            Duration::from_millis(u64::try_from(at - now_ms()).unwrap_or(0) + spread) + AFTER_RESET
+        }
         None => WAIT_RETRY,
     }
     .min(WAIT_RETRY)

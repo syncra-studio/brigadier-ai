@@ -225,6 +225,15 @@ pub struct QuotaWait {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit_kind: Option<brigadier_providers::LimitKind>,
+    /// How often in a row the conversation went on by itself after a usage limit reset (MA5).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(skip)]
+    pub tries: u32,
+    /// The waiting messages the CLI had begun: the turn that goes on says to carry on with
+    /// them instead of sending them again (MA5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub landed: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -589,7 +598,7 @@ pub enum OutputSource {
 // ----- previews -----------------------------------------------------------------------------
 
 /// A process the thread or a worker started to show its work (a dev server, the app), owned by
-/// the daemon and kept across the thread's turns, hibernation, rebirth and fallback
+/// the daemon and kept across the thread's turns, hibernation, seams and account switches
 /// (THREAD-PLAN.md Q6). The thread's runs in the session's workspace and stops with the
 /// session, its merge, a workspace change, `stop_preview`, the user's Stop and Brigadier's
 /// quit; a worker's runs in its own folder and stops with that folder too.
@@ -2041,19 +2050,6 @@ pub struct Decision {
     /// Where it happened in the conversation's stream (set when the board reads it).
     #[serde(default)]
     pub position: i64,
-    /// What the app and the morning report say: `what` and `why` in the current short words,
-    /// also for a decision recorded in an earlier version's longer ones (set when the board
-    /// reads it; a decision recorded now is in them already).
-    #[serde(default)]
-    pub short: Option<DecisionWords>,
-}
-
-/// A decision's line and reason as the user reads them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct DecisionWords {
-    pub what: String,
-    pub why: String,
 }
 
 // ----- compactions -----------------------------------------------------------------------
@@ -2920,8 +2916,6 @@ pub enum InjectionKind {
     Resume,
     /// A follow-up the user sent while the answer worked, for the orchestrator to sort.
     FollowUp,
-    /// The briefing a reborn orchestrator starts with.
-    Briefing,
     /// Brigadier asks for an answer the orchestrator left out.
     Reminder,
     /// An overnight run starts, restarts or ends.
@@ -2930,12 +2924,15 @@ pub enum InjectionKind {
     PeerMessage,
     /// The result of a job the thread's CLI ran in the background, or what became of it.
     BackgroundRun,
-    /// The one message at a seam (G12): write the hand-off note.
+    /// The one message at a seam (G12): write the hand-off note; or the hand-off a successor
+    /// starts from.
     Seam,
 }
 
 /// An injection's kind as stored, older names included: an earlier run's per-phase `phase`
-/// reads as `run`, so the thread engine's first start can still delete it (THREAD-PLAN.md Q14).
+/// reads as `run`, so the thread engine's first start can still delete it (THREAD-PLAN.md Q14),
+/// and any other kind an earlier version wrote (the first message its fresh thread started
+/// from) reads as a hand-off.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum StoredInjectionKind {
@@ -2950,13 +2947,14 @@ enum StoredInjectionKind {
     Reseed,
     Resume,
     FollowUp,
-    Briefing,
     Reminder,
     Run,
     Phase,
     PeerMessage,
     BackgroundRun,
     Seam,
+    #[serde(other)]
+    Retired,
 }
 
 impl<'de> Deserialize<'de> for InjectionKind {
@@ -2973,12 +2971,11 @@ impl<'de> Deserialize<'de> for InjectionKind {
             StoredInjectionKind::Reseed => Self::Reseed,
             StoredInjectionKind::Resume => Self::Resume,
             StoredInjectionKind::FollowUp => Self::FollowUp,
-            StoredInjectionKind::Briefing => Self::Briefing,
             StoredInjectionKind::Reminder => Self::Reminder,
             StoredInjectionKind::Run | StoredInjectionKind::Phase => Self::Run,
             StoredInjectionKind::PeerMessage => Self::PeerMessage,
             StoredInjectionKind::BackgroundRun => Self::BackgroundRun,
-            StoredInjectionKind::Seam => Self::Seam,
+            StoredInjectionKind::Seam | StoredInjectionKind::Retired => Self::Seam,
         })
     }
 }
@@ -3012,36 +3009,14 @@ pub enum OrchestratorEntry {
         provider: ProviderKind,
         event: ProviderEvent,
     },
-    /// The orchestrator was reborn: a fresh CLI session took over from a briefing.
-    Rebirth {
-        record: Box<crate::knowledge::RebirthRecord>,
-    },
     /// Something broke the orchestrator's contract, such as its CLI compacting the context
     /// (PLAN.md §2: the orchestrator never compacts).
     ContractBreach {
         message: String,
     },
-    /// The thread's turn was stopped mid-request near its model's limit, to be reborn at once
-    /// (BUILD-PLAN D2.3b). Recorded before its CLI is stopped: a restart before the rebirth
-    /// finishes it and continues the request.
-    StoppedForRebirth {
-        /// The request the turn served.
-        request_id: Option<String>,
-        /// The context when it was stopped.
-        at_tokens: i64,
-        /// Why, in words.
-        reason: String,
-    },
-    /// A checkpoint's handoff note was written while the thread idled with a warm cache: kept
-    /// so a rebirth after a daemon restart still has it (BUILD-PLAN D1.4).
-    Checkpoint {
-        /// The CLI session it covers.
-        old_native_id: String,
-        /// When its fork started: it covers what that session did before.
-        started_at_ms: i64,
-        /// The note (blob hash).
-        note_blob: String,
-    },
+    /// An entry of a kind an earlier version wrote that nothing reads any more.
+    #[serde(other)]
+    Retired,
 }
 
 /// A settings change the thread suggests on a card (Q90): this session's permission level,
@@ -3066,6 +3041,33 @@ pub enum SettingChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Log entries and injection kinds an earlier version wrote still read: as retired, or as
+    /// a hand-off.
+    #[test]
+    fn old_log_entries_still_read() {
+        let entry: OrchestratorEntry = serde_json::from_value(serde_json::json!({
+            "type": "checkpoint",
+            "anything": 1,
+        }))
+        .unwrap();
+        assert_eq!(entry, OrchestratorEntry::Retired);
+        let entry: OrchestratorEntry = serde_json::from_value(serde_json::json!({
+            "type": "injection",
+            "injection": {
+                "kind": "anOlderKind",
+                "bytes": 10,
+                "tokensEstimate": 3,
+                "label": "first message",
+                "taskId": null,
+            },
+        }))
+        .unwrap();
+        let OrchestratorEntry::Injection { injection } = entry else {
+            panic!("an injection: {entry:?}");
+        };
+        assert_eq!(injection.kind, InjectionKind::Seam);
+    }
 
     #[test]
     fn a_question_card_stored_before_rounds_reads_as_a_round_of_one() {

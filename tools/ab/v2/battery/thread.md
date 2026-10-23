@@ -3,9 +3,8 @@ id: thread
 timeout: 5400
 
 Several requests in one session (PLAN §0 V2, BUILD-PLAN D1.0). Steps `r1`–`r6` plant every item. The fillers then
-push them far out of the thread's verbatim tail (a rebirth briefing keeps 6 exchanges whole, `M/rebirth.rs`
-`MIN_EXCHANGES`). `e1` and `e2` act on the constraint, its exception and the ruled-out approach. `p1` asks for
-every item. The seams under test happen between the plants and the probe, at least twice each (`run.py --seam`).
+push them far back in the thread. `e1` and `e2` act on the constraint, its exception and the ruled-out
+approach. `p1` asks for every item. The seams under test happen between the plants and the probe, at least twice each (`run.py --seam`).
 
 Each request is sent verbatim, followed by the harness's safety sentence (`tools/ab/task.py`).
 
@@ -132,8 +131,7 @@ Without running any command or reading any file, answer from what you already kn
 
 ## Items
 
-Each item passes or fails on its own (`score.py`). `source` is the step that planted it; its words must have left the
-verbatim tail of every briefing before the step that uses it, or the item is scored "not tested" for that use.
+Each item passes or fails on its own (`score.py`). `source` is the step that planted it.
 
 ```json
 [

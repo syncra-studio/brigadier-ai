@@ -33,7 +33,7 @@ declare global {
 const id = "live-refresh-fixture";
 const conversation: Conversation = { id, kind: "session", title: "Live refresh", projectId: null,
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
+  forkedFrom: null, sideOf: null, quotaWait: null };
 useApp.setState({ conversations: { [id]: conversation }, selection: { type: "conversation", id },
   connection: { status: "connected", daemon: null, reason: null },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 } });

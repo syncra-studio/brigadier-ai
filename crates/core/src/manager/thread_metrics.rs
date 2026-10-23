@@ -910,55 +910,6 @@ mod tests {
         board
     }
 
-    /// BUILD-PLAN B0's done-when: the note fork of 2026-10-14 03:46 (WEAK-SPOTS C11) replayed.
-    /// The thread's last turn stood at 252,313; the fork's one call read 544 and wrote 216,616
-    /// (the row stored then; its lifetime split wasn't recorded, so the fixture writes it for
-    /// an hour). The report shows about 252K missed, under "note fork".
-    #[test]
-    fn the_c11_note_fork_shows_its_missed_prefix_under_its_cause() {
-        use crate::routing::{LastSession, TokenMeter, WriteCause};
-        // The thread's own session, as its rows recorded it: its last call's prompt.
-        let thread = LastSession {
-            last_prompt: Some(252_313),
-            session_key: None,
-        };
-        let fork = TokenMeter::new(false).starting_from(WriteCause::NoteFork, None);
-        let rows = replayed(
-            &fork,
-            &[&[("fork-1", 3, 544, 216_616)]],
-            Some(&thread),
-            "r1",
-            StepKind::Handoff,
-        );
-        let summary = &request_summaries(&rows, &board_with("r1"))[0];
-        assert_eq!(
-            summary.cache.causes,
-            [CauseTokens {
-                cause: "note fork".into(),
-                sessions: 1,
-                written: 216_616,
-                missed: 252_313 - 544,
-            }]
-        );
-        assert_eq!(
-            (
-                summary.cache.missed,
-                summary.cache.big_misses,
-                summary.cache.unexplained
-            ),
-            (251_769, 1, 0)
-        );
-        let claude = &summary.providers[0];
-        assert_eq!(
-            (
-                claude.cache_write,
-                claude.cache_write_1h,
-                claude.cache_write_5m
-            ),
-            (216_616, 216_616, 0)
-        );
-    }
-
     /// Several calls in a turn, each compared with the call before it (Codex's review of the
     /// B0 outline): a cold resume misses the session's last prompt on its first call, warm calls
     /// miss nothing, and a later call that misses part of the prefix is left unexplained.
@@ -969,7 +920,7 @@ mod tests {
             last_prompt: Some(80_000),
             session_key: None,
         };
-        let meter = TokenMeter::new(false).starting(WriteCause::ColdResume);
+        let meter = TokenMeter::new(false).starting(WriteCause::Resume);
         let rows = replayed(
             &meter,
             &[
@@ -986,7 +937,7 @@ mod tests {
             "r1",
             StepKind::Thread,
         );
-        assert_eq!(rows[0].cache.cause, Some(WriteCause::ColdResume));
+        assert_eq!(rows[0].cache.cause, Some(WriteCause::Resume));
         assert_eq!(rows[1].cache.cause, None);
         assert_eq!(rows[0].cache.last_prompt, Some(82_115));
         assert_eq!(rows[1].cache.missed, 82_115 - 52_115);
@@ -994,7 +945,7 @@ mod tests {
         assert_eq!(
             cache.causes,
             [CauseTokens {
-                cause: "cold resume".into(),
+                cause: "resume".into(),
                 sessions: 1,
                 written: 80_500,
                 missed: 80_000,

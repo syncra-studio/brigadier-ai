@@ -33,7 +33,7 @@ mockIPC((command, payload) => {
 const project = "p-1";
 const session = (id: string, title: string, updatedAtMs: number, extra: Partial<Conversation> = {}): Conversation => ({
   id, kind: "session", projectId: project, title, pinnedAtMs: null, createdAtMs: updatedAtMs, updatedAtMs, setup: null,
-  lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null, ...extra,
+  lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null, ...extra,
 });
 // Resets at 14:05 today, as the "waiting for reset" row says.
 const RESET = new Date(new Date().setHours(14, 5, 0, 0)).getTime();

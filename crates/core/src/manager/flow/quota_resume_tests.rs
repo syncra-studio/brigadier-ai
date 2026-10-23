@@ -1,13 +1,14 @@
 //! A thread that waited for its usage limit says where the limit reset and its work went on
 //! (#128): a step under the request that waited, which survives a reload as the board does.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use brigadier_providers::ProviderKind;
 
 use super::{Flow, Options, Reply};
 use crate::board::Board;
+use crate::manager::prompts::CONTINUE_AFTER_LIMIT;
 use crate::model::Setup;
 use crate::work::{OrchestratorStepKind, RequestState};
 
@@ -217,7 +218,7 @@ async fn continue_now_sends_the_waiting_message_at_once() {
 /// MA5: Don't resume leaves the thread idle: past the reset nothing goes on its own.
 #[tokio::test]
 async fn dont_resume_stays_idle_past_the_reset() {
-    let (flow, turns) = waiting_flow("quota-dont-resume").await;
+    let (mut flow, turns) = waiting_flow("quota-dont-resume").await;
     let reset = waiting_reset(&flow);
     flow.manager.dont_resume(&flow.conversation).await.unwrap();
     assert!(
@@ -227,12 +228,113 @@ async fn dont_resume_stays_idle_past_the_reset() {
             .quota_wait
             .is_none()
     );
+    // A restart before the reset doesn't bring the wait back.
+    flow.restart().await;
     flow.until("the limit to reset", |_| crate::now_ms() > reset)
         .await;
     flow.manager.retry_waiting_conversations().await;
     flow.settled().await;
     assert_eq!(turns.load(Ordering::SeqCst), 1);
     assert_eq!(flow.board().await.run, crate::work::RunState::Idle);
+    flow.stop().await;
+}
+
+/// MA5: the CLI had begun the turn the limit stopped, so its session holds the user's message
+/// and what the turn did: at the reset the same turn goes on with a note to carry on, never
+/// the message again, after a restart too.
+#[tokio::test]
+async fn the_limited_turn_carries_on_at_the_reset() {
+    let (mut flow, turns, inputs) = limited_flow_n(
+        "quota-carry-on",
+        brigadier_providers::LimitKind::UsageWindow,
+        Some(1500),
+        1,
+    )
+    .await;
+    flow.restart().await;
+    resume(&flow).await;
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    let inputs = inputs.lock().unwrap().clone();
+    assert!(inputs[0].contains(ASKED), "{inputs:#?}");
+    assert!(inputs[1].contains(CONTINUE_AFTER_LIMIT), "{inputs:#?}");
+    assert!(
+        !inputs[1].contains(ASKED),
+        "the message goes once: {inputs:#?}"
+    );
+    // The note is the CLI's input only, never a message of the thread's.
+    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.text.contains(CONTINUE_AFTER_LIMIT)),
+        "{messages:#?}"
+    );
+    flow.stop().await;
+}
+
+/// MA5: a thread goes on by itself after at most four resets in a row; the fifth limit waits
+/// for Continue now, and says so.
+#[tokio::test]
+async fn a_fifth_limit_in_a_row_waits_for_continue_now() {
+    let (flow, turns, _) = limited_flow_n(
+        "quota-five-limits",
+        brigadier_providers::LimitKind::UsageWindow,
+        Some(300),
+        5,
+    )
+    .await;
+    for resumed in 1..=4 {
+        let reset = waiting_reset(&flow);
+        flow.until("the limit to reset", |_| crate::now_ms() > reset)
+            .await;
+        flow.manager.retry_waiting_conversations().await;
+        flow.until("the next limit", |_| {
+            turns.load(Ordering::SeqCst) == resumed + 1 && waiting_reset(&flow) > reset
+        })
+        .await;
+    }
+    let reset = waiting_reset(&flow);
+    flow.until("the fifth limit to reset", |_| {
+        crate::now_ms() > reset + 200
+    })
+    .await;
+    flow.manager.retry_waiting_conversations().await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(turns.load(Ordering::SeqCst), 5, "it waits for Continue now");
+    let wait = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .quota_wait
+        .unwrap();
+    assert_eq!(wait.tries, 4);
+    let said = flow
+        .board()
+        .await
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Moment { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        said.iter()
+            .any(|text| text.ends_with("goes when you choose Continue now.")),
+        "{said:#?}"
+    );
+    flow.manager
+        .continue_waiting(&flow.conversation)
+        .await
+        .unwrap();
+    flow.until("the request done", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.state == RequestState::Done)
+    })
+    .await;
+    assert_eq!(turns.load(Ordering::SeqCst), 6);
     flow.stop().await;
 }
 
@@ -341,8 +443,24 @@ async fn limited_flow(
     kind: brigadier_providers::LimitKind,
     resets_in_ms: Option<i64>,
 ) -> (Flow, Arc<AtomicUsize>) {
+    let (flow, turns, _) = limited_flow_n(name, kind, resets_in_ms, 1).await;
+    (flow, turns)
+}
+
+/// What the user asks in a [`limited_flow`].
+const ASKED: &str = "Move the tax rules into their own module.";
+
+/// [`limited_flow`] whose first `limits` turns hit the limit; also keeps each turn's input.
+async fn limited_flow_n(
+    name: &str,
+    kind: brigadier_providers::LimitKind,
+    resets_in_ms: Option<i64>,
+    limits: usize,
+) -> (Flow, Arc<AtomicUsize>, Arc<Mutex<Vec<String>>>) {
     let turns = Arc::new(AtomicUsize::new(0));
     let counted = turns.clone();
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let seen = inputs.clone();
     let flow = Flow::start(
         name,
         Options {
@@ -352,10 +470,11 @@ async fn limited_flow(
             }),
             ..Options::default()
         },
-        Arc::new(move |_turn| {
-            let first = counted.fetch_add(1, Ordering::SeqCst) == 0;
+        Arc::new(move |turn| {
+            seen.lock().unwrap().push(turn.input.clone());
+            let limited = counted.fetch_add(1, Ordering::SeqCst) < limits;
             Box::pin(async move {
-                if first {
+                if limited {
                     Reply {
                         limit: Some(brigadier_providers::LimitHit {
                             kind,
@@ -375,7 +494,7 @@ async fn limited_flow(
     settings.disabled_providers.push(ProviderKind::Codex);
     flow.core.update_settings(settings).await.unwrap();
 
-    flow.say("Move the tax rules into their own module.").await;
+    flow.say(ASKED).await;
     flow.until("the thread to wait for its limit", |_| {
         flow.core
             .conversation(&flow.conversation)
@@ -383,7 +502,7 @@ async fn limited_flow(
     })
     .await;
     assert_eq!(resumed(&flow.board().await), [], "nothing reset yet");
-    (flow, turns)
+    (flow, turns, inputs)
 }
 
 /// Once the reset is past, the thread looks again (as its timer would, 45 s after the reset)

@@ -5,7 +5,7 @@
  */
 export type CauseTokens = { 
 /**
- * "note fork", "cold resume", "fresh start"…
+ * "seam", "resume", "fresh start"…
  */
 cause: string, sessions: number, written: number, 
 /**

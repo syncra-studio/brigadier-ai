@@ -80,7 +80,7 @@ test("a request's summary reads its times and its tokens per provider and step, 
       bigMisses: 2,
       unestimatedCalls: 1,
       causes: [
-        { cause: "note fork", sessions: 1, written: 180_000, missed: 252_000 },
+        { cause: "hand-off", sessions: 1, written: 180_000, missed: 252_000 },
         { cause: "fresh start", sessions: 2, written: 15_000, missed: 0 },
       ],
       unexplained: 48_000,
@@ -110,7 +110,7 @@ test("a request's summary reads its times and its tokens per provider and step, 
   // Where the cache writes came from, by lifetime and cause, the misses marked as estimates (BUILD-PLAN B0).
   assert.equal(
     oldest!.cache,
-    "cache writes 200K (1h 180K, 5m 20K) · note fork wrote 180K, missed ≈252K · fresh start ×2 wrote 15K · ≈48K missed, no known cause · 2 calls missed over 20K",
+    "cache writes 200K (1h 180K, 5m 20K) · hand-off wrote 180K, missed ≈252K · fresh start ×2 wrote 15K · ≈48K missed, no known cause · 2 calls missed over 20K",
   );
   assert.equal(newest!.cache, "");
   assert.equal(summaryRows([done, working], 1).length, 1);

@@ -8,7 +8,7 @@
 //! index (`code_search`, `code_refs`) count too. They are held for the turn and recorded once
 //! when it ends (or when the CLI goes, or every [`BATCH_MAX`] calls in a long turn) as one
 //! [`DomainEvent::ThreadLooked`] on the conversation's stream, so they survive a restart, a
-//! rebirth and a vendor fallback like the rest of its board. Paths are made absolute (against
+//! seam and an account switch like the rest of its board. Paths are made absolute (against
 //! the CLI's working directory), resolved as the file system does and checked against the
 //! thread's effective workspace; a search keeps the files it found that exist.
 

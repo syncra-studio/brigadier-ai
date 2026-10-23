@@ -23,7 +23,7 @@ let history: BrowserVisit[] = params.has("empty") ? [] : [
   { id: 2, url: "https://two.test/", title: "Second site", atMs: 2, agent: true },
   { id: 1, url: "https://one.test/old", title: "Old site", atMs: 1, agent: false },
 ];
-const conversation: Conversation = { id: ID, kind: "session", projectId: "fixture-project", title: "New tab tools", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
+const conversation: Conversation = { id: ID, kind: "session", projectId: "fixture-project", title: "New tab tools", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null };
 const requests: Request[] = [];
 useApp.setState((s) => ({
   conversations: { [ID]: conversation }, selection: { type: "conversation", id: ID },

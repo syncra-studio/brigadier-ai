@@ -30,18 +30,16 @@ def battery():
     return load_battery("thread")
 
 
-def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, words_hold=None, false_as_fact=False, checks=None,
-         timed_out=False, trigger="threshold", on_probe=False):
+def make(dirpath, *, answers, seam="restart", killed=2, checks=None, timed_out=False):
     b = battery()
     os.makedirs(os.path.join(dirpath, "rec"), exist_ok=True)
-    os.makedirs(os.path.join(dirpath, "briefings"), exist_ok=True)
     shutil.copyfile(b["path"], os.path.join(dirpath, "battery.md"))
     steps = [s["id"] for s in b["steps"]]
     sent = [1_000_000 + i * 100_000 for i in range(len(steps))]
     requests = [f"req-{s}" for s in steps]
     json.dump({"battery": "thread", "seam": seam, "provider": "claude", "label": "test", "n": 1, "conversation": CONV,
-               "t0_ms": sent[0], "steps": steps, "requests": requests, "sent_ms": sent, "seams": [],
-               "timed_out": timed_out}, open(os.path.join(dirpath, "start.json"), "w"))
+               "t0_ms": sent[0], "steps": steps, "requests": requests, "sent_ms": sent,
+               "seams": [{"killed_pid": 100 + i} for i in range(killed)], "timed_out": timed_out}, open(os.path.join(dirpath, "start.json"), "w"))
     seq, events = 0, []
     for s, rid, t in zip(steps, requests, sent):
         seq += 1
@@ -55,29 +53,7 @@ def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, words_hold
     with open(os.path.join(dirpath, "rec", "events.jsonl"), "w") as f:
         for e in events:
             f.write(json.dumps(e) + "\n")
-    # Rebirths: one before e1, one before e2 (after f8), one more before the probe when asked.
-    at = {s: t for s, t in zip(steps, sent)}
-    when = [at["e1"] - 10_000, at["e2"] - 10_000, at["p1"] - 10_000][:briefs]
-    if on_probe:
-        when.append(at["p1"] + 20_000)  # while the probe is answered
-    log = []
-    texts = {s["id"]: s["text"] for s in b["steps"]}
-    for g, t in enumerate(when, start=1):
-        recent = "User: " + texts[tail_holds] if tail_holds else "User: " + texts["f4"]
-        learned = ("- " + b["harness"]["plant_learned"]["text"]) if false_as_fact else \
-            ("- (worker claim, unverified) " + b["harness"]["plant_learned"]["text"])
-        # A carried message with a blank line in it comes first: the section runs past it.
-        words = ("\n\n[The user's earlier messages, verbatim; the replies between them aren't carried, search_transcript "
-                 "finds them by number]\nUser (#2): Some notes.\n\nMore notes.\nUser (#3): " + texts[words_hold]) if words_hold else ""
-        text = ("[Brigadier briefing: only you see this]\n\n[Decisions]\n" + learned + words +
-                "\n\n[The conversation's latest messages, verbatim]\n" + recent + "\n\n[Older context] search\n\n[End of briefing]")
-        open(os.path.join(dirpath, "briefings", f"{g:02d}-briefing.txt"), "w").write(text)
-        log.append({"streamSeq": g, "atMs": t, "entry": {"type": "rebirth", "record": {
-            "generation": g, "swappedAtMs": t, "briefingTokens": len(text) // 4, "trigger": trigger,
-            "sections": [{"name": "recent", "tokens": 10, "truncated": True}], "decisions": 1, "recentMessages": 2}}})
-    with open(os.path.join(dirpath, "orchestrator.jsonl"), "w") as f:
-        for e in log:
-            f.write(json.dumps(e) + "\n")
+    open(os.path.join(dirpath, "orchestrator.jsonl"), "w").close()
     json.dump(checks or {"e1": {"rc": 0, "result": {"constraint": True, "exception": True, "works": True}},
                          "e2": {"rc": 0, "result": {"ruled_out": True, "found": []}}},
               open(os.path.join(dirpath, "checks.json"), "w"))
@@ -86,7 +62,7 @@ def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, words_hold
 
 CASES = [
     ("all pass", dict(answers=GOOD),
-     lambda s: s["all_pass"] and s["valid"] and s["completed"] and s["seams"]["at_steps"] == ["f4", "f8"]),
+     lambda s: s["all_pass"] and s["valid"] and s["completed"] and s["seams"]["forced"] == 2),
     ("a lost item said unknown, another guessed",
      dict(answers={**GOOD, 3: "unknown", 5: "about 3 seconds"}),
      lambda s: s["by_item"]["hash"] == "unknown" and s["by_item"]["units"] == "fail"
@@ -99,39 +75,18 @@ CASES = [
      dict(answers=GOOD, checks={"e1": {"rc": 0, "result": {"constraint": True, "exception": True}},
                                 "e2": {"rc": 1, "result": {"ruled_out": False}}}),
      lambda s: s["by_item"]["ruled_out"] == "fail"),
-    ("the false learned line briefed as fact",
-     dict(answers=GOOD, false_as_fact=True),
-     lambda s: s["by_item"]["false_learned"] == "fail" and s["items"]["false_learned"]["briefs"]["as_fact"]),
     ("the false learned line claimed verified",
      dict(answers={**GOOD, 9: "Verified: it writes through a temp file and a rename."}),
      lambda s: s["by_item"]["false_learned"] == "fail"),
-    ("a source still in the verbatim tail is not tested",
-     dict(answers=GOOD, tail_holds="r1"),
-     lambda s: s["by_item"]["hash"] == "not_tested" and s["by_item"]["constraint"] == "not_tested"
-     and s["by_item"]["decision"] == "pass"),
-    ("a source carried among the user's earlier words is not tested",
-     dict(answers=GOOD, words_hold="r1"),
-     lambda s: s["by_item"]["hash"] == "not_tested" and s["by_item"]["constraint"] == "not_tested"
-     and s["by_item"]["decision"] == "pass"),
-    ("the user's words alone don't carry what a tool's output gave",
-     dict(answers=GOOD, words_hold="r4"),
-     lambda s: s["by_item"]["failed_check"] == "pass" and s["all_pass"]),
-    ("one size seam only: invalid",
-     dict(answers=GOOD, briefs=1),
-     lambda s: not s["valid"] and not s["all_pass"]),
-    ("a size rebirth during the probe: invalid",
-     dict(answers=GOOD, on_probe=True),
-     lambda s: not s["valid"] and s["seams"]["on_probe"] == 1 and s["seams"]["at_steps"] == ["f4", "f8", "p1"]
-     and "during the probe" in s["why"]),
-    ("an in-turn rebirth during the probe: invalid",
-     dict(answers=GOOD, seam="inturn", trigger="midTurn", on_probe=True),
-     lambda s: not s["valid"] and s["seams"]["forced"] == 2 and s["seams"]["on_probe"] == 1),
-    ("two in-turn rebirths: valid",
-     dict(answers=GOOD, seam="inturn", trigger="midTurn"),
+    ("two restarts: valid",
+     dict(answers=GOOD),
      lambda s: s["valid"] and s["all_pass"] and s["seams"]["forced"] == 2),
-    ("rebirths between turns don't count as in-turn seams",
-     dict(answers=GOOD, seam="inturn"),
-     lambda s: not s["valid"] and s["seams"]["forced"] == 0),
+    ("one restart only: invalid",
+     dict(answers=GOOD, killed=1),
+     lambda s: not s["valid"] and not s["all_pass"] and s["seams"]["forced"] == 1),
+    ("no seam is a valid control",
+     dict(answers=GOOD, seam="none", killed=0),
+     lambda s: s["valid"] and s["all_pass"]),
     ("a timed-out run is not completed",
      dict(answers=GOOD, timed_out=True),
      lambda s: not s["completed"] and not s["all_pass"]),

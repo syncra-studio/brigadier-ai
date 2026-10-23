@@ -32,7 +32,7 @@ const calls: { command: string; payload: unknown }[] = [];
 const copied: string[] = [];
 Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
 
-const conversation: Conversation = { id: ID, kind: "session", projectId: "fixture-project", title: "Page", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
+const conversation: Conversation = { id: ID, kind: "session", projectId: "fixture-project", title: "Page", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null };
 useApp.setState(() => ({
   conversations: { [ID]: conversation }, selection: { type: "conversation", id: ID },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },

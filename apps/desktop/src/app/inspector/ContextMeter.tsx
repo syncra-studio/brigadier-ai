@@ -1,17 +1,12 @@
 import { type ContextPoint, formatTokens } from "@/app/inspector/orchestratorLog";
 import { UsageBar } from "@/components/shared";
-import type { RebirthThresholds } from "@/ipc/generated";
 
 export function ContextMeter({
   point,
   injected,
-  generation,
-  thresholds,
 }: {
   point: ContextPoint | null;
   injected: number;
-  generation: number;
-  thresholds: RebirthThresholds | null;
 }) {
   const used = point?.usedTokens ?? null;
   const windowTokens = point?.windowTokens ?? null;
@@ -19,12 +14,7 @@ export function ContextMeter({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline gap-2">
-        <span className="flex-1 font-medium">
-          Context{" "}
-          <span className="text-muted-foreground font-normal">
-            · CLI generation {generation + 1}
-          </span>
-        </span>
+        <span className="flex-1 font-medium">Context</span>
         <span className="text-muted-foreground tabular-nums">
           {used === null
             ? "not reported yet"
@@ -44,10 +34,8 @@ export function ContextMeter({
         size="md"
       />
       <span className="text-muted-foreground tabular-nums">
-        Brigadier injected about {formatTokens(injected)} tokens into this CLI (≈ 4 bytes per
-        token)
-        {thresholds &&
-          ` · handoff prepared at ${formatTokens(thresholds.prepareTokens)}, reborn at ${formatTokens(thresholds.swapTokens)}`}
+        Brigadier injected about {formatTokens(injected)} tokens into this session (≈ 4 bytes
+        per token)
       </span>
     </div>
   );

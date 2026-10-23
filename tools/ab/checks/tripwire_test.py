@@ -33,8 +33,8 @@ def build(data):
         (T + 2, "opus", "c1", None, "thread", 50, 39_000, 2_000, 300, 1_500, 0, None, None, None),
         (T + 3, "sonnet", "c1", "t1", "worker", 10, 0, 20_000, 200, 0, 1, "fresh start", 20_000, 0),
         (T + 4, "sonnet", "c1", "t1", "worker", 20, 18_000, 1_000, 100, 5_000, 0, "resume", 1_000, 5_000),
-        (T + 5_000, "opus", "c1", None, "thread", 9, 9, 9, 9, 9, 9, "rebirth", 9, 9),  # after the window
-        (T + 5, "opus", "c2", None, "thread", 7, 7, 7, 7, 7, 7, "rebirth", 7, 7),  # another tab
+        (T + 5_000, "opus", "c1", None, "thread", 9, 9, 9, 9, 9, 9, "fresh start", 9, 9),  # after the window
+        (T + 5, "opus", "c2", None, "thread", 7, 7, 7, 7, 7, 7, "fresh start", 7, 7),  # another tab
         (T + 6, "claude-sonnet-5-5", None, None, "brain", 100, 800, 0, 100, None, None, None, None, None),
         (T + 7, "new-model", None, None, "brain", 10, 0, 0, 0, None, None, None, None, None),
         (T + 8, "claude-haiku-5-5", None, None, "upkeep", 200, 0, 0, 50, None, None, None, None, None),

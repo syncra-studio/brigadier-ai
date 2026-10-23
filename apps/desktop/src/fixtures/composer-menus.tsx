@@ -22,7 +22,7 @@ const FILES = ["README.md", "src/lib/menu.ts", "src/lib/chips.ts", "src/app/Comp
 
 const conversation = (cid: string, title: string, kind: "chat" | "session", age: number) => ({
   id: cid, kind, projectId: kind === "session" ? "p1" : null, title, pinnedAtMs: null, createdAtMs: start,
-  updatedAtMs: start + age, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  updatedAtMs: start + age, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
   setup: kind === "chat" ? { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" } : null,
 }) as unknown as Conversation;
 const session = conversation(id, "Menus", "session", 3);

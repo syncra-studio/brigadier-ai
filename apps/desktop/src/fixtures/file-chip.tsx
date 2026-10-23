@@ -25,7 +25,7 @@ const session = query.has("session");
 const conversation: Conversation = {
   id: "chat-1", kind: session ? "session" : "chat", projectId: session ? "project-1" : null,
   title: "File links", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
   setup: session ? {
     type: "session", repo: "/repo", environment: { type: "localCheckout", branch: "main" },
     permission: "full", orchestrator: { provider: "claude", model: null, effort: null },

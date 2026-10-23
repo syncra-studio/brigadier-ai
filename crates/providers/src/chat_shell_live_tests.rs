@@ -151,7 +151,6 @@ impl Fake {
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
-            deny_tools: None,
             lean_worker: false,
         }
     }

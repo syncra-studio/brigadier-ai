@@ -125,22 +125,13 @@ impl SessionManager {
             // The thread's turn the restart cut off ran its calls no further, and its request
             // reads interrupted, not answered.
             self.end_cut_off_calls(&conversation.id).await;
-            // A turn stopped for a rebirth the restart cut off is reborn now and its request
-            // goes on (BUILD-PLAN D2.3b); any other cut-off turn reads interrupted. What the
-            // stop left in the thread's inbox goes back once a cut-off request reads so, but
-            // before anything can settle a request it still works for (the rebirth's
-            // delivery settles them), and before reviews are told again (so a review in it
+            // A seam the restart came in goes on from its record (S22); the turn it cut off
+            // reads interrupted. What the stop left in the thread's inbox goes back once a
+            // cut-off request reads so, and before reviews are told again (so a review in it
             // already isn't told twice).
-            // A seam the restart came in goes on from its record (S22).
             crate::heap(|| self.recover_seam(&conversation.id)).await;
-            let rebirth = self.unfinished_stop(&conversation.id).await.is_some();
-            if !rebirth {
-                self.mark_cut_off_turn(&conversation.id).await;
-            }
+            self.mark_cut_off_turn(&conversation.id).await;
             self.recover_unheard_envelopes(&conversation.id).await;
-            if rebirth && !crate::heap(|| self.recover_stopped_rebirth(&conversation.id)).await {
-                self.mark_cut_off_turn(&conversation.id).await;
-            }
             // Merge cards are retired: open ones close, and no card answer merges.
             if conversation.lifecycle != Lifecycle::Archived {
                 self.retire_merge_cards(&conversation.id).await;

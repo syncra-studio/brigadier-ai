@@ -46,7 +46,7 @@ function conversation(id: string, kind: "chat" | "session", title: string): Conv
     lifecycle: "active",
     forkedFrom: null,
     sideOf: null,
-    fallback: null,
+   
     quotaWait: null,
     setup:
       kind === "chat"

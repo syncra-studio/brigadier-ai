@@ -20,8 +20,8 @@ where
 }
 
 /// An error injected into the thread's running turn ends that turn as the CLI's own error would.
-/// "Prompt is too long" on the thread no longer fails the request: the thread is reborn and the
-/// request goes on in the fresh session (BUILD-PLAN D2.3b).
+/// "Prompt is too long" on the thread no longer fails the request: its generation ends with no
+/// note and the request goes on in the successor (STRIP-DOWN-PLAN S22).
 #[tokio::test]
 async fn an_injected_context_window_error_ends_the_threads_turn() {
     let (started, go) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
@@ -33,7 +33,9 @@ async fn an_injected_context_window_error_ends_the_threads_turn() {
             let (on_start, on_go) = (on_start.clone(), on_go.clone());
             async move {
                 if turn.is_orchestrator()
-                    && turn.input.contains("[Where your earlier session stopped]")
+                    && turn
+                        .input
+                        .contains("The previous session ended without a hand-off note")
                 {
                     return Reply::text("Read it in the fresh session.");
                 }

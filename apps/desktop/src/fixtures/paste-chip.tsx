@@ -42,7 +42,7 @@ const EARLIER = "earlier [Image #1] [Pasted text #1]";
 
 const conversation = {
   id, kind: "chat", projectId: null, title: "Paste chip", pinnedAtMs: null, createdAtMs: start,
-  updatedAtMs: start, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  updatedAtMs: start, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
   setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" },
 } as unknown as Conversation;
 const messages: Message[] = [

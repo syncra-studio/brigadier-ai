@@ -6,7 +6,7 @@ import type { TaskId } from "./TaskId";
 
 /**
  * A process the thread or a worker started to show its work (a dev server, the app), owned by
- * the daemon and kept across the thread's turns, hibernation, rebirth and fallback
+ * the daemon and kept across the thread's turns, hibernation, seams and account switches
  * (THREAD-PLAN.md Q6). The thread's runs in the session's workspace and stops with the
  * session, its merge, a workspace change, `stop_preview`, the user's Stop and Brigadier's
  * quit; a worker's runs in its own folder and stops with that folder too.

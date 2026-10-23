@@ -8,7 +8,6 @@ use brigadier_providers::{
 };
 use brigadier_router::{MergedModel, OverrideRule, ProviderQuota, QuotaSample, RegistryInfo};
 
-use crate::knowledge::RebirthThresholds;
 use crate::work::{
     Approval, AttachmentRef, Compaction, MessageQueue, OrchestratorEntry, OrchestratorStep,
     Question, RunState, Task, UserRequest, WorkerStep,
@@ -505,11 +504,6 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tab_chat: Option<TabChat>,
-    /// Set while the conversation's model (a session's orchestrator, a Chat's model) is
-    /// replaced because it hit a limit. Temporary: the saved choice in `setup`, the project's
-    /// remembered one and the global default are never changed by it.
-    #[serde(default)]
-    pub fallback: Option<ModelFallback>,
     /// Set while its model is at a limit and no model it may use can stand in: its messages
     /// wait, and go on their own when one can take them.
     #[serde(default)]
@@ -566,21 +560,6 @@ pub struct Workspace {
     /// Active or Archived (never Hibernated).
     #[serde(default)]
     pub lifecycle: Lifecycle,
-}
-
-/// A conversation's model standing in for the chosen one while that one is at a limit.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelFallback {
-    /// The model standing in.
-    pub choice: ModelChoice,
-    /// The chosen model it replaces.
-    pub replaces: ModelChoice,
-    /// Why (a short sentence, as on worker cards).
-    pub reason: String,
-    pub since_ms: i64,
-    /// When the chosen model's limit resets and it takes over again, when known.
-    pub until_ms: Option<i64>,
 }
 
 /// Something a user message @-mentions.
@@ -1576,8 +1555,6 @@ pub struct WorkerPage {
 pub struct OrchestratorPage {
     pub entries: Vec<OrchestratorLogEntry>,
     pub has_more: bool,
-    /// The conversation's rebirth thresholds for its current model (sessions only).
-    pub thresholds: Option<RebirthThresholds>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1881,7 +1858,7 @@ pub struct CacheCauses {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CauseTokens {
-    /// "note fork", "cold resume", "fresh start"…
+    /// "seam", "resume", "fresh start"…
     pub cause: String,
     pub sessions: u32,
     pub written: i64,
@@ -2061,12 +2038,6 @@ pub enum RoutingActivity {
         resets_at_ms: Option<i64>,
         since_ms: i64,
     },
-    /// A conversation's model stands in for the chosen one.
-    Fallback {
-        conversation_id: ConversationId,
-        title: String,
-        fallback: ModelFallback,
-    },
 }
 
 /// Everything the Usage page shows, in one read.
@@ -2172,12 +2143,6 @@ pub enum DomainEvent {
     ConversationPinned {
         id: ConversationId,
         pinned_at_ms: Option<i64>,
-    },
-    /// A stand-in model took over the conversation because its chosen one hit a limit
-    /// (`fallback` set), or the chosen one took over again (`fallback` absent).
-    ConversationFallback {
-        id: ConversationId,
-        fallback: Option<ModelFallback>,
     },
     ConversationWaiting {
         id: ConversationId,
@@ -2651,7 +2616,6 @@ impl DomainEvent {
             Self::WorkspacePinned { .. } => "workspace.pinned",
             Self::WorkspaceArchived { .. } => "workspace.archived",
             Self::ConversationPinned { .. } => "conversation.pinned",
-            Self::ConversationFallback { .. } => "conversation.fallback",
             Self::ConversationWaiting { .. } => "conversation.waiting",
             Self::MessageAppended { .. } => "message.appended",
             Self::SettingsChanged { .. } => "settings.changed",

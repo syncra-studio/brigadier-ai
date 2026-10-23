@@ -51,7 +51,7 @@ function conversation(id: string, title: string, fields: Partial<Conversation> =
   return {
     id, kind: "chat", title, projectId: null, pinnedAtMs: null, createdAtMs: NOW - 3 * DAY,
     updatedAtMs: NOW - 2 * DAY, setup: null, lifecycle: "archived", forkedFrom: null, sideOf: null,
-    fallback: null, quotaWait: null, ...fields,
+    quotaWait: null, ...fields,
   };
 }
 

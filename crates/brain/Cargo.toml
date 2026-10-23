@@ -1,6 +1,6 @@
 [package]
 name = "brigadier-brain"
-description = "Project Brain: knowledge graph, freshness, retrieval and rebirth briefings."
+description = "Project Brain: knowledge graph, freshness, retrieval."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

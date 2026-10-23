@@ -20,7 +20,7 @@ const params = new URLSearchParams(location.search);
 const conversation: Conversation = {
   id, kind: "session", title: "Add notes", projectId: null, pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0,
   setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "add-notes" }, permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } },
-  lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
 };
 const base: PullRequest = { number: 7, title: "Add notes", url: "https://github.com/o/n/pull/7", state: "open", base: "main", ci: "passing", approved: true, mergeable: true };
 const STATES: Record<string, PullRequest> = {

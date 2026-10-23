@@ -27,7 +27,7 @@ mockIPC(async (command, payload) => {
 const session: Conversation = {
   id: "mention-session", kind: "session", projectId: null, title: "Mention refresh",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
 };
 
 const emptySearch = () => [];

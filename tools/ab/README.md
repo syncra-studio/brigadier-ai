@@ -102,18 +102,16 @@ plant every item:
 - a false `learned` line in a worker report (planted by the daemon's debug `debugPlantLearned`).
 
 `v2/battery/lookup.md` (`--battery lookup`) is the same battery with a probe that lets the thread look things up with
-`search_transcript` and `query_brain` (still no command, no file read): `thread.md` measures what the briefings keep,
-`lookup.md` what the session can still find, such as the thread-only item after two rebirths (BUILD-PLAN D2.4).
+`search_transcript` and `query_brain` (still no command, no file read): `thread.md` measures what the thread keeps,
+`lookup.md` what the session can still find, such as the thread-only item after two seams (BUILD-PLAN D2.4).
 
-Fillers then push the plants far out of the verbatim tail. Two edits act on the constraint, its exception and the
+Fillers then push the plants far back in the thread. Two edits act on the constraint, its exception and the
 ruled-out approach, and a probe asks for every item.
 
 - **Fixture:** `v2/fixture/build.sh` is V3's fixture plus `scripts/import-check.mjs`. Its feed (`v2/fixture/feed/`)
   is copied into the session's workspace for `r4`–`r5` and deleted after them, so what it said can only be
   remembered.
 - **Seams:** forced at least twice between the last plant and the probe (`--seam`):
-  - `size`: `BRIGADIER_REBIRTH_TOKENS`, with the briefing capped by `BRIGADIER_BRIEFING_TOKENS` so the early
-    messages leave its verbatim tail as in a long session; both passed on by `startd.sh`'s `BRIG_DEBUG_ENV`;
   - `restart`: the daemon is SIGKILLed mid-request and started again;
   - `kill`: the thread's CLI is SIGKILLed mid-request;
   - `context`, `auth`, `billing`: the error is injected mid-turn (`debugInjectError`);
@@ -122,85 +120,19 @@ ruled-out approach, and a probe asks for every item.
 
     export BRIGD=<dev brigadierd> BRIG_SRC=<its source tree>
     v2/run.py template --root /tmp/v2-X --provider claude --tag X    # or --provider codex (thread and workers)
-    v2/run.py battery --root /tmp/v2-X --seam size [--rebirth-tokens 33500]
-    v2/run.py set --root /tmp/v2-X --seam size --reruns 3            # D1.0: three reruns, one build
+    v2/run.py battery --root /tmp/v2-X --seam restart
+    v2/run.py set --root /tmp/v2-X --seam restart --reruns 3            # D1.0: three reruns, one build
     v2/summary.py /tmp/v2-X        # rescored; per item and run; exit 1 when the reruns disagree on an item
     v2/selftest.py [/tmp/v2-X]     # the scorer's rules on synthetic runs, and byte-identical rescoring
     v2/run.py cleanup --root /tmp/v2-X [--export DIR]
 
 **Scoring** (`v2/score.py`, from the run dir alone):
-- **Item verdicts:** each item is `pass`, `fail`, `unknown` (lost, and the thread said it didn't know) or
-  `not_tested`.
+- **Item verdicts:** each item is `pass`, `fail` or `unknown` (lost, and the thread said it didn't know).
   - An item passes when the probe recalls it exactly, the edits that depend on it act on it correctly (the hidden
-    checks' `RESULT` lines), and, for the false line, no rebirth briefing or worker brief carries it unlabelled.
-  - An item is `not_tested` when its source was still in the verbatim tail of the last briefing before a step
-    that needs it.
+    checks' `RESULT` lines), and, for the false line, no worker brief carries it unlabelled.
 - **The run:** a run is `valid` only when its seam happened at least twice.
 - **Also reported:** the "unknown instead of a guess" score (unknown ÷ (unknown + guessed) over the lost items),
-  every briefing's size and sections, and the probe's tool calls.
-
-## A10: earlier thread rebirth (`v2/a10.py`, Phase X)
-
-BUILD-PLAN Phase X, research A10: the thread's rebirth at 200k and 300k against today's 400k on a 1M window, as one
-real long session per threshold (`v2/battery/a10.md`): V2's thread and lookup batteries, V1's completion and usage
-through settlement, and a late-session quality probe (V3's q1–q4 and e1–e4, split into matched early and late
-halves). The threshold is the debug daemon's `BRIGADIER_REBIRTH_TOKENS` (a release build ignores it; the 400k arm is
-production's 400k/450k). The briefing is the real one, uncapped. Claude only: Codex's threshold is 150k on every
-window, so the arms don't map there.
-
-    export BRIGD=<a copy of the dev brigadierd inside the root> BRIG_SRC=<its source tree>
-    v2/a10.py template --root /tmp/X --tag T          # V2's template plus 44 ballast files of ~20k tokens
-    v2/a10.py run --root /tmp/X --threshold 200000 --expect-account <email> --expect-claude <version>
-    v2/a10.py run --root /tmp/X --threshold 300000 ...   # every arm on the same root: one binary, one template
-    v2/a10.py score /tmp/X/runs/a10-200k-T-1          # rescored from the run dir alone
-    v2/a10selftest.py [/tmp/X]                        # the scorer on synthetic runs; rescoring is byte-identical
-    v2/run.py cleanup --root /tmp/X [--export DIR]
-
-- **One arm:** the template restored, one warm-up session (V3's), then the battery's 50 steps. After a step ends with
-  the context at or past the threshold, the next step waits until the daemon has written the handoff note; the daemon
-  swaps the thread at the start of the next turn, so every arm is reborn right after the step that crossed its
-  threshold. A ballast step reads two files at once (about 40k tokens).
-- **The two probes:** before `p1` (memory only) the arm is stopped and its data dir and the thread's Claude
-  transcripts are copied; after `p1` they are put back, so `p2` (lookup) starts from the same state without `p1`'s
-  answers. `p1`'s usage and transcripts are kept in `runs/<id>/p1/`. Each probe is scored on its own; "either
-  probe" is an extra column.
-- **After the seams:** `e1` (the JSDoc rule and its exception) and `e2` (the ruled-out approach) come after the
-  ballast. Their items are `not_tested` unless two rebirths came between the source and the edit and the source had
-  left the verbatim tail.
-- **Measured** (`v2/a10score.py`): both batteries' item verdicts; each quality ask's pass, the context it was sent
-  at, its time and model calls; every rebirth (after which step, its context, prepare-to-swap time, the swap's wait,
-  briefing tokens, the note fork's usage plus the new session's first cache write); the session's usage from t0 to
-  settlement and per hour (without `p1` and the warm-up); the account and `claude --version`.
-- `--smoke --only r1,…` with a low threshold proves the plumbing on small ballast files; it is never a measurement.
-
-### The long-session head-to-head (`v2/a10long.md`, `v2/plain.py`, `v2/h2h.py`)
-
-Brigadier against plain Claude Code on the same script, long enough that plain, with its own auto-compaction on,
-compacts at least twice (near 967k on a 1M window): `a10long.md` is `a10.md` with four files a ballast step and 26
-ballast steps (about 2.2M tokens of growth). Both arms run on one root (the same template repo and ballast paths).
-
-    v2/a10.py run --battery a10long --root /tmp/X --threshold 400000 --expect-account <email> --expect-claude <version>
-    v2/plain.py run --root /tmp/X --expect-account <email> --expect-claude <version>
-    v2/h2h.py /tmp/X/runs/a10long-400k-T-1 /tmp/X/runs/plain-a10long-T-1     # the table, a winner per row
-
-- **Plain:** the user's own `claude`, one session, `claude -p` then `--resume` per step, with the bench's plain-arm
-  flags (`bench/arms/claude.sh`): Opus at high, permissions skipped, only the project's setting sources (so the
-  user's `autoCompactEnabled: false` doesn't apply), no MCP servers, no auto-memory, no idle compaction. It gets
-  every step but `p2` (it has no session search). The false `learned` line is Brigadier-only, so that item isn't
-  scored for plain. Its usage is the session's cumulative `modelUsage` (compactions included), cross-checked against
-  the transcript. A plain item counts as tested once a compaction came between its source and its use (two for
-  the edits).
-- **The table** (`h2h.py`, both arms rescored from their run dirs):
-  - memory (`p1`, the items both arms tested);
-  - guesses instead of "unknown";
-  - the late and early quality probes;
-  - edits whose hidden checks pass;
-  - claims the work can't back up (guesses, plus edits whose check fails and whose answer admits no problem);
-  - tokens through settlement (Brigadier's `p1` put back and `p2` left out);
-  - working time (the sum of the steps);
-  - seams and peak context.
-- `plain.py --smoke-compact-pct N` (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE) tries the plumbing on a small budget; it is
-  never a measurement.
+  and the probe's tool calls.
 
 ## V1 overnight-style task (`v1-overnight/`, E2)
 

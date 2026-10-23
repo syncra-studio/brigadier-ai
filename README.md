@@ -271,8 +271,8 @@ and effort itself, for every session it starts.
 - **Quota.** Brigadier reads Claude's and Codex's usage windows and projects each one to its
   reset. When an account runs out, Brigadier switches the conversation to another account of the
   same agent automatically (a setting, on by default).
-- **Fewer tokens, built in.** Nothing to turn on. A thread idle past its prompt cache restarts
-  from a checkpoint briefing instead of resending its whole history. A worker at about two-thirds of
+- **Fewer tokens, built in.** Nothing to turn on. A long session writes a short hand-off note and
+  a fresh session carries on from it, under one divider. A worker at about two-thirds of
   its model's context window (200k tokens at most) hands over to a fresh session of the same model.
   Brain answers return a few results of each kind and page the rest.
 

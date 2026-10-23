@@ -98,11 +98,6 @@ impl Projection {
                     conversation.updated_at_ms = conversation.updated_at_ms.max(at_ms);
                 }
             }
-            DomainEvent::ConversationFallback { id, fallback } => {
-                if let Some(conversation) = self.conversations.get_mut(id) {
-                    conversation.fallback.clone_from(fallback);
-                }
-            }
             DomainEvent::ConversationWaiting { id, wait } => {
                 if let Some(conversation) = self.conversations.get_mut(id) {
                     conversation.quota_wait.clone_from(wait);
@@ -290,7 +285,6 @@ mod tests {
             forked_from: None,
             side_of: None,
             tab_chat: None,
-            fallback: None,
             quota_wait: None,
             cleanup_pending: false,
             deleting: false,

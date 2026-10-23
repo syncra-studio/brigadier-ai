@@ -1515,7 +1515,7 @@ export async function openOrchestratorLog(conversationId: string | null): Promis
     return;
   }
   useBoard.setState({
-    orchestrator: { conversationId, entries: [], hasMore: false, loading: true, thresholds: null },
+    orchestrator: { conversationId, entries: [], hasMore: false, loading: true },
   });
   try {
     const { page } = await request({
@@ -1536,7 +1536,6 @@ export async function openOrchestratorLog(conversationId: string | null): Promis
         ].slice(-ORCHESTRATOR_ENTRIES),
         hasMore: page.hasMore,
         loading: false,
-        thresholds: page.thresholds,
       },
     });
   } catch (error) {

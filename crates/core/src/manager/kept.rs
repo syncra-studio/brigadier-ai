@@ -6,7 +6,7 @@
 //! cuts the event's `output`, and leaves the whole text waiting on the event; this stores it in
 //! the blob store before the event is recorded, so the recorded event names the blob (and the
 //! blob store keeps a blob while an event names it). What couldn't be stored is said on the
-//! event (`error`), never dropped quietly: an export or a successor briefing reads it as a gap.
+//! event (`error`), never dropped quietly.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -14,7 +14,6 @@ use std::future::Future;
 use brigadier_providers::{ItemStatus, KeptFile, KeptOutput, ProviderEvent};
 
 use super::SessionManager;
-use super::export::{Decoded, worker_event};
 use crate::Result;
 use crate::model::{DomainEvent, TaskId, streams};
 
@@ -78,7 +77,7 @@ impl SessionManager {
                     }
                     continue;
                 }
-                if let Decoded::Event(event) = worker_event(stored)
+                if let Some(event) = worker_event(stored)
                     && let Some(found) = uncopied_file(&event)
                 {
                     missing.push(found);
@@ -118,7 +117,7 @@ impl SessionManager {
                         }
                     }
                 }
-                // Gone already: nothing to record, the export says it is missing.
+                // Gone already: nothing to record.
                 Err(_) => continue,
             }
             let event = DomainEvent::OutputKept {
@@ -179,6 +178,17 @@ fn uncopied_file(event: &ProviderEvent) -> Option<(String, String)> {
 }
 
 /// The kept part of a command or tool call event.
+/// A worker's CLI event (`task:` stream), if `stored` is one.
+pub(crate) fn worker_event(stored: &brigadier_store::StoredEvent) -> Option<ProviderEvent> {
+    if stored.kind != "worker.event" {
+        return None;
+    }
+    match serde_json::from_str::<DomainEvent>(stored.payload.get()) {
+        Ok(DomainEvent::WorkerEvent { event, .. }) => Some(event),
+        _ => None,
+    }
+}
+
 pub(crate) fn kept_mut(event: &mut ProviderEvent) -> Option<&mut KeptOutput> {
     match event {
         ProviderEvent::Command { kept, .. } | ProviderEvent::ToolCall { kept, .. } => {

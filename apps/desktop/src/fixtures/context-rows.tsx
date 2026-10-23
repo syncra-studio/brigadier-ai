@@ -34,7 +34,7 @@ const quotaWait: QuotaWait | null = limit === "usage"
   ? { reason: "Claude's 5-hour window resets", resetsAtMs: RESET, rule: null, ranking: null, sinceMs: now, limitKind: "usageWindow" }
   : null;
 const conversation: Conversation = { id, kind: "session", title: "Add the web interface", projectId: "p1",
-  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait,
+  pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait,
   setup: { type: "session", repo: "/work/todo-app", environment: { type: "newWorktree", branch: "brigadier/web-ui", base: "main", path: "/work/todo-app-web-ui", start: null },
     permission: "ask", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const base = Object.values(night.tasks)[0] as unknown as Task;

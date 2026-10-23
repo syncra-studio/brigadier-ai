@@ -1679,7 +1679,7 @@ pub(crate) struct Flow {
     pub behavior: Arc<FakeBehavior>,
     /// The permission level its sessions start on.
     permission: PermissionLevel,
-    /// How its managers go on past a long context, restarted ones too (none: the env's).
+    /// Where its managers' seams come, restarted ones too (none: the default's).
     pub seam: Option<crate::manager::seam::SeamConfig>,
 }
 
@@ -2215,8 +2215,6 @@ mod cli_thread_tests;
 #[cfg(unix)]
 mod computer_host_tests;
 #[cfg(unix)]
-mod decision_index_tests;
-#[cfg(unix)]
 mod engine_tests;
 #[cfg(unix)]
 mod ledger_tests;
@@ -2276,8 +2274,6 @@ mod preview_tests;
 #[cfg(unix)]
 mod quota_resume_tests;
 #[cfg(unix)]
-mod rebirth_words_tests;
-#[cfg(unix)]
 mod seam_tests;
 #[cfg(unix)]
 mod source_branch_tests;
@@ -2301,16 +2297,12 @@ mod tests;
 mod thread_items_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(unix)]
-mod older_context_tests;
-#[cfg(unix)]
 mod project_sessions_tests;
 #[cfg(unix)]
 mod session_dir_tests;
 #[cfg(unix)]
 mod session_states_tests;
 #[cfg(all(test, debug_assertions))]
-#[cfg(unix)]
-mod thread_overflow_tests;
 #[cfg(unix)]
 mod thread_scratch_tests;
 #[cfg(unix)]

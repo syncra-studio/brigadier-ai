@@ -19,7 +19,7 @@ const id = "tabs-chat";
 const start = Date.now() - 600_000;
 const conversation = {
   id, kind: "chat", projectId: null, title: "Shop check", pinnedAtMs: null, createdAtMs: start,
-  updatedAtMs: start, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  updatedAtMs: start, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
   setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false }, permission: "acceptEdits" },
 } as unknown as Conversation;
 

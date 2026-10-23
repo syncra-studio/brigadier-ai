@@ -27,7 +27,6 @@ type Inputs = Arc<Mutex<Vec<(String, String)>>>;
 /// Turns the seam on at 60k, for this manager and every one the flow restarts.
 fn seam_on(flow: &mut Flow, hold: Duration) {
     let config = SeamConfig {
-        on: true,
         tokens: 60_000,
         hold,
     };
@@ -394,6 +393,15 @@ async fn a_context_too_long_ends_the_generation_without_a_note() {
     assert_eq!(
         view.seams[0].death.as_deref(),
         Some("its context was too long for the model")
+    );
+    // The request the generation died in isn't failed: the successor finished it.
+    let board = flow.board().await;
+    let states: Vec<_> = board.requests.values().map(|r| r.state.clone()).collect();
+    assert!(
+        states
+            .iter()
+            .all(|state| *state == crate::work::RequestState::Done),
+        "{states:?}"
     );
     flow.stop().await;
 }

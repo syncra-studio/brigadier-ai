@@ -16,8 +16,8 @@ async fn edit_settings(flow: &Flow, edit: impl FnOnce(&mut Settings)) {
 }
 
 /// The strip-down's first start archives the sessions open then, through the normal archive
-/// path, and so does the first start with session folders (S7); a later start leaves sessions
-/// alone.
+/// path, and so does the first start with session folders (S7) and with the seam (S23); a later
+/// start leaves sessions alone.
 #[tokio::test]
 async fn sessions_open_at_the_upgrade_are_archived() {
     let mut flow = Flow::start(
@@ -28,24 +28,24 @@ async fn sessions_open_at_the_upgrade_are_archived() {
     .await;
     flow.say("Hello.").await;
     flow.settled().await;
-    // As a data folder from before session folders: their marker isn't there yet.
-    let marker = flow
-        .dir
-        .join("data")
-        .join(crate::manager::upgrade::MARKERS[1]);
-    std::fs::remove_file(&marker).unwrap();
-    flow.restart().await;
-    assert_eq!(
-        flow.core
-            .conversation(&flow.conversation)
-            .unwrap()
-            .lifecycle,
-        Lifecycle::Archived
-    );
-    assert!(marker.exists());
+    for marker in &crate::manager::upgrade::MARKERS[1..] {
+        // As a data folder from before that step: its marker isn't there yet.
+        let marker = flow.dir.join("data").join(marker);
+        std::fs::remove_file(&marker).unwrap();
+        flow.restart().await;
+        assert_eq!(
+            flow.core
+                .conversation(&flow.conversation)
+                .unwrap()
+                .lifecycle,
+            Lifecycle::Archived,
+            "{marker:?}"
+        );
+        assert!(marker.exists());
+        let restored = flow.manager.restore(flow.conversation.clone()).await;
+        assert!(restored.is_ok(), "{restored:?}");
+    }
     // Once only: a session open at a later start stays open.
-    let later = flow.manager.restore(flow.conversation.clone()).await;
-    assert!(later.is_ok(), "{later:?}");
     flow.restart().await;
     assert_ne!(
         flow.core

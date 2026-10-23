@@ -119,7 +119,7 @@ test("a failed turn needs the user until the next one runs", () => {
 
 const session = (extra: Partial<Conversation> = {}): Conversation => ({
   id: "s", kind: "session", projectId: "p", title: "s", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null,
-  lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null, ...extra,
+  lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null, ...extra,
 });
 
 test("a project's open session is a task of its own; a chat, a side chat, an archived one aren't", () => {

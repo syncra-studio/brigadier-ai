@@ -13,7 +13,6 @@ export * from "./ProjectsEmptyPrompt";
 export * from "./ProviderUsage";
 export * from "./SessionTab";
 export * from "./SidebarHeader";
-export * from "./StandInPill";
 export * from "./TabMenu";
 export * from "./UpdateRow";
 export * from "./WaitingPill";

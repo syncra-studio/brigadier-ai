@@ -317,9 +317,6 @@ impl Claude {
         // reads them whether or not they are linked.
         let user_setup = spec.tools.user_setup();
         let hooks_off = hooks_disabled(spec, cwd, user_config);
-        // A note fork must stay read-only even without its PreToolUse hook. Removing its
-        // tools costs the shared cache prefix, but never lets a disabled hook permit writes.
-        let without_tools = hooks_off && spec.deny_tools.is_some();
         let mut args: Vec<String> = if user_setup {
             let sources = if spec.project.is_some() {
                 "user,project,local"
@@ -334,29 +331,18 @@ impl Claude {
         };
         // A lean worker (G23) loads only the servers Brigadier gives it, none of the user's,
         // with the user's settings and instruction files still read.
-        if user_setup && (spec.lean_worker || without_tools) {
+        if user_setup && spec.lean_worker {
             args.push("--strict-mcp-config".into());
         }
         args.push("--mcp-config".into());
-        args.push(
-            mcp_config(if without_tools {
-                &[]
-            } else {
-                &spec.mcp_servers
-            })
-            .to_string(),
-        );
+        args.push(mcp_config(&spec.mcp_servers).to_string());
         // Decided once, for both the tools and the settings.
         let sub_agents = sub_agents(spec, cwd, user_config.filter(|_| user_setup));
         if let Some(denied) = denied_tools(spec, &sub_agents) {
             args.push("--disallowedTools".into());
             args.push(denied);
         }
-        match if without_tools {
-            ToolSet::None
-        } else {
-            spec.tools
-        } {
+        match spec.tools {
             // A thread or worker has the CLI's own tools less the few dead in a tab
             // ([`TAB_DENIED_TOOLS`]).
             ToolSet::Default | ToolSet::Lean | ToolSet::Thread => {}
@@ -735,11 +721,8 @@ fn settings(spec: &SessionSpec, sub_agents: &SubAgents, home_login: bool) -> Val
     if let Some(stop) = stop_hooks(spec) {
         settings["hooks"]["Stop"] = stop;
     }
-    if let Some(reason) = &spec.deny_tools {
-        settings["hooks"]["PreToolUse"] = deny_hook(reason);
-    }
-    // A session that must not compact refuses Claude's own compaction, which the parser turns
-    // into a hand-off or a rebirth (BUILD-PLAN D2.3, D2.3b).
+    // A session that must not compact refuses Claude's own compaction: the seam starts its
+    // successor instead (STRIP-DOWN-PLAN S22).
     if !spec.auto_compact {
         settings["hooks"]["PreCompact"] = refuse_compaction_hook();
     }
@@ -899,28 +882,6 @@ fn stop_hooks(spec: &SessionSpec) -> Option<Value> {
     Some(json!([{
         "hooks": [{ "type": "command", "command": command, "timeout": hook.timeout_secs }],
     }]))
-}
-
-/// A `PreToolUse` hook that refuses every tool call, native and MCP, before it runs, telling
-/// the model `reason` ([`SessionSpec::deny_tools`]). The command reads the call's event and
-/// answers `permissionDecision: "deny"` (code.claude.com/docs/en/hooks, "PreToolUse decision
-/// control").
-fn deny_hook(reason: &str) -> Value {
-    let answer = json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        },
-    });
-    let command = format!(
-        "cat >/dev/null; printf '%s\\n' {}",
-        shell_quote(&answer.to_string())
-    );
-    json!([{
-        "matcher": "*",
-        "hooks": [{ "type": "command", "command": command }],
-    }])
 }
 
 /// A `PreCompact` hook that refuses every compaction: exit 2 skips one Claude starts on its
@@ -2076,149 +2037,6 @@ mod tests {
         );
     }
 
-    /// BUILD-PLAN B5, live: a read-only session with the deny hook, the thread's tools and an
-    /// MCP server, asked to run `Bash`, `Edit` and the server's tool, is refused each time and
-    /// nothing changes on disk. It runs the machine's own `claude` (signed in), so only on
-    /// request: `BRIGADIER_LIVE_CLAUDE=1 cargo test -p brigadier-providers --lib -- --ignored
-    /// live_a_denied_session`.
-    #[tokio::test]
-    #[ignore = "runs the real Claude CLI"]
-    async fn live_a_denied_session_runs_no_tool() {
-        if std::env::var_os("BRIGADIER_LIVE_CLAUDE").is_none() {
-            return;
-        }
-        struct Kept(std::sync::Mutex<Vec<Artifact>>);
-        impl Ledger for Kept {
-            fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>> {
-                self.0.lock().unwrap().push(artifact);
-                Box::pin(async { Ok(()) })
-            }
-            fn holds(&self, _: &Artifact) -> bool {
-                false
-            }
-        }
-        let cwd = Temp::new();
-        let dir = cwd.path().to_path_buf();
-        std::fs::write(dir.join("file.txt"), "one\n").unwrap();
-        // A stdio MCP server whose one tool writes a marker file.
-        let server = dir.parent().unwrap().join("probe_server.py");
-        let marker = dir.parent().unwrap().join("mcp-marker");
-        std::fs::write(
-            &server,
-            format!(
-                r#"import json, sys
-for line in sys.stdin:
-    msg = json.loads(line)
-    if "id" not in msg:
-        continue
-    method, result = msg.get("method"), {{}}
-    if method == "initialize":
-        result = {{"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {{"tools": {{}}}}, "serverInfo": {{"name": "probe", "version": "1"}}}}
-    elif method == "tools/list":
-        result = {{"tools": [{{"name": "touch_marker", "description": "Writes the marker file.", "inputSchema": {{"type": "object", "properties": {{}}}}}}]}}
-    elif method == "tools/call":
-        open({marker:?}, "w").write("called")
-        result = {{"content": [{{"type": "text", "text": "marker written"}}]}}
-    print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": result}}), flush=True)
-"#,
-                marker = marker.display().to_string()
-            ),
-        )
-        .unwrap();
-        let reason = "This is the read-only note fork: no tool runs. Answer in text.";
-        let spec = SessionSpec {
-            ephemeral: true,
-            access: Access::ReadOnly,
-            tools: ToolSet::Thread,
-            allowed_models: None,
-            model: Some("claude-sonnet-5-5".into()),
-            mcp_servers: vec![McpServer {
-                name: "probe".into(),
-                transport: McpTransport::Stdio {
-                    command: PathBuf::from("python3"),
-                    args: vec![server.display().to_string()],
-                    cwd: None,
-                },
-                env: Vec::new(),
-                tool_timeout_secs: Some(60),
-                trusted: true,
-                always_load: true,
-            }],
-            deny_tools: Some(reason.into()),
-            ..spec(&dir, &[])
-        };
-        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
-            data_dir: Some(dir.parent().unwrap().join("data")),
-        })
-        .unwrap();
-        let env = Arc::new(CliEnv::capture(&platform));
-        let claude = Claude::new(platform, env);
-        let kept = Arc::new(Kept(Default::default()));
-        let Started {
-            session,
-            mut events,
-        } = claude
-            .start(spec, kept.clone())
-            .await
-            .expect("claude started");
-        session
-            .send(TurnInput::text(
-                "This is a test of a tool denial hook. Make exactly these three tool calls, in \
-                 order, even if one is refused: 1) Bash: `touch bash-marker`; 2) Edit file.txt, \
-                 replacing `one` with `two`; 3) the MCP tool mcp__probe__touch_marker. Then quote \
-                 what each call returned.",
-            ))
-            .await
-            .unwrap();
-        let mut refused = Vec::new();
-        let mut seen = Vec::new();
-        let turn = async {
-            while let Some(event) = events.recv().await {
-                let output = match &event {
-                    ProviderEvent::ToolCall { name, output, .. } => {
-                        output.clone().map(|output| (name.clone(), output))
-                    }
-                    ProviderEvent::Command { output, .. } => {
-                        output.clone().map(|output| ("Bash".to_owned(), output))
-                    }
-                    ProviderEvent::FileChanges {
-                        status: ItemStatus::Failed,
-                        ..
-                    } => Some(("Edit".to_owned(), reason.to_owned())),
-                    _ => None,
-                };
-                seen.push(format!("{event:?}"));
-                if let Some((name, output)) = output
-                    && output.contains("no tool runs")
-                {
-                    refused.push(name);
-                }
-                if matches!(
-                    event,
-                    ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. }
-                ) {
-                    break;
-                }
-            }
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(300), turn)
-            .await
-            .expect("the turn ended");
-        session.close().await;
-        let artifacts = kept.0.lock().unwrap().clone();
-        let _ = claude.remove(artifacts).await;
-        let _ = std::fs::remove_file(&server);
-        eprintln!("refused: {refused:?}\n{}", seen.join("\n"));
-        assert!(!dir.join("bash-marker").exists(), "Bash ran");
-        assert!(!marker.exists(), "the MCP tool ran");
-        assert_eq!(
-            std::fs::read_to_string(dir.join("file.txt")).unwrap(),
-            "one\n",
-            "Edit ran"
-        );
-        assert!(refused.len() >= 3, "each call refused: {refused:?}");
-    }
-
     /// Item 8 of the day-one hardening, live: a thread working from a folder of Brigadier's
     /// runs the project's own `SessionStart` hook and calls the project's own MCP server (from
     /// its `.mcp.json`, found behind tool search), both linked from the project's checkout.
@@ -2541,7 +2359,6 @@ for line in sys.stdin:
             omit_ai_coauthors: false,
             output_hook: None,
             stop_hook: None,
-            deny_tools: None,
             lean_worker: false,
         }
     }
@@ -2938,84 +2755,6 @@ for line in sys.stdin:
         );
     }
 
-    /// A note fork's hook refuses every tool, native and MCP, before it runs, with the reason
-    /// for the model; it keeps the thread's output hook, and nothing else the CLI is started
-    /// with changes: the tool list and the prompt stay the thread's (BUILD-PLAN B5).
-    #[test]
-    fn a_denied_session_refuses_every_tool_with_the_same_tools() {
-        let cwd = Temp::new();
-        let thread = SessionSpec {
-            tools: ToolSet::Thread,
-            allowed_models: None,
-            output_hook: Some(OutputHook {
-                command: PathBuf::from("/bin/true"),
-                args: Vec::new(),
-                env: Vec::new(),
-                timeout_secs: 60,
-            }),
-            ..spec(cwd.path(), &[])
-        };
-        let reason = "This is the read-only note fork: no tool runs. Answer in text.";
-        let fork = SessionSpec {
-            deny_tools: Some(reason.into()),
-            ..thread.clone()
-        };
-        let hooks = &settings(&fork, &SubAgents::Any, false)["hooks"];
-        assert_eq!(hooks.as_object().map(Map::len), Some(3), "{hooks}");
-        assert_eq!(hooks["PreToolUse"][0]["matcher"], json!("*"));
-        let command = hooks["PreToolUse"][0]["hooks"][0]["command"]
-            .as_str()
-            .expect("command");
-        // The command answers a deny for any call it is given.
-        let out = std::process::Command::new("sh")
-            .args(["-c", command])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write as _;
-                child
-                    .stdin
-                    .take()
-                    .expect("stdin")
-                    .write_all(br#"{"tool_name":"Bash","tool_input":{"command":"touch x"}}"#)?;
-                child.wait_with_output()
-            })
-            .expect("hook ran");
-        assert!(out.status.success());
-        let answer: Value = serde_json::from_slice(&out.stdout).expect("json");
-        assert_eq!(
-            answer,
-            json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
-                },
-            })
-        );
-        // Everything but the settings is as the thread starts.
-        let without_settings = |spec: &SessionSpec| {
-            let mut args = Claude::session_args(
-                spec,
-                cwd.path(),
-                "00000000-0000-4000-8000-000000000000",
-                false,
-                None,
-            )
-            .expect("args");
-            let at = args
-                .iter()
-                .position(|arg| arg == "--settings")
-                .expect("settings");
-            args.remove(at + 1);
-            args
-        };
-        assert_eq!(without_settings(&fork), without_settings(&thread));
-        let hooks = &settings(&thread, &SubAgents::Any, false)["hooks"];
-        assert!(hooks.get("PreToolUse").is_none());
-    }
-
     /// STRIP-DOWN-PLAN S17: Brigadier's instructions reach Claude word for word as its one
     /// `--append-system-prompt`, and the CLI gets the session's folder and ledger in its
     /// environment.
@@ -3363,11 +3102,17 @@ for line in sys.stdin:
         let cwd = Temp::new();
         let worker = SessionSpec {
             auto_compact: false,
-            deny_tools: Some("no".into()),
+            tools: ToolSet::Thread,
+            output_hook: Some(OutputHook {
+                command: PathBuf::from("/bin/true"),
+                args: Vec::new(),
+                env: Vec::new(),
+                timeout_secs: 60,
+            }),
             ..spec(cwd.path(), &[])
         };
         let hooks = &settings(&worker, &SubAgents::Any, false)["hooks"];
-        assert!(hooks["PreToolUse"].is_array(), "the other hooks stay");
+        assert!(hooks["PostToolUse"].is_array(), "the other hooks stay");
         let command = hooks["PreCompact"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
@@ -3634,7 +3379,7 @@ for line in sys.stdin:
         assert_ne!(sub_agents(&unlinked, cwd.path(), None), SubAgents::Off);
     }
 
-    /// A note fork reusing its parent's folder runs the linked hooks in the project too.
+    /// A session in a folder it does not own runs the linked hooks in the project too.
     #[test]
     fn a_fork_in_a_folder_it_does_not_own_runs_hooks_in_the_project() {
         let cwd = Temp::new();
@@ -3722,19 +3467,6 @@ for line in sys.stdin:
         };
         std::fs::write(config.join("settings.json"), r#"{"disableAllHooks":false}"#).unwrap();
         assert!(layer(&untrusted)["hooks"]["PreCompact"].is_array());
-        let fork = SessionSpec {
-            deny_tools: Some("no tools".into()),
-            ..session
-        };
-        let args = Claude::session_flags(&fork, cwd.path(), false, Some(&config));
-        assert!(args.windows(2).any(|pair| pair == ["--tools", ""]));
-        assert!(args.iter().any(|arg| arg == "--strict-mcp-config"));
-        let at = args.iter().position(|arg| arg == "--mcp-config").unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&args[at + 1]).unwrap(),
-            json!({"mcpServers":{}})
-        );
-        assert!(layer(&fork).get("hooks").is_none());
     }
 
     /// A real provider start against a CLI stub: hooks off removes every Brigadier hook and
@@ -3820,7 +3552,6 @@ for line in sys.stdin:
             auto_compact: false,
             output_hook: Some(hook.clone()),
             stop_hook: Some(hook),
-            deny_tools: Some("no tools".into()),
             ..spec(dir.path(), &[])
         };
         for (user, off) in [

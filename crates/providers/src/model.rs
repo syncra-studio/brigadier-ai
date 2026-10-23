@@ -1396,11 +1396,6 @@ pub struct SessionSpec {
     /// A Claude worker's `Stop` hook: the command answers whether its turn may end (it
     /// refuses a turn that ends with no report, BUILD-PLAN E2). Codex doesn't run it.
     pub stop_hook: Option<OutputHook>,
-    /// Every tool call is refused before it runs, with this reason for the model: a Claude
-    /// `PreToolUse` hook that denies all tools, native and MCP. Hooks run in the client, so the
-    /// tool list (and the cached prefix it starts) stays the same; `--disallowedTools` would
-    /// change it (BUILD-PLAN B5, a thread's note fork). Codex ignores this.
-    pub deny_tools: Option<String>,
     /// A lean research worker (`brigadier start --lean`, G23): none of the user's MCP servers
     /// and no memory writes, from the CLI's own flags and settings, never by editing the user's
     /// files. Its skills are cut through [`Self::switched_off`]; its instruction files still
@@ -1526,9 +1521,9 @@ mod input_tests {
             name: "readme.txt".into(),
             mime: "text/plain".into(),
         };
-        let mut input = TurnInput::with_files("briefing".into(), vec![file]);
+        let mut input = TurnInput::with_files("hand-off".into(), vec![file]);
         input.append_text("\n\nWaiting for you now:\nquestion");
-        assert_eq!(input.parts_with_file_notes(), vec![InputPart::Text("briefing\n\nWaiting for you now:\nquestion\n[Attached file \"readme.txt\" (text/plain): /attachments/readme.txt]".into())]);
+        assert_eq!(input.parts_with_file_notes(), vec![InputPart::Text("hand-off\n\nWaiting for you now:\nquestion\n[Attached file \"readme.txt\" (text/plain): /attachments/readme.txt]".into())]);
     }
 
     #[test]

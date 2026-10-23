@@ -31,7 +31,7 @@ function project(id: string, name: string): Project {
 
 function conversation(id: string, projectId: string | null): Conversation {
   return { id, kind: projectId ? "session" : "chat", projectId, title: id, pinnedAtMs: null, createdAtMs: 0,
-    updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+    updatedAtMs: 0, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
     setup: null } as unknown as Conversation;
 }
 

@@ -1,6 +1,5 @@
 import { toolName } from "@/app/conversation/activity/words";
 import type { CardType } from "@/app/conversation/cards/CardBody";
-import { decisionWords } from "@/app/conversation/rowWords";
 import type {
   Approval,
   AttachmentRef,
@@ -452,7 +451,7 @@ export function boardItems(board: BoardDigest): BoardItem[] {
       position: decision.position,
       requestId: decision.requestId,
       step: {
-        kind: { type: "decided", ...decisionWords(decision) },
+        kind: { type: "decided", what: decision.what, why: decision.why },
         position: decision.position,
       },
       atMs: decision.atMs,

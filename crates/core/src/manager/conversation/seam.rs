@@ -51,6 +51,9 @@ pub(super) struct SeamLive {
     pub(super) reserved: Option<String>,
     /// The seam closed and its successor starts by itself, when no message starts it first.
     pub(super) carry_on: bool,
+    /// The request whose turn the generation died in ("prompt is too long"): it still works,
+    /// and the successor that carries on by itself serves it.
+    pub(super) carried_request: Option<String>,
     /// The context a successor's CLI first reported, which its generation grows from before
     /// its seam (none for the first generation); `None` until looked up in `seam.json`.
     pub(super) base: Option<Option<i64>>,
@@ -77,9 +80,9 @@ const NOT_RESUMED: &str = "its CLI session could not be resumed";
 const TOO_LONG: &str = "its context was too long for the model";
 
 impl SessionManager {
-    /// Whether conversation `conv` goes on at seams rather than by rebirth.
+    /// Whether conversation `conv` goes on at seams: a session's thread (a Chat compacts).
     pub(in crate::manager) fn seam_on(&self, conv: &ConvLive) -> bool {
-        conv.kind == ConversationKind::Session && self.seam_config().on
+        conv.kind == ConversationKind::Session
     }
 
     pub(in crate::manager) async fn read_seam_of(&self, id: &ConversationId) -> SeamFile {
@@ -233,16 +236,20 @@ impl SessionManager {
 
     /// A closed seam's successor that starts by itself, taken for the next turn: when nothing
     /// else is there to start it.
-    pub(super) fn take_carry_on(state: &mut super::ConvState) -> Option<Envelope> {
+    /// With the request it serves, if the generation died in one's turn.
+    pub(super) fn take_carry_on(
+        state: &mut super::ConvState,
+    ) -> Option<(Envelope, Option<String>)> {
         if !std::mem::take(&mut state.seam.carry_on) {
             return None;
         }
-        Some(Envelope {
+        let envelope = Envelope {
             kind: InjectionKind::Seam,
             label: "carry on".into(),
             task_id: None,
             text: crate::manager::seam::CARRY_ON.into(),
-        })
+        };
+        Some((envelope, state.seam.carried_request.take()))
     }
 
     /// The nudge due as a turn of its own, taken for the next turn.
@@ -359,6 +366,11 @@ impl SessionManager {
             Phase::Nudged { at_ms, .. } => Some(*at_ms),
             Phase::Closed { .. } | Phase::Starting { .. } => return,
         };
+        // Its request isn't over: the successor goes on with it.
+        {
+            let mut state = conv.state.lock().await;
+            state.seam.carried_request = state.request.clone();
+        }
         // The turn's end looks for the next turn, which retires the CLI first.
         self.close_seam(conv, file, nudged, Some(TOO_LONG.into()))
             .await;
@@ -462,11 +474,12 @@ impl SessionManager {
         let mut state = conv.state.lock().await;
         state.seam.reserved = Some(reserved);
         state.seam.carry_on = false;
+        // A message started it first: the request the generation died in ends.
+        state.seam.carried_request = None;
         state.seam.base = None;
         state.fresh = true;
         // The predecessor's context is not the successor's.
         state.context = None;
-        state.checkpoint = None;
         // Nothing is in the new session yet: whatever it carries goes in whole.
         state.continuing.clear();
         state.continuing_envelopes.clear();
@@ -507,7 +520,6 @@ impl SessionManager {
         state.seam.held = false;
         state.seam.base = None;
         state.context = None;
-        state.checkpoint = None;
         state.continuing.clear();
         state.continuing_envelopes.clear();
         drop(state);

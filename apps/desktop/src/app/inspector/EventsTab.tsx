@@ -27,10 +27,6 @@ function summary(event: DomainEvent): string {
       return event.archived ? "archived" : "restored";
     case "conversationPinned":
       return event.pinnedAtMs === null ? "unpinned" : "pinned";
-    case "conversationFallback":
-      return event.fallback === null
-        ? "chosen model back"
-        : `stand-in ${event.fallback.choice.provider} ${event.fallback.choice.model ?? "default"}`;
     case "conversationWaiting":
       return event.wait === null ? "no longer waiting" : `waits: ${event.wait.reason}`;
     case "messageAppended":
@@ -160,16 +156,12 @@ function summary(event: DomainEvent): string {
           return `${event.entry.injection.kind} ${event.entry.injection.label}`;
         case "provider":
           return event.entry.event.type;
-        case "rebirth":
-          return `rebirth ${event.entry.record.generation}`;
         case "contractBreach":
           return event.entry.message;
-        case "checkpoint":
-          return `checkpoint for ${event.entry.oldNativeId.slice(0, 8)}`;
-        case "stoppedForRebirth":
-          return `stopped for a rebirth at ${event.entry.atTokens} tokens: ${event.entry.reason}`;
+        default:
+          // Retired entries (old stores) have nothing to say.
+          return "";
       }
-      break;
     case "decidedForYou":
       return event.decision.what;
     case "peerMessageSent":

@@ -2,14 +2,12 @@
 //! through Brigadier's adapter, runs a command that prints 200 KiB with a marker 50 KiB in and
 //! calls an MCP tool that returns the same. Each result is kept as the core keeps it, its
 //! events are recorded in a store, the CLI's session files are removed the way Brigadier
-//! removes them, and the marker is still found through each recorded event's reference, in a
-//! streamed export's `outputs/`.
+//! removes them, and the marker is still found through each recorded event's reference.
 //!
 //! The CLIs must be signed in, so this runs only on request:
 //! `BRIGADIER_LIVE_CLAUDE=1 cargo test -p brigadier-core --lib -- --ignored live_claude_kept`
 //! `BRIGADIER_LIVE_CODEX=1 cargo test -p brigadier-core --lib -- --ignored live_codex_kept`
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -21,8 +19,7 @@ use brigadier_providers::{
 };
 use brigadier_store::{Store, StoreConfig};
 
-use super::export::{OUTPUTS_DIR, export, worker_event};
-use super::kept::{keep, kept_mut};
+use super::kept::{keep, kept_mut, worker_event};
 use crate::model::{DomainEvent, TaskId, streams};
 
 const MARKER: &str = "PLANTED-MARKER-7f3a9c";
@@ -140,7 +137,6 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         omit_ai_coauthors: false,
         output_hook: None,
         stop_hook: None,
-        deny_tools: None,
         lean_worker: false,
     };
     let ledger = Arc::new(Recorded(Mutex::default()));
@@ -217,40 +213,37 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         );
     }
 
-    let out = root.join("handoff");
-    std::fs::create_dir_all(&out).unwrap();
-    let file = tokio::fs::File::create(out.join("transcript.md"))
-        .await
-        .unwrap();
+    // Each recorded result names its kept copy, which still holds the marker.
     let blobs = store.blobs().clone();
-    let exported = export(
-        |after| store.read_stream_since(stream.clone(), after, 2_000),
-        |hash: String| {
-            let blobs = blobs.clone();
-            async move { Ok(blobs.file_of(&hash.parse()?)) }
-        },
-        &HashMap::new(),
-        worker_event,
-        "The worker",
-        tokio::io::BufWriter::new(file),
-        &out.join(OUTPUTS_DIR),
-    )
-    .await;
-    let transcript = std::fs::read_to_string(out.join("transcript.md")).unwrap();
-    assert!(exported.complete(), "{:?}\n{transcript}", exported.gaps);
     let mut found = 0;
-    for entry in std::fs::read_dir(out.join(OUTPUTS_DIR)).unwrap() {
-        let path = entry.unwrap().path();
-        let text = std::fs::read_to_string(&path).unwrap();
-        eprintln!(
-            "{}: {} bytes, marker {}",
-            path.display(),
-            text.len(),
-            text.contains(MARKER)
-        );
-        found += usize::from(text.contains(MARKER));
+    for stored in store
+        .read_stream_since(stream.clone(), 0, 2_000)
+        .await
+        .unwrap()
+    {
+        let Some(mut event) = worker_event(&stored) else {
+            continue;
+        };
+        let Some(kept) = kept_mut(&mut event) else {
+            continue;
+        };
+        let hashes = kept
+            .blob
+            .iter()
+            .chain(kept.file.iter().filter_map(|file| file.blob.as_ref()));
+        for hash in hashes {
+            let path = blobs.file_of(&hash.parse().unwrap());
+            let text = std::fs::read_to_string(&path).unwrap();
+            eprintln!(
+                "{}: {} bytes, marker {}",
+                path.display(),
+                text.len(),
+                text.contains(MARKER)
+            );
+            found += usize::from(text.contains(MARKER));
+        }
     }
-    assert!(found >= 2, "the marker of both results: {transcript}");
+    assert!(found >= 2, "the marker of both results");
     eprintln!("kept outputs found after the CLI's files were removed: {found}");
     store.shutdown().await.unwrap();
     std::fs::remove_dir_all(&root).unwrap();

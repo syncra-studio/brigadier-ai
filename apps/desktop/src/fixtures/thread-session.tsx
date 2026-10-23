@@ -82,7 +82,7 @@ const conversation = {
   lifecycle: query.get("archived") === "1" ? "archived" : "active",
   forkedFrom: null,
   sideOf: null,
-  fallback: null,
+ 
   quotaWait: null,
   setup: {
     type: "session",

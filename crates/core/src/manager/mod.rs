@@ -31,20 +31,15 @@ mod cli_tools;
 mod close_tab;
 mod closing;
 mod codex_children;
-mod cold;
 mod computer_host;
 mod models;
 mod open_in_app;
 mod terminal_run;
 pub use computer_host::ComputerNews;
 mod computer_use;
-mod constraints;
 mod conversation;
-pub(crate) mod decisions;
 pub mod disk;
 mod engine;
-mod evidence;
-mod export;
 mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
@@ -78,7 +73,6 @@ mod protected_folders;
 mod pull_request;
 mod quiet;
 pub(crate) mod reads;
-mod rebirth;
 mod records;
 mod refcheck;
 mod review;
@@ -441,7 +435,6 @@ impl SessionManager {
         manager.start_hibernation_timer();
         manager.start_computer_watchdog();
         manager.retry_waiting_on_provider_checks();
-        manager.start_checkpoint_timer();
         Ok(manager)
     }
 

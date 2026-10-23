@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use brigadier_providers::model::{Access, Origin, SessionSpec, ToolSet};
+use brigadier_providers::model::{Access, Origin, ToolSet};
 use brigadier_providers::{ApprovalDecision, Artifact, ProviderKind};
 
 use serde_json::json;
@@ -1321,16 +1321,11 @@ async fn first_native_id(flow: &Flow) -> String {
         .expect("a logged session start")
 }
 
-/// How many rebirths the conversation's log records.
-async fn rebirth_count(flow: &Flow) -> usize {
-    flow.core
-        .list_orchestrator_log(&flow.conversation, None, brigadier_store::MAX_PAGE)
-        .await
-        .unwrap()
-        .entries
-        .iter()
-        .filter(|entry| matches!(entry.entry, crate::work::OrchestratorEntry::Rebirth { .. }))
-        .count()
+/// How many seams the session went through.
+fn seams(flow: &Flow) -> usize {
+    crate::manager::seam::read_seam(&flow.manager.session_dir(&flow.conversation).record())
+        .seams
+        .len()
 }
 
 /// Bug 2: the turn after a closed CLI resumes its session however many events were logged
@@ -1383,12 +1378,12 @@ async fn a_busy_thread_resumes_its_session_past_a_thousand_logged_events() {
         Origin::Resume { native_id: native },
         "the same session resumes"
     );
-    assert_eq!(rebirth_count(&flow).await, 0, "no rebirth");
+    assert_eq!(seams(&flow), 0, "no seam");
     flow.stop().await;
 }
 
 /// Bug 3: Accept edits → Full access on a busy thread resumes the same session between
-/// turns, with the permission note, and no rebirth.
+/// turns, with the permission note, and no seam.
 #[tokio::test]
 async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
     let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -1424,241 +1419,6 @@ async fn a_permission_change_on_a_busy_thread_resumes_with_the_note() {
     assert_eq!(specs[1].1.access, Access::Full);
     let second = inputs.lock().unwrap()[1].clone();
     assert!(!second.contains("[settings]"), "{second}");
-    assert_eq!(rebirth_count(&flow).await, 0, "no rebirth");
-    flow.stop().await;
-}
-
-/// A thread idle past its cache's lifetime, with a checkpoint covering its last request, at
-/// `context` tokens of a 1M window, its CLI closed meanwhile: the first session's id, the
-/// thread's settled decisions and every input the thread got.
-async fn cold_turn(name: &str, context: i64) -> (Flow, String, Vec<String>, Vec<String>) {
-    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = inputs.clone();
-    let flow = Flow::start(
-        name,
-        Options::default(),
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                log.lock().unwrap().push(turn.input.clone());
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("First.").await;
-    flow.settled().await;
-    let native = first_native_id(&flow).await;
-    // Thirty settled decisions with long bodies: far past the briefing's old 4k-token budget
-    // for them.
-    let decisions: Vec<String> = (0..30)
-        .map(|n| {
-            format!(
-                "Decision {n}: {}",
-                format!("keep part {n} as it is; ").repeat(40)
-            )
-        })
-        .collect();
-    let kept = flow
-        .manager
-        .keep_note_decisions(&flow.conversation, decisions.clone(), 0)
-        .await
-        .unwrap();
-    assert_eq!(kept, 30);
-    let now = crate::now_ms();
-    let conv = flow.manager.conv(&flow.conversation).unwrap();
-    conv.set_cache_mark(crate::manager::cold::CacheMark {
-        native_id: native.clone(),
-        provider: ProviderKind::Claude,
-        at_ms: now - 2 * 3_600_000,
-        context,
-        window: Some(1_000_000),
-    })
-    .await;
-    conv.set_checkpoint(crate::manager::rebirth::RebirthPrep::written(
-        "Goal: the first ask.\nWhat to do next: the second.",
-        &native,
-        now - 2 * 3_600_000 + 60_000,
-    ))
-    .await;
-    conv.close_cli().await;
-
-    flow.say("Second.").await;
-    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
-        .await;
-    flow.settled().await;
-    let inputs = inputs.lock().unwrap().clone();
-    (flow, native, decisions, inputs)
-}
-
-/// Q5: a thread under 150k whose cache expired resumes its session.
-#[tokio::test]
-async fn a_cold_thread_under_150k_resumes() {
-    if std::env::var_os("BRIGADIER_COLD_REBIRTH_TOKENS").is_some() {
-        return;
-    }
-    let (flow, native, _, _) = cold_turn("cold-small", 120_000).await;
-    let specs = flow.thread_specs();
-    assert_eq!(specs[1].1.origin, Origin::Resume { native_id: native });
-    assert_eq!(rebirth_count(&flow).await, 0);
-    flow.stop().await;
-}
-
-/// Q5: a bigger one is reborn from its checkpoint, with every decision whole in the briefing.
-#[tokio::test]
-async fn a_cold_thread_over_150k_is_reborn_with_every_decision_whole() {
-    if std::env::var_os("BRIGADIER_COLD_REBIRTH_TOKENS").is_some() {
-        return;
-    }
-    let (flow, _, decisions, inputs) = cold_turn("cold-big", 200_000).await;
-    let specs = flow.thread_specs();
-    assert_eq!(specs[1].1.origin, Origin::New, "reborn");
-    let records: Vec<_> = flow
-        .core
-        .list_orchestrator_log(&flow.conversation, None, brigadier_store::MAX_PAGE)
-        .await
-        .unwrap()
-        .entries
-        .into_iter()
-        .filter_map(|entry| match entry.entry {
-            crate::work::OrchestratorEntry::Rebirth { record } => Some(record),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(records.len(), 1);
-    assert_eq!(
-        records[0].trigger,
-        crate::knowledge::RebirthTrigger::CacheExpired
-    );
-    assert_eq!(records[0].decisions, 30);
-    assert_eq!(records[0].decisions_in_full, 30);
-    let briefing = &inputs[1];
-    for line in &decisions {
-        assert!(briefing.contains(line.as_str()), "a decision cut: {line}");
-    }
-    flow.stop().await;
-}
-
-/// A checkpoint's note fork of a `thread` session, whose model asks for `project_map`: the
-/// fork's spec, the thread's first spec, the note and what the call was answered.
-async fn note_fork(name: &str, thread: ProviderKind) -> (Flow, SessionSpec, SessionSpec, String) {
-    let answers: Arc<Mutex<Vec<String>>> = Arc::default();
-    let log = answers.clone();
-    let flow = Flow::start(
-        name,
-        Options {
-            thread,
-            ..Options::default()
-        },
-        script(move |turn| {
-            let log = log.clone();
-            async move {
-                if turn.input.contains("Write the handoff note") {
-                    let reply = turn.call("project_map", json!({})).await;
-                    log.lock().unwrap().push(reply.text);
-                    return Reply::text("Goal and open threads: the first ask.");
-                }
-                Reply::text("Done.")
-            }
-        }),
-    )
-    .await;
-    flow.say("First.").await;
-    flow.settled().await;
-    let native = flow
-        .manager
-        .read_native_id(&flow.conversation, thread)
-        .await
-        .flatten()
-        .expect("a logged session start");
-    let Some(Setup::Session { orchestrator, .. }) =
-        flow.core.conversation(&flow.conversation).unwrap().setup
-    else {
-        panic!("a session");
-    };
-    let prep = flow.manager.prepare_rebirth(
-        &flow.conversation,
-        thread,
-        orchestrator,
-        Some(native.clone()),
-        (200_000, Some(1_000_000)),
-        crate::manager::rebirth::HandoffPurpose::Checkpoint,
-    );
-    let note = prep
-        .note(std::time::Duration::from_secs(30))
-        .await
-        .expect("a note");
-    assert_eq!(note, "Goal and open threads: the first ask.");
-    let fork = flow
-        .specs()
-        .into_iter()
-        .map(|(_, spec)| spec)
-        .find(|spec| matches!(spec.origin, Origin::Fork { .. }))
-        .expect("a fork");
-    assert_eq!(fork.origin, Origin::Fork { native_id: native });
-    // It stays read-only, whatever the thread may do.
-    assert_eq!(fork.access, Access::ReadOnly);
-    assert!(fork.ephemeral && !fork.owned_cwd && fork.sweep_dir.is_none());
-    let thread = flow.thread_specs()[0].1.clone();
-    let answered = answers.lock().unwrap().clone();
-    (flow, fork, thread, answered.join("\n"))
-}
-
-/// B5: a Claude thread's note fork starts as the thread did (tools, model, instructions and the
-/// rest), so it reads the thread's prefix from the cache; only its origin, its life and its
-/// folders' ownership change. It stays read-only, a hook denies every tool, and it holds no
-/// grant, so a Brigadier tool refuses it too.
-#[tokio::test]
-async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
-    let (flow, fork, thread, answered) = note_fork("note-fork-claude", ProviderKind::Claude).await;
-    assert_eq!(
-        fork.deny_tools.as_deref(),
-        Some(crate::manager::rebirth::NOTE_FORK_REFUSAL)
-    );
-    assert!(answered.contains("not valid"), "{answered}");
-    // It runs no command: it has no `brigadier` session or grant, and keeps the rest.
-    let calls = |spec: &SessionSpec| {
-        spec.env
-            .iter()
-            .filter(|(name, _)| {
-                name == brigadier_cli::protocol::SESSION_ENV
-                    || name == brigadier_cli::protocol::GRANT_ENV
-            })
-            .count()
-    };
-    assert_eq!((calls(&thread), calls(&fork)), (2, 0));
-    // Everything else is the thread's.
-    let unchanged = SessionSpec {
-        env: thread.env.clone(),
-        origin: thread.origin.clone(),
-        ephemeral: thread.ephemeral,
-        access: thread.access,
-        record_to: thread.record_to.clone(),
-        redactor: thread.redactor.clone(),
-        owned_cwd: thread.owned_cwd,
-        sweep_dir: thread.sweep_dir.clone(),
-        output_hook: thread.output_hook.clone(),
-        deny_tools: None,
-        lean_worker: false,
-        ..fork.clone()
-    };
-    assert_eq!(format!("{unchanged:?}"), format!("{thread:?}"));
-    assert!(fork.env.iter().all(|var| thread.env.contains(var)));
-    assert_eq!(fork.tools, ToolSet::Thread);
-    flow.stop().await;
-}
-
-/// B5: a Codex thread's note fork is as before, with no tools beyond Codex's own read-only
-/// ones and no MCP server, until a Codex hook probe shows its tools can be denied.
-#[tokio::test]
-async fn a_codex_note_fork_is_unchanged() {
-    let (flow, fork, _, answered) = note_fork("note-fork-codex", ProviderKind::Codex).await;
-    assert_eq!(fork.tools, ToolSet::None);
-    assert!(fork.mcp_servers.is_empty());
-    assert!(fork.deny_tools.is_none() && fork.output_hook.is_none());
-    assert!(
-        answered.contains("not available") || answered.contains("not valid"),
-        "{answered}"
-    );
+    assert_eq!(seams(&flow), 0, "no seam");
     flow.stop().await;
 }

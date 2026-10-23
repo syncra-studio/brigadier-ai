@@ -484,7 +484,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
       };
     case "conversationRenamed":
     case "conversationPinned":
-    case "conversationFallback":
     case "conversationWaiting": {
       const current = slice.conversations[event.id];
       if (!current) return slice;
@@ -493,9 +492,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
           ? { ...current, title: event.title }
           : event.type === "conversationPinned"
             ? { ...current, pinnedAtMs: event.pinnedAtMs }
-            : event.type === "conversationFallback"
-              ? { ...current, fallback: event.fallback }
-              : { ...current, quotaWait: event.wait };
+            : { ...current, quotaWait: event.wait };
       return {
         ...slice,
         conversations: { ...slice.conversations, [event.id]: next },

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The V2 continuity battery (PLAN §0 V2, BUILD-PLAN D1.0): several requests in one session, with
-items planted early, pushed far out of the thread's verbatim tail, and needed late, across forced
+items planted early, pushed far back in the thread, and needed late, across forced
 seams of the kind under test, against a dev brigadierd with its own data dir. Every attempt is kept
 with its evidence and score; `score.py` rescores a run from its directory alone.
 
@@ -11,27 +11,20 @@ A harness root (under /tmp) holds one build and one provider for the thread and 
                         V2 fixture (fixture/build.sh) added as a project and its Brain jobs ended
   arm/{data,repo}       the live arm, restored from the template before every attempt
   runs/<id>/            one attempt: rec/, transcripts/, start.json, orchestrator.jsonl,
-                        briefings/, freeze.json, checks.json, tokens.json, manifest.json, score.json
+                        freeze.json, checks.json, tokens.json, manifest.json, score.json
   results.jsonl         one line per attempt (every attempt, failed or not)
 
 usage:
   run.py template --root R --provider claude|codex          (BRIGD, BRIG_SRC from the environment)
-  run.py battery --root R --battery thread --seam SEAM [--n 1] [--tag T] [--rebirth-tokens N]
-                 [--hard-line-tokens N]
+  run.py battery --root R --battery thread --seam SEAM [--n 1] [--tag T]
   run.py set --root R --battery thread --seam SEAM --reruns 3 [--first 1]
   run.py cleanup --root R [--export DIR]                    (as tools/ab/v3/run.py cleanup)
 
 Seams (each forced at least twice between the plants and the probe):
-  size     the thread is reborn by size: BRIGADIER_REBIRTH_TOKENS (--rebirth-tokens, default 33500),
-           with the briefing's cap at BRIGADIER_BRIEFING_TOKENS (--briefing-tokens, default 8000),
-           so a short battery's early messages leave the verbatim tail as a long session's do
-  inturn   the thread's turn is stopped mid-request and reborn at once: BRIGADIER_HARD_LINE_TOKENS
-           (--hard-line-tokens, default 37500), with the briefing's cap as for size (BUILD-PLAN D2.3b)
   restart  the daemon is killed (SIGKILL) mid-request at each seam point, and started again
   kill     the thread's CLI process is killed (SIGKILL) mid-request at each seam point (Codex: its
            app-server)
-  context  "prompt is too long" injected into the thread's turn at each seam point, with the briefing's
-           cap as for size
+  context  "prompt is too long" injected into the thread's turn at each seam point
   auth     a failed sign-in injected likewise
   billing  credits run out, injected likewise
   limit    a usage limit injected likewise, resetting in LIMIT_RESET_MINUTES (the session moves to
@@ -53,22 +46,8 @@ from v2lib import load_battery  # noqa: E402
 
 log, now_ms = v3run.log, v3run.now_ms
 MODELS = {"claude": "opus", "codex": "gpt-6.1-sol"}
-SEAMS = ["size", "inturn", "restart", "kill", "context", "auth", "billing", "limit", "none"]
+SEAMS = ["restart", "kill", "context", "auth", "billing", "limit", "none"]
 INJECTED = {"context": "contextWindow", "auth": "auth", "billing": "billing"}
-# A reborn thread started near 29k (instructions, tools and an 8k briefing) until Phase O cut the
-# thread's start by about 2.6k (17.5k to 14.9k of instructions and Brigadier tools, docs/evidence/
-# benchmark-2026-10-16-phase-o.md): near 26.4k now. The line keeps the 7k of room above the start
-# the 36k line had, where every 10-15 size run rebirthed four times between the last plant and the
-# probe and never on it (a 10-16 run at 36k on the smaller start rebirthed three times). At 45k the
-# second one fell on the probe in two of three runs; score.py now makes such a run invalid and names
-# the step each rebirth fell in (seams.at_steps), so a line that drifts again shows (#191).
-DEFAULT_REBIRTH_TOKENS = 33_500
-DEFAULT_BRIEFING_TOKENS = 8_000
-# The in-turn seam's hard line: a reborn thread starts near 26.4k (29k before Phase O; the line keeps
-# the 11k above it that 40k had), so each later step that grows past 37.5k mid-turn is stopped and
-# continued in a fresh session; the size rebirth (prepared at 300k, swapped at 375k on a 1M window
-# since A10) never comes first.
-DEFAULT_HARD_LINE_TOKENS = 37_500
 # The injected usage limit resets this soon (whole minutes, at least 1): with no other account the
 # thread waits for the reset, and an hour's wait made the limit seam impractical to run.
 LIMIT_RESET_MINUTES = 2
@@ -287,8 +266,7 @@ def seam(arm, kind, conv, rid, sent_ms, deadline, record):
     log("seam", kind, json.dumps(entry)[:200])
 
 
-def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIEFING_TOKENS,
-        hard_line_tokens=DEFAULT_HARD_LINE_TOKENS):
+def one(root, b, seam_kind, n, tag):
     build = json.load(open(os.path.join(root, "build.json")))
     label = tag or build["label"]
     rid_ = f"{b['name']}-{seam_kind}-{build['provider']}-{label}-{n}"
@@ -300,12 +278,7 @@ def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIE
     os.makedirs(run)
     shutil.copyfile(b["path"], os.path.join(run, "battery.md"))
     v3run.restore(root, "seeded")
-    # "prompt is too long" continues in a fresh session from a briefing too: at the full 20k the short
-    # battery's plants all stayed in its verbatim tail and every item was "not tested".
-    debug_env = {"size": f"BRIGADIER_REBIRTH_TOKENS={rebirth_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
-                 "inturn": f"BRIGADIER_HARD_LINE_TOKENS={hard_line_tokens} BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
-                 "context": f"BRIGADIER_BRIEFING_TOKENS={briefing_tokens}",
-                 }.get(seam_kind, "")
+    debug_env = ""
     conditions = subprocess.run(["bash", "-c", "sysctl -n vm.loadavg; claude --version; codex --version; node --version"],
                                 capture_output=True, text=True).stdout.split("\n")
     arm = Arm(root, os.path.join(run, "rec"), run, debug_env)
@@ -336,7 +309,7 @@ def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIE
             start["steps"].append(step["id"]); start["requests"].append(rid); start["sent_ms"].append(t)
             json.dump(start, open(os.path.join(run, "start.json"), "w"), indent=1)
             log(rid_, f"{step['id']} sent ({i + 1}/{len(b['steps'])})")
-            if seam_kind not in ("size", "inturn", "none") and step["id"] in h.get("seam_points", []):
+            if seam_kind != "none" and step["id"] in h.get("seam_points", []):
                 seam(arm, seam_kind, conv, rid, t, deadline, start["seams"])
             r = v3run.wait_request(arm.events, conv, rid, deadline)
             if r is None:
@@ -367,21 +340,12 @@ def one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens=DEFAULT_BRIE
 
 
 def freeze(root, run, arm, conv):
-    """While the arm still stands: the orchestrator log, every rebirth's briefing and note, and the
-    session workspace's files and git state. The scorer reads only these and the record."""
+    """While the arm still stands: the orchestrator log and the session workspace's files and git
+    state. The scorer reads only these and the record."""
     entries = orchestrator_log(arm.data, conv)
     with open(os.path.join(run, "orchestrator.jsonl"), "w") as f:
         for e in entries:
             f.write(json.dumps(e) + "\n")
-    out = v3run.ensure(os.path.join(run, "briefings"))
-    for e in entries:
-        if e["entry"].get("type") != "rebirth":
-            continue
-        record = e["entry"]["record"]
-        for key, name in (("briefingBlob", "briefing"), ("handoffBlob", "note")):
-            if record.get(key):
-                text = req(arm.data, {"method": "readBlobText", "hash": record[key]})["value"]["text"]
-                open(os.path.join(out, f"{record['generation']:02d}-{name}.txt"), "w").write(text)
     ws = workspace(arm.events, conv); git = {}
     if ws and os.path.isdir(ws):
         files = subprocess.run(["git", "-C", ws, "ls-files", "-co", "--exclude-standard", "-z"], capture_output=True).stdout
@@ -417,9 +381,9 @@ def run_checks(root, run, harness):
 
 # ---------------------------------------------------------------- commands
 
-def attempt(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens, hard_line_tokens):
+def attempt(root, b, seam_kind, n, tag):
     try:
-        return one(root, b, seam_kind, n, tag, rebirth_tokens, briefing_tokens, hard_line_tokens)
+        return one(root, b, seam_kind, n, tag)
     except Exception as err:  # noqa: BLE001
         log(b["name"], "HARNESS ERROR", repr(err))
         with open(os.path.join(root, "results.jsonl"), "a") as f:
@@ -436,9 +400,6 @@ def main():
         p = sub.add_parser(name)
         p.add_argument("--root", required=True); p.add_argument("--battery", default="thread")
         p.add_argument("--seam", choices=SEAMS, required=True); p.add_argument("--tag")
-        p.add_argument("--rebirth-tokens", type=int, default=DEFAULT_REBIRTH_TOKENS)
-        p.add_argument("--briefing-tokens", type=int, default=DEFAULT_BRIEFING_TOKENS)
-        p.add_argument("--hard-line-tokens", type=int, default=DEFAULT_HARD_LINE_TOKENS)
         if name == "battery":
             p.add_argument("--n", type=int, default=1)
         else:
@@ -453,10 +414,10 @@ def main():
         root = v3run.check_root(a.root)
         b = load_battery(a.battery)
         if a.cmd == "battery":
-            one(root, b, a.seam, a.n, a.tag, a.rebirth_tokens, a.briefing_tokens, a.hard_line_tokens)
+            one(root, b, a.seam, a.n, a.tag)
         else:
             for r in range(a.first, a.first + a.reruns):
-                attempt(root, b, a.seam, r, a.tag, a.rebirth_tokens, a.briefing_tokens, a.hard_line_tokens)
+                attempt(root, b, a.seam, r, a.tag)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@
 //! working. The code it works on is its *workspace*, given to the CLI as an extra folder: the
 //! session's checkout. The workspace
 //! is never recorded under the thread's cleanup-ledger owner, so ending the thread's processes
-//! (hibernation, rebirth, fallback) never reaches what runs there.
+//! (hibernation, a seam, an account switch) never reaches what runs there.
 //!
 //! The thread's CLI runs at the session's permission level, passed straight through as its
 //! CLI's own permission mode, as a worker's is (G5). What its CLI was started with is remembered on it ([`ThreadLaunch`]): when the workspace or

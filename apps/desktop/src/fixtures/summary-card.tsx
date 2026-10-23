@@ -32,7 +32,7 @@ const LONG = "Please tidy the release notes for the next version so every entry 
 function session(id: string, title: string): Conversation {
   return {
     id, kind: "session", projectId: "project", title, pinnedAtMs: null, createdAtMs: start, updatedAtMs: start,
-    setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+    setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
   } as unknown as Conversation;
 }
 

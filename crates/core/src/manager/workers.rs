@@ -719,7 +719,6 @@ impl SessionManager {
             omit_ai_coauthors: self.core.settings().omit_ai_coauthors,
             output_hook: None,
             stop_hook: None,
-            deny_tools: None,
             lean_worker: task.plain.as_ref().is_some_and(|plain| plain.lean),
         };
         let worktree = workspace.worktree.clone();

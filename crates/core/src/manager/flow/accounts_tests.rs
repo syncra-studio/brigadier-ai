@@ -224,12 +224,6 @@ async fn with_switching_off_a_limit_moves_the_session_to_the_picked_account() {
             (ProviderKind::Claude, Some("acct-c".into())),
         ]
     );
-    let conversation = flow.core.conversation(&flow.conversation).unwrap();
-    assert!(
-        conversation.fallback.is_none(),
-        "{:?}",
-        conversation.fallback
-    );
     assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-c"));
     let moments = moments(&flow).await;
     assert!(
@@ -1175,7 +1169,6 @@ async fn an_extra_login_makes_a_signed_out_provider_ready_and_starts_its_chat() 
         assert_eq!(turns.len(), 1, "{turns:?}");
         assert_eq!(turns[0].provider, provider);
         assert_eq!(turns[0].account.as_deref(), Some("acct-b"));
-        assert!(flow.core.conversation(&chat).unwrap().fallback.is_none());
         flow.stop().await;
     }
 }

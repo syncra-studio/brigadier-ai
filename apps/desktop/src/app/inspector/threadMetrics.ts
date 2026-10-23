@@ -65,7 +65,7 @@ export type SummaryRow = {
   providers: string[];
   /** "thread 1.3K · worker 2.2K (3 calls)". */
   steps: string;
-  /** Where its cache writes came from: "cache writes 217K (1h 217K) · note fork wrote 217K, missed ≈252K"; empty when it wrote and missed nothing. */
+  /** Where its cache writes came from: "cache writes 217K (1h 217K) · hand-off wrote 217K, missed ≈252K"; empty when it wrote and missed nothing. */
   cache: string;
 };
 

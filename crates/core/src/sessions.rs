@@ -397,7 +397,6 @@ impl Core {
             forked_from: origin.forked_from,
             side_of: origin.side_of,
             tab_chat: origin.tab_chat,
-            fallback: None,
             quota_wait: None,
             cleanup_pending: false,
             deleting: false,
@@ -1190,7 +1189,7 @@ impl Core {
         before: Option<i64>,
         limit: u32,
     ) -> Result<OrchestratorPage> {
-        let conversation = self.conversation(id)?;
+        self.conversation(id)?;
         let (events, has_more) = self
             .read_page(
                 streams::orchestrator(id),
@@ -1213,24 +1212,7 @@ impl Core {
                 Err(err) => Some(Err(err)),
             })
             .collect::<Result<_>>()?;
-        let thresholds = match &conversation.setup {
-            Some(Setup::Session { orchestrator, .. }) => {
-                let window = self
-                    .context_usage(id)
-                    .await?
-                    .and_then(|usage| usage.window_tokens);
-                Some(crate::knowledge::rebirth_thresholds(
-                    orchestrator.provider,
-                    window,
-                ))
-            }
-            _ => None,
-        };
-        Ok(OrchestratorPage {
-            entries,
-            has_more,
-            thresholds,
-        })
+        Ok(OrchestratorPage { entries, has_more })
     }
 
     /// The whole text of the conversation's stored output `alias`, while its blob is there.
@@ -2354,25 +2336,6 @@ impl Core {
             .ok_or_else(|| Error::NotFound(format!("conversation {id}")))
     }
 
-    /// Appends events atomically, applies them to the projection, and returns each event's
-    /// stream sequence.
-    /// Records the model standing in for a conversation's chosen one (or that none does now).
-    pub(crate) async fn set_fallback(
-        &self,
-        id: &ConversationId,
-        fallback: Option<crate::model::ModelFallback>,
-    ) -> Result<()> {
-        self.record(vec![(
-            streams::CATALOG.into(),
-            DomainEvent::ConversationFallback {
-                id: id.clone(),
-                fallback,
-            },
-        )])
-        .await?;
-        Ok(())
-    }
-
     /// Records that a conversation's messages wait for quota (or no longer do).
     pub(crate) async fn set_conversation_wait(
         &self,
@@ -2458,7 +2421,6 @@ fn catalog_conversation(event: &DomainEvent) -> Option<&ConversationId> {
         | DomainEvent::ConversationDeleting { id }
         | DomainEvent::ConversationDeleted { id }
         | DomainEvent::ConversationRenamed { id, .. }
-        | DomainEvent::ConversationFallback { id, .. }
         | DomainEvent::ConversationWaiting { id, .. }
         | DomainEvent::ConversationPinned { id, .. } => Some(id),
         _ => None,

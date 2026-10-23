@@ -203,7 +203,7 @@ async fn the_first_start_deletes_every_old_conversation() {
 }
 
 /// Records only the earlier engine wrote (a run in Phase 0, a whole-phase verifier, a
-/// per-phase injection and rebirth) still read: a conversation holding them whose delete
+/// per-phase injection and an old orchestrator log entry) still read: a conversation holding them whose delete
 /// can't finish at once keeps a board, so the next launch can still release its tasks.
 #[tokio::test]
 async fn the_earlier_engines_own_records_still_read() {
@@ -229,14 +229,9 @@ async fn the_earlier_engines_own_records_still_read() {
     assert!(board.tasks.contains_key(&crate::model::TaskId(
         "01a108f3-9296-70a4-a507-9d369072785a".into()
     )));
-    // An injection and a rebirth of an earlier run's phase.
+    // An injection of an earlier run's phase.
     let injection = serde_json::from_str::<crate::work::InjectionKind>("\"phase\"");
     assert_eq!(injection.ok(), Some(crate::work::InjectionKind::Run));
-    let rebirth = serde_json::from_str::<crate::knowledge::RebirthTrigger>("\"phase\"");
-    assert_eq!(
-        rebirth.ok(),
-        Some(crate::knowledge::RebirthTrigger::Recovery)
-    );
     flow.stop().await;
 }
 

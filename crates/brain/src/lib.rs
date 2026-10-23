@@ -181,7 +181,7 @@ pub struct Claim {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub report_version: Option<u64>,
-    /// The rebirth whose hand-off note named it.
+    /// The generation whose hand-off note named it (older records).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub generation: Option<u32>,

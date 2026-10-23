@@ -17,7 +17,7 @@ import { emitWorkspaceChanged } from "@/state/workspaceCache";
 const id = "files-tree-fixture";
 const conversation: Conversation = { id, kind: "session", title: "Files tree", projectId: null,
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
+  forkedFrom: null, sideOf: null, quotaWait: null };
 useApp.setState({ conversations: { [id]: conversation }, selection: { type: "conversation", id },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 } });
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true } });

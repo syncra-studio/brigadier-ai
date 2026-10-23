@@ -34,8 +34,7 @@ def main():
                  "seams_forced": [s["seams"]["forced"] for _, s in runs],
                  "items": {i: [s["by_item"].get(i) for _, s in runs] for i in items},
                  "agree": agree, "all_agree": all(agree.values()),
-                 "unknown_instead_of_guess": [s["unknown_instead_of_guess"]["score"] for _, s in runs],
-                 "briefing_tokens": [[b["tokens"] for b in s["briefings"]] for _, s in runs]}
+                 "unknown_instead_of_guess": [s["unknown_instead_of_guess"]["score"] for _, s in runs]}
         if len(runs) >= 2 and not group["all_agree"]:
             disagree += 1
         out.append(group)
@@ -52,7 +51,6 @@ def main():
                 mark = "" if g["agree"][i] else "  <- differs"
                 print(f"  {i:<16}" + "".join(f"{str(v):<12}" for v in statuses) + mark)
             print(f"  {'unknown score':<16}" + "".join(f"{str(v):<12}" for v in g["unknown_instead_of_guess"]))
-            print(f"  {'briefings (tok)':<16}" + "".join(f"{','.join(map(str, v)) or '-':<12}" for v in g["briefing_tokens"]))
     sys.exit(1 if disagree else 0)
 
 

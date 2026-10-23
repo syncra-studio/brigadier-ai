@@ -248,7 +248,8 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
     assert!(alive(&flow, pid) && alive(&flow, child));
     assert!(running(&flow.board().await).len() == 1);
 
-    // A fresh CLI (as after a rebirth or a fallback, which close the old one) reads its log.
+    // A fresh CLI (as after a seam or an account switch, which close the old one) reads its
+    // log.
     flow.settled().await;
     flow.say("Show me the log.").await;
     flow.until("the log", |_| replies.lock().unwrap().len() == 2)

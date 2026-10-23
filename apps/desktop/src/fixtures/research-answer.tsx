@@ -74,7 +74,7 @@ const ANSWER = old
 
 const conversation = {
   id: ID, kind: session ? "session" : "chat", projectId: null, title: "Which AI models for 3D printing", pinnedAtMs: null,
-  createdAtMs: begun, updatedAtMs: begun, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  createdAtMs: begun, updatedAtMs: begun, lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null,
   setup: session
     ? {
         type: "session", repo: "/tmp/research-answer-fixture", environment: { type: "local" }, permission: "full", planMode: false,

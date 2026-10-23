@@ -175,7 +175,7 @@ impl SessionManager {
         }
     }
 
-    /// Notes what a turn that could not start, or one a limit or a rebirth handed over, put
+    /// Notes what a turn that could not start, or one a limit handed over, put
     /// back in front of the inbox.
     pub(super) async fn keep_carried(
         &self,

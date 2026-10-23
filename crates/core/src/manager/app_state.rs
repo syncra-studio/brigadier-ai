@@ -151,10 +151,6 @@ impl SessionManager {
             Some(Setup::Chat { model, .. }) => (Some(model.clone()), None),
             None => (None, None),
         };
-        let standing_in = conversation
-            .fallback
-            .as_ref()
-            .map(|fallback| &fallback.choice);
         let queued = self
             .core
             .board(id)
@@ -165,9 +161,6 @@ impl SessionManager {
         if let Some(choice) = &choice {
             parts.push(format!("model {}", model_words(choice)));
         }
-        if let Some(stand_in) = standing_in {
-            parts.push(format!("standing in now: {}", model_words(stand_in)));
-        }
         if let Some(permission) = permission {
             parts.push(format!("permission {}", permission_words(permission)));
         }
@@ -177,7 +170,7 @@ impl SessionManager {
             many => format!("{many} messages queued"),
         });
         let _ = writeln!(text, "Composer: {}.", parts.join(" · "));
-        let Some(choice) = standing_in.or(choice.as_ref()) else {
+        let Some(choice) = choice.as_ref() else {
             return;
         };
         let account = AccountRef {

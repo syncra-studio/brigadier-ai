@@ -21,7 +21,7 @@ const id = "background-session";
 const start = Date.now() - 600_000;
 const session = {
   id, kind: "session", projectId: "p1", title: "Background", pinnedAtMs: null, createdAtMs: start, updatedAtMs: start,
-  lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null, setup: null,
+  lifecycle: "active", forkedFrom: null, sideOf: null, quotaWait: null, setup: null,
 } as unknown as Conversation;
 const project = { id: "p1", name: "app", createdAtMs: start, repos: [{ path: "/tmp/app", name: "app" }], prefs: {}, trust: [] } as unknown as Project;
 

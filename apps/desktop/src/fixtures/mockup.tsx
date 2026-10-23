@@ -97,7 +97,7 @@ const conversation: Conversation = {
   id, kind: "session", projectId: "fixture-project",
   title: params.has("long") ? "What does this repository build? Answer in two sentences, no workers." : "Density toggle",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
 };
 useApp.setState({
   conversations: { [id]: conversation },

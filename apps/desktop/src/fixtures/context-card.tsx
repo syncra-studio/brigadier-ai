@@ -27,7 +27,7 @@ useSessionTabs.setState({ sessions: {} });
 const conversation: Conversation = {
   id, kind: "session", projectId: null, title: "Tidy the release notes",
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
-  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  forkedFrom: null, sideOf: null, quotaWait: null,
 };
 useApp.setState({
   conversations: { [id]: conversation }, selection: { type: "conversation", id }, summaryShown: { [id]: true },
