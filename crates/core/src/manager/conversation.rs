@@ -2330,8 +2330,7 @@ impl SessionManager {
     /// effect on the next message.
     /// Use picked another account of the conversation's provider since its last turn began
     /// (switching off, D23): it moves there now, its CLI session resumed on that account, and
-    /// says so. Not while a stand-in runs, nor to an account that can't take work (a limit
-    /// there moves it on as usual).
+    /// says so. Not to an account that can't take work (a limit there moves it on as usual).
     async fn follow_pick(&self, conv: &Arc<ConvLive>) {
         let Ok(conversation) = self.core.conversation(&conv.id) else {
             return;
@@ -2356,11 +2355,10 @@ impl SessionManager {
         let Some(picked) = picked else {
             return;
         };
-        if conversation.fallback.is_some()
-            || self
-                .runtime
-                .launch_account(choice.provider, choice.model.as_deref())
-                != picked
+        if self
+            .runtime
+            .launch_account(choice.provider, choice.model.as_deref())
+            != picked
         {
             return;
         }
