@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "brigadier ledger --json",
+  "type": "object",
+  "required": ["action", "text"],
+  "additionalProperties": false,
+  "properties": {
+    "action": {"enum": ["add", "show"]},
+    "text": {"type": "string", "description": "Empty for add; the ledger verbatim for show."}
+  }
+}

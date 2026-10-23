@@ -447,6 +447,21 @@ pub const COMMANDS: &[Command] = &[
         schema: include_str!("../schemas/page.schema.json"),
     },
     Command {
+        name: "ledger",
+        summary: "Add to or show your own session's ledger.",
+        details: "`add <text…>` appends one Markdown list entry, keeping the existing list \
+                  marker. With no text, or `-`, reads standard input. Give the entry's kind \
+                  and source as the standing instructions say. Prints nothing on success. \
+                  `show` prints the ledger verbatim. Threads, workers and Chats use their \
+                  own record/ledger.md; chats beside a tab cannot keep a ledger.",
+        args: &[
+            action(&["add", "show"], "What to do."),
+            rest("args", "add: the entry's text.", false),
+        ],
+        available: true,
+        schema: include_str!("../schemas/ledger.schema.json"),
+    },
+    Command {
         name: "brain",
         summary: "Search the project's records: every session's transcript, ledger and notes.",
         details: "`search <query…>` finds the best-matching entries of the records the \

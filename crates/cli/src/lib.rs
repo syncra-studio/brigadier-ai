@@ -27,6 +27,10 @@ use protocol::{CliError, CliReply, ErrorCode, ErrorOutput};
 
 /// Runs `brigadier` with the words after its name; returns the exit code.
 pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
+    let ledger = words
+        .iter()
+        .find(|word| !word.starts_with('-'))
+        .is_some_and(|word| word == "ledger");
     let json = words
         .iter()
         .take_while(|word| *word != "--")
@@ -50,7 +54,11 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             json,
         }) => (command, args, json),
         Err(err) => {
-            let message = format!("{}\nusage: {}", err.message, err.usage);
+            let message = if ledger {
+                err.message
+            } else {
+                format!("{}\nusage: {}", err.message, err.usage)
+            };
             return fail(ErrorCode::Usage, &message, json, stdout, stderr);
         }
     };
@@ -83,7 +91,11 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
             return fail(ErrorCode::NotAvailable, &message, json, stdout, stderr);
         }
         Err(err) => {
-            let message = format!("{}\nusage: {}", err.message, err.usage);
+            let message = if ledger {
+                err.message
+            } else {
+                format!("{}\nusage: {}", err.message, err.usage)
+            };
             return fail(ErrorCode::Usage, &message, json, stdout, stderr);
         }
     };
@@ -109,6 +121,9 @@ pub fn run(words: Vec<String>, stdout: &mut dyn Write, stderr: &mut dyn Write) -
         "wait" => present(output, json, render::wait),
         "close" => present(output, json, render::close),
         "ask" => present(output, json, render::ask),
+        "ledger" => present(output, json, |output: &protocol::ToolOutput| {
+            output.text.clone()
+        }),
         name if json && protocol::Tool::of_command(name).is_some() => {
             present(output, json, render::tool)
         }
@@ -143,6 +158,7 @@ fn text_from_stdin(command: &str, action: Option<&str>) -> Option<(&'static str,
         ("page", "write") => Some(("args", 1)),
         ("page", "file-write") => Some(("args", 0)),
         ("report", "save") => Some(("markdown", 0)),
+        ("ledger", "add") => Some(("args", 0)),
         ("feedback", "offer") => Some(("body", 0)),
         _ => None,
     }

@@ -351,8 +351,18 @@ impl SessionManager {
         ) {
             return CliReply::error(
                 ErrorCode::Refused,
-                "refused: a chat beside a tab reads and changes only what is beside it, with \
-                 `brigadier page`",
+                if matches!(
+                    call.request,
+                    CliRequest::Tool {
+                        tool: cli::Tool::Ledger,
+                        ..
+                    }
+                ) {
+                    "refused: a chat beside a tab leaves no records, so it cannot keep a ledger"
+                } else {
+                    "refused: a chat beside a tab reads and changes only what is beside it, with \
+                     `brigadier page`"
+                },
             );
         }
         let reply = match call.request {

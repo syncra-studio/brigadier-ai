@@ -558,6 +558,17 @@ fn tool_request(command: &Command, args: &Parsed) -> Result<CliRequest, UsageErr
             }
             Tool::Page
         }
+        "ledger" => {
+            if action == "add" {
+                if text.trim().is_empty() {
+                    return Err(error("give a ledger entry, with its kind and source"));
+                }
+                put("text", Some(json!(text)));
+            } else if let Some(extra) = words.first() {
+                return Err(error(&format!("unexpected argument {extra:?}")));
+            }
+            Tool::Ledger
+        }
         "brain" | "transcript" => {
             if action == "read" {
                 let [session, from, to] = words.as_slice() else {

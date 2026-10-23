@@ -1157,7 +1157,7 @@ message instead (`research/POCOCK.md` §3.1).
 ```
 This is a plain Claude Code / Codex session inside Brigadier. Work as you would anywhere: run checks, reviews, git and gh yourself.
 Your session folder is $BRIGADIER_SESSION_DIR. Scratch files go in $TMPDIR (inside it), never in the repo.
-Keep a ledger at $BRIGADIER_LEDGER as you work. Write an entry the moment something is settled, in the same step as your other tool calls.
+Keep a ledger at $BRIGADIER_LEDGER as you work. `brigadier ledger add` works in every role except chats beside a tab; `brigadier ledger show` reads it back. Write an entry the moment something is settled, in the same step as your other tool calls.
 Each entry says its kind and its source (which message, command or file). Kinds:
 - Rule from the user: their exact words, which message, scope (this request / session / project); add "supersedes …", never delete.
 - Decision: one line and the reason, marked "user decided" or "I decided".

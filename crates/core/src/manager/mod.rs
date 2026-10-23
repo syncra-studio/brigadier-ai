@@ -25,6 +25,7 @@ mod brigade;
 pub(crate) mod browser_tool;
 mod cards;
 mod cli;
+mod cli_ledger;
 mod cli_thread;
 mod cli_tools;
 mod close_tab;

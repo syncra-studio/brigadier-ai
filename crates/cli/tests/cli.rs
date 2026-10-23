@@ -475,6 +475,13 @@ fn every_subcommands_json_output_fits_its_schema() {
         ],
         &["page", "read", "page-1", "--json"],
         &[
+            "ledger",
+            "add",
+            "Decision: keep tabs (user message 1)",
+            "--json",
+        ],
+        &["ledger", "show", "--json"],
+        &[
             "page",
             "write",
             "page-1",
@@ -673,4 +680,82 @@ fn wrong_arguments_exit_2_with_the_usage() {
     assert_fits(ERROR_SCHEMA, &output, "usage");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("missing <id>") && stderr.contains("usage: brigadier read"));
+}
+
+#[test]
+fn ledger_add_is_silent_reads_stdin_and_show_is_verbatim() {
+    fn ledger(request: &CliRequest) -> CliReply {
+        let CliRequest::Tool {
+            tool: Tool::Ledger,
+            action,
+            args,
+        } = request
+        else {
+            panic!("expected a ledger call: {request:?}");
+        };
+        let text = match action.as_str() {
+            "add" => {
+                assert_eq!(args["text"], "Decision: keep tabs\n(source: message 1)\n");
+                ""
+            }
+            "show" => "- Decision: keep tabs (source: message 1)\n\n",
+            _ => panic!("unexpected action"),
+        };
+        CliReply::ok(&ToolOutput {
+            action: action.clone(),
+            text: text.into(),
+            images: vec![],
+            saved: vec![],
+        })
+    }
+    let dir = DataDir::new("ledger");
+    let daemon = stand_in_daemon(&dir.0, 3, ledger);
+    for words in [vec!["ledger", "add"], vec!["ledger", "add", "-"]] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_brigadier"))
+            .args(words)
+            .env("BRIGADIER_DATA_DIR", &dir.0)
+            .env(SESSION_ENV, SESSION)
+            .env(GRANT_ENV, GRANT)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"Decision: keep tabs\n(source: message 1)\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            output.stdout.is_empty() && output.stderr.is_empty(),
+            "{output:?}"
+        );
+    }
+    let output = brigadier(Some(&dir.0), Some(GRANT), &["ledger", "show"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        stdout(&output),
+        "- Decision: keep tabs (source: message 1)\n\n"
+    );
+    assert!(output.stderr.is_empty());
+    daemon.join().unwrap();
+
+    for words in [
+        vec!["ledger"],
+        vec!["ledger", "show", "extra"],
+        vec!["ledger", "add", "  "],
+        vec!["ledger", "unknown"],
+    ] {
+        let output = brigadier(None, None, &words);
+        assert!(!output.status.success(), "{words:?}");
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).lines().count(),
+            1,
+            "{output:?}"
+        );
+    }
 }

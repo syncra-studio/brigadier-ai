@@ -193,6 +193,12 @@ impl SessionManager {
         given: Value,
     ) -> CliReply {
         let role = self.grants.resolve(&caller.grant);
+        if tool == Tool::Ledger {
+            return match self.cli_ledger(caller, action, given).await {
+                Ok(text) => tool_reply(action, ToolReply::ok(text)),
+                Err(err) => CliReply::error(ErrorCode::Failed, err.to_string()),
+            };
+        }
         if matches!(tool, Tool::Brain | Tool::Transcript) {
             return crate::heap(|| self.cli_records(caller, role.as_ref(), tool, action, given))
                 .await;
