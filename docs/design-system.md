@@ -13,25 +13,37 @@ through its MCP server, never as text.
 | File | What it holds |
 |---|---|
 | `README.pen` | The Read me board: the file map, how files link, naming, the design rules, how to save. Start here. |
-| `foundations.pen` | The design system only: all variables (colours, radii, sizes, type), the `Icon / <Name>` icons, glyphs and indicators, controls (buttons, badges, inputs, switches, the checkbox, tabs…), menu, popover and dialog shells, and the shared app parts that both `app.pen` and `settings.pen` use. |
-| `app.pen` | The main window, one board group per surface in app order: App shell, Conversation, Side panel, Setup. Each surface's screens, dialogs and components sit on its own boards. |
-| `settings.pen` | The Settings window, including the Inspector (a page inside Settings): boards per page in `pages.ts` order, with every Settings and Inspector screen. |
+| `foundations.pen` | Every component, nothing else. The design system boards (Tokens & type, Icons, Primitives · Controls, Primitives · Menus, popovers & dialogs, Glyphs & indicators, Shared app parts), then one board per area of the main window under "Group · App", then one board per area of Settings under "Group · Settings". |
+| `app.pen` | The main window's screens only: 14 boards, one per surface, in four groups (App shell, Conversation, Side panel, Setup). No components of its own. |
+| `settings.pen` | The Settings window's screens only, the Inspector (a page inside Settings) among them: one board per page in `pages.ts` order. No components of its own. |
 | `unused.pen` | Components nothing in the app renders today, each with a cleanup note (what to remove in the code, and how sure). Never build from it. |
 
 ## Boards
 
-- Every `app.pen` and `settings.pen` board is titled by its surface or page ("Surface · Topic"
-  when it has several boards) and holds its zones in this order: ① Screens, ② Dialogs,
-  ③ Components. Cards are titled "#NN Name" (the number from the components inventory) and show
-  the component's code path.
+- `foundations.pen` area boards of the main window: Sidebar & shell, Top bar & tabs, Thread,
+  Markdown, code & images, Thread cards, Steps & tool rows, Composer, Composer menus, rail &
+  queue, Summary pane, Files, search & source, Changes, review & conflicts, Terminal, Workers,
+  Page, Job, mockup & new tab, Output, plan & side chat, Browser, Onboarding & setup, App dialogs.
+  Settings area boards are named "Settings · <area>" (Window & page parts, General & system,
+  Providers, Plugins, Routing, Browser, Storage & archived chats, and three Inspector boards).
+- A component sits on one card: the card's title is its plain name, and its states are cells in
+  one row, at most six, each with a short label under it. A line on the card only when it says a
+  behaviour the picture can't show.
+- `app.pen` and `settings.pen` boards hold screens only, about twelve at most per board: whole
+  surfaces in real states, built from instances of foundations components. Hover, tooltips and
+  pressed looks are component states on the foundations card, not screens.
+- `app.pen` boards: Window, sidebar & tabs, Onboarding & setup, App dialogs, Home & thread,
+  Composer, Summary pane, and the side panel's Files & source, Changes & review, Terminal,
+  Workers, Page, Job, mockup & new tab, Output, plan & side chat, Browser. `settings.pen` boards:
+  Settings window, then one per page.
 - Boards sit in rows, not columns, left to right in app order, with a label above each group.
-  A board is at most 8,400 × 5,000 and always landscape (the user's two boards in `app.pen` are
-  the only exception); when a surface needs more, it gets another board beside it.
+  A board is landscape; when a surface needs more room it gets another board beside it.
 
 ## How the files link
 
 Every file except `foundations.pen` imports it under the alias `f`, and nothing else. Imports are
-one level deep, so a part both `app.pen` and `settings.pen` use must live in `foundations.pen`.
+one level deep: a foundations component never holds anything from another file, and every part,
+used by one window or both, lives in `foundations.pen`.
 
 - Instance of a foundations component: `{ "type": "ref", "ref": "f:<id>" }`.
 - Override inside it: every path segment that names a foundations node carries the prefix,
@@ -40,11 +52,11 @@ one level deep, so a part both `app.pen` and `settings.pen` use must live in `fo
 
 ## Names
 
-- Components: `Area / Component / Variant`, for example `Button/Primary/sm`, `Icon / Sparkle`,
-  `Uninstall/Plan`.
-- Screens: `Screen / <Area> / <Name>`, for example `Screen / Settings / Storage › Uninstall`.
-- Every state of a component is drawn and captioned under it. Each screen's caption names its
-  source file in `apps/desktop/src`.
+- Components: a plain name, a look after a slash: `Button/Primary/sm`, `Icon / Sparkle`,
+  `Project row`, `Add project dialog/Clone`. Settings parts keep their code names
+  (`SettingsPage/BackLink`). No numbers and no code paths on cards or screens.
+- Every state of a component is drawn and labelled under it; every screen sits in a cell headed
+  by its state (`Empty`, `Pasted text`).
 
 ## Rules for building UI from it
 
@@ -85,26 +97,32 @@ that draw nothing may name the file.
 | `overlays/` | Primitives · Menus, popovers & dialogs | dialog, confirm dialog, popover, dropdown and context menus, tooltip, toast |
 | `layout/` | ScrollFade (Menus board), Skeleton (Controls board) | sidebar, sidebar layout, collapsible, scroll fade, skeleton |
 | `shared/` | Shared app parts | settings card and search, state dot, usage bar, banner, empty state, titlebar button, copy button, model selector, progress line, labeled divider, terminal button, site icon, counts, section |
-| `conversation/` | (app.pen Conversation boards) | the conversation kit: thread, message rail, markdown, code blocks, composer parts, transcript; `kit.ts` is the one door to the chat library |
-| `views/<view>/` | (on their surface's boards) | views built on a drawing library, each its own folder so it loads on demand: `terminal` (xterm), `diff` (@pierre/diffs), `brain-graph` (sigma), `page-editor` (lexical) |
+| `conversation/` | Thread, Markdown, code & images, Thread cards, Steps & tool rows, Composer, Composer menus, rail & queue | the conversation kit: thread, message rail, markdown, code blocks, composer parts, transcript; `kit.ts` is the one door to the chat library |
+| `views/<view>/` | Terminal, Changes, review & conflicts, Page, Settings · Inspector · Brain | views built on a drawing library, each its own folder so it loads on demand: `terminal` (xterm), `diff` (@pierre/diffs), `brain-graph` (sigma), `page-editor` (lexical) |
 
 The libraries that draw (the chat library, lexical, xterm, sigma/graphology, @pierre/diffs) are
 imported only inside `src/components`; the style check fails them anywhere else.
 
 `apps/desktop/src/app/` holds the screens, one folder per surface as the boards group them:
-`shell/` (App shell: window, sidebar, top bar and session tabs, app dialogs), `conversation/`,
-`side-panel/`, `setup/` (onboarding, computer-use setup) in `app.pen`; `settings/` (its pages,
-Providers among them) and `inspector/` in `settings.pen`. App-wide wiring (`App.tsx`,
-shortcuts, smoke) stays at the top of `app/`.
+`shell/` (window, sidebar, top bar and session tabs, app dialogs; parts on Sidebar & shell, Top
+bar & tabs, App dialogs), `conversation/` (parts on the Thread, Steps & tool rows, Thread cards
+and Composer boards), `side-panel/` (Summary pane, Files, search & source, Changes, review &
+conflicts, Terminal, Workers, Page, Job, mockup & new tab, Output, plan & side chat, Browser),
+`setup/` (onboarding, computer-use setup; Onboarding & setup), with their screens in `app.pen`;
+`settings/` (its pages, Providers among them) and `inspector/`, parts on the "Settings · …"
+boards, screens in `settings.pen`. App-wide wiring (`App.tsx`, shortcuts, smoke) stays at the
+top of `app/`.
 
 ## Pen component → code
 
-Every component in `foundations.pen`, board by board, with the file (under `apps/desktop/src`)
-and the export that draws it. "Pen only" means the code has no such part; "code only" means a
-component folder holds a part that has no card yet. Parts still in `src/app` (not yet under
-`src/components`) are noted "in app"; the per-surface "Design system: … parts as reusable
-components" issues track moving them. The card captions in Pen may still show older paths; this
-table is the current one.
+The `foundations.pen` board and component that show each code part, board by board, with the
+file (under `apps/desktop/src`) and the export that draws it. "Pen only" means the code has no
+such part; "code only" means a component folder holds a part that has no card yet. "Look of X"
+means the part has no component of its own: it is a look of X. "Shown inside it" means it is
+drawn inside that component, with no card of its own. "Not found in foundations (check)" rows
+have no component found yet. Parts still in `src/app` (not yet under `src/components`) are noted
+"in app"; the per-surface "Design system: … parts as reusable components" issues track moving
+them. Cards in Pen carry no code paths: this table is the link.
 
 | Board | Pen component | Code file | Export | Note |
 |---|---|---|---|---|
@@ -133,6 +151,12 @@ table is the current one.
 | Primitives · Controls | `StateDot` | `components/shared/state-dot.tsx` | `StateDot` (`color`) | |
 | Primitives · Controls | `ErrorLine` | `components/controls/error-line.tsx` | `ErrorLine` | |
 | Primitives · Controls | `Nav Row` | `components/controls/nav-row.tsx` | `NavRow` | |
+| Primitives · Controls | `Button/Ghost` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | look of `Button/Ghost` |
+| Primitives · Controls | `Icon Button/sm` | `app/conversation/CardDictate.tsx` | `CardDictate` | look of `Icon Button/sm` |
+| Primitives · Controls | `Icon Button` | `app/conversation/DictateButton.tsx` | `DictateButton` | look of `Icon Button` |
+| Primitives · Controls | `Icon Button/sm` | `app/conversation/cards/PlanRating.tsx` | `PlanRating` | look of `Icon Button/sm` |
+| Primitives · Controls | `Button/Ghost/sm` | `app/setup/onboarding/SelectAllToggle.tsx` | `SelectAllToggle` | look of `Button/Ghost/sm` |
+| Primitives · Controls | `Button/Primary` | `app/setup/onboarding/ContinueButton.tsx` | `ContinueButton` | look of `Button/Primary` |
 | Primitives · Menus, popovers & dialogs | `Menu`, `Menu Item`, `Menu Item/Check`, `Menu Item/Radio`, `Menu Item/Sub`, `Menu Label`, `Menu Separator` | `components/overlays/dropdown-menu.tsx` | `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioItem`, `DropdownMenuSubTrigger`, `DropdownMenuLabel` (`variant` caps/heading), `DropdownMenuSeparator` | |
 | Primitives · Menus, popovers & dialogs | — | `components/overlays/dropdown-menu.tsx` | `MenuRow` | code only (the two-line menu row) |
 | Primitives · Menus, popovers & dialogs | — | `components/overlays/context-menu.tsx` | `ContextMenu*` | code only (same look as the menu) |
@@ -178,245 +202,238 @@ table is the current one.
 | Shared app parts | `LabeledDivider` | `components/shared/labeled-divider.tsx` | `LabeledDivider` | |
 | Shared app parts | `MD/Paragraph`, `MD/Bullet item` | `components/conversation/markdown-text.tsx` | `MarkdownText` | |
 | Shared app parts | — | `components/shared/banner.tsx`, `usage-bar.tsx`, `titlebar-button.tsx` | `Banner`, `UsageBar`, `TITLEBAR_BUTTON`, `TitlebarTips` | code only |
-| App shell (app.pen) | `#60 PageCorners` | `app/shell/PageCorners.tsx` | `PageCorners` | |
-| App shell (app.pen) | `#62 App › page surface` | `app/shell/PageSurface.tsx` | `PageSurface` | |
-| App shell (app.pen) | `#63 App › Settings titlebar strip` | `components/shared/settings-titlebar-strip.tsx` | `SettingsTitlebarStrip` | |
-| App shell (app.pen) | `#66 AppSidebar › header title and Search` | `app/shell/SidebarHeader.tsx` | `SidebarHeader` | |
-| App shell (app.pen) | `#67 AppSidebar › New chat row` | `app/shell/NewChatRow.tsx` | `NewChatRow` | |
-| App shell (app.pen) | `#69 AppSidebar › projects empty prompt` | `app/shell/ProjectsEmptyPrompt.tsx` | `ProjectsEmptyPrompt` | |
-| App shell (app.pen) | `#74 ProjectRow` | `app/shell/ProjectRow.tsx` | `ProjectRow` | |
-| App shell (app.pen) | `#943 Flyout` | `app/shell/Flyout.tsx` | `Flyout` | its lists (`ProjectsFlyout`, `ChatsFlyout`, `FlyoutConversation`) stay in `app/shell/AppSidebar.tsx` |
-| App shell (app.pen) | `#948 ProviderUsage` | `app/shell/ProviderUsage.tsx` | `ProviderUsage` | |
-| App shell (app.pen) | `#92 BarDivider` | `app/shell/BarDivider.tsx` | `BarDivider` | |
-| App shell (app.pen) | `#94 SessionTabBar › Chat tab` | `app/shell/ChatTab.tsx` | `ChatTab` | |
-| App shell (app.pen) | `#95 SessionTabBar › session tab` | `app/shell/SessionTab.tsx` | `SessionTab` | |
-| App shell (app.pen) | `#975 TabMenu` | `app/shell/TabMenu.tsx` | `TabMenu` | |
-| App shell (app.pen) | `#950 HelpMenu` | `app/shell/HelpMenu.tsx` | `HelpMenu` | |
-| App shell (app.pen) | `#951 UpdateRow` | `app/shell/UpdateRow.tsx` | `UpdateRow` | |
-| App shell (app.pen) | `#891 CloneView` | `app/shell/dialogs/CloneView.tsx` | `CloneView` | the Add project parts it shares are in `app/shell/dialogs/addProjectParts.tsx` |
-| App shell (app.pen) | `#893 NewRepoView` | `app/shell/dialogs/NewRepoView.tsx` | `NewRepoView` | |
-| App shell (app.pen) | `#912 Field` | `app/shell/dialogs/Field.tsx` | `Field` | |
-| App shell (app.pen) | `#903 RemoveForm` | `app/shell/dialogs/RemoveForm.tsx` | `RemoveForm` | its head and actions row are in `app/shell/dialogs/removeProjectParts.tsx` |
-| App shell (app.pen) | `#904 Removed` | `app/shell/dialogs/Removed.tsx` | `Removed` | |
-| Side panel (app.pen) | `#412 AgentRow` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
-| Side panel (app.pen) | `#414 WorkerList` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
-| Side panel (app.pen) | `#416 WorkerDetail › worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |
-| Side panel (app.pen) | `#149 FileGlyph` | `app/side-panel/FileGlyph.tsx` | `FileGlyph` | |
-| Side panel (app.pen) | `#150 FileRow (worker output)` | `app/side-panel/WorkerFileRow.tsx` | `WorkerFileRow` | |
-| Side panel (app.pen) | `#517 TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | |
-| Side panel (app.pen) | `#481 EntryView` | `app/side-panel/EntryView.tsx` | `EntryView` | |
-| Side panel (app.pen) | `#484 Brief` | `app/side-panel/WorkerBrief.tsx` | `WorkerBrief` | |
-| Side panel (app.pen) | `#486 Answer (worker report)` | `app/side-panel/WorkerAnswer.tsx` | `WorkerAnswer` | |
-| Side panel (app.pen) | `#490 WorkspacePane › view icon tab row` | `app/side-panel/PaneViewTabs.tsx` | `PaneViewTabs` | |
-| Side panel (app.pen) | `#500 RebaseStep` | `app/side-panel/RebaseStep.tsx` | `RebaseStep` | |
-| Side panel (app.pen) | `#509 Steps` | `app/side-panel/ReviewSteps.tsx` | `ReviewSteps` | |
-| Side panel (app.pen) | `#974 OpenInMenu` | `app/side-panel/OpenInMenu.tsx` | `OpenInMenu` | |
-| Side panel (app.pen) | `#960 CodeLines › find / go-to-line box` | `app/side-panel/FindLineBox.tsx` | `FindLineBox` | |
-| Side panel (app.pen) | `#422 FileBrowser` | `app/side-panel/FileBrowser.tsx` | `FileBrowser` | |
-| Side panel (app.pen) | `#962 FilePill › images menu` | `app/side-panel/ImagesMenu.tsx` | `ImagesMenu` | |
-| Side panel (app.pen) | `#963 NotesList` | `app/side-panel/NotesList.tsx` | `NotesList` | |
-| Side panel (app.pen) | `#881 ShowPages` | `app/side-panel/pages/ShowPages.tsx` | `ShowPages` | |
-| Side panel (app.pen) | `#983 PageTopBar › File menu` | `app/side-panel/pages/PageFileMenu.tsx` | `PageFileMenu` | |
-| Side panel (app.pen) | `#984 PageTopBar › Insert menu` | `app/side-panel/pages/PageInsertMenu.tsx` | `PageInsertMenu` | |
-| Side panel (app.pen) | `#579 Navigation capsule` | `app/side-panel/NavigationCapsule.tsx` | `NavigationCapsule` | |
-| Side panel (app.pen) | `#576 SiteInfo` | `app/side-panel/SiteInfo.tsx` | `SiteInfo` | |
-| Side panel (app.pen) | `#953 SiteInfo popover` | `app/side-panel/SiteInfoPopover.tsx` | `SiteInfoPopover` | |
-| Side panel (app.pen) | `#577 FindBar` | `app/side-panel/FindBar.tsx` | `FindBar` | |
-| Side panel (app.pen) | `#954 BrowserOptions` | `app/side-panel/BrowserOptions.tsx` | `BrowserOptions` | |
-| Side panel (app.pen) | `#462 SOURCE header` | `app/side-panel/SourceHeader.tsx` | `SourceHeader` | |
-| Side panel (app.pen) | `#465 Group (Source)` | `app/side-panel/SourceGroup.tsx` | `SourceGroup` | |
-| Side panel (app.pen) | `#467 CommitBox` | `app/side-panel/CommitBox.tsx` | `CommitBox` | |
-| Side panel (app.pen) | `#977 CommitBox › commit actions menu` | `app/side-panel/CommitActionsMenu.tsx` | `CommitActionsMenu` | |
-| Side panel (app.pen) | `#976 SourcePanel › More Actions menu` | `app/side-panel/SourceMoreMenu.tsx` | `SourceMoreMenu` | |
-| Side panel (app.pen) | `#440 SummaryContent` | `app/conversation/SummaryContent.tsx` | `SummaryContent` | |
-| Side panel (app.pen) | `#965 FloatingSummary` | `app/conversation/FloatingSummary.tsx` | `FloatingSummary` | |
-| Side panel (app.pen) | `#426 SourceRow` | `app/conversation/SourceRow.tsx` | `SourceRow` | |
-| Side panel (app.pen) | `#439 BranchRow` | `app/conversation/BranchRow.tsx` | `BranchRow` | |
-| Side panel (app.pen) | `#446 JobStack` | `app/conversation/JobStack.tsx` | `JobStack` | |
-| Side panel (app.pen) | `#964 Sources › View all links popover` | `app/conversation/AllLinksPopover.tsx` | `AllLinksPopover` | |
-| Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
-| Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
-| Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
-| Inspector (settings.pen) | `#1008 OrchestratorLogView › list switch bar` | `app/inspector/ListSwitchBar.tsx` | `ListSwitchBar` | |
-| Inspector (settings.pen) | `#1009 Breaches` | `app/inspector/Breaches.tsx` | `Breaches` | |
-| Inspector (settings.pen) | `#1010 ContextMeter` | `app/inspector/ContextMeter.tsx` | `ContextMeter` | |
-| Inspector (settings.pen) | `#1011 InjectionRowView` | `app/inspector/InjectionRowView.tsx` | `InjectionRowView` | |
-| Inspector (settings.pen) | `#1012 GenerationHeader` | `app/inspector/GenerationHeader.tsx` | `GenerationHeader` | |
-| Inspector (settings.pen) | `#1013 InjectionList` | `app/inspector/InjectionList.tsx` | `InjectionList` | |
-| Inspector (settings.pen) | `#1020 BlobText` | `app/inspector/BlobText.tsx` | `BlobText` | |
-| Inspector (settings.pen) | `#1021 RebirthDetail` | `app/inspector/RebirthDetail.tsx` | `RebirthDetail` | |
-| Inspector (settings.pen) | `#1022 RebirthDetail › briefing sections table` | `app/inspector/BriefingSectionsTable.tsx` | `BriefingSectionsTable` | |
-| Inspector (settings.pen) | `#1023 RebirthRowView` | `app/inspector/RebirthRowView.tsx` | `RebirthRowView` | |
-| Inspector (settings.pen) | `#1039 Section (Brain)` | `app/inspector/brain/BrainSection.tsx` | `BrainSection` | |
-| Inspector (settings.pen) | `#1040 Detail (Brain)` | `app/inspector/brain/BrainDetail.tsx` | `BrainDetail` | |
-| Inspector (settings.pen) | `#1041 Progress` | `app/inspector/brain/BrainProgress.tsx` | `BrainProgress` | |
-| Inspector (settings.pen) | `#1043 BrainOverviewView › nodes-by-kind list` | `app/inspector/brain/NodesByKindList.tsx` | `NodesByKindList` | |
-| Inspector (settings.pen) | `#1044 indexState` | `app/inspector/brain/IndexState.tsx` | `IndexState` | |
-| Inspector (settings.pen) | `#1045 IndexSection` | `app/inspector/brain/IndexSection.tsx` | `IndexSection` | |
-| Inspector (settings.pen) | `#1046 embedderState` | `app/inspector/brain/EmbedderState.tsx` | `EmbedderState` | |
-| Inspector (settings.pen) | `#1047 EmbedderSection` | `app/inspector/brain/EmbedderSection.tsx` | `EmbedderSection` | |
-| Inspector (settings.pen) | `#1048 WorkersSection` | `app/inspector/brain/WorkersSection.tsx` | `WorkersSection` | |
-| Inspector (settings.pen) | `#1049 JobRow` | `app/inspector/brain/JobRow.tsx` | `JobRow` | |
-| Inspector (settings.pen) | `#1050 JobsSection` | `app/inspector/brain/JobsSection.tsx` | `JobsSection` | |
-| Inspector (settings.pen) | `#1051 DeveloperActions` | `app/inspector/brain/DeveloperActions.tsx` | `DeveloperActions` | |
-| Inspector (settings.pen) | `#1054 BrainSearch › query bar` | `app/inspector/brain/QueryBar.tsx` | `QueryBar` | |
-| Inspector (settings.pen) | `#1055 BrainSearch › result summary line` | `app/inspector/brain/ResultSummary.tsx` | `ResultSummary` | |
-| Inspector (settings.pen) | `#1052 HitRow` | `app/inspector/brain/HitRow.tsx` | `HitRow` | |
-| Inspector (settings.pen) | `#1056 BrainSearch › “What the orchestrator reads” disclosure` | `app/inspector/brain/OrchestratorReadsDisclosure.tsx` | `OrchestratorReadsDisclosure` | |
-| Inspector (settings.pen) | `#1058 BrainTab › toolbar` | `app/inspector/brain/BrainToolbar.tsx` | `BrainToolbar` | |
-| Inspector (settings.pen) | `#1060 ConversationName` | `app/inspector/brain/ConversationName.tsx` | `ConversationName` | |
-| Inspector (settings.pen) | `#1065 NodeDetail › node link` | `app/inspector/brain/NodeLink.tsx` | `NodeLink` | |
-| Inspector (settings.pen) | `#1067 ActionError` | `app/inspector/providers/ActionError.tsx` | `ActionError` | |
-| Inspector (settings.pen) | `#1073 StartSessionForm` | `app/inspector/providers/StartSessionForm.tsx` | `StartSessionForm` | |
-| Inspector (settings.pen) | `#1074 StartSessionForm › Record toggle` | `app/inspector/providers/RecordToggle.tsx` | `RecordToggle` | |
-| Inspector (settings.pen) | `#1075 SessionList` | `app/inspector/providers/SessionList.tsx` | `SessionList` | |
-| Inspector (settings.pen) | `#1076 SessionList › session row` | `app/inspector/providers/SessionRow.tsx` | `SessionRow` | |
-| Inspector (settings.pen) | `#1077 FixtureList` | `app/inspector/providers/FixtureList.tsx` | `FixtureList` | |
-| Inspector (settings.pen) | `#1078 FixtureList › fixture row` | `app/inspector/providers/FixtureRow.tsx` | `FixtureRow` | |
-| Inspector (settings.pen) | `#1080 RawSessionView › approvals tray` | `app/inspector/providers/ApprovalsTray.tsx` | `ApprovalsTray` | |
-| Inspector (settings.pen) | `#1081 SessionHeader` | `app/inspector/providers/SessionHeader.tsx` | `SessionHeader` | |
-| Inspector (settings.pen) | `#1082 TranscriptList` | `app/inspector/providers/TranscriptList.tsx` | `TranscriptList` | |
-| Inspector (settings.pen) | `#1083 ApprovalCard (RawSessionView)` | `app/inspector/providers/RawApprovalCard.tsx` | `RawApprovalCard` | |
-| Inspector (settings.pen) | `#1084 Composer (raw session)` | `app/inspector/providers/RawSessionComposer.tsx` | `RawSessionComposer` | |
-| Conversation (app.pen) | `#147 LoadEarlier` | `app/conversation/LoadEarlier.tsx` | `LoadEarlier` | |
-| Conversation (app.pen) | `#148 UserAttachments` | `app/conversation/UserAttachments.tsx` | `UserAttachments` | |
-| Conversation (app.pen) | `#160 UpdateText and 4 parts` | `app/conversation/UpdateText.tsx` | `UpdateText` | parts: `ReplyText`, `ReportText` (+ `AnswerDetails`), `DetailsFold`, `PhaseOutcome`, each in its own file |
-| Conversation (app.pen) | `#164 SteerBubble` | `app/conversation/SteerBubble.tsx` | `SteerBubble` | |
-| Conversation (app.pen) | `#165 BlockError` | `app/conversation/BlockError.tsx` | `BlockError` | |
-| Conversation (app.pen) | `#166 usage-limit divider` | `app/conversation/UsageLimitDivider.tsx` | `UsageLimitDivider` | |
-| Conversation (app.pen) | `#168 joined answer` | `app/conversation/JoinedAnswer.tsx` | `JoinedAnswer` | |
-| Conversation (app.pen) | `#170 ModelChanged` | `app/conversation/ModelChanged.tsx` | `ModelChanged` | |
-| Conversation (app.pen) | `#171 AnswerActions and 2 parts` | `app/conversation/AnswerActions.tsx` | `AnswerActions` | parts: `JoinedAnswerActions`, `ReadAloud`, each in its own file |
-| Conversation (app.pen) | `#174 ContinuedFrom` | `app/conversation/ContinuedFrom.tsx` | `ContinuedFrom` | |
-| Conversation (app.pen) | `#187 WorkHeader (RequestBlock)` | `app/conversation/WorkHeader.tsx` | `WorkHeader` | |
-| Conversation (app.pen) | `#189 CompactionBlock` | `app/conversation/CompactionBlock.tsx` | `CompactionBlock` | |
-| Conversation (app.pen) | `#190 ActivityItems` | `app/conversation/ActivityItems.tsx` | `ActivityItems` | |
-| Conversation (app.pen) | `#198 RepeatsRow` | `app/conversation/activity/RepeatsRow.tsx` | `RepeatsRow` | |
-| Conversation (app.pen) | `#200 group step list (ActivityGroup)` | `app/conversation/activity/GroupStepList.tsx` | `GroupStepList` | |
-| Conversation (app.pen) | `#201 RunOutput` | `app/conversation/activity/RunOutput.tsx` | `RunOutput` | |
-| Conversation (app.pen) | `#203 FileLink` | `app/conversation/activity/FileLink.tsx` | `FileLink` | |
-| Conversation (app.pen) | `#204 FileCounts` | `app/conversation/activity/FileCounts.tsx` | `FileCounts` | |
-| Conversation (app.pen) | `#213 MachineRow` | `app/conversation/activity/MachineRow.tsx` | `MachineRow` | |
-| Conversation (app.pen) | `#214 DecidedRow` | `app/conversation/activity/DecidedRow.tsx` | `DecidedRow` | |
-| Conversation (app.pen) | `#215 QuotaResumed` | `app/conversation/activity/QuotaResumed.tsx` | `QuotaResumed` | |
-| Conversation (app.pen) | `#217 ThreadStep › merged row` | `app/conversation/activity/MergedRow.tsx` | `MergedRow` | |
-| Conversation (app.pen) | `#218 PeerLink` | `app/conversation/activity/PeerLink.tsx` | `PeerLink` | |
-| Conversation (app.pen) | `#226 ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | |
-| Conversation (app.pen) | `#227 Diffs` | `app/conversation/activity/Diffs.tsx` | `Diffs` | |
-| Conversation (app.pen) | `#228 LeadToolDetail` | `app/conversation/activity/LeadToolDetail.tsx` | `LeadToolDetail` | |
-| Conversation (app.pen) | `#229 LeadItemDetail` | `app/conversation/activity/LeadItemDetail.tsx` | `LeadItemDetail` | |
-| Conversation (app.pen) | `#233 TeamSentence › Glyphs` | `app/conversation/activity/Glyphs.tsx` | `Glyphs` | |
-| Conversation (app.pen) | `#234 TeamSentence › Briefs` | `app/conversation/activity/Briefs.tsx` | `Briefs` | |
-| Conversation (app.pen) | `#236 TeamStep › Quiet` | `app/conversation/activity/QuietBrief.tsx` | `QuietBrief` | |
-| Conversation (app.pen) | `#270 Notices` | `app/conversation/Notices.tsx` | `Notices` | |
-| Conversation (app.pen) | `#271 AboveComposer` | `app/conversation/AboveComposer.tsx` | `AboveComposer` | |
-| Conversation (app.pen) | `#272 AboveComposer › inline: archived bar` | `app/conversation/ArchivedBar.tsx` | `ArchivedBar` | |
-| Conversation (app.pen) | `#276 ApprovalAction › inline: Reply… button` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | |
-| Conversation (app.pen) | `#279 CardDictate` | `app/conversation/CardDictate.tsx` | `CardDictate` | |
-| Conversation (app.pen) | `#280 ChoiceCard` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |
-| Conversation (app.pen) | `#281 QuestionAction` | `app/conversation/QuestionAction.tsx` | `QuestionAction` | |
-| Conversation (app.pen) | `#283 ImplementPlanAction` | `app/conversation/ImplementPlanAction.tsx` | `ImplementPlanAction` | |
-| Conversation (app.pen) | `#284 PlanAction` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
-| Conversation (app.pen) | `#285 PhasePlanAction` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
-| Conversation (app.pen) | `#289 ConversationComposer › inline: composer card` | `app/conversation/ComposerCard.tsx` | `ComposerCard` | |
-| Conversation (app.pen) | `#290 ComposerInput` | `app/conversation/ComposerInput.tsx` | `ComposerInput` | |
-| Conversation (app.pen) | `#292 ComposerContextRing` | `app/conversation/ComposerContextRing.tsx` | `ComposerContextRing` | |
-| Conversation (app.pen) | `#293 FullAccessNotice` | `app/conversation/FullAccessNotice.tsx` | `FullAccessNotice` | |
-| Conversation (app.pen) | `#294 UtilityBar` | `app/conversation/UtilityBar.tsx` | `UtilityBar` | |
-| Conversation (app.pen) | `#295 SendControls` | `app/conversation/SendControls.tsx` | `SendControls` | the button itself is `SendButton` (Primitives · Controls) |
-| Conversation (app.pen) | `#296 DictationNote` | `app/conversation/DictationNote.tsx` | `DictationNote` | |
-| Conversation (app.pen) | `#297 DictateButton` | `app/conversation/DictateButton.tsx` | `DictateButton` | |
-| Conversation (app.pen) | `#298 ComposerFooter` | `app/conversation/ComposerFooter.tsx` | `ComposerFooter` | |
-| Conversation (app.pen) | `#299 DictationBar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
-| Conversation (app.pen) | `#300 DictationBar › inline: waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
-| Conversation (app.pen) | `#301 ComposerHint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
-| Conversation (app.pen) | `#302 Pill (ComposerCapsule)` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
-| Conversation (app.pen) | `#303 StepList` | `app/conversation/StepList.tsx` | `StepList` | |
-| Conversation (app.pen) | `#305 RunCapsule` | `app/conversation/RunCapsule.tsx` | `RunCapsule` | |
-| Conversation (app.pen) | `#306 Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
-| Conversation (app.pen) | `#307 RequestCapsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
-| Conversation (app.pen) | `#308 DiffPill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
-| Conversation (app.pen) | `#320 QueueCard › inline: moved message notice` | `app/conversation/MovedMessageNotice.tsx` | `MovedMessageNotice` | |
-| Conversation (app.pen) | `#321 RailPill` | `app/conversation/RailPill.tsx` | `RailPill` | |
-| Conversation (app.pen) | `#326 StandInPill` | `app/shell/StandInPill.tsx` | `StandInPill` | |
-| Conversation (app.pen) | `#327 WaitingPill` | `app/shell/WaitingPill.tsx` | `WaitingPill` | |
-| Conversation (app.pen) | `#330 StatusCard › Row` | `app/conversation/StatusCardRow.tsx` | `StatusCardRow` | |
-| Conversation (app.pen) | `#331 StatusCard › LimitBar` | `app/conversation/LimitBar.tsx` | `LimitBar` | |
-| Conversation (app.pen) | `#334 WorkersStrip › StripRow` | `app/conversation/activity/StripRow.tsx` | `StripRow` | |
-| Conversation (app.pen) | `#364 ChangesCard › FileRow` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
-| Conversation (app.pen) | `#366 ChangesCard › inline: merge warning row` | `app/conversation/MergeWarningRow.tsx` | `MergeWarningRow` | |
-| Conversation (app.pen) | `#367 ChangesCard › inline: revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
-| Conversation (app.pen) | `#370 TurnEnd` | `app/conversation/TurnEnd.tsx` | `TurnEnd` | |
-| Conversation (app.pen) | `#375 PreviewCard › OpenPill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
-| Conversation (app.pen) | `#376 PreviewCard › Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
-| Conversation (app.pen) | `#382 PlanCard` | `app/conversation/cards/PlanCard.tsx` | `PlanCard` | |
-| Conversation (app.pen) | — | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | code only (its OvernightPlanCard card was retired) |
-| Conversation (app.pen) | — | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | code only (its OvernightPlanCard card was retired) |
-| Conversation (app.pen) | `#388 PhaseMore` | `app/conversation/cards/PhaseMore.tsx` | `PhaseMore` | |
-| Conversation (app.pen) | `#389 DoneWhen` | `app/conversation/cards/DoneWhen.tsx` | `DoneWhen` | |
-| Conversation (app.pen) | `#392 PlanRating` | `app/conversation/cards/PlanRating.tsx` | `PlanRating` | |
-| Conversation (app.pen) | `#393 PlanFrame` | `app/conversation/cards/PlanFrame.tsx` | `PlanFrame` | |
-| Conversation (app.pen) | `#395 PlanClip` | `app/conversation/cards/PlanClip.tsx` | `PlanClip` | |
-| Conversation (app.pen) | `#970 ProjectCombobox › picker row` | `app/conversation/PickerRow.tsx` | `PickerRow` | |
-| Conversation (app.pen) | `#971 UsageRemaining` | `app/conversation/UsageRemaining.tsx` | `UsageRemaining` | |
-| Conversation (app.pen) | `PlanText` | `app/conversation/cards/PlanText.tsx` | `PlanText` | moved out of PlanDocument.tsx with PlanClip; PlanDocument re-exports it |
-| Settings (settings.pen) | `#684 SettingsPage › back link` | `app/settings/BackLink.tsx` | `BackLink` | |
-| Settings (settings.pen) | `#607 BrowserDownloads › inline: download row` | `app/settings/DownloadRow.tsx` | `DownloadRow` | |
-| Settings (settings.pen) | `#610 BrowserHistory › inline: day group (collapsible card)` | `app/settings/DayGroup.tsx` | `DayGroup` | |
-| Settings (settings.pen) | `#611 VisitRow` | `app/settings/VisitRow.tsx` | `VisitRow` | |
-| Settings (settings.pen) | `#612 FilterMenu (history)` | `app/settings/FilterMenu.tsx` | `FilterMenu` | |
-| Settings (settings.pen) | `#614 BrowserImportPage › inline: status line (error / none found)` | `app/settings/ImportStatusLine.tsx` | `ImportStatusLine` | |
-| Settings (settings.pen) | `#615 BrowserImportPage › inline: browser-off note` | `app/settings/BrowserOffNote.tsx` | `BrowserOffNote` | |
-| Settings (settings.pen) | `#616 ListingRows` | `app/settings/ListingRows.tsx` | `ListingRows` | |
-| Settings (settings.pen) | `#617 BrowserIcon` | `app/settings/BrowserIcon.tsx` | `BrowserIcon` | |
-| Settings (settings.pen) | `#618 BrowserRow` | `app/settings/BrowserRow.tsx` | `BrowserRow` | |
-| Settings (settings.pen) | `#619 BrowserRow › inline: status dot + text` | `app/settings/BrowserStatus.tsx` | `BrowserStatus` | |
-| Settings (settings.pen) | `#620 FlowHeader` | `app/settings/FlowHeader.tsx` | `FlowHeader` | |
-| Settings (settings.pen) | `#622 ImportBar` | `app/settings/ImportBar.tsx` | `ImportBar` | |
-| Settings (settings.pen) | `#623 ChooseStep` | `app/settings/ChooseStep.tsx` | `ChooseStep` | |
-| Settings (settings.pen) | `#624 ProfilePick` | `app/settings/ProfilePick.tsx` | `ProfilePick` | |
-| Settings (settings.pen) | `#626 BrowserPage › inline: off note` | `app/settings/BrowserOffNote.tsx` | `BrowserOffNote` | |
-| Settings (settings.pen) | `#627 LocationRow` | `app/settings/LocationRow.tsx` | `LocationRow` | |
-| Settings (settings.pen) | `#628 BrowserSwitch` | `app/settings/BrowserSwitch.tsx` | `BrowserSwitch` | |
-| Settings (settings.pen) | `#629 LinkRow` | `app/settings/LinkRow.tsx` | `LinkRow` | |
-| Settings (settings.pen) | `#632 BrowserSiteSettings › inline: site row` | `app/settings/SiteRow.tsx` | `SiteRow` | |
-| Settings (settings.pen) | `#634 ClearForm` | `app/settings/ClearForm.tsx` | `ClearForm` | |
-| Settings (settings.pen) | `#635 ClearForm › inline: tick row` | `app/settings/TickRow.tsx` | `TickRow` | |
-| Settings (settings.pen) | `#645 AppearanceSection` | `app/settings/AppearanceSection.tsx` | `AppearanceSection` | |
-| Settings (settings.pen) | `#646 NameRow` | `app/settings/NameRow.tsx` | `NameRow` | |
-| Settings (settings.pen) | `#647 ComposerSection (general)` | `app/settings/ComposerSection.tsx` | `ComposerSection` | |
-| Settings (settings.pen) | `#648 NotificationsSection` | `app/settings/NotificationsSection.tsx` | `NotificationsSection` | |
-| Settings (settings.pen) | `#649 NotificationsSection › inline: dimmed row (notifications off)` | `app/settings/DimmedRow.tsx` | `DimmedRow` | |
-| Settings (settings.pen) | `#650 PowerSection` | `app/settings/PowerSection.tsx` | `PowerSection` | |
-| Settings (settings.pen) | `#651 OpenAtLoginRow` | `app/settings/OpenAtLoginRow.tsx` | `OpenAtLoginRow` | |
-| Settings (settings.pen) | `#652 AboutSection` | `app/settings/AboutSection.tsx` | `AboutSection` | |
-| Settings (settings.pen) | `#653 AboutSection › inline: version value` | `app/settings/VersionValue.tsx` | `VersionValue` | |
-| Settings (settings.pen) | `#654 HibernateRow` | `app/settings/HibernateRow.tsx` | `HibernateRow` | |
-| Settings (settings.pen) | `#675 Picture (sidebar closed preview)` | `app/settings/SidebarClosedPicture.tsx` | `SidebarClosedPicture` | |
-| Settings (settings.pen) | `#755 Installation` | `app/settings/providers/Installation.tsx` | `Installation` | |
-| Settings (settings.pen) | `#756 AgentModels` | `app/settings/providers/AgentModels.tsx` | `AgentModels` | |
-| Settings (settings.pen) | `#758 AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
-| Settings (settings.pen) | `#763 AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
-| Settings (settings.pen) | `#738 RankingView` | `app/conversation/cards/RankingView.tsx` | `RankingView` | |
-| Setup (app.pen) | `#823 SetupWindow › step rail item` | `app/setup/computerSetup/StepRailItem.tsx` | `StepRailItem` | |
-| Setup (app.pen) | `#824 Panel` | `app/setup/computerSetup/SetupPanel.tsx` | `SetupPanel` | |
-| Setup (app.pen) | `#825 PermissionStep` | `app/setup/computerSetup/PermissionStep.tsx` | `PermissionStep` | |
-| Setup (app.pen) | `#826 HelperCard` | `app/setup/computerSetup/HelperCard.tsx` | `HelperCard` | |
-| Setup (app.pen) | `#827 CaptureStep` | `app/setup/computerSetup/CaptureStep.tsx` | `CaptureStep` | |
-| Setup (app.pen) | `#829 AgentCard` | `app/setup/onboarding/AgentCard.tsx` | `AgentCard` | |
-| Setup (app.pen) | `#832 Onboarding` | `app/setup/onboarding/Onboarding.tsx` | `Onboarding` | |
-| Setup (app.pen) | `#833 TopBar (onboarding)` | `app/setup/onboarding/OnboardingTopBar.tsx` | `OnboardingTopBar` | |
-| Setup (app.pen) | `#835 ProjectsStep › found counter` | `app/setup/onboarding/FoundCounter.tsx` | `FoundCounter` | |
-| Setup (app.pen) | `#836 ProjectsStep › Select all / none` | `app/setup/onboarding/SelectAllToggle.tsx` | `SelectAllToggle` | |
-| Setup (app.pen) | `#837 ProjectCard` | `app/setup/onboarding/ProjectCard.tsx` | `ProjectCard` | |
-| Setup (app.pen) | `#840 ContinueButton` | `app/setup/onboarding/ContinueButton.tsx` | `ContinueButton` | |
-| Setup (app.pen) | `#841 NameForm (onboarding)` | `app/setup/onboarding/NameForm.tsx` | `NameForm` | |
-| Settings (settings.pen) | `#709 ProjectRows` | `app/settings/storage/ProjectRows.tsx` | `ProjectRows` | |
-| Settings (settings.pen) | `#711 ExpandableRow` | `app/settings/storage/ExpandableRow.tsx` | `ExpandableRow` | |
-| Settings (settings.pen) | `#712 DetailRow (storage part)` | `app/settings/storage/DetailRow.tsx` | `DetailRow` | |
-| Settings (settings.pen) | `#713 Size` | `app/settings/storage/StorageSize.tsx` | `StorageSize` | |
-| Settings (settings.pen) | `#714 UnusedRow` | `app/settings/storage/UnusedRow.tsx` | `UnusedRow` | |
-| Settings (settings.pen) | `#719 UsageCard` | `app/settings/storage/UsageCard.tsx` | `UsageCard` | |
+| Shared app parts | `LabeledDivider` | `app/conversation/UsageLimitDivider.tsx` | `UsageLimitDivider` | look of `LabeledDivider` |
+| Shared app parts | `LabeledDivider` | `app/conversation/activity/QuotaResumed.tsx` | `QuotaResumed` | look of `LabeledDivider` |
+| Sidebar & shell | `Page corners` | `app/shell/PageCorners.tsx` | `PageCorners` | |
+| Sidebar & shell | `Page surface` | `app/shell/PageSurface.tsx` | `PageSurface` | |
+| Sidebar & shell | `Sidebar header` | `app/shell/SidebarHeader.tsx` | `SidebarHeader` | |
+| Sidebar & shell | `Sidebar` | `app/shell/NewChatRow.tsx` | `NewChatRow` | shown inside it |
+| Sidebar & shell | `Projects empty prompt` | `app/shell/ProjectsEmptyPrompt.tsx` | `ProjectsEmptyPrompt` | |
+| Sidebar & shell | `Project row` | `app/shell/ProjectRow.tsx` | `ProjectRow` | |
+| Sidebar & shell | `Projects flyout`, `Chats flyout` | `app/shell/Flyout.tsx` | `Flyout` | its lists (`ProjectsFlyout`, `ChatsFlyout`, `FlyoutConversation`) stay in `app/shell/AppSidebar.tsx` |
+| Sidebar & shell | `Provider usage`, `Provider usage/Open`, `Provider usage/Limit`, `Provider usage/Sign in` | `app/shell/ProviderUsage.tsx` | `ProviderUsage` | |
+| Sidebar & shell | `Help menu` | `app/shell/HelpMenu.tsx` | `HelpMenu` | |
+| Sidebar & shell | `Update row` | `app/shell/UpdateRow.tsx` | `UpdateRow` | |
+| Top bar & tabs | `Bar divider` | `app/shell/BarDivider.tsx` | `BarDivider` | |
+| Top bar & tabs | `Chat tab`, `Chat tab/Inactive` | `app/shell/ChatTab.tsx` | `ChatTab` | |
+| Top bar & tabs | `Session tab`, `Session tab/Inactive` | `app/shell/SessionTab.tsx` | `SessionTab` | |
+| Top bar & tabs | `Tab menu` | `app/shell/TabMenu.tsx` | `TabMenu` | |
+| Thread | `Load earlier`, `Load earlier/Failed` | `app/conversation/LoadEarlier.tsx` | `LoadEarlier` | |
+| Thread | `User attachments` | `app/conversation/UserAttachments.tsx` | `UserAttachments` | |
+| Thread | `Archived bar` | `app/conversation/AboveComposer.tsx` | `AboveComposer` | draws `Archived bar` only |
+| Thread | `Archived bar` | `app/conversation/ArchivedBar.tsx` | `ArchivedBar` | |
+| Thread cards | `Question card` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |
+| Thread cards | `Action card/Question` | `app/conversation/QuestionAction.tsx` | `QuestionAction` | |
+| Thread cards | `Action card/Plan` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
+| Thread cards | `Phase plan action` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
+| Thread cards | `Changes file row` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
+| Thread cards | `Merge warning row` | `app/conversation/MergeWarningRow.tsx` | `MergeWarningRow` | |
+| Thread cards | `Revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
+| Thread cards | `Open pill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
+| Thread cards | `Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
+| Thread cards | — | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | code only (its OvernightPlanCard card was retired) |
+| Thread cards | — | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | code only (its OvernightPlanCard card was retired) |
+| Thread cards | `Plan frame` | `app/conversation/cards/PlanFrame.tsx` | `PlanFrame` | |
+| Thread cards | `Plan clip` | `app/conversation/cards/PlanClip.tsx` | `PlanClip` | |
+| Thread cards | `Plan text` | `app/conversation/cards/PlanText.tsx` | `PlanText` | moved out of PlanDocument.tsx with PlanClip; PlanDocument re-exports it |
+| Steps & tool rows | `Update text` | `app/conversation/UpdateText.tsx` | `UpdateText` | parts: `ReplyText`, `ReportText` (+ `AnswerDetails`), `DetailsFold`, `PhaseOutcome`, each in its own file |
+| Steps & tool rows | `Steer bubble` | `app/conversation/SteerBubble.tsx` | `SteerBubble` | |
+| Steps & tool rows | `Block error` | `app/conversation/BlockError.tsx` | `BlockError` | |
+| Steps & tool rows | `Joined answer` | `app/conversation/JoinedAnswer.tsx` | `JoinedAnswer` | |
+| Steps & tool rows | `Model changed` | `app/conversation/ModelChanged.tsx` | `ModelChanged` | |
+| Steps & tool rows | `Answer actions/Chat`, `Answer actions/Session`, `Answer actions/Joined` | `app/conversation/AnswerActions.tsx` | `AnswerActions` | parts: `JoinedAnswerActions`, `ReadAloud`, each in its own file |
+| Steps & tool rows | `Continued from`, `Continued from/Gone` | `app/conversation/ContinuedFrom.tsx` | `ContinuedFrom` | |
+| Steps & tool rows | `Work header` | `app/conversation/WorkHeader.tsx` | `WorkHeader` | |
+| Steps & tool rows | `Compaction block` | `app/conversation/CompactionBlock.tsx` | `CompactionBlock` | |
+| Steps & tool rows | `Activity items` | `app/conversation/ActivityItems.tsx` | `ActivityItems` | |
+| Steps & tool rows | `Repeats row` | `app/conversation/activity/RepeatsRow.tsx` | `RepeatsRow` | |
+| Steps & tool rows | `Activity group` | `app/conversation/activity/GroupStepList.tsx` | `GroupStepList` | shown inside it |
+| Steps & tool rows | `File link` | `app/conversation/activity/FileLink.tsx` | `FileLink` | |
+| Steps & tool rows | `File counts` | `app/conversation/activity/FileCounts.tsx` | `FileCounts` | |
+| Steps & tool rows | `Machine row` | `app/conversation/activity/MachineRow.tsx` | `MachineRow` | |
+| Steps & tool rows | `Decided row` | `app/conversation/activity/DecidedRow.tsx` | `DecidedRow` | |
+| Steps & tool rows | `Merged row` | `app/conversation/activity/MergedRow.tsx` | `MergedRow` | |
+| Steps & tool rows | `Peer link` | `app/conversation/activity/PeerLink.tsx` | `PeerLink` | |
+| Steps & tool rows | `Inline diff` | `app/conversation/activity/Diffs.tsx` | `Diffs` | a stack of `Inline diff` |
+| Steps & tool rows | `Lead detail` | `app/conversation/activity/LeadToolDetail.tsx` | `LeadToolDetail` | |
+| Steps & tool rows | `Lead detail` | `app/conversation/activity/LeadItemDetail.tsx` | `LeadItemDetail` | look of `Lead detail` |
+| Steps & tool rows | `Team glyphs` | `app/conversation/activity/Glyphs.tsx` | `Glyphs` | |
+| Steps & tool rows | `Briefs` | `app/conversation/activity/Briefs.tsx` | `Briefs` | |
+| Steps & tool rows | `Quiet` | `app/conversation/activity/QuietBrief.tsx` | `QuietBrief` | |
+| Steps & tool rows | `Turn end` | `app/conversation/TurnEnd.tsx` | `TurnEnd` | |
+| Composer | `Composer card` | `app/conversation/ComposerCard.tsx` | `ComposerCard` | |
+| Composer | `Composer input` | `app/conversation/ComposerInput.tsx` | `ComposerInput` | |
+| Composer | `Context ring` | `app/conversation/ComposerContextRing.tsx` | `ComposerContextRing` | |
+| Composer | `Full access notice` | `app/conversation/FullAccessNotice.tsx` | `FullAccessNotice` | |
+| Composer | `Utility bar` | `app/conversation/UtilityBar.tsx` | `UtilityBar` | |
+| Composer | `Send controls` | `app/conversation/SendControls.tsx` | `SendControls` | the button itself is `SendButton` (Primitives · Controls) |
+| Composer | `Dictation note` | `app/conversation/DictationNote.tsx` | `DictationNote` | |
+| Composer | `Composer footer` | `app/conversation/ComposerFooter.tsx` | `ComposerFooter` | |
+| Composer | `Dictation bar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
+| Composer | `Waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
+| Composer | `Composer hint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
+| Composer menus, rail & queue | `Capsule pill` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
+| Composer menus, rail & queue | `Step list` | `app/conversation/StepList.tsx` | `StepList` | |
+| Composer menus, rail & queue | `Run capsule` | `app/conversation/RunCapsule.tsx` | `RunCapsule` | |
+| Composer menus, rail & queue | `Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
+| Composer menus, rail & queue | `Request capsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
+| Composer menus, rail & queue | `Diff pill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
+| Composer menus, rail & queue | `Moved notice` | `app/conversation/MovedMessageNotice.tsx` | `MovedMessageNotice` | |
+| Composer menus, rail & queue | `Rail pill` | `app/conversation/RailPill.tsx` | `RailPill` | |
+| Composer menus, rail & queue | `Stand-in pill` | `app/shell/StandInPill.tsx` | `StandInPill` | |
+| Composer menus, rail & queue | `Waiting pill` | `app/shell/WaitingPill.tsx` | `WaitingPill` | |
+| Composer menus, rail & queue | `Status row` | `app/conversation/StatusCardRow.tsx` | `StatusCardRow` | |
+| Composer menus, rail & queue | `Limit bar` | `app/conversation/LimitBar.tsx` | `LimitBar` | |
+| Composer menus, rail & queue | `Strip row` | `app/conversation/activity/StripRow.tsx` | `StripRow` | |
+| Composer menus, rail & queue | `Picker row` | `app/conversation/PickerRow.tsx` | `PickerRow` | |
+| Composer menus, rail & queue | `Usage remaining` | `app/conversation/UsageRemaining.tsx` | `UsageRemaining` | |
+| Summary pane | `Summary content` | `app/conversation/SummaryContent.tsx` | `SummaryContent` | |
+| Summary pane | `Floating summary` | `app/conversation/FloatingSummary.tsx` | `FloatingSummary` | |
+| Summary pane | `Source row` | `app/conversation/SourceRow.tsx` | `SourceRow` | |
+| Summary pane | `Branch row` | `app/conversation/BranchRow.tsx` | `BranchRow` | |
+| Summary pane | `JobStack` | `app/conversation/JobStack.tsx` | `JobStack` | |
+| Summary pane | `Links popover` | `app/conversation/AllLinksPopover.tsx` | `AllLinksPopover` | |
+| Files, search & source | `View tabs` | `app/side-panel/PaneViewTabs.tsx` | `PaneViewTabs` | |
+| Files, search & source | `File browser` | `app/side-panel/FileBrowser.tsx` | `FileBrowser` | |
+| Files, search & source | `Source header` | `app/side-panel/SourceHeader.tsx` | `SourceHeader` | |
+| Files, search & source | `Source group` | `app/side-panel/SourceGroup.tsx` | `SourceGroup` | |
+| Files, search & source | `Commit box` | `app/side-panel/CommitBox.tsx` | `CommitBox` | |
+| Files, search & source | `Commit actions menu` | `app/side-panel/CommitActionsMenu.tsx` | `CommitActionsMenu` | |
+| Files, search & source | `More actions menu` | `app/side-panel/SourceMoreMenu.tsx` | `SourceMoreMenu` | |
+| Changes, review & conflicts | `Rebase step` | `app/side-panel/RebaseStep.tsx` | `RebaseStep` | |
+| Changes, review & conflicts | `Review steps/Changes`, `Review steps/Files` | `app/side-panel/ReviewSteps.tsx` | `ReviewSteps` | |
+| Changes, review & conflicts | `Open in menu` | `app/side-panel/OpenInMenu.tsx` | `OpenInMenu` | |
+| Changes, review & conflicts | `Find box` | `app/side-panel/FindLineBox.tsx` | `FindLineBox` | |
+| Workers | `Agent row` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
+| Workers | `Worker list` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
+| Workers | `Worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |
+| Workers | `Output file row` | `app/side-panel/WorkerFileRow.tsx` | `WorkerFileRow` | |
+| Workers | `Entry view/Received`, `Entry view/Reply`, `Entry view/Approval`, `Entry view/Notice` | `app/side-panel/EntryView.tsx` | `EntryView` | |
+| Workers | `Brief` | `app/side-panel/WorkerBrief.tsx` | `WorkerBrief` | |
+| Workers | `Worker answer` | `app/side-panel/WorkerAnswer.tsx` | `WorkerAnswer` | |
+| Page | `Show pages dialog` | `app/side-panel/pages/ShowPages.tsx` | `ShowPages` | |
+| Page | `Page file menu` | `app/side-panel/pages/PageFileMenu.tsx` | `PageFileMenu` | |
+| Page | `Page insert menu` | `app/side-panel/pages/PageInsertMenu.tsx` | `PageInsertMenu` | |
+| Job, mockup & new tab | `Images menu` | `app/side-panel/ImagesMenu.tsx` | `ImagesMenu` | |
+| Job, mockup & new tab | `Notes list` | `app/side-panel/NotesList.tsx` | `NotesList` | |
+| Output, plan & side chat | `Run output` | `app/conversation/activity/RunOutput.tsx` | `RunOutput` | |
+| Browser | `Browser nav` | `app/side-panel/NavigationCapsule.tsx` | `NavigationCapsule` | |
+| Browser | `Site info button/Not secure` | `app/side-panel/SiteInfo.tsx` | `SiteInfo` | secure and local are looks of `Icon Button` |
+| Browser | `Site info` | `app/side-panel/SiteInfoPopover.tsx` | `SiteInfoPopover` | |
+| Browser | `Find bar` | `app/side-panel/FindBar.tsx` | `FindBar` | |
+| Browser | `Browser options` | `app/side-panel/BrowserOptions.tsx` | `BrowserOptions` | |
+| Onboarding & setup | `Setup step/Pending`, `Setup step/Current`, `Setup step/Done` | `app/setup/computerSetup/StepRailItem.tsx` | `StepRailItem` | |
+| Onboarding & setup | `Setup panel` | `app/setup/computerSetup/SetupPanel.tsx` | `SetupPanel` | |
+| Onboarding & setup | `Permission step/Accessibility`, `Permission step/Screen Recording` | `app/setup/computerSetup/PermissionStep.tsx` | `PermissionStep` | |
+| Onboarding & setup | `Helper card` | `app/setup/computerSetup/HelperCard.tsx` | `HelperCard` | |
+| Onboarding & setup | `Capture step` | `app/setup/computerSetup/CaptureStep.tsx` | `CaptureStep` | |
+| Onboarding & setup | `Agent card` | `app/setup/onboarding/AgentCard.tsx` | `AgentCard` | |
+| Onboarding & setup | `Onboarding/Intro`, `Onboarding/Name`, `Onboarding/Agents`, `Onboarding/Projects` | `app/setup/onboarding/Onboarding.tsx` | `Onboarding` | |
+| Onboarding & setup | `Onboarding top bar` | `app/setup/onboarding/OnboardingTopBar.tsx` | `OnboardingTopBar` | |
+| Onboarding & setup | `Found counter` | `app/setup/onboarding/FoundCounter.tsx` | `FoundCounter` | |
+| Onboarding & setup | `Project card` | `app/setup/onboarding/ProjectCard.tsx` | `ProjectCard` | |
+| Onboarding & setup | `Name form` | `app/setup/onboarding/NameForm.tsx` | `NameForm` | |
+| App dialogs | `Add project dialog/Clone` | `app/shell/dialogs/CloneView.tsx` | `CloneView` | the Add project parts it shares are in `app/shell/dialogs/addProjectParts.tsx` |
+| App dialogs | `Add project dialog/New repository` | `app/shell/dialogs/NewRepoView.tsx` | `NewRepoView` | |
+| App dialogs | `Field` | `app/shell/dialogs/Field.tsx` | `Field` | |
+| App dialogs | `Remove project dialog/Form` | `app/shell/dialogs/RemoveForm.tsx` | `RemoveForm` | its head and actions row are in `app/shell/dialogs/removeProjectParts.tsx` |
+| App dialogs | `Remove project dialog/Removed` | `app/shell/dialogs/Removed.tsx` | `Removed` | |
+| Settings · Window & page parts | `SettingsPage/BackLink` | `app/settings/BackLink.tsx` | `BackLink` | |
+| Settings · General & system | `AppearanceSection` | `app/settings/AppearanceSection.tsx` | `AppearanceSection` | |
+| Settings · General & system | `NameRow` | `app/settings/NameRow.tsx` | `NameRow` | |
+| Settings · General & system | `ComposerSection` | `app/settings/ComposerSection.tsx` | `ComposerSection` | |
+| Settings · General & system | `NotificationsSection` | `app/settings/NotificationsSection.tsx` | `NotificationsSection` | |
+| Settings · General & system | `NotificationsSection` | `app/settings/DimmedRow.tsx` | `DimmedRow` | shown inside it |
+| Settings · General & system | `PowerSection` | `app/settings/PowerSection.tsx` | `PowerSection` | |
+| Settings · General & system | `OpenAtLoginRow` | `app/settings/OpenAtLoginRow.tsx` | `OpenAtLoginRow` | |
+| Settings · General & system | `AboutSection` | `app/settings/AboutSection.tsx` | `AboutSection` | |
+| Settings · General & system | `VersionRow` | `app/settings/VersionValue.tsx` | `VersionValue` | shown inside it |
+| Settings · General & system | `HibernateRow` | `app/settings/HibernateRow.tsx` | `HibernateRow` | |
+| Settings · General & system | `Picture/Strip`, `Picture/None` | `app/settings/SidebarClosedPicture.tsx` | `SidebarClosedPicture` | |
+| Settings · Providers | `Installation` | `app/settings/providers/Installation.tsx` | `Installation` | |
+| Settings · Providers | `AgentModels` | `app/settings/providers/AgentModels.tsx` | `AgentModels` | |
+| Settings · Providers | `AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
+| Settings · Providers | `AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
+| Settings · Routing | `RankingView` | `app/conversation/cards/RankingView.tsx` | `RankingView` | |
+| Settings · Browser | `DownloadRow` | `app/settings/DownloadRow.tsx` | `DownloadRow` | |
+| Settings · Browser | `HistoryDay` | `app/settings/DayGroup.tsx` | `DayGroup` | |
+| Settings · Browser | `VisitRow` | `app/settings/VisitRow.tsx` | `VisitRow` | |
+| Settings · Browser | `BrowserImportPage` | `app/settings/ImportStatusLine.tsx` | `ImportStatusLine` | shown inside it |
+| Settings · Browser | `BrowserOffNote` | `app/settings/BrowserOffNote.tsx` | `BrowserOffNote` | |
+| Settings · Browser | `ListingRows` | `app/settings/ListingRows.tsx` | `ListingRows` | |
+| Settings · Browser | `BrowserIcon` | `app/settings/BrowserIcon.tsx` | `BrowserIcon` | |
+| Settings · Browser | `BrowserRow` | `app/settings/BrowserRow.tsx` | `BrowserRow` | |
+| Settings · Browser | `ImportStatus/Ready`, `ImportStatus/Attention`, `ImportStatus/Idle` | `app/settings/BrowserStatus.tsx` | `BrowserStatus` | |
+| Settings · Browser | `FlowHeader` | `app/settings/FlowHeader.tsx` | `FlowHeader` | |
+| Settings · Browser | `ImportBar` | `app/settings/ImportBar.tsx` | `ImportBar` | |
+| Settings · Browser | `ChooseStep` | `app/settings/ChooseStep.tsx` | `ChooseStep` | |
+| Settings · Browser | `ProfilePick` | `app/settings/ProfilePick.tsx` | `ProfilePick` | |
+| Settings · Browser | `BrowserOffNote` | `app/settings/BrowserOffNote.tsx` | `BrowserOffNote` | |
+| Settings · Browser | `LocationRow` | `app/settings/LocationRow.tsx` | `LocationRow` | |
+| Settings · Browser | `BrowserSwitch` | `app/settings/BrowserSwitch.tsx` | `BrowserSwitch` | |
+| Settings · Browser | `LinkRow` | `app/settings/LinkRow.tsx` | `LinkRow` | |
+| Settings · Browser | `SiteRow` | `app/settings/SiteRow.tsx` | `SiteRow` | |
+| Settings · Browser | `ClearForm` | `app/settings/ClearForm.tsx` | `ClearForm` | |
+| Settings · Browser | `ClearTickRow` | `app/settings/TickRow.tsx` | `TickRow` | |
+| Settings · Storage & archived chats | `ProjectRow`, `ProjectRow/Compact` | `app/settings/storage/ProjectRows.tsx` | `ProjectRows` | |
+| Settings · Storage & archived chats | `ExpandableRow` | `app/settings/storage/ExpandableRow.tsx` | `ExpandableRow` | |
+| Settings · Storage & archived chats | `DetailRow` | `app/settings/storage/DetailRow.tsx` | `DetailRow` | |
+| Settings · Storage & archived chats | `Size` | `app/settings/storage/StorageSize.tsx` | `StorageSize` | |
+| Settings · Storage & archived chats | `UnusedRow` | `app/settings/storage/UnusedRow.tsx` | `UnusedRow` | |
+| Settings · Storage & archived chats | `UsageCard` | `app/settings/storage/UsageCard.tsx` | `UsageCard` | |
+| Settings · Inspector · Events & orchestrator | `SessionBar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
+| Settings · Inspector · Events & orchestrator | `OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
+| Settings · Inspector · Events & orchestrator | `LoadEarlierLine` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |
+| Settings · Inspector · Events & orchestrator | `ListSwitchBar` | `app/inspector/ListSwitchBar.tsx` | `ListSwitchBar` | |
+| Settings · Inspector · Events & orchestrator | `Breaches` | `app/inspector/Breaches.tsx` | `Breaches` | |
+| Settings · Inspector · Events & orchestrator | `ContextMeter` | `app/inspector/ContextMeter.tsx` | `ContextMeter` | |
+| Settings · Inspector · Events & orchestrator | `InjectionRowView` | `app/inspector/InjectionRowView.tsx` | `InjectionRowView` | |
+| Settings · Inspector · Events & orchestrator | `GenerationHeader` | `app/inspector/GenerationHeader.tsx` | `GenerationHeader` | |
+| Settings · Inspector · Events & orchestrator | `InjectionList` | `app/inspector/InjectionList.tsx` | `InjectionList` | |
+| Settings · Inspector · Events & orchestrator | `BlobText` | `app/inspector/BlobText.tsx` | `BlobText` | |
+| Settings · Inspector · Events & orchestrator | `RebirthDetail` | `app/inspector/RebirthDetail.tsx` | `RebirthDetail` | |
+| Settings · Inspector · Events & orchestrator | `BriefingSectionsTable` | `app/inspector/BriefingSectionsTable.tsx` | `BriefingSectionsTable` | |
+| Settings · Inspector · Events & orchestrator | `RebirthRowView` | `app/inspector/RebirthRowView.tsx` | `RebirthRowView` | |
+| Settings · Inspector · Brain | `Detail`, `Detail/Wrap`, `Detail/Busy` | `app/inspector/brain/BrainDetail.tsx` | `BrainDetail` | |
+| Settings · Inspector · Brain | `Progress` | `app/inspector/brain/BrainProgress.tsx` | `BrainProgress` | |
+| Settings · Inspector · Brain | `KindCounts` | `app/inspector/brain/NodesByKindList.tsx` | `NodesByKindList` | |
+| Settings · Inspector · Brain | `IndexSection` | `app/inspector/brain/IndexState.tsx` | `IndexState` | shown inside it |
+| Settings · Inspector · Brain | `IndexSection` | `app/inspector/brain/IndexSection.tsx` | `IndexSection` | |
+| Settings · Inspector · Brain | `EmbedderSection` | `app/inspector/brain/EmbedderState.tsx` | `EmbedderState` | shown inside it |
+| Settings · Inspector · Brain | `EmbedderSection` | `app/inspector/brain/EmbedderSection.tsx` | `EmbedderSection` | |
+| Settings · Inspector · Brain | `WorkersSection` | `app/inspector/brain/WorkersSection.tsx` | `WorkersSection` | |
+| Settings · Inspector · Brain | `JobRow` | `app/inspector/brain/JobRow.tsx` | `JobRow` | |
+| Settings · Inspector · Brain | `JobsSection` | `app/inspector/brain/JobsSection.tsx` | `JobsSection` | |
+| Settings · Inspector · Brain | `DeveloperActions` | `app/inspector/brain/DeveloperActions.tsx` | `DeveloperActions` | |
+| Settings · Inspector · Brain | `BrainQueryBar` | `app/inspector/brain/QueryBar.tsx` | `QueryBar` | |
+| Settings · Inspector · Brain | `ResultSummary` | `app/inspector/brain/ResultSummary.tsx` | `ResultSummary` | |
+| Settings · Inspector · Brain | `HitRow` | `app/inspector/brain/HitRow.tsx` | `HitRow` | |
+| Settings · Inspector · Brain | `OrchestratorReads` | `app/inspector/brain/OrchestratorReadsDisclosure.tsx` | `OrchestratorReadsDisclosure` | |
+| Settings · Inspector · Brain | `BrainToolbar` | `app/inspector/brain/BrainToolbar.tsx` | `BrainToolbar` | |
+| Settings · Inspector · Brain | `ConversationName` | `app/inspector/brain/ConversationName.tsx` | `ConversationName` | |
+| Settings · Inspector · Brain | `NodeLink` | `app/inspector/brain/NodeLink.tsx` | `NodeLink` | |
+| Settings · Inspector · Processes & providers | `StartSessionForm` | `app/inspector/providers/StartSessionForm.tsx` | `StartSessionForm` | |
+| Settings · Inspector · Processes & providers | `RecordToggle/Off`, `RecordToggle/On` | `app/inspector/providers/RecordToggle.tsx` | `RecordToggle` | |
+| Settings · Inspector · Processes & providers | `SessionList` | `app/inspector/providers/SessionList.tsx` | `SessionList` | |
+| Settings · Inspector · Processes & providers | `RawSessionRow` | `app/inspector/providers/SessionRow.tsx` | `SessionRow` | |
+| Settings · Inspector · Processes & providers | `FixtureList` | `app/inspector/providers/FixtureList.tsx` | `FixtureList` | |
+| Settings · Inspector · Processes & providers | `FixtureRow` | `app/inspector/providers/FixtureRow.tsx` | `FixtureRow` | |
+| Settings · Inspector · Processes & providers | `ApprovalsTray` | `app/inspector/providers/ApprovalsTray.tsx` | `ApprovalsTray` | |
+| Settings · Inspector · Processes & providers | `SessionHeader` | `app/inspector/providers/SessionHeader.tsx` | `SessionHeader` | |
+| Settings · Inspector · Processes & providers | `TranscriptList` | `app/inspector/providers/TranscriptList.tsx` | `TranscriptList` | |
+| Settings · Inspector · Processes & providers | `ApprovalCard/Raw` | `app/inspector/providers/RawApprovalCard.tsx` | `RawApprovalCard` | |
+| Settings · Inspector · Processes & providers | `RawComposer` | `app/inspector/providers/RawSessionComposer.tsx` | `RawSessionComposer` | |
+| — | `FileGlyph` | `app/side-panel/FileGlyph.tsx` | `FileGlyph` | not found in foundations (check) |
+| — | `TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | not found in foundations (check) |
+| — | `Section (Brain)` | `app/inspector/brain/BrainSection.tsx` | `BrainSection` | not found in foundations (check) |
+| — | `ActionError` | `app/inspector/providers/ActionError.tsx` | `ActionError` | not found in foundations (check) |
+| — | `ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | not found in foundations (check) |
+| — | `Notices` | `app/conversation/Notices.tsx` | `Notices` | not found in foundations (check) |
+| — | `ImplementPlanAction` | `app/conversation/ImplementPlanAction.tsx` | `ImplementPlanAction` | not found in foundations (check) |
+| — | `PlanCard` | `app/conversation/cards/PlanCard.tsx` | `PlanCard` | not found in foundations (check) |
+| — | `PhaseMore` | `app/conversation/cards/PhaseMore.tsx` | `PhaseMore` | not found in foundations (check) |
+| — | `DoneWhen` | `app/conversation/cards/DoneWhen.tsx` | `DoneWhen` | not found in foundations (check) |
+| — | `FilterMenu (history)` | `app/settings/FilterMenu.tsx` | `FilterMenu` | not found in foundations (check) |
 
 ## Icons
 
@@ -443,15 +460,19 @@ indicators board, controls, the other files) places it as a ref.
 ## Keeping it in sync
 
 - When the UI changes, update the component and all its states first, then the screens that show
-  it. Parts both windows use go in `foundations.pen`; parts used by one window go on
-  its surface's or page's board in that window's file.
+  it. Every component lives in `foundations.pen`, on its area's board; `app.pen` and
+  `settings.pen` only place instances of it.
 - When code removes a component, delete it from `unused.pen` too (and its foundations copy if its
   note says so).
 - Agents editing through the MCP: pass the file's full real path, and make sure the file is open
   in Pen, or the call silently works on whichever file is active. Never `Replace` a child of an
   instance of a reusable component (insert the new part, move it, delete the old one). After a
   failed edit, close the file without saving and reopen it.
-- Save with ⌘S in that file's own Pen window and check the file's modified time. No backup copies.
+- A new foundations component shows up in `app.pen` or `settings.pen` only after that window is
+  closed and opened again (save both first).
+- Save with ⌘S in that file's own Pen window, after a real click in it: Pen saves the window
+  that has focus, whichever file the last edit was in. Then check the file's modified time
+  changed. No backup copies.
 
 ## Updating tokens
 
