@@ -117,7 +117,8 @@ top of `app/`.
 
 The `foundations.pen` board and component that show each code part, board by board, with the
 file (under `apps/desktop/src`) and the export that draws it. "Pen only" means the code has no
-such part; "code only" means a component folder holds a part that has no card yet. "Look of X"
+such part ("the code was removed in <commit>": the strip-down took it out, the card stays until the
+design drops it); "code only" means a component folder holds a part that has no card yet. "Look of X"
 means the part has no component of its own: it is a look of X. "Shown inside it" means it is
 drawn inside that component, with no card of its own. "Not found in foundations (check)" rows
 have no component found yet. Parts still in `src/app` (not yet under `src/components`) are noted
@@ -128,6 +129,7 @@ them. Cards in Pen carry no code paths: this table is the link.
 |---|---|---|---|---|
 | Icons | `Icon / <Name>`, `FileIcon/*`, `IdGlyph/*`, `BlockIcon/*`, `BrigadierGlyph`, `ProviderGlyph/*` | `components/icons/` | see Icons below | |
 | Icons | `Spinner/12`, `/14`, `/16`, `/20` | `components/icons/app-glyphs/spinner.tsx` | `Spinner` (sized by class) | |
+| Icons | `Icon / FileImage`, `Icon / FileDocument`, `Icon / FileCode`, `Icon / File` | `app/side-panel/FileGlyph.tsx` | `FileGlyph` | picks one of these icons by file type; no component of its own |
 | Primitives · Controls | `Badge/Default`, `Secondary`, `Destructive`, `Warning`, `Success`, `Outline`, `Ghost`, `Link` | `components/controls/badge.tsx` | `Badge` (`variant`) | |
 | Primitives · Controls | `Badge/Full access` | — | — | Pen only: the app's Full access pill is the access picker's trigger (`text-full-access`) in `app/shell/SetupPickers.tsx` |
 | Primitives · Controls | `Button/Primary`, `Secondary`, `Outline`, `Ghost`, `Destructive`, `Link`, each `/xs` and `/sm` | `components/controls/button.tsx` | `Button` (`variant` default…link, `size` default/xs/sm) | |
@@ -154,9 +156,9 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Primitives · Controls | `Button/Ghost` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | look of `Button/Ghost` |
 | Primitives · Controls | `Icon Button/sm` | `app/conversation/CardDictate.tsx` | `CardDictate` | look of `Icon Button/sm` |
 | Primitives · Controls | `Icon Button` | `app/conversation/DictateButton.tsx` | `DictateButton` | look of `Icon Button` |
-| Primitives · Controls | `Icon Button/sm` | `app/conversation/cards/PlanRating.tsx` | `PlanRating` | look of `Icon Button/sm` |
 | Primitives · Controls | `Button/Ghost/sm` | `app/setup/onboarding/SelectAllToggle.tsx` | `SelectAllToggle` | look of `Button/Ghost/sm` |
 | Primitives · Controls | `Button/Primary` | `app/setup/onboarding/ContinueButton.tsx` | `ContinueButton` | look of `Button/Primary` |
+| Primitives · Controls | `ErrorLine` | `app/inspector/providers/ActionError.tsx` | `ActionError` | look of `ErrorLine` |
 | Primitives · Menus, popovers & dialogs | `Menu`, `Menu Item`, `Menu Item/Check`, `Menu Item/Radio`, `Menu Item/Sub`, `Menu Label`, `Menu Separator` | `components/overlays/dropdown-menu.tsx` | `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioItem`, `DropdownMenuSubTrigger`, `DropdownMenuLabel` (`variant` caps/heading), `DropdownMenuSeparator` | |
 | Primitives · Menus, popovers & dialogs | — | `components/overlays/dropdown-menu.tsx` | `MenuRow` | code only (the two-line menu row) |
 | Primitives · Menus, popovers & dialogs | — | `components/overlays/context-menu.tsx` | `ContextMenu*` | code only (same look as the menu) |
@@ -174,9 +176,9 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Glyphs & indicators | `WorkerGlyph` | `components/conversation/elements/worker-glyph.tsx` | `WorkerGlyph` | |
 | Glyphs & indicators | `SidebarActivityMark/Working`, `/Unread`, `SidebarError`, `SessionStatusLabel` | `components/shared/session-status.tsx` | `SidebarActivityMark`, `SidebarError`, `SessionStatusLabel` | |
 | Glyphs & indicators | `StateIcon/Running`, `StateIcon/Paused` | `components/conversation/elements/state-icon.tsx` | `StateIcon` | |
-| Glyphs & indicators | `Donut` | `components/conversation/elements/donut.tsx` | `Donut` | |
-| Glyphs & indicators | `StepGlyph/Done`, `Failed`, `Stopped`, `Pending` | `components/conversation/elements/step-glyph.tsx` | `StepGlyph` | |
-| Glyphs & indicators | `CiGlyph/Passed` | `components/conversation/elements/ci-glyph.tsx` | `CiGlyph` | |
+| Glyphs & indicators | `Donut` | — | — | Pen only: the code was removed in cb94ccca9 |
+| Glyphs & indicators | `StepGlyph/Done`, `Failed`, `Stopped`, `Pending` | — | — | Pen only: the code was removed in cb94ccca9 |
+| Glyphs & indicators | `CiGlyph/Passed` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Glyphs & indicators | `MockupTabIcon` | `components/conversation/elements/mockup-tab-icon.tsx` | `MockupTabIcon` (with `useMockup`, `mockupBusy`) | the tab's own hooks stay in `app/conversation/MockupTab.tsx` |
 | Glyphs & indicators | `FaviconGlyph/Globe`, `Favicon`, `Loading`, `Loading with favicon` | `components/conversation/elements/favicon-glyph.tsx` | `FaviconGlyph` | its look is `favicon-glyph.css`; the browser tab's `BrowserTabIcon` stays in `app/conversation/BrowserTabIcon.tsx` |
 | Glyphs & indicators | `SiteIcon/Globe`, `SiteIcon/Favicon` | `components/shared/site-icon.tsx` | `SiteIcon` | its look is the New tab's `new-tab-site-icon` class (`app/side-panel/NewTabTools.css`) |
@@ -224,18 +226,16 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Thread | `Archived bar` | `app/conversation/ArchivedBar.tsx` | `ArchivedBar` | |
 | Thread cards | `Question card` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |
 | Thread cards | `Action card/Question` | `app/conversation/QuestionAction.tsx` | `QuestionAction` | |
-| Thread cards | `Action card/Plan` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
-| Thread cards | `Phase plan action` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
+| Thread cards | `Action card/Plan` | — | — | Pen only: the code was removed in cb94ccca9 |
+| Thread cards | `Phase plan action` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Thread cards | `Changes file row` | `app/conversation/ChangesFileRow.tsx` | `ChangesFileRow` | |
-| Thread cards | `Merge warning row` | `app/conversation/MergeWarningRow.tsx` | `MergeWarningRow` | |
+| Thread cards | `Merge warning row` | — | — | Pen only: the code was removed in b1014e45c |
 | Thread cards | `Revert confirm row` | `app/conversation/RevertConfirmRow.tsx` | `RevertConfirmRow` | |
 | Thread cards | `Open pill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
 | Thread cards | `Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
-| Thread cards | — | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | code only (its OvernightPlanCard card was retired) |
-| Thread cards | — | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | code only (its OvernightPlanCard card was retired) |
-| Thread cards | `Plan frame` | `app/conversation/cards/PlanFrame.tsx` | `PlanFrame` | |
-| Thread cards | `Plan clip` | `app/conversation/cards/PlanClip.tsx` | `PlanClip` | |
-| Thread cards | `Plan text` | `app/conversation/cards/PlanText.tsx` | `PlanText` | moved out of PlanDocument.tsx with PlanClip; PlanDocument re-exports it |
+| Thread cards | `Plan frame` | — | — | Pen only: the code was removed in cb94ccca9 |
+| Thread cards | `Plan clip` | — | — | Pen only: the code was removed in cb94ccca9 |
+| Thread cards | `Plan text` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Steps & tool rows | `Update text` | `app/conversation/UpdateText.tsx` | `UpdateText` | parts: `ReplyText`, `ReportText` (+ `AnswerDetails`), `DetailsFold`, `PhaseOutcome`, each in its own file |
 | Steps & tool rows | `Steer bubble` | `app/conversation/SteerBubble.tsx` | `SteerBubble` | |
 | Steps & tool rows | `Block error` | `app/conversation/BlockError.tsx` | `BlockError` | |
@@ -255,7 +255,7 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Steps & tool rows | `Merged row` | `app/conversation/activity/MergedRow.tsx` | `MergedRow` | |
 | Steps & tool rows | `Peer link` | `app/conversation/activity/PeerLink.tsx` | `PeerLink` | |
 | Steps & tool rows | `Inline diff` | `app/conversation/activity/Diffs.tsx` | `Diffs` | a stack of `Inline diff` |
-| Steps & tool rows | `Lead detail` | `app/conversation/activity/LeadToolDetail.tsx` | `LeadToolDetail` | |
+| Steps & tool rows | `Lead detail` | — | — | Pen only: the code was removed in 19f382faa |
 | Steps & tool rows | `Lead detail` | `app/conversation/activity/LeadItemDetail.tsx` | `LeadItemDetail` | look of `Lead detail` |
 | Steps & tool rows | `Team glyphs` | `app/conversation/activity/Glyphs.tsx` | `Glyphs` | |
 | Steps & tool rows | `Briefs` | `app/conversation/activity/Briefs.tsx` | `Briefs` | |
@@ -273,8 +273,8 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Composer | `Waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
 | Composer | `Composer hint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
 | Composer menus, rail & queue | `Capsule pill` | `app/conversation/CapsulePill.tsx` | `CapsulePill` | |
-| Composer menus, rail & queue | `Step list` | `app/conversation/StepList.tsx` | `StepList` | |
-| Composer menus, rail & queue | `Run capsule` | `app/conversation/RunCapsule.tsx` | `RunCapsule` | |
+| Composer menus, rail & queue | `Step list` | — | — | Pen only: the code was removed in cb94ccca9 |
+| Composer menus, rail & queue | `Run capsule` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Composer menus, rail & queue | `Capsule` | `app/conversation/Capsule.tsx` | `Capsule` | |
 | Composer menus, rail & queue | `Request capsule` | `app/conversation/RequestCapsule.tsx` | `RequestCapsule` | |
 | Composer menus, rail & queue | `Diff pill` | `app/conversation/DiffPill.tsx` | `DiffPill` | |
@@ -291,7 +291,7 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Summary pane | `Floating summary` | `app/conversation/FloatingSummary.tsx` | `FloatingSummary` | |
 | Summary pane | `Source row` | `app/conversation/SourceRow.tsx` | `SourceRow` | |
 | Summary pane | `Branch row` | `app/conversation/BranchRow.tsx` | `BranchRow` | |
-| Summary pane | `JobStack` | `app/conversation/JobStack.tsx` | `JobStack` | |
+| Summary pane | `JobStack` | — | — | Pen only: the code was removed in cb94ccca9 |
 | Summary pane | `Links popover` | `app/conversation/AllLinksPopover.tsx` | `AllLinksPopover` | |
 | Files, search & source | `View tabs` | `app/side-panel/PaneViewTabs.tsx` | `PaneViewTabs` | |
 | Files, search & source | `File browser` | `app/side-panel/FileBrowser.tsx` | `FileBrowser` | |
@@ -310,13 +310,13 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Workers | `Output file row` | `app/side-panel/WorkerFileRow.tsx` | `WorkerFileRow` | |
 | Workers | `Entry view/Received`, `Entry view/Reply`, `Entry view/Approval`, `Entry view/Notice` | `app/side-panel/EntryView.tsx` | `EntryView` | |
 | Workers | `Brief` | `app/side-panel/WorkerBrief.tsx` | `WorkerBrief` | |
-| Workers | `Worker answer` | `app/side-panel/WorkerAnswer.tsx` | `WorkerAnswer` | |
+| Workers | `Worker answer` | — | — | Pen only: the code was removed in fb6ff046b |
 | Page | `Show pages dialog` | `app/side-panel/pages/ShowPages.tsx` | `ShowPages` | |
 | Page | `Page file menu` | `app/side-panel/pages/PageFileMenu.tsx` | `PageFileMenu` | |
 | Page | `Page insert menu` | `app/side-panel/pages/PageInsertMenu.tsx` | `PageInsertMenu` | |
 | Job, mockup & new tab | `Images menu` | `app/side-panel/ImagesMenu.tsx` | `ImagesMenu` | |
 | Job, mockup & new tab | `Notes list` | `app/side-panel/NotesList.tsx` | `NotesList` | |
-| Output, plan & side chat | `Run output` | `app/conversation/activity/RunOutput.tsx` | `RunOutput` | |
+| Output, plan & side chat | `Run output` | — | — | Pen only: the code was removed in 71f10dc45 |
 | Browser | `Browser nav` | `app/side-panel/NavigationCapsule.tsx` | `NavigationCapsule` | |
 | Browser | `Site info button/Not secure` | `app/side-panel/SiteInfo.tsx` | `SiteInfo` | secure and local are looks of `Icon Button` |
 | Browser | `Site info` | `app/side-panel/SiteInfoPopover.tsx` | `SiteInfoPopover` | |
@@ -339,6 +339,7 @@ them. Cards in Pen carry no code paths: this table is the link.
 | App dialogs | `Remove project dialog/Form` | `app/shell/dialogs/RemoveForm.tsx` | `RemoveForm` | its head and actions row are in `app/shell/dialogs/removeProjectParts.tsx` |
 | App dialogs | `Remove project dialog/Removed` | `app/shell/dialogs/Removed.tsx` | `Removed` | |
 | Settings · Window & page parts | `SettingsPage/BackLink` | `app/settings/BackLink.tsx` | `BackLink` | |
+| Settings · Window & page parts | `SettingsSelectTrigger/Icon` | `app/settings/FilterMenu.tsx` | `FilterMenu` | look of `SettingsSelectTrigger/Icon` |
 | Settings · General & system | `AppearanceSection` | `app/settings/AppearanceSection.tsx` | `AppearanceSection` | |
 | Settings · General & system | `NameRow` | `app/settings/NameRow.tsx` | `NameRow` | |
 | Settings · General & system | `ComposerSection` | `app/settings/ComposerSection.tsx` | `ComposerSection` | |
@@ -402,8 +403,8 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Settings · Inspector · Brain | `EmbedderSection` | `app/inspector/brain/EmbedderState.tsx` | `EmbedderState` | shown inside it |
 | Settings · Inspector · Brain | `EmbedderSection` | `app/inspector/brain/EmbedderSection.tsx` | `EmbedderSection` | |
 | Settings · Inspector · Brain | `WorkersSection` | `app/inspector/brain/WorkersSection.tsx` | `WorkersSection` | |
-| Settings · Inspector · Brain | `JobRow` | `app/inspector/brain/JobRow.tsx` | `JobRow` | |
-| Settings · Inspector · Brain | `JobsSection` | `app/inspector/brain/JobsSection.tsx` | `JobsSection` | |
+| Settings · Inspector · Brain | `JobRow` | — | — | Pen only: the code was removed in a041169da |
+| Settings · Inspector · Brain | `JobsSection` | — | — | Pen only: the code was removed in a041169da |
 | Settings · Inspector · Brain | `DeveloperActions` | `app/inspector/brain/DeveloperActions.tsx` | `DeveloperActions` | |
 | Settings · Inspector · Brain | `BrainQueryBar` | `app/inspector/brain/QueryBar.tsx` | `QueryBar` | |
 | Settings · Inspector · Brain | `ResultSummary` | `app/inspector/brain/ResultSummary.tsx` | `ResultSummary` | |
@@ -412,6 +413,7 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Settings · Inspector · Brain | `BrainToolbar` | `app/inspector/brain/BrainToolbar.tsx` | `BrainToolbar` | |
 | Settings · Inspector · Brain | `ConversationName` | `app/inspector/brain/ConversationName.tsx` | `ConversationName` | |
 | Settings · Inspector · Brain | `NodeLink` | `app/inspector/brain/NodeLink.tsx` | `NodeLink` | |
+| Settings · Inspector · Brain | — | `app/inspector/brain/BrainSection.tsx` | `BrainSection` | shown inside `IndexSection`, `WorkersSection` and `EmbedderSection` |
 | Settings · Inspector · Processes & providers | `StartSessionForm` | `app/inspector/providers/StartSessionForm.tsx` | `StartSessionForm` | |
 | Settings · Inspector · Processes & providers | `RecordToggle/Off`, `RecordToggle/On` | `app/inspector/providers/RecordToggle.tsx` | `RecordToggle` | |
 | Settings · Inspector · Processes & providers | `SessionList` | `app/inspector/providers/SessionList.tsx` | `SessionList` | |
@@ -423,17 +425,8 @@ them. Cards in Pen carry no code paths: this table is the link.
 | Settings · Inspector · Processes & providers | `TranscriptList` | `app/inspector/providers/TranscriptList.tsx` | `TranscriptList` | |
 | Settings · Inspector · Processes & providers | `ApprovalCard/Raw` | `app/inspector/providers/RawApprovalCard.tsx` | `RawApprovalCard` | |
 | Settings · Inspector · Processes & providers | `RawComposer` | `app/inspector/providers/RawSessionComposer.tsx` | `RawSessionComposer` | |
-| — | `FileGlyph` | `app/side-panel/FileGlyph.tsx` | `FileGlyph` | not found in foundations (check) |
-| — | `TabPage` | `app/side-panel/TabPage.tsx` | `TabPage` | not found in foundations (check) |
-| — | `Section (Brain)` | `app/inspector/brain/BrainSection.tsx` | `BrainSection` | not found in foundations (check) |
-| — | `ActionError` | `app/inspector/providers/ActionError.tsx` | `ActionError` | not found in foundations (check) |
 | — | `ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | not found in foundations (check) |
 | — | `Notices` | `app/conversation/Notices.tsx` | `Notices` | not found in foundations (check) |
-| — | `ImplementPlanAction` | `app/conversation/ImplementPlanAction.tsx` | `ImplementPlanAction` | not found in foundations (check) |
-| — | `PlanCard` | `app/conversation/cards/PlanCard.tsx` | `PlanCard` | not found in foundations (check) |
-| — | `PhaseMore` | `app/conversation/cards/PhaseMore.tsx` | `PhaseMore` | not found in foundations (check) |
-| — | `DoneWhen` | `app/conversation/cards/DoneWhen.tsx` | `DoneWhen` | not found in foundations (check) |
-| — | `FilterMenu (history)` | `app/settings/FilterMenu.tsx` | `FilterMenu` | not found in foundations (check) |
 
 ## Icons
 
@@ -453,6 +446,7 @@ code name is its component's name:
 | Worker shapes | `icons/worker-shapes/` | `IdGlyph/<shape>` → `IdGlyph`'s shape of that name |
 | Page blocks | `icons/page-blocks/` | `BlockIcon/<label>` → `BLOCK_ICONS[<kind>]` of the block with that label |
 | Marks | `icons/marks/` | `BrigadierGlyph`, `ProviderGlyph/<agent>` → the same names |
+| — | — | `app/side-panel/TabPage.tsx` | `TabPage` | code only (layout, no look of its own) |
 
 An icon is drawn once, as a component on the Icons board; everything else (the Glyphs &
 indicators board, controls, the other files) places it as a ref.
@@ -468,11 +462,12 @@ indicators board, controls, the other files) places it as a ref.
   in Pen, or the call silently works on whichever file is active. Never `Replace` a child of an
   instance of a reusable component (insert the new part, move it, delete the old one). After a
   failed edit, close the file without saving and reopen it.
-- A new foundations component shows up in `app.pen` or `settings.pen` only after that window is
-  closed and opened again (save both first).
-- Save with ⌘S in that file's own Pen window, after a real click in it: Pen saves the window
-  that has focus, whichever file the last edit was in. Then check the file's modified time
-  changed. No backup copies.
+- A new foundations component shows up in `app.pen` or `settings.pen` only after that file's tab
+  is closed and opened again, or Pen is restarted (save every file first).
+- Pen (1.2.19 on) opens every file as a tab of one window. Save acts on the front tab: bring the
+  file's tab to the front (File › Open Recent › the file switches to it), check the window title
+  names that file, then ⌘S, and check the file's modified time changed. A newly started MCP
+  server may reach only the front tab, so switch first there too. No backup copies.
 
 ## Updating tokens
 
