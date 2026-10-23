@@ -1498,7 +1498,9 @@ below is proposed unless tagged.
   - **Per provider, on its page:** the "Switch accounts automatically" row stays where it is (D23). Use on an
     account turns it off and makes that account the one to use now (D23: "the auto switch toggle goes to
     disabled"). The pick is immediate: new sessions start there, and a running session moves at its next
-    request, through `switch_account`, with Q12's one "carry on" line (proposed).
+    request, through `switch_account`, with the moment "*CLI* continues on *account*, picked in Settings" (as
+    landed: not Q12's "carry on" line, since nothing was interrupted; it acts only when the pick changed since the
+    conversation's last turn, so a per-chat account choice stays).
   - **Off:** work stays on the picked account. Its limit still moves work to another account of the same
     provider before anything else, as built (#505; proposed: kept, since D23's fallback starts only once all of
     a provider's quota is done).
@@ -1524,15 +1526,16 @@ below is proposed unless tagged.
   - **On:** when every account of a provider is out (none can take work by the order above), a running session
     hands off through the seam to the other installed, enabled CLI: the same thread, the divider "Fresh context ·
     hand-off note" with "Usage limit on *provider* · continued on *other*", the note, and the successor carrying
-    on at once (S22, S23, D8). Its model and effort come from the user's rules rows (S32) for the session's work,
-    else the other CLI's default. When the out provider resets, the session stays where it is (proposed: a
-    switch back would be a second seam).
+    on at once (S22, S23, D8). Its model and effort come from the rules file's `Fallback` row (S32) when that row
+    names the other CLI, else the other CLI's default (as landed). No extra moment line: the divider says why.
+    When the out provider resets, the session stays where it is (as landed: a switch back would be a second
+    seam). Sessions only: a Chat has no seam and keeps Q11.
   - **Off:** Q11, as built: the "Resumes at" card, then the same session continues at the reset.
   - A death with no note (the limit hit mid-note) uses S22's "start from the ledger and tail" path.
-  - New sessions and `brigadier start` pick the other provider's model through the rules rows (S32) when the
-    switch is on and a provider is out; `brigadier models` says so. Advice, never a gate (G18).
-  - Behind `BRIGADIER_PROVIDER_FALLBACK=1` until the flow test and a live dev check pass; the flag goes in the
-    step that turns it on.
+  - A new session takes the same path at its first limit. Turning the switch on while a session waits for a
+    reset moves it at once. `brigadier start` picks nothing itself: `brigadier models` shows each account's state
+    and `switchProviders`, and the caller chooses (as landed; advice, never a gate, G18).
+  - No env flag (as landed): the switch is off by default (D23: "if enabled") and is the gate.
 - **Files:** `crates/core/src/accounts.rs` (the order and its reasons), `crates/core/src/model.rs` (`switch_providers`
   back), `M/conversation.rs` (pick-now at the next request, the out-provider branch), `M/models.rs` and its schema
   (`order`, the two toggles), `D/app/settings/providers/{AgentPage,AgentsOverview,AccountRows,ProvidersPage}.tsx`,
