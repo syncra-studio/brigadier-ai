@@ -36,6 +36,7 @@
 > all 20 answers are decided (§9.6), including the four defaults settled on 10-23.
 > Amended again on 10-23 with the user's D22 (S32: model-fit rows and Refresh) and D23 (S38: the account
 > auto-switch order and the provider fallback).
+> Amended again on 10-24 with the user's D51 (S39: `brigadier why <file>:<line>`).
 > **Nothing is migrated.** There are no real users yet: existing records, saved settings and open sessions are
 > not converted or kept readable. Sessions open at upgrade time are archived.
 > Base: origin/main `ae56e9271`. Paths: `M/` = `crates/core/src/manager/`, `P/` = `crates/providers/src/`,
@@ -1641,6 +1642,49 @@ below is proposed unless tagged.
 - **Order:** 2a ∥ anything (rebase after S32 if it touches `M/models.rs` first). 2b after S23 lands (Stage 5,
   w108); it rebases on it.
 
+**S39. `brigadier why <file>:<line>` (D51).** Opus.
+(user, 2026-10-24, D51: "sure, do the brigadier why", answering: make "why was this line written" (`brigadier why
+<file>:<line>`: walks the per-turn snapshot refs to the turn that wrote it, prints that turn's message, reply and
+ledger entries from the CLI's files; no new store) a plan step now.)
+**Take, don't rebuild:** the CLIs' own session files (G11, `record/lineage.json`), the per-turn snapshot refs
+(S11, `refs/brigadier/s/<id>/turn-<n>-{start,end}` and their `-head` anchors), the request → turn number records
+S11 already keeps, and the ledger (S17, S22b). No new store, no new recording, nothing leaves the machine. Pull-only:
+nothing is pushed into a thread. The how below is proposed.
+- **Scope:**
+  - **Input:** `brigadier why <file>:<line>`, or `<file> --line N`; the path is relative to the caller's current
+    folder (any checkout of any project). Read-only, for Claude and Codex sessions alike.
+  - **The walk (blame-like):** the sessions whose checkout is this one, seam successors included (one id, one
+    ref namespace), their turns ordered newest first. From the line as the file has it now, each step maps it
+    back: across the gap after a turn (end tree → the next state), then through the turn (start → end tree). The
+    first turn whose own diff added the line's current content wrote it. A line the turn only moved (the same
+    text deleted elsewhere in that turn, in any file) is followed to where it came from, and the walk goes on. A
+    line added in a gap, or older than every turn, was written outside Brigadier: `git blame` names the commit,
+    or "not committed".
+  - **Workers (G21):** a worker has no turn refs of its own; its work lands in the parent's turn by a merge or a
+    fast-forward. When the line came in that way (`git blame` at the turn's end head names a commit made during the
+    turn, off the session's own first-parent line, or on a worker's branch), the answer names the worker and reads
+    its task and last reply from its own CLI files.
+  - **Output, plain and short:** the line; session name and id; turn number and time; the user's message for
+    that turn, whole; the reply, trimmed, with the exact `brigadier brain read <session> <from> <to>` for all of
+    it; the ledger entries stamped inside the turn, by id. A session whose CLI file is gone (the CLI cleaned it
+    up, or the session was deleted) says so plainly and prints what git still knows. `--json` for machines.
+  - The `brigadier` help lists it; the brigade skill's command table gets it only if it fits in one line within
+    the skill's byte cap.
+- **Files:** a new `crates/git/src/why.rs` (the walk, its line map, the blame fallback), `crates/cli`
+  (`commands.rs`, `args.rs`, `protocol.rs`, `render.rs`, `schemas/why.schema.json`), a new `M/cli_why.rs` (the
+  sessions of a checkout, turn ↔ request ↔ the CLI's turn, the reply and ledger read), `M/cli.rs` (dispatch),
+  `M/brigade/SKILL.md` (one line, if it fits).
+- **Done when:**
+  - Unit tests of the walk on a scratch repo with fabricated snapshot refs: a line one turn introduced; a line a
+    later turn modified (the later turn wins); a line a later turn moved (the first turn still wins); a line from
+    the user's own commit (`git blame`'s commit); an uncommitted edit outside any turn.
+  - A flow test with the fake CLI: two turns edit one file; `why` on a line of each returns that turn's message,
+    reply and ledger entry; with the CLI file removed it says the file is gone.
+  - A live dev run: one real Claude session edits a file over two turns; `brigadier why` on a line from each
+    returns the right turn's message (Codex too, if quick).
+- **Order:** ∥ anything. Sources: D51; the run's w156 report (P2) and w160 report (rows 12 and 15), from Delta's
+  "immortal" idea, done locally.
+
 ### Order and parallel runs, in one view
 
 ```
@@ -1651,7 +1695,7 @@ after S8:  S21 (∥ anything)
 after S18 + S21:  S22 → S22b → S23 → S25 → S26 → S27      (S24 dropped, decided 2026-10-23)
 Stage 6, now (user, 2026-10-23):  S28 → S29 → S30 → S36 · S28 → S35 · S33 → S32 (after S28)
                                   ∥ S31, S33, S34, S37 with anything (S37 rebases after S22/S23 hook changes)
-                                  S38: 2a ∥ anything; 2b after S23 (D23)
+                                  S38: 2a ∥ anything; 2b after S23 (D23) · S39 ∥ anything (D51)
 any time:  MA1, X1 (bounded Codex tasks, §9)
 after Stage 2, one run per capability (§9):  O1–O5 with S13–S15 · MA2–MA7 with S13–S14 and S23
                                              L1–L9 with S18–S27 · BR1–BR8 after S13 · X2–X9 after X1
@@ -2094,7 +2138,7 @@ sessions with token economy. Each has a measurable bar against the best rival to
     (S16c, S28).
 Also decided on 10-23, with no step of their own: D13 (Sources are outside-the-repo things only, and the
 ledger is not shown in the UI, `f10bb20b9`), D18 (the Delegator skill's continuity items) and D19 (the memory
-cleanup): no step needed. D23 is S38; D24 is S23's kept `orch:<id>` log (§4 last consumers, #540).
+cleanup): no step needed. D23 is S38; D51 (10-24) is S39; D24 is S23's kept `orch:<id>` log (§4 last consumers, #540).
 
 **Waiting on you:**
 - A terms check of multi-account auto-switch before marketing it.
