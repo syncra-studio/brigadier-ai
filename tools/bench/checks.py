@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bench import cleanup_native
 from metrics import parse
 from tasks import TASKS, fixture, grade
 from nightly import collect, issue, regressions
@@ -47,6 +48,23 @@ class Accounting(unittest.TestCase):
             path.write_text('{}\n')
             with self.assertRaises(RuntimeError):
                 parse(path, "codex", "task")
+
+    def test_native_cleanup_removes_only_the_owned_project(self):
+        with tempfile.TemporaryDirectory(prefix=PREFIX) as tmp:
+            root = Path(tmp)
+            projects = root / "projects"
+            own = projects / ("-tmp-" + root.name + "-repo")
+            (own / "memory").mkdir(parents=True)
+            transcript = own / "explicit-session.jsonl"
+            transcript.write_text("{}")
+            neighbor = projects / "other-run"
+            neighbor.mkdir()
+            keep = neighbor / "session.jsonl"
+            keep.write_text("{}")
+            cleanup_native(transcript, root)
+            cleanup_native(transcript, root)
+            self.assertFalse(own.exists())
+            self.assertTrue(keep.exists())
 
 
 class Graders(unittest.TestCase):

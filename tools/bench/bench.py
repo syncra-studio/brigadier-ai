@@ -54,6 +54,25 @@ def native_files(provider, sid):
     return list(home.glob(pattern))
 
 
+def cleanup_native(path, scratch):
+    path = Path(path)
+    path.unlink(missing_ok=True)
+    sidecar = path.with_suffix("")
+    if sidecar.is_dir():
+        shutil.rmtree(sidecar)
+    marker = re.sub(r"[^A-Za-z0-9]", "-", scratch.name)
+    if path.parent.parent.name == "projects" and marker in path.parent.name:
+        # The CLI also makes memory/ in this invocation's unique project slug.
+        # Never remove a shared project folder or a neighboring session's files.
+        if path.parent.is_dir():
+            shutil.rmtree(path.parent)
+    else:
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+
+
 def plain(repo, provider, prompt, model, args, scratch):
     sid = str(uuid.uuid4())
     command = (["claude", "-p", "--verbose", "--output-format", "stream-json", "--include-partial-messages",
@@ -89,15 +108,7 @@ def plain(repo, provider, prompt, model, args, scratch):
     finally:
         stop(proc)
         for path in native_files(provider, sid):
-            path.unlink(missing_ok=True)
-            # Only this invocation's explicit session id, never neighboring sessions.
-            sidecar = path.with_suffix("")
-            if sidecar.is_dir():
-                shutil.rmtree(sidecar)
-            try:
-                path.parent.rmdir()
-            except OSError:
-                pass
+            cleanup_native(path, scratch)
 
 
 class Daemon:
@@ -270,15 +281,7 @@ class Daemon:
         finally:
             stop(self.proc)
             for original in self.kept:
-                path = Path(original)
-                path.unlink(missing_ok=True)
-                sidecar = path.with_suffix("")
-                if sidecar.is_dir():
-                    shutil.rmtree(sidecar)
-                try:
-                    path.parent.rmdir()
-                except OSError:
-                    pass
+                cleanup_native(original, self.root)
         if errors:
             raise RuntimeError("Cleanup: " + "; ".join(map(str, errors)))
 
