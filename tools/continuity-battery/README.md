@@ -30,6 +30,13 @@ one-minute usage limit. It waits for that window to reset before probing Claude.
 If a seam fails to happen, the report says so; a successful injection alone is not
 proof of recovery. Repeated answers aren't fed back between seams.
 
+`--seam` measures the seam (S22) instead: `BRIGADIER_SEAM=1` with `BRIGADIER_SEAM_TOKENS` a
+quarter past `--tokens`, where rebirth would swap, so both arms take their fresh context at the same
+size. Its report reads each seam from the session's `record/seam.json`, its note from
+`record/handoff/<n>.md` and what the successor started from from `<n>-start.md`. Both arms plant
+into, exclude from and measure the session's ledger, `record/ledger.md` (the one the standing
+instructions name), not a ledger in the repo.
+
 Overrides pass through `run.sh`, for example `--tokens 60000 --max-fillers 24`.
 `--report PATH` chooses the text report. `--evidence /absolute/private/path.json`
 keeps detailed input/output, provider events, briefings and metering outside git.

@@ -1068,7 +1068,8 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - The thread writes `record/handoff/<n>.md`.
   - Brigadier draws the divider "Fresh context · hand-off note" (openable) and closes the predecessor.
 - **Successor:** starts on the next user message, with the bootstrap as the first lines of that message, also
-  saved as `record/handoff/<n>-start.md`. The bootstrap holds:
+  saved as `record/handoff/<n>-start.md`. One switch, `BRIGADIER_SEAM_CARRY_ON=1`, starts it at once instead,
+  carrying on from the note by itself (open with the user, 10-23). The bootstrap holds:
   - the map;
   - the whole ledger;
   - the note;
@@ -1079,9 +1080,17 @@ and the seam code, not the session commands. The shared files are `prompts.rs`, 
   - Death without a note (limit, crash, prompt too long) → the successor starts from the ledger and tail with
     the "check git first" line.
   - Daemon restart → `seam.json` decides; never two successors.
-- **Probes on the side:**
-  - Codex's opt-in 1M window, a 1-hour probe (Q0).
-  - Whether a failure hook sees the full failing output.
+- **Probes on the side** (run 10-23 on codex-cli 0.163 and Claude Code 2.1.309):
+  - Codex's opt-in 1M window, a 1-hour probe (Q0). **Held.** With `-c model_context_window=1000000 -c
+    model_auto_compact_token_limit=900000` on `gpt-6.1-sol`, the server took requests of 503k, 742k and
+    799k input tokens with no error. Codex caps the setting at the model's `max_context_window` of 872k (828k
+    usable at its 95%) and compacted once, before a turn, past about 90% of 872k, not at 900k. The 272k
+    window is the other models'; this one's default is 500k. Only this model was probed, without tool calls.
+  - Whether a failure hook sees the full failing output. **No.** `PostToolUseFailure` gets the same
+    ≈10 kB head-and-tail excerpt the model sees (cut from the first 30k characters), in its `error`
+    field, and nothing on disk keeps the whole failing output. Only a successful run's large output is
+    saved whole (`tool-results/`, `tool_response.persistedOutputPath`). Keeping a failing output whole
+    needs the command itself to keep it (as the Bash hook's trimmed-output blob does).
 - **Done when:**
   - Flow tests with a 60k debug threshold give two seams, the divider and note, exactly-once delivery, a death
     without a note, and a restart between note and successor.
@@ -1115,7 +1124,9 @@ worse than today's rebirth.
 - **Scope:**
   - The bootstrap on Codex (the standing instructions already reach it, S17).
   - The divider when Codex compacted, read from the rollout.
-  - The 1M window if the S22 probe held, otherwise a documented limit.
+  - The 1M window: the S22 probe held, capped at the model's 872k maximum (Codex compacts at about 90% of
+    it). Set `model_context_window` and `model_auto_compact_token_limit` per model from its
+    `max_context_window`, and seam below the compaction point.
   - No Codex hooks.
 - **Done when:** a Codex dev session goes through a debug-threshold seam with its divider.
 
