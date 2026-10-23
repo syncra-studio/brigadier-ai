@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::cli_tests::brigadier;
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
-use crate::manager::seam::{CARRY_ON, Phase, read_seam};
+use crate::manager::seam::{CARRY_ON, Phase, read_seam, write_seam};
 use crate::model::{ContinueWhen, Setup};
 use crate::thread_view::{HANDOFF_MARK, NUDGE_MARK};
 
@@ -494,5 +494,119 @@ async fn a_requested_move_carries_predecessor_turns_beyond_the_size_tail() {
     });
     assert!(!size.contains("SECRET-ASSISTANT-DETAIL"));
     assert!(size.contains("brigadier brain read test"));
+    flow.stop().await;
+}
+
+/// A move asked for in a turn the daemon's restart cut off is kept in the record: after the
+/// restart its CLI writes the note, and the successor starts on Codex.
+#[tokio::test]
+async fn a_pending_move_survives_a_restart() {
+    let (turns, answers) = (Turns::default(), Answers::default());
+    let mut flow = Flow::start(
+        "continue-on-restart",
+        options(),
+        thread(turns.clone(), answers),
+    )
+    .await;
+    flow.say("Plant: keep the code K-002 as it is.").await;
+    flow.settled().await;
+    let record = flow.manager.session_dir(&flow.conversation).record();
+    let mut file = read_seam(&record);
+    file.moving = Some(crate::model::ModelChoice {
+        provider: ProviderKind::Codex,
+        model: None,
+        effort: None,
+        fast: None,
+        account: None,
+    });
+    write_seam(&record, &file).unwrap();
+    flow.restart().await;
+    flow.until("a turn on Codex", |_| {
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(provider, ..)| *provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let turns = turns.lock().unwrap().clone();
+    let (_, _, input) = turns.last().unwrap();
+    assert!(input.starts_with(HANDOFF_MARK), "{input}");
+    assert!(input.contains("Plant: keep the code K-002"), "{input}");
+    assert_eq!(orchestrator(&flow).provider, ProviderKind::Codex);
+    let file = read_seam(&record);
+    assert!(file.moving.is_none(), "{file:?}");
+    assert_eq!(file.seams.len(), 1);
+    assert!(file.seams[0].note.is_some(), "{file:?}");
+    assert_eq!(file.seams[0].end.moved_to, Some(ProviderKind::Codex));
+    flow.stop().await;
+}
+
+/// Asked for the move already coming with a model named, the move takes that model.
+#[tokio::test]
+async fn a_pending_move_takes_a_model_named_later() {
+    let turns = Turns::default();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let script: Script = {
+        let (turns, release) = (turns.clone(), release.clone());
+        Arc::new(move |turn: Turn| {
+            let (turns, release) = (turns.clone(), release.clone());
+            Box::pin(async move {
+                turns.lock().unwrap().push((
+                    turn.provider,
+                    turn.native_id.clone(),
+                    turn.input.clone(),
+                ));
+                if turn.input.contains("Hold.") {
+                    release.notified().await;
+                }
+                Reply::text("Noted.")
+            })
+        })
+    };
+    let flow = Flow::start("continue-on-model", options(), script).await;
+    flow.say("Hold.").await;
+    flow.until("the held turn", |_| !turns.lock().unwrap().is_empty())
+        .await;
+    let (when, first) = flow
+        .manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap();
+    assert_eq!(when, ContinueWhen::AfterTurn);
+    let named = crate::model::ModelChoice {
+        model: Some("named-model".into()),
+        ..first.clone()
+    };
+    let (when, choice) = flow
+        .manager
+        .continue_on(
+            &flow.conversation,
+            ProviderKind::Codex,
+            Some(named.clone()),
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!((when, &choice), (ContinueWhen::AfterTurn, &named));
+    // Asked again with no model: the one named stays.
+    let (_, again) = flow
+        .manager
+        .continue_on(&flow.conversation, ProviderKind::Codex, None, true)
+        .await
+        .unwrap();
+    assert_eq!(again, named);
+    release.notify_one();
+    flow.until("a turn on Codex", |_| {
+        turns
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(provider, ..)| *provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    assert_eq!(orchestrator(&flow).model.as_deref(), Some("named-model"));
     flow.stop().await;
 }

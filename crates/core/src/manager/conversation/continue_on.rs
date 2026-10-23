@@ -51,7 +51,10 @@ impl SessionManager {
             }
             return Ok((ContinueWhen::Already, orchestrator.clone()));
         }
-        if let Some(moving) = file.moving.as_ref().filter(|moving| moving.provider == to) {
+        // Asked again for the move already coming: unchanged, unless another model is named.
+        if let Some(moving) = file.moving.as_ref().filter(|moving| {
+            moving.provider == to && model.as_ref().is_none_or(|model| model == *moving)
+        }) {
             return Ok((ContinueWhen::AfterTurn, moving.clone()));
         }
         if let Some(why) = self.agent_unready(to) {
